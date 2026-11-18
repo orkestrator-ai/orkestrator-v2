@@ -113,7 +113,9 @@ describe("built-in type library", () => {
     );
     expect(builtIn("verification-verdict@1").schema).toEqual(VERIFICATION_VERDICT_SCHEMA);
     expect(builtIn("validation-plan@1").schema).toEqual(REVIEW_VALIDATION_PLAN_V1_SCHEMA);
-    expect(builtIn("fix-result@1").schema).toEqual(REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA);
+    expect(builtIn("address-findings-result@1").schema).toEqual(
+      REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+    );
     expect(builtIn("pr-result@1").schema).toEqual(REVIEW_PR_RESULT_JSON_SCHEMA);
   });
 
@@ -222,9 +224,12 @@ describe("domain validators", () => {
   });
 
   test("fix results are consistent", () => {
-    expect(codes("fix-result@1", { ...example("fix-result@1"), limitations: ["CI down"] })).toEqual(
-      ["invalid_value"],
-    );
+    expect(
+      codes("address-findings-result@1", {
+        ...example("address-findings-result@1"),
+        limitations: ["CI down"],
+      }),
+    ).toEqual(["invalid_value"]);
   });
 
   test("PR results are github.com pull requests", () => {
@@ -284,7 +289,7 @@ describe("domain validators", () => {
     expect(graphBuiltInValidator("review-package-reference").backend?.existing).toContain(
       "verifyEnvironmentReviewPackage",
     );
-    expect(graphBuiltInValidator("fix-result").wraps).toBe(
+    expect(graphBuiltInValidator("address-findings-result").wraps).toBe(
       "review-results.ts#parseAddressFindingsResult",
     );
     expect(graphBuiltInValidator("workspace-commit").backend?.existing).toBeUndefined();

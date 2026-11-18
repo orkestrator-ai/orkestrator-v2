@@ -15,6 +15,7 @@
  */
 import type { AgentInteractionKind, AgentInteractionState } from "./agent-interactions.js";
 import type { AgentPlatform } from "./agent-platforms.js";
+import type { WebAnnotationResultDiff } from "./web-annotations-diff.js";
 
 export const WEB_ANNOTATION_CONTRACT_VERSION = 1 as const;
 export const WEB_ANNOTATION_SCHEMA_VERSION = 1 as const;
@@ -538,6 +539,17 @@ export interface WebAnnotationResultCaptureMetadata {
   masks?: WebAnnotationResultCaptureMask[];
   /** Anchor resolution of the original target on the current page, if run. */
   targetResolution?: WebAnnotationAnchorResolution;
+  /**
+   * The unstable-region mask: regions, in document CSS pixels, that changed
+   * between two samples of the page taken a moment apart with nothing else
+   * happening (animations, carousels, cursors). Present (possibly empty) only
+   * when the desktop sampled for them, which it does only for a backend that
+   * advertises `operations.resultDiffs`; absent means "not sampled", and an
+   * advisory diff (`web_annotation_result_diff`) is then refused.
+   */
+  unstableRegions?: WebAnnotationRect[];
+  /** Original-image redactions in document CSS pixels, separate from the after-image masks. */
+  originalMasks?: { captureId: string | null; rects: WebAnnotationRect[] };
 }
 
 /** How an after-capture relates to the evidence it is compared with. */
@@ -1197,6 +1209,14 @@ export interface WebAnnotationCapabilities {
      * `{ kind: "unsupported", reason: "iframe" }` instead.
      */
     frameTargets?: boolean;
+    /**
+     * Advisory region diffs between an annotation's original capture and a
+     * result capture (`web_annotation_result_diff`, the
+     * `get_annotation_evidence` tool's `diff` option). Absent or false: no
+     * diff is offered, and desktops do not sample result captures for the
+     * unstable-region mask.
+     */
+    resultDiffs?: boolean;
   };
   /** Capture target kinds a client may submit (never `legacy-unresolved`). */
   targets: WebAnnotationTargetKind[];
@@ -1252,6 +1272,7 @@ export const WEB_ANNOTATION_COMMANDS = Object.freeze({
   requestResponse: "web_annotation_request_response",
   requestFollowUp: "web_annotation_request_follow_up",
   resultCapture: "web_annotation_result_capture",
+  resultDiff: "web_annotation_result_diff",
   migrate: "web_annotations_migrate",
   migrationStatus: "web_annotations_migration_status",
   archive: "web_annotation_archive",
@@ -1735,6 +1756,8 @@ export interface WebAnnotationCommandArgs {
   web_annotation_request_response: { environmentId: string; requestId: string };
   web_annotation_request_follow_up: { environmentId: string; requestId: string };
   web_annotation_result_capture: WebAnnotationResultCaptureInput;
+  /** Advisory diff of a result (after) capture against the original it was compared with. */
+  web_annotation_result_diff: { environmentId: string; captureId: string };
   web_annotations_migrate: { environmentId: string };
   web_annotations_migration_status: { environmentId: string };
   web_annotation_archive: WebAnnotationArchiveInput;
@@ -1780,6 +1803,7 @@ export interface WebAnnotationCommandResults {
   };
   web_annotation_request_follow_up: WebAnnotationFollowUpCandidates;
   web_annotation_result_capture: { result: WebAnnotationResult; captureId: string };
+  web_annotation_result_diff: { diff: WebAnnotationResultDiff };
   web_annotations_migrate: WebAnnotationMigrationStatus;
   web_annotations_migration_status: WebAnnotationMigrationStatus;
   web_annotation_archive: WebAnnotationArchiveResult;

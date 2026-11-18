@@ -114,6 +114,7 @@ describe("Electron backend environment lifecycle commands", () => {
       opencodePid: 123,
       pendingRenamePrompt: "secret prompt",
       isolationPortBase: 20_000,
+      prMergeNoticePendingUrl: "https://github.com/example/repo/pull/1",
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
@@ -127,6 +128,7 @@ describe("Electron backend environment lifecycle commands", () => {
     expect(single).not.toHaveProperty("opencodePid");
     expect(single).not.toHaveProperty("pendingRenamePrompt");
     expect(single).not.toHaveProperty("isolationPortBase");
+    expect(single).not.toHaveProperty("prMergeNoticePendingUrl");
     await expect(
       commands.get("get_environment_snapshot")?.({ environmentId: "missing" }, context),
     ).resolves.toBeNull();

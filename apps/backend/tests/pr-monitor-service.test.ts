@@ -13,7 +13,7 @@ import {
   type PrMonitorDetectionOptions,
   type PrMonitorWarning,
   type PrMonitorTarget,
-} from "../src/core/pr-monitor";
+} from "../src/core/git/pr-monitor";
 
 interface HarnessTask {
   taskId: string;

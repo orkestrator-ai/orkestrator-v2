@@ -57,7 +57,14 @@ describe("the report §9 examples", () => {
     const result = compile(example);
     expect(result.pendingAcknowledgements).toEqual([]);
     const taint = result.diagnostics.filter((d) => d.code === "taint-reaches-side-effect");
-    const sinks = ["build", "review/plan", "review/package", "review/fix", "review/pr", "pr"];
+    const sinks = [
+      "build",
+      "review/plan",
+      "review/package",
+      "review/address-findings",
+      "review/pr",
+      "pr",
+    ];
     expect(taint.map((d) => [d.nodeId, d.severity, d.acknowledgement?.accepted])).toEqual(
       sinks.map((sink) => [sink, "info", true]),
     );
@@ -82,7 +89,8 @@ describe("the report §9 examples", () => {
       peakParallelism: 32,
       incomplete: false,
     });
-    // build 1 + (fix, prepare, review, address, verify) × 3; fix and address can be skipped.
+    // build 1 + (rework, prepare, review, address-findings, verify) × 3; rework and
+    // address-findings can be skipped.
     expect(cost("build-pipeline-loop")).toMatchObject({
       agentSessions: { best: 4, worst: 16 },
       peakParallelism: 1,
@@ -91,7 +99,7 @@ describe("the report §9 examples", () => {
       agentSessions: { best: 0, worst: 39 },
       peakParallelism: 12,
     });
-    // design 3 + judge 1 + build 1 + inlined Multi Review (plan 1 + 8 + 1 + fix 1 +
+    // design 3 + judge 1 + build 1 + inlined Multi Review (plan 1 + 8 + 1 + address-findings 1 +
     // describe-pr 1) + describe-pr 1: the sub-graph's sessions count against the parent.
     expect(cost("design-bake-off")).toMatchObject({
       agentSessions: { worst: 18 },
@@ -117,7 +125,7 @@ describe("the plan", () => {
       "review",
       "consolidate",
       "has-findings",
-      "fix",
+      "address-findings",
       "describe-pr",
       "pr",
     ]);
@@ -153,7 +161,7 @@ describe("the plan", () => {
     expect(plan.nodes[0]).toMatchObject({ onFailure: "fail-run", workspaceAccess: "write" });
     expect(plan.nodes[1]).toMatchObject({ kind: "system", workspaceAccess: "read", params: {} });
     expect(plan.nodes[4]).toMatchObject({ kind: "gate", outlets: ["findings", "clean"] });
-    expect(plan.nodes.find((node) => node.id === "fix")!.skippable).toBe(true);
+    expect(plan.nodes.find((node) => node.id === "address-findings")!.skippable).toBe(true);
     const edgeIds = plan.edges.map((edge) => edge.id);
     expect(edgeIds).toEqual(edgeIds.toSorted());
     expect(plan.edges.find((edge) => edge.id === "review-consolidate")).toMatchObject({
@@ -174,19 +182,27 @@ describe("the plan", () => {
     expect(plan.loops).toEqual([
       expect.objectContaining({
         id: "rounds",
-        members: ["fix", "prepare", "package", "review", "has-issues", "address", "verify"],
-        entry: ["fix"],
-        laterOnly: ["fix"],
+        members: [
+          "rework",
+          "prepare",
+          "package",
+          "review",
+          "has-issues",
+          "address-findings",
+          "verify",
+        ],
+        entry: ["rework"],
+        laterOnly: ["rework"],
         maxIterations: 3,
         carry: [
           {
             from: { node: "verify", port: "verdict" },
-            to: { node: "fix", port: "feedback" },
+            to: { node: "rework", port: "feedback" },
             type: { kind: "named", ref: "verification-verdict@1" },
           },
           {
             from: { node: "verify", port: "code" },
-            to: { node: "fix", port: "code" },
+            to: { node: "rework", port: "code" },
             type: { kind: "named", ref: "workspace@1" },
           },
         ],
@@ -194,12 +210,12 @@ describe("the plan", () => {
     ]);
     const iterations = Object.fromEntries(plan.edges.map((edge) => [edge.id, edge.iterations]));
     expect(iterations["build-prepare"]).toBe("first");
-    expect(iterations["fix-prepare"]).toBe("later");
+    expect(iterations["rework-prepare"]).toBe("later");
     expect(iterations["ticket-build"]).toBe("all");
-    const fix = plan.nodes.find((node) => node.id === "fix")!;
-    expect(fix).toMatchObject({ loop: "rounds", skippable: true });
-    expect(fix.inputs.find((port) => port.name === "feedback")!.carries).toEqual(["rounds#0"]);
-    // Verify gets its commit from Address or the clean outlet: it always runs.
+    const rework = plan.nodes.find((node) => node.id === "rework")!;
+    expect(rework).toMatchObject({ loop: "rounds", skippable: true });
+    expect(rework.inputs.find((port) => port.name === "feedback")!.carries).toEqual(["rounds#0"]);
+    // Verify gets its commit from Address Findings or the clean outlet: it always runs.
     expect(plan.nodes.find((node) => node.id === "verify")!.skippable).toBe(false);
     expect(plan.order[0]).toBe("build");
   });

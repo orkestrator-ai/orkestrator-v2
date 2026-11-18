@@ -9,7 +9,7 @@ function Checkbox({ className, ...props }: React.ComponentProps<typeof CheckboxP
     <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        "peer group/checkbox border-input dark:bg-input/30 data-[state=checked]:bg-primary data-[state=indeterminate]:bg-primary data-[state=indeterminate]:text-primary-foreground data-[state=indeterminate]:border-primary data-[state=checked]:text-primary-foreground dark:data-[state=checked]:bg-primary dark:data-[state=indeterminate]:bg-primary data-[state=checked]:border-primary focus-hairline data-[state=checked]:focus-hairline-outset aria-invalid:[--focus-hairline-color:var(--color-destructive)] aria-invalid:border-destructive size-4 shrink-0 rounded-[4px] border shadow-xs transition-shadow outline-none disabled:cursor-not-allowed disabled:opacity-50",
+        "peer group/checkbox border-input dark:bg-input/30 data-[state=checked]:bg-primary-fill data-[state=indeterminate]:bg-primary-fill data-[state=indeterminate]:text-primary-foreground data-[state=indeterminate]:border-primary data-[state=checked]:text-primary-foreground dark:data-[state=checked]:bg-primary-fill dark:data-[state=indeterminate]:bg-primary-fill data-[state=checked]:border-primary focus-hairline data-[state=checked]:focus-hairline-outset data-[state=indeterminate]:focus-hairline-outset aria-invalid:[--focus-hairline-color:var(--color-destructive)] aria-invalid:border-destructive size-4 shrink-0 rounded-[4px] border shadow-xs transition-shadow outline-none disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}

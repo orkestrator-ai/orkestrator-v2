@@ -267,3 +267,34 @@ Evidence: the pinned review package's `validation-04.stderr.txt`, and
 `orkestrator-test-run.GH3c7x/{root-and-agent-support-tests,rerun-tests-unit-activity-sweep-bridge-test-ts}.log.gz`
 under the host temporary root. No implementation, assertion, timeout or skip changed.
 Attribution remains undetermined; the retry proves intermittence, not a fix.
+
+## American English merge validation — 2026-11-18
+
+Observed while merging `0c01e1f008bbdbee8d1c35b007165d4213186cbe` with target
+`583da944e454bfd514e7e459f102ff3df67f9b6a`. The recurrence check for that
+target classified case 6063 as open. The original command was
+`mise run test:logged -- --name merge-default -- mise run test`; the root
+group had one worker slot and the workspace group had five.
+
+- `activity sweep bridge ownership > readiness timeout reaps the child and removes copied credentials (ignores TERM: %s)` failed in
+  `tests/unit/activity-sweep-bridge.test.ts:111` after 216.73 ms with
+  `kill() failed: EPERM`. The root group finished with 4,899 passes, 29
+  skips, and 11 failures across 288 files in 707.32 s. The complete file
+  passed alone in 0.4 s.
+- The same aggregate run observed a separate failure in
+  `apps/web/src/components/linear/LinearTicketsView.test.tsx:1919`.
+  `LinearTicketsView > board view > a failed move after a successful one puts the card back where the first left it`
+  received `undefined` for the card's lane instead of `In Review lane`
+  after 842.33 ms. The complete file passed alone in 3.0 s and also passed
+  in the focused checks on the incoming target. The cause is unconfirmed.
+
+```sh
+mise run test:logged -- --name merge-1d1931cf-activity-alone -- \
+  bun test ./tests/unit/activity-sweep-bridge.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name merge-1d1931cf-linear-alone -- \
+  bun --cwd=apps/web test src/components/linear/LinearTicketsView.test.tsx --parallel=1 --only-failures
+```
+
+Aggregate group logs are under `orkestrator-test-run.9scwJV` in the host
+temporary directory. The observations did not require changes to the
+implementation or assertions of either test.

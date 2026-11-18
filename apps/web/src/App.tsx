@@ -916,7 +916,7 @@ function ConnectedApp() {
               {localBackendUnavailableMessage && (
                 <div
                   role="alert"
-                  className="fixed inset-x-4 top-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-red-500/40 bg-red-950/95 px-4 py-3 text-sm text-red-100 shadow-xl"
+                  className="fixed inset-x-4 top-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-failure/40 bg-failure/10 backdrop-blur-sm backdrop-brightness-10 px-4 py-3 text-sm text-failure shadow-xl"
                 >
                   <span>{localBackendUnavailableMessage}</span>
                   <Button

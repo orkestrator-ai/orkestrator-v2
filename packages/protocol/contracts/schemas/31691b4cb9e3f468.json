@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:31691b4cb9e3f4683af377201def657a3fe2fdf938d04e69be3c2f34e7534e53",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "addressFindingsModel": {},
+        "instruction": {},
+        "reviewerId": {},
+        "surface": {},
+        "workflowId": {}
+      },
+      "type": "object"
+    }
+  }
+}

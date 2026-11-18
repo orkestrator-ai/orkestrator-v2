@@ -61,9 +61,9 @@ function multiReview(): GraphTemplateV1 {
     revision: 1,
     name: "Multi Review",
     description:
-      "Prepare and seal a review package, review it with a panel, consolidate, then optionally fix and open a pull request.",
+      "Prepare and seal a review package, review it with a panel, consolidate, then optionally address the findings and open a pull request.",
     parameters: [
-      { key: "autoFix", type: "boolean", default: true },
+      { key: "autoAddressFindings", type: "boolean", default: true },
       { key: "autoPr", type: "boolean", default: false },
     ],
     roles: [
@@ -75,13 +75,18 @@ function multiReview(): GraphTemplateV1 {
         defaultsFrom: ["review", "review2", "additionalReviewers"],
       },
       { key: "consolidator", multiplicity: "one", defaultsFrom: ["reviewPreparation"] },
-      { key: "fixer", multiplicity: "one", defaultsFrom: ["fixReviewIssues"] },
+      { key: "addresser", multiplicity: "one", defaultsFrom: ["addressFindings"] },
       { key: "describer", multiplicity: "one", defaultsFrom: ["pr"] },
     ],
     inputs: [{ name: "target", type: "workspace@1" }],
     outputs: [
       { name: "report", type: "review-report@1", from: { node: "consolidate", port: "report" } },
-      { name: "code", type: "workspace@1", required: false, from: { node: "fix", port: "code" } },
+      {
+        name: "code",
+        type: "workspace@1",
+        required: false,
+        from: { node: "address-findings", port: "code" },
+      },
     ],
     workspace: { kind: "environment" },
     nodes: [
@@ -146,21 +151,21 @@ function multiReview(): GraphTemplateV1 {
         otherwise: "clean",
       },
       {
-        id: "fix",
+        id: "address-findings",
         kind: "agent",
-        role: "fixer",
-        when: { path: "params.autoFix", op: "eq", value: true },
+        role: "addresser",
+        when: { path: "params.autoAddressFindings", op: "eq", value: true },
         capabilities: { profile: "builder" },
         workspaceAccess: "write",
         // Today: an ordinary interactive tab.
         session: { mode: "fresh" },
-        prompt: { builtIn: "fix-review-issues" },
+        prompt: { builtIn: "address-findings" },
         inputs: [
           { name: "report", type: "review-report@1", render: "json-frame" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [
-          { name: "result", type: "fix-result@1" },
+          { name: "result", type: "address-findings-result@1" },
           { name: "code", type: "workspace@1" },
         ],
       },
@@ -174,7 +179,7 @@ function multiReview(): GraphTemplateV1 {
         prompt: { builtIn: "pull-request-description" },
         inputs: [
           { name: "code", type: "workspace@1" },
-          { name: "result", type: "fix-result@1", render: "json-frame" },
+          { name: "result", type: "address-findings-result@1", render: "json-frame" },
         ],
         outputs: [{ name: "description", type: "pr-description@1" }],
       },
@@ -210,29 +215,37 @@ function multiReview(): GraphTemplateV1 {
         { node: "has-findings", port: "report" },
       ),
       edge(
-        "findings-fix",
+        "findings-address-findings",
         { node: "has-findings", outlet: "findings", port: "report" },
-        { node: "fix", port: "report" },
+        { node: "address-findings", port: "report" },
       ),
-      edge("plan-fix", { node: "plan", port: "code" }, { node: "fix", port: "code" }),
       edge(
-        "fix-describe-code",
-        { node: "fix", port: "code" },
+        "plan-address-findings",
+        { node: "plan", port: "code" },
+        { node: "address-findings", port: "code" },
+      ),
+      edge(
+        "address-findings-describe-code",
+        { node: "address-findings", port: "code" },
         { node: "describe-pr", port: "code" },
       ),
       edge(
-        "fix-describe-result",
-        { node: "fix", port: "result" },
+        "address-findings-describe-result",
+        { node: "address-findings", port: "result" },
         { node: "describe-pr", port: "result" },
       ),
-      edge("fix-pr", { node: "fix", port: "code" }, { node: "pr", port: "code" }),
+      edge(
+        "address-findings-pr",
+        { node: "address-findings", port: "code" },
+        { node: "pr", port: "code" },
+      ),
       edge(
         "describe-pr-pr",
         { node: "describe-pr", port: "description" },
         { node: "pr", port: "description" },
       ),
     ],
-    // plan 1 + reviewers 32 + consolidate 1 + fix 1 + describe-pr 1.
+    // plan 1 + reviewers 32 + consolidate 1 + address-findings 1 + describe-pr 1.
     limits: { maxAgentSessions: 36, maxConcurrentAgents: 32 },
   };
 }
@@ -256,7 +269,7 @@ function buildPipelineLoop(): GraphTemplateV1 {
       { key: "builder", multiplicity: "one" },
       { key: "preparer", multiplicity: "one", defaultsFrom: ["reviewPreparation"] },
       { key: "reviewer", multiplicity: "one", defaultsFrom: ["review"] },
-      { key: "fixer", multiplicity: "one", defaultsFrom: ["fixReviewIssues"] },
+      { key: "addresser", multiplicity: "one", defaultsFrom: ["addressFindings"] },
       { key: "verifier", multiplicity: "one", defaultsFrom: ["verify"] },
     ],
     inputs: [
@@ -286,17 +299,17 @@ function buildPipelineLoop(): GraphTemplateV1 {
         ],
         outputs: [
           { name: "code", type: "workspace@1" },
-          { name: "report", type: "fix-result@1" },
+          { name: "report", type: "address-findings-result@1" },
         ],
       },
       {
-        id: "fix",
+        id: "rework",
         kind: "agent",
         role: "builder",
         when: { path: "run.iteration", op: "gt", value: 1 },
         capabilities: { profile: "builder" },
         workspaceAccess: "write",
-        prompt: { builtIn: "pipeline-fix" },
+        prompt: { builtIn: "pipeline-rework" },
         inputs: [
           { name: "ticket", type: "ticket@1", render: "markdown" },
           { name: "feedback", type: "verification-verdict@1", render: "json-frame" },
@@ -304,7 +317,7 @@ function buildPipelineLoop(): GraphTemplateV1 {
         ],
         outputs: [
           { name: "code", type: "workspace@1" },
-          { name: "report", type: "fix-result@1" },
+          { name: "report", type: "address-findings-result@1" },
         ],
       },
       {
@@ -318,7 +331,7 @@ function buildPipelineLoop(): GraphTemplateV1 {
           {
             name: "code",
             type: "workspace@1",
-            // Build's commit on iteration 1, Fix's afterwards.
+            // Build's commit on iteration 1, Rework's afterwards.
             firstIterationFrom: { node: "build", port: "code" },
           },
         ],
@@ -362,19 +375,19 @@ function buildPipelineLoop(): GraphTemplateV1 {
         otherwise: "clean",
       },
       {
-        id: "address",
+        id: "address-findings",
         kind: "agent",
-        role: "fixer",
+        role: "addresser",
         capabilities: { profile: "builder" },
         workspaceAccess: "write",
-        prompt: { builtIn: "address-review" },
+        prompt: { builtIn: "pipeline-address-findings" },
         inputs: [
           { name: "report", type: "review-report@1", render: "json-frame" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [
           { name: "code", type: "workspace@1" },
-          { name: "report", type: "fix-result@1" },
+          { name: "report", type: "address-findings-result@1" },
         ],
       },
       {
@@ -390,7 +403,12 @@ function buildPipelineLoop(): GraphTemplateV1 {
         inputs: [
           { name: "ticket", type: "ticket@1", render: "markdown" },
           { name: "code", type: "workspace@1" },
-          { name: "address", type: "fix-result@1", required: false, render: "json-frame" },
+          {
+            name: "addressFindings",
+            type: "address-findings-result@1",
+            required: false,
+            render: "json-frame",
+          },
         ],
         outputs: [
           { name: "verdict", type: "verification-verdict@1" },
@@ -402,8 +420,8 @@ function buildPipelineLoop(): GraphTemplateV1 {
       edge("target-build", { input: "target" }, { node: "build", port: "code" }),
       edge("ticket-build", { input: "ticket" }, { node: "build", port: "ticket" }),
       edge("build-prepare", { node: "build", port: "code" }, { node: "prepare", port: "code" }),
-      edge("fix-prepare", { node: "fix", port: "code" }, { node: "prepare", port: "code" }),
-      edge("ticket-fix", { input: "ticket" }, { node: "fix", port: "ticket" }),
+      edge("rework-prepare", { node: "rework", port: "code" }, { node: "prepare", port: "code" }),
+      edge("ticket-rework", { input: "ticket" }, { node: "rework", port: "ticket" }),
       edge(
         "prepare-package-plan",
         { node: "prepare", port: "plan" },
@@ -427,19 +445,19 @@ function buildPipelineLoop(): GraphTemplateV1 {
       ),
       edge("prepare-gate", { node: "prepare", port: "code" }, { node: "has-issues", port: "code" }),
       edge(
-        "issues-address-report",
+        "issues-address-findings-report",
         { node: "has-issues", outlet: "issues", port: "report" },
-        { node: "address", port: "report" },
+        { node: "address-findings", port: "report" },
       ),
       edge(
-        "issues-address-code",
+        "issues-address-findings-code",
         { node: "has-issues", outlet: "issues", port: "code" },
-        { node: "address", port: "code" },
+        { node: "address-findings", port: "code" },
       ),
       // Two producers into verify.code, on mutually exclusive gate outlets.
       edge(
-        "address-verify-code",
-        { node: "address", port: "code" },
+        "address-findings-verify-code",
+        { node: "address-findings", port: "code" },
         { node: "verify", port: "code" },
       ),
       edge(
@@ -448,26 +466,34 @@ function buildPipelineLoop(): GraphTemplateV1 {
         { node: "verify", port: "code" },
       ),
       edge(
-        "address-verify-report",
-        { node: "address", port: "report" },
-        { node: "verify", port: "address" },
+        "address-findings-verify-report",
+        { node: "address-findings", port: "report" },
+        { node: "verify", port: "addressFindings" },
       ),
       edge("ticket-verify", { input: "ticket" }, { node: "verify", port: "ticket" }),
     ],
     loops: [
       {
         id: "rounds",
-        nodes: ["fix", "prepare", "package", "review", "has-issues", "address", "verify"],
+        nodes: [
+          "rework",
+          "prepare",
+          "package",
+          "review",
+          "has-issues",
+          "address-findings",
+          "verify",
+        ],
         until: { path: "verify.verdict.complete", op: "eq", value: true },
         // Today's default; the protocol maximum is 10.
         maxIterations: 3,
         carry: [
-          { from: { node: "verify", port: "verdict" }, to: { node: "fix", port: "feedback" } },
-          { from: { node: "verify", port: "code" }, to: { node: "fix", port: "code" } },
+          { from: { node: "verify", port: "verdict" }, to: { node: "rework", port: "feedback" } },
+          { from: { node: "verify", port: "code" }, to: { node: "rework", port: "code" } },
         ],
       },
     ],
-    // build 1 + (fix, prepare, review, address, verify) × 3.
+    // build 1 + (rework, prepare, review, address-findings, verify) × 3.
     limits: { maxAgentSessions: 16, maxConcurrentAgents: 1 },
   };
 }
@@ -494,7 +520,7 @@ function designBriefExample() {
  * Report §9.3. Added: the judge also emits the chosen brief (citing its
  * source) so the human node has one artifact to edit, and a `describe-pr`
  * node produces the PR description. The review is the built-in Multi Review
- * inlined as a sub-graph (item 402): `autoFix` passes this template's
+ * inlined as a sub-graph (item 402): `autoAddressFindings` passes this template's
  * parameter through, `autoPr` is off because this template opens the pull
  * request itself, on whichever branch the review ends on (`clean` or
  * `fixed`). The briefs are tainted (the designers search the web), so the
@@ -512,7 +538,7 @@ function designBakeOff(): GraphTemplateV1 {
       "Three designers propose briefs through different lenses, a judge picks one, a person approves it, then Build, Multi Review and a pull request.",
     parameters: [
       {
-        key: "autoFix",
+        key: "autoAddressFindings",
         type: "boolean",
         label: "Address review findings",
         default: true,
@@ -563,7 +589,7 @@ function designBakeOff(): GraphTemplateV1 {
       { name: "ticket", type: "ticket@1" },
       { name: "target", type: "workspace@1" },
     ],
-    // Optional: with autoFix off, a review with findings ends without a pull request.
+    // Optional: with autoAddressFindings off, a review with findings ends without a pull request.
     outputs: [
       { name: "pr", type: "pr-result@1", required: false, from: { node: "pr", port: "pr" } },
     ],
@@ -662,7 +688,7 @@ function designBakeOff(): GraphTemplateV1 {
         ],
         outputs: [
           { name: "code", type: "workspace@1" },
-          { name: "report", type: "fix-result@1" },
+          { name: "report", type: "address-findings-result@1" },
         ],
       },
       {
@@ -671,12 +697,12 @@ function designBakeOff(): GraphTemplateV1 {
         // Unpinned: a built-in moves with the app version, and a run freezes
         // the copy it launched with. The designer pins what the user picks.
         template: { scope: "builtin", id: "multi-review" },
-        params: { autoFix: { param: "autoFix" }, autoPr: false },
+        params: { autoAddressFindings: { param: "autoAddressFindings" }, autoPr: false },
         roles: {
           preparer: "preparer",
           reviewer: "reviewer",
           consolidator: "consolidator",
-          fixer: "builder",
+          addresser: "builder",
           describer: "describer",
         },
         inputs: [{ name: "target", type: "workspace@1" }],
@@ -758,7 +784,7 @@ function designBakeOff(): GraphTemplateV1 {
       ),
     ],
     // design 3 + judge 1 + build 1 + Multi Review (plan 1 + reviewers 8 +
-    // consolidate 1 + fix 1 + describe-pr 1) + describe-pr 1; the compiler
+    // consolidate 1 + address-findings 1 + describe-pr 1) + describe-pr 1; the compiler
     // sums the inlined nodes against these limits.
     limits: { maxAgentSessions: 18, maxConcurrentAgents: 8 },
     // The human approval node is the mitigation; these record that the user
@@ -771,8 +797,8 @@ function designBakeOff(): GraphTemplateV1 {
       taintAcknowledgement("34b99290835bb877ad19ec337cd8896241f821d91a899e13d205918741c2d284"),
       // review/package
       taintAcknowledgement("2fa1268a39bdc72b65e90c24903afeebe7bf13ffbf07fe76ec1c2cc9e192e6b8"),
-      // review/fix
-      taintAcknowledgement("68161e8aada90977a901eada3aef05cad3bd0542a2249c52eac65a4c8b844c97"),
+      // review/address-findings
+      taintAcknowledgement("2ad48dbe8dbda1eeaabb0404191d2e28fe12b37944c5f40cf3d48a7ec6acc999"),
       // review/pr (skipped here, as autoPr is off, but the compiler cannot know that)
       taintAcknowledgement("f884ef2386630f240e24a30a0e58dfae9c4a610b16ac8a489546fbc3af031cda"),
       // pr
@@ -806,7 +832,7 @@ function failureDiagnosis(): GraphTemplateV1 {
     parameters: [],
     roles: [
       { key: "diagnoser", multiplicity: "one" },
-      { key: "fixer", multiplicity: "one", defaultsFrom: ["fixReviewIssues"] },
+      { key: "addresser", multiplicity: "one", defaultsFrom: ["addressFindings"] },
     ],
     types: [
       {
@@ -916,19 +942,19 @@ function failureDiagnosis(): GraphTemplateV1 {
         outputs: [{ name: "diagnosis", type: "diagnosis@1" }],
       },
       {
-        id: "fix",
+        id: "address-findings",
         kind: "agent",
-        role: "fixer",
+        role: "addresser",
         capabilities: { profile: "builder" },
         workspaceAccess: "write",
-        prompt: { builtIn: "fix-review-issues" },
+        prompt: { builtIn: "address-findings" },
         inputs: [
           { name: "diagnosis", type: "diagnosis@1", render: "json-frame" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [
           { name: "code", type: "workspace@1" },
-          { name: "report", type: "fix-result@1" },
+          { name: "report", type: "address-findings-result@1" },
         ],
       },
     ],
@@ -951,19 +977,32 @@ function failureDiagnosis(): GraphTemplateV1 {
         { node: "diagnose", port: "diagnosis" },
         { node: "dedupe", port: "diagnoses" },
       ),
-      edge("dedupe-fix", { node: "dedupe", port: "diagnosis" }, { node: "fix", port: "diagnosis" }),
-      edge("validate-fix", { node: "validate", port: "code" }, { node: "fix", port: "code" }),
+      edge(
+        "dedupe-address-findings",
+        { node: "dedupe", port: "diagnosis" },
+        { node: "address-findings", port: "diagnosis" },
+      ),
+      edge(
+        "validate-address-findings",
+        { node: "validate", port: "code" },
+        { node: "address-findings", port: "code" },
+      ),
     ],
     loops: [
       {
         id: "repair",
-        nodes: ["validate", "diagnose", "dedupe", "fix"],
+        nodes: ["validate", "diagnose", "dedupe", "address-findings"],
         until: { path: "validate.results.failures", op: "empty" },
         maxIterations: 3,
-        carry: [{ from: { node: "fix", port: "code" }, to: { node: "validate", port: "code" } }],
+        carry: [
+          {
+            from: { node: "address-findings", port: "code" },
+            to: { node: "validate", port: "code" },
+          },
+        ],
       },
     ],
-    // (diagnose 12 + fix 1) × 3.
+    // (diagnose 12 + address-findings 1) × 3.
     limits: { maxAgentSessions: 39, maxConcurrentAgents: 12 },
   };
 }

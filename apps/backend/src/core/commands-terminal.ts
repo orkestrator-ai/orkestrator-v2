@@ -42,6 +42,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     tabTeardownIntents: _tabTeardownIntents,
     pendingRenamePrompt: _pendingRenamePrompt,
     prRecheckAfterAgentCompletionArmedAt: _prRecheckArm,
+    prMergeNoticePendingUrl: _prMergeNoticePending,
     controlRequestId: _controlRequestId,
     controlRequestFingerprint: _controlRequestFingerprint,
     branchRevision: _branchRevision,

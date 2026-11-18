@@ -105,11 +105,11 @@ export function sampleGraphTemplate(
   };
 }
 
-/** The sample with its fixer node asking for `git.push` (D12: always rejected). */
+/** The sample with its Address Findings node asking for `git.push` (D12: always rejected). */
 export function pushingGraphTemplate(id = "pushing-review"): GraphTemplateV1 {
   const template = sampleGraphTemplate(id);
   for (const node of template.nodes) {
-    if (node.kind === "agent" && node.id === "fix") {
+    if (node.kind === "agent" && node.id === "address-findings") {
       node.capabilities = { ...node.capabilities, allow: ["git.push"] };
     }
   }

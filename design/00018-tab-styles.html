@@ -11,20 +11,20 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00018</p>
       <h1>00018 · Reduce tab-like controls to the documented styles</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-low">Low</span>
         <span class="pill">Interaction</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 6 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 6 / 6 images</span
         >
       </div>
 
       <h2>Problem</h2>
       <p>
-        <code>ui/tabs.tsx</code> renders a <code>bg-muted</code> track with a
+        <code>ui/tabs.tsx</code> rendered a <code>bg-muted</code> track with a
         <code>bg-background</code> active tab, which matches none of the three documented patterns.
-        <code>KanbanTaskDialog.tsx:215</code> hand-rolls an underline tab, and
-        <code>CreateEnvironmentDialog.tsx:173</code> styles its mobile tabs with a
+        <code>KanbanTaskDialog.tsx</code> hand-rolled an underline tab, and
+        <code>CreateEnvironmentDialog.tsx</code> styled its mobile tabs with a
         <code>border-primary/40</code> outlined active tab and 10px labels.
       </p>
       <div class="rule">
@@ -49,7 +49,7 @@
         </thead>
         <tbody>
           <tr>
-            <td><code>apps/web/src/components/ui/tabs.tsx:21,34</code></td>
+            <td><code>apps/web/src/components/ui/tabs.tsx</code></td>
             <td>the shared Tabs</td>
           </tr>
           <tr>
@@ -57,12 +57,12 @@
             <td>the documented segmented control</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/kanban/KanbanTaskDialog.tsx:215</code></td>
+            <td><code>apps/web/src/components/kanban/KanbanTaskDialog.tsx</code></td>
             <td>hand-rolled underline tabs</td>
           </tr>
           <tr>
             <td>
-              <code>apps/web/src/components/environments/CreateEnvironmentDialog.tsx:173</code>
+              <code>apps/web/src/components/environments/CreateEnvironmentDialog.tsx</code>
             </td>
             <td>mobile tab triggers with an outlined active tab</td>
           </tr>
@@ -111,7 +111,7 @@
 
       <section class="capture" id="cap-kanban-task-tabs-desktop">
         <h3>Kanban task dialog tabs <span class="pill">desktop 1440×900</span></h3>
-        <p class="how">Open a Kanban task.</p>
+        <p class="how">Open the fixture ticket “Review navigation styles” on the Kanban board.</p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -142,7 +142,7 @@
 
       <section class="capture" id="cap-create-environment-mobile-tabs-narrow">
         <h3>Create environment dialog mobile tabs <span class="pill">narrow 390×844</span></h3>
-        <p class="how">Open the dialog at a narrow width.</p>
+        <p class="how">Open the fixture project’s Create environment dialog at a narrow width.</p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -177,7 +177,7 @@
 
       <section class="capture" id="cap-shared-tabs-sample-desktop">
         <h3>One screen using the shared Tabs <span class="pill">desktop 1440×900</span></h3>
-        <p class="how">Pick one from the call-site list.</p>
+        <p class="how">Open Add project and leave Existing repository selected.</p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -225,54 +225,54 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00018/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Hits were classified in Notes, and each decision below is recorded with the option
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Hits were classified in Notes, and each decision above is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: Name the final tab variants in Components →
             Navigation.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -280,14 +280,59 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+      <h3>Tab list inventory</h3>
+      <ul>
+        <li>
+          <b>Underline.</b> <code>KanbanTaskDialog</code> (Ticket and Notes),
+          <code>CreateEnvironmentDialog</code> (mobile configuration views), and
+          <code>FeaturesView</code> (Chat, Stories and open stories).
+        </li>
+        <li>
+          <b>Pill.</b> <code>FilesPanelHeader</code> (file and pull request views),
+          <code>EnvironmentSettingsDialog</code> (agent extensions), and
+          <code>SkillsSettings</code> (agent and category selection).
+        </li>
+        <li>
+          <b>Segmented.</b> <code>AddProjectDialog</code> (project source),
+          <code>DesignWorkspaceDialog</code> (New, Open and Saved),
+          <code>SkillsSettings</code> (Rendered and Raw),
+          <code>RenderedRawFileShell</code> (Rendered and Raw),
+          <code>PipelineFlowView</code> (Transcript and Tests),
+          <code>GraphRunInspector</code> (Details and Transcript), and
+          <code>MultiReviewInspectorViews</code> (Transcript and Report).
+        </li>
+        <li><code>KanbanBoard</code> uses the shared root and panels and supplies no tab list.</li>
+      </ul>
+
+      <h3>Decision</h3>
+      <p>
+        Chose explicit variants on the shared tab list and migrated each caller by purpose. Each
+        list and its triggers now share one style choice. The segmented tabs and the standalone
+        selector use the same track token classes. This keeps the existing tabs’ keyboard behaviour
+        and panel wiring. Palette values are unchanged.
+      </p>
+
+      <h3>Image pairs</h3>
+      <p>
+        Captured in Chromium from the headless <code>design-00018</code> profile using the same dark
+        theme, fixture, viewport and 1× scale for each pair. Baseline commit
+        <code>b2c91abb9</code> had no source changes.
       </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <a href="#cap-kanban-task-tabs-desktop">Kanban task dialog</a>. The selected Ticket tab
+          keeps its blue underline using the shared style. Notes is disabled in this fixture because
+          the ticket has no build.
+        </li>
+        <li>
+          <a href="#cap-create-environment-mobile-tabs-narrow">Create environment</a>. A blue
+          underline replaces the selected tab’s outlined tile, and the icons sit above 12px labels
+          in 44px-tall targets.
+        </li>
+        <li>
+          <a href="#cap-shared-tabs-sample-desktop">Add project</a>. Existing repository and Create
+          new share one bordered track. The selected source has a solid blue fill and bold label.
+        </li>
       </ul>
 
       <footer>

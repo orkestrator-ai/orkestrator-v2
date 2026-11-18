@@ -343,7 +343,7 @@ function PredicateNode({
   return (
     <div
       data-graph-predicate-group={kind}
-      className="flex flex-col gap-1 rounded-md border border-border/60 border-l-2 border-l-indigo-400/50 p-1.5"
+      className="flex flex-col gap-1 rounded-md border border-indigo-400/30 p-1.5"
     >
       <div className="flex items-center gap-1">
         <select

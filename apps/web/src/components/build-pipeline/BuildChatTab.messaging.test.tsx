@@ -960,22 +960,20 @@ describe("BuildChatTab agent messaging", () => {
     expect(screen.getByRole("button", { name: label })).toBeTruthy();
   });
 
-  test.each(["building", "reworking"] as const)("names validation during the %s phase", (phase) => {
+  test("names validation during package preparation", () => {
     pipelineStore()
       .getState()
       .replacePipeline({
         ...running,
-        phase,
+        phase: "preparing-package",
         validationRun: validationRun({ status: "running" }),
       });
     renderTab();
 
     expect(screen.getByRole("button", { name: "Restart Validation" })).toBeTruthy();
-    expect(
-      screen.queryByRole("button", {
-        name: `Restart ${phase === "building" ? "Build" : "Rework"} Stage`,
-      }) === null,
-    ).toBe(true);
+    expect(screen.queryByRole("button", { name: "Restart Review Preparation" }) === null).toBe(
+      true,
+    );
   });
 
   test.each(["cancelled", "retry"] as const)(
@@ -985,7 +983,7 @@ describe("BuildChatTab agent messaging", () => {
         .getState()
         .replacePipeline({
           ...running,
-          phase: "reworking",
+          phase: "preparing-package",
           validationRun: validationRun({
             status: reason === "cancelled" ? "cancelled" : "running",
           }),
@@ -997,17 +995,17 @@ describe("BuildChatTab agent messaging", () => {
     },
   );
 
-  test("names the dedicated preparation session during a fix", () => {
+  test("names the dedicated preparation session", () => {
     pipelineStore()
       .getState()
       .replacePipeline({
         ...running,
-        phase: "reworking",
+        phase: "preparing-package",
         sessions: [
           ...running.sessions,
           {
             ...running.sessions[0]!,
-            phase: "rework",
+            phase: "package-preparation",
             sessionKey: "preparation-key",
             sdkSessionId: "preparation-session",
             status: "running",

@@ -82,7 +82,7 @@ export function ErrorNotice({
     <div
       role="alert"
       className={cn(
-        "rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive",
+        "rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-failure",
         className,
       )}
     >
@@ -91,7 +91,7 @@ export function ErrorNotice({
         <div className="min-w-0 flex-1 space-y-1">
           <p className="break-words">{message}</p>
           {credential && (
-            <p className="text-xs text-destructive/80">
+            <p className="text-xs text-failure/80">
               The pull request viewer uses the GitHub credentials configured in Settings → Version
               control. Add a token there (or enable host GitHub CLI credentials) and retry.
             </p>

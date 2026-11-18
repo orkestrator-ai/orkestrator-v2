@@ -75,8 +75,14 @@ import {
  * command node can use.
  */
 
-/** The surfaces `controller_multi_review_surface` opens; older nodes know the first three. */
-const MULTI_REVIEW_SURFACES = ["root", "fix", "address", "reviewer", "custom-fix"] as const;
+/** The surfaces `controller_multi_review_surface` opens. */
+const MULTI_REVIEW_SURFACES = [
+  "root",
+  "address-findings",
+  "address",
+  "reviewer",
+  "custom-address",
+] as const;
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -391,8 +397,8 @@ export function registerControllerWorkflowCommands(
   });
 
   /**
-   * Open a saved review's root, Fix or reviewer tab, address its findings, or
-   * start a custom fix.
+   * Open a saved review's root, Address Findings or reviewer tab, address its
+   * findings, or start a custom Address Findings.
    */
   register(controllerMultiReviewSurfaceCommand, async (args, context) => {
     const surface = args.surface;
@@ -409,23 +415,23 @@ export function registerControllerWorkflowCommands(
       const reviewerId = asNonBlankString(args.reviewerId, "reviewerId");
       return runMultiReviewSurface(context, review, "root", undefined, reviewerId);
     }
-    if (surface === "address" || surface === "custom-fix") {
+    if (surface === "address" || surface === "custom-address") {
       const environment = await context.storage.getEnvironment(saved.snapshot.environmentId);
       if (isProjectHomeEnvironment(environment)) {
         throw new Error("The project checkout is not a worker environment.");
       }
     }
-    if (surface === "custom-fix") {
+    if (surface === "custom-address") {
       const instruction = asNonBlankString(args.instruction, "instruction").trim();
       if (instruction.length > MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH) {
-        throw new Error("The custom fix instruction is too long");
+        throw new Error("The custom Address Findings instruction is too long");
       }
-      const fixModel = args.fixModel;
-      if (fixModel !== undefined && !isMultiReviewModelSelection(fixModel)) {
-        throw new Error("Expected fixModel to be { agent, model, reasoningEffort? }");
+      const model = args.addressFindingsModel;
+      if (model !== undefined && !isMultiReviewModelSelection(model)) {
+        throw new Error("Expected addressFindingsModel to be { agent, model, reasoningEffort? }");
       }
-      // A command node's retry after a lost answer can arrive once that fix is
-      // past its handoff, when the review is no longer ready: report the fix
+      // A command node's retry after a lost answer can arrive once that run is
+      // past its handoff, when the review is no longer ready: report the run
       // this instruction started instead of refusing it.
       const launch = saved.snapshot.addressFindingsLaunch;
       if (
@@ -433,21 +439,25 @@ export function registerControllerWorkflowCommands(
         !saved.snapshot.addressPromptPending &&
         launch?.kind === "custom" &&
         launch.instruction === instruction &&
-        (fixModel === undefined ||
-          (launch.model.agent === fixModel.agent &&
-            launch.model.model === fixModel.model &&
-            launch.model.reasoningEffort === fixModel.reasoningEffort))
+        (model === undefined ||
+          (launch.model.agent === model.agent &&
+            launch.model.model === model.model &&
+            launch.model.reasoningEffort === model.reasoningEffort))
       ) {
-        return runMultiReviewSurface(context, review, "fix");
+        return runMultiReviewSurface(context, review, "address-findings");
       }
       return runMultiReviewSurface(context, review, "address", undefined, undefined, {
         instruction,
-        // Omitted, the custom fix runs the review's own fix model, as the
-        // dialog's model picker starts on it.
-        addressFindingsModel: fixModel ?? saved.snapshot.addressFindingsModel,
+        // Omitted, the custom Address Findings runs the review's own Address
+        // Findings model, as the dialog's model picker starts on it.
+        addressFindingsModel: model ?? saved.snapshot.addressFindingsModel,
       });
     }
-    return runMultiReviewSurface(context, review, surface as "root" | "fix" | "address");
+    return runMultiReviewSurface(
+      context,
+      review,
+      surface as "root" | "address-findings" | "address",
+    );
   });
 
   /** The low-level start after a successful build, under a reserved ID. */

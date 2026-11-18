@@ -188,8 +188,9 @@ describe("Terminal ComposeBar", () => {
     const composeBar = document.querySelector("[data-compose-bar]");
     expect(composeBar?.className).toContain("bottom-[calc(3.5rem+env(safe-area-inset-bottom))]");
     expect(composeBar?.className).toContain("absolute");
-    expect(composeBar?.className).toContain("left-2");
-    expect(composeBar?.className).not.toContain("bottom-2");
+    expect(composeBar?.classList.contains("inset-x-0")).toBe(true);
+    expect(composeBar?.classList.contains("px-2")).toBe(true);
+    expect(composeBar?.classList.contains("bottom-0")).toBe(false);
   });
 
   test("focuses the textarea when opened and persists typed drafts", () => {
@@ -208,11 +209,11 @@ describe("Terminal ComposeBar", () => {
   });
 
   test("keeps drafts isolated by terminal session and caps textarea rows", () => {
-    const manyLines = Array.from({ length: 12 }, (_, index) => `line ${index}`).join("\n");
+    const manyLines = Array.from({ length: 16 }, (_, index) => `line ${index}`).join("\n");
     seedDraft(manyLines);
 
     const { rerender } = renderComposeBar();
-    expect(Number(getTextarea().getAttribute("rows"))).toBe(10);
+    expect(getTextarea().getAttribute("rows")).toBe("12");
 
     rerender(
       <ComposeBar
@@ -224,7 +225,7 @@ describe("Terminal ComposeBar", () => {
       />,
     );
     expect(getTextarea().value).toBe("");
-    expect(Number(getTextarea().getAttribute("rows"))).toBe(1);
+    expect(getTextarea().getAttribute("rows")).toBe("1");
   });
 
   test("restores an environment-scoped backend draft", async () => {

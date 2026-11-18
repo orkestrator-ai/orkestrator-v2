@@ -90,24 +90,20 @@ async function openGitHubRepositories() {
 }
 
 describe("AddProjectDialog", () => {
-  test("renders the source selector as option cards and preserves active state", () => {
+  test("renders the project source selector as segmented tabs and switches panels", () => {
     renderDialog();
 
     const existingTab = screen.getByRole("tab", { name: "Existing repository" });
     const createTab = screen.getByRole("tab", { name: "Create new" });
-    const tabList = screen.getByRole("tablist");
+    const tabList = screen.getByRole("tablist", { name: "Project source" });
 
-    expect(tabList.className).toContain("gap-2");
-    expect(tabList.className).toContain("bg-transparent");
-    expect(tabList.className).toContain("p-0");
+    expect(tabList.className).toContain("bg-input-surface");
+    expect(tabList.className).toContain("border-divider");
+    expect(tabList.className).toContain("p-0.5");
 
     for (const tab of [existingTab, createTab]) {
-      expect(tab.className).not.toContain("border-2");
-      expect(tab.className).toContain("p-3");
-      expect(tab.className).toContain("justify-start");
-      expect(tab.className).toContain("data-[state=active]:!border-ring");
-      expect(tab.className).toContain("data-[state=inactive]:!bg-zinc-900");
-      expect(tab.className).toContain("hover:data-[state=inactive]:border-zinc-600");
+      expect(tab.className).toContain("data-[state=active]:bg-primary-fill");
+      expect(tab.className).toContain("data-[state=active]:font-bold");
     }
 
     expect(existingTab.getAttribute("data-state")).toBe("active");

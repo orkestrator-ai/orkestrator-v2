@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ActionBar } from "../../apps/web/src/components/layout/ActionBar";
-import { TerminalProvider } from "../../apps/web/src/contexts/TerminalContext";
+import { TerminalProvider, useTerminalContext } from "../../apps/web/src/contexts/TerminalContext";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "../../apps/web/src/stores";
 import type { Environment } from "../../apps/web/src/types";
 import { appCommandStore } from "../../apps/web/src/test/app-command-store";
@@ -69,6 +69,7 @@ function installFixture(
  * `?message=short|typical|long|none` picks the failure, `?presentation=grid`
  * the phone toolbar, `?mergeable=yes|conflicts|checking` the PR's
  * mergeability and `?autoMerge=off` turns auto-merge off.
+ * `?terminalControls` registers a stub tab factory to enable the toolbar buttons.
  */
 export function AutoMergeErrorFixture() {
   const params = new URLSearchParams(window.location.search);
@@ -81,8 +82,18 @@ export function AutoMergeErrorFixture() {
   return (
     <TerminalProvider>
       <div className="h-screen bg-background text-foreground">
+        {params.has("terminalControls") && <RegisterTabFactory />}
         <ActionBar presentation={params.get("presentation") === "grid" ? "grid" : "bar"} />
       </div>
     </TerminalProvider>
   );
+}
+
+function RegisterTabFactory() {
+  const { setCreateTab } = useTerminalContext();
+  useEffect(() => {
+    setCreateTab(() => false);
+    return () => setCreateTab(null);
+  }, [setCreateTab]);
+  return null;
 }

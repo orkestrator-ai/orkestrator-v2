@@ -98,7 +98,7 @@ export const GRAPH_BUILT_IN_TYPE_NAMES = [
   "review-report",
   "finding",
   "verification-verdict",
-  "fix-result",
+  "address-findings-result",
   "pr-result",
   "pr-description",
   "check-summary",
@@ -745,7 +745,7 @@ const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
     resultKind: "verification-result",
   },
   {
-    name: "fix-result",
+    name: "address-findings-result",
     version: 1,
     label: "Address Findings result",
     description: "What a fixing or building node changed and validated, and whether it finished.",
@@ -767,8 +767,8 @@ const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
       notes: [],
       limitations: [],
     },
-    validator: "fix-result",
-    resultKind: "fix-result",
+    validator: "address-findings-result",
+    resultKind: "address-findings-result",
   },
   {
     name: "pr-result",

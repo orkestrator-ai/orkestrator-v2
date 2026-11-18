@@ -412,7 +412,7 @@ function StatusSection({
             <dt className="text-zinc-500">Ping</dt>
             <dd
               data-testid="machine-ping"
-              className={"error" in ping ? "text-red-300" : "font-mono text-zinc-200"}
+              className={"error" in ping ? "text-failure" : "font-mono text-zinc-200"}
             >
               {"error" in ping ? `No answer: ${ping.error}` : `${ping.ms} ms`}
             </dd>
@@ -488,7 +488,7 @@ function ForgetNodeSection({
   };
 
   return (
-    <section className="flex items-center justify-between gap-3 rounded-md border border-red-500/20 px-3 py-3">
+    <section className="flex items-center justify-between gap-3 rounded-md border border-destructive/20 px-3 py-3">
       <div>
         <p className="text-sm text-zinc-200">Remove machine</p>
         <p className="text-xs text-zinc-500">
@@ -500,7 +500,7 @@ function ForgetNodeSection({
         type="button"
         size="sm"
         variant="ghost"
-        className="shrink-0 text-red-300 hover:bg-red-500/10 hover:text-red-200"
+        className="shrink-0 text-failure hover:bg-destructive/15 hover:text-failure"
         onClick={() => setOpen(true)}
         aria-label={`Remove ${name}`}
       >
@@ -524,7 +524,7 @@ function ForgetNodeSection({
                 void forget();
               }}
               disabled={busy}
-              className="bg-red-600 text-white hover:bg-red-500"
+              className="bg-destructive text-black hover:bg-destructive/95 active:bg-destructive/90"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Remove

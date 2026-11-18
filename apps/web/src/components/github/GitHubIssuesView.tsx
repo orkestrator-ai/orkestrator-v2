@@ -265,7 +265,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
       </header>
 
       {(loadError || statusMutationError) && (
-        <div className="mx-3 mt-3 flex shrink-0 items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive sm:mx-6">
+        <div className="mx-3 mt-3 flex shrink-0 items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-failure sm:mx-6">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="min-w-0 flex-1">
             <p>{loadError ?? statusMutationError}</p>

@@ -349,7 +349,7 @@ export function EnvironmentNetworkPolicyStatus({
       {!effective ? (
         <div>The container has not reported its firewall state (it may be stopped).</div>
       ) : effective.state === "failed" ? (
-        <div className="text-destructive">
+        <div className="text-failure">
           The firewall failed to apply; the container blocks all outbound traffic until it is
           restarted.
         </div>

@@ -23,7 +23,7 @@ export const WORKFLOW_RESULT_KINDS = [
   "review-report",
   "consolidated-review",
   "review-reconciliation",
-  "fix-result",
+  "address-findings-result",
   "verification-result",
   "pr-result",
   /** One subork's response (`suborks.ts`). */
@@ -174,7 +174,7 @@ const WORKFLOW_RESULT_TOOL_NAMES: Record<WorkflowResultKind, string> = {
   "review-report": "submit_review_report",
   "consolidated-review": "submit_consolidated_review",
   "review-reconciliation": "submit_review_reconciliation",
-  "fix-result": "submit_fix_result",
+  "address-findings-result": "submit_address_findings_result",
   "verification-result": "submit_verification_result",
   "pr-result": "submit_pr_result",
   "graph-output": "submit_graph_output",
@@ -692,8 +692,15 @@ export function normalizeWorkflowResultToolsSettings(value: unknown): WorkflowRe
         STRUCTURED_OUTPUT_PROVIDER_VALUES.includes(entry as StructuredOutputProvider),
       )
     : undefined;
+  // The config.json upgrade (to-do 4740): builds before this one saved the
+  // Address Findings kind as `fix-result`. Settings are not in the database,
+  // so this reads that entry once under its current name; the next settings
+  // write stores only the current name.
   const kinds = Array.isArray(candidate.kinds)
-    ? candidate.kinds.filter(isWorkflowResultKind)
+    ? candidate.kinds
+        .map((entry) => (entry === "fix-result" ? "address-findings-result" : entry))
+        .filter(isWorkflowResultKind)
+        .filter((entry, index, all) => all.indexOf(entry) === index)
     : undefined;
   return {
     enabled: typeof candidate.enabled === "boolean" ? candidate.enabled : true,

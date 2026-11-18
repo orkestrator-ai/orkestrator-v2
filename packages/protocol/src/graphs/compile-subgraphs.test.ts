@@ -78,7 +78,7 @@ describe("inlining", () => {
         },
         parameters: childTemplate().parameters,
         params: { strict: { param: "flag" }, depth: { value: 2 } },
-        roles: { checker: "worker", fixer: "worker" },
+        roles: { checker: "worker", addresser: "worker" },
         nodes: ["audit/check", "audit/gate", "audit/fix"],
         inputs: {
           code: [
@@ -102,10 +102,10 @@ describe("inlining", () => {
 
   test("an unbound child role maps to the parent role with the same key", () => {
     const parent = parentTemplate(auditNode({ roles: { checker: "worker" } }));
-    parent.roles.push({ key: "fixer", multiplicity: "one" });
+    parent.roles.push({ key: "addresser", multiplicity: "one" });
     const plan = planOf(parent, childTemplate());
-    expect((node(plan, "audit/fix") as GraphPlanAgentNode).role).toBe("fixer");
-    expect(plan.subgraphs![0]!.roles).toEqual({ checker: "worker", fixer: "fixer" });
+    expect((node(plan, "audit/fix") as GraphPlanAgentNode).role).toBe("addresser");
+    expect(plan.subgraphs![0]!.roles).toEqual({ checker: "worker", addresser: "addresser" });
   });
 
   test("inlined nodes read the child's parameters; the plan resolves them per node", () => {
@@ -180,7 +180,7 @@ describe("inlining", () => {
           kind: "subgraph",
           template: { scope: "user", id: "child" },
           params: { strict: { param: "level" }, depth: 5 },
-          roles: { checker: "agent", fixer: "agent" },
+          roles: { checker: "agent", addresser: "agent" },
           inputs: [{ name: "code", type: "workspace@1" }],
           outputs: [{ name: "report", type: "review-report@1" }],
         },
@@ -212,7 +212,7 @@ describe("inlining", () => {
     ]);
     const inner = plan.subgraphs![1]!;
     expect(inner.params).toEqual({ strict: { param: "flag" }, depth: { value: 5 } });
-    expect(inner.roles).toEqual({ checker: "worker", fixer: "worker" });
+    expect(inner.roles).toEqual({ checker: "worker", addresser: "worker" });
     expect(node(plan, "audit/inner/gate").subgraph).toBe("audit/inner");
     expect(plan.subgraphs![0]!.nodes).toEqual([
       "audit/inner/check",
@@ -350,7 +350,7 @@ describe("inlining", () => {
         id: "next",
         kind: "subgraph",
         template: { scope: "user", id: next },
-        roles: { checker: "checker", fixer: "fixer" },
+        roles: { checker: "checker", addresser: "addresser" },
         inputs: [{ name: "code", type: "workspace@1" }],
       });
       template.edges.push({
@@ -425,7 +425,7 @@ describe("inlining", () => {
     if (check.kind === "agent") check.replicate = { over: "panel", role: "checker" };
     panelChild.outputs = [];
     const wide = compileWith(
-      parentTemplate(auditNode({ roles: { checker: "panel", fixer: "worker" }, outputs: [] })),
+      parentTemplate(auditNode({ roles: { checker: "panel", addresser: "worker" }, outputs: [] })),
       panelChild,
     );
     expect(wide.diagnostics).toContainEqual(

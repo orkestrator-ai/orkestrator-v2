@@ -1383,11 +1383,11 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
             ...reviewSelection,
             description: "Preparation and consolidation model. Omitted: the saved one.",
           },
-          fixModel: {
+          addressFindingsModel: {
             ...reviewSelection,
             description: "Address Findings model. Omitted: the saved one.",
           },
-          autoFix: {
+          autoAddressFindings: {
             type: "boolean",
             description:
               "Start the Address Findings session when consolidation reports findings. Omitted: the saved Auto-address findings setting (on when autoPr is true).",
@@ -1413,7 +1413,7 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       ),
       examples: [
         { environmentId: "env-1" },
-        { environmentId: "env-1", autoFix: true, autoPr: true },
+        { environmentId: "env-1", autoAddressFindings: true, autoPr: true },
         {
           environmentId: "env-1",
           reviewers: [
@@ -1447,13 +1447,17 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
           workflowId,
           surface: {
             type: "string",
-            enum: ["root", "fix"],
-            description: "root (default): the review tab; fix: its Address Findings session tab.",
+            enum: ["root", "address-findings"],
+            description:
+              "root (default): the review tab; address-findings: its Address Findings session tab.",
           },
         },
         ["workflowId"],
       ),
-      examples: [{ workflowId: "review-1" }, { workflowId: "review-1", surface: "fix" }],
+      examples: [
+        { workflowId: "review-1" },
+        { workflowId: "review-1", surface: "address-findings" },
+      ],
     },
     "review.address": {
       capability: "sessions.control",

@@ -38,9 +38,10 @@ export function InspectorTranscriptTabs({
         className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
       >
         <TabsList
+          variant="segmented"
           aria-label="Inspector views"
           hidden={sideBySide || !report}
-          className={sideBySide || !report ? "hidden" : "h-7 rounded-md p-0.5"}
+          className={sideBySide || !report ? "hidden" : undefined}
         >
           <TabsTrigger className="h-6 px-2 text-xs" value="transcript">
             Transcript

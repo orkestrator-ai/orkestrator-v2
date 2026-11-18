@@ -16,7 +16,7 @@ describe("graph built-in types and workflow result kinds", () => {
       ["validation-plan@2", "validation-plan"],
       ["review-report@1", "review-report"],
       ["verification-verdict@1", "verification-result"],
-      ["fix-result@1", "fix-result"],
+      ["address-findings-result@1", "address-findings-result"],
       ["pr-result@1", "pr-result"],
     ]);
   });

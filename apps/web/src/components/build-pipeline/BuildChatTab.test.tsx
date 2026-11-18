@@ -353,7 +353,7 @@ describe("BuildChatTab backend projection", () => {
   test("shows backend tests on the package preparation between build and the reviews", () => {
     const packageSession: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      phase: "rework",
+      phase: "package-preparation",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,
@@ -549,7 +549,7 @@ describe("BuildChatTab backend projection", () => {
   test("follows the package preparation, with its tests beside its transcript", () => {
     const packageSession: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      phase: "rework",
+      phase: "package-preparation",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,
@@ -603,7 +603,7 @@ describe("BuildChatTab backend projection", () => {
   test("keeps the Prepare node and its tests selected when the run is replaced", async () => {
     const packageSession: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      phase: "rework",
+      phase: "package-preparation",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,

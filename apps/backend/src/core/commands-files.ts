@@ -3,15 +3,25 @@ import {
   getHostClaudeCredentials as readHostClaudeCredentials,
 } from "./claude-host-credentials.js";
 export { getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
-import { neutralizeGitFilters } from "./git-filter-config.js";
+import {
+  type GitFetchScheduler,
+  type GitFileChange,
+  HARDENED_GIT_CONFIG,
+  neutralizeGitFilters,
+  parseGitDiffSummary,
+  parseGitFileChanges,
+  parseGitNumstat,
+  readGitBlob,
+  removeLegacyWorktreeFsmonitor,
+  runRemoteGit,
+  splitNulTerminatedGitFields,
+  withoutStatOnlyModifications,
+} from "./git/index.js";
 import {
   assertNoNestedRepositories,
   containerRemovalPreflightScript,
 } from "./workspace-removal-preflight.js";
-import { HARDENED_GIT_CONFIG, removeLegacyWorktreeFsmonitor } from "./git-fsmonitor.js";
-import { runRemoteGit } from "./git-noninteractive-env.js";
 import { MissingRemoteBaseBranchError } from "./commands-error-text.js";
-import { readGitBlob } from "./git-blob-read.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -48,7 +58,6 @@ import {
   CONTAINER_ROOT_USER_ARGS,
   CONTAINER_UNTRACKED_STATS_SCANNER,
 } from "./container-scripts.js";
-import type { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import {
   CONTAINER_FETCH_STDERR_BYTES,
   CONTAINER_REPO_IDENTITY_SNIPPET,
@@ -66,14 +75,6 @@ import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { statStamp } from "./stat-stamp.js";
-import {
-  parseGitDiffSummary,
-  parseGitFileChanges,
-  parseGitNumstat,
-  splitNulTerminatedGitFields,
-  withoutStatOnlyModifications,
-  type GitFileChange,
-} from "./git-diff-summary.js";
 import {
   countUntrackedFileLines,
   ensureLocalGitExcludeOnce,

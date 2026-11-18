@@ -281,12 +281,13 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 
 ### Primary
 - **Signal Blue** (`brand-blue`): the brand blue. On the site it carries the primary button, links and the start of the headline gradient; its brighter partner **Signal Blue Bright** (`brand-blue-bright`) carries eyebrows, focus outlines and the gradient's first stop.
-- **App Signal Blue** (`primary`): the app's current blue for lines, text and marks: links, the selected row's 2px accent bar, the focus hairline (`--color-ring`), the active tab underline, the unread-mail count, and the "creating" status. Bells are not blue; see Approval Amber.
-- **Deep Signal Fill** (`primary-fill`): the same blue one step deeper, for any fill that carries white text or glyphs: primary buttons (Create PR), the selected segment, the compose bar's Send. White on `primary` is 3.7:1, below AA for 14px text; white on `primary-fill` is 5.2:1.
+- **App Signal Blue** (`primary`): the app's current blue for lines, text and marks: links, the selected row's 2px accent bar, the focus hairline (`--color-ring`), the active tab underline, and the "creating" status. Bells are not blue; see Approval Amber.
+- **Deep Signal Fill** (`primary-fill`): the same blue one step deeper, for any fill that carries white text or glyphs: primary buttons (Create PR), the selected segment, the compose bar's Send, and the unread-mail count pill. White on `primary` is 3.7:1, below AA for 14px text; white on `primary-fill` is 5.2:1.
 
 ### Secondary
 - **All-Clear Green** (`brand-green`): the brand green. Site security eyebrows, "allowed" rows, and the end of the headline gradient.
 - **App All-Clear Green** (`success`): the app's one success color. Diff additions, successful tool calls, running status (`--color-status-running`) and the merge-ready shimmer.
+- **Kanban column colors** are an exception for category identity. Backlog, In Progress, Review, and Done retain their column dot and card stripe colors.
 
 ### Tertiary
 - **Approval Amber** (`brand-amber`): the site's "approval needed" and fix-stage accent. In the app, waiting-on-you and new-activity states are yellow: the needs-answer shimmer uses Tailwind's `yellow-400`, and every bell uses `amber-400` with a `fill-amber-400/20` body (the unread bell on an environment row and in its toast, the sidebar's waiting-environments counter, the project-home activity icon). A bell is how a glance finds the row that changed, so it keeps its yellow at rest rather than taking Signal Blue.
@@ -300,7 +301,7 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 - **Panel Surface** (`panel-surface`): raised informational panels (for example the coordinator's "How it works" box).
 - **Elevated** (`elevated`, `elevated-hover`): the resting fill of a control sitting on chrome or sidebar. Controls use `elevated`, never `accent`/`secondary`, because those are rebound inside the central panel and would vanish.
 - **Ink** (`foreground`, `muted-foreground`): primary and secondary text. **Hairlines** (`border`, `divider`): `divider` separates shell panels, tool-card rows and modal header/footer; it is a flat color so it renders identically over any layer.
-- **Selection** (`selected` → `selected-edge`, `selected-foreground`): a left-to-right blue-tinted gradient for the selected row. **Hover** (`hover`, `environment-hover`) is a weaker shade of the same blue, never a gray wash.
+- **Selection** (`selected` → `selected-edge`, `selected-foreground`): a left-to-right blue-tinted gradient for the selected row. **Hover** (`hover`, `environment-hover`) uses a weaker shade of the same blue in these lists. Dropdown and context menu items and select options use a neutral highlight for pointer and keyboard navigation when the popover has no blue selected row.
 - **The cool zinc ramp** (`--color-zinc-50`…`950`, OKLCH at hue 264): Tailwind's `zinc` retinted so the ~200 call sites that name it share the cool cast. Use the semantic tokens above first; the ramp is for steps they don't name.
 - **Site neutrals** (`site-night`, `site-surface`, `site-surface-raised`, `site-ink*`, `site-line*`): the public site's own deeper night and three-step ink scale.
 - **Flow graph** (`flow-canvas`, `flow-node`, `flow-edge`): Multi Review, build pipeline and Graphs canvases. The canvas sits below the panel, nodes above it; `flow-edge` is the dashed line of an unreached step.
@@ -368,6 +369,8 @@ The app is flat. Depth comes from tonal layers (sidebar darkest, then background
 - **Modal** (`box-shadow: 0 28px 90px rgba(0,0,0,0.72)`): dialogs and alert dialogs, with a 16px radius and a `zinc-700` hairline at 70%.
 - **Compose dock** (`shadow-xl` at black 20%): the native tab's compose bar, which floats over the bottom of the transcript.
 - **Floating notice** (`shadow-xl` at black 40% with a small backdrop blur; its folded pill uses `shadow-lg` at black 30%): agent mail and other pane notices floating at a pane's top right.
+- **Design canvas frames** (`shadow-xl`): the canvas treats frames as floating windows, so each page stays distinct from the canvas.
+- **Transcript annotation pins** (`shadow-lg`): the numbered marks float above transcript content and use a 2px white ring to stay legible over text and tinted rows.
 - **Control lift** (`shadow-xs` / `shadow-sm`): inputs and the selected segment only.
 - **Site window** (`box-shadow: inset 0 1px 0 #2a3446, 0 30px 80px rgb(0 0 0 / 0.45), 0 2px 6px rgb(0 0 0 / 0.4)`): illustration frames on the public site.
 - **Site primary glow** (`box-shadow: inset 0 1px 0 #86aef5, 0 10px 30px rgb(39 81 155 / 0.3)`): the site's primary button; it lifts 1px on hover.
@@ -398,7 +401,7 @@ Quiet until touched. Most app buttons are ghost or tonal; the filled blue is rar
 ### Cards / Containers
 - **Corner Style:** 12px for cards, 8px for the tool card.
 - **Background:** `card` for generic cards, `panel-surface` for informational panels, `sidebar` for tool-call groups.
-- **Shadow Strategy:** none at rest (see Elevation).
+- **Shadow Strategy:** none at rest or on hover (see Elevation).
 - **Border:** 1px `input`/`divider`; tool-call groups divide their rows with `divider`.
 - **Internal Padding:** 24px for generic cards, 12–16px for panels.
 
@@ -411,6 +414,7 @@ Quiet until touched. Most app buttons are ghost or tonal; the filled blue is rar
 - **Sidebar rows:** 8px-radius rows inset 4px from the panel edge. Hover is `environment-hover`; the selected row is the `selected` → `selected-edge` gradient with a 2px Signal Blue bar on the left that gives way to the drag grip on hover. Offline machines dim to 60%.
 - **Workspace tabs:** 12–14px labels with an icon; the active tab gets a 2px Signal Blue underline. The top section tabs (Home, Coordinator, Kanban…) mark the active one with a filled blue pill.
 - **Segmented selector:** an `input-surface` track with a `divider` border and 2px inset; the selected segment is a filled blue with bold text.
+- **Shared Tabs variants:** use `underline` for icon-and-label views within a pane, `pill` to switch sections, and `segmented` to choose between modes or representations. The segmented variant uses the same track as the segmented selector.
 - **Mobile:** hamburger to a slide-over sidebar; touch targets at least 40–44px.
 
 ### Live Signals (signature)

@@ -43,6 +43,8 @@ export type PersistedMailbox = {
   tombstonedAt?: string;
   messages: AgentMailMessage[];
   revision: number;
+  /** Last admitted merge notice; retained with the mailbox, independently of mail retention. */
+  mergeNoticeRequestId?: string;
   ownerKind?: "environment" | "coordinator";
   coordinatorId?: string;
   conversationId?: string;

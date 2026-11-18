@@ -755,8 +755,8 @@ export function FileViewerTab({
         style={{ backgroundColor: terminalAppearance.backgroundColor }}
       >
         <div className="flex flex-col items-center gap-2 text-center">
-          <AlertCircle className="h-8 w-8 text-red-400" />
-          <p className="text-sm text-red-400">Failed to load file</p>
+          <AlertCircle className="h-8 w-8 text-failure" />
+          <p className="text-sm text-failure">Failed to load file</p>
           <p className="max-w-md text-xs text-muted-foreground">{error}</p>
         </div>
       </div>

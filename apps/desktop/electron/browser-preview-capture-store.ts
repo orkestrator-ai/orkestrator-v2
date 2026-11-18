@@ -35,7 +35,9 @@ import type {
 import {
   WEB_ANNOTATION_LIMITS,
   type WebAnnotationCaptureInput,
+  type WebAnnotationRect,
 } from "@orkestrator/protocol/web-annotations";
+import { WEB_ANNOTATION_DIFF_LIMITS } from "@orkestrator/protocol/web-annotations-diff";
 import {
   isWebAnnotationId,
   isWebAnnotationRect,
@@ -143,6 +145,12 @@ export interface BrowserPreviewCaptureStoreOptions {
   onChange?: (change: BrowserPreviewCaptureStoreChange) => void;
 }
 
+interface ResultRecaptureOptions {
+  originalCaptureId: string | null;
+  masks: BrowserPreviewCaptureMask[];
+  sampleUnstable: boolean;
+}
+
 export interface BrowserPreviewCaptureCreateInput {
   captureId: string;
   tabId: string;
@@ -155,6 +163,7 @@ export interface BrowserPreviewCaptureCreateInput {
   masks?: BrowserPreviewCaptureMask[];
   purpose?: BrowserPreviewCapturePurpose;
   result?: BrowserPreviewResultCaptureMetadata;
+  resultRecapture?: ResultRecaptureOptions;
   responsive?: BrowserPreviewResponsiveMember;
   /**
    * Pending capture this one replaces. It is discarded in the same serialized
@@ -170,13 +179,16 @@ interface SpoolRecord {
   capture: WebAnnotationCaptureInput;
   imageFile: string | null;
   imageRevision: number;
+  masksIncomplete?: boolean;
   masks?: BrowserPreviewCaptureMask[];
   result?: BrowserPreviewResultCaptureMetadata;
+  resultRecapture?: ResultRecaptureOptions;
 }
 
 interface RememberedMasks {
   backendCaptureId: string;
   savedAt: string;
+  complete?: boolean;
   masks: BrowserPreviewCaptureMask[];
 }
 
@@ -208,7 +220,32 @@ function isResultMetadata(value: unknown): value is BrowserPreviewResultCaptureM
     Number.isFinite(scroll.x) &&
     Number.isFinite(scroll.y) &&
     (value.stability === "stable" || value.stability === "unstable") &&
-    isMaskList(value.masks)
+    isMaskList(value.masks) &&
+    (value.unstableRegions === undefined || isUnstableRegionList(value.unstableRegions)) &&
+    (value.originalMasks === undefined ||
+      (isRecord(value.originalMasks) &&
+        (value.originalMasks.captureId === null ||
+          isWebAnnotationId(value.originalMasks.captureId)) &&
+        Array.isArray(value.originalMasks.rects) &&
+        value.originalMasks.rects.length <= MAX_CAPTURE_MASKS &&
+        value.originalMasks.rects.every(isWebAnnotationRect)))
+  );
+}
+
+function isResultRecaptureOptions(value: unknown): value is ResultRecaptureOptions {
+  return (
+    isRecord(value) &&
+    (value.originalCaptureId === null || isWebAnnotationId(value.originalCaptureId)) &&
+    isMaskList(value.masks) &&
+    typeof value.sampleUnstable === "boolean"
+  );
+}
+
+function isUnstableRegionList(value: unknown): value is WebAnnotationRect[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= WEB_ANNOTATION_DIFF_LIMITS.unstableRegions &&
+    value.every(isWebAnnotationRect)
   );
 }
 
@@ -448,6 +485,7 @@ export class BrowserPreviewCaptureStore {
             isRecord(entry) &&
             isWebAnnotationId(entry.backendCaptureId) &&
             isIso(entry.savedAt) &&
+            (entry.complete === undefined || typeof entry.complete === "boolean") &&
             isMaskList(entry.masks),
         )
         .slice(0, MAX_REMEMBERED_MASK_SETS);
@@ -504,8 +542,10 @@ export class BrowserPreviewCaptureStore {
         !isDescriptor(parsed.descriptor) ||
         parsed.descriptor.captureId !== captureId ||
         !validateWebAnnotationCaptureInput(parsed.capture).ok ||
+        (parsed.masksIncomplete !== undefined && typeof parsed.masksIncomplete !== "boolean") ||
         (parsed.masks !== undefined && !isMaskList(parsed.masks)) ||
-        (parsed.result !== undefined && !isResultMetadata(parsed.result))
+        (parsed.result !== undefined && !isResultMetadata(parsed.result)) ||
+        (parsed.resultRecapture !== undefined && !isResultRecaptureOptions(parsed.resultRecapture))
       ) {
         return null;
       }
@@ -654,6 +694,7 @@ export class BrowserPreviewCaptureStore {
         capture: input.capture,
         ...(input.masks && input.masks.length > 0 ? { masks: input.masks } : {}),
         ...(input.result ? { result: input.result } : {}),
+        ...(input.resultRecapture ? { resultRecapture: input.resultRecapture } : {}),
         descriptor: {
           captureId: input.captureId,
           tabId: input.tabId,
@@ -728,6 +769,22 @@ export class BrowserPreviewCaptureStore {
       return Array.from(this.records.values())
         .sort((left, right) => right.sequence - left.sequence)
         .map((record) => ({ ...record.descriptor }));
+    });
+  }
+
+  /** Read only the selection and options needed to recapture a pending image. */
+  async readRecapture(captureId: string) {
+    if (!isBrowserPreviewCaptureId(captureId)) return null;
+    return this.afterReady(async () => {
+      await this.sweepLocked();
+      const record = this.records.get(captureId);
+      return record
+        ? structuredClone({
+            descriptor: record.descriptor,
+            target: record.capture.target,
+            resultRecapture: record.resultRecapture,
+          })
+        : null;
     });
   }
 
@@ -847,7 +904,17 @@ export class BrowserPreviewCaptureStore {
         ),
         imageExcluded: image === null,
       };
-      const masks = [...(record.masks ?? []), ...manualMasks].slice(0, MAX_CAPTURE_MASKS);
+      const allMasks = [...(record.masks ?? []), ...manualMasks];
+      const masks = allMasks.slice(0, MAX_CAPTURE_MASKS);
+      const masksIncomplete =
+        record.masksIncomplete === true ||
+        added !== manualMasks.length ||
+        allMasks.length > MAX_CAPTURE_MASKS;
+      const result = record.result && { ...record.result };
+      if (result && (!image || masksIncomplete)) {
+        delete result.unstableRegions;
+        delete result.originalMasks;
+      }
       const validation = validateWebAnnotationCaptureInput(capture);
       if (!validation.ok) throw new BrowserPreviewCaptureSpoolError("invalid", validation.error);
       const imageRevision = image ? record.imageRevision + 1 : record.imageRevision;
@@ -858,7 +925,9 @@ export class BrowserPreviewCaptureStore {
         imageRevision,
         imageFile,
         capture,
+        ...(masksIncomplete ? { masksIncomplete } : {}),
         ...(masks.length > 0 ? { masks } : {}),
+        ...(result ? { result } : {}),
         descriptor: {
           ...record.descriptor,
           image: image
@@ -949,6 +1018,7 @@ export class BrowserPreviewCaptureStore {
             backendCaptureId: ack.backendCaptureId,
             savedAt: new Date(this.now()).toISOString(),
             masks: record.masks,
+            complete: record.masksIncomplete !== true,
           },
           ...this.rememberedMasks.filter(
             (entry) => entry.backendCaptureId !== ack.backendCaptureId,
@@ -963,14 +1033,20 @@ export class BrowserPreviewCaptureStore {
     if (tabId !== null) this.notify(ack.captureId, tabId, "acknowledged");
   }
 
-  /** Masks remembered for an acknowledged backend capture, or null. */
-  async masksFor(backendCaptureId: string): Promise<BrowserPreviewCaptureMask[] | null> {
+  /** Known masks to reapply, with whether they account for the whole original. */
+  async masksFor(backendCaptureId: string) {
     if (!isWebAnnotationId(backendCaptureId)) return null;
     return this.afterReady(async () => {
       const entry = this.rememberedMasks.find(
         (candidate) => candidate.backendCaptureId === backendCaptureId,
       );
-      return entry ? structuredClone(entry.masks) : null;
+      return entry
+        ? {
+            masks: structuredClone(entry.masks),
+            // A legacy entry at the cap may have been truncated.
+            complete: entry.complete ?? entry.masks.length < MAX_CAPTURE_MASKS,
+          }
+        : null;
     });
   }
 

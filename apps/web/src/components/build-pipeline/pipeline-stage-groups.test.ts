@@ -17,7 +17,7 @@ describe("pipelineStageItems", () => {
       ],
       sessions: [
         session("build", "build", 0),
-        session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+        session("package-preparation", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
         session("review", "review-1", 240, { label: "Review 1" }),
       ],
       validationRun: validationRun(),

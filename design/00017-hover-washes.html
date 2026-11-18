@@ -11,20 +11,21 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00017</p>
       <h1>00017 · Use the blue hover tokens beside blue selections</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-low">Low</span>
         <span class="pill">Interaction</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 6 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 6 / 6 images</span
         >
       </div>
 
       <h2>Problem</h2>
       <p>
-        <code>hover:bg-zinc-*</code> (27), <code>hover:bg-foreground/[…]</code> (10),
-        <code>hover:bg-muted</code> (63) and <code>hover:bg-accent</code> (19) outnumber the
-        documented <code>hover:bg-hover</code> (5) and <code>hover:bg-environment-hover</code> (2).
-        Menus and selects use <code>focus:bg-zinc-800/80</code>.
+        At the time of the audit, <code>hover:bg-zinc-*</code> (27),
+        <code>hover:bg-foreground/[…]</code> (10), <code>hover:bg-muted</code> (63) and
+        <code>hover:bg-accent</code> (19) outnumber the documented <code>hover:bg-hover</code> (5)
+        and <code>hover:bg-environment-hover</code> (2). Menus and selects use
+        <code>focus:bg-zinc-800/80</code>.
       </p>
       <div class="rule">
         <div>
@@ -87,7 +88,7 @@
       </ol>
 
       <h2>Decisions</h2>
-      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+      <p class="note">The chosen option is recorded in Notes.</p>
 
       <div class="decision">
         <h3>Menus and selects (no selected row inside them)</h3>
@@ -232,54 +233,54 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
-            under <code>design/images/00017/</code>.</span
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot, and committed under
+            <code>design/images/00017/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Hits were classified in Notes, and each decision below is recorded with the option
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Hits were classified in Notes, and each decision is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
-            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass. <code>mise run format:check</code> and
+            <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: Add the menu exception to Colors → Selection
             if kept.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -287,14 +288,266 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+      <h3>Hover review</h3>
+      <ul>
+        <li>
+          Mail conversation rows and enabled GitHub repository results use
+          <code>hover:bg-hover</code>. Disabled repository results stay transparent. The subork
+          group and child buttons pair the same fill with an inset blue hairline so hover is visible
+          on navy transcripts.
+        </li>
+        <li>
+          Available file and folder rows in the Files tree use <code>hover:bg-hover</code>. A file
+          selection keeps its accent fill and a folder drop target keeps its blue fill and ring.
+        </li>
+        <li>
+          Pull-request rows and Linear board cards use <code>hover:bg-hover/50</code> on eligible
+          neighbours. Feature rows use <code>hover:bg-hover/30</code> beside their lighter selection
+          fill. The shared sidebar already uses <code>environment-hover</code> on environment rows
+          and <code>hover</code> on project rows.
+        </li>
+      </ul>
+      <h3>Retained washes by control</h3>
+      <p>
+        Paths are relative to <code>apps/web/src/components/</code>. Line numbers refer to the
+        source at the time of this review and identify each match from the audit search.
+      </p>
+      <details>
+        <summary>Neutral selection and navigation</summary>
+        <ul>
+          <li>
+            <code>build-pipeline/PipelineKeyInformation.tsx:241</code> — section navigation with a
+            muted active fill.
+          </li>
+          <li>
+            <code>chat/AgentModelPicker.tsx:237,1174,1349</code> — platform and favourites controls
+            with muted active fills.
+          </li>
+          <li>
+            <code>chat/QuestionCard.tsx:297,775,776</code> — answer options and question tabs with
+            muted or surface-coloured selection.
+          </li>
+          <li>
+            <code>chat/NativeAttachmentMenu.tsx:264</code> and
+            <code>layout/OpenFileDialog.tsx:256</code> — file options with neutral accent selection.
+          </li>
+          <li>
+            <code>design/DesignLayerTree.tsx:690</code> — layer tree with a muted selected row.
+          </li>
+          <li>
+            <code>graph-designer/GraphLibraryList.tsx:198</code> and
+            <code>graph-designer/GraphTypeEditor.tsx:506</code> — graph and type rows with neutral
+            accent selection.
+          </li>
+          <li>
+            <code>settings/AgentPluginsBrowser.tsx:224</code>,
+            <code>settings/FullscreenSettingsLayout.tsx:180</code> and
+            <code>settings/SkillsSettings.tsx:564</code> — plugin, section and skill navigation with
+            zinc fills and an active edge.
+          </li>
+          <li>
+            <code>settings/usage/UsageSummary.tsx:155</code> — platform usage filter with muted
+            selection.
+          </li>
+          <li>
+            <code>claude/ClaudeTmuxChatTab.tsx:1313,1314</code> — interactive mode toggle with a
+            muted active fill.
+          </li>
+        </ul>
+      </details>
+      <details>
+        <summary>Temporary choices in pickers and suggestions</summary>
+        <ul>
+          <li><code>agent-mail/AgentMailPanel.tsx:390</code> — add a recipient.</li>
+          <li>
+            <code>chat/FileMentionMenu.tsx:100</code>, <code>chat/SlashCommandMenu.tsx:269</code>,
+            <code>projects/CoordinatorActionSearch.tsx:175</code> and
+            <code>sidebar/ProjectSearchBar.tsx:198</code> — transient keyboard highlights in search
+            and suggestion results.
+          </li>
+          <li>
+            <code>chat/NativeResumeSessionDialog.tsx:290</code>,
+            <code>claude/ResumeTmuxSessionDialog.tsx:110</code> and
+            <code>native-agent/AgentNativeTab.helpers.tsx:320</code> — resume a session or choose
+            its platform.
+          </li>
+          <li>
+            <code>files-panel/AllFilesView.tsx:397,410</code> — workspace root and folder
+            destinations for Move to….
+          </li>
+        </ul>
+      </details>
+      <details>
+        <summary>Rows that open, disclose or jump without a blue selected fill</summary>
+        <ul>
+          <li>
+            <code>build-pipeline/PipelineFlowView.tsx:1190,1201</code> and
+            <code>build-pipeline/PipelineKeyInformationTab.tsx:450</code> — open validation or
+            worker sessions and jump to key information.
+          </li>
+          <li>
+            <code>chat/GoalPill.tsx:76</code>, <code>chat/GoalTile.tsx:63</code>,
+            <code>chat/JsonPayloadPart.tsx:100</code>, <code>chat/MailTile.tsx:333</code> and
+            <code>chat/rich/RichDetails.tsx:52</code> — open or expand goal, payload, mail and
+            detail content.
+          </li>
+          <li>
+            <code>chat/NativeMessage.file-parts.tsx:389</code> and
+            <code>chat/rich/FilePreview.tsx:473</code> — open file attachment previews.
+          </li>
+          <li>
+            <code>files-panel/ChangeFileRowItem.tsx:107</code> and
+            <code>files-panel/ChangedFileItem.tsx:36</code> — open a diff from the Changes lists.
+          </li>
+          <li>
+            <code>graph-designer/GraphCompilePanel.tsx:95</code> and
+            <code>graph-designer/GraphInspector.tsx:773</code> — jump to a graph diagnostic or
+            member.
+          </li>
+          <li>
+            <code>kanban/KanbanCard.tsx:277</code> and
+            <code>linear/LinearTicketsView.tsx:1533</code> — open an item from the Kanban board or
+            Linear list.
+          </li>
+          <li><code>layout/AgentInfoButton.panels.tsx:1550</code> — expand agent information.</li>
+          <li>
+            <code>pull-requests/PullRequestCodeTab.tsx:105</code>,
+            <code>pull-requests/PullRequestSummaryTab.tsx:447</code> and
+            <code>pull-requests/PullRequestTimelineTab.tsx:191,248</code> — expand file or comment
+            rows, scan checks, or open an external commit.
+          </li>
+          <li>
+            <code>review/ReviewValidationStatus.tsx:547</code> — open the details for a validation
+            result.
+          </li>
+          <li>
+            <code>settings/AgentPluginsBrowser.tsx:329</code>,
+            <code>settings/DiskUsageSettings.tsx:245</code>,
+            <code>settings/SelfImprovementLists.tsx:278</code> and
+            <code>settings/SelfImprovementProgress.tsx:121</code> — open a skill or ticket, expand
+            disk usage, or show stage details.
+          </li>
+        </ul>
+      </details>
+      <details>
+        <summary>Standalone actions and controls</summary>
+        <ul>
+          <li>
+            <code>build-pipeline/PipelineSessionTranscript.tsx:479</code>,
+            <code>chat/NativeChatShell.tsx:797</code>,
+            <code>claude/ClaudeTmuxChatTab.tsx:1549</code> and
+            <code>kanban/FeaturesView.tsx:932</code> — scroll to the latest transcript content.
+          </li>
+          <li>
+            <code>chat/AgentModelPicker.tsx:1037</code> and
+            <code>chat/SlashCommandMenu.tsx:336</code> — refresh catalogues.
+          </li>
+          <li>
+            <code>chat/MailTile.tsx:374,386</code> — open the worker or the conversation from a mail
+            tile.
+          </li>
+          <li>
+            <code>chat/NativeComposeBar.tsx:320</code> and
+            <code>claude/ClaudeTmuxChatTab.parts.tsx:1224</code> — remove a composer attachment.
+          </li>
+          <li>
+            <code>chat/NativeMessage.basic-parts.tsx:1079,1090</code> — open historical or current
+            file diffs.
+          </li>
+          <li>
+            <code>chat/QueuedPromptsDialog.tsx:180,265,282,300,314,331,370</code> — retry, edit,
+            steer, move up, move down, remove and keep a queued prompt.
+          </li>
+          <li><code>chat/SuborkGroup.tsx:204</code> — stop a subork batch.</li>
+          <li>
+            <code>chat/rich/FilePreview.tsx:252,711,721,752</code> and
+            <code>chat/rich/MediaBlock.tsx:423</code> — reload or load media, download it, open its
+            workspace file, or invoke a media action.
+          </li>
+          <li>
+            <code>claude/ClaudeTmuxChatTab.parts.tsx:1412,1463</code> — switch mode or inspect
+            queued prompts.
+          </li>
+          <li>
+            <code>design/DesignAgentDock.tsx:203</code>,
+            <code>design/DesignFrameDownloadMenu.tsx:118</code>,
+            <code>design/DesignFrameView.tsx:413,540,547,555</code>,
+            <code>design/DesignLayerTree.tsx:641</code> and
+            <code>design/DesignToolbar.tsx:132,473</code> — dock the panel, open download or frame
+            actions, retry or repair validation, restore a version, and control zoom.
+          </li>
+          <li>
+            <code>environments/CreateEnvironmentDialog.tsx:1818</code>,
+            <code>environments/EnvironmentRow.tsx:710,726</code> and
+            <code>environments/FeatureBuildFields.tsx:264</code> — restore the default worktree
+            location, retry deletion, open environment actions, or choose reviewers.
+          </li>
+          <li>
+            <code>files-panel/FileTreeNode.tsx:355</code> — the row’s separate Move to… button.
+          </li>
+          <li><code>html/HtmlFileTab.tsx:191</code> — open the linked pages menu.</li>
+          <li>
+            <code>kanban/FeaturesView.tsx:640,961,971</code> — close a story tab, refresh Codex
+            status, or send a planning message.
+          </li>
+          <li>
+            <code>layout/AgentInfoButton.panels.tsx:62,373,1465,1482</code> — display metric details
+            or diagnostics and run primary or secondary server actions.
+          </li>
+          <li>
+            <code>projects/ProjectLauncher.tsx:112</code> and
+            <code>sidebar/ActivityEnvironmentList.tsx:162</code> — create an environment.
+          </li>
+          <li>
+            <code>settings/OpenCodeProvidersSection.tsx:330</code> — choose a provider to connect.
+          </li>
+          <li>
+            <code>terminal/ComposeBar.tsx:591</code>,
+            <code>terminal/TerminalCornerToolbar.tsx:69,82</code>,
+            <code>terminal/TerminalHistoryPanel.tsx:121,131</code> and
+            <code>terminal/TerminalWarningBanner.tsx:35</code> — close an image preview, finish
+            setup, open or page through history, return to the live terminal, and dismiss a warning.
+          </li>
+        </ul>
+      </details>
+      <h3>Menu decision</h3>
+      <p>
+        Kept the neutral highlight for dropdowns, context menus and selects without a blue selected
+        row. A blue menu highlight would extend the tint to neutral popovers. Documented the
+        exception in <a href="../DESIGN.md#neutral">Colors → Neutral → Selection</a>.
       </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <code>ui/dropdown-menu.tsx:66,84,115,190</code> — items, checkbox items, radio items and
+          submenu triggers.
+        </li>
+        <li>
+          <code>ui/context-menu.tsx:112,130,155</code> — items, checkbox items and radio items.
+        </li>
+        <li><code>ui/select.tsx:105</code> — options.</li>
+      </ul>
+      <h3>Image comparisons</h3>
+      <p>
+        Captured the before images on <code>b2c91abb9</code>, then repeated the same interactions
+        after the change. Both sets use the same local fixture and synthetic mail in the isolated,
+        headless <code>design-00017</code> profile, in dark mode at 1440 × 900, 100% zoom and device
+        scale factor 1. The browser reloaded before each capture run. The profile ran with host
+        seeding, agent credentials, and host reachability checks disabled.
+      </p>
+      <ul>
+        <li>
+          <a href="#cap-sidebar-hover-selected-desktop">Sidebar</a>. The blue selection gradient on
+          <code>fixture-local</code> and the blue hover on <code>fixture-neighbor</code> identify
+          the two states in both images.
+        </li>
+        <li>
+          <a href="#cap-list-row-hover-desktop">Mail list</a>. The hovered Fixture handoff row
+          changes from a grey foreground wash to the blue hover token.
+        </li>
+        <li>
+          <a href="#cap-menu-open-desktop">Dropdown</a>. By activity has the same neutral highlight
+          in both images. By project remains the checked option.
+        </li>
       </ul>
 
       <footer>

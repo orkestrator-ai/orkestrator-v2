@@ -7,7 +7,7 @@
 - **Observed head:** the uncommitted dead-code removal branch
   `dead-code-investigation-0dd96028bc56` on that base. It does not touch the
   fixture or the failing tests.
-- **File:** `apps/backend/src/core/git-checkout-template-test-support.ts`
+- **File:** `apps/backend/src/core/git/checkout-template-test-support.ts`
   (`copyCommittedCheckout`, added in a57ea8702, #2095), through its users.
 - **Tests (one aggregate run):**
   - `send_message with attachments, to an environment on this node > the recipient can open the image from the path its message names` (`coordinator-mail-attachments.test.ts`)

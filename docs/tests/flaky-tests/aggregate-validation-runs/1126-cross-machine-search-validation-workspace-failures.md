@@ -147,3 +147,32 @@ The updated failure-register indexes passed
 `mise run test:logged -- --name search-review-flake-index -- bun test ./tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures`.
 Electron-native, Docker, CLI scenario, preview, and iOS suites were omitted
 because the follow-up changes only search copy and renderer regression tests.
+
+## Component browser follow-up (2026-11-18)
+
+Workflow vocabulary review started the component check at `a1289718a` on
+base `b2c91abb94de8144c119aeccf4a31cf26b655d3b`. It ran
+`mise run test:logged -- --name browser -- mise run test:browser` with five
+Chromium workers and no retries. It finished the component suite with 1,773
+passed, 155 skipped and four failed in 1,772.8 s. It reproduced the mobile
+`a detached reader holds their place through a reflow in either direction`
+failure in `e2e/StreamingTranscript.spec.ts:307`. The largest anchor error
+at line 346 was 113.75 px, above the 3 px limit.
+
+The same run also failed desktop `scrolling during drag keeps the pointer's
+before placement` in `e2e/LinearBoardDrag.spec.ts:6`. The scroll position
+reached 174 px against the 200 px threshold at line 22 before the 30 s poll
+expired. The two remaining failures were the tool fold threshold in both
+viewports ([1012](../web-ui/1012-live-tool-fold-threshold-gap.md)).
+
+The complete owners passed individually with one worker: StreamingTranscript
+in 109.3 s (26 cases scheduled) and LinearBoardDrag in 28.4 s. Both used
+`mise run test:logged -- --name <name> -- bun scripts/loopback-network.ts
+--free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config
+e2e/playwright.config.ts <file> --workers=1 --output <directory>`. The
+names were `4740-streaming-owner` and `4740-linear-drag-owner`, with the
+matching spec paths above and output directories
+`output/playwright/workflow-phase-streaming-owner` and
+`output/playwright/workflow-phase-linear-drag-owner`. The aggregate log is
+`/tmp/orkestrator-test-run.dLX8UW/browser.log.gz`. The source of the
+aggregate-only reflow and auto-scroll failures remains undetermined.

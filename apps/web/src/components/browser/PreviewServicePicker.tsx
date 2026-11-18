@@ -18,7 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const TONE_CLASS: Record<ServiceReadinessTone, string> = {
-  ready: "bg-emerald-500",
+  ready: "bg-status-running",
   starting: "bg-amber-500",
   problem: "bg-destructive",
   unknown: "bg-muted-foreground/60",

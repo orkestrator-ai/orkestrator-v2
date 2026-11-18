@@ -6,6 +6,7 @@
  * resolves GitHub's published ranges). Every resource is labelled with this
  * run's private owner namespace and removed by that label afterwards.
  */
+import { createAgentToolsLoopbackSigner } from "../src/core/agent-tools-loopback-proof";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -17,6 +18,7 @@ import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { restartRuntime, startRuntime } from "./container-live-start";
 import { removeLabelledResources } from "./container-live-cleanup";
+import { agentToolsStandIn } from "./container-live-host-service-context";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -57,8 +59,12 @@ afterAll(async () => {
   // hook timeout would abandon the cleanup part-way and leak the networks.
 }, 180_000);
 
-function hostListener(): number {
-  const server = Bun.serve({ hostname: "0.0.0.0", port: 0, fetch: () => new Response("host-ok") });
+function hostListener(signLoopbackProbe?: (challenge: string) => string): number {
+  const server = Bun.serve({
+    hostname: "0.0.0.0",
+    port: 0,
+    fetch: (request) => agentToolsStandIn(request, "host-ok", signLoopbackProbe),
+  });
   servers.push(server);
   return server.port!;
 }
@@ -168,7 +174,8 @@ describe("C22 environment networks and narrow host access", () => {
       const { ensureContainerHostServicePorts } = await import("../src/core/commands-environment");
       const { environmentNetworkPolicy, removeEnvironmentNetwork, environmentNetworkName } =
         await import("../src/core/container-network");
-      const servicePort = hostListener();
+      const signLoopbackProbe = createAgentToolsLoopbackSigner();
+      const servicePort = hostListener(signLoopbackProbe);
       const otherPort = hostListener();
       const restricted = lifecycleEnvironment({
         id: `env-${RUN}-a`,
@@ -180,6 +187,7 @@ describe("C22 environment networks and narrow host access", () => {
         await import("../src/core/container-host-reachability");
       const reachability = new ContainerHostReachabilityService({
         servicePort: () => servicePort,
+        signLoopbackProbe,
         ownerNamespace: owner,
         fallbackImage: () => IMAGE,
       });

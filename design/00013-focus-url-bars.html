@@ -11,20 +11,19 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00013</p>
       <h1>00013 · Use the focus hairline on the browser URL bars</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-medium">Medium</span>
         <span class="pill">Focus</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 6 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 6 / 6 images</span
         >
       </div>
 
       <h2>Problem</h2>
       <p>
-        <code>BrowserTab.tsx:777</code> and <code>ServiceBrowserTab.tsx:842</code> wrap the URL
-        input in a bordered container with <code>focus-within:border-ring</code>. That is a
-        border-color swap, the pattern DESIGN.md rules out. Their inner input also drops the
-        outline.
+        <code>BrowserTab.tsx</code> and <code>ServiceBrowserTab.tsx</code> used
+        <code>focus-within:border-ring</code> on their URL bar frames. This swapped the border color
+        on focus while the inner input suppressed its outline.
       </p>
       <div class="rule">
         <div>
@@ -46,11 +45,11 @@
         </thead>
         <tbody>
           <tr>
-            <td><code>apps/web/src/components/browser/BrowserTab.tsx:777</code></td>
+            <td><code>apps/web/src/components/browser/BrowserTab.tsx</code></td>
             <td>URL bar wrapper</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/browser/ServiceBrowserTab.tsx:842</code></td>
+            <td><code>apps/web/src/components/browser/ServiceBrowserTab.tsx</code></td>
             <td>URL bar wrapper</td>
           </tr>
         </tbody>
@@ -194,53 +193,53 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00013/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -248,15 +247,40 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+      <h3>Classification and decision</h3>
+      <p>
+        Both hits were local focus-style defects: one on the manual browser bar and one on the
+        service browser bar. Both now share a frame style that draws a 1px hairline inset 2px when
+        their address input matches <code>:focus-visible</code>. Applying the hairline directly to
+        the input would reuse the standalone control utility, but would frame only the text portion
+        of the service bar. The frame keeps the same focus target on both bars and leaves the
+        service picker’s own focus indicator independent. The hairline uses existing theme colors,
+        including the destructive color for invalid service addresses and Highlight in forced
+        colors.
       </p>
+      <h3>Image comparisons</h3>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <a href="#cap-url-bar-focused-desktop">Manual browser, keyboard focus</a> — the blue outer
+          border becomes a blue inset hairline inside the neutral border.
+        </li>
+        <li>
+          <a href="#cap-service-url-bar-focused-desktop">Service browser, keyboard focus</a> — the
+          inset hairline frames the service picker and address together. The picker, service status,
+          and selected URL match the baseline.
+        </li>
+        <li>
+          <a href="#cap-url-bar-rest-desktop">Manual browser, at rest</a> — the two PNGs are
+          byte-for-byte identical.
+        </li>
       </ul>
+      <p>
+        Chromium captures came from the isolated headless <code>design-00013</code> profile with the
+        same dark theme, 1440×900 viewport, 100% zoom, and device scale factor 1. The three before
+        images were taken on unmodified commit <code>b2c91abb9</code>. Both inputs show the same
+        hairline with Tab and mouse focus. The browser check also covered reload, both bars at
+        390×844, picker focus, the service address error and recovery, and forced colors.
+      </p>
 
       <footer>
         Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and

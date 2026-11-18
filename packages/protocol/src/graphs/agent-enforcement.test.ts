@@ -83,9 +83,9 @@ describe("graphRoleProviderChoices", () => {
       floor: "provider-configured",
     });
     // A builder role has no floor: every provider is offered.
-    const fixer = choices.find((entry) => entry.role === "fixer")!;
-    expect(fixer.floor).toBeUndefined();
-    expect(fixer.choices.every((choice) => choice.allowed)).toBe(true);
+    const addresser = choices.find((entry) => entry.role === "addresser")!;
+    expect(addresser.floor).toBeUndefined();
+    expect(addresser.choices.every((choice) => choice.allowed)).toBe(true);
   });
 });
 
@@ -96,7 +96,7 @@ describe("graphBindingFloorProblems", () => {
       preparer: { platform: "claude" as const },
       reviewer: [{ platform: "claude" as const }, { platform: "grok" as const }],
       consolidator: { platform: "claude" as const },
-      fixer: { platform: "grok" as const },
+      addresser: { platform: "grok" as const },
       describer: { platform: "claude" as const },
     };
     const problems = graphBindingFloorProblems(plan, roles, sandboxed);

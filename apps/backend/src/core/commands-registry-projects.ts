@@ -45,7 +45,11 @@ import {
   useHttpsGitRemoteCommand,
   validateGitUrlCommand,
 } from "@orkestrator/protocol/contract/domains/projects";
-import { switchOriginToHttps } from "./git-ssh-transport.js";
+import { switchOriginToHttps } from "./git/index.js";
+import {
+  listGitHubCloneAccounts,
+  listGitHubCloneRepositories,
+} from "./git/github-clone-browser.js";
 import { readProjectSetupRequirements } from "./project-setup-requirements.js";
 import {
   getConfigCommand,
@@ -130,7 +134,6 @@ import {
   HOST_OPENCODE_CATALOG_SCOPE,
   seedHostModelCatalogIfMissing,
 } from "./host-model-catalog-seed.js";
-import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 import { openCode2EnvironmentServer } from "./opencode2/container-server-lifecycle.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {

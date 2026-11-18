@@ -49,13 +49,16 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES } from "@orkestrator/protocol/container-host-reachability";
 import { IMAGE_MANIFEST_PATH } from "@orkestrator/protocol/image-manifest";
 import { runCommand } from "../src/core/shell";
+import { AgentToolsServer } from "../src/core/agent-tools";
+import { StorageService } from "../src/core/storage";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, writeGithubRangesSeedFixture } from "./container-lifecycle-fixtures";
-import { hostServiceContext } from "./container-live-host-service-context";
+import { agentToolsStandIn, hostServiceContext } from "./container-live-host-service-context";
 import { startRuntime } from "./container-live-start";
 import { removeLabelledResources } from "./container-live-cleanup";
 import { startGateway } from "./gateway-test-harness";
@@ -68,7 +71,8 @@ const GITHUB_SEED = process.env.ORKESTRATOR_LIVE_GITHUB_RANGES_SEED?.trim() ?? "
 const WORKLOAD_FIREWALL_IMAGE = process.env.ORKESTRATOR_LIVE_WORKLOAD_FIREWALL_IMAGE?.trim() ?? "";
 const RUN = `h${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 const LIVE_TIMEOUT_MS = 900_000;
-const HOST_LOOPBACK = "10.0.2.2";
+/** The RootlessKit host loopback address the backend's check chose (it depends on the network driver). */
+let hostLoopback = "";
 const CAPABILITIES_LABEL = "org.orkestrator.image.capabilities";
 
 async function docker(args: string[], timeoutMs = 120_000): Promise<string> {
@@ -95,6 +99,8 @@ const live = ROOTLESS ? test : test.skip;
 let dataDir = "";
 let owner = "";
 let variantImage = "";
+let agentTools: AgentToolsServer | undefined;
+let storage: StorageService | undefined;
 const servers: Array<{ stop: (force?: boolean) => void }> = [];
 
 beforeAll(async () => {
@@ -109,6 +115,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!ROOTLESS) return;
+  await agentTools?.stop();
+  storage?.close();
   for (const server of servers) server.stop(true);
   const leftovers = await removeLabelledResources(docker, [`label=orkestrator-owner=${owner}`]);
   if (variantImage) {
@@ -130,7 +138,7 @@ function loopbackListener(answer: string): { port: number; peers: Set<string> } 
     fetch: (request, self) => {
       const peer = self.requestIP(request)?.address;
       if (peer) peers.add(peer);
-      return new Response(answer);
+      return agentToolsStandIn(request, answer);
     },
   });
   servers.push(server);
@@ -293,7 +301,12 @@ describe("rootless daemon with host loopback enabled", () => {
       const { resolveDockerImage } = await import("../src/core/docker-image");
       const { networkOwnerContainer } = await import("../src/core/container-network-owner");
 
-      const service = loopbackListener("service-ok");
+      storage = new StorageService(dataDir);
+      await storage.init();
+      const tools = new AgentToolsServer(storage, "0.0.0.0");
+      agentTools = tools;
+      await tools.start();
+      const servicePort = tools.servicePort()!;
       const other = loopbackListener("other-ok");
       const { info } = await startGateway({ agentTestMode: true });
       const gatewayPort = Number(new URL(info.url).port);
@@ -310,14 +323,16 @@ describe("rootless daemon with host loopback enabled", () => {
       expect(await fromHost(`http://127.0.0.1:${gatewayPort}${mintPath}`, "POST")).toBe(401);
 
       const reachability = new ContainerHostReachabilityService({
-        servicePort: () => service.port,
+        servicePort: () => servicePort,
+        signLoopbackProbe: tools.signLoopbackProbe,
         ownerNamespace: owner,
         fallbackImage: () => IMAGE,
       });
       const host = await reachability.check("manual");
       expect(host.dockerRootless).toBe(true);
       expect(host.status).toBe("reachable");
-      expect(host.hostAddress).toBe(HOST_LOOPBACK);
+      expect(ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES).toContain(host.hostAddress ?? "");
+      hostLoopback = host.hostAddress!;
       expect(host.remediation ?? null).toBeNull();
 
       const workloadFirewall = await workloadFirewallImage();
@@ -326,7 +341,7 @@ describe("rootless daemon with host loopback enabled", () => {
         lifecycleEnvironment({ id: `env-${RUN}-full`, networkAccessMode: "full" }),
         lifecycleEnvironment({ id: `env-${RUN}-incont`, networkAccessMode: "restricted" }),
       ];
-      const { context } = hostServiceContext(environments, dataDir, service.port);
+      const { context } = hostServiceContext(environments, dataDir, servicePort);
       context.containerHostReachability = reachability;
       const create = async (environment: Environment, image: string) => {
         const resolved = await resolveDockerImage(image);
@@ -372,6 +387,46 @@ describe("rootless daemon with host loopback enabled", () => {
       const fullRuntime = await create(environments[1]!, IMAGE);
       const inContainerRuntime = await create(environments[2]!, workloadFirewall.image);
 
+      // Send the disposable bearer on stdin, never in docker/curl arguments
+      // or in the qualification matrix. List tools without mutating state.
+      const credential = tools.connection(
+        environments[0]!.id,
+        environments[0]!.projectId,
+        "container",
+      );
+      const { stdout: mcp } = await runCommand(
+        "docker",
+        [
+          "exec",
+          "-i",
+          "-u",
+          "node",
+          gatewayRuntime,
+          "curl",
+          "-q",
+          "--fail",
+          "--silent",
+          "--show-error",
+          "--max-time",
+          "8",
+          "--config",
+          "-",
+          "--header",
+          "content-type: application/json",
+          "--header",
+          "accept: application/json, text/event-stream",
+          "--data",
+          JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+          credential.url,
+        ],
+        {
+          timeoutMs: 15_000,
+          stdin: `header = "Authorization: Bearer ${credential.token}"\n`,
+          redactValues: [credential.token],
+        },
+      );
+      expect(mcp).toContain('"tools"');
+
       // Where each runtime's firewall lives.
       const egressGateway = await networkOwnerContainer(gatewayRuntime);
       expect(egressGateway).not.toBe(gatewayRuntime);
@@ -409,7 +464,7 @@ describe("rootless daemon with host loopback enabled", () => {
       }
 
       const targets = (address: string) => ({
-        service: `http://${address}:${service.port}/`,
+        service: `http://${address}:${servicePort}/mcp`,
         other: `http://${address}:${other.port}/`,
         gatewayStatus: `http://${address}:${gatewayPort}${gatewayStatusPath}`,
         gatewayLogin: `http://${address}:${gatewayPort}${loginPath}`,
@@ -420,7 +475,7 @@ describe("rootless daemon with host loopback enabled", () => {
       const loopbackHost = `127.0.0.1:${gatewayPort}`;
       const probeAll = async (containerId: string) => {
         const results: Record<string, Probe> = {};
-        for (const address of ["host.docker.internal", HOST_LOOPBACK]) {
+        for (const address of ["host.docker.internal", hostLoopback]) {
           for (const [name, url] of Object.entries(targets(address))) {
             results[`${name}@${address}`] = await probe(containerId, url);
           }
@@ -436,9 +491,9 @@ describe("rootless daemon with host loopback enabled", () => {
           named.gatewayLogin,
           { host: loopbackHost },
         );
-        results[`gatewayMint@${HOST_LOOPBACK}`] = await probe(
+        results[`gatewayMint@${hostLoopback}`] = await probe(
           containerId,
-          `http://${HOST_LOOPBACK}:${gatewayPort}${mintPath}`,
+          `http://${hostLoopback}:${gatewayPort}${mintPath}`,
           { method: "POST" },
         );
         return results;
@@ -458,9 +513,8 @@ describe("rootless daemon with host loopback enabled", () => {
         const after = await rejectCount(firewall);
         matrix[label] = { results: summarize(results), rejectBefore: before, rejectAfter: after };
         // Positive control first: the named service port answers.
-        for (const address of ["host.docker.internal", HOST_LOOPBACK]) {
-          expect(results[`service@${address}`]).toMatchObject({ exit: 0, status: 200 });
-          expect(results[`service@${address}`]!.body).toBe("service-ok");
+        for (const address of ["host.docker.internal", hostLoopback]) {
+          expect(results[`service@${address}`]).toMatchObject({ exit: 0, status: 405 });
         }
         // Everything else is rejected by the firewall at once: no response,
         // curl exit 7, and one REJECT counted per refused connection.
@@ -471,8 +525,8 @@ describe("rootless daemon with host loopback enabled", () => {
 
       const full = await probeAll(fullRuntime);
       matrix.full = { results: summarize(full) };
-      for (const address of ["host.docker.internal", HOST_LOOPBACK]) {
-        expect(full[`service@${address}`]).toMatchObject({ exit: 0, status: 200 });
+      for (const address of ["host.docker.internal", hostLoopback]) {
+        expect(full[`service@${address}`]).toMatchObject({ exit: 0, status: 405 });
         expect(full[`other@${address}`]).toMatchObject({ exit: 0, status: 200 });
         expect(full[`other@${address}`]!.body).toBe("other-ok");
       }
@@ -481,7 +535,7 @@ describe("rootless daemon with host loopback enabled", () => {
       expect(full["gatewayStatus@host.docker.internal"]).toMatchObject({ exit: 0, status: 421 });
       expect(full["gatewayLogin@host.docker.internal"]).toMatchObject({ exit: 0, status: 421 });
       for (const name of [
-        `gatewayStatus@${HOST_LOOPBACK}`,
+        `gatewayStatus@${hostLoopback}`,
         "gatewayStatus@host.docker.internal+loopback-host",
       ]) {
         expect(full[name]).toMatchObject({ exit: 0, status: 401 });
@@ -490,17 +544,17 @@ describe("rootless daemon with host loopback enabled", () => {
       // peer, so its loopback-gated login route was served, and still refused
       // the request without a valid single-use code.
       for (const name of [
-        `gatewayLogin@${HOST_LOOPBACK}`,
+        `gatewayLogin@${hostLoopback}`,
         "gatewayLogin@host.docker.internal+loopback-host",
       ]) {
         expect(full[name]).toMatchObject({ exit: 0, status: 401 });
       }
       // Minting a login code needs the gateway token even from loopback.
-      expect(full[`gatewayMint@${HOST_LOOPBACK}`]).toMatchObject({ exit: 0, status: 401 });
+      expect(full[`gatewayMint@${hostLoopback}`]).toMatchObject({ exit: 0, status: 401 });
       // RootlessKit dials the host's loopback itself, so every listener saw
       // 127.0.0.1, never the container's own address.
-      matrix.peers = { service: [...service.peers], other: [...other.peers] };
-      expect([...service.peers]).toEqual(["127.0.0.1"]);
+      matrix.peers = { other: [...other.peers] };
+      matrix.authenticatedMcp = "tools/list passed";
       expect([...other.peers]).toEqual(["127.0.0.1"]);
 
       // Runtime root and the firewall. Behind a gateway, uid 0 in the runtime
@@ -511,14 +565,14 @@ describe("rootless daemon with host loopback enabled", () => {
       expect(await dockerSucceeds(["exec", "-u", "orkroot", gatewayRuntime, ...openAll])).toBe(
         false,
       );
-      const gatewayAfterTamper = await probe(gatewayRuntime, targets(HOST_LOOPBACK).gatewayStatus);
+      const gatewayAfterTamper = await probe(gatewayRuntime, targets(hostLoopback).gatewayStatus);
       expect(gatewayAfterTamper).toMatchObject({ exit: 7, status: 0 });
       expect(await dockerSucceeds(["exec", "-u", "orkroot", inContainerRuntime, ...openAll])).toBe(
         true,
       );
       const inContainerAfterTamper = await probe(
         inContainerRuntime,
-        targets(HOST_LOOPBACK).gatewayStatus,
+        targets(hostLoopback).gatewayStatus,
       );
       expect(inContainerAfterTamper).toMatchObject({ exit: 0, status: 401 });
       matrix.rootTamper = summarize({

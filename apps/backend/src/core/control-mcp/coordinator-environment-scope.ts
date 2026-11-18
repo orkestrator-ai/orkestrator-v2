@@ -71,7 +71,7 @@ export const COORDINATOR_ENVIRONMENT_ACTIONS: ReadonlyMap<
 export const COORDINATOR_ENVIRONMENT_CHECKED_BY_COMMAND: ReadonlySet<string> = new Set([
   "send_message",
   "address_multi_review",
-  "custom_fix_multi_review",
+  "custom_address_multi_review",
   "cancel_graph_run",
 ]);
 
@@ -97,7 +97,7 @@ export const COORDINATOR_ENVIRONMENT_READS: ReadonlySet<string> = new Set([
   "get_build_pipeline",
   "get_multi_review",
   "open_multi_review",
-  "open_multi_review_fix",
+  "open_multi_review_address_findings",
   "get_graph_run",
 ]);
 

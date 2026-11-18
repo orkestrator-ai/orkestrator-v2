@@ -7,10 +7,10 @@ import {
 } from "./action-defaults.js";
 
 describe("normalizeActionDefaults", () => {
-  it("keeps a default saved under the key a later build uses for Address Findings", () => {
+  it("upgrades an Address Findings default saved under the former key", () => {
     const saved = { platform: "codex" as const, model: "gpt-6.1-sol" };
-    expect(normalizeActionDefaults({ addressFindings: saved })).toEqual({
-      fixReviewIssues: saved,
+    expect(normalizeActionDefaults({ fixReviewIssues: saved })).toEqual({
+      addressFindings: saved,
     });
   });
 
@@ -20,7 +20,7 @@ describe("normalizeActionDefaults", () => {
         fixReviewIssues: { platform: "codex" },
         addressFindings: { platform: "claude" },
       }),
-    ).toEqual({ fixReviewIssues: { platform: "codex" } });
+    ).toEqual({ addressFindings: { platform: "claude" } });
   });
 
   it("returns an empty object for anything that is not a record", () => {
@@ -36,7 +36,7 @@ describe("normalizeActionDefaults", () => {
         review: { platform: "codex", model: " gpt-5.4 ", reasoningEffort: " high " },
         review2: { platform: "claude", model: " opus " },
         reviewPreparation: { platform: "codex", model: " gpt-5.6 ", reasoningEffort: " medium " },
-        fixReviewIssues: { platform: "codex", model: " gpt-5.6 " },
+        addressFindings: { platform: "codex", model: " gpt-5.6 " },
       }),
     ).toEqual({
       createScript: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
@@ -47,7 +47,7 @@ describe("normalizeActionDefaults", () => {
         model: "gpt-5.6",
         reasoningEffort: "medium",
       },
-      fixReviewIssues: { platform: "codex", model: "gpt-5.6" },
+      addressFindings: { platform: "codex", model: "gpt-5.6" },
     });
   });
 

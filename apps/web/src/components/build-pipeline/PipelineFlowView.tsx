@@ -836,7 +836,7 @@ export function PipelineFlowView({
                   }
                   className="mb-1 shrink-0"
                 >
-                  <TabsList aria-label="Inspector views" className="h-7 rounded-md p-0.5">
+                  <TabsList variant="segmented" aria-label="Inspector views">
                     <TabsTrigger className="h-6 px-2 text-xs" value="transcript">
                       Transcript
                     </TabsTrigger>
@@ -994,7 +994,7 @@ function InspectorNotes({
             : session.phase === "verify"
               ? "verification-result"
               : session.phase === "address-findings"
-                ? "fix-result"
+                ? "address-findings-result"
                 : "review-preparation"
         }
       />,

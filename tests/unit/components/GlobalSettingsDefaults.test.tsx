@@ -151,7 +151,7 @@ describe("GlobalSettings defaults section", () => {
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
         review2: { platform: "codex", model: "gpt-6.1-sol" },
-        fixReviewIssues: { platform: "claude", model: "haiku" },
+        addressFindings: { platform: "claude", model: "haiku" },
       }),
     );
 
@@ -164,7 +164,7 @@ describe("GlobalSettings defaults section", () => {
 
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
-        fixReviewIssues: { platform: "claude", model: "haiku" },
+        addressFindings: { platform: "claude", model: "haiku" },
       }),
     );
   });

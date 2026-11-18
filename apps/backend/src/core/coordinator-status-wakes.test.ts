@@ -1575,7 +1575,7 @@ describe("status classification and bounds", () => {
       state: "pr-failed",
       headline: "found nothing to fix but its PR session could not start",
     });
-    expect(failed.tools.join(" ")).not.toContain("open_multi_review_fix");
+    expect(failed.tools.join(" ")).not.toContain("open_multi_review_address_findings");
     const skipped = status({ state: "skipped", message: "A pull request already exists" })!;
     expect(skipped).toMatchObject({ state: "ready", headline: "found nothing to fix" });
     expect(skipped.details).toContain("No PR session started: A pull request already exists");

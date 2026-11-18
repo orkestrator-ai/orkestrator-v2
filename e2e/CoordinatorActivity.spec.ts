@@ -363,28 +363,36 @@ for (const presentation of ["bar", "grid"] as const) {
     await page.goto(`/coordinator-activity?presentation=${presentation}`);
     const tab = coordinatorTab(page);
     const list = page.getByRole("tablist", { name: "Project navigation" });
+    const scrollport = presentation === "bar" ? page.getByTestId("project-navigation-bar") : list;
     const outline = tab.getByTestId("coordinator-working-outline");
     await expect(outline).toBeVisible();
     if (presentation === "bar") {
-      // The fixture sidebar deliberately leaves a narrow scrolling navigation bar.
-      expect(await list.evaluate((e) => e.scrollWidth > e.clientWidth)).toBe(true);
-      await list.evaluate((e) => {
-        e.scrollLeft = e.scrollWidth;
+      const listLayout = await list.evaluate((element) => ({
+        overflowX: getComputedStyle(element).overflowX,
+        overflows: element.scrollWidth > element.clientWidth,
+      }));
+      expect(listLayout).toEqual({ overflowX: "visible", overflows: false });
+      const end = await scrollport.evaluate((row) => {
+        row.scrollLeft = row.scrollWidth;
+        return row.scrollLeft;
       });
-      expect(await list.evaluate((e) => e.scrollLeft)).toBeGreaterThan(0);
-      // Coordinator is the first tab. Put its inset outline exactly at the
-      // clipping boundary while leaving the tablist horizontally scrolled.
-      await list.evaluate((e) => {
-        e.scrollLeft = 1;
-      });
-      expect(await list.evaluate((e) => e.scrollLeft)).toBe(1);
+      expect(end).toBeGreaterThan(0);
+      // Include the row's leading padding when placing the 1px inset at
+      // the scrollport's left edge.
+      const tabLeft = await tab.evaluate((element) => element.getBoundingClientRect().left);
+      const edge = await scrollport.evaluate((row, left) => {
+        const clipLeft = row.getBoundingClientRect().left + row.clientLeft;
+        row.scrollLeft = Math.floor(row.scrollLeft + left + 1 - clipLeft);
+        return row.scrollLeft;
+      }, tabLeft);
+      expect(edge).toBeGreaterThan(0);
+      expect(edge).toBeLessThan(end);
     }
     const geometry = await tab.evaluate((element) => {
       const outline = element.querySelector("[data-testid='coordinator-working-outline']")!;
       const ring = outline.firstElementChild!;
       const tab = element.getBoundingClientRect();
       const box = outline.getBoundingClientRect();
-      const list = element.parentElement!.getBoundingClientRect();
       return {
         inset: [
           box.left - tab.left,
@@ -392,22 +400,28 @@ for (const presentation of ["bar", "grid"] as const) {
           tab.right - box.right,
           tab.bottom - box.bottom,
         ],
-        visible:
-          box.left >= list.left &&
-          box.right <= list.right &&
-          box.top >= list.top &&
-          box.bottom <= list.bottom,
+        box: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
         tabRadius: getComputedStyle(element).borderRadius,
         ringRadius: getComputedStyle(ring, "::before").borderRadius,
       };
     });
+    const clip = await scrollport.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const left = rect.left + element.clientLeft;
+      const top = rect.top + element.clientTop;
+      return { left, right: left + element.clientWidth, top, bottom: top + element.clientHeight };
+    });
     expect(geometry.inset).toEqual([1, 1, 1, 1]);
-    expect(geometry.visible).toBe(true);
+    expect(geometry.box.left).toBeGreaterThanOrEqual(clip.left);
+    expect(geometry.box.right).toBeLessThanOrEqual(clip.right);
+    expect(geometry.box.top).toBeGreaterThanOrEqual(clip.top);
+    expect(geometry.box.bottom).toBeLessThanOrEqual(clip.bottom);
+    if (presentation === "bar") expect(geometry.box.left - clip.left).toBeLessThan(1);
     expect(geometry.tabRadius).toBe(presentation === "grid" ? "8px" : "6px");
     expect(geometry.ringRadius).toBe(geometry.tabRadius);
-    const dimensions = await list.evaluate((e) => [e.scrollWidth, e.scrollHeight]);
+    const dimensions = await scrollport.evaluate((e) => [e.scrollWidth, e.scrollHeight]);
     await page.getByRole("button", { name: "Coordinator idle" }).click();
     await expect(outline).toHaveCount(0);
-    expect(await list.evaluate((e) => [e.scrollWidth, e.scrollHeight])).toEqual(dimensions);
+    expect(await scrollport.evaluate((e) => [e.scrollWidth, e.scrollHeight])).toEqual(dimensions);
   });
 }

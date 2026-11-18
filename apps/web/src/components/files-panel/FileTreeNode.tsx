@@ -105,7 +105,8 @@ interface FileTreeNodeProps {
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
   onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onRequestMove?: (sourcePaths: string[]) => void;
-  onRequestRename?: (path: string) => void;
+  /** Asks to rename a file or folder in place; `isFolder` picks the dialog's wording. */
+  onRequestRename?: (path: string, isFolder: boolean) => void;
   onCreateFolder?: (parentDirectory: string) => void;
   movePending?: boolean;
 }
@@ -221,7 +222,7 @@ export const FileTreeNode = memo(function FileTreeNode({
 
     return (
       <Collapsible open={isExpanded} onOpenChange={(open) => setFolderExpanded(item.path, open)}>
-        {onCreateFolder || onDeleteFolder ? (
+        {onCreateFolder || onDeleteFolder || onRequestRename ? (
           <ContextMenu>
             <ContextMenuTrigger
               asChild
@@ -241,6 +242,15 @@ export const FileTreeNode = memo(function FileTreeNode({
                 <Copy />
                 Copy path
               </ContextMenuItem>
+              {onRequestRename && (
+                <ContextMenuItem
+                  disabled={movePending}
+                  onSelect={() => onRequestRename(item.path, true)}
+                >
+                  <Pencil />
+                  Rename…
+                </ContextMenuItem>
+              )}
               {onDeleteFolder && (
                 <ContextMenuItem
                   variant="destructive"
@@ -384,7 +394,10 @@ export const FileTreeNode = memo(function FileTreeNode({
           Copy path
         </ContextMenuItem>
         {onRequestRename && (
-          <ContextMenuItem disabled={movePending} onSelect={() => onRequestRename(item.path)}>
+          <ContextMenuItem
+            disabled={movePending}
+            onSelect={() => onRequestRename(item.path, false)}
+          >
             <Pencil />
             Rename…
           </ContextMenuItem>

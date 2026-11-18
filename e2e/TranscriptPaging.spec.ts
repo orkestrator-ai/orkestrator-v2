@@ -32,6 +32,43 @@ async function toolPosition(list: Locator, id: string) {
     };
   }, id);
 }
+test("reviewer: a grown tool group stays expanded when its transcript tab is reopened", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/transcript-paging?reviewer=1&restore=1");
+  const list = page.locator("[data-transcript-scroller]");
+  const group = list.locator("[data-transcript-group-frame]");
+  const retainedCall = group.locator('[data-transcript-part-id="call-4"]');
+  const olderCall = group.locator('[data-transcript-part-id="call-0"]');
+  const latestCall = group.locator('[data-transcript-part-id="call-7"]');
+  const rowKey = () =>
+    group.evaluate((element) =>
+      element.closest("[data-chat-message-key]")?.getAttribute("data-chat-message-key"),
+    );
+  await group.getByRole("button", { name: /^Show 4 tool calls:/ }).click();
+  await expect(retainedCall).toBeVisible();
+  const originalRowKey = await rowKey();
+  expect(originalRowKey).toMatch(/^row-4/);
+
+  await page.getByRole("button", { name: "Load earlier messages", exact: true }).click();
+  const fold = group.getByRole("button", { name: /^Fold 8 tool calls:/ });
+  await expect(fold).toHaveAttribute("aria-expanded", "true");
+  await expect.poll(rowKey).toBe(originalRowKey);
+  await expect(olderCall).toBeVisible();
+
+  await page.getByRole("button", { name: "Switch environment" }).click();
+  await expect(list).toHaveCount(0);
+  await page.getByRole("button", { name: "Return to transcript" }).click();
+  await expect(fold).toHaveAttribute("aria-expanded", "true");
+  // The new view builds its display row from the full snapshot. Provider
+  // part anchors still identify the same card even without the old alias.
+  await expect.poll(rowKey).toMatch(/^row-0/);
+  await expect(olderCall).toBeVisible();
+  await expect(retainedCall).toBeVisible();
+  await expect(latestCall).toBeVisible();
+});
+
 for (const view of ["native", "reviewer"]) {
   for (const [mixed, bounded] of [
     [false, false],

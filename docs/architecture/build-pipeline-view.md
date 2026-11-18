@@ -50,6 +50,36 @@ the `create_feature_build` command, `featureBuildRequestHash`, the `feature-buil
 events): they are persisted or part of the backend contract, so they were not
 renamed.
 
+## Sidebar activity and completion
+
+The backend stores the pipeline activity source on each environment. The source
+is working while any of that environment's pipelines has agents in flight.
+Completion and failure can raise unread attention when work ends. A cancel,
+pause, stall, or deletion alone does not raise completion attention.
+
+On a debounced pipeline change, the backend reads the changed record and
+reconciles its previous and current environments. A changed record with agents
+in flight establishes that its current environment is working. For other
+affected environments, the backend reads their current pipeline records before
+deciding activity. That read includes changes whose local event is still queued
+and changes made by another backend. Observations and activity writes are
+serialized, so a completion saved during a working write is processed afterward.
+Startup, retry after failure, and the 30-second sweep reconcile all records.
+An event that arrives before startup reconciliation succeeds runs the full pass.
+
+To-do 8308 task 1 is done (retired 2026-11-18). In the
+[100-environment SQLite fixture](../../apps/backend/src/core/build-pipeline-activity.test.ts),
+one pipeline change fetched one record and read one environment, down from
+100 environment reads. A change to working made no pipeline listing. A change
+to complete listed only the affected environment's pipelines. The separate
+recovery sweep still listed 100 pipeline records and read 100 environments.
+The measurements count calls at the observer's storage boundary. The scoped
+listing filters decoded records and copies the matching environment's records.
+The single-record lookup reuses decoded records on a warm revision and reloads
+the control store after another
+connection changes its revision, as covered by the
+[storage read accounting tests](../../apps/backend/src/core/storage-read-accounting.test.ts).
+
 ## Starting a build
 
 Every launcher sends only what the user explicitly chose, and the backend fills

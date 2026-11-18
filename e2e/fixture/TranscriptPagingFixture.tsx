@@ -22,6 +22,7 @@ const identity: NativeAgentViewIdentity = {
 const query = new URLSearchParams(window.location.search);
 const mixed = query.has("mixed");
 const short = query.has("short");
+const restore = query.has("restore");
 // `bounded` reports the tail the way a view whose own byte bound dropped rows
 // does: a direct cursor at the first kept row of a bytes-truncated window
 // (0232).
@@ -37,8 +38,8 @@ if (!query.has("auto")) disableAutoLoadEarlier();
 // bridges do, so the first click leaves more to load. `stops=N` lengthens the
 // trail and starts the tail 100 rows from its end, like the live window.
 const pageSize = Number(query.get("paged") ?? 0) || undefined;
-const stopCount = Number(query.get("stops") ?? 0) || 60;
-const tailStart = query.has("stops") ? Math.max(0, stopCount - 100) : short ? 58 : 40;
+const stopCount = Number(query.get("stops") ?? 0) || (restore ? 8 : 60);
+const tailStart = query.has("stops") ? Math.max(0, stopCount - 100) : restore ? 4 : short ? 58 : 40;
 const tools = Array.from({ length: stopCount }, (_, index) => ({
   id: `row-${index}`,
   role: "assistant" as const,
@@ -134,7 +135,19 @@ const reviewer: MultiReviewReviewerTranscript = {
 // `slow` holds the page long enough for the reader to move while it loads.
 const pageDelayMs = new URLSearchParams(window.location.search).has("slow") ? 1_500 : 150;
 const pause = () => new Promise((resolve) => setTimeout(resolve, pageDelayMs));
-const loadTranscript = async () => reviewer;
+let reviewerHistoryLoaded = false;
+const loadTranscript = async () => {
+  if (!restore) return reviewer;
+  if (!reviewerHistoryLoaded) return structuredClone(reviewer);
+  // Reopening the transcript gets a fresh backend snapshot of the grown
+  // group, without the previous view's cached objects or display aliases.
+  return structuredClone({
+    ...reviewer,
+    messages: [...earlier, ...tail],
+    historyCursor: undefined,
+    truncated: false,
+  });
+};
 /** One page of `earlier` ending before `cursor` (`before-N`, N a source row). */
 function pageBefore(cursor: string | undefined) {
   const end = Math.min(Number(cursor?.replace("before-", "") ?? tailStart), tailStart);
@@ -152,7 +165,9 @@ function pageBefore(cursor: string | undefined) {
 }
 const loadHistoryPage = async (_workflow: string, _reviewer: string, page: { before: string }) => {
   await pause();
-  return { status: "page" as const, ...pageBefore(page.before) };
+  const result = pageBefore(page.before);
+  if (restore && result.complete) reviewerHistoryLoaded = true;
+  return { status: "page" as const, ...result };
 };
 /** The cursors the native tab paged from, in order, for tests to read. */
 const pageRequests: string[] = [];
@@ -324,6 +339,7 @@ export function TranscriptPagingFixture() {
       </button>
       <section className="min-h-0 flex-1" style={{ display: away ? "none" : undefined }}>
         {!disposed &&
+          (!restore || !away) &&
           (review ? (
             <MultiReviewReviewerTab
               data={{

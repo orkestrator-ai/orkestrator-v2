@@ -479,7 +479,16 @@ export const moveContainerFileCommand = defineCommand({
   critical: [],
 });
 
-const renameArgs = Schema.Struct({ ...pathMutation, newName: Schema.String });
+export type WorkspaceRenameKind = "file" | "folder";
+export const MAX_WORKSPACE_FOLDER_NAME_BYTES = 255;
+// Confined file writers reserve 42 bytes for sibling staging names.
+export const MAX_WORKSPACE_FILE_NAME_BYTES = MAX_WORKSPACE_FOLDER_NAME_BYTES - 42;
+
+const renameArgs = Schema.Struct({
+  ...pathMutation,
+  newName: Schema.String,
+  expectedKind: Schema.optionalKey(Schema.Literals(["file", "folder"])),
+});
 
 export const renameLocalFileCommand = defineCommand({
   domain: filesDomain,
@@ -489,7 +498,7 @@ export const renameLocalFileCommand = defineCommand({
   read: false,
   args: renameArgs,
   result: Schema.String,
-  critical: [],
+  critical: ["expectedKind"],
 });
 
 export const renameContainerFileCommand = defineCommand({
@@ -500,7 +509,7 @@ export const renameContainerFileCommand = defineCommand({
   read: false,
   args: renameArgs,
   result: Schema.String,
-  critical: [],
+  critical: ["expectedKind"],
 });
 
 const folderArgs = Schema.Struct({

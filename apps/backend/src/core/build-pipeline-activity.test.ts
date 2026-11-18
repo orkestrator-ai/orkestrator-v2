@@ -2,7 +2,7 @@
  * Pipe branches in the sidebar: the environment's `build-pipeline` activity
  * source follows its pipelines, on a real store.
  */
-import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,11 +16,12 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function store() {
+async function store(environmentCount = 2) {
   const root = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-activity-"));
   const storage = new StorageService(root);
   await storage.init();
-  for (const id of ["e1", "e2"]) {
+  for (let index = 1; index <= environmentCount; index++) {
+    const id = `e${index}`;
     await storage.addEnvironment({
       id,
       projectId: "proj-1",
@@ -116,10 +117,13 @@ class ManualTimers {
   }
 }
 
-function watched(storage: StorageService) {
+function watched(storage: StorageService, clock?: () => Date) {
   const timers = new ManualTimers();
-  const observer = new BuildPipelineActivity(storage, { timers });
-  cleanups.unshift(async () => observer.stop());
+  const observer = new BuildPipelineActivity(storage, { timers, clock });
+  cleanups.unshift(async () => {
+    observer.stop();
+    await observer.settled();
+  });
   return { observer, timers };
 }
 
@@ -132,6 +136,56 @@ async function activity(storage: StorageService, environmentId: string) {
 }
 
 describe("build pipeline activity", () => {
+  test("one change in 100 pipelines scopes the reads to the affected environment", async () => {
+    const storage = await store(100);
+    for (let index = 1; index <= 100; index++) {
+      await save(storage, pipeline(`p${index}`, `e${index}`, "complete"));
+    }
+    const { observer, timers } = watched(storage);
+    await observer.start();
+
+    const getPipeline = spyOn(storage, "getBuildPipeline");
+    const getEnvironment = spyOn(storage, "getEnvironment");
+    const loadEnvironments = spyOn(storage, "loadEnvironments");
+    const listPipelines = spyOn(storage, "listAllBuildPipelines");
+    const listSiblings = spyOn(storage, "listBuildPipelinesForEnvironment");
+    try {
+      await save(storage, pipeline("p42", "e42", "building"));
+      await timers.advance(500, observer);
+      expect(getPipeline.mock.calls).toEqual([["p42"]]);
+      expect(listPipelines).not.toHaveBeenCalled();
+      expect(listSiblings).not.toHaveBeenCalled();
+      expect(getEnvironment.mock.calls).toEqual([["e42"]]);
+      expect(loadEnvironments).not.toHaveBeenCalled();
+      expect((await activity(storage, "e42")).aggregate).toBe("working");
+
+      getPipeline.mockClear();
+      getEnvironment.mockClear();
+      await save(storage, pipeline("p42", "e42", "complete"));
+      await timers.advance(500, observer);
+      expect(getPipeline.mock.calls).toEqual([["p42"]]);
+      expect(listPipelines).not.toHaveBeenCalled();
+      expect(listSiblings.mock.calls).toEqual([["proj-1", "e42"]]);
+      expect(await listSiblings.mock.results[0]!.value).toHaveLength(1);
+      expect(getEnvironment.mock.calls).toEqual([["e42"]]);
+      expect(loadEnvironments).not.toHaveBeenCalled();
+      expect((await activity(storage, "e42")).aggregate).toBe("idle");
+
+      getEnvironment.mockClear();
+      await timers.advance(29_000, observer);
+      expect(listPipelines).toHaveBeenCalledTimes(1);
+      expect(await listPipelines.mock.results[0]!.value).toHaveLength(100);
+      expect(getEnvironment).toHaveBeenCalledTimes(100);
+      expect(loadEnvironments).toHaveBeenCalledTimes(1);
+    } finally {
+      getPipeline.mockRestore();
+      getEnvironment.mockRestore();
+      loadEnvironments.mockRestore();
+      listPipelines.mockRestore();
+      listSiblings.mockRestore();
+    }
+  });
+
   test("a pipeline with agents in flight paints its environment working until it finishes", async () => {
     const storage = await store();
     const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
@@ -215,6 +269,7 @@ describe("build pipeline activity", () => {
     for (const failure of [
       "getBuildPipeline",
       "getEnvironment",
+      "listBuildPipelinesForEnvironment",
       "setEnvironmentAgentActivity",
     ] as const) {
       test(`${transition} retries a failed ${failure} automatically`, async () => {
@@ -227,18 +282,31 @@ describe("build pipeline activity", () => {
           new Error("disk unavailable"),
         );
         try {
+          const attention = captureAttention(storage);
           if (transition === "delete") await storage.deleteBuildPipeline("p1");
           else await save(storage, pipeline("p1", "e1", "complete"));
           await timers.advance(500, observer);
           expect((await activity(storage, "e1")).source).toBe("working");
+          expect(attention).not.toHaveBeenCalled();
           expect(warning).toHaveBeenCalledWith(
             expect.stringMatching(/sidebar\.update-failed pipelineId=p1 .*disk unavailable/),
           );
           failing.mockRestore();
-          await timers.advance(999, observer);
+
+          // A successful event for an unrelated environment cannot retry e1
+          // early or cancel recovery (even if the failed read dirtied nothing).
+          await save(storage, pipeline("p2", "e2", "reviewing"));
+          await timers.advance(500, observer);
+          expect((await activity(storage, "e2")).source).toBe("working");
+          await timers.advance(499, observer);
           expect((await activity(storage, "e1")).source).toBe("working");
           await timers.advance(1, observer);
           expect((await activity(storage, "e1")).source).toBe("idle");
+          await observer.reconcile();
+          expect(await bell(storage, "e1")).toBe(
+            transition === "complete" ? "agent_finished" : null,
+          );
+          expect(attention).toHaveBeenCalledTimes(transition === "complete" ? 1 : 0);
         } finally {
           failing.mockRestore();
           warning.mockRestore();
@@ -286,7 +354,88 @@ describe("build pipeline activity", () => {
     }
   });
 
-  test("shared-directory observers refresh external changes and periodically converge", async () => {
+  test("a completion cannot go idle ahead of a queued sibling activation", async () => {
+    const storage = await store();
+    await save(storage, pipeline("p1", "e1", "building"));
+    const { observer, timers } = watched(storage);
+    await observer.start();
+    const attention = captureAttention(storage);
+
+    await save(storage, pipeline("p1", "e1", "reviewing"));
+    await save(storage, pipeline("p2", "e1", "building"));
+    await save(storage, pipeline("p1", "e1", "complete"));
+    await timers.advance(500, observer);
+    expect((await activity(storage, "e1")).source).toBe("working");
+    expect(await bell(storage, "e1")).toBeNull();
+    expect(attention).not.toHaveBeenCalled();
+
+    await save(storage, pipeline("p2", "e1", "complete"));
+    await timers.advance(500, observer);
+    expect((await activity(storage, "e1")).source).toBe("idle");
+    expect(await bell(storage, "e1")).toBe("agent_finished");
+    expect(attention).toHaveBeenCalledTimes(1);
+  });
+
+  test("an event before startup retry accounts for siblings already in storage", async () => {
+    const storage = await store();
+    await save(storage, pipeline("p1", "e1", "building"));
+    await save(storage, pipeline("p2", "e1", "building"));
+    await storage.setEnvironmentAgentActivity(
+      "e1",
+      "working",
+      new Date().toISOString(),
+      "build-pipeline",
+    );
+    const { observer, timers } = watched(storage);
+    const attention = captureAttention(storage);
+    const failing = spyOn(storage, "listAllBuildPipelines").mockRejectedValueOnce(
+      new Error("offline"),
+    );
+    try {
+      await expect(observer.start()).rejects.toThrow("offline");
+      await save(storage, pipeline("p1", "e1", "complete"));
+      await timers.advance(500, observer);
+      expect(failing).toHaveBeenCalledTimes(2);
+      expect((await activity(storage, "e1")).source).toBe("working");
+      expect(await bell(storage, "e1")).toBeNull();
+      expect(attention).not.toHaveBeenCalled();
+
+      await save(storage, pipeline("p2", "e1", "complete"));
+      await timers.advance(500, observer);
+      expect((await activity(storage, "e1")).source).toBe("idle");
+      expect(await bell(storage, "e1")).toBe("agent_finished");
+      expect(attention).toHaveBeenCalledTimes(1);
+    } finally {
+      failing.mockRestore();
+    }
+  });
+
+  test("a completion accounts for a sibling restarted by another storage instance", async () => {
+    const storage = await store();
+    const writer = new StorageService(storage.getDataDir());
+    await writer.init();
+    cleanups.unshift(async () => writer.close());
+    await save(storage, pipeline("p1", "e1", "building"));
+    await save(storage, pipeline("p2", "e1", "failed"));
+    const { observer, timers } = watched(storage);
+    await observer.start();
+    const attention = captureAttention(storage);
+
+    await save(writer, pipeline("p2", "e1", "building"));
+    await save(storage, pipeline("p1", "e1", "complete"));
+    await timers.advance(500, observer);
+    expect((await activity(storage, "e1")).source).toBe("working");
+    expect(await bell(storage, "e1")).toBeNull();
+    expect(attention).not.toHaveBeenCalled();
+
+    await save(storage, pipeline("p2", "e1", "complete"));
+    await timers.advance(500, observer);
+    expect((await activity(storage, "e1")).source).toBe("idle");
+    expect(await bell(storage, "e1")).toBe("agent_finished");
+    expect(attention).toHaveBeenCalledTimes(1);
+  });
+
+  test("shared-directory observers see sibling completions on an event and repair stale activity on the sweep", async () => {
     const first = await store();
     const second = new StorageService(first.getDataDir());
     await second.init();
@@ -351,14 +500,21 @@ describe("build pipeline activity", () => {
   }
 
   test("moving a working pipeline releases its old environment", async () => {
-    const storage = await store();
+    const storage = await store(3);
     await save(storage, pipeline("p1", "e1", "building"));
+    await save(storage, pipeline("p3", "e3", "building"));
     const { observer, timers } = watched(storage);
     await observer.start();
-    await save(storage, pipeline("p1", "e2", "building"));
-    await timers.advance(500, observer);
-    expect((await activity(storage, "e1")).source).toBe("idle");
-    expect((await activity(storage, "e2")).source).toBe("working");
+    const getEnvironment = spyOn(storage, "getEnvironment");
+    try {
+      await save(storage, pipeline("p1", "e2", "building"));
+      await timers.advance(500, observer);
+      expect(getEnvironment.mock.calls).toEqual([["e1"], ["e2"]]);
+      expect(await activity(storage, "e1")).toEqual({ source: "idle", aggregate: "idle" });
+      expect(await activity(storage, "e2")).toEqual({ source: "working", aggregate: "working" });
+    } finally {
+      getEnvironment.mockRestore();
+    }
   });
 
   test("a failed release during a move retries the old environment and still marks the new one", async () => {
@@ -410,6 +566,13 @@ describe("build pipeline activity", () => {
     }
   });
 });
+
+function captureAttention(storage: StorageService) {
+  const listener = mock();
+  const unsubscribe = storage.addEnvironmentAttentionListener(listener);
+  cleanups.unshift(async () => unsubscribe());
+  return listener;
+}
 
 /** What the environment's bell says, or `null` when nothing rang. */
 async function bell(storage: StorageService, environmentId: string) {
@@ -619,21 +782,39 @@ describe("what a pipeline's end rings", () => {
     observer.stop();
   });
 
-  test("an end this process watched counts even when its save predates the working write", async () => {
+  test("a completion saved during the working write goes idle and rings once", async () => {
     const storage = await store();
-    // The activity write's clock runs ahead of the store's timestamps, as
-    // when a pipeline ends between the read and the write that went working.
-    const observer = new BuildPipelineActivity(storage, {
-      timers: NO_TIMERS,
-      clock: () => new Date(Date.now() + 60_000),
-    });
+    // Make the saved ending older than the working observation, so the bell
+    // must use the observed transition even if the two writes land close together.
+    const { observer, timers } = watched(storage, () => new Date(Date.now() + 60_000));
     await observer.start();
-    await save(storage, pipeline("p1", "e1", "building"));
-    await observer.observe("p1");
-    await save(storage, pipeline("p1", "e1", "failed", { error: "Build stage failed" }));
-    await observer.observe("p1");
-    expect(await bell(storage, "e1")).toBe("agent_failed");
-    observer.stop();
+    const attention = captureAttention(storage);
+    const write = storage.setEnvironmentAgentActivity.bind(storage);
+    const inFlight = spyOn(storage, "setEnvironmentAgentActivity").mockImplementationOnce(
+      async (...args) => {
+        await save(storage, pipeline("p1", "e1", "complete"));
+        return write(...args);
+      },
+    );
+    try {
+      await save(storage, pipeline("p1", "e1", "building"));
+      await timers.advance(500, observer);
+      expect((await activity(storage, "e1")).source).toBe("working");
+      expect(attention).not.toHaveBeenCalled();
+      await timers.advance(500, observer);
+      expect(await activity(storage, "e1")).toEqual({ source: "idle", aggregate: "idle" });
+      expect(await bell(storage, "e1")).toBe("agent_finished");
+      await observer.reconcile();
+      expect(attention).toHaveBeenCalledTimes(1);
+
+      const reader = new StorageService(storage.getDataDir());
+      cleanups.unshift(async () => reader.close());
+      await reader.init();
+      expect(await activity(reader, "e1")).toEqual({ source: "idle", aggregate: "idle" });
+      expect(await bell(reader, "e1")).toBe("agent_finished");
+    } finally {
+      inFlight.mockRestore();
+    }
   });
 
   test("an old pipeline's end does not colour a later one", async () => {

@@ -1,3 +1,7 @@
+import {
+  MAX_WORKSPACE_FILE_NAME_BYTES,
+  MAX_WORKSPACE_FOLDER_NAME_BYTES,
+} from "@orkestrator/protocol/contract/domains/files";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   Dialog,
@@ -13,6 +17,8 @@ import { Label } from "@/components/ui/label";
 
 interface RenameFileDialogProps {
   filePath: string | null;
+  /** Renames a folder rather than a file: wording, and the whole name is selected. */
+  isFolder?: boolean;
   isPending: boolean;
   onCancel: () => void;
   onRename: (filePath: string, newName: string) => Promise<void>;
@@ -30,6 +36,7 @@ export function fileNameStemLength(name: string): number {
 
 export function RenameFileDialog({
   filePath,
+  isFolder = false,
   isPending,
   onCancel,
   onRename,
@@ -41,6 +48,9 @@ export function RenameFileDialog({
   const currentName = filePath ? fileName(filePath) : "";
   const newName = value.trim();
   const unchanged = newName === currentName;
+  const noun = isFolder ? "folder" : "file";
+  const maxBytes = isFolder ? MAX_WORKSPACE_FOLDER_NAME_BYTES : MAX_WORKSPACE_FILE_NAME_BYTES;
+  const capitalNoun = isFolder ? "Folder" : "File";
 
   // Opening the dialog for a file starts from its current name.
   const [openedFor, setOpenedFor] = useState<string | null>(null);
@@ -55,24 +65,30 @@ export function RenameFileDialog({
   useEffect(() => {
     if (filePath === null) return;
     const name = fileName(filePath);
+    // A folder has no extension to protect, so its whole name is selected.
+    const selectionEnd = isFolder ? name.length : fileNameStemLength(name);
     const frame = requestAnimationFrame(() => {
       inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(0, fileNameStemLength(name));
+      inputRef.current?.setSelectionRange(0, selectionEnd);
     });
     return () => cancelAnimationFrame(frame);
-  }, [filePath]);
+  }, [filePath, isFolder]);
 
   const submit = async () => {
     if (!filePath || !newName || unchanged || isPending) return;
     if (newName.includes("/") || newName.includes("\\")) {
-      setError("File names cannot contain / or \\");
+      setError(`${capitalNoun} names cannot contain / or \\`);
+      return;
+    }
+    if (new TextEncoder().encode(newName).length > maxBytes) {
+      setError(`${capitalNoun} names cannot exceed ${maxBytes} bytes`);
       return;
     }
     setError(null);
     try {
       await onRename(filePath, newName);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Failed to rename file");
+      setError(submitError instanceof Error ? submitError.message : `Failed to rename ${noun}`);
     }
   };
 
@@ -85,7 +101,7 @@ export function RenameFileDialog({
     >
       <DialogContent size="md">
         <DialogHeader>
-          <DialogTitle>Rename file</DialogTitle>
+          <DialogTitle>Rename {noun}</DialogTitle>
           <DialogDescription>
             Rename <strong className="break-all text-foreground">{filePath ?? ""}</strong>.
           </DialogDescription>
@@ -98,13 +114,12 @@ export function RenameFileDialog({
           }}
         >
           <div className="space-y-2">
-            <Label htmlFor={inputId}>File name</Label>
+            <Label htmlFor={inputId}>{capitalNoun} name</Label>
             <Input
               id={inputId}
               ref={inputRef}
               autoFocus
               value={value}
-              maxLength={255}
               disabled={isPending}
               onChange={(event) => {
                 setValue(event.target.value);

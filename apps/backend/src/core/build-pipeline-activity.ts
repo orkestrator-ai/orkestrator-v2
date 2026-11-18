@@ -8,9 +8,10 @@
  * the control tools) reads only the environment's stored aggregate. Writing it
  * here is what lights a pipe branch's marker wherever it is shown.
  *
- * Debounced observations refresh the revision-validated shared store before
- * aggregating. Periodic reconciliation catches writes by other backends, and
- * dirty environments survive failed writes, including pipeline deletion.
+ * Debounced observations refresh one pipeline and aggregate its affected
+ * environments. A working record establishes activity on its own. Otherwise
+ * the event reads the environment's current siblings before deciding activity.
+ * Full reconciliation catches missed changes and retries failed writes.
  *
  * The `working -> idle` edge also says what the bell reads
  * (`buildPipelineCompletionOutcome`): a failure as a failure, a completion as
@@ -45,6 +46,10 @@ const MAX_RETRY_MS = 30_000;
 export interface BuildPipelineActivityStorage {
   addResourceChangeListener(listener: ResourceChangeListener): () => void;
   getBuildPipeline(pipelineId: string): Promise<PersistedBuildPipeline | null>;
+  listBuildPipelinesForEnvironment(
+    projectId: string,
+    environmentId: string,
+  ): Promise<PersistedBuildPipeline[]>;
   listAllBuildPipelines(): Promise<PersistedBuildPipeline[]>;
   getEnvironment(environmentId: string): Promise<Environment | null>;
   loadEnvironments(): Promise<Environment[]>;
@@ -149,12 +154,14 @@ export class BuildPipelineActivity {
   private readonly debounceMs: number;
   private readonly changeTimers = new Map<string, unknown>();
   private readonly pipelines = new Map<string, ObservedPipeline>();
+  private readonly pipelinesByEnvironment = new Map<string, Map<string, ObservedPipeline>>();
   /** Ends not yet announced, by pipeline; cleared when their environment's edge is written. */
   private readonly endings = new Map<string, ObservedEnding>();
   private readonly dirtyEnvironments = new Set<string>();
   private reconcileTimer: unknown = null;
   private retryTimer: unknown = null;
   private retryMs = RETRY_MS;
+  private initialized = false;
   private unsubscribe: (() => void) | null = null;
   /** One observation at a time, so two cannot both decide the same activity write. */
   private queue: Promise<unknown> = Promise.resolve();
@@ -174,6 +181,7 @@ export class BuildPipelineActivity {
 
   /** Subscribes to changes and starts recovery for missed cross-process events. */
   start(): Promise<void> {
+    if (!this.unsubscribe) this.initialized = false;
     this.unsubscribe ??= this.storage.addResourceChangeListener((change) =>
       this.onResourceChange(change),
     );
@@ -253,13 +261,19 @@ export class BuildPipelineActivity {
   /** Observes one pipeline now, including its deletion. */
   observe(pipelineId: string): Promise<void> {
     return this.serialize(async () => {
-      const previous = this.pipelines.get(pipelineId);
+      // A failed startup may have left us without the previous environment of
+      // a moved or deleted record. Recover from the persisted activity sources.
+      if (!this.initialized) return this.reconcileAll();
+
       const record = await this.storage.getBuildPipeline(pipelineId);
       const next = record ? observePipeline(record) : null;
-      if (previous) this.dirtyEnvironments.add(previous.environmentId);
-      if (next) this.dirtyEnvironments.add(next.environmentId);
-      await this.refreshPipelines();
-      await this.syncDirtyEnvironments();
+      const affected = new Set<string>();
+      this.updatePipeline(pipelineId, next, affected);
+      await this.syncEnvironments(affected, async (environment) =>
+        next?.working && next.environmentId === environment.id
+          ? [next]
+          : this.refreshEnvironmentPipelines(environment),
+      );
     });
   }
 
@@ -268,32 +282,85 @@ export class BuildPipelineActivity {
    * before a restart: the recovery path for a missed change.
    */
   reconcile(): Promise<void> {
-    return this.serialize(async () => {
-      const environments = await this.storage.loadEnvironments();
-      for (const environment of environments) {
-        if (environment.agentActivitySources?.["build-pipeline"]) {
-          this.dirtyEnvironments.add(environment.id);
-        }
+    return this.serialize(() => this.reconcileAll());
+  }
+
+  private async reconcileAll(): Promise<void> {
+    const environments = await this.storage.loadEnvironments();
+    for (const environment of environments) {
+      if (environment.agentActivitySources?.["build-pipeline"]) {
+        this.dirtyEnvironments.add(environment.id);
       }
-      await this.refreshPipelines();
-      await this.syncDirtyEnvironments();
-    });
+    }
+    await this.refreshPipelines();
+    await this.syncEnvironments(this.dirtyEnvironments);
+    this.initialized = true;
+    // Only a full pass can recover failed reads and reconcile every dirty
+    // environment, so an unrelated successful event cannot cancel a retry.
+    if (this.retryTimer !== null) this.timers.clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.retryMs = RETRY_MS;
+  }
+
+  private async refreshEnvironmentPipelines(environment: Environment): Promise<ObservedPipeline[]> {
+    const records = await this.storage.listBuildPipelinesForEnvironment(
+      environment.projectId,
+      environment.id,
+    );
+    const pipelines: ObservedPipeline[] = [];
+    for (const record of records) {
+      const observed = observePipeline(record);
+      if (!observed) continue;
+      pipelines.push(observed);
+      const previous = this.pipelines.get(record.id);
+      // Keep a known previous assignment until the pipeline's own event or
+      // the full sweep can reconcile both sides of a move.
+      if (!previous || previous.environmentId === environment.id) {
+        this.updatePipeline(record.id, observed, this.dirtyEnvironments);
+      }
+    }
+    return pipelines;
   }
 
   private async refreshPipelines(): Promise<void> {
     const records = await this.storage.listAllBuildPipelines();
-    const previous = new Map(this.pipelines);
-    for (const pipeline of this.pipelines.values()) {
-      this.dirtyEnvironments.add(pipeline.environmentId);
-    }
-    this.pipelines.clear();
+    const missing = new Set(this.pipelines.keys());
     for (const record of records) {
-      const observed = observePipeline(record);
-      if (!observed) continue;
-      this.pipelines.set(record.id, observed);
-      this.dirtyEnvironments.add(observed.environmentId);
-      this.noteEnding(record.id, previous.get(record.id), observed);
+      missing.delete(record.id);
+      this.updatePipeline(record.id, observePipeline(record), this.dirtyEnvironments);
     }
+    for (const pipelineId of missing) {
+      this.updatePipeline(pipelineId, null, this.dirtyEnvironments);
+    }
+  }
+
+  private updatePipeline(
+    pipelineId: string,
+    next: ObservedPipeline | null,
+    affected: Set<string>,
+  ): void {
+    const previous = this.pipelines.get(pipelineId);
+    if (previous) {
+      affected.add(previous.environmentId);
+      if (previous.environmentId !== next?.environmentId) {
+        const siblings = this.pipelinesByEnvironment.get(previous.environmentId);
+        siblings?.delete(pipelineId);
+        if (siblings?.size === 0) this.pipelinesByEnvironment.delete(previous.environmentId);
+      }
+    }
+    if (!next) {
+      this.pipelines.delete(pipelineId);
+      return;
+    }
+    this.pipelines.set(pipelineId, next);
+    let siblings = this.pipelinesByEnvironment.get(next.environmentId);
+    if (!siblings) {
+      siblings = new Map();
+      this.pipelinesByEnvironment.set(next.environmentId, siblings);
+    }
+    siblings.set(pipelineId, next);
+    affected.add(next.environmentId);
+    this.noteEnding(pipelineId, previous, next);
   }
 
   /**
@@ -354,33 +421,37 @@ export class BuildPipelineActivity {
     for (const [pipelineId] of this.endingsFor(environmentId)) this.endings.delete(pipelineId);
   }
 
-  private async syncDirtyEnvironments(): Promise<void> {
+  private async syncEnvironments(
+    affected: ReadonlySet<string>,
+    readPipelines?: (environment: Environment) => Promise<ObservedPipeline[]>,
+  ): Promise<void> {
     // Attempt every environment even if one fails; only durable successes leave
     // the set. A deleted pipeline's former environment remains here for retry.
     const failures: unknown[] = [];
-    for (const environmentId of Array.from(this.dirtyEnvironments)) {
+    for (const environmentId of Array.from(affected)) {
+      this.dirtyEnvironments.add(environmentId);
       try {
-        await this.syncEnvironment(environmentId);
+        await this.syncEnvironment(environmentId, readPipelines);
         this.dirtyEnvironments.delete(environmentId);
       } catch (error) {
         failures.push(error);
       }
     }
     if (failures.length) throw failures[0];
-    if (this.retryTimer !== null) this.timers.clearTimeout(this.retryTimer);
-    this.retryTimer = null;
-    this.retryMs = RETRY_MS;
   }
 
-  private async syncEnvironment(environmentId: string): Promise<void> {
+  private async syncEnvironment(
+    environmentId: string,
+    readPipelines?: (environment: Environment) => Promise<ObservedPipeline[]>,
+  ): Promise<void> {
     const environment = await this.storage.getEnvironment(environmentId);
     if (!environment) {
       this.clearEndings(environmentId);
       return;
     }
-    const pipelines = Array.from(this.pipelines.values()).filter(
-      (pipeline) => pipeline.environmentId === environmentId,
-    );
+    const pipelines = readPipelines
+      ? await readPipelines(environment)
+      : Array.from(this.pipelinesByEnvironment.get(environmentId)?.values() ?? []);
     const desired: AgentActivityState = pipelines.some((pipeline) => pipeline.working)
       ? "working"
       : "idle";

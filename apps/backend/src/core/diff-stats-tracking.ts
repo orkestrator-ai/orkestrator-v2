@@ -374,7 +374,7 @@ export class DiffStatsTracking {
    * Reconciles which environments are tracked against what storage says exists.
    *
    * Reconciling the whole set rather than patching it means every caller - start,
-   * stop, delete, a client connecting - converges on the same answer, and a missed
+   * stop, delete, backend startup - converges on the same answer, and a missed
    * lifecycle event self-corrects on the next call instead of leaving an
    * environment permanently unwatched or a deleted one permanently watched.
    */

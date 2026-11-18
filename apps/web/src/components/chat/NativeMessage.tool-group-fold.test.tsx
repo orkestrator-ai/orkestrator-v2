@@ -7,7 +7,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TerminalProvider } from "@/contexts";
-import type { NativeMessagePart } from "@/lib/chat/native-message-types";
+import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
+import type {
+  NativeMessage as TranscriptRow,
+  NativeMessagePart,
+} from "@/lib/chat/native-message-types";
 import { VirtuosoMockContext } from "react-virtuoso";
 import { NativeMessage } from "./NativeMessage";
 import { toolGroupEntryIndex } from "./NativeMessage.tool-group";
@@ -111,19 +115,41 @@ describe("folded tool group", () => {
   });
 
   test("stays open as calls stream in after it and as history pages in before it", () => {
-    messageCounter += 1;
-    const id = `tool-group-fold-${messageCounter}`;
-    const calls = Array.from({ length: 6 }, (_, index) => shell(index, `echo ${index}`));
-    const { rerender } = renderInAppCommandScope(messageView(id, calls.slice(2, 5)));
+    const id = `tool-group-fold-${++messageCounter}`;
+    const source = Array.from({ length: 6 }, (_, index): TranscriptRow => {
+      const part = shell(index, `echo ${index}`);
+      return {
+        id: `${id}-${index}`,
+        role: "assistant",
+        content: "",
+        createdAt: part.createdAt!,
+        turnId: id,
+        parts: [part],
+      };
+    });
+    const view = (rows: TranscriptRow[]) => {
+      const [row] = normalizeNativeMessages(rows);
+      expect(row?.id).toBe(source[2]!.id);
+      return (
+        <TerminalProvider>
+          <NativeMessage agentExpansionScope={id} message={row!} />
+        </TerminalProvider>
+      );
+    };
+
+    const { rerender, unmount } = renderInAppCommandScope(view(source.slice(2, 5)));
     fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
 
-    rerender(messageView(id, calls.slice(2, 6)));
+    rerender(view(source.slice(2)));
     expect(screen.getByRole("button", { name: /^Fold 4 tool calls:/ })).toBeTruthy();
 
-    // Earlier history coalesces in front, and the row takes the oldest id.
-    rerender(messageView(`${id}-earlier`, calls.slice(0, 6)));
+    rerender(view(source));
     expect(screen.getByRole("button", { name: /^Fold 6 tool calls:/ })).toBeTruthy();
     expect(screen.getByText("echo 0")).toBeTruthy();
+
+    unmount();
+    renderInAppCommandScope(view(source));
+    expect(screen.getByRole("button", { name: /^Fold 6 tool calls:/ })).toBeTruthy();
   });
 
   test("stays closed after an opened group grows and is folded again", () => {

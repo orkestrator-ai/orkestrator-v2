@@ -341,13 +341,14 @@ export function createFilesSessionsApi(client: BackendClient) {
     });
   }
 
-  /** Rename a container file in place without replacing an existing path. */
+  /** Rename a container file or folder in place without replacing an existing path. */
   async function renameContainerFile(
     environmentId: string,
     filePath: string,
     newName: string,
+    expectedKind?: "file" | "folder",
   ): Promise<string> {
-    return filesDomain().rename_container_file({ environmentId, filePath, newName });
+    return filesDomain().rename_container_file({ environmentId, filePath, newName, expectedKind });
   }
 
   /** Create an empty folder inside an existing container workspace directory. */
@@ -610,13 +611,14 @@ export function createFilesSessionsApi(client: BackendClient) {
     });
   }
 
-  /** Rename a local-worktree file in place without replacing an existing path. */
+  /** Rename a local-worktree file or folder in place without replacing an existing path. */
   async function renameLocalFile(
     environmentId: string,
     filePath: string,
     newName: string,
+    expectedKind?: "file" | "folder",
   ): Promise<string> {
-    return filesDomain().rename_local_file({ environmentId, filePath, newName });
+    return filesDomain().rename_local_file({ environmentId, filePath, newName, expectedKind });
   }
 
   /** Create an empty folder inside an existing local-worktree directory. */

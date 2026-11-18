@@ -794,9 +794,7 @@ export class ProjectsRepository {
   }
 
   async getEnvironmentsByProject(projectId: string): Promise<Environment[]> {
-    return (await this.loadEnvironments()).filter(
-      (environment) => environment.projectId === projectId,
-    );
+    return this.loadProjectEnvironments(projectId);
   }
 
   async getEnvironment(environmentId: string): Promise<Environment | null> {

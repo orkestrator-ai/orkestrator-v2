@@ -1191,9 +1191,14 @@ export function registerTerminalCommands(
   );
   register(
     renameLocalFileCommand,
-    async ({ environmentId: id, filePath, newName }, context) => {
+    async ({ environmentId: id, filePath, newName, expectedKind }, context) => {
       return withLocalFileMutation(context, id, async (environment) => {
-        const result = await renameLocalFile(environment.worktreePath!, filePath, newName);
+        const result = await renameLocalFile(
+          environment.worktreePath!,
+          filePath,
+          newName,
+          expectedKind,
+        );
         context.runtime.diffStats.service.invalidateChanges({
           worktreePath: environment.worktreePath!,
         });
@@ -1583,17 +1588,19 @@ export function registerTerminalCommands(
   );
   register(
     renameContainerFileCommand,
-    async ({ environmentId, filePath, newName }, context) => {
+    async ({ environmentId, filePath, newName, expectedKind }, context) => {
       const environmentIdString = environmentId;
       const environment = await requireContainerMutationEnvironment(
         context.storage,
         environmentIdString,
       );
       const id = environment.containerId!;
-      const rename = resolveWorkspaceFileRename(filePath, newName);
+      const rename = resolveWorkspaceFileRename(filePath, newName, expectedKind);
       await dockerExec(
         id,
-        containerMoveFileCommand(rename.source, rename.directory, rename.destination),
+        containerMoveFileCommand(rename.source, rename.directory, rename.destination, {
+          renameKind: expectedKind ?? "file",
+        }),
       );
       context.runtime.diffStats.service.invalidateChanges({ containerId: id });
       context.runtime.diffStats.service.refresh(environmentIdString);

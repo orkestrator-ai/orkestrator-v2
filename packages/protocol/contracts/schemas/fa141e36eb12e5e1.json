@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:fa141e36eb12e5e133c0417123633c96b50b5c3b64cdaa3072b1eee59172a887",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        },
+        "expectedKind": {
+          "enum": ["file", "folder"],
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "newName": {
+          "type": "string"
+        }
+      },
+      "required": ["environmentId", "filePath", "newName"],
+      "type": "object"
+    }
+  }
+}

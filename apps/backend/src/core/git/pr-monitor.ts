@@ -458,7 +458,7 @@ export class PrMonitorService {
    * Reconciles the monitored set against what storage says exists.
    *
    * Reconciling the whole set rather than patching it means every caller —
-   * start, stop, delete, a client connecting — converges on the same answer,
+   * startup, start, stop and delete — converges on the same answer,
    * and a missed lifecycle event self-corrects on the next call.
    */
   sync(targets: PrMonitorTarget[]): void {
@@ -499,10 +499,8 @@ export class PrMonitorService {
         this.dropIfUnmonitorable(entry);
       } else if (target.prUrl && target.ready) {
         // Reconciliation is not a user action: the first check runs after one
-        // normal interval rather than instantly, so converging the set (which
-        // every snapshot request does) cannot burst a `gh` call per PR. The
-        // first schedule is also jittered so a restart's whole set does not
-        // fall due in the same instant.
+        // normal interval rather than instantly. The first schedule is jittered
+        // so a restart's whole set does not fall due in the same instant.
         this.track(target, "normal", { immediate: false, restored: true });
       } else if (target.prUrl) {
         // Known PR on an environment that cannot be checked right now: hold the

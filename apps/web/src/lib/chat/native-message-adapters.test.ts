@@ -4146,6 +4146,86 @@ describe("coalesceAdjacentToolMessages", () => {
     ]);
   });
 
+  test("a cached tool group stays separate when an append starts with a subagent", () => {
+    const prefix = [
+      toolMessage("read", "2026-09-03T10:43:01.000Z", ["Read"]),
+      toolMessage("grep", "2026-09-03T10:43:02.000Z", ["Grep"]),
+    ];
+    const suffix = toolMessage("append", "2026-09-03T10:43:03.000Z", [], {
+      parts: [
+        { type: "subagent", content: "Agent step", agentState: "finished" },
+        { type: "tool-invocation", content: "Edit", toolName: "Edit" },
+      ],
+    });
+    const [cached] = coalesceAdjacentToolMessages(prefix);
+    const rows = [...prefix, suffix];
+    const [warm] = coalesceAdjacentToolMessages(rows);
+    const [cold] = coalesceAdjacentToolMessages(rows.map((row) => ({ ...row })));
+
+    expect(warm).toEqual(cold!);
+    expect(warm!.parts[0]).toBe(cached!.parts[0]!);
+    expect(warm!.parts).toMatchObject([
+      { type: "tool-group", parts: [{ toolName: "Read" }, { toolName: "Grep" }] },
+      { type: "subagent" },
+      { type: "tool-group", parts: [{ toolName: "Edit" }] },
+    ]);
+  });
+
+  test("a cached multi-part prefix regroups its trailing tool activity with an append", () => {
+    const prefix = [
+      toolMessage("read", "2026-09-03T10:43:01.000Z", ["Read"]),
+      toolMessage("agent-and-grep", "2026-09-03T10:43:02.000Z", [], {
+        parts: [
+          { type: "subagent", content: "Agent step", agentState: "finished" },
+          { type: "tool-invocation", content: "Grep", toolName: "Grep" },
+        ],
+      }),
+    ];
+    const suffix = toolMessage("edit", "2026-09-03T10:43:03.000Z", ["Edit"]);
+    const [cached] = coalesceAdjacentToolMessages(prefix);
+    expect(cached!.parts).toHaveLength(3);
+
+    const rows = [...prefix, suffix];
+    const [warm] = coalesceAdjacentToolMessages(rows);
+    const [cold] = coalesceAdjacentToolMessages(rows.map((row) => ({ ...row })));
+
+    expect(warm).toEqual(cold!);
+    expect(warm!.parts).toMatchObject([
+      { type: "tool-group", parts: [{ toolName: "Read" }] },
+      { type: "subagent" },
+      { type: "tool-group", parts: [{ toolName: "Grep" }, { toolName: "Edit" }] },
+    ]);
+  });
+
+  test("visits a linear number of tool parts when coalescing a fresh run", () => {
+    const size = 256;
+    let partTypeReads = 0;
+    const rows = Array.from({ length: size }, (_, index) =>
+      toolMessage(`read-${index}`, "2026-09-03T10:43:01.000Z", [], {
+        parts: [
+          {
+            get type() {
+              partTypeReads++;
+              return "tool-invocation" as const;
+            },
+            content: "Read",
+            toolName: "Read",
+          },
+        ],
+      }),
+    );
+    const result = coalesceAdjacentToolMessages(rows);
+
+    // Count classification work without a timing budget. The previous
+    // pairwise merge classified every accumulated prefix, so even one
+    // read per part per prefix would exceed this per-row allowance.
+    expect(partTypeReads).toBeLessThan(32 * size);
+    expect(result).toHaveLength(1);
+    const [group] = result[0]!.parts;
+    expect(group?.type).toBe("tool-group");
+    if (group?.type === "tool-group") expect(group.parts).toHaveLength(size);
+  });
+
   test("a run that splits never gives two rows one id", () => {
     const a = toolMessage("a", "2026-09-03T10:43:01.000Z");
     const b = toolMessage("b", "2026-09-03T10:43:02.000Z");

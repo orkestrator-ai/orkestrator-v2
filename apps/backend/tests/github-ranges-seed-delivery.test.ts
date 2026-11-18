@@ -4,7 +4,7 @@ import {
   deliverRuntimeSeedBeforeBoot,
   parseSeedConsumer,
   type SeedDeliveryDependencies,
-} from "../src/core/github-ranges-seed-delivery";
+} from "../src/core/git/github-ranges-seed-delivery";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 // What `docker inspect` prints for the delivery's format: the restricted

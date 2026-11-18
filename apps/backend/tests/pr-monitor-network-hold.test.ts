@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { PrDetection } from "../src/core/pr-monitor";
+import type { PrDetection } from "../src/core/git/pr-monitor";
 import { deferred } from "../src/core/recurring-test-support";
 import { createLifecycleHarness } from "./pr-monitor-test-harness";
 

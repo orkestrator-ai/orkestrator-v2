@@ -22,7 +22,11 @@ import {
   type DiffScanResult,
   type DiffStatsTarget,
 } from "../src/core/diff-stats-service";
-import { PrMonitorService, type PrDetection, type PrMonitorTarget } from "../src/core/pr-monitor";
+import {
+  PrMonitorService,
+  type PrDetection,
+  type PrMonitorTarget,
+} from "../src/core/git/pr-monitor";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

@@ -1,10 +1,10 @@
 # GitHub pull request viewer (backend)
 
-Status: Living — `apps/backend/src/core/github-pull-requests.ts`,
-`apps/backend/src/core/github-pull-request-files.ts`,
-`apps/backend/src/core/github-pull-request-timeline.ts`,
-`apps/backend/src/core/github-pull-request-actions.ts`,
-`apps/backend/src/core/github-graphql.ts`,
+Status: Living — `apps/backend/src/core/git/github-pull-requests.ts`,
+`apps/backend/src/core/git/github-pull-request-files.ts`,
+`apps/backend/src/core/git/github-pull-request-timeline.ts`,
+`apps/backend/src/core/git/github-pull-request-actions.ts`,
+`apps/backend/src/core/git/github-graphql.ts`,
 `apps/backend/src/core/commands-registry-github-pull-requests.ts`,
 `packages/protocol/src/github-pull-requests.ts`.
 
@@ -16,7 +16,7 @@ and container environments, and for pull requests outside the current project.
 ## Credential
 
 Every command uses the backend's GitHub credential from Settings
-(`resolveGitHubToken` in `github-credentials.ts`): the host `gh auth login`
+(`resolveGitHubToken` in `git/github-credentials.ts`): the host `gh auth login`
 token by default, or the stored personal access token when host credentials
 are off. What containers receive is a [separate setting](github-cli.md#container-credential). `requireGitHubToken` (in `commands-validation.ts`) and
 `requireGitHubProject` share the "GitHub is not configured" message. Errors
@@ -294,7 +294,7 @@ to spend less (`commands-pr-monitor-batch.ts`). When GitHub still refuses:
   the cooldown instead of asking, and the held checks resume spread over 30 s
   rather than all at once, so one refusal does not become a burst.
 - A refused poll does not withdraw a reading GitHub confirmed in the last 15
-  minutes (`rateLimitGraceMs` in `pr-monitor-policy.ts`): a refusal is not
+  minutes (`rateLimitGraceMs` in `git/pr-monitor-policy.ts`): a refusal is not
   evidence that the PR changed, so the green and red names stay. Past the
   grace, the deferred refusals count as failed checks and the reading is no
   longer confirmed until GitHub answers again. Ordinary failures count at
@@ -311,7 +311,7 @@ PRs on that host. The host is part of the scope because a GitHub Enterprise
 host can be down while github.com answers; an environment with no PR URL yet
 has a scope of its own. The hold is 30 s, doubling for each further such
 failure in a row up to five minutes (`networkHoldMs` in
-`pr-monitor-policy.ts`), and works like the rate-limit cooldown above: queued
+`git/pr-monitor-policy.ts`), and works like the rate-limit cooldown above: queued
 checks and agent-completion wakes wait it out, held checks resume spread over
 30 s, and user refreshes and pending intents still ask. A rate limit met during
 a hold keeps its own cooldown and does not lengthen the hold. A check that
@@ -333,7 +333,7 @@ monitor asks `gh api --hostname github.com repos/{owner}/{repo} --jq
 .permissions` through the environment's own runner (host `gh` in the worktree,
 or `gh` inside the container), the credential Merge uses. "May merge" is push,
 maintain or admin, as in `loadViewerIdentity`. `PrViewerPermissionCache`
-(`apps/backend/src/core/pr-viewer-permission.ts`) keeps one answer per
+(`apps/backend/src/core/git/pr-viewer-permission.ts`) keeps one answer per
 credential scope (the host login, or one container) and repository for an hour,
 so an open PR costs at most one extra request per repository per hour. A failed
 lookup is unknown and is retried after ten minutes. A merge that fails with a
@@ -399,7 +399,7 @@ explicit `false`, because renderers merge environment records field by field.
 
 The merging is done by the backend, not the renderer, so it keeps working with
 no window open and resumes after a restart. `PrAutoMergeController`
-(`apps/backend/src/core/pr-auto-merge.ts`) subscribes to the PR monitor's
+(`apps/backend/src/core/git/pr-auto-merge.ts`) subscribes to the PR monitor's
 in-process events and re-evaluates an environment on each announced reading.
 Switching the toggle on asks the monitor for a fresh check, and only a reading
 that started after the switch can authorize the first action. A merge is
@@ -429,7 +429,7 @@ to a minute for the next throttled read. `decideAutoMerge` uses
   time once the Resolve has ended: on the completion edge of a confirmed
   automatic turn, or, for any Resolve including one pressed by hand, once
   every open Resolve tab has settled (`resolveTabsSettled` in
-  `pr-auto-merge-resolve-settled.ts`: nothing queued, in flight, unconfirmed
+  `git/pr-auto-merge-resolve-settled.ts`: nothing queued, in flight, unconfirmed
   or still running). A successful conflict reading that started at least 30
   seconds after that time (`PR_AUTO_MERGE_RESOLVE_SETTLE_MS`, room for GitHub
   to recompute mergeability after the push) consumes the token and sends the

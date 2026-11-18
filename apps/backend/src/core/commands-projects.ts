@@ -1,16 +1,19 @@
 import { claudeModelCatalogUpdatedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { containerCredentialMode } from "./container-credential-mode.js";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
-import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
-import { gitHubCliEnv } from "./github-credentials.js";
-import { gitHubGitCredentials } from "./github-git-credentials.js";
+import {
+  gitHubCli,
+  gitHubCliEnv,
+  type GitHubCliSelection,
+  gitHubGitCredentials,
+  retryGitWithoutFsmonitorOnTimeout,
+  runRemoteGit,
+} from "./git/index.js";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
-import { runRemoteGit } from "./git-noninteractive-env.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createProject } from "./storage.js";
-import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 import { conciseError, isGitSshAuthenticationFailure } from "./commands-error-text.js";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";

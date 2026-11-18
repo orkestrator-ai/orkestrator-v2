@@ -477,7 +477,7 @@ export function registerPullRequestCommands(
     );
   });
   /**
-   * Turns auto-merge on or off for an environment (`pr-auto-merge.ts`). The
+   * Turns auto-merge on or off for an environment (`git/pr-auto-merge.ts`). The
    * flag is durable; turning it on also asks the monitor for a fresh reading
    * before acting, so a cached pre-request reading cannot authorize a merge.
    *

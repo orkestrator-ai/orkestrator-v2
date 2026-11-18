@@ -2210,7 +2210,7 @@ or logs. Operator reads are unchanged.
 
 `requiredFailed` is GitHub's `isRequired`, which the PR monitor asks only
 when its rollup shows a failing check, cached per PR head and failing set
-(`pr-required-checks.ts`). A PR whose only failing checks are not required
+(`git/pr-required-checks.ts`). A PR whose only failing checks are not required
 stays quiet: no `pr-checks-failed` wake, and still not ready to merge. When
 GitHub does not answer, or an older node does not relay the count, it is
 null and every failing check counts; that notice says the check may not be

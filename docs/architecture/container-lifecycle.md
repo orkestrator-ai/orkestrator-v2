@@ -1252,7 +1252,7 @@ three policy inputs the root bootstrap captures once, root-owned:
 | `/etc/orkestrator/host-service-ports` | Host TCP ports the workload may call (the agent-tools port) |
 | `/etc/orkestrator/ingress-ports` | Container ports Docker publishes (bridges, entry and mapped ports) |
 
-GitHub's published ranges come from a backend seed (`github-ranges-cache.ts`)
+GitHub's published ranges come from a backend seed (`git/github-ranges-cache.ts`)
 when it is under a day old, else a live fetch cached in the container, else
 either copy under a week old; with none the firewall fails closed.
 Reachability is verified against `github.com`, not the rate-limited API. The
@@ -1268,7 +1268,7 @@ restricted runtime without one) binds that directory read-only at
 refreshes it at most hourly, one fetch at a time and none for five minutes
 after a failed one, when it creates such a container and again just before
 the start path boots one (`deliverGithubRangesSeedBeforeBoot`,
-`github-ranges-seed-delivery.ts`, called from
+`git/github-ranges-seed-delivery.ts`, called from
 `startContainerWithAgentAccounts` for the runtime and through
 `prepareEgressGatewayForStart`'s `beforeGatewayBoot` for its gateway). It
 writes the new file beside the directory and renames it in, so a container

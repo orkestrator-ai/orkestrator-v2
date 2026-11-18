@@ -182,7 +182,7 @@ The toolchain also pins host tools that are not agents.
 - They have no Dockerfile pin. The image installs `gh` from its distribution,
   so the `AGENT_PINS` table and the Dockerfile checks do not cover them.
 - The backend runs the managed `gh` for PR detection, reviews, cloning and the
-  in-app GitHub sign-in (`apps/backend/src/core/github-cli-binary.ts`), and
+  in-app GitHub sign-in (`apps/backend/src/core/git/github-cli-binary.ts`), and
   falls back to `gh` on `PATH`. Terminals and agents find it first on `PATH`
   as well. Every copy shares gh's configuration and stored login.
 

@@ -1,0 +1,197 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { GitHubCliSelection } from "./github-cli-binary.js";
+import {
+  getContainerGitHubCredentialStatus,
+  getHostGitHubToken,
+  gitHubCliEnv,
+  resolveContainerGitHubToken,
+  resolveGitHubToken,
+  type GitHubCliConfigSource,
+} from "./github-credentials.js";
+import type { AppConfig } from "../models.js";
+
+const config = (global: Partial<AppConfig["global"]>) => global as AppConfig["global"];
+let source: GitHubCliConfigSource | undefined;
+function useGlobal(global: Partial<AppConfig["global"]>): void {
+  source = { loadConfig: async () => ({ global: config(global) }) };
+}
+
+describe("selected GitHub credentials", () => {
+  let root: string;
+  let previous: NodeJS.ProcessEnv;
+  let selection: GitHubCliSelection;
+  beforeEach(async () => {
+    previous = { ...process.env };
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-github-credentials-"));
+    const gh = path.join(root, "gh");
+    await fs.writeFile(
+      gh,
+      `#!/bin/sh
+# A stored login exists, but inherited tokens would take precedence.
+test "$*" = 'auth token --hostname github.com' || exit 2
+if test -n "$GH_TOKEN$GITHUB_TOKEN"; then echo inherited_identity; else echo host_identity; fi
+`,
+      { mode: 0o755 },
+    );
+    selection = new GitHubCliSelection();
+    selection.pin(gh);
+    process.env.GH_TOKEN = "inherited_gh";
+    process.env.GITHUB_TOKEN = "inherited_github";
+  });
+  afterEach(async () => {
+    source = undefined;
+    for (const key of ["GH_TOKEN", "GITHUB_TOKEN"]) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  test("host mode strips inherited tokens without mutating the base environment", async () => {
+    useGlobal({ useHostGitHubCredentials: true, githubToken: "stored_pat" });
+    const base = { PATH: "/managed/bin", GH_TOKEN: "other", GITHUB_TOKEN: "another" };
+    expect(await gitHubCliEnv(source, base)).toEqual({ PATH: "/managed/bin" });
+    expect(base.GH_TOKEN).toBe("other");
+    expect(await gitHubCliEnv(source)).not.toHaveProperty("GH_TOKEN");
+    expect(await gitHubCliEnv(source)).not.toHaveProperty("GITHUB_TOKEN");
+    source = undefined;
+    expect(await gitHubCliEnv(source)).not.toHaveProperty("GH_TOKEN");
+  });
+
+  test("PAT mode overrides caller tokens and preserves other base variables", async () => {
+    useGlobal({ useHostGitHubCredentials: false, githubToken: " stored_pat " });
+    expect((await gitHubCliEnv(source)).GH_TOKEN).toBe("stored_pat");
+    expect(
+      await gitHubCliEnv(source, {
+        PATH: "/managed/bin",
+        GH_TOKEN: "other",
+        GITHUB_TOKEN: "other",
+      }),
+    ).toEqual({ PATH: "/managed/bin", GH_TOKEN: "stored_pat" });
+  });
+
+  test.each([undefined, "", "  \n\t "])(
+    "missing PAT %j fails closed despite a host login",
+    async (githubToken) => {
+      useGlobal({ useHostGitHubCredentials: false, githubToken });
+      expect(await getHostGitHubToken(selection)).toBe("host_identity");
+      await expect(gitHubCliEnv(source)).rejects.toThrow("personal access token is missing");
+      await expect(gitHubCliEnv(source, { GH_TOKEN: "host" })).rejects.toThrow("Settings");
+      expect(
+        await resolveGitHubToken(
+          config({ useHostGitHubCredentials: false, githubToken }),
+          selection,
+        ),
+      ).toBeUndefined();
+      expect(
+        await getContainerGitHubCredentialStatus(
+          config({ containerGitHubCredential: "pat", githubToken }),
+          selection,
+        ),
+      ).toEqual({ source: "pat", available: false });
+    },
+  );
+
+  test("host token lookup, resolution and container status use the stored login", async () => {
+    expect(await getHostGitHubToken(selection)).toBe("host_identity");
+    expect(await resolveGitHubToken(config({ githubToken: "unused_pat" }), selection)).toBe(
+      "host_identity",
+    );
+    expect(
+      await getContainerGitHubCredentialStatus(
+        config({ containerGitHubCredential: "host-cli" }),
+        selection,
+      ),
+    ).toEqual({
+      source: "host-cli",
+      available: true,
+    });
+    expect(process.env.GH_TOKEN).toBe("inherited_gh");
+    expect(process.env.GITHUB_TOKEN).toBe("inherited_github");
+  });
+
+  test("PAT resolution and status do not require gh", async () => {
+    selection.pin(path.join(root, "missing"));
+    const global = config({
+      useHostGitHubCredentials: false,
+      containerGitHubCredential: "pat",
+      githubToken: " stored_pat ",
+    });
+    expect(await resolveGitHubToken(global, selection)).toBe("stored_pat");
+    expect(await getContainerGitHubCredentialStatus(global, selection)).toEqual({
+      source: "pat",
+      available: true,
+    });
+    expect(await getHostGitHubToken(selection)).toBeUndefined();
+    expect(
+      await getContainerGitHubCredentialStatus(
+        config({ containerGitHubCredential: "host-cli" }),
+        selection,
+      ),
+    ).toEqual({
+      source: "host-cli",
+      available: false,
+    });
+  });
+
+  test("containers get nothing by default, and the host login is not even read", async () => {
+    // A gh that would fail the test if anything ran it.
+    const ghRan = path.join(root, "gh-ran");
+    await fs.writeFile(path.join(root, "gh"), `#!/bin/sh\ntouch "${ghRan}"\nprintf host\n`, {
+      mode: 0o755,
+    });
+    for (const global of [
+      config({}),
+      config({ containerGitHubCredential: "none", githubToken: "stored_pat" }),
+    ]) {
+      expect(await resolveContainerGitHubToken(global, selection)).toBeUndefined();
+      expect(await getContainerGitHubCredentialStatus(global, selection)).toEqual({
+        source: "none",
+        available: false,
+      });
+    }
+    await expect(fs.stat(ghRan)).rejects.toThrow();
+  });
+
+  test("the container credential is independent of the backend's", async () => {
+    await fs.writeFile(path.join(root, "gh"), "#!/bin/sh\nprintf 'host_identity\\n'\n", {
+      mode: 0o755,
+    });
+    const hostBackendPatContainers = config({
+      useHostGitHubCredentials: true,
+      containerGitHubCredential: "pat",
+      githubToken: " stored_pat ",
+    });
+    expect(await resolveGitHubToken(hostBackendPatContainers, selection)).toBe("host_identity");
+    expect(await resolveContainerGitHubToken(hostBackendPatContainers, selection)).toBe(
+      "stored_pat",
+    );
+
+    const patBackendHostContainers = config({
+      useHostGitHubCredentials: false,
+      containerGitHubCredential: "host-cli",
+      githubToken: "stored_pat",
+    });
+    expect(await resolveGitHubToken(patBackendHostContainers, selection)).toBe("stored_pat");
+    expect(await resolveContainerGitHubToken(patBackendHostContainers, selection)).toBe(
+      "host_identity",
+    );
+  });
+
+  test("empty host token is unavailable", async () => {
+    await fs.writeFile(path.join(root, "gh"), "#!/bin/sh\nprintf '  \\n'\n", { mode: 0o755 });
+    expect(await resolveGitHubToken(config({}), selection)).toBeUndefined();
+    expect(
+      await getContainerGitHubCredentialStatus(
+        config({ containerGitHubCredential: "host-cli" }),
+        selection,
+      ),
+    ).toEqual({
+      source: "host-cli",
+      available: false,
+    });
+  });
+});

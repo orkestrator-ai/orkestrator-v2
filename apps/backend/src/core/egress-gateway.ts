@@ -8,7 +8,7 @@ import { runCommand } from "./shell.js";
 import { egressGatewayOf, forgetNetworkOwner } from "./container-network-owner.js";
 import { startDockerContainer } from "./container-start.js";
 import { PROBE_WINDOW_MS, boundedWaitScript, probeIterations } from "./container-readiness.js";
-import { githubRangesSeedMountArguments } from "./github-ranges-cache.js";
+import { githubRangesSeedMountArguments } from "./git/index.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 
 export { egressGatewayOf, networkOwnerContainer } from "./container-network-owner.js";

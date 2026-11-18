@@ -12,7 +12,7 @@ import {
   submitGitHubPullRequestReview,
   updateGitHubPullRequestComment,
   updateGitHubPullRequestState,
-} from "../src/core/github-pull-request-actions";
+} from "../src/core/git/github-pull-request-actions";
 import {
   HEAD_SHA,
   REF,

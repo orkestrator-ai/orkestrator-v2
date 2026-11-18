@@ -21,7 +21,7 @@ import {
 } from "../src/core/docker-image";
 import { egressGatewayOf, resetNetworkOwnerCache } from "../src/core/container-network-owner";
 import { prepareEgressGatewayForStart } from "../src/core/egress-gateway";
-import { githubRangesSeedDirectory } from "../src/core/github-ranges-cache";
+import { githubRangesSeedDirectory } from "../src/core/git/github-ranges-cache";
 import { extractSingleTarFile } from "../src/core/docker-copy-out";
 import { resolveOperationImage } from "../src/core/commands-environment";
 import { shouldAddDockerHostGatewayAlias } from "../src/core/commands-container-exec";

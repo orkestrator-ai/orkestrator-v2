@@ -20,7 +20,7 @@ import {
   reconcileContainerDelegationBase,
   reconcilePreparedContainerDelegation,
 } from "./commands-environment.js";
-import * as remoteGit from "./git-noninteractive-env.js";
+import * as remoteGit from "./git/noninteractive-env.js";
 import { ProjectGitService } from "./project-git-service.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { readStoredValue, seedStore, writeLegacyStore } from "./storage-test-support.js";

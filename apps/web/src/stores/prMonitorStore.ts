@@ -9,7 +9,7 @@ export type { PrMonitorEnvironmentState };
  * Read-through mirror of the backend's PR monitor.
  *
  * The polling loop, mode timeouts, error backoff, and kanban side effects all
- * live in the backend (`apps/backend/src/core/pr-monitor.ts`); this store only
+ * live in the backend (`apps/backend/src/core/git/pr-monitor.ts`); this store only
  * holds the last announced state per environment so UI (detection spinners,
  * mode badges) can render it. It is rehydrated from the `get_pr_monitor_state`
  * snapshot on mount and reconnect, and patched by `pr-monitor-changed` events

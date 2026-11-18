@@ -2,8 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { GitHubCliSelection } from "./github-cli-binary.js";
-import { getGitHubTokenLogin } from "./github-credentials.js";
+import { getGitHubTokenLogin, GitHubCliSelection } from "./git/index.js";
 import type { AppConfig } from "./models.js";
 import {
   containerCloneUrl,

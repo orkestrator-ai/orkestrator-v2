@@ -4910,6 +4910,23 @@ describe("AgentInfoButton backend-owned steering", () => {
       ),
     );
 
+    // Ticking "Keep a summary" asks Pi to summarize the branch being left.
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: /Keep a summary of the branch I leave/ }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: 'Switch to the branch starting "second prompt"' }),
+    );
+    await waitFor(() =>
+      expect(nativeInvokeMock).toHaveBeenCalledWith(
+        "perform_native_agent_session_action",
+        expect.objectContaining({
+          agent: "pi",
+          action: { kind: "switch-branch", entryId: "leaf-old", summarize: true },
+        }),
+      ),
+    );
+
     seedProjection(TAB_ID, "idle", "codex");
     rerender(<AgentInfoButton activeTab={codexTab()} />);
     reopen();

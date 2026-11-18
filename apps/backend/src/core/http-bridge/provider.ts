@@ -105,7 +105,7 @@ import { bridgeChangeEvidenceSource } from "./change-evidence.js";
 import { readAcpTurnTerminalError } from "./turn-outcome.js";
 import { HttpBridgeObservationWakeup } from "./observation-stream.js";
 import { readBridgeResumableSessions } from "./resumable-sessions.js";
-import { readBridgeSessionBranches } from "./session-branches.js";
+import { readBridgeSessionBranches, switchBridgeSessionBranch } from "./session-branches.js";
 import { readBridgeHumanPrompts } from "./human-prompts.js";
 import { HttpBridgeSteerQualification } from "./steer-qualification.js";
 
@@ -1399,14 +1399,13 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       return { outcome: "applied" };
     }
     if (this.agent === "pi" && action.kind === "switch-branch") {
-      const response = await bridgeFetch(
+      return await switchBridgeSessionBranch(
         this.connection,
-        `${base}/branches/${encodeURIComponent(action.entryId)}`,
-        { method: "POST" },
         this.fetchImpl,
+        sessionId,
+        action.entryId,
+        action.summarize === true,
       );
-      await assertOkWithErrorDetail(response, "Pi branch switch");
-      return { outcome: "applied" };
     }
     if (this.agent === "codex" && action.kind === "steer") {
       let response: Response;

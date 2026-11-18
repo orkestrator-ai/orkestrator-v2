@@ -1,5 +1,6 @@
 import {
   NATIVE_AGENT_BRANCH_LIST_LIMITS,
+  type NativeAgentSessionActionOutcome,
   type NativeAgentSessionBranch,
   type NativeAgentSessionBranchList,
 } from "@orkestrator/protocol/native-agent";
@@ -53,4 +54,52 @@ export async function readBridgeSessionBranches(
     branches: branches.slice(0, limits.branches),
     truncated: payload.truncated === true || branches.length > limits.branches,
   };
+}
+
+/** The switch answer is a few fields; anything larger is not one. */
+const SWITCH_ANSWER_MAX_BYTES = 16 * 1024;
+
+/**
+ * Switch a Pi session to another branch (`POST /session/:id/branches/:entryId`).
+ *
+ * `summarize` asks Pi to summarize the branch being left first, which is a
+ * model call, so the body is sent only then: an ordinary switch is the same
+ * bodyless request as before and never costs one. A summarized switch gets
+ * the `branch-summary` budget, longer than the bridge's own bound on the
+ * summary, so the bridge always answers with what happened. A switch someone
+ * stopped (409 `cancelled: true`) is reported in the bridge's own words: the
+ * conversation stayed where it was, which reads as "retry", not "report".
+ */
+export async function switchBridgeSessionBranch(
+  connection: BridgeConnection,
+  fetchImpl: typeof fetch,
+  sessionId: string,
+  entryId: string,
+  summarize: boolean,
+): Promise<NativeAgentSessionActionOutcome> {
+  const response = await bridgeFetch(
+    connection,
+    `/session/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}`,
+    { method: "POST", ...(summarize ? { body: JSON.stringify({ summarize: true }) } : {}) },
+    fetchImpl,
+    summarize ? "branch-summary" : "default",
+  );
+  const payload = asRecord(
+    await boundedJson(response.clone(), "Pi branch switch", {
+      remaining: SWITCH_ANSWER_MAX_BYTES,
+    }).catch(() => undefined),
+  );
+  await assertOkWithErrorDetail(response, "Pi branch switch", {
+    // A stopped switch and a refused summary both say, in the bridge's words,
+    // that the conversation did not move.
+    detailAlone:
+      (response.status === 409 && payload?.cancelled === true) ||
+      (response.status === 422 && payload?.kind === "branch-summary-failed"),
+  });
+  await response.body?.cancel().catch(() => undefined);
+  // A bridge that predates summaries ignores the body and answers without
+  // `summarized`: the switch happened, the summary did not.
+  return summarize
+    ? { outcome: "applied", summarized: payload?.summarized === true }
+    : { outcome: "applied" };
 }

@@ -26,6 +26,9 @@ async function fixture() {
           truncated: false,
         }),
       );
+    const input = request.body.args.input as { summarize?: unknown } | undefined;
+    if (action === "session.branch" && input?.summarize === true)
+      return envelope(publicSuccessEnvelope(action, { sessionId: "s", summarized: true }));
     if (action === "session.rewind" || action === "session.branch")
       return envelope(publicSuccessEnvelope(action, { sessionId: "s" }));
     return defaultResponder()(request);
@@ -71,6 +74,20 @@ test("branch forwards the entry positional argument as entryId", async () => {
   const writes = gateway.requests.filter((r) => r.body.args.action === "session.branch");
   expect(writes).toHaveLength(1);
   expect(writes[0]!.body.args.input).toEqual({ sessionId: "s", entryId: "old-leaf" });
+});
+
+test("branch --summarize asks for a summary and says one was kept", async () => {
+  const { box, gateway } = await fixture();
+  const run = await box.run(["session", "branch", "s", "old-leaf", "--summarize"]);
+  expect(run.code).toBe(0);
+  expect(run.out).toContain("keeping a summary of the branch left");
+  const writes = gateway.requests.filter((r) => r.body.args.action === "session.branch");
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.body.args.input).toEqual({
+    sessionId: "s",
+    entryId: "old-leaf",
+    summarize: true,
+  });
 });
 
 test("branches prints a table or entry IDs", async () => {

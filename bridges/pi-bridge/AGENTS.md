@@ -133,6 +133,17 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   the active branch does not share, and is bounded by
   `NATIVE_AGENT_BRANCH_LIST_LIMITS`. It is a user-initiated read (it may
   attach the session), so nothing polls it.
+- **A branch summary is opt-in and costs a model call.** `POST
+  /session/:id/branches/:entryId` with `{ "summarize": true }` has Pi
+  summarize the branch being left (`branch-switch.ts`); no body, or
+  `summarize: false`, must stay a navigation with no model call. Pi appends
+  the `branch_summary` entry as the new leaf, a child of the selected entry,
+  so the "keep the selected leaf" step must not move past it. The switch
+  claims `dispatching` before its first await; while Pi summarizes,
+  `branchSummary` reports the session running and the cancel routes abort it.
+  Every way it ends without moving the leaf answers as that (409
+  `cancelled: true` with a `reason`, or 422 `branch-summary-failed`), never
+  200 and never the opaque 500.
 
 ## When touching the Pi bridge
 

@@ -273,6 +273,52 @@ describe("session.branches and session.branch", () => {
     expect(actions).toEqual([{ kind: "switch-branch", entryId: "leaf-old" }]);
   });
 
+  test("Pi switches with a summary when asked, and reports whether it kept one", async () => {
+    const actions: NativeAgentSessionAction[] = [];
+    const performSessionAction = mock(
+      async (_providerSessionId: string, action: NativeAgentSessionAction) => {
+        actions.push(action);
+        return { outcome: "applied" as const, summarized: true };
+      },
+    );
+    const { harness, sessionId } = await adoptedSession("pi", { performSessionAction });
+    const switched = await harness.call(
+      "session.branch",
+      { sessionId, entryId: "leaf-old", summarize: true },
+      { requestId: "branch-summary-1" },
+    );
+    if (!switched.ok) throw new Error(`branch failed: ${switched.error.message}`);
+    expect(switched.result).toEqual({ sessionId, entryId: "leaf-old", summarized: true });
+    expect(actions).toEqual([{ kind: "switch-branch", entryId: "leaf-old", summarize: true }]);
+
+    // The same request key with a different intent is a different request.
+    const conflicting = await harness.call(
+      "session.branch",
+      { sessionId, entryId: "leaf-old" },
+      { requestId: "branch-summary-1" },
+    );
+    expect(conflicting.ok).toBe(false);
+    expect(actions).toHaveLength(1);
+  });
+
+  test("a stopped summarized switch fails with the bridge's words, not success", async () => {
+    const performSessionAction = mock(async () => {
+      throw new Error(
+        "The branch switch was stopped before Pi finished the summary; the conversation stayed on its branch.",
+      );
+    });
+    const { harness, sessionId } = await adoptedSession("pi", { performSessionAction });
+    const switched = await harness.call(
+      "session.branch",
+      { sessionId, entryId: "leaf-old", summarize: true },
+      { requestId: "branch-stopped" },
+    );
+    expect(switched.ok).toBe(false);
+    if (!switched.ok) {
+      expect(switched.error.message).toContain("stayed on its branch");
+    }
+  });
+
   test.each(["codex", "cursor", "claude"] as const)("%s has no branches", async (agent) => {
     const { actions, performSessionAction } = recordingActions();
     const { harness, sessionId } = await adoptedSession(agent, { performSessionAction });

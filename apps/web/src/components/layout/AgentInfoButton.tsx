@@ -1300,13 +1300,25 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                             logicalSessionKey: activeSession.sessionKey,
                           })
                         }
-                        switchBranch={async (entryId) => {
-                          await backendForScope(nodeScope).performNativeAgentSessionAction({
+                        switchBranch={async (entryId, { summarize }) => {
+                          const outcome = await backendForScope(
+                            nodeScope,
+                          ).performNativeAgentSessionAction({
                             environmentId: activeSession.environmentId,
                             agent: activeSession.provider,
                             logicalSessionKey: activeSession.sessionKey,
-                            action: { kind: "switch-branch", entryId },
+                            action: {
+                              kind: "switch-branch",
+                              entryId,
+                              ...(summarize ? { summarize: true } : {}),
+                            },
                           });
+                          return {
+                            summarized:
+                              outcome && "summarized" in outcome
+                                ? outcome.summarized === true
+                                : undefined,
+                          };
                         }}
                       />
                     ) : null}

@@ -18,7 +18,7 @@ describe("SessionBranchPicker", () => {
   test("reads branches only when opened, and switches to one by entry id", async () => {
     let current = ABANDONED;
     const listBranches = mock(async () => current);
-    const switchBranch = mock(async (_entryId: string) => {
+    const switchBranch = mock(async (_entryId: string, _options: { summarize: boolean }) => {
       current = { activeEntryId: "leaf-old", branches: [], truncated: false };
     });
     renderInAppCommandScope(
@@ -38,10 +38,73 @@ describe("SessionBranchPicker", () => {
     fireEvent.click(
       screen.getByRole("button", { name: 'Switch to the branch starting "second prompt"' }),
     );
-    await waitFor(() => expect(switchBranch).toHaveBeenCalledWith("leaf-old"));
+    // An ordinary switch: no summary, so no model call.
+    await waitFor(() =>
+      expect(switchBranch).toHaveBeenCalledWith("leaf-old", { summarize: false }),
+    );
     // Re-read after the switch: the branch just left would be listed now.
     await screen.findByText(/No other branches/);
     expect(listBranches).toHaveBeenCalledTimes(2);
+  });
+
+  test("a summary is opt-in, and the switch says whether one was kept", async () => {
+    let release: (() => void) | undefined;
+    const switchBranch = mock(
+      (_entryId: string, _options: { summarize: boolean }) =>
+        new Promise<{ summarized: boolean }>((resolve) => {
+          release = () => resolve({ summarized: true });
+        }),
+    );
+    renderInAppCommandScope(
+      <SessionBranchPicker
+        agentLabel="Pi"
+        disabled={false}
+        listBranches={async () => ABANDONED}
+        switchBranch={switchBranch}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Branches" }));
+    await screen.findByText("second prompt");
+    const keep = screen.getByRole("checkbox", { name: /Keep a summary of the branch I leave/ });
+    expect(keep.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText(/one extra model call/)).toBeTruthy();
+
+    fireEvent.click(keep);
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Switch to the branch starting "second prompt"' }),
+    );
+    await waitFor(() => expect(switchBranch).toHaveBeenCalledWith("leaf-old", { summarize: true }));
+    await screen.findByText("Summarizing…");
+    expect(keep.hasAttribute("disabled")).toBe(true);
+    release!();
+    await waitFor(() => expect(screen.queryByText("Summarizing…") === null).toBe(true));
+  });
+
+  test("a stopped summarized switch leaves the branch listed and the switch ready again", async () => {
+    const listBranches = mock(async () => ABANDONED);
+    renderInAppCommandScope(
+      <SessionBranchPicker
+        agentLabel="Pi"
+        disabled={false}
+        listBranches={listBranches}
+        switchBranch={async () => {
+          throw new Error("The branch switch was stopped; the conversation stayed on its branch.");
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Branches" }));
+    await screen.findByText("second prompt");
+    fireEvent.click(screen.getByRole("checkbox", { name: /Keep a summary/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Switch to the branch starting "second prompt"' }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: 'Switch to the branch starting "second prompt"' })
+          .textContent,
+      ).toBe("Switch"),
+    );
+    expect(screen.getByText("second prompt")).toBeTruthy();
   });
 
   test("a parent re-render with a new reader does not re-read", async () => {

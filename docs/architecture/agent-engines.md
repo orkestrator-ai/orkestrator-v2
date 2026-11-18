@@ -242,9 +242,26 @@ entry id. The branch being left is listed in its turn, so a switch is always
 reversible. Live rows keep their bridge ids; giving them Pi entry ids would
 change a row's id mid-turn (`bridges/AGENTS.md`, "Transcript rows").
 
+A switch can keep a summary of the branch it leaves. The picker's **Keep a
+summary of the branch I leave** box (off by default) adds `summarize: true`
+to `switch-branch`; the bridge then calls Pi's `navigateTree` with
+`summarize: true`, and Pi asks the session's model to summarize the entries
+being left and appends a `branch_summary` entry, as the new leaf, under the
+selected entry. It is in the session file at once, so it survives a reload
+and a restart, it is rendered as a "Branch summary" row, and the next turn's
+context carries it. An ordinary switch passes `summarize: false` and makes
+no model call. While Pi writes the summary the session reports itself
+running, the tab's Stop stops it through `abortBranchSummary`, and the bridge
+stops it itself after four minutes; a stopped switch, one an extension
+cancels and a failed summary are each answered as "the conversation stayed
+on its branch" (`bridges/pi-bridge/src/branch-switch.ts`). A branch that ends
+on a prompt with no reply is refused a summary before any model call: Pi
+would put the summary before that prompt and leave the prompt off the
+branch.
+
 The public CLI reaches both: `session rewind SESSION --message ID`,
-`session branches SESSION` and `session branch SESSION ENTRY_ID`
-([public-cli.md](public-cli.md)). A Coordinator conversation refuses rewind and
+`session branches SESSION` and `session branch SESSION ENTRY_ID
+[--summarize]` ([public-cli.md](public-cli.md)). A Coordinator conversation refuses rewind and
 a branch switch, as it refuses fork and resume.
 
 **Claude offers fork at a message, not message rewind** (decided by the user

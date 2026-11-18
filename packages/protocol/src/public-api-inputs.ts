@@ -1095,10 +1095,18 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
             maxLength: 500,
             description: "Branch entry ID from session.branches.",
           },
+          summarize: {
+            type: "boolean",
+            description:
+              "true asks Pi to summarize the branch being left (one model call) and keep the summary in the conversation. Omitted or false: an ordinary switch with no model call.",
+          },
         },
         ["sessionId", "entryId"],
       ),
-      examples: [{ sessionId: EXAMPLE_SESSION_ID, entryId: "entry-1" }],
+      examples: [
+        { sessionId: EXAMPLE_SESSION_ID, entryId: "entry-1" },
+        { sessionId: EXAMPLE_SESSION_ID, entryId: "entry-1", summarize: true },
+      ],
     },
     "session.interactions": {
       capability: "sessions.read",

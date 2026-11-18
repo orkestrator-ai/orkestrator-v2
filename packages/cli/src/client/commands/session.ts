@@ -922,26 +922,47 @@ export const sessionCommands: CommandSpec[] = [
     path: ["session", "branch"],
     action: "session.branch",
     summary: "Switch the conversation to another branch from `session branches` (Pi).",
-    description: "The branch being left is kept and listed by `session branches`.",
+    description:
+      "The branch being left is kept and listed by `session branches`. --summarize also keeps Pi's summary of it in the conversation, which costs one model call.",
     positionals: [
       { name: "session", required: true },
       { name: "entry-id", required: true },
     ],
-    options: [REQUEST_ID_OPTION],
+    options: [
+      {
+        name: "summarize",
+        kind: "boolean",
+        description:
+          "Ask Pi to summarize the branch being left (one model call) and keep the summary.",
+      },
+      REQUEST_ID_OPTION,
+    ],
     async run(context, parsed) {
+      const summarize = parsed.options.summarize === true;
       const { session, result, receipt, warnings } = await submit<Record<string, unknown>>(
         context,
         "session.branch",
-        { sessionId: parsed.positionals.session, entryId: parsed.positionals["entry-id"] },
+        {
+          sessionId: parsed.positionals.session,
+          entryId: parsed.positionals["entry-id"],
+          ...(summarize ? { summarize: true } : {}),
+        },
         parsed.options,
       );
+      const entryId = parsed.positionals["entry-id"];
       return {
         action: "session.branch",
         result,
         receipt,
         warnings,
         connection: session.identity,
-        human: [`switched to branch ${parsed.positionals["entry-id"]}`],
+        human: [
+          !summarize
+            ? `switched to branch ${entryId}`
+            : result.summarized === true
+              ? `switched to branch ${entryId}, keeping a summary of the branch left`
+              : `switched to branch ${entryId}; Pi kept no summary of the branch left`,
+        ],
       };
     },
   },

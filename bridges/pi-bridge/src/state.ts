@@ -596,6 +596,11 @@ export interface SessionState {
    */
   manualCompaction?: import("./compaction-controls.js").ManualCompaction;
   /**
+   * The branch switch whose summary Pi is writing, so a cancel can stop it.
+   * Reported as running, like a compaction. Runtime-only (`branch-switch.ts`).
+   */
+  branchSummary?: import("./branch-switch.js").BranchSummaryRun;
+  /**
    * The session's own auto-compaction choice, from the composer toggle.
    * Absent means Pi's setting applies. Persisted; never written to Pi's
    * account-wide `settings.json`.
@@ -790,7 +795,10 @@ export function publicTurnStatus(state: SessionState): SessionState["status"] {
   // A compaction is work the user can stop, so it reports as running: that is
   // what puts a Stop control in front of a manual compaction, which owns no
   // prompt claim and would otherwise read as idle while it rewrote history.
-  return state.promptClaim !== undefined || state.compacting ? "running" : state.status;
+  // A branch summary is the same kind of work: a model call the user can stop.
+  return state.promptClaim !== undefined || state.compacting || state.branchSummary
+    ? "running"
+    : state.status;
 }
 
 /** Whether cancellation was requested for exactly this claim. */
@@ -871,7 +879,12 @@ export function sessionIsWorking(state: SessionState): boolean {
   // An admitted prompt still preparing (cold attach, preflight) is work in
   // flight: reporting idle there would let a stop request read as settled
   // while Pi may still accept the turn.
-  return state.status === "running" || state.compacting || state.promptClaim !== undefined;
+  return (
+    state.status === "running" ||
+    state.compacting ||
+    state.branchSummary !== undefined ||
+    state.promptClaim !== undefined
+  );
 }
 
 /**

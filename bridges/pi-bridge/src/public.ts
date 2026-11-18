@@ -178,7 +178,9 @@ export function messageWindow(
  * before Pi has settled the abandoned prompt — would contradict it.
  */
 function publicTurnError(state: SessionState): string | undefined {
-  return state.promptClaim !== undefined || state.compacting ? undefined : state.error;
+  return state.promptClaim !== undefined || state.compacting || state.branchSummary
+    ? undefined
+    : state.error;
 }
 
 /**

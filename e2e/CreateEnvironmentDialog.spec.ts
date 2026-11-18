@@ -104,6 +104,30 @@ test("mobile sections have one visible panel, preserve values, and stay within t
 
   await expect(dialog).toBeVisible();
   await expect(tabList).toBeVisible();
+  const tabs = tabList.getByRole("tab");
+  await expect(tabs).toHaveText(["Prompt", "Setup", "Agent", "Access", "Ports"]);
+  const tabListBox = await tabList.boundingBox();
+  expect(tabListBox).not.toBeNull();
+  for (const tab of await tabs.all()) {
+    await expect(tab).toHaveCSS("font-size", "11px");
+    const labelFits = await tab.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element.querySelector("span")!);
+      const text = range.getClientRects();
+      const bounds = element.getBoundingClientRect();
+      return (
+        text.length === 1 &&
+        text[0].left >= bounds.left &&
+        text[0].right <= bounds.right &&
+        text[0].top >= bounds.top &&
+        text[0].bottom <= bounds.bottom
+      );
+    });
+    expect(labelFits, await tab.innerText()).toBe(true);
+    const bounds = (await tab.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(tabListBox!.x);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(tabListBox!.x + tabListBox!.width);
+  }
   await expect(promptPanel).toBeVisible();
   await expect(setupPanel).toBeHidden();
   await expect(accessPanel).toBeHidden();

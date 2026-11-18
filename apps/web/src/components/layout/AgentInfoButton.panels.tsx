@@ -634,7 +634,9 @@ export function AgentRuntimePanel({
           </div>
           <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             New steering is refused until the turn finishes; the turn keeps running.{" "}
-            {`${saturatedSteer.entries} of ${saturatedSteer.limitEntries} records, ${formatSteerBytes(saturatedSteer.bytes)} of ${formatSteerBytes(saturatedSteer.limitBytes)}.`}
+            <span className="font-medium">
+              {`${saturatedSteer.entries} of ${saturatedSteer.limitEntries} records, ${formatSteerBytes(saturatedSteer.bytes)} of ${formatSteerBytes(saturatedSteer.limitBytes)}.`}
+            </span>
           </div>
         </div>
       ) : null}

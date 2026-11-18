@@ -202,9 +202,9 @@ function LinearCardContent({
 }
 
 const CARD_CLASS = cn(
-  "group relative block w-full overflow-hidden rounded-lg border bg-card p-3 pl-4 text-left shadow-sm",
-  "transition-[border-color,box-shadow,background-color]",
-  "border-border hover:border-primary/50 hover:shadow-md",
+  "group relative block w-full overflow-hidden rounded-lg border bg-card p-3 pl-4 text-left",
+  "transition-[border-color,background-color]",
+  "border-border hover:border-primary/50",
   "outline-none focus-hairline",
 );
 

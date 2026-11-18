@@ -49,6 +49,11 @@ import {
 import type { FakeAnthropicModel, FakeModelCall } from "./fake-anthropic-model";
 
 const AGENT_DESIGN_NAME = "Agent design";
+/**
+ * A design tab's title: the design's name since the agent panel landed,
+ * "Design" before its canvas loads and on older renderers.
+ */
+const DESIGN_TAB_TITLE = `(?:Design|${AGENT_DESIGN_NAME})`;
 const CHAT_TITLE = "Design chat";
 const CLOSED_ENDED = "Closed — conversation ended";
 const CLOSED_RESUMABLE = "Closed — can be resumed";
@@ -188,7 +193,7 @@ export async function runAskAgentJourney({
     await expect(workspace).toHaveCount(0, { timeout: 30_000 });
     const title = window.getByRole("button", { name: "Move frame Mobile", exact: true });
     await expect(title).toBeVisible({ timeout: 30_000 });
-    await expect.poll(() => tagTab(window, "Design", "design")).toBe(true);
+    await expect.poll(() => tagTab(window, DESIGN_TAB_TITLE, "design")).toBe(true);
     const entries = (
       await invoke<{ value: { entries: Array<{ id: string }> } }>("design_library", {
         environmentId: environment.id,
@@ -212,7 +217,11 @@ export async function runAskAgentJourney({
     await expect(dialog.getByText("No conversations are linked to this design yet.")).toBeVisible();
     await dialog.getByRole("button", { name: "Start a new conversation", exact: true }).click();
     await expect(dialog).toHaveCount(0, { timeout: 30_000 });
-    await expect.poll(() => tagTab(window, CHAT_TITLE, "chat"), { timeout: 30_000 }).toBe(true);
+    if (olderRenderer) {
+      await expect.poll(() => tagTab(window, CHAT_TITLE, "chat"), { timeout: 30_000 }).toBe(true);
+    } else {
+      await expect(window.getByRole("region", { name: "Agent panel" })).toBeVisible();
+    }
 
     await expect
       .poll(async () => (await snapshotOf(invoke, environment.id, canvasId)).workspace.sessions, {
@@ -245,6 +254,29 @@ export async function runAskAgentJourney({
     expect(turnCallsAbout(model, canvasId)).toHaveLength(1);
   });
 
+  if (!olderRenderer) {
+    await test.step("embedded composer survives hide, pop out and Show here without sending", async () => {
+      const panel = window.getByRole("region", { name: "Agent panel" });
+      const composer = () => window.getByRole("textbox", { name: /^Message Claude/ });
+      const draft = "Unsent design follow-up";
+      await composer().fill(draft);
+      await panel.getByRole("button", { name: "Hide agent panel" }).click();
+      await expect(panel).toBeHidden();
+      await window.getByRole("button", { name: "Show agent panel", exact: true }).click();
+      await expect(composer()).toHaveText(draft);
+      await panel.getByRole("button", { name: "Open agent in its own tab" }).click();
+      await expect.poll(() => tagTab(window, CHAT_TITLE, "chat")).toBe(true);
+      await taggedTab(window, "chat").click();
+      await expect(composer()).toHaveText(draft);
+      await taggedTab(window, "design").click();
+      await panel.getByRole("button", { name: "Show here", exact: true }).click();
+      await expect(composer()).toHaveText(draft);
+      await composer().fill("");
+      await window.waitForTimeout(QUIET_MS);
+      expect(turnCallsAbout(model, canvasId)).toHaveLength(1);
+    });
+  }
+
   const turnCalls = turnCallsAbout(model, canvasId).length;
   // Every call so far, whatever it carried: closing and reading the link must add none.
   const callsBeforeClose = model.calls().length;
@@ -258,6 +290,10 @@ export async function runAskAgentJourney({
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(dialog).toHaveCount(0);
 
+    if (!olderRenderer) {
+      await window.getByRole("button", { name: "Open agent in its own tab", exact: true }).click();
+      await expect.poll(() => tagTab(window, CHAT_TITLE, "chat")).toBe(true);
+    }
     await closeTaggedTab(window, "chat");
 
     const linkStates = () =>
@@ -341,7 +377,9 @@ export async function resumeLinkedConversation({
   const invoke = pageInvoke(window);
   await test.step("resume: the closed conversation reopens with its transcript", async () => {
     await selectEnvironment(window, asked.projectName, asked.environmentName);
-    await expect.poll(() => tagTab(window, "Design", "design"), { timeout: 30_000 }).toBe(true);
+    await expect
+      .poll(() => tagTab(window, DESIGN_TAB_TITLE, "design"), { timeout: 30_000 })
+      .toBe(true);
     await taggedTab(window, "design").click();
     await expect(
       window.getByRole("button", { name: "Move frame Mobile", exact: true }),

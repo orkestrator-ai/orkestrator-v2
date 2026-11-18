@@ -375,7 +375,6 @@ export function DesignWorkspaceDialog({
     )
       return;
     const launchScope = scopeRef.current;
-    const originPaneId = paneLayouts.getState().environments.get(environmentId)?.activePaneId;
     const images = withAgent ? briefImages : [];
     setBusy(true);
     setError(null);
@@ -392,13 +391,14 @@ export function DesignWorkspaceDialog({
             () => false,
           ));
       if (launchScope !== scopeRef.current) return;
+      const canvasTabId = createUniqueTabId("design");
       const result = await launchDesignWorkspace({
         name,
         agent: withAgent ? agent : null,
         brief,
         framePreset: preset,
         placement: plan.placement,
-        canvasTabId: createUniqueTabId("design"),
+        canvasTabId,
         agentTabId: createUniqueTabId("design-agent"),
         createCanvas: (canvasName) =>
           designAction<DesignCanvas>(
@@ -421,8 +421,6 @@ export function DesignWorkspaceDialog({
             designPlacement: placement,
           }),
         createAgentTab: (platform, tabId, initialPrompt) => {
-          // The agent sits beside the canvas in the pane the user started from.
-          if (originPaneId) paneLayouts.getState().setActivePane(originPaneId, environmentId);
           // Seed the images before the tab mounts so the initial prompt,
           // which the tab sends from its draft, carries them.
           const sessionKey = createSessionKey(environmentId, tabId);
@@ -451,6 +449,9 @@ export function DesignWorkspaceDialog({
               initialFastMode: promptOptions.fastMode,
               initialConversationMode: "build",
             });
+            // The agent is shown inside the design tab, as its agent panel.
+            // Should that fail it stays an ordinary tab, still working.
+            if (created) paneLayouts.getState().setTabEmbedding(tabId, canvasTabId, environmentId);
             if (created)
               void handTabInitialPromptToBackend(
                 {

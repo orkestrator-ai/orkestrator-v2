@@ -160,3 +160,21 @@ export function pendingPreviewFrames(projection: DesignProjection | undefined): 
   }
   return result;
 }
+
+/**
+ * The name of the canvas a design tab shows, from any loaded projection of it
+ * in `environmentId`; undefined until one has loaded.
+ */
+export function designCanvasName(
+  state: Pick<DesignStoreState, "projections">,
+  environmentId: string | undefined,
+  tab: { designCanvasData?: { canvasId: string } },
+): string | undefined {
+  const canvasId = tab.designCanvasData?.canvasId;
+  if (!canvasId || !environmentId) return undefined;
+  for (const projection of state.projections.values()) {
+    if (projection.canvasId !== canvasId || projection.environmentId !== environmentId) continue;
+    if (projection.canvas?.name) return projection.canvas.name;
+  }
+  return undefined;
+}

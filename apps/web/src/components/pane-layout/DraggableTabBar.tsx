@@ -19,6 +19,7 @@ import {
   DraftRevisionConflictError,
   resolveComposeDraftDiscardConflict,
 } from "@/lib/compose-draft-persistence";
+import { visibleTabsOf, withEmbeddedTabIds } from "@/stores/pane-layout-embedded";
 import { DraggableTab } from "./DraggableTab";
 import { TabLaunchPlaceholder, useEnvironmentTabLaunches } from "./TabLaunchShimmer";
 import { moveTabFocus, TAB_STRIP_CLASS } from "./TabShell";
@@ -72,6 +73,8 @@ export function DraggableTabBar({
   const clearDirty = useFileDirtyStore((state) => state.clearDirty);
   // The node this pane's file drafts are kept on.
   const draftScope = useNodeScope();
+  // Agents embedded in a design tab are shown by the design, not the strip.
+  const visibleTabs = useMemo(() => visibleTabsOf(pane.tabs), [pane.tabs]);
 
   const discardTabDraft = useCallback(
     (tabId: string): Promise<void> => {
@@ -162,7 +165,7 @@ export function DraggableTabBar({
   // When a tab from another pane is being dragged over this pane,
   // include it in the sortable items so dnd-kit can show visual feedback
   const sortableIds = useMemo(() => {
-    const ids: string[] = pane.tabs.map((tab) => createDraggableTabId(tab.id, pane.id));
+    const ids: string[] = visibleTabs.map((tab) => createDraggableTabId(tab.id, pane.id));
 
     // If a tab from another pane is being dragged over this pane, add it to the list
     if (activeDragId && dragOverPaneId === pane.id) {
@@ -174,7 +177,7 @@ export function DraggableTabBar({
     }
 
     return ids;
-  }, [pane.tabs, pane.id, activeDragId, dragOverPaneId]);
+  }, [visibleTabs, pane.id, activeDragId, dragOverPaneId]);
 
   // All tabs can be closed
   const canClose = true;
@@ -222,7 +225,8 @@ export function DraggableTabBar({
 
   const closeTabs = useCallback(
     async (tabIds: string[]) => {
-      const uniqueTabIds = Array.from(new Set(tabIds));
+      // A design closes together with the agent shown inside it.
+      const uniqueTabIds = Array.from(new Set(withEmbeddedTabIds(pane.tabs, tabIds)));
       const idsInPane = uniqueTabIds.filter((tabId) => pane.tabs.some((tab) => tab.id === tabId));
 
       if (idsInPane.length === 0) {
@@ -307,11 +311,11 @@ export function DraggableTabBar({
     (tabId: string) => {
       keyboardClosedTabRef.current = {
         tabId,
-        index: pane.tabs.findIndex((tab) => tab.id === tabId),
+        index: visibleTabs.findIndex((tab) => tab.id === tabId),
       };
       closeTabs([tabId]);
     },
-    [closeTabs, pane.tabs],
+    [closeTabs, visibleTabs],
   );
   const restoreKeyboardCloseFocus = useCallback(
     (dialogDismissed = false) => {
@@ -332,23 +336,23 @@ export function DraggableTabBar({
   useEffect(() => restoreKeyboardCloseFocus(), [restoreKeyboardCloseFocus]);
 
   const handleCloseAll = useCallback(() => {
-    closeTabs(pane.tabs.map((tab) => tab.id));
-  }, [closeTabs, pane.tabs]);
+    closeTabs(visibleTabs.map((tab) => tab.id));
+  }, [closeTabs, visibleTabs]);
 
   const handleCloseOthers = useCallback(
     (tabId: string) => {
-      closeTabs(pane.tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
+      closeTabs(visibleTabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
     },
-    [closeTabs, pane.tabs],
+    [closeTabs, visibleTabs],
   );
 
   const handleCloseToRight = useCallback(
     (tabId: string) => {
-      const index = pane.tabs.findIndex((tab) => tab.id === tabId);
+      const index = visibleTabs.findIndex((tab) => tab.id === tabId);
       if (index < 0) return;
-      closeTabs(pane.tabs.slice(index + 1).map((tab) => tab.id));
+      closeTabs(visibleTabs.slice(index + 1).map((tab) => tab.id));
     },
-    [closeTabs, pane.tabs],
+    [closeTabs, visibleTabs],
   );
 
   const pendingCloseTabLabel = useMemo(() => {
@@ -412,7 +416,7 @@ export function DraggableTabBar({
   // Always show tab bar when there's at least one tab (even for single-tab panes).
   // This provides a consistent drag-drop target for cross-pane tab moves and
   // makes it clear which pane is which. Only hide when truly empty.
-  if (pane.tabs.length === 0 && placeholders.length === 0) {
+  if (visibleTabs.length === 0 && placeholders.length === 0) {
     return null;
   }
 
@@ -434,7 +438,7 @@ export function DraggableTabBar({
         )}
       >
         <SortableContext items={sortableIds} strategy={horizontalListSortingStrategy}>
-          {pane.tabs.map((tab, index) => {
+          {visibleTabs.map((tab, index) => {
             const isActive = tab.id === pane.activeTabId && !placeholderHasFocus;
             return (
               <DraggableTab
@@ -457,9 +461,9 @@ export function DraggableTabBar({
                 onCloseOthers={() => handleCloseOthers(tab.id)}
                 onCloseToRight={() => handleCloseToRight(tab.id)}
                 canClose={canClose}
-                canCloseAll={pane.tabs.length > 1}
-                canCloseOthers={pane.tabs.length > 1}
-                canCloseToRight={index < pane.tabs.length - 1}
+                canCloseAll={visibleTabs.length > 1}
+                canCloseOthers={visibleTabs.length > 1}
+                canCloseToRight={index < visibleTabs.length - 1}
               />
             );
           })}

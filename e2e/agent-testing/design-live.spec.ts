@@ -613,7 +613,16 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           const userTurnsOf = (current: Projection) =>
             (current?.messages ?? []).filter((message) => message.role === "user");
           const userTurns = userTurnsOf(await projection());
-          // The handoff tab keeps its display title; the design tab is the other one.
+          // The design conversation sits in the design tab's agent panel: pop
+          // it out into a tab of its own, then close that tab. The handoff tab
+          // keeps its display title; the design conversation is the other one.
+          await page
+            .getByRole("tab", { name: new RegExp(`^${designName} \\d+$`) })
+            .first()
+            .click({ timeout: 30_000 });
+          await page
+            .getByRole("button", { name: "Open agent in its own tab", exact: true })
+            .click({ timeout: 30_000 });
           await page
             .getByRole("button", {
               name: new RegExp(`^Close ${spec.label} \\d+ · (?!Implement design)`),
@@ -632,7 +641,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           // The handoff tab may be the active tab in the canvas's pane.
           const askAgent = page.getByRole("button", { name: "Ask agent about the selection" });
           await page
-            .getByRole("tab", { name: /^Design \d+$/ })
+            .getByRole("tab", { name: new RegExp(`^${designName} \\d+$`) })
             .first()
             .click({ timeout: 30_000 });
           await askAgent.click({ timeout: 30_000 });

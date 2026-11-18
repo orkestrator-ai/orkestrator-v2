@@ -1,3 +1,4 @@
+import { DesignAgentDockFixture } from "./DesignAgentDockFixture";
 import { LinearBoardDragFixture } from "./LinearBoardDragFixture";
 import { LinearBoardAssigneesFixture } from "./LinearBoardAssigneesFixture";
 import { LinearBoardLabelsFixture } from "./LinearBoardLabelsFixture";
@@ -2098,6 +2099,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/worker-question-approval")
     return <WorkerQuestionApprovalFixture />;
   if (window.location.pathname === "/agents-md-approval") return <AgentsMdApprovalFixture />;
+  if (window.location.pathname === "/design-agent-dock") return <DesignAgentDockFixture />;
   if (window.location.pathname === "/design-canvas") {
     installDesignCanvasFixture();
     return <DesignCanvasFixture />;

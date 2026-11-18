@@ -24,6 +24,7 @@ import {
   getAllLeaves,
 } from "@/stores";
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
+import { findEmbeddedTab } from "@/stores/pane-layout-embedded";
 import { getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { uiStore } from "@/stores/uiStore";
@@ -696,7 +697,10 @@ export function useEnvironmentLifecycleService(): void {
       if (selectedEnvironmentId === payload.environment_id) {
         const root = scope.store(paneLayoutStore).getState().getRoot(selectedEnvironmentId);
         const owningTabIsVisible = getAllLeaves(root).some((pane) => {
-          const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId);
+          const host = pane.tabs.find((tab) => tab.id === pane.activeTabId);
+          const embedded = host && findEmbeddedTab(pane.tabs, host.id);
+          const activeTab =
+            embedded && host?.designCanvasData?.agentPanel?.open !== false ? embedded : host;
           const data = activeTab ? getNativeAgentData(activeTab) : null;
           return (
             data?.platform === "codex" &&

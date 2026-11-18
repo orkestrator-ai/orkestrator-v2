@@ -163,6 +163,44 @@ describe("DraggableTabBar", () => {
       );
     });
 
+    test("an agent embedded in a design is not in the strip and closes with the design", async () => {
+      renderStrip(["one"]);
+      const store = appCommandStore(paneLayoutStore).getState();
+      store.addTab(
+        "default",
+        {
+          id: "design",
+          type: "design-canvas",
+          designCanvasData: { canvasId: "00000000-0000-4000-8000-000000000001" },
+        },
+        environmentId,
+      );
+      store.addTab(
+        "default",
+        {
+          id: "agent",
+          type: "agent-native",
+          nativeAgentData: { platform: "claude", environmentId },
+        },
+        environmentId,
+      );
+      expect(store.setTabEmbedding("agent", "design", environmentId)).toBe(true);
+
+      const strip = await screen.findByRole("tablist", { name: "Environment tabs" });
+      await waitFor(() =>
+        expect(
+          within(strip)
+            .getAllByRole("tab")
+            .map((tab) => tab.getAttribute("aria-label")),
+        ).toEqual(["Terminal 1", "Design 2"]),
+      );
+      const design = screen.getByRole("tab", { name: "Design 2" });
+      expect(design.getAttribute("aria-selected")).toBe("true");
+      design.focus();
+      fireEvent.keyDown(design, { key: "Delete", code: "Delete" });
+      await waitFor(() => expect(paneTabIds()).toEqual(["one"]));
+    });
+
     test("closing the last tab in the strip hands focus to the one before it", async () => {
       renderStrip(["one", "two"], "two");
       const two = screen.getByRole("tab", { name: "Terminal 2" });

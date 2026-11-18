@@ -150,6 +150,7 @@ async function renderDialog(props: {
   context?: DesignContextReference;
   sessions?: DesignSessionLink[];
   onOpenChange?: (open: boolean) => void;
+  onConversationOpened?: (tabId: string) => void;
 }) {
   const onOpenChange = props.onOpenChange ?? mock();
   await act(async () => {
@@ -160,6 +161,9 @@ async function renderDialog(props: {
             context={props.context ?? context}
             projection={projectionWith(props.sessions ?? [])}
             onOpenChange={onOpenChange}
+            {...(props.onConversationOpened
+              ? { onConversationOpened: props.onConversationOpened }
+              : {})}
           />
         </RegisterCreateTab>
       </TerminalProvider>,
@@ -221,7 +225,11 @@ describe("DesignAgentDialog", () => {
       const restore = supportPaste(write.promise);
       seedTabs([]);
       try {
-        const { onOpenChange } = await renderDialog({ context: { ...context, scope } });
+        const onConversationOpened = mock((_tabId: string) => {});
+        const { onOpenChange } = await renderDialog({
+          context: { ...context, scope },
+          onConversationOpened,
+        });
         const prompt = screen.getByPlaceholderText(
           scope === "discuss"
             ? "What would you like to know or change?"
@@ -261,6 +269,9 @@ describe("DesignAgentDialog", () => {
         if (scope === "implement") expect(draft.text).toContain("static visual reference");
         expect(commandCalls("design_session_link")).toHaveLength(1);
         expect(onOpenChange).toHaveBeenCalledTimes(1);
+        // A design conversation goes to the design tab's agent panel; an
+        // implementation handoff stays a tab of its own.
+        expect(onConversationOpened.mock.calls).toEqual(scope === "discuss" ? [[tabId]] : []);
       } finally {
         restore();
       }
@@ -429,7 +440,8 @@ describe("DesignAgentDialog", () => {
     seedTabs([]);
     const sessions = [link("kept", "agent-closed", { label: "Design chat" })];
     backendLinks(sessions, { kept: "missing" }, { kept: "provider-session-9" });
-    const { onOpenChange } = await renderDialog({ sessions });
+    const onConversationOpened = mock((_tabId: string) => {});
+    const { onOpenChange } = await renderDialog({ sessions, onConversationOpened });
 
     const row = screen.getByTestId("design-link-kept");
     expect(row.textContent).toContain("Closed — can be resumed");
@@ -459,6 +471,7 @@ describe("DesignAgentDialog", () => {
       resumeSessionId: "live-session-1",
       requireExistingResumeSession: true,
     });
+    expect(onConversationOpened).toHaveBeenCalledWith(options!.tabId!);
     expect(options?.initialPrompt).toBeUndefined();
     // Resuming alone leaves the reopened conversation's composer untouched.
     expect(

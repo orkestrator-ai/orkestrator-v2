@@ -111,12 +111,18 @@ export function DesignCanvasTab({
   isActive,
   ownsGlobalShortcuts,
   onClose,
+  agentPanel,
 }: {
   canvasId: string;
   environmentId: string;
   isActive: boolean;
   ownsGlobalShortcuts: boolean;
   onClose?: () => void;
+  /**
+   * The design tab's agent panel: shown or hidden from the toolbar, and
+   * offered the conversations Ask agent opens.
+   */
+  agentPanel?: { open: boolean; onToggle: () => void; adopt?: (tabId: string) => void };
 }) {
   const { controller, projection } = useDesignCanvas(environmentId, canvasId, isActive);
   // The canvas's node: every call this tab makes goes there (plan item 4007).
@@ -1269,6 +1275,9 @@ export function DesignCanvasTab({
           onRename={rename}
           onAskAgent={() => openAgent()}
           onShortcuts={() => setShortcutsOpen(true)}
+          {...(agentPanel
+            ? { agentPanelOpen: agentPanel.open, onToggleAgentPanel: agentPanel.onToggle }
+            : {})}
         />
         {projection && (
           <DesignConnectionBanner
@@ -1599,6 +1608,7 @@ export function DesignCanvasTab({
           context={agentContext}
           projection={projection}
           onLinksChanged={() => void controller.refresh()}
+          {...(agentPanel?.adopt ? { onConversationOpened: agentPanel.adopt } : {})}
           onOpenChange={(open) => {
             if (!open) setAgentContext(null);
           }}

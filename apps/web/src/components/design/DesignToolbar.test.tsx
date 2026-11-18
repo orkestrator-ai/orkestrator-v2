@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import type { DesignProjection } from "@/stores/designStore";
 import { DesignToolbar, type DesignToolbarProps } from "./DesignToolbar";
 
+afterEach(() => cleanup());
+
 const noop = () => {};
 
 function projection(): DesignProjection {
@@ -212,5 +214,36 @@ describe("DesignToolbar tooltips", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Add frame" }));
     await waitFor(() => expect(onAddFrame).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(document.activeElement === more).toBe(true));
+  });
+});
+
+describe("DesignToolbar", () => {
+  test("fit all and zoom to selection have different icons", () => {
+    render(<DesignToolbar {...props({ hasSelection: true })} />);
+    const fitAll = screen.getByRole("button", { name: "Fit all frames" });
+    const fitSelection = screen.getByRole("button", { name: "Zoom to selection" });
+    expect(fitAll.querySelector("svg.lucide-maximize")).toBeTruthy();
+    // Zoom to selection draws a target inside the frame corners.
+    expect(fitSelection.querySelector("svg.lucide-focus")).toBeTruthy();
+    expect(fitSelection.querySelector("svg")?.innerHTML).not.toBe(
+      fitAll.querySelector("svg")?.innerHTML,
+    );
+  });
+
+  test("the agent panel toggle shows only for a design tab with a panel", async () => {
+    const onToggleAgentPanel = mock(() => {});
+    render(<DesignToolbar {...props({ agentPanelOpen: true, onToggleAgentPanel })} />);
+    const toggle = screen.getByRole("button", { name: "Hide agent panel" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(toggle.getAttribute("title")).toBeNull();
+    act(() => toggle.focus());
+    expect(await tooltipText()).toBe("Hide agent panelCtrl/⌘+.");
+    expectDescription(toggle, "Hide agent panel Ctrl/⌘+.");
+    await closeTooltips();
+    fireEvent.click(toggle);
+    expect(onToggleAgentPanel).toHaveBeenCalledTimes(1);
+    cleanup();
+    render(<DesignToolbar {...props({ hasSelection: true })} />);
+    expect(screen.queryByRole("button", { name: /agent panel/ }) === null).toBe(true);
   });
 });

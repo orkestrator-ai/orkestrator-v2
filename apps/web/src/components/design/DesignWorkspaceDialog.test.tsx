@@ -154,6 +154,36 @@ const switchTo = (name: string) =>
 const brief = () => screen.getByRole("textbox", { name: "Design brief" }) as HTMLTextAreaElement;
 
 describe("DesignWorkspaceDialog", () => {
+  test("creating a workspace embeds its native agent in the new canvas", async () => {
+    const createTab = mock((type: CreatableTabType, options?: CreateTabOptions) => {
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .addTab(
+          "pane-1",
+          type === "design-canvas"
+            ? {
+                id: options!.tabId!,
+                type: "design-canvas",
+                designCanvasData: { canvasId: canvas.id },
+              }
+            : {
+                id: options!.tabId!,
+                type: "agent-native",
+                nativeAgentData: { platform: "claude", environmentId: "env-1" },
+              },
+          "env-1",
+        );
+      return true;
+    });
+    mount(createTab);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
+    await flush();
+    const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1");
+    const host = tabs.find((tab) => tab.type === "design-canvas")!;
+    expect(tabs.find((tab) => tab.type === "agent-native")?.embeddedIn).toBe(host.id);
+  });
+
   function supportPaste(write?: Promise<string>) {
     const restore = installImagePasteSupport();
     appCommandStore(environmentStore).setState({
@@ -853,7 +883,7 @@ describe("DesignWorkspaceDialog", () => {
     expect(createTab.mock.calls).toHaveLength(1);
     expect(createTab.mock.calls[0]?.[1]).toMatchObject({
       canvasId: canvas.id,
-      designPlacement: "split",
+      designPlacement: "current",
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });

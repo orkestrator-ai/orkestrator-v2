@@ -1,7 +1,9 @@
 import { cloneElement, useId, useRef, useState, type ReactElement, type Ref } from "react";
 import {
+  BotMessageSquare,
   Download,
   Eye,
+  Focus,
   History,
   Keyboard,
   Layers,
@@ -15,7 +17,6 @@ import {
   Plus,
   Redo2,
   Save,
-  Scan,
   SquarePlus,
   Undo2,
   type LucideIcon,
@@ -66,6 +67,9 @@ export interface DesignToolbarProps {
   onRename: (name: string) => void;
   onAskAgent: () => void;
   onShortcuts: () => void;
+  /** Whether the design tab's agent panel shows; omitted when the tab has none. */
+  agentPanelOpen?: boolean;
+  onToggleAgentPanel?: () => void;
 }
 
 /**
@@ -237,7 +241,8 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
     {
       id: "fit-selection",
       label: "Zoom to selection",
-      icon: Scan,
+      // Fit all is the bare frame corners; this one has a target inside them.
+      icon: Focus,
       tooltip: props.hasSelection ? undefined : "Zoom to selection (select a frame first)",
       shortcut: "Shift+2",
       disabled: !props.hasSelection,
@@ -428,6 +433,23 @@ export function DesignToolbar(props: DesignToolbarProps) {
           <Layers className="size-4" />
         </Button>
       </ToolbarTooltip>
+      {props.onToggleAgentPanel && (
+        <ToolbarTooltip
+          label={props.agentPanelOpen ? "Hide agent panel" : "Show agent panel"}
+          shortcut="Ctrl/⌘+."
+        >
+          <Button
+            variant="ghost"
+            size="icon"
+            className={iconClass}
+            aria-label={props.agentPanelOpen ? "Hide agent panel" : "Show agent panel"}
+            aria-pressed={props.agentPanelOpen}
+            onClick={props.onToggleAgentPanel}
+          >
+            <BotMessageSquare className="size-4" />
+          </Button>
+        </ToolbarTooltip>
+      )}
       {canvas ? (
         <RenameField
           key={canvas.name}

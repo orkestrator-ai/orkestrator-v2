@@ -38,6 +38,7 @@ import { forgetAgentHandoff } from "@/lib/agent-handoff";
 import { reportNativeTabTeardownFailure } from "@/lib/tab-teardown-notice";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { withEmbeddedTabs, type EmbeddedTabActions } from "./pane-layout-embedded-actions";
 
 const log = createLogger("web.pane-layout");
 
@@ -203,7 +204,7 @@ export function getAllLeaves(node: PaneNode): PaneLeaf[] {
   return [...getAllLeaves(node.children[0]), ...getAllLeaves(node.children[1])];
 }
 
-export interface PaneLayoutState {
+export interface PaneLayoutState extends EmbeddedTabActions {
   // Per-environment state (keyed by environmentId)
   environments: Map<string, EnvironmentPaneState>;
   // Restore-on-connect state (keyed by environmentId)
@@ -624,9 +625,8 @@ function pruneUnreferencedAgentHandoffs(scope: NodeScope, envId: string, root: P
  * node, its terminal sessions, tmux, compose drafts, terminal portals and
  * handoff cache.
  */
-export const paneLayoutStore = defineScopedStore<PaneLayoutState>(
-  "pane-layout",
-  (scope) => (set, get) => ({
+export const paneLayoutStore = defineScopedStore<PaneLayoutState>("pane-layout", (scope) =>
+  withEmbeddedTabs((set, get) => ({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
@@ -893,6 +893,14 @@ export const paneLayoutStore = defineScopedStore<PaneLayoutState>(
 
       const closedTab = leaf.tabs.find((t) => t.id === tabId);
       if (!closedTab) return;
+      // Closing a design closes the agent shown inside it first (its
+      // conversation is retained, as for any closed agent tab).
+      const embedded = leaf.tabs.filter((t) => t.embeddedIn === tabId);
+      if (embedded.length > 0) {
+        for (const child of embedded) get().removeTab(paneId, child.id, envId);
+        get().removeTab(paneId, tabId, envId);
+        return;
+      }
 
       const remainingTabs = leaf.tabs.filter((t) => t.id !== tabId);
 
@@ -946,15 +954,20 @@ export const paneLayoutStore = defineScopedStore<PaneLayoutState>(
       const envState = state.environments.get(envId);
       if (!envState) return;
       const pane = findLeaf(envState.root, paneId);
-      if (!pane || !pane.tabs.some((tab) => tab.id === tabId)) return;
+      const target = pane?.tabs.find((tab) => tab.id === tabId);
+      if (!pane || !target) return;
+      // Selecting an embedded agent selects its design and shows the panel.
+      const host = target.embeddedIn;
+      if (host) get().updateDesignAgentPanel(host, { open: true }, envId);
+      const current = get().environments.get(envId) ?? envState;
 
-      const newRoot = updateLeaf(envState.root, paneId, (leaf) => ({
+      const newRoot = updateLeaf(current.root, paneId, (leaf) => ({
         ...leaf,
-        activeTabId: tabId,
+        activeTabId: host ?? tabId,
       }));
 
-      const newEnvs = new Map(state.environments);
-      newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: paneId });
+      const newEnvs = new Map(get().environments);
+      newEnvs.set(envId, { ...current, root: newRoot, activePaneId: paneId });
       set({ environments: newEnvs });
     },
 
@@ -1913,7 +1926,7 @@ export const paneLayoutStore = defineScopedStore<PaneLayoutState>(
       const envState = getEnvironmentPaneState(state, environmentId);
       return findPaneWithTab(envState.root, tabId);
     },
-  }),
+  })),
 );
 
 /** Reads the nearest node scope's pane layouts; other code uses `scope.store(paneLayoutStore)`. */

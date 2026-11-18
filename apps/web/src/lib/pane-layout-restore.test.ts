@@ -58,6 +58,48 @@ describe("reconcilePersistedLayout", () => {
     expect(JSON.stringify(layout)).not.toContain("must not enter layout");
   });
 
+  test("a design keeps its agent panel and the agent embedded in it", () => {
+    const canvasId = "f17234d5-7dd0-4ee9-9ee9-d733001f35b8";
+    const layout = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "design",
+        tabs: [
+          {
+            id: "design",
+            type: "design-canvas",
+            designCanvasData: { canvasId, agentPanel: { dock: "right", open: false, size: 50 } },
+          },
+          {
+            id: "other-design",
+            type: "design-canvas",
+            designCanvasData: { canvasId, agentPanel: { dock: "nowhere", open: true } },
+          },
+          {
+            id: "agent",
+            type: "agent-native",
+            embeddedIn: "design",
+            nativeAgentData: { platform: "claude", environmentId: "env-1" },
+          },
+        ],
+      }),
+      context,
+    );
+    expect(layout?.root).toMatchObject({
+      tabs: [
+        {
+          id: "design",
+          designCanvasData: { canvasId, agentPanel: { dock: "right", open: false, size: 50 } },
+        },
+        { id: "other-design", designCanvasData: { canvasId } },
+        { id: "agent", embeddedIn: "design" },
+      ],
+    });
+    const otherDesign = (layout!.root as PaneLeaf).tabs[1]!;
+    expect(otherDesign.designCanvasData?.agentPanel).toBeUndefined();
+  });
+
   test("Graphs designer tabs restore only a well-formed template reference", () => {
     const tab = (id: string, graphDesignerData: unknown) => ({
       id,

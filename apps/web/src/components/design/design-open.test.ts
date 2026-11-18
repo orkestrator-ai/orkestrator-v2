@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   decideDesignOpen,
   planDesignLaunch,
-  SPLIT_FALLBACK_MESSAGE,
   type DesignLayoutFacts,
   type DesignTabLike,
 } from "./design-open";
@@ -93,7 +92,7 @@ describe("planDesignLaunch", () => {
       planDesignLaunch({ environmentReady: true, withAgent: false, facts: nearlyFull }),
     ).toEqual({
       ok: true,
-      placement: "split",
+      placement: "current",
     });
   });
 
@@ -102,13 +101,14 @@ describe("planDesignLaunch", () => {
     expect(plan.ok === false && plan.reason).toBe("environment");
   });
 
-  test("falls back to the current pane at maximum split depth", () => {
-    expect(
-      planDesignLaunch({
-        environmentReady: true,
-        withAgent: true,
-        facts: facts({ canSplit: false }),
-      }),
-    ).toEqual({ ok: true, placement: "current", notice: SPLIT_FALLBACK_MESSAGE });
+  test("opens a new design as a tab of the current pane, whatever the split depth", () => {
+    for (const canSplit of [true, false])
+      expect(
+        planDesignLaunch({
+          environmentReady: true,
+          withAgent: true,
+          facts: facts({ canSplit }),
+        }),
+      ).toEqual({ ok: true, placement: "current" });
   });
 });

@@ -1961,6 +1961,43 @@ exit 1
     );
   });
 
+  test("runs a folder rename through the registered container command and its generated script", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const rename = createCommandRegistry().get("rename_container_file")!;
+    const workspace = await createTempDir("ork-container-rename-");
+    await fs.mkdir(path.join(workspace, "src"));
+    await fs.writeFile(path.join(workspace, "src/keep.txt"), "contents");
+
+    // Docker is replaced by a recorder. Run the exact shell payload against an
+    // isolated directory, with only the workspace mount path substituted.
+    await withFakeDocker(
+      '#!/bin/sh\nprintf "%s" "$5" > "$FAKE_DOCKER_EXEC_LOG"\n',
+      async (logs) => {
+        const run = async (filePath: string, newName: string, expectedKind: "file" | "folder") => {
+          await expect(
+            rename({ environmentId: environment.id, filePath, newName, expectedKind }, context),
+          ).resolves.toBe(newName);
+          const script = await fs.readFile(logs.exec, "utf8");
+          return execFileAsync("bash", ["-c", script.replaceAll("/workspace", workspace)]);
+        };
+        await expect(run("src", "wrong", "file")).rejects.toThrow("Source is not a regular file");
+        await expect(run("src", "lib", "folder")).resolves.toBeDefined();
+        await expect(fs.readFile(path.join(workspace, "lib/keep.txt"), "utf8")).resolves.toBe(
+          "contents",
+        );
+        await expect(fs.stat(path.join(workspace, "src"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+    );
+  });
+
   test("runs validated container file revert and delete commands", async () => {
     const environment = createEnvironment({
       id: "env-container",

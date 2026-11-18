@@ -7,6 +7,7 @@ import path from "node:path";
 import { dlopen, FFIType, ptr, read, type Pointer } from "bun:ffi";
 import { CommandFailedError, runCommandBuffer } from "./command-capture.js";
 import { APP_SLUG } from "./constants.js";
+import { assertNoNestedRepositories } from "./workspace-removal-preflight.js";
 
 export const MAX_BINARY_FILE_BYTES = 10 * 1024 * 1024;
 /** Keep whole-file editor payloads small enough for IPC and Monaco to handle safely. */
@@ -68,8 +69,14 @@ function isLoopOrNoFollowError(code: number): boolean {
   return code === ERRNO_ELOOP_LINUX || code === ERRNO_ELOOP_DARWIN;
 }
 
+export interface ConfinedMoveOptions {
+  /** An in-place rename requires the source to match the kind the caller saw. */
+  renameKind?: "file" | "folder";
+}
+
 /**
- * Atomically moves a regular file without re-resolving mutable ancestors.
+ * Atomically moves a regular file (or, when renaming in place, a folder)
+ * without re-resolving mutable ancestors.
  *
  * Every parent directory is opened relative to an already-pinned descriptor
  * with O_NOFOLLOW, then the platform no-replace rename primitive operates on
@@ -81,6 +88,7 @@ export async function moveConfinedFile(
   sourcePath: string,
   destinationPath: string,
   testHooks: ConfinedMoveTestHooks = {},
+  options: ConfinedMoveOptions = {},
 ): Promise<void> {
   if (process.platform !== "darwin" && process.platform !== "linux") {
     throw new Error("Safe workspace file moves are not supported on this platform");
@@ -92,6 +100,11 @@ export async function moveConfinedFile(
   const destinationParent = path.posix.dirname(destination);
   const sourceName = path.posix.basename(source);
   const destinationName = path.posix.basename(destination);
+  const isFolder = options.renameKind === "folder";
+  if (options.renameKind && sourceParent !== destinationParent) {
+    throw new Error(`A ${options.renameKind} can only be renamed in place`);
+  }
+  const notMovable = `Source is not a ${isFolder ? "folder" : "regular file"}: ${source}`;
   const canonicalRoot = await fs.realpath(rootPath);
   const rootStats = await fs.lstat(canonicalRoot);
   if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
@@ -130,7 +143,6 @@ export async function moveConfinedFile(
     (constants.O_DIRECTORY ?? 0) |
     (constants.O_NOFOLLOW ?? 0) |
     ((constants as Record<string, number>).O_CLOEXEC ?? 0);
-  const fileFlags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
   const errno = (): number => {
     const errnoPointer =
       process.platform === "darwin"
@@ -171,17 +183,40 @@ export async function moveConfinedFile(
       destinationParent,
       "Destination directory",
     );
-    const sourceFd = openAt(sourceParentFd, sourceName, fileFlags);
-    if (sourceFd < 0) {
-      if (errno() === ERRNO_ENOENT) throw new Error(`Source no longer exists: ${source}`);
-      throw new Error(`Source is not a regular file: ${source}`);
-    }
-    const sourceStats = fsSync.fstatSync(sourceFd);
-    if (!sourceStats.isFile()) throw new Error(`Source is not a regular file: ${source}`);
+    assertPinnedDirectoryStillNamed(canonicalRoot, sourceParent, sourceParentFd);
+    // Linux can read leaf metadata directly through the pinned parent. On
+    // macOS, verify the named parents again immediately before the renameat call.
+    const sourceRoot =
+      process.platform === "linux" ? `/proc/self/fd/${sourceParentFd}` : canonicalRoot;
+    const sourceLeaf = process.platform === "linux" ? sourceName : source;
+    const namedSource = path.join(sourceRoot, sourceLeaf);
+    const readSource = (): Stats => {
+      try {
+        return fsSync.lstatSync(namedSource);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") throw new Error(`Source no longer exists: ${source}`);
+        if (code === "EACCES" || code === "EPERM") {
+          throw new Error(`Permission denied accessing source: ${source}`, { cause: error });
+        }
+        throw error;
+      }
+    };
+    const sourceStats = readSource();
+    if (isFolder ? !sourceStats.isDirectory() : !sourceStats.isFile()) throw new Error(notMovable);
+    if (isFolder) await assertNoNestedRepositories(sourceRoot, sourceLeaf, "rename");
 
     await testHooks.afterDirectoriesOpened?.();
     assertPinnedDirectoryStillNamed(canonicalRoot, sourceParent, sourceParentFd);
     assertPinnedDirectoryStillNamed(canonicalRoot, destinationParent, destinationParentFd);
+    const currentSource = readSource();
+    if (
+      currentSource.dev !== sourceStats.dev ||
+      currentSource.ino !== sourceStats.ino ||
+      (isFolder ? !currentSource.isDirectory() : !currentSource.isFile())
+    ) {
+      throw new Error(`Source changed while it was being moved: ${source}`);
+    }
 
     const encodedSource = nulTerminated(sourceName);
     const encodedDestination = nulTerminated(destinationName);
@@ -224,7 +259,11 @@ export async function moveConfinedFile(
     if (result !== 0) {
       const code = errno();
       if (code === ERRNO_EEXIST) {
-        throw new Error(`A file already exists at ${destination}`);
+        throw new Error(
+          isFolder
+            ? `A file or folder already exists at ${destination}`
+            : `A file already exists at ${destination}`,
+        );
       }
       if (code === ERRNO_ENOENT) throw new Error(`Source no longer exists: ${source}`);
       if (code === ERRNO_EXDEV) {

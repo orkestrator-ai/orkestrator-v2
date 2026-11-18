@@ -6523,8 +6523,8 @@
       "since": 1,
       "access": "workspace",
       "read": false,
-      "critical": [],
-      "argsDigest": "sha256:07759a31691e43ce09fa66202563c89c4da99bdadadb1b848071180970982863",
+      "critical": ["expectedKind"],
+      "argsDigest": "sha256:fa141e36eb12e5e133c0417123633c96b50b5c3b64cdaa3072b1eee59172a887",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "rename_environment": {
@@ -6550,8 +6550,8 @@
       "since": 1,
       "access": "workspace",
       "read": false,
-      "critical": [],
-      "argsDigest": "sha256:07759a31691e43ce09fa66202563c89c4da99bdadadb1b848071180970982863",
+      "critical": ["expectedKind"],
+      "argsDigest": "sha256:fa141e36eb12e5e133c0417123633c96b50b5c3b64cdaa3072b1eee59172a887",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "rename_session": {

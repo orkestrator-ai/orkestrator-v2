@@ -423,8 +423,12 @@ mise run lint</code></pre>
       <p>
         Captured the live renderer in the same isolated headless <code>design-00002</code> fixture
         profile at 1440×900, dark theme, and 1× zoom. Each PNG crops the relevant element from the
-        desktop viewport. The before images were captured before any source edit. For the after
-        images, the development stack restarted with the same fixture project and environments.
+        desktop viewport. The before images came from the clean <code>b2c91abb9</code> checkout. The
+        profile restarted on the changed renderer with the same fixture project and environments.
+      </p>
+      <p>
+        Both runs disabled host seeding, host reachability checks, and real agent credentials. The
+        fixture used a downloaded Codex toolchain and a loopback test model.
       </p>
       <ul>
         <li>
@@ -437,7 +441,8 @@ mise run lint</code></pre>
           <b>Failed tool result.</b> A fixture Codex turn ran a local command that returned exit
           code 7. The fixture repeated that command after the stack restart, and the collapsed row
           rehydrated after page reload in both captures. The failure badge already used
-          <code>text-failure</code> on the baseline, so its color is identical across the pair.
+          <code>text-failure</code> on the baseline, so its color is identical across the pair. The
+          runtime label shows the measured duration of each invocation.
         </li>
         <li>
           <b>Environment error status.</b> A failed startup with the fixture repository temporarily

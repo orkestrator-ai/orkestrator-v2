@@ -37,19 +37,19 @@ Two claims carry equal weight and form one argument: **every agent in a sealed c
 - Safety constraints the UI must never misrepresent: approvals deny on timeout, disconnect or unparseable answers; closing a tab never deletes a conversation; the Coordinator cannot edit the checkout; a restricted network limits destinations, not what is sent; host sessions default to no vendor sandbox.
 - Terminology to keep: project home, prompt environment, pipeline environment, Coordinator, side agent, worker, Multi Review, build pipeline, execution policy, agent mail, subork.
 - Current version is 2.37.1-beta.
-- Undecided: licence and distribution terms (no LICENSE file), pricing (none exists).
+- Undecided: license and distribution terms (no LICENSE file), pricing (none exists).
 
 ## Brand Commitments
 
 - Name: **Orkestrator** (the package is `orkestrator-ai`; the CLI is `orkestrator`).
 - Logo sources: `logos/ork-logo.png`, `logos/ork-logo2.png` and their `.afdesign` masters.
-- Voice: plain, precise, factual British English. Claims are stated as mechanisms ("Isolation is the default, not a setting."), limits are stated honestly (what the firewall does not stop), and nothing is promised that the system does not enforce.
+- Voice: plain, precise, factual American English. Claims are stated as mechanisms ("Isolation is the default, not a setting."), limits are stated honestly (what the firewall does not stop), and nothing is promised that the system does not enforce.
 
 ## Evidence on Hand
 
 - Public beta, distributed with an install command for macOS and Linux.
 - Real product mechanics documented in `README.md` and `docs/architecture/`. These are the only proof material.
-- No testimonials, customer names, usage metrics, benchmarks, pricing or licence terms exist. Future work must not invent any.
+- No testimonials, customer names, usage metrics, benchmarks, pricing or license terms exist. Future work must not invent any.
 
 ## Product Principles
 

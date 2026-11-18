@@ -213,7 +213,7 @@ describe("SkillsSettings", () => {
       render(<SkillsSettings />);
 
       await waitFor(() =>
-        expect(screen.getByText("The backend returned an unreadable skill catalogue")).toBeTruthy(),
+        expect(screen.getByText("The backend returned an unreadable skill catalog")).toBeTruthy(),
       );
       expect(footerText()).toBe("Scan failed");
       expect(

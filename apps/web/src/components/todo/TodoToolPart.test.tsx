@@ -197,12 +197,13 @@ describe("TodoToolPart", () => {
       />,
     );
 
-    expect(container.textContent).toContain("1 cancelled");
+    expect(container.textContent).toContain("1 canceled");
 
     fireEvent.click(container.querySelector("button")!);
 
     const cancelledSpan = screen.getByText("Cancelled item");
     expect(cancelledSpan.className).toContain("line-through");
+    expect(screen.getByText("canceled")).toBeTruthy();
   });
 
   test("renders in_progress items with font-medium and badge", () => {

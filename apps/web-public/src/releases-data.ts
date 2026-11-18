@@ -120,14 +120,14 @@ export const RELEASES: readonly ReleaseSummary[] = [
     ],
     improved: [
       "Agent chat is easier to read and to tap: clearer change summaries, tidier tool details and larger touch targets.",
-      "Drafting an Auto-pipeline shows its progress, can be cancelled, and tells you how the confirmation went.",
+      "Drafting an Auto-pipeline shows its progress, can be canceled, and tells you how the confirmation went.",
       "Read-only reviewers can run on Linux machines where the command sandbox is unavailable.",
       "Restoring a large set of file changes is faster.",
     ],
     fixed: [
       "Cleaning up an environment or merging its pull request only deletes branches that environment created.",
       "Spinners and progress bars in command output show their latest frame instead of every frame.",
-      "A cancelled Auto-pipeline draft no longer reappears, and saved model choices are kept when launching a build.",
+      "A canceled Auto-pipeline draft no longer reappears, and saved model choices are kept when launching a build.",
       "A finished pipeline opens its Notes once, even when no window was watching it finish.",
       "The MCP panel refreshes straight after you act on a server.",
       "Commands that keep running after an agent's turn ends are shown as left running instead of stuck.",

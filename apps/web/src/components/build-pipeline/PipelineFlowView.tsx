@@ -70,6 +70,7 @@ import { ReviewerStartFailureNotice } from "@/components/review/ReviewerStartFai
 import { reviewerProvisionalSummary } from "@/components/review/multi-review-steps";
 import { WorkflowResultStatus } from "@/components/review/WorkflowResultStatus";
 import {
+  buildErrorLabel,
   pipelineFlowModel,
   pipelinePackageRestartStageId,
   pipelineReviewPassNodes,
@@ -963,7 +964,7 @@ function InspectorNotes({
   if (node.state === "failed" && node.error && node.error !== visibleError) {
     notes.push(
       <p key="error" className="break-words whitespace-pre-wrap text-failure">
-        {node.error}
+        {buildErrorLabel(node.error)}
       </p>,
     );
   }

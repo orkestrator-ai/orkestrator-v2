@@ -111,7 +111,7 @@ export function describeHostUpdateJob(
     case "postponed":
       return `Postponed on ${on}. ${target} installs the next time Orkestrator quits there.`;
     case "cancelled":
-      return "The update was cancelled.";
+      return "The update was canceled.";
     case "failed":
       return `The update failed: ${job.error ? summarizeUpdateError(job.error) : "unknown error"}`;
   }

@@ -80,7 +80,9 @@ export function validationStageSummary(run: ValidationRun): string {
   }
   if (run.status === "cancelled") {
     const error = run.error?.trim();
-    return error && error.length > 0 ? error : "Validation cancelled";
+    return error
+      ? error.replace(/^Validation cancelled\b/, "Validation canceled")
+      : "Validation canceled";
   }
   const commandCount = run.plan.commands.length;
   const checkWord = commandCount === 1 ? "check" : "checks";

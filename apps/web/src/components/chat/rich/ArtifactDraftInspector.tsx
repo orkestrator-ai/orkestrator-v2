@@ -298,7 +298,7 @@ const STATUS_TEXT: Record<string, string> = {
   running: "Running",
   succeeded: "Succeeded",
   failed: "Failed",
-  cancelled: "Cancelled",
+  cancelled: "Canceled",
   interrupted: "Interrupted",
 };
 

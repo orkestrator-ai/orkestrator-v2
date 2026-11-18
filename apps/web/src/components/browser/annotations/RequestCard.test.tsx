@@ -101,6 +101,26 @@ describe("request cards", () => {
     );
   });
 
+  test("canceling a queued request confirms it was never sent", async () => {
+    seedWithRequest("queued");
+    renderInAppCommandScope(<AnnotationHarness />);
+    const article = await card();
+    fireEvent.click(within(article).getByRole("button", { name: "Cancel request" }));
+    expect(await within(article).findByText("Request canceled. It was never sent.")).toBeTruthy();
+  });
+
+  test("shows American spelling for a stored canceled request", async () => {
+    seedWithRequest("cancelled", {
+      cancelSource: "user",
+      stateReason: "Cancelled by the user",
+    });
+    renderInAppCommandScope(<AnnotationHarness />);
+    const article = within(await card());
+    expect(article.getByText("Canceled", { exact: true })).toBeTruthy();
+    expect(article.getByText("Canceled by the user")).toBeTruthy();
+    expect(article.getByText("Canceled from the note")).toBeTruthy();
+  });
+
   test("discarding unconfirmed delivery requires acknowledging that work may have run", async () => {
     seedWithRequest("unconfirmed");
     renderInAppCommandScope(<AnnotationHarness />);

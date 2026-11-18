@@ -22,7 +22,7 @@ const STATUS_WORDS: Record<GraphRunSummary["status"], string> = {
   complete: "complete",
   failed: "failed",
   cancelling: "stopping",
-  cancelled: "cancelled",
+  cancelled: "canceled",
 };
 
 const STATUS_TONE: Record<GraphRunSummary["status"], string> = {

@@ -73,7 +73,7 @@ function isTailscaleIPv4(address: string): boolean {
 }
 
 function cancelled(): CliError {
-  return new CliError("invalid-input", "Setup cancelled; nothing was installed");
+  return new CliError("invalid-input", "Setup canceled; nothing was installed");
 }
 
 async function ask(io: ClientIo, prompt: string): Promise<string> {

@@ -192,8 +192,8 @@ function phaseCopy(workflow: MultiReviewWorkflow): string {
     interactive: "The Address Findings model is working interactively",
     paused: "Multi Review paused",
     completed: "All findings were addressed",
-    cancelling: "Cancelling Multi Review",
-    cancelled: "Multi Review cancelled",
+    cancelling: "Canceling Multi Review",
+    cancelled: "Multi Review canceled",
     failed: "Multi Review needs attention",
   } as const;
   if (

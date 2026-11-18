@@ -250,24 +250,24 @@ export const sessionCommands: CommandSpec[] = [
   {
     path: ["agent", "options"],
     action: "agent.options",
-    summary: "Enabled agents, model catalogues (with freshness), and supported controls.",
+    summary: "Enabled agents, model catalogs (with freshness), and supported controls.",
     description:
-      "Reads the backend's cached catalogues; --refresh asks providers again, which can take a while. An `empty` catalogue is a successful empty answer; `stale`/`unavailable` means the backend could not read it.",
+      "Reads the backend's cached catalogs; --refresh asks providers again, which can take a while. An `empty` catalog is a successful empty answer; `stale`/`unavailable` means the backend could not read it.",
     positionals: [],
     options: [
       {
         name: "environment",
         kind: "string",
         valueName: "ENVIRONMENT_ID",
-        description: "Environment whose live catalogue to read.",
+        description: "Environment whose live catalog to read.",
       },
       {
         name: "project",
         kind: "string",
         valueName: "PROJECT_ID",
-        description: "Project (cached catalogue) when no environment is given.",
+        description: "Project (cached catalog) when no environment is given.",
       },
-      { name: "refresh", kind: "boolean", description: "Ask the providers for a fresh catalogue." },
+      { name: "refresh", kind: "boolean", description: "Ask the providers for a fresh catalog." },
     ],
     async run(context, parsed) {
       const environmentId = stringOption(parsed.options, "environment");
@@ -285,7 +285,7 @@ export const sessionCommands: CommandSpec[] = [
         result: options,
         connection: session.identity,
         human: table(
-          ["AGENT", "ENABLED", "CATALOGUE", "MODELS", "COMPLETION"],
+          ["AGENT", "ENABLED", "CATALOG", "MODELS", "COMPLETION"],
           options.agents.map((agent) => [
             agent.agent,
             agent.enabled ? "yes" : "no",
@@ -508,7 +508,7 @@ export const sessionCommands: CommandSpec[] = [
     action: "session.commands",
     summary: "List the session's slash commands (ID, name, availability, argument policy).",
     description:
-      "Reads the catalogue the backend already holds; --refresh asks the provider again. Use an ID (or a unique name) with `session command`.",
+      "Reads the catalog the backend already holds; --refresh asks the provider again. Use an ID (or a unique name) with `session command`.",
     positionals: [{ name: "session", required: true }],
     options: [
       { name: "refresh", kind: "boolean", description: "Ask the provider for its list again." },
@@ -526,7 +526,7 @@ export const sessionCommands: CommandSpec[] = [
         connection: session.identity,
         ids: list.commands.map((command) => command.id),
         human: [
-          `catalogue ${list.catalogue.status}${list.catalogue.error ? ` (${list.catalogue.error})` : ""}`,
+          `catalog ${list.catalogue.status}${list.catalogue.error ? ` (${list.catalogue.error})` : ""}`,
           ...table(
             ["NAME", "ID", "ARGS", "AVAILABLE", "DESCRIPTION"],
             list.commands.map((command) => [

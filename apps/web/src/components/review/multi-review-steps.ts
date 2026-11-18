@@ -138,8 +138,8 @@ function step(label: string, state: MultiReviewStepState): MultiReviewStepStatus
  * guess rather than a reading.
  */
 function cancellationStep(phase: MultiReviewPhase): MultiReviewStepStatus | null {
-  if (phase === "cancelling") return step("Cancelling", "cancelling");
-  if (phase === "cancelled") return step("Cancelled", "cancelled");
+  if (phase === "cancelling") return step("Canceling", "cancelling");
+  if (phase === "cancelled") return step("Canceled", "cancelled");
   return null;
 }
 
@@ -223,7 +223,7 @@ export function addressFindingsStep(workflow: MultiReviewWorkflow): MultiReviewS
       return step("Complete", "complete");
     if (workflow.addressFindingsSession?.status === "failed") return step("Failed", "failed");
     if (workflow.addressFindingsSession?.status === "cancelled")
-      return step("Cancelled", "cancelled");
+      return step("Canceled", "cancelled");
     return step("Interactive session", "running");
   }
   const cancelled = cancellationStep(workflow.phase);

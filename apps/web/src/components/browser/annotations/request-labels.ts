@@ -37,7 +37,7 @@ export function dispatchModeLabel(mode: WebAnnotationDispatchMode | undefined): 
 }
 
 const CANCEL_SOURCES: Record<NonNullable<WebAnnotationRequest["cancelSource"]>, string> = {
-  user: "Cancelled from the note",
+  user: "Canceled from the note",
   "chat-queue": "Removed from the chat queue before it was sent",
   retarget: "Moved to another session",
 };

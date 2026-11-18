@@ -1568,7 +1568,7 @@ export const WEB_ANNOTATION_REQUEST_STATE_LABELS: Readonly<
   completed: "Response ready",
   "awaiting-review": "Review response",
   failed: "Failed",
-  cancelled: "Cancelled",
+  cancelled: "Canceled",
   "abandoned-unconfirmed": "Discarded (may have run)",
 });
 

@@ -11,21 +11,21 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00019</p>
       <h1>00019 · Switch the product voice to American English</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-medium">Medium</span>
         <span class="pill">Copy</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 8 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 8 / 8 images</span
         >
       </div>
 
       <h2>Problem</h2>
       <p>
-        The decision is American English. The UI is already mostly American (Favorite, Color,
-        Initializing, Customize), so the work is in the documents and a few display strings:
-        <code>PRODUCT.md</code> states British English, <code>DESIGN.md</code> spells “colour” 21
+        The decision is American English. The UI was already mostly American (Favorite, Color,
+        Initializing, Customize), so the work was in the documents and a few display strings:
+        <code>PRODUCT.md</code> stated British English, <code>DESIGN.md</code> spelled “colour” 21
         times (including rule names such as the Outcome and Mode color rules), and a handful of
-        strings say “cancelled” or “cancelling”. The <code>cancelled</code> value used as a status
+        strings said “cancelled” or “cancelling”. The <code>cancelled</code> value used as a status
         in code (500+ occurrences) is data, not copy.
       </p>
       <div class="rule">
@@ -168,7 +168,6 @@
               <img
                 src="images/00019/before-request-cancelled-desktop.png"
                 alt="Before: Annotation request in the canceled state (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -180,7 +179,6 @@
               <img
                 src="images/00019/after-request-cancelled-desktop.png"
                 alt="After: Annotation request in the canceled state (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -199,7 +197,6 @@
               <img
                 src="images/00019/before-multi-review-canceled-desktop.png"
                 alt="Before: Multi Review tab in the canceled state (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -211,7 +208,6 @@
               <img
                 src="images/00019/after-multi-review-canceled-desktop.png"
                 alt="After: Multi Review tab in the canceled state (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -232,7 +228,6 @@
               <img
                 src="images/00019/before-mcp-apply-canceled-desktop.png"
                 alt="Before: MCP apply status when applying was canceled (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -244,7 +239,6 @@
               <img
                 src="images/00019/after-mcp-apply-canceled-desktop.png"
                 alt="After: MCP apply status when applying was canceled (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -265,7 +259,6 @@
               <img
                 src="images/00019/before-rebuild-cannot-cancel-toast-desktop.png"
                 alt="Before: Rebuild toast (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -279,7 +272,6 @@
               <img
                 src="images/00019/after-rebuild-cannot-cancel-toast-desktop.png"
                 alt="After: Rebuild toast (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -309,54 +301,54 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00019/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Type-check and the owning tests pass (commands below);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: This task is the documentation update:
             PRODUCT.md and DESIGN.md.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -365,13 +357,48 @@ mise run lint</code></pre>
 
       <h2>Notes</h2>
       <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+        Captured at 1440×900 with device scale factor 1 and the same dark theme in the isolated
+        headless <code>design-00019</code> profile. The baseline came from unmodified commit
+        <code>b2c91abb9</code>. The annotation and review pairs use the same saved fixture records
+        before and after the edit.
       </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <strong>Product and design prose.</strong> The voice rule now specifies American English.
+          The Mode Color Exception, Outcome Color Rule, and their references use the same spelling,
+          including in the design metadata. The front matter and palette values are unchanged.
+        </li>
+        <li>
+          <strong>Displayed copy.</strong> Corrected cancellation wording in the four captured
+          views, host updates, and the queued-request confirmation accessible name. Public-site hits
+          were a connection error and two release notes. CLI hits were help, table headings, and
+          setup or update output. Swift hits were platform enums, test identifiers, or comments.
+        </li>
+        <li>
+          <strong>Decision.</strong> Use “canceled” and “canceling” in product copy. Keeping the
+          double-L forms would save assertion updates, but the single-L forms match the American
+          English convention in the rest of the interface. Persisted values, identifiers, and API
+          fields retain their existing spellings.
+        </li>
+        <li>
+          <strong>Annotation request.</strong> The card badge, its reason and source, and the
+          discussion history use “canceled” after reload. The immediate cancellation confirmation
+          also uses “Request canceled.”
+        </li>
+        <li>
+          <strong>Multi Review.</strong> The workflow header and canceled step labels use
+          “canceled.” Reopening the environment after a reload restores the same settled review.
+        </li>
+        <li>
+          <strong>MCP apply.</strong> The Recent changes headline and session row show “Saved;
+          applying was canceled.” Playwright supplied the queued operation and the response to
+          Cancel apply. The settings screen reads the resulting state after reload.
+        </li>
+        <li>
+          <strong>Rebuild toast.</strong> Cancel rebuild shows “The rebuild can no longer be
+          canceled.” The Docker daemon was unavailable, so Playwright supplied a post-commit
+          lifecycle snapshot and the refusal response. The real renderer produced the toast.
+        </li>
       </ul>
 
       <footer>

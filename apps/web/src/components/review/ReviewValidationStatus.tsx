@@ -396,6 +396,7 @@ export function ReviewValidationStatus({
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
   const selectedResult = run.results.find((result) => result.id === selectedResultId);
   const runActive = run.status === "running";
+  const statusLabel = run.status === "cancelled" ? "canceled" : run.status;
   // Requested stops stay visible until the authoritative snapshot settles them.
   const [pendingStops, setPendingStops] = useState<{
     runId: string;
@@ -472,7 +473,7 @@ export function ReviewValidationStatus({
                       (run.results.some((result) => result.status === "queued") &&
                         !run.results.some((result) => result.status === "running"))))
                 ? "Queued"
-                : run.status}
+                : statusLabel}
           </span>
           {onStop && (run.status === "planned" || run.status === "running") && (
             <Button

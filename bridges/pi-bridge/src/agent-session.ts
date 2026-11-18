@@ -71,11 +71,13 @@ import {
   SettingsManager,
 } from "./pi-sdk.js";
 import {
+  boundedModelId,
   catalogReadFailed,
   composeModelId,
   hydrateComposer,
   reconcileComposerSelection,
   resolveModel,
+  responseModelId,
   thinkingLevel,
   type ThinkingLevelDefaults,
 } from "./models.js";
@@ -1789,7 +1791,13 @@ function hydrateHistory(state: SessionState): void {
   const name = manager.getSessionName();
   if (name?.trim()) state.title = name.trim();
 
-  for (const entry of manager.getBranch()) appendHistoricEntry(state, entry);
+  let selectedModelId = state.composer.selectedModelId;
+  for (const entry of manager.getBranch()) {
+    if (entry.type === "model_change") {
+      selectedModelId = boundedModelId(entry.provider, entry.modelId) ?? selectedModelId;
+    }
+    appendHistoricEntry(state, entry, selectedModelId);
+  }
   boundTranscript(state);
   state.revision += 1;
 }
@@ -1852,7 +1860,11 @@ function entryCreatedAt(entry: SessionEntry): string {
  * change what the model sees without changing the conversation — Pi's own UI
  * keeps showing the edited entries — so the transcript does the same.
  */
-function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
+function appendHistoricEntry(
+  state: SessionState,
+  entry: SessionEntry,
+  selectedModelId: string | undefined,
+): void {
   switch (entry.type) {
     case "compaction":
       appendHistoricNotice(state, entry, {
@@ -1957,7 +1969,16 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
     }
   }
   if (parts.length > 0) {
-    pushMessage(state, "assistant", content, parts, entryCreatedAt(entry), messageId);
+    pushMessage(
+      state,
+      "assistant",
+      content,
+      parts,
+      entryCreatedAt(entry),
+      messageId,
+      // The model Pi recorded for this response, as the live row showed it.
+      responseModelId(message) ?? selectedModelId,
+    );
   }
 }
 
@@ -2000,6 +2021,7 @@ function pushMessage(
   parts: BridgeMessagePart[],
   createdAt: string,
   messageId = randomBytes(12).toString("hex"),
+  modelId?: string,
 ): void {
   const message: BridgeMessage = {
     id: messageId,
@@ -2017,6 +2039,7 @@ function pushMessage(
             },
           ],
     createdAt,
+    ...(modelId ? { modelId } : {}),
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));

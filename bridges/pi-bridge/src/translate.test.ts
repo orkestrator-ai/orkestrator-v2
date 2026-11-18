@@ -596,13 +596,13 @@ describe("tool cards", () => {
       args: { command: "rm -rf /" },
     });
     applySessionEvent(state, {
-      type: "turn_end",
-      message: { usage: { input: 999, output: 999 } },
+      type: "message_end",
+      message: { role: "assistant", usage: { input: 999, output: 999 } },
     });
 
     expect(parts(state)).toHaveLength(1);
     expect(parts(state)[0]).toMatchObject({ content: "live" });
-    expect(state.currentTurnUsage).toBeUndefined();
+    expect(state.currentTurnResponses).toBeUndefined();
   });
 
   test("still records session-scoped frames while no turn is running", () => {
@@ -659,15 +659,18 @@ describe("session events", () => {
   test("accumulates usage across the turns of one prompt", () => {
     const state = running();
     applySessionEvent(state, {
-      type: "turn_end",
-      message: { usage: { input: 10, output: 5, cacheRead: 1, cacheWrite: 0, reasoning: 3 } },
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 10, output: 5, cacheRead: 1, cacheWrite: 0, reasoning: 3 },
+      },
     });
     applySessionEvent(state, {
-      type: "turn_end",
-      message: { usage: { input: 7, output: 2, cacheRead: 0, cacheWrite: 4 } },
+      type: "message_end",
+      message: { role: "assistant", usage: { input: 7, output: 2, cacheRead: 0, cacheWrite: 4 } },
     });
 
-    expect(state.currentTurnUsage).toEqual({
+    expect(state.currentTurnResponses?.tokens).toEqual({
       inputTokens: 17,
       outputTokens: 7,
       cacheReadTokens: 1,

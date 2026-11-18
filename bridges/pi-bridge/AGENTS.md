@@ -81,6 +81,29 @@ response, which `finishTurn` fails) gets an error `status` line saying why
 (`appendTurnFailure`), on its last row or a new one when the turn produced
 none. A retried response that a later answer replaces adds nothing.
 
+## Model attribution
+
+A row names the model that produced it, not the composer selection. Pi's
+`AssistantMessage` carries the model it asked for (`provider`, `model`) and,
+when the provider reports it, the one that answered (`responseModel`: an
+alias resolved to a dated model, or a fallback model). `responseModelId` in
+`models.ts` tries `provider/responseModel` and then `provider/model`, checking
+each against the byte limit also used by backend usage normalization. Each
+assistant frame updates the open row, and `hydrateHistory` uses the same model
+resolver. Rows with no usable ID use the selection, preferring Pi's recorded
+model changes when replaying history. Never write a response's model into
+`composer.selectedModelId`: an alias resolving is not the user choosing
+another model, and the picker would then offer an id the catalogue lacks.
+
+`turn-usage.ts` totals the current prompt's assistant usage, including paid
+errors and aborts. A turn names a model only when its token and cost
+contributors all identify that model. The cost delta also includes cache
+warming, summaries and tool results, so a mixed or unidentified charge keeps
+the full cost with no model ID. The session-wide `usage.modelId` follows the
+latest answer. Pi's own context calculation still supplies occupancy, and the
+context-window lookup falls back to the selection when the answering model is
+absent from the catalogue.
+
 ## Fork, rewind and branch targets
 
 A fork or rewind names a transcript row, and `history-target.ts` turns it into

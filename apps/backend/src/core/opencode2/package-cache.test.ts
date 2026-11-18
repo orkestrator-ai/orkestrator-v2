@@ -65,7 +65,7 @@ describe("openCodePackageInstalls", () => {
 
   test("the layout is the pinned 2.x's", () => {
     // The `ai-v6` tag and the `npm/<name>@<tag>/<generation>` directories are
-    // read from the pinned binary (2.2.6, re-read for 2.3.0), not from its configuration. When the pin
+    // read from the pinned binary (2.2.6, re-read for 2.3.0 and 2.3.1), not from its configuration. When the pin
     // moves, run opencode2-package-cache.live.test.ts against the new binary
     // (and read its npm service) before moving OPENCODE2_PACKAGE_LAYOUT_VERSION.
     expect(PINNED_TOOLCHAIN_VERSIONS.opencode2).toBe(OPENCODE2_PACKAGE_LAYOUT_VERSION);

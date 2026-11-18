@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readProviderStatus } from "../agent-provider-contract.js";
+import { ProviderUnavailableError, readProviderStatus } from "../agent-provider-contract.js";
+import { OPENCODE2_STOP_CLEANUP_MS, OpenCode2BackgroundWork } from "./background-subagents.js";
+import { OpenCode2Client } from "./client.js";
+import { openCode2TurnTerminalError } from "./environment-provider.js";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 import { OpenCode2Provider } from "./provider.js";
 import { openCode2RequestRun } from "./workflow-results.js";
@@ -8,7 +11,8 @@ import type { OpenCode2Message } from "./types.js";
 /**
  * OpenCode 2.3.0 runs every sub-agent in the background: the parent's run
  * settles while its child works, and the child's report wakes the parent
- * later (`background-subagents.ts`).
+ * later. 2.3.1 does the same with a shell command still running when its
+ * timeout expires (`background-subagents.ts`).
  */
 let server: FakeOpenCode2Server | undefined;
 let provider: OpenCode2Provider | undefined;
@@ -123,6 +127,438 @@ describe("background sub-agents", () => {
   });
 });
 
+/** A session whose request settled after a shell command moved to the background. */
+async function backgrounded(requestId = "r-1", answer = "the tests are still running") {
+  const { server, provider } = setup();
+  const session = await provider.createSession("build", "p");
+  await provider.send(session, "run the tests", { requestId });
+  const shell = server.addBackgroundShell(session, "bun test");
+  server.finishRun(session, "succeeded", answer);
+  return { server, provider, session, shell };
+}
+
+describe("background shells (2.3.1)", () => {
+  test("a timed-out command keeps the environment working; the composer is free", async () => {
+    const { server, provider, session, shell } = await backgrounded();
+    expect(await provider.status(session)).toBe("idle");
+    expect((await provider.activityBatch([session])).get(session)).toBe("working");
+    expect(await provider.observeSession(session)).toEqual({
+      status: "idle",
+      backgroundWorkLive: true,
+    });
+
+    // The command ends; its report wakes the session into a run of its own.
+    server.finishBackgroundShell(shell, "completed", "42 pass");
+    expect(await provider.status(session)).toBe("running");
+    server.finishRun(session, "succeeded", "all tests pass");
+    expect(await provider.observeSession(session)).toEqual({ status: "idle" });
+    expect((await provider.activityBatch([session])).get(session)).toBe("idle");
+  });
+
+  test("the outcome is in the history, so a tab that was away reads it on return", async () => {
+    const { server, provider, session, shell } = await backgrounded();
+    // Nothing reads the session while the command runs and ends.
+    server.finishBackgroundShell(shell, "completed", "42 pass");
+    server.finishRun(session, "succeeded", "all tests pass");
+    for (const read of [
+      async () => JSON.stringify(await provider.interactiveState(session)),
+      async () =>
+        JSON.stringify(await provider.transcriptSnapshot(session, { limit: 20, targetBytes: 1e6 })),
+    ]) {
+      const text = await read();
+      expect(text).toContain("Background command completed: bun test\\n42 pass");
+      expect(text).toContain("all tests pass");
+    }
+  });
+
+  test("a workflow waits for the run the report wakes and takes its answer", async () => {
+    const { server, provider } = setup();
+    const session = await provider.createSession("plan", "p");
+    await provider.send(session, "plan", { requestId: "s-1", schema: { type: "object" } });
+    const shell = server.addBackgroundShell(session);
+    server.finishRun(session, "succeeded", "waiting for the build");
+    expect(await readProviderStatus(provider, session)).toMatchObject({
+      status: "idle",
+      backgroundWorkLive: true,
+    });
+    expect(await provider.structured(session, "s-1")).toBeNull();
+    expect(await provider.settleTurn(session, "s-1")).toBe(false);
+    server.finishBackgroundShell(shell);
+    expect(await provider.structured(session, "s-1")).toBeNull();
+    server.finishRun(session, "succeeded", '{"built":true}');
+    expect(await provider.structured(session, "s-1")).toMatchObject({
+      ok: true,
+      value: { built: true },
+    });
+    expect(await provider.settleTurn(session, "s-1")).toBe(true);
+  });
+
+  test("a report still on its way counts until its grace passes", async () => {
+    const { server, provider, session, shell } = await backgrounded();
+    const job = server.backgroundShells.find((entry) => entry.shellID === shell)!;
+    job.status = "completed";
+    job.time.completed = clock;
+    expect(await provider.observeSession(session)).toMatchObject({ backgroundWorkLive: true });
+    expect((await provider.activityBatch([session])).get(session)).toBe("working");
+    // A settled job left listed (its report never admitted) is not waited on forever.
+    clock += 10_000;
+    expect(await provider.observeSession(session)).toEqual({ status: "idle" });
+    expect((await provider.activityBatch([session])).get(session)).toBe("idle");
+  });
+
+  test("a report waiting in the inbox is still owed", async () => {
+    const { server, provider, session, shell } = await backgrounded();
+    server.backgroundShells.length = 0;
+    server.sessions.get(session)!.inbox.push({
+      id: "report-inbox",
+      type: "synthetic",
+      payload: {
+        text: `<shell id="${shell}" state="completed" command="bun test">\nok\n</shell>`,
+        metadata: { source: "shell", shellID: shell, jobID: shell, state: "completed" },
+      },
+    });
+    expect(await provider.observeSession(session)).toMatchObject({ backgroundWorkLive: true });
+  });
+
+  test("a sub-agent's background shell keeps its parent working", async () => {
+    const { server, provider, parent, child } = await launched();
+    server.sessions.get(child)!.running = false;
+    server.sessions.get(child)!.busy = { busy: clock - 60_000, idle: clock - 60_000 };
+    clock += 60_000;
+    expect(await provider.observeSession(parent)).toEqual({ status: "idle" });
+    server.addBackgroundShell(child, "bun run build");
+    expect(await provider.activityBatch([parent, child])).toEqual(
+      new Map([
+        [parent, "working"],
+        [child, "working"],
+      ]),
+    );
+    expect(await provider.activity(parent)).toBe("working");
+    expect(await provider.activity(child)).toBe("working");
+    expect(await provider.observeSession(parent)).toMatchObject({ backgroundWorkLive: true });
+  });
+
+  test("a stop terminates the command and the run its report wakes", async () => {
+    const { server, provider, session, shell } = await backgrounded();
+    await provider.abort(session);
+    expect(server.shellRemovals).toEqual([shell]);
+    expect(server.backgroundShells).toEqual([]);
+    // The terminated command's report woke the session; the stop interrupted that run.
+    expect(server.sessions.get(session)!.running).toBe(false);
+    const outcomes = server.sessions
+      .get(session)!
+      .rows.filter((row) => row.type === "idle")
+      .map((row) => row.outcome);
+    expect(outcomes.at(-1)).toBe("interrupted");
+    expect((await provider.activityBatch([session])).get(session)).toBe("idle");
+  });
+
+  test("a stop terminates a sub-agent's background shell too", async () => {
+    const { server, provider, parent, child } = await launched();
+    const shell = server.addBackgroundShell(child);
+    await provider.abort(parent);
+    expect(server.shellRemovals).toEqual([shell]);
+    expect(server.sessions.get(child)!.running).toBe(false);
+  });
+
+  test("an unreadable job list keeps observation pending but not activity", async () => {
+    const { server, provider, session } = await backgrounded();
+    const client = server.client();
+    client.listBackgroundJobs = async () => {
+      throw new Error("offline");
+    };
+    const work = new OpenCode2BackgroundWork(client, {
+      running: async () => new Set(),
+      now: () => clock,
+    });
+    expect(await work.live(session)).toBe(true);
+    await expect(work.shellOwners()).rejects.toThrow("offline");
+    // The provider's activity read degrades to the session's own run.
+    server.backgroundShells.length = 0;
+    expect((await provider.activityBatch([session])).get(session)).toBe("idle");
+  });
+});
+
+describe("shell settlement and Stop interleavings", () => {
+  function setupWork() {
+    server = new FakeOpenCode2Server();
+    clock = Date.now();
+    const client = server.client();
+    provider = new OpenCode2Provider(client, { monitorEvents: false, now: () => clock });
+    return { server, provider, client };
+  }
+
+  for (const check of ["observe", "grant", "structured"] as const) {
+    test(`a shell completing during ${check} cannot settle on the launch run`, async () => {
+      const { server, provider, client } = setupWork();
+      const id = await provider.createSession("build", "race");
+      await provider.send(id, "run", {
+        requestId: "race",
+        readOnly: true,
+        schema: { type: "object" },
+      });
+      const shell = server.addBackgroundShell(id);
+      server.finishRun(id, "succeeded", '{"launch":true}');
+      const listJobs = client.listBackgroundJobs.bind(client);
+      client.listBackgroundJobs = (...args) => {
+        server.finishBackgroundShell(shell);
+        client.listBackgroundJobs = listJobs;
+        return listJobs(...args);
+      };
+      if (check === "observe") {
+        expect(await provider.observeSession(id)).toMatchObject({ backgroundWorkLive: true });
+      } else if (check === "grant") {
+        expect(await provider.settleTurn(id, "race")).toBe(false);
+        expect(server.sessions.get(id)?.metadata?.orkestrator).toMatchObject({
+          turn: { requestId: "race", settled: false },
+        });
+      } else {
+        expect(await provider.structured(id, "race")).toBeNull();
+      }
+      server.finishRun(id, "succeeded", '{"done":true}');
+      expect(await provider.structured(id, "race")).toMatchObject({ value: { done: true } });
+      expect(await provider.settleTurn(id, "race")).toBe(true);
+    });
+  }
+
+  test("reconciles a continuation that starts and finishes during the job read", async () => {
+    const { server, provider, client } = setupWork();
+    const id = await provider.createSession("build", "race");
+    await provider.send(id, "run", { requestId: "race", schema: { type: "object" } });
+    const shell = server.addBackgroundShell(id);
+    server.finishRun(id, "succeeded", '{"launch":true}');
+    const listJobs = client.listBackgroundJobs.bind(client);
+    client.listBackgroundJobs = (...args) => {
+      server.finishBackgroundShell(shell);
+      server.finishRun(id, "succeeded", '{"done":true}');
+      client.listBackgroundJobs = listJobs;
+      return listJobs(...args);
+    };
+    expect(await provider.structured(id, "race")).toBeNull();
+    expect(await provider.structured(id, "race")).toMatchObject({ value: { done: true } });
+  });
+
+  test("a previous shell cannot replace the newer request's result or outcome", async () => {
+    const { server, provider } = setupWork();
+    const id = await provider.createSession("build", "ownership");
+    await provider.send(id, "a", { requestId: "a" });
+    const shell = server.addBackgroundShell(id);
+    server.finishRun(id, "succeeded", '{"a":true}');
+    await provider.send(id, "b", { requestId: "b" });
+    server.finishRun(id, "succeeded", '{"b":true}');
+    expect(await provider.structured(id, "b")).toMatchObject({ value: { b: true } });
+    server.finishBackgroundShell(shell);
+    expect(await provider.structured(id, "b")).toMatchObject({ value: { b: true } });
+    server.finishRun(id, "failed");
+    const rows = (await provider.messages(id)) as OpenCode2Message[];
+    expect(openCode2TurnTerminalError(rows, "b")).toBeNull();
+    expect(openCode2TurnTerminalError(rows, "a")).toMatch(/failed/);
+    expect(await provider.structured(id, "b")).toMatchObject({ value: { b: true } });
+  });
+
+  test("retains reviewer permissions through shell removal and orders a replacement dispatch", async () => {
+    const { server, provider, client } = setupWork();
+    const id = await provider.createSession("build", "stop");
+    await provider.send(id, "old", { requestId: "old", readOnly: true });
+    const shell = server.addBackgroundShell(id);
+    server.finishRun(id);
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const remove = client.removeShell.bind(client);
+    client.removeShell = async (...args) => {
+      reached.resolve();
+      await release.promise;
+      expect(server.sessions.get(id)?.rules).toContainEqual(
+        expect.objectContaining({ action: "edit", effect: "deny" }),
+      );
+      await remove(...args);
+      expect(server.sessions.get(id)?.metadata?.orkestrator).toMatchObject({
+        turn: { requestId: "old", settled: false },
+      });
+    };
+    const replacement = new OpenCode2Provider(server.client(), { monitorEvents: false });
+    try {
+      const stopping = provider.abort(id);
+      await reached.promise;
+      const sending = replacement.send(id, "new", { requestId: "new", readOnly: true });
+      try {
+        expect(await replacement.dispatchStatus(id, "new")).toBe("unknown");
+      } finally {
+        release.resolve();
+        await Promise.all([stopping, sending]);
+      }
+      expect(server.shellRemovals).toEqual([shell]);
+      expect(server.sessions.get(id)?.running).toBe(true);
+      expect(server.sessions.get(id)?.metadata?.orkestrator).toMatchObject({
+        turn: { requestId: "new", settled: false },
+      });
+    } finally {
+      await replacement.dispose();
+    }
+  });
+
+  test("a new input arriving during the job read fences stale deletions", async () => {
+    const { server, provider, client } = setupWork();
+    const id = await provider.createSession("build", "stop");
+    await provider.send(id, "old", { requestId: "old" });
+    server.finishRun(id);
+    const read = client.listBackgroundJobs.bind(client);
+    client.listBackgroundJobs = (...args) => {
+      server.pushRow(id, { type: "user", text: "replacement" });
+      server.addBackgroundShell(id);
+      return read(...args);
+    };
+    await expect(provider.abort(id)).rejects.toThrow("stop is still pending");
+    expect(server.shellRemovals).toEqual([]);
+  });
+
+  test("rescans for a shell that crosses its timeout during descendant interruption", async () => {
+    const { server, provider, client } = setupWork();
+    const parent = await provider.createSession("build", "stop");
+    const child = server.addChildSession(parent);
+    const interrupt = client.interrupt.bind(client);
+    let shell: string | undefined;
+    client.interrupt = async (...args) => {
+      if (args[0] === child) shell ??= server.addBackgroundShell(child);
+      return interrupt(...args);
+    };
+    const work = new OpenCode2BackgroundWork(client, {
+      running: () => client.activeSessions(),
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    });
+    expect(await work.stop(parent)).toBe(true);
+    expect(shell).toBeDefined();
+    expect(server.shellRemovals).toEqual([shell!]);
+    expect(server.sessions.get(child)?.running).toBe(false);
+  });
+
+  test("drains a completion report that arrives after a scan with nothing to delete", async () => {
+    const { server, provider, client } = setupWork();
+    const id = await provider.createSession("build", "stop");
+    const shell = server.addBackgroundShell(id);
+    server.backgroundShells[0]!.status = "completed";
+    server.backgroundShells[0]!.time.completed = clock;
+    let polls = 0;
+    const work = new OpenCode2BackgroundWork(client, {
+      running: () => client.activeSessions(),
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+        if (++polls === 2) server.finishBackgroundShell(shell);
+      },
+    });
+    expect(await work.stop(id)).toBe(true);
+    expect(server.shellRemovals).toEqual([]);
+    expect(server.interrupts).toEqual([id]);
+    expect(server.sessions.get(id)?.running).toBe(false);
+  });
+
+  test.each(["envelope", "started", "status", "shellID", "completed"] as const)(
+    "malformed job %s keeps observation and Stop pending",
+    async (field) => {
+      const { server, provider, client } = setupWork();
+      const id = await provider.createSession("build", "bad jobs");
+      server.addBackgroundShell(id);
+      const job = server.backgroundShells[0]!;
+      const malformed = {
+        envelope: {},
+        started: [{ ...job, time: {} }],
+        status: [{ ...job, status: "unknown" }],
+        shellID: [{ ...job, shellID: "../unsafe" }],
+        completed: [{ ...job, status: "completed", time: { ...job.time, completed: "soon" } }],
+      };
+      const malformedClient = new OpenCode2Client({
+        baseUrl: client.baseUrl,
+        directory: client.directory,
+        password: "pw",
+        fetch: Object.assign(
+          async (...args: Parameters<typeof fetch>) =>
+            new URL(String(args[0])).pathname === "/api/experimental/job"
+              ? Response.json({ data: malformed[field] })
+              : fetch(...args),
+          { preconnect: fetch.preconnect },
+        ),
+      });
+      const work = new OpenCode2BackgroundWork(malformedClient, {
+        running: () => client.activeSessions(),
+        now: () => clock,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+      });
+      await expect(malformedClient.listBackgroundJobs()).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+      expect(await work.live(id)).toBe(true);
+      if (field === "shellID") expect(await work.stop(id)).toBe(false);
+      expect(server.shellRemovals).toEqual([]);
+    },
+  );
+
+  test("a refused DELETE leaves Stop unconfirmed", async () => {
+    const { server, provider, client } = setupWork();
+    const id = await provider.createSession("build", "refusal");
+    const shell = server.addBackgroundShell(id);
+    const attempted: string[] = [];
+    client.removeShell = async (id) => {
+      attempted.push(id);
+      throw new Error("refused");
+    };
+    const work = new OpenCode2BackgroundWork(client, {
+      running: () => client.activeSessions(),
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    });
+    expect(await work.stop(id)).toBe(false);
+    expect(attempted).toEqual([shell]);
+    expect(server.backgroundShells).toHaveLength(1);
+  });
+
+  test("hung shell DELETEs share the Stop deadline and a bounded pool", async () => {
+    const { server, provider } = setupWork();
+    const id = await provider.createSession("build", "hung deletes");
+    for (let n = 0; n < 8; n++) server.addBackgroundShell(id);
+    let sent = 0;
+    let aborted = 0;
+    const client = new OpenCode2Client({
+      baseUrl: server.baseUrl,
+      directory: "/work",
+      password: "pw",
+      fetch: Object.assign(
+        async (...args: Parameters<typeof fetch>) => {
+          if (args[1]?.method !== "DELETE") return fetch(...args);
+          sent++;
+          const signal = args[1].signal!;
+          return new Promise<Response>((_, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                aborted++;
+                reject(signal.reason);
+              },
+              { once: true },
+            );
+          });
+        },
+        { preconnect: fetch.preconnect },
+      ),
+    });
+    const work = new OpenCode2BackgroundWork(client, {
+      running: () => client.activeSessions(),
+      now: Date.now,
+    });
+    const start = performance.now();
+    expect(await work.stop(id)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(OPENCODE2_STOP_CLEANUP_MS + 1_000);
+    expect([sent, aborted]).toEqual([4, 4]);
+  }, 8_000);
+});
+
 describe("openCode2RequestRun", () => {
   const row = (id: string, type: string, extra: Record<string, unknown> = {}) =>
     ({ id, type, time: { created: 1 }, ...extra }) as unknown as OpenCode2Message;
@@ -158,6 +594,28 @@ describe("openCode2RequestRun", () => {
     });
     expect(openCode2RequestRun([...rows.slice(0, 3), shell], "r")?.idle?.id).toBe("i1");
   });
+
+  test("follows the run a background shell's report wakes (2.3.1)", () => {
+    const shellReport = row("s1", "synthetic", {
+      description: "bun test",
+      metadata: { source: "shell", shellID: "shl_1", jobID: "shl_1", state: "completed" },
+      text: '<shell id="shl_1" state="completed" command="bun test">\nok\n</shell>',
+    });
+    const rows = [
+      user("u1", "r"),
+      row("a1", "assistant", {
+        content: [{ type: "tool", name: "shell", state: { metadata: { shellID: "shl_1" } } }],
+      }),
+      row("i1", "idle", { outcome: "succeeded" }),
+      shellReport,
+      row("a2", "assistant", { content: [] }),
+      row("i2", "idle", { outcome: "succeeded" }),
+    ];
+    const run = openCode2RequestRun(rows, "r")!;
+    expect(run.assistants.map((assistant) => assistant.id)).toEqual(["a1", "a2"]);
+    expect(run.idle?.id).toBe("i2");
+    expect(openCode2RequestRun(rows.slice(0, 4), "r")?.idle).toBeUndefined();
+  });
 });
 
 // Use the real client with deterministic lifecycle reads; no wall-clock races.
@@ -165,7 +623,6 @@ describe("background work read failures and stop races", () => {
   test("unreadable activity, child lists and inboxes remain pending", async () => {
     const { server, parent } = await launched();
     const client = server.client();
-    const { OpenCode2BackgroundWork } = await import("./background-subagents.js");
     const work = new OpenCode2BackgroundWork(client, {
       running: async () => {
         throw new Error("offline");
@@ -216,7 +673,6 @@ describe("background work read failures and stop races", () => {
     test(`stop handles ${kind}`, async () => {
       const { server, parent, child } = await launched();
       const client = server.client();
-      const { OpenCode2BackgroundWork } = await import("./background-subagents.js");
       server.sessions.get(child)!.running = kind === "new-prompt";
       if (kind === "inbox") {
         server.sessions.get(parent)!.inbox.push({

@@ -12,7 +12,7 @@ export const PINNED_TOOLCHAIN_VERSIONS = {
   claude: "2.1.326",
   codex: "0.169.0",
   grok: "1.0.88",
-  opencode2: "2.3.0",
+  opencode2: "2.3.1",
   pi: "1.5.2",
 } as const;
 
@@ -412,48 +412,48 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
     "darwin",
     "arm64",
     {
-      size: 107_997_165,
-      sha256: "c25247a72bb9d0cb8feca67eb95f1417b61c9cfb042908756fbaf8d6c170641e",
+      size: 109_080_555,
+      sha256: "b01885024413cc021aa0ecc359a2f397217f74121f43569b318e192058f34f47",
     },
     {
-      size: 223_583_968,
-      sha256: "9f3147cae4ca323827d3ca39451b0d3431b2906e79a08e9b09d1eb34bb703f52",
+      size: 225_750_880,
+      sha256: "25b6895db61be9a429ecc5513ca21ec4f5cbf62d6039950dd72e5aab6b9b319d",
     },
   ),
   openCode2Artifact(
     "darwin",
     "x64",
     {
-      size: 113_362_424,
-      sha256: "a75749c0d77ef2cf4b234b45ad1b59a570afdaae23e0da416f258733557e795e",
+      size: 114_447_514,
+      sha256: "6952e3e3a786967f05f5d4887e177e967ef4e940353bdfed5440410f02702a4b",
     },
     {
-      size: 238_289_120,
-      sha256: "06b36d6b341e4bc248d982fd634d9075baa804383ff4a030b923888ef7a7095a",
+      size: 240_468_704,
+      sha256: "235a6377bf3dbef847eb9828efb8bca1666d04b9b699cc67d50b029d6c6f2d99",
     },
   ),
   openCode2Artifact(
     "linux",
     "arm64",
     {
-      size: 119_468_028,
-      sha256: "be30066353bb592c43919b31072ff4099e069636c31a16806b088737e0287cea",
+      size: 120_539_224,
+      sha256: "97c127e0f17afd4a0110490aee5728e9047bba201bb132b2ebbcc724831a0aeb",
     },
     {
-      size: 245_681_144,
-      sha256: "5c7d89bc2d5fa5d83cc7768b813ca671368e70b8b9eda9d1ca9e6ec6b66d8ce0",
+      size: 247_843_832,
+      sha256: "7f6127effa38a997d22a518e75fea5cf664f35ddc6a7a29850653aea5ec5b234",
     },
   ),
   openCode2Artifact(
     "linux",
     "x64",
     {
-      size: 121_017_774,
-      sha256: "408f854b5fac7857a3b4df4e783d3a8b70f5cc8c7c3187aac09c5be0576c14ae",
+      size: 122_080_965,
+      sha256: "020e4bdadf62962f806f75393657ed26d462debec8e34ee7d3b6e0cb3b45c783",
     },
     {
-      size: 250_685_616,
-      sha256: "2e0e4656521ca56e5ba16a00d48429958b8105b3fa6466710a4350e68759381f",
+      size: 252_848_304,
+      sha256: "1a8ef837bb8bdd06f2e16e0ed1a49b05aefb96b95102834dbb178cdd6223205d",
     },
   ),
   {

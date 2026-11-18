@@ -70,8 +70,9 @@ import {
   openCode2ReloadGateKey,
   withinOpenCode2Dispatch,
 } from "./reload-gate.js";
-import { normalizeOpenCode2Transcript, openCode2SubagentReport } from "./transcript.js";
-import { isOpenCode2IdleMessage, type OpenCode2Message } from "./types.js";
+import { normalizeOpenCode2Transcript } from "./transcript.js";
+import type { OpenCode2Message } from "./types.js";
+import { openCode2RequestRun } from "./workflow-results.js";
 
 const log = createLogger("native-agent.opencode2");
 
@@ -651,36 +652,22 @@ function stateSnapshot(
   };
 }
 
-function carriesRequest(row: OpenCode2Message, requestId: string): boolean {
-  const orkestrator = (row.metadata as { orkestrator?: { requestId?: unknown } } | undefined)
-    ?.orkestrator;
-  return orkestrator?.requestId === requestId;
-}
-
 /**
  * The failure of one request's run, read from the run boundary after its
  * input: `null` for a run that succeeded (or a request not in the scanned
  * history), the user's stop for an interrupted one. A run a background
- * sub-agent's report woke right after it is the same request's (2.3.0), so
- * its boundary decides. Throws while the run has not settled, so an early
+ * sub-agent's (2.3.0) or background shell's (2.3.1) report woke right after it
+ * is the same request's, so its boundary decides. Throws while the run has not settled, so an early
  * idle read is never taken as success.
  */
 export function openCode2TurnTerminalError(
   rows: readonly OpenCode2Message[],
   requestId: string,
 ): string | null {
-  const start = rows.findIndex((row) => carriesRequest(row, requestId));
-  if (start < 0) return null;
-  let boundary: OpenCode2Message | undefined;
-  for (const row of rows.slice(start + 1)) {
-    if (boundary) {
-      if (!openCode2SubagentReport(row)) break;
-      boundary = undefined;
-      continue;
-    }
-    if (isOpenCode2IdleMessage(row)) boundary = row;
-  }
-  if (!boundary || !isOpenCode2IdleMessage(boundary)) {
+  const run = openCode2RequestRun(rows, requestId);
+  if (!run) return null;
+  const boundary = run.idle;
+  if (!boundary) {
     throw new ProviderUnavailableError("The OpenCode 2 turn has not settled yet");
   }
   if (boundary.outcome === "succeeded") return null;

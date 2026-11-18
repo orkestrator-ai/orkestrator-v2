@@ -85,6 +85,16 @@ export interface FakeOpenCode2Attempt {
   code?: string;
 }
 
+export interface FakeOpenCode2ShellJob {
+  id: string;
+  kind: "shell";
+  sessionID: string;
+  shellID: string;
+  command: string;
+  status: "running" | "completed" | "error" | "cancelled";
+  time: { started: number; completed?: number };
+}
+
 export class FakeOpenCode2Server {
   readonly sessions = new Map<string, FakeOpenCode2Session>();
   readonly calls: Array<{ method: string; path: string; body?: unknown }> = [];
@@ -110,6 +120,14 @@ export class FakeOpenCode2Server {
   onRunStarted?: (sessionId: string, text: string) => void;
   /** Session ids `POST /api/session/:id/interrupt` reached, in order, running or not. */
   readonly interrupts: string[] = [];
+  /**
+   * Background shell jobs (`GET /api/experimental/job`), as 2.3.1 lists them:
+   * from the moment a command moves to the background until its report is
+   * admitted to its session.
+   */
+  readonly backgroundShells: FakeOpenCode2ShellJob[] = [];
+  /** Shell ids `DELETE /api/shell/:id` reached, in order. */
+  readonly shellRemovals: string[] = [];
   /** Session ids `DELETE /api/session/:id` reached, in order. */
   readonly deletions: string[] = [];
   /** Inbox items `DELETE /api/session/:id/inbox/:inputId` removed, in order. */
@@ -302,6 +320,63 @@ export class FakeOpenCode2Server {
     });
     if (wake) parent.running = true;
     this.emit(parent.id, "session.synthetic");
+  }
+
+  /**
+   * A shell command of `sessionId` moves to the background, as 2.3.1 moves a
+   * foreground command whose timeout expired (or one run with `background:
+   * true`): its job is listed while it runs. Returns the shell id.
+   */
+  addBackgroundShell(sessionId: string, command = "bun test"): string {
+    const shellID = this.id("shl");
+    this.backgroundShells.push({
+      id: shellID,
+      kind: "shell",
+      sessionID: sessionId,
+      shellID,
+      command,
+      status: "running",
+      time: { started: Date.now() },
+    });
+    this.pushRow(sessionId, {
+      type: "assistant",
+      content: [
+        {
+          type: "tool",
+          id: this.id("call"),
+          name: "shell",
+          state: { status: "completed", metadata: { status: "running", shellID } },
+        },
+      ],
+    });
+    return shellID;
+  }
+
+  /**
+   * The background command ends and reports to its session as 2.3.1 does: a
+   * `synthetic` `<shell>` row (`metadata.source: "shell"`, with its `jobID`)
+   * that wakes the session (`wake`), after which the job is no longer listed.
+   */
+  finishBackgroundShell(
+    shellId: string,
+    state: "completed" | "error" | "cancelled" = "completed",
+    output = "ok",
+    wake = true,
+  ): void {
+    const index = this.backgroundShells.findIndex((job) => job.shellID === shellId);
+    const job = this.backgroundShells[index]!;
+    this.backgroundShells.splice(index, 1);
+    const session = this.sessions.get(job.sessionID)!;
+    session.rows.push({
+      id: this.id("msg"),
+      type: "synthetic",
+      description: job.command,
+      metadata: { source: "shell", shellID: shellId, jobID: shellId, state, exit: 0 },
+      text: `<shell id="${shellId}" state="${state}" command="${job.command}">\n${output}\n</shell>`,
+      time: { created: 1 },
+    });
+    if (wake) session.running = true;
+    this.emit(session.id, "session.synthetic");
   }
 
   /** Append a history row as the server would (a tool-call response, a shell row, …). */
@@ -653,6 +728,31 @@ export class FakeOpenCode2Server {
     if (credentialRoute) return credentialRoute;
     const integrationRoute = this.integrationRoute(request.method, path, body);
     if (integrationRoute) return integrationRoute;
+    if (path === "/api/experimental/job" && request.method === "GET") {
+      const sessionID = url.searchParams.get("sessionID");
+      const kind = url.searchParams.get("kind");
+      const descendants = url.searchParams.get("descendants") === "true";
+      if (sessionID && !this.sessions.has(sessionID)) return notFound();
+      const owns = (id: string): boolean => {
+        if (id === sessionID) return true;
+        const parent = descendants ? this.sessions.get(id)?.parentID : undefined;
+        return parent ? owns(parent) : false;
+      };
+      const jobs = this.backgroundShells.filter(
+        (job) => (!kind || job.kind === kind) && (!sessionID || owns(job.sessionID)),
+      );
+      return ok(jobs);
+    }
+    const shell = /^\/api\/shell\/([^/]+)$/.exec(path);
+    if (shell && request.method === "DELETE") {
+      const shellId = decodeURIComponent(shell[1]!);
+      this.shellRemovals.push(shellId);
+      // 2.3.1: removing a running command fails its job, which reports
+      // `error` with the error's tag as its whole body.
+      if (this.backgroundShells.some((job) => job.shellID === shellId && job.status === "running"))
+        this.finishBackgroundShell(shellId, "error", "Shell.NotFoundError");
+      return new Response(null, { status: 204 });
+    }
     if (path === "/api/session/active") {
       const active: Record<string, unknown> = {};
       for (const session of this.sessions.values()) {

@@ -43,7 +43,47 @@ describe("openCode2HostLaunch", () => {
       OPENCODE_FLAGS: OPENCODE2_FLAGS,
       OPENCODE_DISABLE_FILEWATCHER: "1",
     });
-    expect(OPENCODE2_FLAGS.split(",")).toContain("-schedules");
+    expect(OPENCODE2_FLAGS.split(",")).toContain("-automations");
+  });
+
+  test("OPENCODE_FLAGS names every 2.3.1 flag, and none 2.3.1 removed", () => {
+    // `packages/schema/src/config/flag.ts` at v2.3.1: its registry keys. A
+    // name OpenCode does not know is ignored, so a removed flag left here
+    // would only look like a setting.
+    const named = OPENCODE2_FLAGS.split(",").map((entry) => entry.replace(/^-/, ""));
+    expect(named.sort()).toEqual(
+      [
+        "todo",
+        "media_blob",
+        "automations",
+        "artifacts",
+        "video_generate",
+        "console_watches",
+        "mcp_events",
+        "full_codemode",
+      ].sort(),
+    );
+    // Only the todo tool is on; everything that wakes sessions on its own is off.
+    expect(OPENCODE2_FLAGS.split(",").filter((entry) => !entry.startsWith("-"))).toEqual(["todo"]);
+    for (const removed of ["shell_timeout_background", "background_compaction", "schedules"]) {
+      expect(named).not.toContain(removed);
+    }
+  });
+
+  test("the launch leaves background compaction at OpenCode's default", () => {
+    // 2.3.1 turns `compaction.background` on unless a configuration file
+    // turns it off; the launcher passes no inline configuration that would
+    // override the user's own (see OPENCODE2_FLAGS for the cost).
+    const launch = openCode2HostLaunch({
+      cliPath: "/bin/opencode2",
+      dataDir: "/data",
+      configDir: "/data/opencode2/config",
+      port: 1,
+      password: "p",
+      baseEnv: {},
+    });
+    expect(launch.env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(JSON.stringify(launch.env)).not.toContain("compaction");
   });
 
   test("the backend's OPENCODE_CONFIG reaches 2.x only as its mirror", () => {

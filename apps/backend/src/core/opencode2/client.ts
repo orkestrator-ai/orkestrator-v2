@@ -4,8 +4,8 @@
  * OpenCode 2.x serves no legacy routes, so the 1.x SDK cannot drive it
  * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`)). This client covers only the
  * routes the 2.x provider uses, verified against the pinned server and its
- * committed `packages/protocol/openapi.json` (2.2.6; 2.3.0's adds and removes
- * no route). It is written here rather
+ * committed `packages/protocol/openapi.json` (2.2.6; 2.3.0's and 2.3.1's add
+ * and remove no route it calls). It is written here rather
  * than taken from `@opencode/client` because that package pins `effect` to an
  * exact version the backend does not use, and because every read must be
  * bounded (AGENTS.md invariant 11).
@@ -20,6 +20,7 @@
  */
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
 import type {
+  OpenCode2BackgroundJob,
   OpenCode2Form,
   OpenCode2InboxDelivery,
   OpenCode2InboxItem,
@@ -257,13 +258,17 @@ export class OpenCode2Client {
     });
   }
 
-  async interrupt(sessionId: string, options: { resume?: boolean } = {}): Promise<boolean> {
+  async interrupt(
+    sessionId: string,
+    options: { resume?: boolean; signal?: AbortSignal } = {},
+  ): Promise<boolean> {
     const answer = await this.request<{ interrupted?: unknown }>(
       "POST",
       `/api/session/${seg(sessionId)}/interrupt`,
       "OpenCode interrupt",
       {
         bare: true,
+        signal: options.signal,
         query: { resume: options.resume === undefined ? undefined : String(options.resume) },
       },
     );
@@ -364,18 +369,94 @@ export class OpenCode2Client {
     return data as OpenCode2InboxItem[];
   }
 
+  /**
+   * Background jobs (`GET /api/experimental/job`): the work a session moved
+   * to the background whose report has not reached its inbox yet. Since
+   * 2.3.1 every foreground shell still running at its timeout becomes one.
+   * The route is experimental upstream (no compatibility promise), so it is
+   * held to the exact pin like `/api/experimental/mcp/*` and re-read on every
+   * bump. `sessionId` filters to that session's jobs, `descendants` adds its
+   * child sessions'; an unknown session is a 404.
+   */
+  async listBackgroundJobs(
+    filter: { sessionId?: string; kind?: "shell"; descendants?: boolean } = {},
+    signal?: AbortSignal,
+  ): Promise<OpenCode2BackgroundJob[]> {
+    const data = await this.request<unknown>(
+      "GET",
+      "/api/experimental/job",
+      "OpenCode background jobs",
+      {
+        query: {
+          sessionID: filter.sessionId,
+          kind: filter.kind,
+          descendants: filter.sessionId && filter.descendants ? "true" : undefined,
+        },
+        signal,
+      },
+    );
+    if (!Array.isArray(data)) {
+      throw new ProviderUnavailableError("OpenCode background jobs is malformed");
+    }
+    const jobs: OpenCode2BackgroundJob[] = [];
+    for (const entry of data) {
+      const job = asRecord(entry);
+      const time = asRecord(job?.time);
+      const status = job?.status;
+      if (
+        !job ||
+        typeof job.id !== "string" ||
+        !job.id ||
+        typeof job.kind !== "string" ||
+        !job.kind ||
+        typeof job.sessionID !== "string" ||
+        !job.sessionID ||
+        (status !== "running" &&
+          status !== "completed" &&
+          status !== "error" &&
+          status !== "cancelled") ||
+        typeof time?.started !== "number" ||
+        !Number.isFinite(time.started) ||
+        (time.completed !== undefined &&
+          (typeof time.completed !== "number" || !Number.isFinite(time.completed))) ||
+        (status !== "running" && time.completed === undefined) ||
+        (job.kind === "shell" &&
+          (typeof job.shellID !== "string" || !/^[a-zA-Z0-9_-]+$/.test(job.shellID)))
+      ) {
+        throw new ProviderUnavailableError("OpenCode background jobs contains a malformed entry");
+      }
+      if (!filter.kind || job.kind === filter.kind) jobs.push(entry as OpenCode2BackgroundJob);
+    }
+    return jobs;
+  }
+
+  /**
+   * Terminate a shell command and remove it with its retained output
+   * (`DELETE /api/shell/{id}`, location-scoped). A command already gone
+   * answers 204 too. Its background job then settles and reports to its
+   * session (2.3.1).
+   */
+  async removeShell(shellId: string, signal?: AbortSignal): Promise<void> {
+    await this.request("DELETE", `/api/shell/${seg(shellId)}`, "OpenCode shell remove", { signal });
+  }
+
   /** Withdraw an inbox item that has not been delivered yet. */
-  async withdrawInput(sessionId: string, inputId: string): Promise<void> {
+  async withdrawInput(sessionId: string, inputId: string, signal?: AbortSignal): Promise<void> {
     await this.request(
       "DELETE",
       `/api/session/${seg(sessionId)}/inbox/${seg(inputId)}`,
       "OpenCode inbox withdraw",
-      {},
+      { signal },
     );
   }
 
-  listPermissions(sessionId: string): Promise<OpenCode2PermissionRequest[]> {
-    return this.request("GET", `/api/session/${seg(sessionId)}/permission`, "OpenCode permissions");
+  listPermissions(sessionId: string, signal?: AbortSignal): Promise<OpenCode2PermissionRequest[]> {
+    return this.request(
+      "GET",
+      `/api/session/${seg(sessionId)}/permission`,
+      "OpenCode permissions",
+      { signal },
+    );
   }
 
   async replyPermission(
@@ -383,17 +464,18 @@ export class OpenCode2Client {
     requestId: string,
     decision: OpenCode2PermissionDecision,
     message?: string,
+    signal?: AbortSignal,
   ): Promise<void> {
     await this.request(
       "POST",
       `/api/session/${seg(sessionId)}/permission/${seg(requestId)}/reply`,
       "OpenCode permission reply",
-      { body: { decision, ...(message ? { message } : {}) } },
+      { body: { decision, ...(message ? { message } : {}) }, signal },
     );
   }
 
-  listForms(sessionId: string): Promise<OpenCode2Form[]> {
-    return this.request("GET", `/api/session/${seg(sessionId)}/form`, "OpenCode forms");
+  listForms(sessionId: string, signal?: AbortSignal): Promise<OpenCode2Form[]> {
+    return this.request("GET", `/api/session/${seg(sessionId)}/form`, "OpenCode forms", { signal });
   }
 
   async replyForm(sessionId: string, formId: string, answer: Record<string, unknown>) {
@@ -405,12 +487,12 @@ export class OpenCode2Client {
     );
   }
 
-  async rejectForm(sessionId: string, formId: string, message?: string) {
+  async rejectForm(sessionId: string, formId: string, message?: string, signal?: AbortSignal) {
     await this.request(
       "DELETE",
       `/api/session/${seg(sessionId)}/form/${seg(formId)}`,
       "OpenCode form reject",
-      { query: { message } },
+      { query: { message }, signal },
     );
   }
 

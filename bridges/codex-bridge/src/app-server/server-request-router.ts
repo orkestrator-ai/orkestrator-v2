@@ -53,6 +53,7 @@ import {
   type InteractionResolution,
 } from "./interactions.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import type { DynamicToolCallResponse } from "./generated/typescript/v2/index.js";
 
 const log = createLogger("bridge.codex");
 
@@ -638,19 +639,27 @@ export class ServerRequestRouter {
           }),
         );
 
-      /** Dynamic tools would have to be executed by us; report failure, not silence. */
-      case "item/tool/call":
+      /**
+       * A dynamic tool call. The bridge registers no dynamic tools: app-server
+       * accepts them only on `thread/start` and only from a client that opts
+       * into `experimentalApi`, which this bridge never does. Adoption was
+       * deferred (docs/todo/agent-engines/0007-provider-sdk-adoption-backlog.md,
+       * task 6), so any call is unexpected. It still gets exactly one answer:
+       * a failure the model can read, never silence and never a success.
+       */
+      case "item/tool/call": {
         this.violation(method, "dynamic tool execution requested");
+        const tool = dynamicToolCallName(request.params);
         this.explain(
           record,
-          "Codex asked Orkestrator to execute a tool it does not provide. The call was reported as failed.",
+          tool
+            ? `Codex asked Orkestrator to execute the tool ${tool}, which Orkestrator does not provide. The call was reported as failed.`
+            : "Codex asked Orkestrator to execute a tool it does not provide. The call was reported as failed.",
         );
         return this.finish(key, record, "unsupported", () =>
-          this.options.respond(generation, request.id, {
-            contentItems: [],
-            success: false,
-          }),
+          this.options.respond(generation, request.id, unregisteredDynamicToolResponse(tool)),
         );
+      }
 
       /**
        * Auth refresh: Codex owns its own credentials in our setup. Answering with
@@ -1043,6 +1052,43 @@ export class ServerRequestRouter {
       message,
     });
   }
+}
+
+/** Longest tool label echoed into the transcript and back to the model. */
+const DYNAMIC_TOOL_NAME_MAX = 120;
+
+/**
+ * The `namespace.tool` label of a dynamic tool call, or null when the params
+ * carry no usable name. Bounded and single-line: the name comes from the model.
+ */
+export function dynamicToolCallName(params: unknown): string | null {
+  if (!params || typeof params !== "object") return null;
+  const { namespace, tool } = params as { namespace?: unknown; tool?: unknown };
+  if (typeof tool !== "string") return null;
+  const label = typeof namespace === "string" && namespace ? `${namespace}.${tool}` : tool;
+  // Control characters (newlines included) would let the label break out of
+  // its sentence in the transcript notice.
+  const clean = label.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  if (!clean) return null;
+  return clean.length > DYNAMIC_TOOL_NAME_MAX ? `${clean.slice(0, DYNAMIC_TOOL_NAME_MAX)}…` : clean;
+}
+
+/**
+ * The answer to a dynamic tool call this bridge never registered: a failure
+ * with one text item, so the model learns why the call failed rather than
+ * retrying an empty result.
+ */
+export function unregisteredDynamicToolResponse(tool: string | null): DynamicToolCallResponse {
+  const subject = tool ? `The tool ${tool} is` : "This tool is";
+  return {
+    contentItems: [
+      {
+        type: "inputText",
+        text: `${subject} not available: Orkestrator registers no dynamic tools for Codex sessions. Use the tools this session lists instead.`,
+      },
+    ],
+    success: false,
+  } satisfies DynamicToolCallResponse;
 }
 
 function applyHold(deadline: InteractionDeadline, held: boolean): ParkedHoldOutcome {

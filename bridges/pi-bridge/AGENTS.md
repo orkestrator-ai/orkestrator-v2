@@ -81,6 +81,28 @@ response, which `finishTurn` fails) gets an error `status` line saying why
 (`appendTurnFailure`), on its last row or a new one when the turn produced
 none. A retried response that a later answer replaces adds nothing.
 
+## Model attribution
+
+A row names the model that produced it, not the composer selection. Pi's
+`AssistantMessage` carries the model it asked for (`provider`, `model`) and,
+when the provider reports it, the one that answered (`responseModel`: an
+alias resolved to a dated model, or a fallback model). `responseModelId` in
+`translate.ts` encodes `provider/responseModel`, else `provider/model`, in
+the composer's `provider/modelId` form; every assistant frame updates the open
+row, and `hydrateHistory` stamps replayed rows the same way, so a reload shows
+what the live row showed. A response with no provider (an older entry, a test
+fake) keeps the selection. Never write a response's model into
+`composer.selectedModelId`: an alias resolving is not the user choosing
+another model, and the picker would then offer an id the catalogue lacks.
+
+Usage follows the same rule (`attributedModels` in `prompt.ts`). A turn's
+`modelId` is set only when every response in it that spent tokens used one
+model (`currentTurnModelIds`); a mixed turn leaves it unset, as the Claude
+bridge does for a multi-model result, because the backend's usage history
+charges a turn's whole cost to the model it names. The session-wide
+`usage.modelId` is the model that answered last; the context-window lookup
+falls back to the selection when that model is not in the catalogue.
+
 ## Fork, rewind and branch targets
 
 A fork or rewind names a transcript row, and `history-target.ts` turns it into

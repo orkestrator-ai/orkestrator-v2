@@ -93,6 +93,7 @@ import {
   applySessionEvent,
   providerDuration,
   replayNestedToolCalls,
+  responseModelId,
 } from "./translate.js";
 import {
   boundTranscript,
@@ -1957,7 +1958,16 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
     }
   }
   if (parts.length > 0) {
-    pushMessage(state, "assistant", content, parts, entryCreatedAt(entry), messageId);
+    pushMessage(
+      state,
+      "assistant",
+      content,
+      parts,
+      entryCreatedAt(entry),
+      messageId,
+      // The model Pi recorded for this response, as the live row showed it.
+      responseModelId(message),
+    );
   }
 }
 
@@ -2000,6 +2010,7 @@ function pushMessage(
   parts: BridgeMessagePart[],
   createdAt: string,
   messageId = randomBytes(12).toString("hex"),
+  modelId?: string,
 ): void {
   const message: BridgeMessage = {
     id: messageId,
@@ -2017,6 +2028,7 @@ function pushMessage(
             },
           ],
     createdAt,
+    ...(modelId ? { modelId } : {}),
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));

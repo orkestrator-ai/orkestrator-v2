@@ -35,7 +35,7 @@ import {
 } from "./cost-source.js";
 import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
-import { appendTurnFailure } from "./translate.js";
+import { appendTurnFailure, responseModelId } from "./translate.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import {
   beginEvidenceTurn,
@@ -240,6 +240,8 @@ export async function dispatchPrompt(
   state.turnCancelRequested = undefined;
   state.turnError = undefined;
   state.currentTurnApiDurationMs = undefined;
+  state.currentResponseModelId = undefined;
+  state.currentTurnModelIds = undefined;
   let run: Promise<void>;
   try {
     run = session.prompt(text, {
@@ -481,6 +483,7 @@ function abandonStartup(
         state.toolInputs.clear();
         state.currentTurnUsage = undefined;
         state.currentTurnApiDurationMs = undefined;
+        state.currentTurnModelIds = undefined;
         state.turnAborted = undefined;
         state.turnError = undefined;
         state.turnStartedAt = undefined;
@@ -755,18 +758,21 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       ? stats.tokens.total
       : undefined;
   const previous = state.usage;
+  const lastAssistantEntry = [...branch]
+    .reverse()
+    .find(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        entry.message.usage !== undefined,
+    );
+  const lastAssistantModelId =
+    lastAssistantEntry?.type === "message"
+      ? responseModelId(lastAssistantEntry.message)
+      : undefined;
+  const models = attributedModels(state, lastAssistantModelId);
   if (turn && Object.keys(turn).length > 0) {
-    const turnId =
-      [...branch]
-        .reverse()
-        .find(
-          (entry) =>
-            entry.type === "message" &&
-            entry.message.role === "assistant" &&
-            entry.message.usage !== undefined,
-        )?.id ??
-      input.requestId ??
-      `turn-${state.promptSequence}`;
+    const turnId = lastAssistantEntry?.id ?? input.requestId ?? `turn-${state.promptSequence}`;
     const sessionCost = stats?.cost;
     const turnCost =
       sessionCost === undefined
@@ -811,7 +817,7 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       ...(apiDurationMs === undefined ? {} : { apiDurationMs }),
       ...(toolCalls === undefined ? {} : { toolCalls }),
       ...(input.requestId ? { requestId: input.requestId } : {}),
-      ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
+      ...(models.turn ? { modelId: models.turn } : {}),
     };
     const sessionCostField = sessionCost === undefined ? readCost(state) : { costUsd: sessionCost };
     const sessionCostSource =
@@ -828,7 +834,7 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       ...(stats && typeof stats.toolCalls === "number"
         ? { sessionToolCalls: stats.toolCalls }
         : {}),
-      ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
+      ...(models.latest ? { modelId: models.latest } : {}),
       ...(elapsed !== undefined ? { durationMs: elapsed } : {}),
       ...(apiDurationMs !== undefined ? { apiDurationMs } : {}),
       ...context,
@@ -845,9 +851,37 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
   }
   state.currentTurnUsage = undefined;
   state.currentTurnApiDurationMs = undefined;
+  state.currentTurnModelIds = undefined;
   state.turnAborted = undefined;
   state.turnError = undefined;
   state.turnStartedAt = undefined;
+}
+
+/**
+ * Which model the finished turn's usage belongs to, and which answered last.
+ *
+ * `turn` names a model only when every response that spent tokens used it
+ * (`recordTurnModel`); a turn split across models has no single model, and
+ * leaving it unset is what keeps usage history from billing all of it to one,
+ * as the Claude bridge does for a multi-model result. A turn whose responses
+ * were never observed (a run that produced none, or frames a test does not
+ * send) falls back to the response Pi stored last, then to the composer
+ * selection, which is all an older session could say. `latest` is the
+ * session-wide figure: the model that answered most recently.
+ */
+function attributedModels(
+  state: SessionState,
+  lastAssistantModelId: string | undefined,
+): { turn?: string; latest?: string } {
+  const observed = state.currentTurnModelIds ?? [];
+  const fallback = lastAssistantModelId ?? state.composer.selectedModelId;
+  const latest = state.currentResponseModelId ?? observed.at(-1) ?? fallback;
+  if (observed.length > 1) return latest ? { latest } : {};
+  const turn = observed[0] ?? fallback;
+  return {
+    ...(turn ? { turn } : {}),
+    ...(latest ? { latest } : {}),
+  };
 }
 
 function readSessionStats(state: SessionState): SessionStats | undefined {

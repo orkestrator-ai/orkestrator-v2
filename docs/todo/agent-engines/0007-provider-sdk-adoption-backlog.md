@@ -579,6 +579,18 @@ out. Every entry has already been reviewed against a vendor release and
 deliberately deferred or declined. Without this list, the next SDK review
 rediscovers the same gaps. It is low priority: nothing here is a defect.
 
+### Pi `responseModel` adopted (2026-11-18)
+
+Moved out of "Candidates" under the maintenance rule. Each Pi assistant row
+now names the model that answered (`provider/responseModel`, else the
+requested `provider/model`, which is all a session entry an older Pi wrote
+carries), live and when a resume replays Pi's file; the composer keeps the
+user's selection. A turn's `NativeAgentTurnUsage.modelId` is set only when
+every response that spent tokens used one model, and left unset for a mixed
+turn, as the Claude bridge does for a multi-model result, so usage history
+does not charge all of it to one model. How it works is under "Model
+attribution" in [`bridges/pi-bridge/AGENTS.md`](../../../bridges/pi-bridge/AGENTS.md#model-attribution).
+
 ## Current state
 
 - Pins (upgraded 2026-11-06, 1031 (retired)):
@@ -756,8 +768,6 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     `error_type`, `exhausted`, `is_rate_limited`) for retry UI. Whether they
     reach ACP clients is unverified; belongs with the retry-with-backoff work.
 - Pi (`bridges/pi-bridge`, 1.5.0):
-  - `responseModel` (now also from pi-messages providers) into the existing
-    `NativeAgentTurnUsage.modelId`.
   - `ctx.ui.custom({ blocked })` when extension dialogs are routed;
     `PI_SELF_UPDATE_COMMAND` so `pi update` in a terminal tab defers to the
     managed pin.

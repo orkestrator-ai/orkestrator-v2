@@ -41,7 +41,13 @@ export interface BridgeMessage {
   content: string;
   parts: BridgeMessagePart[];
   createdAt: string;
-  /** Model selected when this assistant response began. */
+  /**
+   * The model that produced this assistant response, as `provider/modelId`:
+   * what the provider reported (`AssistantMessage.responseModel`, set when an
+   * alias resolved or a fallback answered), else the model Pi asked for. A
+   * row opened before Pi named any model, and a row an older bridge wrote,
+   * carries the composer selection instead.
+   */
   modelId?: string;
 }
 
@@ -525,6 +531,18 @@ export interface SessionState {
    * responses — the provider-side share of the turn's wall clock. Runtime-only.
    */
   currentTurnApiDurationMs?: number;
+  /**
+   * The model of the response being written (`provider/modelId`, see
+   * `responseModelId`), so a row opened lazily after Pi named it is
+   * attributed to it. Runtime-only, cleared when a turn is dispatched.
+   */
+  currentResponseModelId?: string;
+  /**
+   * The distinct models of the current turn's finished responses, at most two:
+   * one is the turn's model, two means it was mixed and no single model gets
+   * its usage. Runtime-only, cleared when a turn is dispatched.
+   */
+  currentTurnModelIds?: string[];
   /**
    * Pi's own verdict on the current turn's run: `agent_settled.aborted`
    * (Pi 1.1). True whoever aborted it — this bridge, an extension's

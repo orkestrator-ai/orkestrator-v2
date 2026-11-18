@@ -414,7 +414,13 @@ describe("session ownership", () => {
     // One row per assistant entry, as a live turn writes one per response,
     // and dated when Pi wrote it rather than when it was replayed.
     expect(resumed.messages).toHaveLength(1);
-    expect(resumed.messages[0]).toMatchObject({ id: "assistant-entry", createdAt: timestamp });
+    // The entry names no `responseModel`, as an older Pi wrote it: the row
+    // falls back to the model Pi asked for.
+    expect(resumed.messages[0]).toMatchObject({
+      id: "assistant-entry",
+      createdAt: timestamp,
+      modelId: "test/test",
+    });
     expect(resumed.messages[0]?.content).toBe("Running it");
     expect(tool).toMatchObject({
       toolUseId: "call-1",
@@ -660,6 +666,7 @@ describe("session ownership", () => {
           api: "openai-completions",
           provider: "test",
           model: "test",
+          responseModel: "test-2026-09-22",
           usage,
           stopReason: "stop",
           timestamp: Date.parse(timestamp),
@@ -675,6 +682,8 @@ describe("session ownership", () => {
       ["user", "Hello"],
       ["assistant", "Hi"],
     ]);
+    // A reload shows the model that answered, as the live row did.
+    expect(resumed.messages[1]?.modelId).toBe("test/test-2026-09-22");
   });
 
   test("waits for a cold attach and disposes it when the owner closes", async () => {

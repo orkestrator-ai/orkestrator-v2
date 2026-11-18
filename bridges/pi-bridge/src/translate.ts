@@ -24,7 +24,8 @@ import { nextPartOrdinal, toolResultImagePartId } from "@orkestrator/protocol/tr
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { rememberHistoryMessage } from "./history-target.js";
 import { noteCommandOutput } from "./commands.js";
-import { MAX_TOOL_TITLE_BYTES } from "./config.js";
+import { MAX_MODEL_ID_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
+import { composeModelId } from "./models.js";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import {
   appendBounded,
@@ -137,17 +138,22 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
     case "message_start":
       if (!turnFramesWelcome(state)) break;
       applyResponseBoundary(state, event.message);
+      applyResponseModel(state, event.message);
       applyCommandOutput(state, event.message);
       applySteerDelivery(state, event.message);
       break;
     case "message_update":
       if (!turnFramesWelcome(state)) break;
+      // Before the delta, so a row the delta opens is already attributed.
+      applyResponseModel(state, event.message);
       applyMessageUpdate(state, event.assistantMessageEvent);
       break;
     case "message_end":
       // The assistant message is final. A later delta belongs to a new one.
       state.openTextParts.clear();
       if (!turnFramesWelcome(state)) break;
+      applyResponseModel(state, event.message);
+      recordTurnModel(state, event.message);
       applyResponseOutcome(state, event.message);
       rememberResponseMessage(state, event.message);
       rememberPromptMessage(state, event.message);
@@ -249,8 +255,80 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
 function applyResponseBoundary(state: SessionState, value: unknown): void {
   if (!isObject(value) || value.role !== "assistant") return;
   state.currentAssistantMessageId = undefined;
+  state.currentResponseModelId = undefined;
   state.pendingHistoryResponse = undefined;
   state.openTextParts.clear();
+}
+
+/**
+ * The model that produced an assistant message, as `provider/modelId`.
+ *
+ * `responseModel` is what the provider says answered: set when an alias
+ * resolved to a dated model, when a fallback model answered, or (for
+ * OpenAI-compatible providers) always. Absent, the response came from the
+ * model Pi asked for, which is also the only answer for a session entry an
+ * older Pi wrote. Neither field is ours to trust for size, so an oversized
+ * value is not a model id; nor is a message with no provider, because a bare
+ * model id would not match the composer's `provider/modelId` encoding.
+ */
+export function responseModelId(message: unknown): string | undefined {
+  if (!isObject(message) || message.role !== "assistant") return undefined;
+  const provider = modelIdPart(message.provider);
+  if (!provider) return undefined;
+  const model = modelIdPart(message.responseModel) ?? modelIdPart(message.model);
+  if (!model) return undefined;
+  const modelId = composeModelId(provider, model);
+  return Buffer.byteLength(modelId) <= MAX_MODEL_ID_BYTES ? modelId : undefined;
+}
+
+function modelIdPart(value: unknown): string | undefined {
+  return nonBlank(value) ? value.trim() : undefined;
+}
+
+/**
+ * Attribute the response being written to the model Pi reports for it.
+ *
+ * Pi names the requested model on `message_start`, and a provider may name the
+ * one that actually answered only once it streams (`responseModel`), so every
+ * assistant frame is consulted and the open row is corrected when the answer
+ * changes. The composer selection is never touched: an alias resolving is not
+ * the user choosing a different model.
+ */
+function applyResponseModel(state: SessionState, message: unknown): void {
+  const modelId = responseModelId(message);
+  if (!modelId || modelId === state.currentResponseModelId) return;
+  state.currentResponseModelId = modelId;
+  const last = state.messages[state.messages.length - 1];
+  if (last?.role !== "assistant" || last.id !== state.currentAssistantMessageId) return;
+  if (last.modelId === modelId) return;
+  last.modelId = modelId;
+  chargeNewEntry(state, { modelId });
+  rowChanged(state, last);
+}
+
+/**
+ * Note the model of a finished response against the turn it belongs to.
+ *
+ * One prompt can run many responses, and a fallback (or an extension switching
+ * models mid-run) can put more than one model behind them. The turn's usage is
+ * attributed to a model only when every response that cost anything used it;
+ * two distinct models are enough to know it did not. A response that failed or
+ * was aborted before spending a token says nothing about who was billed.
+ */
+function recordTurnModel(state: SessionState, message: unknown): void {
+  if (!isObject(message) || message.role !== "assistant") return;
+  if (isObject(message.usage) && !spentTokens(message.usage)) return;
+  const modelId = responseModelId(message);
+  if (!modelId) return;
+  const seen = state.currentTurnModelIds ?? [];
+  if (seen.length >= 2 || seen.includes(modelId)) return;
+  state.currentTurnModelIds = [...seen, modelId];
+}
+
+function spentTokens(usage: JsonObject): boolean {
+  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].some(
+    (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
+  );
 }
 
 /**
@@ -939,13 +1017,15 @@ function applyThinkingLevel(state: SessionState, level: unknown): void {
 export function currentAssistantMessage(state: SessionState): BridgeMessage {
   const last = state.messages[state.messages.length - 1];
   if (last?.role === "assistant" && last.id === state.currentAssistantMessageId) return last;
+  // The selection only until Pi names the response's model (`applyResponseModel`).
+  const modelId = state.currentResponseModelId ?? state.composer.selectedModelId;
   const message: BridgeMessage = {
     id: randomBytes(12).toString("hex"),
     role: "assistant",
     content: "",
     parts: [],
     createdAt: new Date().toISOString(),
-    ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
+    ...(modelId ? { modelId } : {}),
   };
   state.messages.push(message);
   state.currentAssistantMessageId = message.id;

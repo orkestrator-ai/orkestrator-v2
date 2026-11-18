@@ -178,7 +178,7 @@ describe("host OpenCode server", () => {
     expect(answer.launched.args).toEqual(
       expect.arrayContaining(["serve", "--hostname", "127.0.0.1"]),
     );
-    expect(String(answer.launched.flags)).toContain("-schedules");
+    expect(String(answer.launched.flags)).toContain("-automations");
 
     const identity = (value: { baseUrl: string; password: string; generation: string }) => ({
       baseUrl: value.baseUrl,

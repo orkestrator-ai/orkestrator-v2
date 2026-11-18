@@ -215,7 +215,7 @@ ENV VISUAL=nano
 # @anthropic-ai/claude-agent-sdk.
 ARG CLAUDE_CLI_VERSION=2.1.326
 ARG CODEX_CLI_VERSION=0.169.0
-ARG OPENCODE2_CLI_VERSION=2.3.0
+ARG OPENCODE2_CLI_VERSION=2.3.1
 ARG GROK_BUILD_VERSION=1.0.88
 ARG PI_CLI_VERSION=1.5.2
 
@@ -243,8 +243,8 @@ ENV DISABLE_AUTOUPDATER=1 FORCE_AUTOUPDATE_PLUGINS=1
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) OPENCODE2_TARGET=linux-x64; OPENCODE2_SHA=408f854b5fac7857a3b4df4e783d3a8b70f5cc8c7c3187aac09c5be0576c14ae ;; \
-    arm64) OPENCODE2_TARGET=linux-arm64; OPENCODE2_SHA=be30066353bb592c43919b31072ff4099e069636c31a16806b088737e0287cea ;; \
+    amd64) OPENCODE2_TARGET=linux-x64; OPENCODE2_SHA=020e4bdadf62962f806f75393657ed26d462debec8e34ee7d3b6e0cb3b45c783 ;; \
+    arm64) OPENCODE2_TARGET=linux-arm64; OPENCODE2_SHA=97c127e0f17afd4a0110490aee5728e9047bba201bb132b2ebbcc724831a0aeb ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   install -d -o root -g root -m 0755 /opt/opencode /opt/opencode/bin && \

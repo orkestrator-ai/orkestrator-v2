@@ -20,8 +20,9 @@
  * - `synthetic`, `system`, `skill`, `agent-switched`, `model-switched` →
  *   compact status rows. A `system` row is OpenCode reloading its
  *   instructions; only its description is shown, never the instruction text.
- *   A `synthetic` row that reports a finished background shell shows the
- *   command and the output it emitted (`backgroundShellNotice`).
+ *   A `synthetic` row that reports a finished background shell (a
+ *   `background: true` command, or since 2.3.1 one whose timeout expired)
+ *   shows the command and the output it emitted (`backgroundShellNotice`).
  * - A `synthetic` row that reports a background sub-agent (`<subagent …>`,
  *   `metadata.source: "subagent"`) is folded onto the `subagent` call that
  *   launched it, as the Claude bridge folds a `<task-notification>` onto its
@@ -153,7 +154,7 @@ function subagentReportRow(id: string, createdAt: string, report: OpenCode2Subag
 
 export type OpenCode2RowFate = "rendered" | "status" | "dropped";
 
-/** Every 2.x row kind (`Session.Message.Info`, unchanged 2.2.6 to 2.3.0) and what the transcript does with it. */
+/** Every 2.x row kind (`Session.Message.Info`, unchanged 2.2.6 to 2.3.1) and what the transcript does with it. */
 export const OPENCODE2_ROW_FATES: Record<string, OpenCode2RowFate> = {
   user: "rendered",
   assistant: "rendered",
@@ -179,11 +180,65 @@ function clip(value: string, limit = MAX_NOTICE_CHARS): string {
 }
 
 /**
+ * Whether a `synthetic` row is a background shell's report to its session: a
+ * command run with `background: true`, or (since 2.3.1, in every build) a
+ * foreground command still running when its timeout expired, which moved to
+ * the background instead of being killed. 2.3.1 `shell/result.ts`
+ * `notification` writes `metadata: { source: "shell", shellID, jobID, state }`
+ * and admits the row to the session's inbox, waking it into a run Orkestrator
+ * never prompted. A command the user ran themselves is reported with the same
+ * `source` but no `jobID`, and wakes nothing, so it is not one.
+ */
+export function openCode2BackgroundShellReport(message: unknown): boolean {
+  const row = asRecord(message);
+  if (row?.type !== "synthetic") return false;
+  const meta = asRecord(row.metadata);
+  return meta?.source === "shell" && !!nonEmptyString(meta.jobID);
+}
+
+/**
+ * Whether a row reports background work to the session it wakes: a
+ * sub-agent's report (2.3.0) or a background shell's (2.3.1). The run such a
+ * report wakes continues the request whose run launched the work.
+ */
+export function openCode2BackgroundReport(message: unknown): boolean {
+  return openCode2SubagentReport(message) !== undefined || openCode2BackgroundShellReport(message);
+}
+
+/** The whole report body of a background command that was removed while it ran (2.3.1). */
+const OPENCODE2_REMOVED_SHELL_ERROR = "Shell.NotFoundError";
+
+/**
+ * The output inside a `<shell …>` report. OpenCode writes the command into
+ * the tag without escaping it (2.3.1 `shell/result.ts`), so a command with an
+ * unbalanced quote or a newline, common in a long test run that timed out, is
+ * found by its known text (the row's description) before the tag is parsed.
+ */
+function shellReportBody(text: string, command: string | undefined): string | undefined {
+  const close = /<\/shell>\s*$/.exec(text);
+  if (!/^\s*<shell\b/.test(text) || !close) return undefined;
+  let start: number | undefined;
+  if (command) {
+    const marker = ` command="${command}">`;
+    const at = text.indexOf(marker);
+    if (at >= 0 && at + marker.length <= close.index) start = at + marker.length;
+  }
+  if (start === undefined) {
+    // Attributes are quoted, and a quoted command may itself contain `>`.
+    const tag = /^\s*<shell\b(?:[^>"]|"[^"]*")*>/.exec(text);
+    if (!tag || tag[0].length > close.index) return undefined;
+    start = tag[0].length;
+  }
+  return text.slice(start, close.index).replace(/^\r?\n/, "");
+}
+
+/**
  * A finished background shell, as 2.x reports it: a `synthetic` row whose
  * metadata names `source: "shell"`, whose description is the command line
- * and whose text wraps the command's output in a `<shell …>` element (2.2.6).
- * The output is what the command emitted, so the row shows it under the
- * command rather than the command alone; null when the row is not one.
+ * and whose text wraps the command's output in a `<shell …>` element (2.2.6,
+ * unchanged in 2.3.1). The output is what the command emitted, so the row
+ * shows it under the command rather than the command alone; null when the
+ * row is not one.
  */
 function backgroundShellNotice(
   metadata: unknown,
@@ -192,13 +247,17 @@ function backgroundShellNotice(
 ): string | null {
   const meta = asRecord(metadata);
   if (meta?.source !== "shell") return null;
-  // Attributes are quoted, and a quoted command may itself contain `>`.
-  const wrapped = /^\s*<shell\b(?:[^>"]|"[^"]*")*>\r?\n?([\s\S]*?)<\/shell>\s*$/.exec(text);
-  if (!wrapped) return null;
+  const body = shellReportBody(text, description ?? undefined);
+  if (body === undefined) return null;
+  // A command terminated through `DELETE /api/shell/{id}` (a stop) fails its
+  // job, and 2.3.1 reports the failure by its error tag alone.
+  if (meta.state === "error" && body.trim() === OPENCODE2_REMOVED_SHELL_ERROR) {
+    return `Background command stopped${description ? `: ${description}` : ""}`;
+  }
   const state = nonEmptyString(meta.state) ?? "finished";
   const exit = typeof meta.exit === "number" && meta.exit !== 0 ? ` (exit ${meta.exit})` : "";
   const heading = `Background command ${state}${exit}${description ? `: ${description}` : ""}`;
-  const output = (wrapped[1] ?? "").replace(/\s+$/, "");
+  const output = body.replace(/\s+$/, "");
   const truncated = meta.truncated === true ? "\n(output truncated)" : "";
   return output ? `${heading}\n${output}${truncated}` : heading;
 }

@@ -1019,6 +1019,8 @@ OpenCode bump, re-check:
   plugin `active` before its socket is recorded.
 - The sub-agent tool and its report (below), with
   `opencode2-subagents.live.test.ts`.
+- The shell tool's timeout handling, its report, the background job list and
+  shell removal (below), with `opencode2-shell-timeout.live.test.ts`.
 
 **Background sub-agents (2.3.0).** Every `subagent` call returns at once with
 its child's session id (`metadata.status: "running"`), the parent's run
@@ -1058,6 +1060,56 @@ Claude turn released to background agents, and is reported the same way
 A child's own permission or question cards are not shown in the parent's tab
 (as on 2.2.6, where the parent waited on the child instead).
 
+**Background shells (2.3.1).** A shell command still running when its timeout
+expires (120 s unless the call names another; a foreground `timeout: 0` means
+the default too) moves to the background instead of being killed, in every
+build: 2.3.1 removed the `shell_timeout_background` flag that 2.3.0 kept off.
+The call returns `metadata.status: "running"` with its shell id, the run
+settles, and when the command ends a `<shell>` report (a `synthetic` row,
+`metadata: { source: "shell", shellID, jobID, state }`, `state` one of
+`completed`, `error`, `cancelled`) is admitted to the session and wakes it into
+a run Orkestrator never prompted. A command run with `background: true`
+behaves the same. The provider reports it as it reports a background
+sub-agent (`opencode2/background-subagents.ts`):
+
+- Activity: a session whose own run settled reads `working` while it, or one
+  of its descendants, owns a background shell job
+  (`GET /api/experimental/job`, which lists a job until its report has been
+  admitted; one read per activity batch). A settled job is waited on for 3 s
+  more, for its report.
+- Workflows: `observeSession` adds `backgroundWorkLive` while such a job is
+  listed or a shell report waits in the inbox, so a pipeline, review or
+  structured turn waits for the run the report wakes, which belongs to the
+  same request (`openCode2RequestRun`, `openCode2TurnTerminalError`). A
+  report with no `jobID` is a command the user ran themselves and wakes
+  nothing.
+- Stop (and so close): terminates the running background shells of the
+  session and its descendants through `DELETE /api/shell/{id}` (an interrupt
+  alone leaves them running), then interrupts the run their reports wake, as
+  for sub-agents. 2.3.1 reports a removed command as a failed job whose body
+  is `Shell.NotFoundError`; the transcript shows it as "Background command
+  stopped".
+- Transcript: the report is a status row with the command and its output
+  (`backgroundShellNotice`). The row is in OpenCode's history, so a tab that
+  was not open when the command finished, or a reload, reads it from the
+  snapshot; nothing depends on the live event. OpenCode writes the command
+  into the report's tag unescaped, so the body is found by the row's
+  description first.
+
+The job route is experimental upstream (no compatibility promise) and is held
+to the exact pin; an unreadable job list keeps a workflow waiting, as an
+unreadable inbox does, and leaves activity to the session's own run.
+
+**Background compaction (2.3.1).** `compaction.background` is a configuration
+key, on by default; the launcher leaves it there and writes no setting, so the
+user's own global OpenCode configuration can turn it off. Near the
+compaction threshold OpenCode writes a speculative summary from the prompt
+cache and holds it in memory, so the run that reaches the threshold does not
+pause for one; it adds no rows and wakes nothing. Each one is a billed model
+request whether or not it is used, and it goes unused when the session ends
+or goes quiet before the threshold, or the server restarts. The costs are
+spelled out beside `OPENCODE2_FLAGS` (`opencode2/server.ts`).
+
 A bump is qualified on scripted models, with no login and nothing billed,
 in three layers ([upgrade-agents.md](../development/upgrade-agents.md) has
 the commands):
@@ -1076,8 +1128,9 @@ the commands):
 
 All three passed at 2.2.6 on Linux x86_64 (host 2026-11-11, container
 2026-11-13, behind an egress gateway); at 2.3.0 the live set passed on Linux
-x86_64 on 2026-11-17, and the real-stack and container halves were not
-re-run. The per-case figures are in
+x86_64 on 2026-11-17, and at 2.3.1 on 2026-11-18 (with
+`opencode2-shell-timeout.live.test.ts`), and the real-stack and container
+halves were not re-run for either. The per-case figures are in
 [agent-testing.md](../development/agent-testing.md). Concurrent sessions on
 one server, a steer racing a permission or question card and steer through
 the public CLI passed on scripted models on 2026-11-14

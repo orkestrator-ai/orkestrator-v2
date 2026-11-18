@@ -43,7 +43,7 @@ import {
 import type { OpenCode2McpServers } from "./mcp.js";
 import { OPENCODE2_ARTIFACTS_MCP_PREFIX, OPENCODE2_DESIGN_MCP_PREFIX } from "./permissions.js";
 import type { OpenCode2TurnGrants } from "./turn-grants.js";
-import { openCode2SubagentReport } from "./transcript.js";
+import { openCode2BackgroundReport } from "./transcript.js";
 import {
   isOpenCode2IdleMessage,
   type OpenCode2AssistantMessage,
@@ -241,10 +241,12 @@ export class OpenCode2WorkflowTurns {
 
 /**
  * One request's run in a session's history (oldest first), once its input is
- * there. A run that a background sub-agent's report wakes after the request's
- * run settled (2.3.0: the next row after an `idle` row is that report) is the
- * same request's continuation, as a Claude turn's continuation after its
- * background agents is: its responses count and its `idle` row ends the run.
+ * there. A run that a background sub-agent's report (2.3.0) or a background
+ * shell's report (2.3.1: a command whose timeout expired keeps running) wakes
+ * after the request's run settled (the next row after an `idle` row is that
+ * report) is the same request's continuation, as a Claude turn's continuation
+ * after its background agents is: its responses count and its `idle` row ends
+ * the run.
  */
 export function openCode2RequestRun(
   rows: readonly OpenCode2Message[],
@@ -256,7 +258,7 @@ export function openCode2RequestRun(
   let idle: OpenCode2IdleMessage | undefined;
   for (const row of rows.slice(start + 1)) {
     if (idle) {
-      if (!openCode2SubagentReport(row)) break;
+      if (!openCode2BackgroundReport(row)) break;
       idle = undefined;
       continue;
     }

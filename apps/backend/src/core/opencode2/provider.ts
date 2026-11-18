@@ -15,9 +15,10 @@
  * - **Activity comes from one cheap read.** `GET /api/session/active` names
  *   every running session, so the activity sweep never reads histories. A run
  *   waiting on a permission or form reads as `waiting`. A session whose run
- *   settled while a background sub-agent of its own still runs reads
- *   `working` (2.3.0; `background-subagents.ts`), and its workflows wait for
- *   the run that sub-agent's report wakes.
+ *   settled while a background sub-agent (2.3.0) or background shell (2.3.1,
+ *   a command whose timeout expired) of its own still runs reads `working`
+ *   (`background-subagents.ts`), and its workflows wait for the run that
+ *   work's report wakes.
  * - **Steer.** A run is identified by the newest `idle` row before it (the
  *   snapshot's run boundary). A steer aimed at a run that has already
  *   settled answers `idle`/`mismatch` before anything is sent; the backend
@@ -183,7 +184,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   private readonly grants: OpenCode2TurnGrants;
   /** A coordinator's server: its rules, tools, agent and commands (`coordinator.ts`). */
   readonly coordinator: OpenCode2CoordinatorSessions | undefined;
-  /** Background sub-agents: activity, workflow waits and stop (`background-subagents.ts`). */
+  /** Background sub-agents and shells: activity, workflow waits and stop (`background-subagents.ts`). */
   private readonly background: OpenCode2BackgroundWork;
   /**
    * When this provider, and so this server generation's view, began. A run
@@ -445,9 +446,9 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
 
   /**
    * The session's own run, plus `backgroundWorkLive` while its run has
-   * settled but a background sub-agent of its will still report and wake it
-   * (2.3.0): a workflow awaiting this turn keeps supervising it, as it does a
-   * Claude turn released to background agents.
+   * settled but a background sub-agent (2.3.0) or background shell (2.3.1)
+   * of its will still report and wake it: a workflow awaiting this turn keeps
+   * supervising it, as it does a Claude turn released to background agents.
    */
   async observeSession(sessionId: string): Promise<ProviderSessionObservation> {
     const status = await this.status(sessionId);
@@ -458,24 +459,29 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   }
 
   /**
-   * One `/api/session/active` read for every session; never touches
+   * One `/api/session/active` read for every session, plus one read of the
+   * background shell jobs when any of them is not running; never touches
    * histories. A session that is not running but owns a running descendant
-   * (a background sub-agent, 2.3.0) reads `working`: that is still work in
-   * the environment, as a Claude session's live background agent is. Its
-   * composer stays free (`status` is its own run's).
+   * (a background sub-agent, 2.3.0) or a background shell, its own or a
+   * descendant's (2.3.1: a command whose timeout expired keeps running),
+   * reads `working`: that is still work in the environment, as a Claude
+   * session's live background task is. Its composer stays free (`status` is
+   * its own run's).
    */
   async activityBatch(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>> {
     const running = await this.runningSessions(sessionIds);
+    const settled = sessionIds.filter((id) => !running.has(id));
+    const shells =
+      settled.length > 0
+        ? await this.background.shellOwners().catch(() => new Set<string>())
+        : new Set<string>();
     const owners = await this.background
-      .owners(
-        sessionIds.filter((id) => !running.has(id)),
-        running,
-      )
+      .owners(settled, shells.size > 0 ? new Set([...running, ...shells]) : running)
       .catch(() => new Set<string>());
     const result = new Map<string, ProviderActivityState>();
     for (const sessionId of sessionIds) {
       if (!running.has(sessionId)) {
-        result.set(sessionId, owners.has(sessionId) ? "working" : "idle");
+        result.set(sessionId, owners.has(sessionId) || shells.has(sessionId) ? "working" : "idle");
         continue;
       }
       const waiting = await this.waitingOnUser(sessionId).catch(() => false);
@@ -531,8 +537,8 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       await this.history(sessionId, OPENCODE2_EVIDENCE_SCAN_LIMIT),
       requestId,
     );
-    // A background sub-agent's report will wake a run that belongs to this
-    // request, and that run's answer is the result.
+    // A background sub-agent's or shell's report will wake a run that belongs
+    // to this request, and that run's answer is the result.
     if (result && (await this.background.live(sessionId))) return null;
     return result;
   }
@@ -552,7 +558,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
         if (!session) return false;
         return (await this.restartCut(sessionId, session).catch(() => undefined)) !== undefined;
       },
-      // A background sub-agent still owes this request a run.
+      // A background sub-agent or shell still owes this request a run.
       () => this.background.live(sessionId),
     );
   }
@@ -589,8 +595,9 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       // too: a run their reports wake would deliver it.
       await this.withdrawUserSteers(sessionId);
       // 2.3.0 leaves a parent's background sub-agents running when the
-      // parent is interrupted, and their reports would wake it again; a stop
-      // ends them and any run they wake (`background-subagents.ts`).
+      // parent is interrupted, and 2.3.1 its background shells; their
+      // reports would wake it again. A stop ends them and any run they wake
+      // (`background-subagents.ts`).
       await this.background.stop(sessionId, stopToken).finally(() => this.markDirty(sessionId));
       await this.rejectPendingRequests(sessionId);
     }

@@ -4,8 +4,8 @@
  * OpenCode 2.x serves no legacy routes, so the 1.x SDK cannot drive it
  * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`)). This client covers only the
  * routes the 2.x provider uses, verified against the pinned server and its
- * committed `packages/protocol/openapi.json` (2.2.6; 2.3.0's adds and removes
- * no route). It is written here rather
+ * committed `packages/protocol/openapi.json` (2.2.6; 2.3.0's and 2.3.1's add
+ * and remove no route it calls). It is written here rather
  * than taken from `@opencode/client` because that package pins `effect` to an
  * exact version the backend does not use, and because every read must be
  * bounded (AGENTS.md invariant 11).
@@ -20,6 +20,7 @@
  */
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
 import type {
+  OpenCode2BackgroundJob,
   OpenCode2Form,
   OpenCode2InboxDelivery,
   OpenCode2InboxItem,
@@ -362,6 +363,58 @@ export class OpenCode2Client {
     );
     if (!Array.isArray(data)) throw new ProviderUnavailableError("OpenCode inbox is malformed");
     return data as OpenCode2InboxItem[];
+  }
+
+  /**
+   * Background jobs (`GET /api/experimental/job`): the work a session moved
+   * to the background whose report has not reached its inbox yet. Since
+   * 2.3.1 every foreground shell still running at its timeout becomes one.
+   * The route is experimental upstream (no compatibility promise), so it is
+   * held to the exact pin like `/api/experimental/mcp/*` and re-read on every
+   * bump. `sessionId` filters to that session's jobs, `descendants` adds its
+   * child sessions'; an unknown session is a 404.
+   */
+  async listBackgroundJobs(
+    filter: { sessionId?: string; kind?: "shell"; descendants?: boolean } = {},
+    signal?: AbortSignal,
+  ): Promise<OpenCode2BackgroundJob[]> {
+    const data = await this.request<unknown>(
+      "GET",
+      "/api/experimental/job",
+      "OpenCode background jobs",
+      {
+        query: {
+          sessionID: filter.sessionId,
+          kind: filter.kind,
+          descendants: filter.sessionId && filter.descendants ? "true" : undefined,
+        },
+        signal,
+      },
+    );
+    if (!Array.isArray(data)) {
+      throw new ProviderUnavailableError("OpenCode background jobs is malformed");
+    }
+    return data.filter((entry): entry is OpenCode2BackgroundJob => {
+      const job = asRecord(entry);
+      return (
+        typeof job?.id === "string" &&
+        typeof job.kind === "string" &&
+        typeof job.sessionID === "string" &&
+        typeof job.status === "string" &&
+        typeof asRecord(job.time)?.started === "number" &&
+        (!filter.kind || job.kind === filter.kind)
+      );
+    });
+  }
+
+  /**
+   * Terminate a shell command and remove it with its retained output
+   * (`DELETE /api/shell/{id}`, location-scoped). A command already gone
+   * answers 204 too. Its background job then settles and reports to its
+   * session (2.3.1).
+   */
+  async removeShell(shellId: string): Promise<void> {
+    await this.request("DELETE", `/api/shell/${seg(shellId)}`, "OpenCode shell remove", {});
   }
 
   /** Withdraw an inbox item that has not been delivered yet. */

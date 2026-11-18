@@ -428,8 +428,9 @@ be resolved without them, and an ambiguous dispatch survives reconstruction
 as unknown rather than unsent.
 
 Traced against the versions in `PROVIDER_STATE_TRACED_VERSIONS` (Claude CLI
-2.1.326, Codex 0.169.0, OpenCode 2.3.0, Pi 1.5.2, `@cursor/sdk` 1.4.1, Grok
-1.0.88; re-traced 2026-11-17, nothing moved), by reading the pinned binaries' strings and bundled docs. A pin bump
+2.1.326, Codex 0.169.0, OpenCode 2.3.1, Pi 1.5.2, `@cursor/sdk` 1.4.1, Grok
+1.0.88; re-traced 2026-11-17, and OpenCode again at 2.3.1 on 2026-11-18,
+nothing moved), by reading the pinned binaries' strings and bundled docs. A pin bump
 fails `apps/backend/tests/container-state-layout.test.ts` until the layout is
 re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)).
 OpenCode's CLI is the toolchain's `opencode2` (OpenCode 2.x), whose sessions

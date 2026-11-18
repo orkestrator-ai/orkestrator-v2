@@ -163,3 +163,24 @@ test("selected Skills and Plugins tabs have 8px corners and readable counts", as
     .toBeGreaterThanOrEqual(4.5);
   await expect(skills.getByText("0", { exact: true })).toHaveCSS("opacity", "0.7");
 });
+
+for (const { view, tablist } of [
+  { view: "extensions", tablist: "Agent extensions" },
+  { view: "skills", tablist: "Agent" },
+]) {
+  test(`selected ${tablist} tabs in ${view} settings have 8px corners`, async ({ page }) => {
+    await page.goto(`/tab-styles?view=${view}`);
+    const list = page.getByRole("tablist", { name: tablist, exact: true });
+    const claude = list.getByRole("tab", { name: "Claude", exact: true });
+    const codex = list.getByRole("tab", { name: "Codex", exact: true });
+
+    await expect(claude).toHaveAttribute("aria-selected", "true");
+    await expect(claude).toHaveCSS("border-radius", "8px");
+
+    await claude.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(codex).toBeFocused();
+    await expect(codex).toHaveAttribute("aria-selected", "true");
+    await expect(codex).toHaveCSS("border-radius", "8px");
+  });
+}

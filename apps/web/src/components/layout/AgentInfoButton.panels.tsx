@@ -464,21 +464,17 @@ function RuntimeNoticeCard({
   );
 }
 
-/**
- * Turn the opaque rewind dry-run payload into something a person can act on.
- *
- * `rewindClaudeFiles` returns `unknown` — it is whatever the installed Agent
- * SDK hands back — so every shape is probed defensively and anything
- * unrecognised degrades to "no files reported" rather than to raw JSON. The
- * previous confirm dialog pasted `JSON.stringify(...).slice(0, 800)` into a
- * `window.confirm`, which truncated mid-structure and asked the user to approve
- * a destructive worktree mutation they could not read.
- */
-export function summarizeRewindPreview(preview: unknown): {
+function rewindResultRecord(payload: unknown): Record<string, unknown> {
+  const root = record(payload);
+  // The bridge returns { status, result }. Flat payloads are also supported.
+  const { result } = root;
+  return result && typeof result === "object" && !Array.isArray(result) ? record(result) : root;
+}
+
+function summarizeRewindFiles(root: Record<string, unknown>): {
   files: string[];
   fileCount: number;
 } {
-  const root = record(preview);
   const candidates = [
     root.files,
     root.restoredFiles,
@@ -510,36 +506,34 @@ export function summarizeRewindPreview(preview: unknown): {
   };
 }
 
+/** Read the dry-run file forecast for the confirmation dialog. */
+export function summarizeRewindPreview(preview: unknown): { files: string[]; fileCount: number } {
+  return summarizeRewindFiles(rewindResultRecord(preview));
+}
+
 /**
  * What the real (non-dry-run) rewind actually did, as one toast.
  *
- * The dry run cannot know what the real rewind will refuse: the SDK sets
- * `skippedLinks` only on a real rewind, counting tracked files it left alone
- * because a symlink, hard link or other non-regular file was at the path (or
- * the path no longer resolved where it did at the checkpoint). So the count
- * shown in the confirmation is never reused here. A restored count is claimed
- * only when the real result reports its own files and nothing was skipped;
- * any skip is disclosed as a warning without a restored count, because the
- * SDK does not say whether its file list includes the files it skipped.
+ * The SDK reports `skippedLinks` as a count without a per-file cause. It also
+ * does not say whether the file list includes skipped entries, so only an
+ * applied result without reported skips can supply a restored count.
  */
 export function summarizeRewindResult(result: unknown): {
   tone: "success" | "warning";
   message: string;
 } {
-  const skipped = record(result).skippedLinks;
+  const payload = rewindResultRecord(result);
+  const skipped = payload.skippedLinks;
   if (typeof skipped === "number" && Number.isSafeInteger(skipped) && skipped > 0) {
     const noun = skipped === 1 ? "file" : "files";
     return {
       tone: "warning",
-      message:
-        `Claude rewound files but skipped ${skipped} ${noun} for link safety (a link or ` +
-        `non-regular file at the path), so ${skipped === 1 ? "it was" : "they were"} not ` +
-        "restored. Check the working tree.",
+      message: `Claude skipped ${skipped} ${noun} during the rewind. Check the working tree.`,
     };
   }
   // Read from the real result, never the dry run: an empty or unrecognised
   // answer claims no count at all.
-  const { fileCount } = summarizeRewindPreview(result);
+  const { fileCount } = summarizeRewindFiles(payload);
   if (fileCount > 0) {
     return {
       tone: "success",

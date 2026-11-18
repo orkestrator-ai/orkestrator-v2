@@ -74,7 +74,7 @@
           <code>border-failure/NN</code> and tints to <code>bg-failure/NN</code>. Map destructive
           fills to <code>bg-destructive</code>.
         </li>
-        <li>Leave <b>risk</b> hits alone. They are the Bypass exception.</li>
+        <li>Leave <b>risk</b> hits alone, including the Bypass and root-terminal warnings.</li>
         <li>
           Replace the red-950 banner background with a failure tint so it matches the other error
           banners.
@@ -270,8 +270,9 @@ mise run lint</code></pre>
       <ul>
         <li>
           <b>Failure.</b> Migrated errors, invalid fields, failed and cancelled states, diff
-          removals, and the negative markers in paired decision and review views. Existing success
-          styles were outside this task.
+          removals, and the negative markers in paired decision and review views. The shared error
+          tone in <code>components/agent-mail/agent-mail-ui.ts</code> was migrated alongside its
+          consumers. Existing success styles were outside this task.
         </li>
         <li>
           <b>Destructive actions.</b> Used the destructive fill for Deny and the confirmation
@@ -279,8 +280,8 @@ mise run lint</code></pre>
           failure-colored foregrounds with a destructive hover wash.
         </li>
         <li>
-          <b>Risk.</b> Kept Bypass, the advisory graph execution tier, and the high-risk review
-          badge.
+          <b>Risk.</b> Kept Bypass, the root-terminal privilege warning, the advisory graph
+          execution tier, and the high-risk review badge.
         </li>
         <li>
           <b>Identity.</b> Kept the Caution callout kind, the canvas alignment guide, Java and Ruby
@@ -290,7 +291,7 @@ mise run lint</code></pre>
       <details>
         <summary>Source lines by classification</summary>
         <details>
-          <summary>Failure and negative outcomes (104 source lines)</summary>
+          <summary>Failure and negative outcomes (103 source lines)</summary>
           <ul>
             <li><code>App.tsx:919</code></li>
             <li><code>components/agent-mail/AgentMailConversationView.tsx:269</code></li>
@@ -319,7 +320,6 @@ mise run lint</code></pre>
             <li><code>components/graph-launch/GraphLaunchFields.tsx:24</code></li>
             <li><code>components/kanban/KanbanCard.tsx:132</code></li>
             <li><code>components/kanban/TicketSyncStrip.tsx:49</code></li>
-            <li><code>components/layout/ActionBar.view.tsx:897</code></li>
             <li><code>components/layout/PullRequestCheckStatus.tsx:36</code></li>
             <li><code>components/projects/CoordinatorPanelNotices.tsx:352</code></li>
             <li><code>components/projects/ProjectSchedulesView.tsx:97</code></li>
@@ -380,10 +380,11 @@ mise run lint</code></pre>
           </ul>
         </details>
         <details>
-          <summary>Risk markers (3 source lines)</summary>
+          <summary>Risk markers (4 source lines)</summary>
           <ul>
             <li><code>components/chat/ComposerIconPicker.tsx:55</code></li>
             <li><code>components/graph-launch/GraphLaunchRoleField.tsx:29</code></li>
+            <li><code>components/layout/ActionBar.view.tsx:897</code></li>
             <li><code>components/review/StructuredReviewReportView.tsx:589</code></li>
           </ul>
         </details>
@@ -413,9 +414,9 @@ mise run lint</code></pre>
           banner to lower text contrast.
         </li>
         <li>
-          <b>Destructive confirmation.</b> Chose the existing <code>destructive</code> fill for
-          confirming actions. Filling those controls with the failure token would make the white
-          label harder to read.
+          <b>Destructive confirmation.</b> Deny, Forget and Remove use the existing
+          <code>destructive</code> fill with black labels. The hover and pressed fills keep 95% and
+          90% opacity to maintain at least 4.5:1 label contrast.
         </li>
       </ul>
 

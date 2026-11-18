@@ -894,7 +894,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     tooltip={
                       <>
                         <p>New Root Terminal</p>
-                        <p className="text-xs text-failure">
+                        <p className="text-xs text-red-500">
                           Full root privileges inside container
                         </p>
                       </>

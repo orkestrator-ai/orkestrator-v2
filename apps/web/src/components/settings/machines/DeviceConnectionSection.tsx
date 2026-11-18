@@ -513,7 +513,7 @@ export function DeviceConnectionSection({
                 void forget();
               }}
               disabled={disabled}
-              className="bg-destructive text-white hover:bg-destructive/85 active:bg-destructive/75"
+              className="bg-destructive text-black hover:bg-destructive/95 active:bg-destructive/90"
             >
               {busy === "forget" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Forget on this device

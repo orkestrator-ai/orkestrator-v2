@@ -562,7 +562,9 @@ describe("AgentMailPanel", () => {
         .getState()
         .openPanel({ conversation: [AGENT_1, AGENT_2] }),
     );
-    expect(await screen.findByText("delivery failed")).toBeTruthy();
+    const status = await screen.findByText("delivery failed");
+    expect(status.classList.contains("text-failure")).toBe(true);
+    expect(status.classList.contains("bg-failure/10")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() =>
       expect(retryAgentMailInject).toHaveBeenCalledWith("env-2", "tab-2", "failed"),

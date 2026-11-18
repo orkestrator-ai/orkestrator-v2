@@ -806,6 +806,55 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(inspector().getByText("2 issues found, 0 coverage gaps found")).toBeTruthy();
   });
 
+  test("shows the consolidated report's severity counts on the Consolidation node", () => {
+    const ready = readyWorkflow();
+    ready.consolidatedReport = {
+      ...report,
+      issues: [
+        { ...report.issues[0]!, severity: "P0", title: "Blocking finding" },
+        report.issues[0]!,
+        { ...report.issues[0]!, title: "Second finding" },
+      ],
+      testCoverageGaps: [],
+    };
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
+
+    renderInAppCommandScope(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    const consolidation = screen.getByRole("tab", {
+      name: /^Consolidation, .*3 issues found, 0 coverage gaps found$/,
+    });
+    expect(within(consolidation).getByTitle("1 P0 issue").textContent).toBe("1");
+    expect(within(consolidation).getByTitle("2 P1 issues").textContent).toBe("2");
+    expect(consolidation.querySelectorAll("[data-severity]")).toHaveLength(2);
+  });
+
+  test("shows no issues and announces coverage gaps on the Consolidation node", () => {
+    const ready = readyWorkflow();
+    ready.consolidatedReport = { ...report, issues: [] };
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
+
+    renderInAppCommandScope(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    const consolidation = screen.getByRole("tab", {
+      name: /^Consolidation, Complete, (?:[^,]+, )*0 issues found, 1 coverage gap found$/,
+    });
+    expect(within(consolidation).getByText("no issues")).toBeTruthy();
+    expect(consolidation.querySelectorAll("[data-severity]")).toHaveLength(0);
+  });
+
   test("does not show finding counts before a reviewer has produced a report", () => {
     const reviewing = reviewingWorkflow();
     appCommandStore(multiReviewStore).getState().replaceWorkflow(reviewing);

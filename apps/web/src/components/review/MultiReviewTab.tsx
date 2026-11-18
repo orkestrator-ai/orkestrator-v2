@@ -1085,6 +1085,8 @@ function MultiReviewOverviewTab({
     details,
     splitDetails = false,
     report,
+    severity,
+    findingsLabel,
   }: {
     key: MultiReviewStepKey;
     kind: MultiReviewStepKind;
@@ -1106,6 +1108,9 @@ function MultiReviewOverviewTab({
     /** Puts the details beside the transcript on a wide inspector, not above it. */
     splitDetails?: boolean;
     report?: ReactNode;
+    /** Severity counts shown on the node's face, as reviewers show theirs. */
+    severity?: MultiReviewFlowNodeModel["severity"];
+    findingsLabel?: string;
   }): MultiReviewFlowNodeView => {
     const runtime = multiReviewStepRuntimeParts(
       workflow,
@@ -1171,6 +1176,8 @@ function MultiReviewOverviewTab({
           status.state === "not-started" ? flowPendingLabel("step", status.label) : undefined,
         statusWord: stepStatusWord(status, stalled),
         validation: key === "package" ? validationChips(workflow.validationRun) : undefined,
+        severity,
+        findingsLabel,
         error: multiReviewStepError(workflow, key, status),
         canOpen,
         onOpen,
@@ -1410,6 +1417,13 @@ function MultiReviewOverviewTab({
       workflow.pausedStep === "consolidate" &&
       Boolean(commands.resumeStep),
     activityAt: latestActivityAt(workflow.stepRuntimes?.consolidate),
+    // The merged report's issues, counted the way each reviewer's are.
+    severity: workflow.consolidatedReport
+      ? severityCounts(workflow.consolidatedReport.issues)
+      : undefined,
+    findingsLabel: workflow.consolidatedReport
+      ? `${findingCountLabel(workflow.consolidatedReport.issues.length, "issue")}, ${findingCountLabel(workflow.consolidatedReport.testCoverageGaps.length, "coverage gap")}`
+      : undefined,
     details:
       workflow.consolidatedReport || consolidationSandboxOff ? (
         <div className="space-y-2">

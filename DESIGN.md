@@ -281,8 +281,8 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 
 ### Primary
 - **Signal Blue** (`brand-blue`): the brand blue. On the site it carries the primary button, links and the start of the headline gradient; its brighter partner **Signal Blue Bright** (`brand-blue-bright`) carries eyebrows, focus outlines and the gradient's first stop.
-- **App Signal Blue** (`primary`): the app's current blue for lines, text and marks: links, the selected row's 2px accent bar, the focus hairline (`--color-ring`), the active tab underline, the unread-mail count, and the "creating" status. Bells are not blue; see Approval Amber.
-- **Deep Signal Fill** (`primary-fill`): the same blue one step deeper, for any fill that carries white text or glyphs: primary buttons (Create PR), the selected segment, the compose bar's Send. White on `primary` is 3.7:1, below AA for 14px text; white on `primary-fill` is 5.2:1.
+- **App Signal Blue** (`primary`): the app's current blue for lines, text and marks: links, the selected row's 2px accent bar, the focus hairline (`--color-ring`), the active tab underline, and the "creating" status. Bells are not blue; see Approval Amber.
+- **Deep Signal Fill** (`primary-fill`): the same blue one step deeper, for any fill that carries white text or glyphs: primary buttons (Create PR), the selected segment, the compose bar's Send, and the unread-mail count pill. White on `primary` is 3.7:1, below AA for 14px text; white on `primary-fill` is 5.2:1.
 
 ### Secondary
 - **All-Clear Green** (`brand-green`): the brand green. Site security eyebrows, "allowed" rows, and the end of the headline gradient.

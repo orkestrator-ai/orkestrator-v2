@@ -113,7 +113,7 @@ export const AGENT_MAIL_STATUS_TONE_CLASS: Record<AgentMailStatusTone, string> =
   muted: "bg-zinc-800/80 text-muted-foreground",
   progress: "bg-cyan-400/10 text-cyan-300",
   warning: "bg-amber-400/10 text-amber-300",
-  error: "bg-red-400/10 text-red-300",
+  error: "bg-failure/10 text-failure",
 };
 
 /** Same day: the time. Otherwise the date and time. */

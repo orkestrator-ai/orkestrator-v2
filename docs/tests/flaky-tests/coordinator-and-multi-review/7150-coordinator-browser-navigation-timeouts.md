@@ -1,7 +1,7 @@
 # Coordinator browser navigation timeouts during merge validation
 
 - **ID:** 7150
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-11-06
 - **Files:** `e2e/CoordinatorPaneTree.spec.ts`; `e2e/FloatingNotices.spec.ts`
 - **Original command:** `NODE_ENV=development mise run test:logged -- --name merge-browser-targeted -- bunx playwright test --config e2e/playwright.config.ts e2e/FloatingNotices.spec.ts e2e/CoordinatorPaneTree.spec.ts`
@@ -44,3 +44,28 @@ Class A candidate. A navigation (`page.goto`/`page.reload`) or step used up Play
 - **Stress:** none beyond that rerun.
 
 A recurrence that hangs until near the new budget (a navigation or assertion timing out at 120 s or 30 s) is a real hang, not this deadline: reopen this case and record it.
+
+## Focus restoration after minimizing a notice (2026-11-18)
+
+On `replace-failure-token-cb2bfc48b3c1-r1` at `5f24ec961`, based on
+`259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`, desktop Chromium timed out at
+`e2e/FloatingNotices.spec.ts:150` in
+`coordinator splits keep notices in their conversation pane`. After clicking
+Minimize, the collapsed notice button remained inactive for the 30 s focus
+assertion. Playwright passed the case on its retry.
+
+The aggregate was
+`ORKESTRATOR_REVIEW_VALIDATION=1 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=8 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 mise run test:logged -- --name browser -- mise run test:browser`.
+The component suite reported 1,785 passed, 155 skipped, one failed and
+one flaky in 49.0 minutes, with eight workers. The log is
+`orkestrator-test-run.P4Cu8y/browser.log.gz` under the host temporary directory.
+
+The same desktop spec passed alone with one worker and zero retries:
+
+```sh
+ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name review-browser-floating-notices -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts --workers 1 --retries 0 --project desktop-chromium --output output/address-findings-00002/floating-notices-browser FloatingNotices.spec.ts
+```
+
+Exit 0 in 14.9 s. `mise run flaky:recurrence -- 7150 --base 259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`
+confirmed that the base contains the prior timeout fix. Reopened for the focus
+failure. The cause is unconfirmed.

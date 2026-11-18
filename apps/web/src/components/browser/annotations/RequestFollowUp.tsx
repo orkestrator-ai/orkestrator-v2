@@ -157,7 +157,7 @@ export function RequestFollowUp({
         </p>
       )}
       {error && (
-        <p role="alert" className="text-destructive">
+        <p role="alert" className="text-failure">
           {error}
         </p>
       )}

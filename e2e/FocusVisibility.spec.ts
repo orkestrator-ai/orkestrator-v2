@@ -156,3 +156,41 @@ test("selected flow nodes gain a separate focus outline", async ({ page }) => {
   await selected.evaluate((el) => (el as HTMLElement).blur());
   await expect(selected).toHaveCSS("outline-offset", "3px");
 });
+
+for (const menu of ["Context", "Dropdown"] as const) {
+  test(`${menu} menu Delete keeps the failure foreground on keyboard focus`, async ({ page }) => {
+    await page.goto("/focus-visibility");
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+    const { failure, wash } = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--color-failure)";
+      probe.style.backgroundColor =
+        "color-mix(in oklab, var(--color-destructive) 20%, transparent)";
+      document.body.append(probe);
+      const styles = getComputedStyle(probe);
+      const result = { failure: styles.color, wash: styles.backgroundColor };
+      probe.remove();
+      return result;
+    });
+
+    const trigger = page.getByRole("button", { name: `${menu} actions` });
+    if (menu === "Context") {
+      await trigger.click({ button: "right" });
+      await expect(page.getByRole("menu")).toBeFocused();
+      await page.keyboard.press("Home");
+    } else {
+      await trigger.focus();
+      await page.keyboard.press("ArrowDown");
+    }
+    await expect(page.getByRole("menuitem", { name: "Rename" })).toBeFocused();
+    const item = page.getByRole("menuitem", { name: "Delete" });
+    await expect(item).toHaveCSS("color", failure);
+    await expect(item).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+
+    await page.keyboard.press("ArrowDown");
+    await expect(item).toBeFocused();
+    await expect(item).toHaveCSS("color", failure);
+    await expect(item.locator("svg")).toHaveCSS("color", failure);
+    await expect(item).toHaveCSS("background-color", wash);
+  });
+}

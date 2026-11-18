@@ -41,9 +41,7 @@ function TaskStatus({ task }: { task: HostTask | undefined }) {
   return (
     <p
       role="status"
-      className={
-        task.state === "failed" ? "text-sm text-destructive" : "text-sm text-muted-foreground"
-      }
+      className={task.state === "failed" ? "text-sm text-failure" : "text-sm text-muted-foreground"}
     >
       {task.state === "running" && (
         <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" aria-hidden="true" />

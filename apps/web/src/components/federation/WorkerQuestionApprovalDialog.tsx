@@ -172,7 +172,7 @@ export function WorkerQuestionApprovalDialog({
         </DialogHeader>
 
         {!relay ? (
-          <p className="flex shrink-0 items-center gap-2 text-sm text-destructive">
+          <p className="flex shrink-0 items-center gap-2 text-sm text-failure">
             <AlertCircle className="h-4 w-4" /> This request carries no question.
           </p>
         ) : (

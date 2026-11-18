@@ -461,7 +461,7 @@ export function NativeAgentQuestionCard({
           className={cn(
             "flex items-center gap-1.5 border-t px-3 py-2 text-xs",
             error || hold.error
-              ? "border-destructive/30 bg-destructive/10 text-destructive"
+              ? "border-destructive/30 bg-destructive/10 text-failure"
               : "border-border/60 bg-muted/30 text-muted-foreground",
           )}
         >

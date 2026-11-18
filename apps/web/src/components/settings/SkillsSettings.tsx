@@ -524,10 +524,7 @@ export function SkillsSettings({
             </div>
 
             {state.error && state.scan && (
-              <p
-                role="alert"
-                className="border-b border-zinc-800 px-3 py-2 text-xs text-destructive"
-              >
+              <p role="alert" className="border-b border-zinc-800 px-3 py-2 text-xs text-failure">
                 Refresh failed: {state.error}
               </p>
             )}
@@ -538,7 +535,7 @@ export function SkillsSettings({
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
               ) : state.error && !state.scan ? (
-                <p className="p-3 text-xs text-destructive">{state.error}</p>
+                <p className="p-3 text-xs text-failure">{state.error}</p>
               ) : filtered.length === 0 ? (
                 <p className="p-3 text-xs text-muted-foreground">
                   {skills.length === 0
@@ -701,7 +698,7 @@ export function SkillsSettings({
                     /* Nothing else re-reads the same path, so without this the
                      obvious recovery — clicking the skill again — is a no-op. */
                     <div className="flex items-center gap-2">
-                      <p className="text-xs text-destructive">{fileError}</p>
+                      <p className="text-xs text-failure">{fileError}</p>
                       <Button
                         variant="ghost"
                         size="sm"

@@ -617,7 +617,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
               aria-hidden
               className={
                 states.includes("needs repair")
-                  ? "shrink-0 text-destructive"
+                  ? "shrink-0 text-failure"
                   : "shrink-0 text-muted-foreground"
               }
             >
@@ -763,7 +763,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
       >
         <span aria-hidden className="size-4 shrink-0" />
         <span
-          className={`min-w-0 truncate ${row.state === "error" ? "text-destructive" : "text-muted-foreground"}`}
+          className={`min-w-0 truncate ${row.state === "error" ? "text-failure" : "text-muted-foreground"}`}
         >
           {row.message}
         </span>

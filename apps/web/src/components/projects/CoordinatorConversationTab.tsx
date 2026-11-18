@@ -129,7 +129,7 @@ export function CoordinatorConversationTab({
       onContextMenu={openMenu}
       closeLabel={
         isMain
-          ? `Close ${item.title}. The next message for the coordinator starts a new one with the default agent.`
+          ? `Close ${item.title}. The next message for the Coordinator starts a new one with the default agent.`
           : `Close ${item.title}`
       }
       onClose={onClose}

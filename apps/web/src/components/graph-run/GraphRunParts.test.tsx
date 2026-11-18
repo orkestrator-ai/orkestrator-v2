@@ -84,7 +84,7 @@ describe("GraphQuestionAnswerForm", () => {
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("Not today");
   });
 
-  test("an empty answer is caught before sending; an answered question shows its answer", () => {
+  test("catches an empty answer and attributes a Coordinator answer", () => {
     const onSubmit = mock(async () => {});
     const { rerender } = renderInAppCommandScope(
       <GraphQuestionAnswerForm question={question} asker="Fix" onSubmit={onSubmit} />,
@@ -96,7 +96,12 @@ describe("GraphQuestionAnswerForm", () => {
       <GraphQuestionAnswerForm
         question={{
           ...question,
-          answer: { kind: "answered", choice: "Yes", at: "2026-10-29T10:00:00.000Z", by: "user" },
+          answer: {
+            kind: "answered",
+            choice: "Yes",
+            at: "2026-10-29T10:00:00.000Z",
+            by: "coordinator",
+          },
         }}
         asker="Fix"
         onSubmit={onSubmit}
@@ -104,7 +109,7 @@ describe("GraphQuestionAnswerForm", () => {
     );
     expect(screen.getByRole("heading", { name: "Fix asked" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send answer" }) === null).toBe(true);
-    expect(screen.getByText("Yes")).toBeTruthy();
+    expect(screen.getByText("Yes (answered by the Coordinator)")).toBeTruthy();
   });
 
   test.each(["metaKey", "ctrlKey"])(

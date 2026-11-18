@@ -55,7 +55,7 @@ const CARRIER = renderAgentMailCarrier({
     projectId: "project-1",
     environmentId: "coordinator:c:v",
     tabId: "coordinator-tab",
-    title: null,
+    title: "Project coordinator",
   },
   toEnvironmentId: "env-1",
   toTabId: "pipeline-worker:pipeline-1:build:0:key",

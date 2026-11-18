@@ -36,7 +36,8 @@ describe("GraphInspector", () => {
   test("summarises the template when nothing is selected", () => {
     const template = pipeline();
     renderInspector(template, null);
-    expect(screen.getByRole("heading", { name: template.name })).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Build pipeline" })).toBeDefined();
+    expect(screen.getByText(/Runs on the build pipeline engine\./)).toBeDefined();
     expect(screen.getByText("Select a node, edge or loop to inspect it.")).toBeDefined();
     expect(screen.getByText(`at most ${template.limits.maxAgentSessions}`)).toBeDefined();
   });

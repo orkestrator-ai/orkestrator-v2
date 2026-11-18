@@ -103,6 +103,7 @@ describe("GraphLibraryList", () => {
       ["active", "Build pipeline engine"],
       ["retired", "Retired engine"],
     ]);
+    expect(screen.getByText("Build pipeline", { exact: true })).toBeDefined();
     expect(screen.getByText("Build pipeline engine").getAttribute("title")).toBe(
       "Runs on the build pipeline engine; duplicate it to run a copy as a graph",
     );

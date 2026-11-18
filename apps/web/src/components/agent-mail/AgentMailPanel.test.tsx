@@ -271,6 +271,14 @@ describe("AgentMailButton", () => {
     renderInAppCommandScope(<AgentMailButton />);
     expect(screen.getByRole("button", { name: "Agent mail" })).toBeTruthy();
   });
+
+  test("uses the singular accessible name for one message needing attention", () => {
+    appCommandStore(agentMailStore).setState({
+      summary: new Map([[AGENT_1, summaryEntry({ attentionCount: 1 })]]),
+    });
+    renderInAppCommandScope(<AgentMailButton />);
+    expect(screen.getByRole("button", { name: "Agent mail, 1 message needs you" })).toBeTruthy();
+  });
 });
 
 describe("AgentMailPanel", () => {

@@ -58,7 +58,7 @@ export function CoordinatorWebResearchSettings({
   const draft = { name: name.trim(), url: url.trim() };
   const draftProblem =
     servers.length >= MAX_COORDINATOR_RESEARCH_MCP_SERVERS
-      ? `A coordinator can use at most ${MAX_COORDINATOR_RESEARCH_MCP_SERVERS} research servers. Remove one to add another.`
+      ? `A Coordinator can use at most ${MAX_COORDINATOR_RESEARCH_MCP_SERVERS} research servers. Remove one to add another.`
       : !draft.name && !draft.url
         ? undefined
         : servers.some((server) => server.name === draft.name)
@@ -70,8 +70,8 @@ export function CoordinatorWebResearchSettings({
     <div>
       <h3 className="text-sm font-medium text-foreground">Coordinator web research</h3>
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-        What a coordinator may look up while it plans. Commands it runs never reach the network, and
-        it cannot open arbitrary web pages in any mode. Changes apply when a coordinator
+        What a Coordinator may look up while it plans. Commands it runs never reach the network, and
+        it cannot open arbitrary web pages in any mode. Changes apply when a Coordinator
         conversation next starts its agent.
       </p>
       <div
@@ -108,7 +108,7 @@ export function CoordinatorWebResearchSettings({
         <div className="mt-3 space-y-2">
           <p className="text-xs leading-relaxed text-muted-foreground">
             Remote (https) MCP servers only: a local server would run on this machine outside the
-            coordinator&apos;s sandbox. The coordinator may call every tool these servers offer.
+            Coordinator&apos;s sandbox. The Coordinator may call every tool these servers offer.
           </p>
           {servers.length === 0 ? (
             <p className="text-xs text-muted-foreground/70">No research servers listed.</p>

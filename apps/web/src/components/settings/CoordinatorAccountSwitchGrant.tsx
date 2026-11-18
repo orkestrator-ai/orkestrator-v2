@@ -231,9 +231,9 @@ export function CoordinatorAccountSwitchGrant({
         <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-2">
             <label htmlFor={id} className="text-sm font-medium text-foreground">
-              Let coordinators switch accounts without asking
+              Let Coordinators switch accounts without asking
             </label>
-            <InfoHint label="About coordinator account switching">
+            <InfoHint label="About Coordinator account switching">
               <p>
                 {granted
                   ? `Coordinators on ${where} switch the active ${platformLabel} account at once, here and on the machines it controls, instead of waiting for your approval.`

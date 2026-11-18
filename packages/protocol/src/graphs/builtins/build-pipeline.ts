@@ -117,9 +117,9 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
     formatVersion: 1,
     id: "build-pipeline",
     revision: GRAPH_BUILT_IN_TEMPLATE_REVISION,
-    name: "Build Pipeline",
+    name: "Build pipeline",
     description:
-      "Build a ticket, then prepare, seal, review with a read-only panel, address and verify in rounds until Verify passes; then open the pull request and resolve merge conflicts. Runs on the Build Pipeline engine.",
+      "Build a ticket, then prepare, seal, review with a read-only panel, address and verify in rounds until Verify passes; then open the pull request and resolve merge conflicts. Runs on the build pipeline engine.",
     engine: "build-pipeline",
     parameters: [],
     roles: [

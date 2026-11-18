@@ -55,6 +55,39 @@ function message(id: string, createdAt: string, body: string): AgentMailMessage 
 
 describe("agent mail conversations", () => {
   test.each([
+    ["Project coordinator", "Project Coordinator on mini"],
+    ["Release lead", "Release lead on mini"],
+  ])("formats retained Coordinator mail with title %s", (title, displayName) => {
+    const from = {
+      kind: "node" as const,
+      role: "coordinator" as const,
+      nodeId: "bk_mini",
+      nodeName: "mini",
+      projectId: "p",
+      environmentId: "coordinator:c:v",
+      tabId: "coordinator-tab",
+      title,
+    };
+    const key = agentMailParticipantKey(from);
+    const mailboxes = [
+      {
+        descriptor,
+        messages: [{ ...message("node-mail", "2026-10-18T10:00:00.000Z", "Report"), from }],
+      },
+    ];
+    const [summary] = listAgentMailConversations(mailboxes, { cutoff: 0 });
+    const conversation = agentMailConversationBetween(mailboxes, key, LIVE, {
+      cutoff: 0,
+      revision: 1,
+    });
+    for (const participants of [summary!.participants, conversation.participants]) {
+      expect(participants.find((participant) => participant.key === key)?.displayName).toBe(
+        displayName,
+      );
+    }
+  });
+
+  test.each([
     ["worker", "worker on omarchy-hp", undefined],
     ["Claude 2", "Claude 2 on omarchy-hp", "worker"],
   ])(

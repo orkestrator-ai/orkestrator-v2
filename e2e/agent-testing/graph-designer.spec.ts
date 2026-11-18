@@ -16,7 +16,11 @@ import { enableExperimentalGraphs } from "./experimental-graphs";
  */
 
 test.use({ actionTimeout: 15_000 });
-test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
+test.beforeEach(async ({ page }) => {
+  const withoutDocker = page.getByRole("button", { name: "Continue Without Docker", exact: true });
+  await page.addLocatorHandler(withoutDocker, (button) => button.click());
+  await acknowledgeDockerReachabilityWarning(page);
+});
 
 function devJson(command: string, profile: string) {
   return JSON.parse(
@@ -109,13 +113,13 @@ test("Graphs designer shows built-ins, imports JSON and pins diagnostics", async
     await expect(page.getByText(/^Graphs \d$/)).toBeVisible();
     const library = designer.getByRole("navigation", { name: "Graph templates" });
     const builtIns = library.getByRole("region", { name: "Built-in templates" });
-    await expect(builtIns.getByText("Build Pipeline", { exact: true })).toBeVisible();
+    await expect(builtIns.getByText("Build pipeline", { exact: true })).toBeVisible();
     await expect(library.locator('[data-graph-engine-status="retired"]')).toHaveText(
       "Retired engine",
     );
 
     // View a built-in: the canvas draws its nodes and loop, and it compiles cleanly.
-    await builtIns.getByText("Build Pipeline", { exact: true }).click();
+    await builtIns.getByText("Build pipeline", { exact: true }).click();
     await expect(designer.locator('[data-graph-node-id="review"]')).toBeVisible();
     await expect(designer.locator("[data-graph-loop]")).toBeVisible();
     await expect(designer.locator(".react-flow__edge").first()).toBeAttached();
@@ -303,7 +307,7 @@ test("switching graphs off persists across reload and keeps an open designer usa
     await expect(page.getByRole("button", { name: "Run graph…", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Graphs", exact: true }).click();
     const designer = page.locator("[data-graph-designer]");
-    await designer.getByText("Build Pipeline", { exact: true }).click();
+    await designer.getByText("Build pipeline", { exact: true }).click();
     await expect(designer.locator('[data-graph-node-id="review"]')).toBeVisible();
 
     const toggle = await openExperimentalSettings();

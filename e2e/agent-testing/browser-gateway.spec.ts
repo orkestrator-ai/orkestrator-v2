@@ -136,6 +136,8 @@ async function authenticatedInvoke(page: Page, status: Status) {
 // Dismiss it through its public Close control so local-worktree flows run even
 // on machines whose firewall blocks Docker's host connection.
 test.beforeEach(async ({ page }) => {
+  const withoutDocker = page.getByRole("button", { name: "Continue Without Docker", exact: true });
+  await page.addLocatorHandler(withoutDocker, (button) => button.click());
   const notice = page.getByRole("dialog", {
     name: "Docker containers can't reach Orkestrator",
     exact: true,

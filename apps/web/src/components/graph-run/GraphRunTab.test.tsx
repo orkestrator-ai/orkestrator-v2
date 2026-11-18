@@ -263,14 +263,14 @@ describe("GraphRunTab inspector", () => {
     await screen.findByTestId("graph-run-title");
     fireEvent.click(faceOf("plan"));
     expect(screen.getByTestId("graph-run-inspector-status").textContent).toBe(
-      "Waiting: Build Pipeline is writing this environment",
+      "Waiting: build pipeline is writing this environment",
     );
     const panel = inspector();
     await waitFor(() =>
       expect(panel.querySelector("[data-graph-activation-blocked]")).not.toBeNull(),
     );
     expect(panel.querySelector("[data-graph-activation-blocked]")!.textContent).toBe(
-      "Waiting: Build Pipeline is writing this environment",
+      "Waiting: build pipeline is writing this environment",
     );
   });
 

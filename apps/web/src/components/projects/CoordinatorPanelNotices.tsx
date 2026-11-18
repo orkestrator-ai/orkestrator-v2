@@ -148,7 +148,7 @@ export function CoordinatorIsolationBadge({
         data-coordinator-isolation-details
       >
         <p>
-          The coordinator reads this checkout but never changes it. Builds, fixes and other changes
+          The Coordinator reads this checkout but never changes it. Builds, fixes and other changes
           run in build pipelines or prompt environments.
         </p>
         {tier && platform ? (

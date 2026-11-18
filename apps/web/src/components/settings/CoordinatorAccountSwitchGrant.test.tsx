@@ -143,7 +143,7 @@ function show(machine: string | null | undefined = undefined) {
 }
 
 const tick = () =>
-  screen.findByRole("checkbox", { name: "Let coordinators switch accounts without asking" });
+  screen.findByRole("checkbox", { name: "Let Coordinators switch accounts without asking" });
 
 /** Opens the switch log and answers its dialog. */
 async function openLog(entries = 1) {
@@ -160,7 +160,7 @@ describe("coordinator account-switch permission in Settings", () => {
     show();
     const box = await tick();
     expect(box.getAttribute("aria-checked")).toBe("false");
-    const hint = screen.getByRole("button", { name: "About coordinator account switching" });
+    const hint = screen.getByRole("button", { name: "About Coordinator account switching" });
     fireEvent.click(hint);
     const tip = await screen.findByRole("tooltip");
     expect(

@@ -94,7 +94,7 @@ describe("LM-04 coordinator conversations in leaf mode", () => {
     expect(screen.getByTestId("leaf-mode-coordinator-gate").textContent).toContain(
       "controlled by Office desktop",
     );
-    fireEvent.click(screen.getByRole("button", { name: /Open this node's coordinator anyway/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Open this node's Coordinator anyway/ }));
     expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
   });
 
@@ -213,7 +213,7 @@ describe("0410 leaf-mode gate edge cases", () => {
   test("opening anyway is remembered per project for the app session, not persisted", () => {
     portalStore.store.setState({ loaded: true, status: leafStatus(["Office desktop"]) });
     renderGate();
-    fireEvent.click(screen.getByRole("button", { name: /Open this node's coordinator anyway/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Open this node's Coordinator anyway/ }));
     expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
     cleanup();
 
@@ -371,7 +371,7 @@ describe("a leaf shown in the window's tree", () => {
       "Coordination happens on the command node",
     );
     // No portal id yet: the command scope's own node is opened.
-    fireEvent.click(screen.getByRole("button", { name: /^Open the coordinator on/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open the Coordinator on/ }));
     expect(open).toHaveBeenCalledWith({
       connectionId: "bk_top",
       projectId: "top-project",
@@ -385,7 +385,7 @@ describe("a leaf shown in the window's tree", () => {
     const open = spyOn(openWorkspace, "openMachineWorkspace").mockImplementation(() => undefined);
     portalStore.store.setState({ loaded: true, selfId: "bk_command" as never });
     renderInTree();
-    fireEvent.click(screen.getByRole("button", { name: /^Open the coordinator on/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open the Coordinator on/ }));
     expect(open.mock.calls[0]?.[0]).toMatchObject({ connectionId: "bk_command" });
   });
 
@@ -436,14 +436,14 @@ describe("a leaf shown in the window's tree", () => {
     );
     expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    await screen.findByRole("button", { name: /^Open the coordinator on/ });
+    await screen.findByRole("button", { name: /^Open the Coordinator on/ });
     expect(commandClient.calls("get_projects")).toHaveLength(1);
     expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
   });
 
   test("opening anyway is remembered under the leaf node, in the leaf's own UI state", () => {
     const { scope } = renderInTree();
-    fireEvent.click(screen.getByRole("button", { name: /Open this node's coordinator anyway/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Open this node's Coordinator anyway/ }));
     expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
     expect(scope.store(uiStore).getState().openedLeafCoordinators).toEqual([
       "bk_leaf:leaf-project",

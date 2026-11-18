@@ -1052,9 +1052,9 @@ Claude turn released to background agents, and is reported the same way
   interrupted, and a stopped child's `cancelled` report wakes the parent. A
   stop (and so a close) interrupts the running descendants and then, for up
   to 3 s, any run their reports wake, refreshing descendants even after a quiet
-  snapshot. New external input cancels the stop phase; another provider
-  instance is detected through the parent's input history. Disposal cancels
-  the phase too. Revised launch cards retain folded results after reports
+  snapshot. Prompts and steers from any provider instance wait for the session's
+  Stop lock. A change to the parent's external input fences further cleanup,
+  and disposal cancels the phase. Revised launch cards retain folded results after reports
   leave the head window, and older launches still consult live child state.
 
 A child's own permission or question cards are not shown in the parent's tab
@@ -1079,14 +1079,17 @@ sub-agent (`opencode2/background-subagents.ts`):
   more, for its report.
 - Workflows: `observeSession` adds `backgroundWorkLive` while such a job is
   listed or a shell report waits in the inbox, so a pipeline, review or
-  structured turn waits for the run the report wakes, which belongs to the
-  same request (`openCode2RequestRun`, `openCode2TurnTerminalError`). A
-  report with no `jobID` is a command the user ran themselves and wakes
-  nothing.
+  structured turn waits for the run the report wakes. The request that
+  launched the shell owns that run, even if a newer request has settled
+  in between (`openCode2RequestRun`, `openCode2TurnTerminalError`).
+  Settlement checks jobs, inbox and active runs before confirming the run
+  boundary in history. A report with no `jobID` is a command the user ran
+  themselves and wakes nothing.
 - Stop (and so close): terminates the running background shells of the
   session and its descendants through `DELETE /api/shell/{id}` (an interrupt
-  alone leaves them running), then interrupts the run their reports wake, as
-  for sub-agents. 2.3.1 reports a removed command as a failed job whose body
+  alone leaves them running). Stop rescans jobs and interrupts report-woken
+  runs under a shared cleanup deadline. It restores only the stopped request's
+  grant, after cleanup confirms quiescence. 2.3.1 reports a removed command as a failed job whose body
   is `Shell.NotFoundError`; the transcript shows it as "Background command
   stopped".
 - Transcript: the report is a status row with the command and its output
@@ -1119,7 +1122,10 @@ the commands):
 - `mise run verify:opencode2:real-stack`: the idle-observation spec's
   OpenCode cases (a missed final event, an approval card, a cut event
   stream, a hidden document, a turn finishing with no renderer, composer
-  steer) in a local environment of a disposable profile.
+  steer) in a local environment of a disposable profile. Select the
+  `shell-timeout-return` case with `ORKESTRATOR_AGENT_TEST_IDLE_CASES` to
+  exercise a timed-out command completing while the tab is hidden, then
+  verify its report on return and after reload.
 - `mise run verify:opencode2:container`: the same cases in a container
   environment, with the scripted model served on the container's own
   loopback and named in the profile's `opencode.json`, which each runtime
@@ -1130,7 +1136,8 @@ All three passed at 2.2.6 on Linux x86_64 (host 2026-11-11, container
 2026-11-13, behind an egress gateway); at 2.3.0 the live set passed on Linux
 x86_64 on 2026-11-17, and at 2.3.1 on 2026-11-18 (with
 `opencode2-shell-timeout.live.test.ts`), and the real-stack and container
-halves were not re-run for either. The per-case figures are in
+full matrices were not re-run for either. The focused `shell-timeout-return`
+browser case passed on 2.3.1 on Linux x86_64. The per-case figures are in
 [agent-testing.md](../development/agent-testing.md). Concurrent sessions on
 one server, a steer racing a permission or question card and steer through
 the public CLI passed on scripted models on 2026-11-14

@@ -43,7 +43,7 @@ import {
 import type { OpenCode2McpServers } from "./mcp.js";
 import { OPENCODE2_ARTIFACTS_MCP_PREFIX, OPENCODE2_DESIGN_MCP_PREFIX } from "./permissions.js";
 import type { OpenCode2TurnGrants } from "./turn-grants.js";
-import { openCode2BackgroundReport } from "./transcript.js";
+import { openCode2BackgroundReport, openCode2ShellReportMetadata } from "./transcript.js";
 import {
   isOpenCode2IdleMessage,
   type OpenCode2AssistantMessage,
@@ -202,27 +202,28 @@ export class OpenCode2WorkflowTurns {
     requestId: string,
     history: () => Promise<readonly OpenCode2Message[]>,
     /** True when the session's open run was cut short by a server stop (`restart-cut.ts`). */
-    cutByStop?: () => Promise<boolean>,
+    cutByStop: () => Promise<boolean>,
     /**
-     * True while a background sub-agent will still report and wake a run that
+     * True while a background sub-agent or shell will report and wake a run that
      * belongs to this request (`background-subagents.ts`): the grant stays.
      */
-    backgroundLive?: () => Promise<boolean>,
+    backgroundLive: (run: OpenCode2RequestRun) => Promise<boolean>,
   ): Promise<boolean> {
     return this.grants.runExclusive(sessionId, async () => {
       const owner = await this.grants.owner(sessionId);
       const holdsGrant = owner?.requestId === requestId && !owner.settled;
       const run = openCode2RequestRun(await history(), requestId);
-      if (run ? !run.idle && !(await cutByStop?.()) : holdsGrant) return false;
-      if (run?.idle && (await backgroundLive?.())) return false;
+      if (!run) return !holdsGrant;
+      if (!run.idle && !(run.superseded && !holdsGrant) && !(await cutByStop())) return false;
+      if (run.idle) {
+        if (await backgroundLive(run)) return false;
+        const reconciled = openCode2RequestRun(await history(), requestId);
+        // A different run boundary may itself have launched more work.
+        if (reconciled?.idle?.id !== run.idle.id) return false;
+      }
       if (holdsGrant) await this.grants.settle(sessionId, requestId);
       return true;
     });
-  }
-
-  /** After an interrupt: whichever turn held a grant no longer does. */
-  afterAbort(sessionId: string): Promise<void> {
-    return this.grants.runExclusive(sessionId, () => this.grants.settleOwner(sessionId));
   }
 
   /** Drop a closed session's own connections (tab, design, artifacts). */
@@ -239,33 +240,66 @@ export class OpenCode2WorkflowTurns {
   }
 }
 
+export interface OpenCode2RequestRun {
+  assistants: OpenCode2AssistantMessage[];
+  idle?: OpenCode2IdleMessage;
+  shellIds: ReadonlySet<string>;
+  /** A different input or shell owns the latest run. */
+  superseded: boolean;
+}
+
 /**
- * One request's run in a session's history (oldest first), once its input is
- * there. A run that a background sub-agent's report (2.3.0) or a background
- * shell's report (2.3.1: a command whose timeout expired keeps running) wakes
- * after the request's run settled (the next row after an `idle` row is that
- * report) is the same request's continuation, as a Claude turn's continuation
- * after its background agents is: its responses count and its `idle` row ends
- * the run.
+ * One request's run in persisted history (oldest first). A shell report
+ * wakes the request that launched its shell, even across intervening input.
+ * Sub-agent reports retain their existing adjacent-run behavior.
  */
 export function openCode2RequestRun(
   rows: readonly OpenCode2Message[],
   requestId: string,
-): { assistants: OpenCode2AssistantMessage[]; idle?: OpenCode2IdleMessage } | undefined {
+): OpenCode2RequestRun | undefined {
   const start = rows.findIndex((row) => carriesRequest(row, requestId));
   if (start < 0) return undefined;
   const assistants: OpenCode2AssistantMessage[] = [];
+  const shellIds = new Set<string>();
   let idle: OpenCode2IdleMessage | undefined;
+  let ownsRun = true;
+  let adjacent = false;
+  let atBoundary = false;
+  let superseded = false;
   for (const row of rows.slice(start + 1)) {
-    if (idle) {
-      if (!openCode2BackgroundReport(row)) break;
-      idle = undefined;
-      continue;
+    if (row.type === "user" && asRecord(row.metadata?.orkestrator)?.steer !== true) {
+      superseded = true;
+      ownsRun = false;
+      adjacent = false;
+      atBoundary = false;
+    } else if (isOpenCode2IdleMessage(row)) {
+      if (ownsRun) idle = row;
+      adjacent = ownsRun;
+      atBoundary = true;
+      ownsRun = false;
+    } else if (atBoundary) {
+      const shell = openCode2ShellReportMetadata(row);
+      ownsRun = shell
+        ? typeof shell.shellID === "string" && shellIds.has(shell.shellID)
+        : adjacent && openCode2BackgroundReport(row);
+      if (shell && !ownsRun) superseded = true;
+      if (ownsRun) {
+        idle = undefined;
+        superseded = false;
+      }
+      atBoundary = false;
+      adjacent = false;
+    } else if (ownsRun && row.type === "assistant") {
+      const assistant = row as OpenCode2AssistantMessage;
+      assistants.push(assistant);
+      for (const part of assistant.content ?? []) {
+        if (part.type !== "tool" || part.name !== "shell") continue;
+        const shellId = part.state?.metadata?.shellID;
+        if (typeof shellId === "string") shellIds.add(shellId);
+      }
     }
-    if (isOpenCode2IdleMessage(row)) idle = row;
-    else if (row.type === "assistant") assistants.push(row as OpenCode2AssistantMessage);
   }
-  return idle ? { assistants, idle } : { assistants };
+  return { assistants, idle, shellIds, superseded };
 }
 
 /**
@@ -274,10 +308,9 @@ export function openCode2RequestRun(
  * answer, or a typed failure.
  */
 export function openCode2StructuredResult<T>(
-  rows: readonly OpenCode2Message[],
+  run: OpenCode2RequestRun,
   requestId: string,
 ): StructuredOutputResult<T> | null {
-  const run = openCode2RequestRun(rows, requestId);
   if (!run?.idle) return null;
   const failure = (code: "provider_error" | "malformed_output", message: string) => ({
     ok: false as const,

@@ -258,13 +258,17 @@ export class OpenCode2Client {
     });
   }
 
-  async interrupt(sessionId: string, options: { resume?: boolean } = {}): Promise<boolean> {
+  async interrupt(
+    sessionId: string,
+    options: { resume?: boolean; signal?: AbortSignal } = {},
+  ): Promise<boolean> {
     const answer = await this.request<{ interrupted?: unknown }>(
       "POST",
       `/api/session/${seg(sessionId)}/interrupt`,
       "OpenCode interrupt",
       {
         bare: true,
+        signal: options.signal,
         query: { resume: options.resume === undefined ? undefined : String(options.resume) },
       },
     );
@@ -394,17 +398,36 @@ export class OpenCode2Client {
     if (!Array.isArray(data)) {
       throw new ProviderUnavailableError("OpenCode background jobs is malformed");
     }
-    return data.filter((entry): entry is OpenCode2BackgroundJob => {
+    const jobs: OpenCode2BackgroundJob[] = [];
+    for (const entry of data) {
       const job = asRecord(entry);
-      return (
-        typeof job?.id === "string" &&
-        typeof job.kind === "string" &&
-        typeof job.sessionID === "string" &&
-        typeof job.status === "string" &&
-        typeof asRecord(job.time)?.started === "number" &&
-        (!filter.kind || job.kind === filter.kind)
-      );
-    });
+      const time = asRecord(job?.time);
+      const status = job?.status;
+      if (
+        !job ||
+        typeof job.id !== "string" ||
+        !job.id ||
+        typeof job.kind !== "string" ||
+        !job.kind ||
+        typeof job.sessionID !== "string" ||
+        !job.sessionID ||
+        (status !== "running" &&
+          status !== "completed" &&
+          status !== "error" &&
+          status !== "cancelled") ||
+        typeof time?.started !== "number" ||
+        !Number.isFinite(time.started) ||
+        (time.completed !== undefined &&
+          (typeof time.completed !== "number" || !Number.isFinite(time.completed))) ||
+        (status !== "running" && time.completed === undefined) ||
+        (job.kind === "shell" &&
+          (typeof job.shellID !== "string" || !/^[a-zA-Z0-9_-]+$/.test(job.shellID)))
+      ) {
+        throw new ProviderUnavailableError("OpenCode background jobs contains a malformed entry");
+      }
+      if (!filter.kind || job.kind === filter.kind) jobs.push(entry as OpenCode2BackgroundJob);
+    }
+    return jobs;
   }
 
   /**
@@ -413,22 +436,27 @@ export class OpenCode2Client {
    * answers 204 too. Its background job then settles and reports to its
    * session (2.3.1).
    */
-  async removeShell(shellId: string): Promise<void> {
-    await this.request("DELETE", `/api/shell/${seg(shellId)}`, "OpenCode shell remove", {});
+  async removeShell(shellId: string, signal?: AbortSignal): Promise<void> {
+    await this.request("DELETE", `/api/shell/${seg(shellId)}`, "OpenCode shell remove", { signal });
   }
 
   /** Withdraw an inbox item that has not been delivered yet. */
-  async withdrawInput(sessionId: string, inputId: string): Promise<void> {
+  async withdrawInput(sessionId: string, inputId: string, signal?: AbortSignal): Promise<void> {
     await this.request(
       "DELETE",
       `/api/session/${seg(sessionId)}/inbox/${seg(inputId)}`,
       "OpenCode inbox withdraw",
-      {},
+      { signal },
     );
   }
 
-  listPermissions(sessionId: string): Promise<OpenCode2PermissionRequest[]> {
-    return this.request("GET", `/api/session/${seg(sessionId)}/permission`, "OpenCode permissions");
+  listPermissions(sessionId: string, signal?: AbortSignal): Promise<OpenCode2PermissionRequest[]> {
+    return this.request(
+      "GET",
+      `/api/session/${seg(sessionId)}/permission`,
+      "OpenCode permissions",
+      { signal },
+    );
   }
 
   async replyPermission(
@@ -436,17 +464,18 @@ export class OpenCode2Client {
     requestId: string,
     decision: OpenCode2PermissionDecision,
     message?: string,
+    signal?: AbortSignal,
   ): Promise<void> {
     await this.request(
       "POST",
       `/api/session/${seg(sessionId)}/permission/${seg(requestId)}/reply`,
       "OpenCode permission reply",
-      { body: { decision, ...(message ? { message } : {}) } },
+      { body: { decision, ...(message ? { message } : {}) }, signal },
     );
   }
 
-  listForms(sessionId: string): Promise<OpenCode2Form[]> {
-    return this.request("GET", `/api/session/${seg(sessionId)}/form`, "OpenCode forms");
+  listForms(sessionId: string, signal?: AbortSignal): Promise<OpenCode2Form[]> {
+    return this.request("GET", `/api/session/${seg(sessionId)}/form`, "OpenCode forms", { signal });
   }
 
   async replyForm(sessionId: string, formId: string, answer: Record<string, unknown>) {
@@ -458,12 +487,12 @@ export class OpenCode2Client {
     );
   }
 
-  async rejectForm(sessionId: string, formId: string, message?: string) {
+  async rejectForm(sessionId: string, formId: string, message?: string, signal?: AbortSignal) {
     await this.request(
       "DELETE",
       `/api/session/${seg(sessionId)}/form/${seg(formId)}`,
       "OpenCode form reject",
-      { query: { message } },
+      { query: { message }, signal },
     );
   }
 

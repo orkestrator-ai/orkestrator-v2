@@ -29,6 +29,9 @@
  *   must settle with no running background task left behind.
  * - `background`: the model starts a background shell command and ends its
  *   turn. The view must follow the task to its end and settle.
+ * - `shell-timeout-return`: OpenCode with a scripted model only. Hide the
+ *   tab after a foreground command moves to the background. The tab catches
+ *   up from its pre-completion transcript on return and after reload.
  * - `reconnect`: the event stream is cut and the browser goes offline while a
  *   turn runs and completes; back online, the view must settle.
  * - `hidden`: the document is hidden for the whole turn; on becoming visible
@@ -1777,6 +1780,62 @@ test.describe("live idle observation", () => {
             );
             await expect(stopButton()).toHaveCount(0);
           }
+        });
+
+        await runCase("shell-timeout-return", async (record) => {
+          if (platform !== "opencode" || !FAKE_MODELS) {
+            record.status = "skipped";
+            return;
+          }
+          const marker = `IDLEQA-BGOUT-${nonce()}`;
+          const word = `IDLEQA-BG-${nonce()}`;
+          await sendFromComposer(
+            `Start this shell command as a background task and do not wait for it: sleep 15; echo ${marker} ` +
+              `Right after starting it, reply with exactly ${word} and nothing else. Use a 1000 ms foreground timeout.`,
+          );
+          await expect(page().getByText(word, { exact: true }).first()).toBeVisible({
+            timeout: 10_000,
+          });
+          const beforeReport = await messageIds();
+          expect(lateOutputRowIds((await projection())?.messages ?? [], new Set(), marker)).toEqual(
+            [],
+          );
+
+          let reportIds: string[] = [];
+          await qa("window.__idleQa.setHidden(true)");
+          try {
+            await expect
+              .poll(
+                async () => {
+                  const current = await projection();
+                  await answerPending(current);
+                  reportIds = lateOutputRowIds(current?.messages ?? [], beforeReport, marker);
+                  return current?.turn.phase === "idle" && reportIds.length > 0;
+                },
+                { timeout: 40_000 },
+              )
+              .toBe(true);
+          } finally {
+            await qa("window.__idleQa.setHidden(false)");
+          }
+
+          const report = () =>
+            page()
+              .locator(
+                reportIds.map((id) => `[data-chat-message-key=${JSON.stringify(id)}]`).join(", "),
+              )
+              .getByText(marker)
+              .first();
+          await expect(report()).toBeVisible({ timeout: 30_000 });
+          await goToEnvironment();
+          await expect(report()).toBeVisible({ timeout: 30_000 });
+          await expect(stopButton()).toHaveCount(0);
+          await expect
+            .poll(() => sidebarActivity(page(), environmentName), { timeout: SIDEBAR_BOUND_MS })
+            .toBe("idle");
+          record.notes.push(
+            "The report appeared on return to the hidden tab and after a fresh page load",
+          );
         });
 
         await runCase("reconnect", async (record) => {

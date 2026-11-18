@@ -190,10 +190,17 @@ function clip(value: string, limit = MAX_NOTICE_CHARS): string {
  * `source` but no `jobID`, and wakes nothing, so it is not one.
  */
 export function openCode2BackgroundShellReport(message: unknown): boolean {
+  return openCode2ShellReportMetadata(message) !== undefined;
+}
+
+export function openCode2ShellReportMetadata(
+  message: unknown,
+): Record<string, unknown> | undefined {
   const row = asRecord(message);
-  if (row?.type !== "synthetic") return false;
-  const meta = asRecord(row.metadata);
-  return meta?.source === "shell" && !!nonEmptyString(meta.jobID);
+  const meta = asRecord(row?.metadata);
+  return row?.type === "synthetic" && meta?.source === "shell" && nonEmptyString(meta.jobID)
+    ? meta
+    : undefined;
 }
 
 /**

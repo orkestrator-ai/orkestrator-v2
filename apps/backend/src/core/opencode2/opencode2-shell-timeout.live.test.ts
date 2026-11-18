@@ -81,7 +81,12 @@ liveTest(
     expect(call?.state?.metadata?.status).toBe("running");
     const jobs = await client!.listBackgroundJobs({ sessionId: id, kind: "shell" });
     expect(jobs).toEqual([
-      expect.objectContaining({ kind: "shell", sessionID: id, status: "running" }),
+      expect.objectContaining({
+        kind: "shell",
+        sessionID: id,
+        status: "running",
+        shellID: call?.state?.metadata?.shellID,
+      }),
     ]);
     expect(await p.status(id)).toBe("idle");
     expect(await p.activity(id)).toBe("working");
@@ -91,12 +96,23 @@ liveTest(
       backgroundWorkLive: true,
     });
 
+    const readOptions = { limit: 100, targetBytes: 2_000_000 };
+    const before = await p.transcriptSnapshot(id, readOptions);
+    expect(JSON.stringify(before)).not.toContain("Background command completed:");
+
     // Away: nothing reads through the provider while the command ends and
     // its report wakes the session into a run that settles.
     await until(async () => (await idleRows(id)) === 2, 30_000);
     await until(async () => (await client!.activeSessions()).has(id) === false);
 
-    // Return, as a reload or a restarted backend reads it: a fresh provider.
+    // Return with the token held before the report, as a remounted tab does.
+    const resumed = await p.transcriptSnapshot(id, {
+      ...readOptions,
+      knownSourceToken: before.sourceToken,
+    });
+    expect(JSON.stringify(resumed)).toContain("Background command completed:");
+
+    // Reload from a fresh provider with no cached transcript.
     const fresh = new OpenCode2Provider(client!, { monitorEvents: false });
     try {
       expect(await fresh.status(id)).toBe("idle");
@@ -109,6 +125,7 @@ liveTest(
       expect(snapshot).toContain(`Background command completed: ${command}\\nLIVE-SHELL-DONE`);
       const report = (await rows(id)).find((row) => row.type === "synthetic");
       expect(report?.metadata).toMatchObject({ source: "shell", state: "completed" });
+      expect(report?.metadata?.shellID).toBe(jobs[0]?.shellID);
       expect(await client!.listBackgroundJobs({ sessionId: id })).toEqual([]);
     } finally {
       await fresh.dispose();

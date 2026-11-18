@@ -48,7 +48,7 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { asRecord } from "../agent-provider-runtime.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
-import { openCode2BackgroundReport } from "./transcript.js";
+import { openCode2BackgroundReport, openCode2ShellReportMetadata } from "./transcript.js";
 import type { OpenCode2BackgroundJob, OpenCode2Session } from "./types.js";
 
 const log = createLogger("native-agent.opencode2");
@@ -83,6 +83,9 @@ export const OPENCODE2_SHELL_REPORT_GRACE_MS = 3_000;
 /** How long a stop keeps interrupting runs that its children's reports wake. */
 export const OPENCODE2_STOP_SETTLE_MS = 3_000;
 const STOP_POLL_MS = 100;
+const STOP_DELETE_CONCURRENCY = 4;
+/** Allows the final reconciliation read after the report polling window. */
+export const OPENCODE2_STOP_CLEANUP_MS = OPENCODE2_STOP_SETTLE_MS + 1_000;
 
 export interface OpenCode2BackgroundWorkDependencies {
   /** The server's running sessions; `fresh` skips any cache. */
@@ -94,21 +97,12 @@ export interface OpenCode2BackgroundWorkDependencies {
 export class OpenCode2BackgroundWork {
   /** Session id → its parent's id, `null` for a root session. */
   private readonly parents = new Map<string, string | null>();
-  private readonly stops = new Map<string, object>();
+  private readonly stops = new Set<AbortController>();
 
   dispose(): void {
+    for (const stop of this.stops) stop.abort();
     this.stops.clear();
     this.parents.clear();
-  }
-
-  beginStop(sessionId: string): object {
-    const token = {};
-    this.stops.set(sessionId, token);
-    return token;
-  }
-
-  cancelStop(sessionId: string): void {
-    this.stops.delete(sessionId);
   }
 
   constructor(
@@ -124,10 +118,9 @@ export class OpenCode2BackgroundWork {
   async owners(sessionIds: readonly string[], running: ReadonlySet<string>): Promise<Set<string>> {
     const wanted = new Set(sessionIds);
     const owners = new Set<string>();
-    const others = [...running].filter((id) => !wanted.has(id));
-    if (others.length === 0 || wanted.size === 0) return owners;
+    if (running.size === 0 || wanted.size === 0) return owners;
     let lookups = 0;
-    for (const id of others) {
+    for (const id of running) {
       let current: string | null | undefined = id;
       for (let depth = 0; current && depth < MAX_DEPTH; depth += 1) {
         let parent = this.parents.get(current);
@@ -137,10 +130,7 @@ export class OpenCode2BackgroundWork {
           parent = await this.parentOf(current);
           if (parent === undefined) break;
         }
-        if (parent && wanted.has(parent)) {
-          owners.add(parent);
-          break;
-        }
+        if (parent && parent !== id && wanted.has(parent)) owners.add(parent);
         current = parent;
       }
     }
@@ -166,21 +156,46 @@ export class OpenCode2BackgroundWork {
    * child or shell that settled so recently its report may still be on its
    * way. An unreadable state stays pending until a read proves completion.
    */
-  async live(sessionId: string): Promise<boolean> {
+  async live(
+    sessionId: string,
+    scope?: { shellIds: ReadonlySet<string>; superseded: boolean },
+  ): Promise<boolean> {
     try {
-      const running = await this.deps.running(true);
-      if ((await this.owners([sessionId], running)).has(sessionId)) return true;
-      const [inbox, children, shells] = await Promise.all([
-        this.client.listInbox(sessionId),
-        this.client.listChildSessions(sessionId),
-        this.client.listBackgroundJobs({ sessionId, kind: "shell", descendants: true }),
-      ]);
-      if (inbox.some((item) => openCode2BackgroundReport({ ...item.payload, type: item.type }))) {
-        return true;
-      }
+      const shellIds = scope?.shellIds;
+      // A shell leaves the job list only after admission to the inbox. Read
+      // in delivery order so a report cannot pass between parallel snapshots.
+      const shells = await this.client.listBackgroundJobs({
+        sessionId,
+        kind: "shell",
+        descendants: true,
+      });
       const now = this.deps.now();
-      if (shells.some((job) => pendingShell(job, now))) return true;
-      return children.some((child) => pendingChild(child, now));
+      if (
+        shells.some(
+          (job) =>
+            pendingShell(job, now) &&
+            (!shellIds || job.sessionID !== sessionId || shellIds.has(job.shellID!)),
+        )
+      )
+        return true;
+      const children = await this.client.listChildSessions(sessionId);
+      const inbox = await this.client.listInbox(sessionId);
+      if (
+        inbox.some((item) => {
+          const row = { ...item.payload, type: item.type };
+          const shell = openCode2ShellReportMetadata(row);
+          if (shell && shellIds)
+            return typeof shell.shellID === "string" && shellIds.has(shell.shellID);
+          return openCode2BackgroundReport(row);
+        })
+      )
+        return true;
+      const running = await this.deps.running(true);
+      return (
+        (!scope?.superseded && running.has(sessionId)) ||
+        (await this.owners([sessionId], running)).has(sessionId) ||
+        children.some((child) => pendingChild(child, now))
+      );
     } catch (error) {
       if (!(error instanceof OpenCode2RequestError && error.status === 404)) {
         log.debug("background.unreadable", { error: formatLogError(error, { message: false }) });
@@ -190,110 +205,136 @@ export class OpenCode2BackgroundWork {
   }
 
   /**
-   * Stop the background work of a session whose own run was just
-   * interrupted: terminate the background shells it and its descendants
-   * own, interrupt every running descendant, then, until the reports those
-   * stops send have been delivered, interrupt any run they wake in
-   * `sessionId`. Bounded by {@link OPENCODE2_STOP_SETTLE_MS}; best-effort.
+   * Interrupt the parent, repeatedly discover and end descendant work, and
+   * drain runs woken by reports. True only with a quiet final snapshot.
+   * Dispatch and grant settlement hold the same session lock as this phase.
    */
-  async stop(sessionId: string, token = this.beginStop(sessionId)): Promise<void> {
-    const current = () => this.stops.get(sessionId) === token;
+  async stop(
+    sessionId: string,
+    interruptParent?: (signal: AbortSignal) => Promise<void>,
+  ): Promise<boolean> {
+    const controller = new AbortController();
+    this.stops.add(controller);
+    const signal = controller.signal;
+    const timeout = setTimeout(() => controller.abort(), OPENCODE2_STOP_CLEANUP_MS);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+    const inputHead = async () => {
+      const page = await this.client.listMessages(sessionId, { limit: 199, order: "desc", signal });
+      return page.messages.find(
+        (row) =>
+          row.type === "user" || (row.type === "synthetic" && !openCode2BackgroundReport(row)),
+      )?.id;
+    };
     try {
-      const inputHead = async () => {
-        const page = await this.client.listMessages(sessionId, { limit: 199, order: "desc" });
-        return page.messages.find(
-          (row) =>
-            row.type === "user" || (row.type === "synthetic" && !openCode2BackgroundReport(row)),
-        )?.id;
-      };
       const initialInput = await inputHead();
-      const shells = await this.stopShells(sessionId);
-      if (!current()) return;
-      const descendants = await this.descendants(sessionId);
-      if (!current()) return;
-      if (descendants.length === 0 && shells === 0) {
-        const inbox = await this.client.listInbox(sessionId);
-        if (!inbox.some((item) => openCode2BackgroundReport({ ...item.payload, type: item.type })))
-          return;
-      }
-      // Poll the whole bounded phase, including quiet snapshots: admission and
-      // report delivery can occur after an initially empty running set.
-      const deadline = this.deps.now() + OPENCODE2_STOP_SETTLE_MS;
+      const ownsStop = async () =>
+        !signal.aborted && (await inputHead()) === initialInput && !signal.aborted;
+      await interruptParent?.(signal);
+      const attempted = new Set<string>();
+      let quiet = false;
       for (let poll = 0; poll <= OPENCODE2_STOP_SETTLE_MS / STOP_POLL_MS; poll += 1) {
-        const running = await this.deps.running(true);
-        if (!current()) return;
-        for (const id of [...descendants, sessionId]) {
-          if (!current()) return;
-          if (running.has(id)) {
-            // Another provider instance (pipeline or mail) can dispatch too.
-            // A new external input owns the parent; only report continuations
-            // of the stopped work may be interrupted here.
-            if (id === sessionId && (await inputHead()) !== initialInput) return;
-            if (!current()) return;
-            await this.client.interrupt(id, { resume: false });
-          }
+        const descendants = await this.descendants(sessionId, signal);
+        const jobs = await this.stopJobs(sessionId, signal);
+        const running = await this.client.activeSessions(signal);
+        const sessions = [...descendants, sessionId];
+        const active = sessions.filter((id) => running.has(id));
+
+        for (const id of active) {
+          if (!(await ownsStop())) return false;
+          await this.client.interrupt(id, { resume: false, signal });
         }
-        if (this.deps.now() >= deadline) break;
-        await sleep(STOP_POLL_MS);
-        if (!current()) return;
-        const refreshed = await this.descendants(sessionId);
-        if (!current()) return;
-        descendants.splice(0, descendants.length, ...refreshed);
+        if (jobs) {
+          const owned = new Set(sessions);
+          await this.stopShells(
+            jobs.filter((job) => owned.has(job.sessionID)),
+            attempted,
+            ownsStop,
+            signal,
+          );
+        }
+
+        // Keep polling empty snapshots too. A command can cross its timeout
+        // during interruption or its report may still be on the way.
+        quiet =
+          !!jobs && !jobs.some((job) => pendingShell(job, this.deps.now())) && active.length === 0;
+        if (poll < OPENCODE2_STOP_SETTLE_MS / STOP_POLL_MS) await sleep(STOP_POLL_MS);
       }
+      if (!quiet || !(await ownsStop())) return false;
+      const descendants = await this.descendants(sessionId, signal);
+      const sessions = [sessionId, ...descendants];
+      const jobs = await this.stopJobs(sessionId, signal);
+      if (!jobs || jobs.some((job) => pendingShell(job, this.deps.now()))) return false;
+      for (const id of sessions) {
+        const inbox = await this.client.listInbox(id, signal);
+        if (inbox.some((item) => openCode2BackgroundReport({ ...item.payload, type: item.type })))
+          return false;
+      }
+      const running = await this.client.activeSessions(signal);
+      return sessions.every((id) => !running.has(id)) && (await ownsStop());
+    } catch (error) {
+      if (signal.aborted) return false;
+      throw error;
     } finally {
-      if (current()) this.stops.delete(sessionId);
+      clearTimeout(timeout);
+      this.stops.delete(controller);
     }
   }
 
-  /**
-   * Terminate the running background shells `sessionId` and its descendants
-   * own (2.3.1 keeps them running across an interrupt). Removing a command
-   * settles its job, whose report then wakes its session; the stop's settle
-   * phase interrupts that run. Returns how many were terminated. A list that
-   * cannot be read terminates nothing; a refused removal is logged.
-   */
-  private async stopShells(sessionId: string): Promise<number> {
-    let jobs: OpenCode2BackgroundJob[];
+  private async stopJobs(sessionId: string, signal: AbortSignal) {
     try {
-      jobs = await this.client.listBackgroundJobs({
-        sessionId,
-        kind: "shell",
-        descendants: true,
-      });
+      return await this.client.listBackgroundJobs(
+        { sessionId, kind: "shell", descendants: true },
+        signal,
+      );
     } catch (error) {
-      if (!(error instanceof OpenCode2RequestError && error.status === 404)) {
+      if (!signal.aborted) {
         log.warn("background.unreadable", {
           error: formatLogError(error, { message: false }),
         });
       }
-      return 0;
+      return undefined;
     }
+  }
+
+  private async stopShells(
+    jobs: OpenCode2BackgroundJob[],
+    attempted: Set<string>,
+    ownsStop: () => Promise<boolean>,
+    signal: AbortSignal,
+  ): Promise<void> {
     const running = jobs
-      .filter((job) => job.status === "running" && job.shellID)
-      .slice(0, MAX_STOPPED_SHELLS);
-    let stopped = 0;
-    for (const job of running) {
-      try {
-        await this.client.removeShell(job.shellID!);
-        stopped += 1;
-      } catch (error) {
-        log.warn("background.stop-failed", {
-          error: formatLogError(error, { message: false }),
-        });
-      }
+      .filter((job) => job.status === "running" && job.shellID && !attempted.has(job.shellID))
+      .slice(0, MAX_STOPPED_SHELLS - attempted.size);
+    for (let index = 0; index < running.length; index += STOP_DELETE_CONCURRENCY) {
+      if (!(await ownsStop())) return;
+      await Promise.all(
+        running.slice(index, index + STOP_DELETE_CONCURRENCY).map(async (job) => {
+          signal.throwIfAborted();
+          const id = job.shellID!;
+          if (attempted.has(id)) return;
+          attempted.add(id);
+          try {
+            await this.client.removeShell(id, signal);
+          } catch (error) {
+            if (!signal.aborted) {
+              log.warn("background.stop-failed", {
+                error: formatLogError(error, { message: false }),
+              });
+            }
+          }
+        }),
+      );
     }
-    return stopped;
   }
 
   /** The session's descendants, breadth first and bounded. */
-  private async descendants(sessionId: string): Promise<string[]> {
+  private async descendants(sessionId: string, signal: AbortSignal): Promise<string[]> {
     const found: string[] = [];
     let level = [sessionId];
     for (let depth = 0; depth < MAX_DEPTH && level.length > 0; depth += 1) {
       const next: string[] = [];
       for (const parent of level) {
-        const children = await this.client.listChildSessions(parent);
+        const children = await this.client.listChildSessions(parent, signal);
         for (const child of children) {
           this.remember(child.id, parent);
           if (found.length >= MAX_STOPPED_DESCENDANTS) return found;

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readProviderStatus } from "../agent-provider-contract.js";
+import { ProviderUnavailableError, readProviderStatus } from "../agent-provider-contract.js";
+import { OPENCODE2_STOP_CLEANUP_MS, OpenCode2BackgroundWork } from "./background-subagents.js";
+import { OpenCode2Client } from "./client.js";
+import { openCode2TurnTerminalError } from "./environment-provider.js";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 import { OpenCode2Provider } from "./provider.js";
 import { openCode2RequestRun } from "./workflow-results.js";
@@ -224,7 +227,14 @@ describe("background shells (2.3.1)", () => {
     clock += 60_000;
     expect(await provider.observeSession(parent)).toEqual({ status: "idle" });
     server.addBackgroundShell(child, "bun run build");
-    expect((await provider.activityBatch([parent])).get(parent)).toBe("working");
+    expect(await provider.activityBatch([parent, child])).toEqual(
+      new Map([
+        [parent, "working"],
+        [child, "working"],
+      ]),
+    );
+    expect(await provider.activity(parent)).toBe("working");
+    expect(await provider.activity(child)).toBe("working");
     expect(await provider.observeSession(parent)).toMatchObject({ backgroundWorkLive: true });
   });
 
@@ -254,7 +264,6 @@ describe("background shells (2.3.1)", () => {
   test("an unreadable job list keeps observation pending but not activity", async () => {
     const { server, provider, session } = await backgrounded();
     const client = server.client();
-    const { OpenCode2BackgroundWork } = await import("./background-subagents.js");
     client.listBackgroundJobs = async () => {
       throw new Error("offline");
     };
@@ -268,6 +277,286 @@ describe("background shells (2.3.1)", () => {
     server.backgroundShells.length = 0;
     expect((await provider.activityBatch([session])).get(session)).toBe("idle");
   });
+});
+
+describe("shell settlement and Stop interleavings", () => {
+  function setupWork() {
+    server = new FakeOpenCode2Server();
+    clock = Date.now();
+    const client = server.client();
+    provider = new OpenCode2Provider(client, { monitorEvents: false, now: () => clock });
+    return { server, provider, client };
+  }
+
+  for (const check of ["observe", "grant", "structured"] as const) {
+    test(`a shell completing during ${check} cannot settle on the launch run`, async () => {
+      const { server, provider, client } = setupWork();
+      const id = await provider.createSession("build", "race");
+      await provider.send(id, "run", {
+        requestId: "race",
+        readOnly: true,
+        schema: { type: "object" },
+      });
+      const shell = server.addBackgroundShell(id);
+      server.finishRun(id, "succeeded", '{"launch":true}');
+      const listJobs = client.listBackgroundJobs.bind(client);
+      client.listBackgroundJobs = (...args) => {
+        server.finishBackgroundShell(shell);
+        client.listBackgroundJobs = listJobs;
+        return listJobs(...args);
+      };
+      if (check === "observe") {
+        expect(await provider.observeSession(id)).toMatchObject({ backgroundWorkLive: true });
+      } else if (check === "grant") {
+        expect(await provider.settleTurn(id, "race")).toBe(false);
+        expect(server.sessions.get(id)?.metadata?.orkestrator).toMatchObject({
+          turn: { requestId: "race", settled: false },
+        });
+      } else {
+        expect(await provider.structured(id, "race")).toBeNull();
+      }
+      server.finishRun(id, "succeeded", '{"done":true}');
+      expect(await provider.structured(id, "race")).toMatchObject({ value: { done: true } });
+      expect(await provider.settleTurn(id, "race")).toBe(true);
+    });
+  }
+
+  test("reconciles a continuation that starts and finishes during the job read", async () => {
+    const { server, provider, client } = setupWork();
+    const id = await provider.createSession("build", "race");
+    await provider.send(id, "run", { requestId: "race", schema: { type: "object" } });
+    const shell = server.addBackgroundShell(id);
+    server.finishRun(id, "succeeded", '{"launch":true}');
+    const listJobs = client.listBackgroundJobs.bind(client);
+    client.listBackgroundJobs = (...args) => {
+      server.finishBackgroundShell(shell);
+      server.finishRun(id, "succeeded", '{"done":true}');
+      client.listBackgroundJobs = listJobs;
+      return listJobs(...args);
+    };
+    expect(await provider.structured(id, "race")).toBeNull();
+    expect(await provider.structured(id, "race")).toMatchObject({ value: { done: true } });
+  });
+
+  test("a previous shell cannot replace the newer request's result or outcome", async () => {
+    const { server, provider } = setupWork();
+    const id = await provider.createSession("build", "ownership");
+    await provider.send(id, "a", { requestId: "a" });
+    const shell = server.addBackgroundShell(id);
+    server.finishRun(id, "succeeded", '{"a":true}');
+    await provider.send(id, "b", { requestId: "b" });
+    server.finishRun(id, "succeeded", '{"b":true}');
+    expect(await provider.structured(id, "b")).toMatchObject({ value: { b: true } });
+    server.finishBackgroundShell(shell);
+    expect(await provider.structured(id, "b")).toMatchObject({ value: { b: true } });
+    server.finishRun(id, "failed");
+    const rows = (await provider.messages(id)) as OpenCode2Message[];
+    expect(openCode2TurnTerminalError(rows, "b")).toBeNull();
+    expect(openCode2TurnTerminalError(rows, "a")).toMatch(/failed/);
+    expect(await provider.structured(id, "b")).toMatchObject({ value: { b: true } });
+  });
+
+  test("retains reviewer permissions through shell removal and orders a replacement dispatch", async () => {
+    const { server, provider, client } = setupWork();
+    const id = await provider.createSession("build", "stop");
+    await provider.send(id, "old", { requestId: "old", readOnly: true });
+    const shell = server.addBackgroundShell(id);
+    server.finishRun(id);
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const remove = client.removeShell.bind(client);
+    client.removeShell = async (...args) => {
+      reached.resolve();
+      await release.promise;
+      expect(server.sessions.get(id)?.rules).toContainEqual(
+        expect.objectContaining({ action: "edit", effect: "deny" }),
+      );
+      await remove(...args);
+      expect(server.sessions.get(id)?.metadata?.orkestrator).toMatchObject({
+        turn: { requestId: "old", settled: false },
+      });
+    };
+    const replacement = new OpenCode2Provider(server.client(), { monitorEvents: false });
+    try {
+      const stopping = provider.abort(id);
+      await reached.promise;
+      const sending = replacement.send(id, "new", { requestId: "new", readOnly: true });
+      try {
+        expect(await replacement.dispatchStatus(id, "new")).toBe("unknown");
+      } finally {
+        release.resolve();
+        await Promise.all([stopping, sending]);
+      }
+      expect(server.shellRemovals).toEqual([shell]);
+      expect(server.sessions.get(id)?.running).toBe(true);
+      expect(server.sessions.get(id)?.metadata?.orkestrator).toMatchObject({
+        turn: { requestId: "new", settled: false },
+      });
+    } finally {
+      await replacement.dispose();
+    }
+  });
+
+  test("a new input arriving during the job read fences stale deletions", async () => {
+    const { server, provider, client } = setupWork();
+    const id = await provider.createSession("build", "stop");
+    await provider.send(id, "old", { requestId: "old" });
+    server.finishRun(id);
+    const read = client.listBackgroundJobs.bind(client);
+    client.listBackgroundJobs = (...args) => {
+      server.pushRow(id, { type: "user", text: "replacement" });
+      server.addBackgroundShell(id);
+      return read(...args);
+    };
+    await expect(provider.abort(id)).rejects.toThrow("stop is still pending");
+    expect(server.shellRemovals).toEqual([]);
+  });
+
+  test("rescans for a shell that crosses its timeout during descendant interruption", async () => {
+    const { server, provider, client } = setupWork();
+    const parent = await provider.createSession("build", "stop");
+    const child = server.addChildSession(parent);
+    const interrupt = client.interrupt.bind(client);
+    let shell: string | undefined;
+    client.interrupt = async (...args) => {
+      if (args[0] === child) shell ??= server.addBackgroundShell(child);
+      return interrupt(...args);
+    };
+    const work = new OpenCode2BackgroundWork(client, {
+      running: () => client.activeSessions(),
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    });
+    expect(await work.stop(parent)).toBe(true);
+    expect(shell).toBeDefined();
+    expect(server.shellRemovals).toEqual([shell!]);
+    expect(server.sessions.get(child)?.running).toBe(false);
+  });
+
+  test("drains a completion report that arrives after a scan with nothing to delete", async () => {
+    const { server, provider, client } = setupWork();
+    const id = await provider.createSession("build", "stop");
+    const shell = server.addBackgroundShell(id);
+    server.backgroundShells[0]!.status = "completed";
+    server.backgroundShells[0]!.time.completed = clock;
+    let polls = 0;
+    const work = new OpenCode2BackgroundWork(client, {
+      running: () => client.activeSessions(),
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+        if (++polls === 2) server.finishBackgroundShell(shell);
+      },
+    });
+    expect(await work.stop(id)).toBe(true);
+    expect(server.shellRemovals).toEqual([]);
+    expect(server.interrupts).toEqual([id]);
+    expect(server.sessions.get(id)?.running).toBe(false);
+  });
+
+  test.each(["envelope", "started", "status", "shellID", "completed"] as const)(
+    "malformed job %s keeps observation and Stop pending",
+    async (field) => {
+      const { server, provider, client } = setupWork();
+      const id = await provider.createSession("build", "bad jobs");
+      server.addBackgroundShell(id);
+      const job = server.backgroundShells[0]!;
+      const malformed = {
+        envelope: {},
+        started: [{ ...job, time: {} }],
+        status: [{ ...job, status: "unknown" }],
+        shellID: [{ ...job, shellID: "../unsafe" }],
+        completed: [{ ...job, status: "completed", time: { ...job.time, completed: "soon" } }],
+      };
+      const malformedClient = new OpenCode2Client({
+        baseUrl: client.baseUrl,
+        directory: client.directory,
+        password: "pw",
+        fetch: Object.assign(
+          async (...args: Parameters<typeof fetch>) =>
+            new URL(String(args[0])).pathname === "/api/experimental/job"
+              ? Response.json({ data: malformed[field] })
+              : fetch(...args),
+          { preconnect: fetch.preconnect },
+        ),
+      });
+      const work = new OpenCode2BackgroundWork(malformedClient, {
+        running: () => client.activeSessions(),
+        now: () => clock,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+      });
+      await expect(malformedClient.listBackgroundJobs()).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+      expect(await work.live(id)).toBe(true);
+      if (field === "shellID") expect(await work.stop(id)).toBe(false);
+      expect(server.shellRemovals).toEqual([]);
+    },
+  );
+
+  test("a refused DELETE leaves Stop unconfirmed", async () => {
+    const { server, provider, client } = setupWork();
+    const id = await provider.createSession("build", "refusal");
+    const shell = server.addBackgroundShell(id);
+    const attempted: string[] = [];
+    client.removeShell = async (id) => {
+      attempted.push(id);
+      throw new Error("refused");
+    };
+    const work = new OpenCode2BackgroundWork(client, {
+      running: () => client.activeSessions(),
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    });
+    expect(await work.stop(id)).toBe(false);
+    expect(attempted).toEqual([shell]);
+    expect(server.backgroundShells).toHaveLength(1);
+  });
+
+  test("hung shell DELETEs share the Stop deadline and a bounded pool", async () => {
+    const { server, provider } = setupWork();
+    const id = await provider.createSession("build", "hung deletes");
+    for (let n = 0; n < 8; n++) server.addBackgroundShell(id);
+    let sent = 0;
+    let aborted = 0;
+    const client = new OpenCode2Client({
+      baseUrl: server.baseUrl,
+      directory: "/work",
+      password: "pw",
+      fetch: Object.assign(
+        async (...args: Parameters<typeof fetch>) => {
+          if (args[1]?.method !== "DELETE") return fetch(...args);
+          sent++;
+          const signal = args[1].signal!;
+          return new Promise<Response>((_, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                aborted++;
+                reject(signal.reason);
+              },
+              { once: true },
+            );
+          });
+        },
+        { preconnect: fetch.preconnect },
+      ),
+    });
+    const work = new OpenCode2BackgroundWork(client, {
+      running: () => client.activeSessions(),
+      now: Date.now,
+    });
+    const start = performance.now();
+    expect(await work.stop(id)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(OPENCODE2_STOP_CLEANUP_MS + 1_000);
+    expect([sent, aborted]).toEqual([4, 4]);
+  }, 8_000);
 });
 
 describe("openCode2RequestRun", () => {
@@ -314,7 +603,9 @@ describe("openCode2RequestRun", () => {
     });
     const rows = [
       user("u1", "r"),
-      row("a1", "assistant", { content: [] }),
+      row("a1", "assistant", {
+        content: [{ type: "tool", name: "shell", state: { metadata: { shellID: "shl_1" } } }],
+      }),
       row("i1", "idle", { outcome: "succeeded" }),
       shellReport,
       row("a2", "assistant", { content: [] }),
@@ -332,7 +623,6 @@ describe("background work read failures and stop races", () => {
   test("unreadable activity, child lists and inboxes remain pending", async () => {
     const { server, parent } = await launched();
     const client = server.client();
-    const { OpenCode2BackgroundWork } = await import("./background-subagents.js");
     const work = new OpenCode2BackgroundWork(client, {
       running: async () => {
         throw new Error("offline");
@@ -383,7 +673,6 @@ describe("background work read failures and stop races", () => {
     test(`stop handles ${kind}`, async () => {
       const { server, parent, child } = await launched();
       const client = server.client();
-      const { OpenCode2BackgroundWork } = await import("./background-subagents.js");
       server.sessions.get(child)!.running = kind === "new-prompt";
       if (kind === "inbox") {
         server.sessions.get(parent)!.inbox.push({

@@ -338,6 +338,17 @@ export class FakeOpenCode2Server {
       status: "running",
       time: { started: Date.now() },
     });
+    this.pushRow(sessionId, {
+      type: "assistant",
+      content: [
+        {
+          type: "tool",
+          id: this.id("call"),
+          name: "shell",
+          state: { status: "completed", metadata: { status: "running", shellID } },
+        },
+      ],
+    });
     return shellID;
   }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type {
   WebAnnotationCapture,
   WebAnnotationCheck,
@@ -14,7 +14,7 @@ import { useAnnotationPanel } from "./panel-context";
 import { ResultCapture } from "./ResultCapturePrompt";
 import { ResultDiff } from "./ResultDiff";
 import {
-  captureConditionsLabel,
+  captureConditionLabels,
   citedEvidenceLabel,
   comparisonLabels,
   fileCheckLabel,
@@ -70,7 +70,7 @@ function Comparison({
   const after = useCapture(environmentId, afterCaptureId);
   const labels = comparisonLabels(before, after, recorded);
   const metadata = recorded ?? after?.comparison ?? null;
-  const conditions = metadata ? captureConditionsLabel(metadata) : null;
+  const conditions = metadata ? captureConditionLabels(metadata) : [];
   return (
     <div className="space-y-1" data-comparison={afterCaptureId}>
       <div className="grid grid-cols-2 gap-1.5">
@@ -93,18 +93,21 @@ function Comparison({
           />
         </figure>
       </div>
-      {conditions && (
+      {conditions.length > 0 && (
         <p className="text-[10px] text-muted-foreground" data-capture-conditions>
-          {conditions}
+          {conditions.map(({ text, status }, index) => (
+            <Fragment key={text}>
+              {index > 0 && " · "}
+              {status ? <span className="text-[11px]">{text}</span> : text}
+            </Fragment>
+          ))}
         </p>
       )}
       {metadata && (
-        <p className="text-[10px] text-muted-foreground">
-          {targetMatchLabel(metadata.targetMatch)}
-        </p>
+        <p className="text-muted-foreground">{targetMatchLabel(metadata.targetMatch)}</p>
       )}
       {labels.map((label) => (
-        <p key={label} className="text-[10px] text-amber-200">
+        <p key={label} className="text-amber-200">
           {label}. Compare with care: these images are not directly comparable.
         </p>
       ))}
@@ -222,14 +225,14 @@ function ObservedByOrkestrator({
       {fileChecks.length > 0 && (
         <div>
           <p className="text-muted-foreground">Reported files, checked by Orkestrator:</p>
-          <ul className="space-y-0.5 font-mono text-[10px]" aria-label="File checks">
+          <ul className="space-y-0.5 font-mono" aria-label="File checks">
             {fileChecks.slice(0, 20).map((check) => (
               <li
                 key={check.path}
                 className={check.status === "exists" ? undefined : "text-amber-200"}
                 data-file-check={check.status}
               >
-                <span className="truncate">{check.path}</span>
+                <span className="truncate text-[10px]">{check.path}</span>
                 <span className="font-sans text-muted-foreground">
                   {" "}
                   — {fileCheckLabel(check.status)}

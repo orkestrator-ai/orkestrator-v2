@@ -1,7 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { InteractionUpdateSchema } from "@cursor/sdk";
 import { newSessionState } from "./agent-session.js";
-import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
+import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES, workingDirectory } from "./config.js";
 import { publicContextUsage } from "./public.js";
 import { beginAssistantTurn } from "./transcript.js";
 import compactionOrder from "../test-fixtures/compaction-order-1.2.0.json";
@@ -1226,6 +1228,125 @@ describe("generated images", () => {
   });
 });
 
+describe("screen recordings", () => {
+  const save = (path: string | undefined) => ({
+    type: "tool-call-completed",
+    callId: "call-rec",
+    toolCall: {
+      type: "recordScreen",
+      args: { mode: "SAVE_RECORDING" },
+      result: { status: "success", value: { ...(path ? { path } : {}), recordingDurationMs: 900 } },
+    },
+  });
+
+  test("a saved recording becomes a file row the renderer can open", () => {
+    const state = running();
+    applyInteractionUpdate(state, save("/workspace/my recording.mp4"));
+
+    const parts = state.messages.at(-1)!.parts;
+    expect(parts.find((part) => part.type === "tool-invocation")).toMatchObject({
+      toolTitle: "Save screen recording",
+      toolOutput: "Recording saved (0.9 s) to /workspace/my recording.mp4",
+      toolState: "success",
+    });
+    expect(parts.find((part) => part.type === "file")).toMatchObject({
+      type: "file",
+      content: "/workspace/my recording.mp4",
+      // Percent-encoded, so the renderer's URL parser recovers the exact path.
+      fileUrl: "file:///workspace/my%20recording.mp4",
+      sourcePartId: "file:call-rec",
+    });
+  });
+
+  test("a re-rendered settled call does not append a second row", () => {
+    const state = running();
+    applyInteractionUpdate(state, save("/workspace/rec.mp4"));
+    applyInteractionUpdate(state, save("/workspace/rec.mp4"));
+
+    expect(state.messages.at(-1)!.parts.filter((part) => part.type === "file")).toHaveLength(1);
+  });
+
+  test("preserves the leading space of a reported relative recording path", () => {
+    const state = running();
+    const reported = " recordings/clip.mp4";
+    applyInteractionUpdate(state, save(reported));
+    const file = state.messages.at(-1)!.parts.find((part) => part.type === "file");
+    expect(file?.content).toBe(resolve(workingDirectory, reported));
+    expect(fileURLToPath(file!.fileUrl!)).toBe(resolve(workingDirectory, reported));
+  });
+
+  test("an inherited property name still renders the generic recording title", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "unknown-mode",
+      toolCall: { type: "recordScreen", args: { mode: "constructor" } },
+    });
+    expect(toolParts(state)[0]?.toolTitle).toBe("Screen recording");
+  });
+
+  test("appends a nested save to the row holding the sub-agent's call", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "launch",
+      modelCallId: "parent",
+      toolCall: { type: "task", args: { description: "Record", prompt: "Record the screen" } },
+    });
+    const taskUpdate = save("/workspace/sub-agent.mp4");
+    const nested = { type: "tool-call-delta", callId: "launch", modelCallId: "parent" };
+    applyInteractionUpdate(state, {
+      ...nested,
+      taskUpdate: { ...taskUpdate, type: "tool-call-started", modelCallId: "child" },
+    });
+    const row = state.messages.find((message) =>
+      message.parts.some(
+        (part) => part.type === "tool-invocation" && part.toolUseId === taskUpdate.callId,
+      ),
+    )!;
+    applyInteractionUpdate(state, {
+      ...nested,
+      taskUpdate: { ...taskUpdate, modelCallId: "child" },
+    });
+    expect(row.parts).toContainEqual(
+      expect.objectContaining({
+        type: "tool-invocation",
+        toolUseId: taskUpdate.callId,
+        parentTaskUseId: "launch",
+        toolState: "success",
+      }),
+    );
+    expect(row.parts).toContainEqual(
+      expect.objectContaining({
+        type: "file",
+        sourcePartId: "file:call-rec",
+        content: "/workspace/sub-agent.mp4",
+      }),
+    );
+  });
+
+  test("a running call, a save with no path and a discard offer nothing to open", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "call-pending",
+      toolCall: { type: "recordScreen", args: { mode: "SAVE_RECORDING" } },
+    });
+    applyInteractionUpdate(state, save(undefined));
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "call-discard",
+      toolCall: {
+        type: "recordScreen",
+        args: { mode: "DISCARD_RECORDING" },
+        result: { status: "success", value: { path: "/workspace/gone.mp4" } },
+      },
+    });
+
+    expect(state.messages.at(-1)!.parts.some((part) => part.type === "file")).toBe(false);
+  });
+});
+
 /**
  * What this bridge does with a `@cursor/sdk` variant it has no branch for.
  *
@@ -1305,7 +1426,7 @@ describe("the run's own system message", () => {
     expect(state.health.drift()?.unknownKinds).toEqual(["tool:webSearch"]);
   });
 
-  test("a typed tool the renderer deliberately leaves generic is counted separately", () => {
+  test("a screen recording has its own card and is not drift", () => {
     const state = newSessionState();
     applyInteractionUpdate(state, {
       type: "tool-call-completed",
@@ -1313,7 +1434,7 @@ describe("the run's own system message", () => {
       toolCall: { type: "recordScreen", args: {} },
     });
 
-    expect(state.health.drift()?.unknownKinds).toEqual(["generic-tool:recordScreen"]);
+    expect(state.health.drift()).toBeUndefined();
   });
 
   test("a tool with its own card is not drift", () => {

@@ -1387,7 +1387,16 @@ export type NativeAgentSessionAction =
     }
   | { kind: "review" }
   | { kind: "rewind-messages"; messageId: string }
-  | { kind: "switch-branch"; entryId: string };
+  | {
+      kind: "switch-branch";
+      entryId: string;
+      /**
+       * Ask Pi to summarize the branch being left and keep the summary at the
+       * new position. A model call the user pays for, so only on request;
+       * absent or false is an ordinary switch with no model call.
+       */
+      summarize?: boolean;
+    };
 
 /**
  * `rejected` is only ever a verified, definitive steer refusal for the same
@@ -1412,6 +1421,12 @@ export type NativeAgentSessionActionOutcome =
       shareUrl?: string;
       preview?: unknown;
       requestId?: string;
+      /**
+       * A `switch-branch` that asked for a summary: whether one was kept.
+       * False when the branch left had nothing to summarize, or the bridge
+       * predates summaries.
+       */
+      summarized?: boolean;
     }
   | NativeAgentSteerRejectedOutcome;
 
@@ -1511,6 +1526,8 @@ export interface NativeAgentContextCategory {
 
 export interface NativeAgentContextUsage {
   usedTokens: number;
+  /** Cost-only snapshots use a placeholder for the required token field. */
+  occupancyUnknown?: true;
   maximumTokens?: number;
   percentage?: number;
   modelId?: string;
@@ -1561,6 +1578,8 @@ export interface NativeAgentContextUsage {
 
 export interface NativeAgentTurnUsage {
   turnId: string;
+  /** Advances when a provider corrects the recorded usage of this turn. */
+  revision?: number;
   /**
    * When the bridge finalized this turn, ISO-8601.
    *
@@ -2129,6 +2148,61 @@ export interface NativeAgentBackgroundTaskSummary {
    * provider settled when resuming, which this session never saw run.
    */
   endReason?: "process-restart" | "resume-cleanup";
+  /**
+   * The agents a workflow task runs, in run order, when the provider reports
+   * them. They are rows of the workflow rather than tasks of their own: they
+   * have no task id and accept no stop of their own.
+   */
+  workflowAgents?: NativeAgentWorkflowAgent[];
+  /** Agents left out of `workflowAgents` to keep it bounded. */
+  workflowAgentsOmitted?: number;
+  /** Counts from the provider's rows before the display limit is applied. */
+  workflowAgentCounts?: NativeAgentWorkflowAgentCounts;
+}
+
+export interface NativeAgentWorkflowAgentCounts {
+  total: number;
+  running: number;
+  queued: number;
+  finished: number;
+  failed: number;
+  /** The provider or parser omitted rows before their statuses could be counted. */
+  partial?: true;
+}
+
+export type NativeAgentWorkflowAgentStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  /** Stopped because the workflow it belonged to ended first. */
+  | "stopped"
+  | "skipped";
+
+/** One agent of a workflow task; see `NativeAgentBackgroundTaskSummary.workflowAgents`. */
+export interface NativeAgentWorkflowAgent {
+  /** The agent's position in the run, unique within the workflow. */
+  index: number;
+  /** The workflow's own label for the agent. */
+  label: string;
+  status: NativeAgentWorkflowAgentStatus;
+  /** The workflow phase the agent belongs to. */
+  phase?: string;
+  /** The agent type or profile, as `agentRole` is for a task. */
+  agentRole?: string;
+  model?: string;
+  /** The tool the agent most recently ran. */
+  lastToolName?: string;
+  /** The provider's one-line description of what the agent is doing. */
+  activity?: string;
+  error?: string;
+  totalTokens?: number;
+  toolUses?: number;
+  /** When the agent started running, as an ISO timestamp; absent while queued. */
+  startedAt?: string;
+  durationMs?: number;
+  /** The result was reused from an earlier run rather than produced again. */
+  cached?: boolean;
 }
 
 export type NativeAgentBackgroundTaskKind =

@@ -2483,6 +2483,47 @@ describe("resumeSession", () => {
     expect(computerUse).toMatchObject({ toolName: "computerUse", toolDurationMs: 60 });
   });
 
+  test("a replayed saved screen recording keeps its openable file row", async () => {
+    const recording = (mode: string, value: Record<string, unknown>) => ({
+      type: "toolCall",
+      message: { type: "recordScreen", args: { mode }, result: { status: "success", value } },
+    });
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              steps: [
+                recording("SAVE_RECORDING", {
+                  path: "/workspace/rec.mp4",
+                  recordingDurationMs: 4200,
+                }),
+                recording("DISCARD_RECORDING", {}),
+              ],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-recording", undefined);
+    const parts = state.messages[0]!.parts;
+    const tools = parts.filter((part) => part.type === "tool-invocation");
+    expect(tools.map((part) => part.toolOutput)).toEqual([
+      "Recording saved (4.2 s) to /workspace/rec.mp4",
+      "Recording discarded. No video was kept.",
+    ]);
+    // Only the saved recording is offered, beside its own card.
+    expect(parts.filter((part) => part.type === "file")).toEqual([
+      expect.objectContaining({
+        content: "/workspace/rec.mp4",
+        fileUrl: "file:///workspace/rec.mp4",
+        sourcePartId: `file:${tools[0]!.toolUseId}`,
+      }),
+    ]);
+  });
+
   test.each(["success", "error"] as const)(
     "computer-use screenshots survive resume and recovered %s runs without duplicates",
     async (status) => {

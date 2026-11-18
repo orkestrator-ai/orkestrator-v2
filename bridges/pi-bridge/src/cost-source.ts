@@ -33,7 +33,7 @@ export interface PiCostParts {
   providerParts: number;
 }
 
-type UsageLike = {
+export type UsageLike = {
   input?: unknown;
   output?: unknown;
   cacheRead?: unknown;
@@ -63,7 +63,7 @@ function entryUsage(entry: unknown): UsageLike | undefined {
   return isRecord(message.usage) ? message.usage : undefined;
 }
 
-function reportedAnything(usage: UsageLike): boolean {
+export function reportedAnything(usage: UsageLike): boolean {
   return (
     positive(usage.cost?.total) ||
     positive(usage.totalTokens) ||
@@ -75,12 +75,16 @@ function reportedAnything(usage: UsageLike): boolean {
 }
 
 /** Count the session's priced parts. Never throws: a malformed entry is skipped. */
-export function countPiCostParts(entries: readonly unknown[]): PiCostParts {
+export function countPiCostParts<T>(
+  entries: readonly T[],
+  visit?: (entry: T, usage: UsageLike, index: number) => void,
+): PiCostParts {
   let parts = 0;
   let providerParts = 0;
   for (const entry of entries) {
     const usage = entryUsage(entry);
     if (!usage || !reportedAnything(usage)) continue;
+    visit?.(entry, usage, parts);
     parts += 1;
     if (usage.cost?.totalFromProvider === true) providerParts += 1;
   }
@@ -117,10 +121,4 @@ export function piTurnCostSource(
     }
   }
   return current.parts > 0 && current.providerParts === current.parts ? "provider" : undefined;
-}
-
-/** The source of one response's own cost, when nothing else is known. */
-export function piUsageCostSource(usage: UsageLike | undefined): NativeAgentCostSource | undefined {
-  if (!usage || !reportedAnything(usage)) return undefined;
-  return usage.cost?.totalFromProvider === true ? "provider" : "estimate";
 }

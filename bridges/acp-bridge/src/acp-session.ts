@@ -30,11 +30,13 @@ import {
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   ACP_COST_SOURCE,
+  GROK_TICK_COSTS_QUALIFIED,
   acpUsageTokenCount,
   accumulateAttemptUsage,
   parseAcpTurnUsage,
   type AcpTurnUsage,
 } from "./usage.js";
+import { EMPTY_SESSION_COST, updateSessionCost } from "./acp-usage-cost.js";
 import { acpSignInMissing, assertAcpSignedIn } from "./acp-credentials.js";
 import { grokQuestionTimeoutFromEnv } from "./acp-question-timeout.js";
 import { syncPromptTurnClock } from "./acp-prompt-clock.js";
@@ -1009,6 +1011,7 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
   state.child = child;
   state.pendingLateTurnUsage = undefined;
   state.ignoreUncorrelatedVendorUsage = undefined;
+  state.lastUsageTurnSequence = undefined;
   child.onUpdate = (params) => applySessionUpdate(state, params);
   // An inventory announced before this handler existed (see
   // `AcpProcess.earlyCommandsUpdate`) would otherwise be lost until the agent
@@ -1243,6 +1246,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
     attachChild(state, child);
     state.historyReplay = state.messages.length === 0 ? "hydrate" : "ignore";
     const hydratedHistory = state.historyReplay === "hydrate";
+    state.historyReplayKeepsUsage = hydratedHistory && state.usage !== undefined;
     const loaded = await child.request(
       "session/load",
       {
@@ -1256,6 +1260,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
     );
     finalizeHistoryReplayTurnUsage(state);
     state.historyReplay = false;
+    state.historyReplayKeepsUsage = undefined;
     if (hydratedHistory) {
       // The replay built this history; no reader holds an older copy of a row.
       state.revisedRows?.clear();
@@ -1284,6 +1289,8 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
     if (state.child === child) state.child = null;
     state.historyReplay = false;
     state.historyReplayTurnUsage = undefined;
+    state.historyReplaySawPrompt = undefined;
+    state.historyReplayKeepsUsage = undefined;
     await child.close();
     throw error;
   }
@@ -1856,6 +1863,7 @@ function appendNonTextContent(
   const messageId = randomBytes(12).toString("hex");
   const parts = contentBlockParts(update.content, messageId, 0);
   if (parts.length === 0) return;
+  if (role === "user" && state.historyReplay === "hydrate") startHistoryReplayPrompt(state);
   const modelId =
     role === "assistant" ? boundedModelId(state.sessionConfig.composer.selectedModelId) : undefined;
   state.messages.push({
@@ -2052,9 +2060,6 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     appendNonTextContent(state, update, role);
     return;
   }
-  if (role === "user" && state.historyReplay === "hydrate") {
-    finalizeHistoryReplayTurnUsage(state);
-  }
   const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
   // A non-chunk update carries a complete message, so it always begins one.
   // Only chunks continue the message before them.
@@ -2083,6 +2088,9 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     message = last;
   }
   if (!message) {
+    if (role === "user" && state.historyReplay === "hydrate") {
+      startHistoryReplayPrompt(state);
+    }
     const modelId =
       role === "assistant"
         ? boundedModelId(state.sessionConfig.composer.selectedModelId)
@@ -2353,7 +2361,7 @@ export function applyVendorUpdate(state: SessionState, method: string, params: J
   // Unlike a model update, this is scoped to one conversation, so a superseded
   // or unrelated child must not write another session's token counts.
   if (params.sessionId !== undefined && params.sessionId !== state.acpSessionId) return;
-  if (state.ignoreUncorrelatedVendorUsage === true) return;
+  if (state.historyReplay === "ignore" || state.ignoreUncorrelatedVendorUsage === true) return;
   const pendingLate = state.pendingLateTurnUsage;
   if (pendingLate && pendingLate.promptSequence < state.promptSequence) {
     // Vendor completion notifications have no turn/request id. A carrier that
@@ -2373,8 +2381,10 @@ export function applyVendorUpdate(state: SessionState, method: string, params: J
     });
     return;
   }
-  if (state.turnStartedAt !== undefined) state.currentTurnSawVendorUsage = true;
-  else state.pendingLateTurnUsage = undefined;
+  if (kind === "turn_completed" || provider !== "grok") {
+    if (state.turnStartedAt !== undefined) state.currentTurnSawVendorUsage = true;
+    else state.pendingLateTurnUsage = undefined;
+  }
   recordTurnUsage(state, update);
 }
 
@@ -2388,9 +2398,15 @@ export function applyVendorUpdate(state: SessionState, method: string, params: J
  * sparser carrier arrived for the same turn. ACP `usage_update` occupancy is
  * merged the same way so a later PromptResponse.usage cannot drop the window.
  */
-export function recordTurnUsage(state: SessionState, payload: unknown): void {
-  const turn = parseAcpTurnUsage(payload);
+export function recordTurnUsage(
+  state: SessionState,
+  payload: unknown,
+  carrier: "notification" | "prompt-result" = "notification",
+  ticksQualified = GROK_TICK_COSTS_QUALIFIED,
+): void {
+  const turn = parseAcpTurnUsage(payload, { provider, carrier });
   if (!turn) return;
+  if (state.historyReplay === "ignore" || state.historyReplayKeepsUsage) return;
   if (state.historyReplay === "hydrate") {
     state.historyReplayTurnUsage = { ...state.historyReplayTurnUsage, ...turn };
     return;
@@ -2399,15 +2415,17 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
   const previous = state.usage;
   // A late carrier after a continued turn belongs to its last attempt, so it
   // merges there; merging it into the summed turn would drop earlier attempts.
-  const attemptOpen =
-    turnInFlight ||
-    (state.completedAttemptUsage !== undefined && state.currentAttemptUsage !== undefined);
+  const attemptOpen = turnInFlight || state.currentAttemptUsage !== undefined;
   if (attemptOpen) {
     state.currentAttemptUsage = { ...state.currentAttemptUsage, ...turn };
   }
   const accumulatedTurn = attemptOpen
     ? accumulateAttemptUsage(state.completedAttemptUsage, state.currentAttemptUsage!)
     : { ...previous?.turn, ...turn };
+  if (provider === "grok" && attemptOpen && state.completedAttemptUsage) {
+    // A snapshot from an ended attempt excludes spend on the continuation.
+    accumulatedTurn.costUsd = state.currentAttemptUsage?.costUsd;
+  }
   if (turnInFlight) state.currentTurnUsage = accumulatedTurn;
   const durationMs =
     state.turnStartedAt === undefined
@@ -2421,16 +2439,48 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
         ? reportedTurnTokens
         : Math.max(0, previous.sessionTokens - (previous.lastTurnTokens ?? 0)) + reportedTurnTokens
       : previous?.sessionTokens;
+  const replacesLastCost =
+    provider === "grok" &&
+    !turnInFlight &&
+    attemptOpen &&
+    state.lastUsageTurnSequence === state.promptSequence &&
+    previous?.cost !== undefined;
+  const replacement = replacesLastCost
+    ? updateSessionCost(previous?.cost?.beforeLastTurn, accumulatedTurn, ticksQualified)
+    : undefined;
+  let cost = replacement?.cost ?? previous?.cost;
+  if (!replacement && !turnInFlight && provider === "grok" && turn.costUsd !== undefined) {
+    // An idle session snapshot can establish the baseline before the next turn.
+    cost = { ...cost, total: { usd: turn.costUsd } };
+  }
+  let turns = previous?.turns;
+  if (replacement && state.lastUsageTurnId) {
+    const row = turns?.find((entry) => entry.turnId === state.lastUsageTurnId);
+    if (
+      row &&
+      (row.costUsd !== replacement.turnCostUsd || row.totalTokens !== reportedTurnTokens)
+    ) {
+      turns = turns?.map((entry) =>
+        entry === row
+          ? {
+              ...entry,
+              ...turnRowCost(replacement.turnCostUsd),
+              ...turnRowTokens(accumulatedTurn, reportedTurnTokens),
+              revision: (entry.revision ?? 0) + 1,
+            }
+          : entry,
+      );
+    }
+  }
   state.usage = {
-    turn: accumulatedTurn,
-    ...(previous?.turns?.length ? { turns: previous.turns } : {}),
+    turn: retainUsageOccupancy(accumulatedTurn, previous?.turn),
+    ...(turns?.length ? { turns } : {}),
+    ...(cost ? { cost } : {}),
     ...(turnInFlight
       ? previous?.lastTurnTokens === undefined
         ? {}
         : { lastTurnTokens: previous.lastTurnTokens }
-      : reportedTurnTokens === undefined
-        ? {}
-        : { lastTurnTokens: reportedTurnTokens }),
+      : { lastTurnTokens: reportedTurnTokens ?? previous?.lastTurnTokens }),
     ...(lateSessionTokens === undefined ? {} : { sessionTokens: lateSessionTokens }),
     ...(modelId ? { modelId } : {}),
     ...(durationMs === undefined ? {} : { durationMs }),
@@ -2445,56 +2495,110 @@ export function acpTurnTokenCount(usage: AcpTurnUsage): number | undefined {
   return acpUsageTokenCount(usage);
 }
 
+function retainUsageOccupancy(
+  turn: AcpTurnUsage,
+  previous: AcpTurnUsage | undefined,
+): AcpTurnUsage {
+  if (!previous || turn.contextUsedTokens !== undefined || acpTurnTokenCount(turn) !== undefined) {
+    return turn;
+  }
+  return { ...turn, contextUsedTokens: previous.contextUsedTokens ?? acpTurnTokenCount(previous) };
+}
+
+function turnRowCost(costUsd: number | undefined) {
+  return { costUsd, costSource: costUsd === undefined ? undefined : ACP_COST_SOURCE };
+}
+
+function turnRowTokens(turn: AcpTurnUsage, totalTokens: number | undefined) {
+  return {
+    inputTokens: turn.inputTokens,
+    outputTokens: turn.outputTokens,
+    cacheReadTokens: turn.cacheReadTokens,
+    cacheWriteTokens: turn.cacheWriteTokens,
+    reasoningTokens: turn.reasoningTokens,
+    totalTokens,
+    apiDurationMs: turn.apiDurationMs,
+  };
+}
+
+function costBeforeNextTurn(previous: SessionState["usage"]) {
+  if (previous?.cost) return previous.cost.total;
+  // Old persisted usage has no cost ledger. Any counted turn makes that
+  // prefix unknown, including a turn that reported zero tokens.
+  if (previous?.sessionTokens !== undefined || previous?.turns?.length) return undefined;
+  return EMPTY_SESSION_COST;
+}
+
+function startHistoryReplayPrompt(state: SessionState): void {
+  if (state.historyReplayKeepsUsage) return;
+  finalizeHistoryReplayTurnUsage(state);
+  state.historyReplaySawPrompt = true;
+}
+
 /** Commit the usage collected for one completed turn replayed by session/load. */
 export function finalizeHistoryReplayTurnUsage(state: SessionState): void {
   const turn = state.historyReplayTurnUsage;
+  const sawPrompt = state.historyReplaySawPrompt;
   state.historyReplayTurnUsage = undefined;
-  if (!turn) return;
+  state.historyReplaySawPrompt = undefined;
+  if (!turn && !(provider === "grok" && sawPrompt)) return;
   const previous = state.usage;
-  const lastTurnTokens = acpTurnTokenCount(turn);
+  const lastTurnTokens = turn && acpTurnTokenCount(turn);
   const modelId = state.sessionConfig.composer.selectedModelId;
+  const cost =
+    provider === "grok"
+      ? updateSessionCost(costBeforeNextTurn(previous), turn ?? {}).cost
+      : undefined;
   state.usage = {
-    turn,
-    ...(previous?.turns?.length ? { turns: previous.turns } : {}),
-    ...(lastTurnTokens === undefined ? {} : { lastTurnTokens }),
-    ...(lastTurnTokens === undefined
-      ? previous?.sessionTokens === undefined
-        ? {}
-        : { sessionTokens: previous.sessionTokens }
-      : { sessionTokens: (previous?.sessionTokens ?? 0) + lastTurnTokens }),
+    ...previous,
+    turn: retainUsageOccupancy(turn ?? {}, previous?.turn),
+    lastTurnTokens,
+    sessionTokens:
+      lastTurnTokens === undefined
+        ? previous?.sessionTokens
+        : (previous?.sessionTokens ?? 0) + lastTurnTokens,
+    ...(cost ? { cost } : {}),
     ...(modelId ? { modelId } : {}),
     updatedAt: new Date().toISOString(),
   };
 }
 
 /** Commit one completed turn exactly once after all synchronous carriers merge. */
-export function finalizeTurnUsage(state: SessionState): void {
-  const lastTurnTokens = state.currentTurnUsage
-    ? acpTurnTokenCount(state.currentTurnUsage)
+export function finalizeTurnUsage(
+  state: SessionState,
+  ticksQualified = GROK_TICK_COSTS_QUALIFIED,
+): void {
+  const turn = state.currentTurnUsage ?? {};
+  const lastTurnTokens = acpTurnTokenCount(turn);
+  const grok = provider === "grok";
+  if (!grok && (!state.usage || lastTurnTokens === undefined)) return;
+  const usage = (state.usage ??= { turn, updatedAt: new Date().toISOString() });
+  const turnId = state.currentTurnRequestId || `turn-${randomBytes(12).toString("hex")}`;
+  const accounting = grok
+    ? updateSessionCost(costBeforeNextTurn(usage), turn, ticksQualified)
     : undefined;
-  if (!state.usage || lastTurnTokens === undefined) return;
-  state.usage.lastTurnTokens = lastTurnTokens;
-  state.usage.sessionTokens = (state.usage.sessionTokens ?? 0) + lastTurnTokens;
-  const turnId = state.currentTurnRequestId || `turn-${state.promptSequence}`;
-  const turn = state.currentTurnUsage!;
-  state.usage.turns = [
-    ...(state.usage.turns ?? []).filter((entry) => entry.turnId !== turnId),
+  if (accounting) {
+    usage.cost = accounting.cost;
+    state.lastUsageTurnSequence = state.promptSequence;
+    state.lastUsageTurnId = turnId;
+  }
+  usage.lastTurnTokens = lastTurnTokens;
+  if (lastTurnTokens !== undefined) {
+    usage.sessionTokens = (usage.sessionTokens ?? 0) + lastTurnTokens;
+  }
+  const turnCostUsd = accounting ? accounting.turnCostUsd : turn.costUsd;
+  usage.turns = [
+    ...(usage.turns ?? []).filter((entry) => entry.turnId !== turnId),
     {
       turnId,
       // `finalizeTurnUsage` commits one completed turn exactly once, so this
       // is the turn's own time.
       at: new Date().toISOString(),
-      ...(turn.costUsd === undefined ? {} : { costUsd: turn.costUsd, costSource: ACP_COST_SOURCE }),
-      ...(turn.inputTokens === undefined ? {} : { inputTokens: turn.inputTokens }),
-      ...(turn.outputTokens === undefined ? {} : { outputTokens: turn.outputTokens }),
-      ...(turn.cacheReadTokens === undefined ? {} : { cacheReadTokens: turn.cacheReadTokens }),
-      ...(turn.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: turn.cacheWriteTokens }),
-      ...(turn.reasoningTokens === undefined ? {} : { reasoningTokens: turn.reasoningTokens }),
-      totalTokens: lastTurnTokens,
-      ...(turn.apiDurationMs === undefined ? {} : { apiDurationMs: turn.apiDurationMs }),
-      ...(state.usage.durationMs === undefined ? {} : { durationMs: state.usage.durationMs }),
+      ...turnRowCost(turnCostUsd),
+      ...turnRowTokens(turn, lastTurnTokens),
+      ...(usage.durationMs === undefined ? {} : { durationMs: usage.durationMs }),
       ...(state.currentTurnRequestId ? { requestId: state.currentTurnRequestId } : {}),
-      ...(state.usage.modelId ? { modelId: state.usage.modelId } : {}),
+      ...(usage.modelId ? { modelId: usage.modelId } : {}),
     },
   ].slice(-20);
 }
@@ -2505,7 +2609,7 @@ export function rememberPendingLateTurnUsage(state: SessionState, promptSequence
     ? acpTurnTokenCount(state.currentTurnUsage) !== undefined
     : false;
   if (
-    hasReportedTokens &&
+    (hasReportedTokens || state.lastUsageTurnSequence === promptSequence) &&
     state.currentTurnSawVendorUsage !== true &&
     state.pendingLateTurnUsage === undefined
   ) {

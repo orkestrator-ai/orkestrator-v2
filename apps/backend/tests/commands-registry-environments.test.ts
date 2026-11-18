@@ -39,6 +39,7 @@ const {
   ptySpawn,
   randomUUID,
   runGit,
+  scheduleMergeCleanupRecovery,
   toClientEnvironment,
   waitForCondition,
   waitForPtyProcessCount,
@@ -3561,7 +3562,7 @@ exit 0
   );
 
   test(
-    "rehydration resumes only persisted cleanup after a merge was already confirmed",
+    "startup recovery resumes only persisted cleanup after a merge was already confirmed",
     async () => {
       const worktreePath = await createTempDir("ork-electron-merge-cleanup-recovery-");
       const environment = createEnvironment({
@@ -3572,10 +3573,9 @@ exit 0
         cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
       });
       const { context } = createContext(environment);
-      const commands = createCommandRegistry();
       // The recovery is the only completion signal this test needs: it settles
       // once the persisted cleanup it resumed has finished, however long the
-      // host takes. Capture the task the rehydration schedules instead of
+      // host takes. Capture the task the startup recovery schedules instead of
       // polling storage for its first write, then closing the lifecycle
       // tracker (whose bounded shutdown drain can return before slow cleanup).
       const operations = context.runtime.environments;
@@ -3591,19 +3591,9 @@ exit 0
       );
 
       try {
-        await expect(
-          commands.get("get_environments")?.(
-            {
-              projectId: environment.projectId,
-            },
-            context,
-          ),
-        ).resolves.toContainEqual(
-          expect.objectContaining({
-            id: environment.id,
-            cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
-          }),
-        );
+        // What backend startup does for each environment with a persisted
+        // cleanup intent; reads such as get_environments never resume it.
+        scheduleMergeCleanupRecovery(environment.id, context);
 
         await recoverySettled.promise;
         await context.environmentLifecycleTasks.whenDrained();

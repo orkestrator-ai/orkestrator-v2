@@ -84,7 +84,7 @@ describe("workspace folder creation", () => {
       "parent directory traversal is not allowed",
     );
     expect(() => resolveWorkspaceFolderCreate("src", "x".repeat(256))).toThrow(
-      "name exceeds 255 characters",
+      "name exceeds 255 bytes",
     );
     expect(resolveWorkspaceFolderCreate("src", "  hooks  ")).toEqual({
       directory: "src",

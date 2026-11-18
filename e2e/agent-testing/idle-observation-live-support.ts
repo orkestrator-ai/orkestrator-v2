@@ -11,6 +11,7 @@ export const IDLE_OBSERVATION_CASES = [
   "approval",
   "subagents",
   "background",
+  "shell-timeout-return",
   "reconnect",
   "hidden",
   "no-renderer",

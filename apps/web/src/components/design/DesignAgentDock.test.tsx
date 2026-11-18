@@ -3,7 +3,7 @@ import { useState } from "react";
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignAgentPanelState } from "@/types/paneLayout";
-import { sanitizeDesignAgentPanel } from "@/stores/pane-layout-embedded";
+import { sanitizeDesignAgentPanel } from "@/lib/pane-layout-embedded";
 import { DesignAgentDock, DesignAgentPanelEmpty } from "./DesignAgentDock";
 
 beforeAll(() => {

@@ -24,7 +24,7 @@ import {
   getAllLeaves,
 } from "@/stores";
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
-import { findEmbeddedTab } from "@/stores/pane-layout-embedded";
+import { findEmbeddedTab } from "@/lib/pane-layout-embedded";
 import { getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { uiStore } from "@/stores/uiStore";

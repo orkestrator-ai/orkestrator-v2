@@ -81,7 +81,9 @@ export function piAssistantMessage(
     // OpenCode 2.x's `shell` backgrounds a command itself (`background: true`);
     // Pi's and OpenCode 1.19.5's `bash` offer no such parameter, so they run
     // it in the foreground (#2149).
-    const background = step.background && Boolean(properties?.background);
+    const timedOut =
+      Boolean(properties?.timeout) && prompt.includes("Use a 1000 ms foreground timeout.");
+    const background = step.background && Boolean(properties?.background) && !timedOut;
     return {
       content: null,
       toolCall: {
@@ -91,6 +93,7 @@ export function piAssistantMessage(
           command: step.command,
           ...(describe ? { description: "Run the requested command" } : {}),
           ...(background ? { background: true } : {}),
+          ...(timedOut ? { timeout: 1_000 } : {}),
         }),
       },
     };

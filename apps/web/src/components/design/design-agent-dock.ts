@@ -1,5 +1,5 @@
 import type { DesignAgentDock } from "@/types/paneLayout";
-import { clampDesignAgentPanelSize, isHorizontalDock } from "@/stores/pane-layout-embedded";
+import { clampDesignAgentPanelSize, isHorizontalDock } from "@/lib/pane-layout-embedded";
 
 /**
  * Pure geometry for the design tab's agent panel, kept apart from the

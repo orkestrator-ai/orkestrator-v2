@@ -306,8 +306,10 @@ describe("AppShell", () => {
       });
       try {
         renderInAppCommandScope(<AppShell>Workspace</AppShell>);
-        expect(screen.queryByRole("button", { name: /^Agent mail\b/i, hidden: true })).toBeNull();
-        expect(screen.queryByTestId("agent-mail-panel")).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: /^Agent mail\b/i, hidden: true }) === null,
+        ).toBe(true);
+        expect(screen.queryByTestId("agent-mail-panel") === null).toBe(true);
       } finally {
         cleanup();
         store.setState({ config });

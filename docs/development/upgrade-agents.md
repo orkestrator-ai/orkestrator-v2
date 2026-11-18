@@ -9,7 +9,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | --- | --- | --- | --- |
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.326`, Anthropic SDK `1.10.0`, CLI `2.1.326` (npm `latest`, verified 2026-11-17) |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.169.0` (latest stable, verified 2026-11-17) |
-| OpenCode | No SDK: the backend's own 2.x client (`apps/backend/src/core/opencode2/`) | The pinned `opencode2` executable (OpenCode 2.x) runs `opencode serve` | CLI `2.3.0` (`opencode2`; npm `latest`, verified 2026-11-17; OpenCode 1.x is retired) |
+| OpenCode | No SDK: the backend's own 2.x client (`apps/backend/src/core/opencode2/`) | The pinned `opencode2` executable (OpenCode 2.x) runs `opencode serve` | CLI `2.3.1` (`opencode2`; verified 2026-11-18, when npm `latest` was already `2.3.2`; OpenCode 1.x is retired) |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.4.1` (npm `latest`, verified 2026-11-17) |
 | Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.88` (stable channel; verified 2026-11-17), ACP SDK `2.7.0` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.5.2` (npm `latest`, verified 2026-11-17) |
@@ -542,7 +542,14 @@ was first made from (Pi 1.2.0, OpenCode 1.19.0):
   token; Snowflake Cortex and xAI keep the old one only when it is omitted;
   Poe's `refresh` is still empty. The five-minute window moved into
   `Credential.expiring` (`expires !== 0 && expires <= now + 5 min`), still in
-  milliseconds. No change to either list.
+  milliseconds. No change to either list. Rechecked 2026-11-18 against
+  OpenCode 2.3.1 the same way: `integration.ts` and `credential.ts` are
+  unchanged; the one new provider plugin, `opencode-artifacts.ts`, syncs
+  Console artifacts (behind the `artifacts` flag, which Orkestrator keeps
+  off) and stores no login; ChatGPT, OpenAI and the credential settings now
+  read the stored credential without resolving it (`storedCredential`), so
+  classifying a login no longer refreshes it, and nothing a refresh stores
+  changed.
 
 No provider moved between the two lists, so `NON_ROTATING_OAUTH_PROVIDERS`
 was left as it was.
@@ -673,7 +680,8 @@ inlined SDK reports its version and spawns only the executable it is given.
 `bridges/claude-bridge/src/services/session-manager.ts` is only a barrel. The
 compatibility surface is `services/session-manager-prompt-handlers/*` (one
 handler per SDK frame type), `services/session-manager-messages.ts`, the
-SDK-facing types in `types/index.ts`, `services/session-manager-prompt-launch.ts`
+task-frame readers (`services/session-manager-task-records.ts`,
+`services/background-task-workflow.ts`), the SDK-facing types in `types/index.ts`, `services/session-manager-prompt-launch.ts`
 (where `query()` is called) and `sdk-compatibility.test.ts`. Together they use the Agent SDK's `query()` async iterator, session lifecycle
 helpers, supported models and agents, file rewind, background-task controls,
 partial messages, structured output, checkpoints, permission/input callbacks,
@@ -819,9 +827,15 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
 5. Refresh and verify the four Claude artifact records using the shared binary
    procedure.
 6. Review the compatibility surface above (`session-manager-prompt-handlers/*`,
-   `session-manager-messages.ts`, `session-manager-prompt-launch.ts` and
-   `types/index.ts`) for option, event, and message-union changes. Pay
-   particular attention to the version-pinned `canUseTool` comment in
+   `session-manager-messages.ts`, `session-manager-task-records.ts`,
+   `background-task-workflow.ts`, `session-manager-prompt-launch.ts` and
+   `types/index.ts`) for option, event, and message-union changes. For
+   workflows, recheck the `workflow_progress` row shape and that a workflow
+   agent's `SubagentStart` still carries the `workflow-subagent` type and its
+   row's `agentId`. Recheck `run_id`, compact terminal phase rows, and the
+   persisted Workflow launch and notification shapes against the
+   [captured loopback fixture](../../bridges/claude-bridge/test-fixtures/workflow-claude-2.1.326.json).
+   Pay particular attention to the version-pinned `canUseTool` comment in
    `session-manager-prompt-query.ts` and re-prove that `AskUserQuestion` remains parked
    until the callback resolves. The `routes AskUserQuestion through canUseTool
    under bypassPermissions` case in `sdk-compatibility.test.ts` is that proof —
@@ -1798,7 +1812,7 @@ To bump it:
    call `installPinnedToolchains({ dataDir: <temp>, tools: ["opencode2"] })`
    from `packages/toolchain/src/install.ts` with `HOME` and `XDG_*` pointed
    into the same temporary directory. It downloads, verifies, probes
-   `--version` (2.3.0 prints `opencode v2.3.0`) and activates. 2.x's
+   `--version` (2.3.1 prints `opencode v2.3.1`) and activates. 2.x's
    `--version` creates its XDG directories and a log file but no database.
 7. Run `bun test ./tests/unit/version-drift.test.ts ./tests/unit/download-agent.test.ts --parallel=2`.
 8. Run the 2.x live set against the new binary. Every test starts its own
@@ -1830,14 +1844,20 @@ To bump it:
    replaced are listed in
    [agent-engines.md](../architecture/agent-engines.md#maintaining-the-opencode-integration). If
    `opencode2-silence.live.test.ts` fails, the server's `: heartbeat` interval
-   (15 s at 2.2.6, measured again at 2.3.0: still 15 s) has changed: measure
+   (15 s at 2.2.6, measured again at 2.3.0: still 15 s; the 2.3.1 live set
+   passed it unchanged) has changed: measure
    it again and set `OPENCODE2_EVENT_STREAM_SILENCE_MS`
    (`opencode2/stream-silence.ts`) to about three missed heartbeats plus 5 s.
 9. Re-read what the new release changed against what the provider assumes:
    - `OPENCODE2_FLAGS` (`opencode2/server.ts`) names every key of
      OpenCode's own `src/config/flag.ts` (under its `packages/schema/`) at the
      tag; a new one is off unless
-     named, so decide and name it.
+     named, so decide and name it. A name OpenCode no longer knows is
+     ignored, so drop a removed flag rather than leave it looking like a
+     setting (`server.test.ts` lists the keys). A behaviour that moved from a
+     flag to a configuration key (2.3.1's `compaction.background`) is
+     decided in the same place: leave OpenCode's default or set it, and say
+     what it costs.
    - Diff the tags' `openapi.json` (in OpenCode's `packages/protocol/`; paths and methods, then
      the schemas of the rows and routes the client reads). 2.2.6 to 2.3.0
      added and removed no route.
@@ -1851,6 +1871,12 @@ To bump it:
      `opencode2-package-cache.live.test.ts`.
    - Sub-agents: the `subagent` tool, its report (`subagent-completion.ts`)
      and what `opencode2-subagents.live.test.ts` asserts.
+   - Background shells: the shell tool's timeout and `background` handling
+     and its report (`tool/plugin/shell.ts`, `shell/result.ts`
+     `notification`), the background job list the provider reads
+     (`GET /api/experimental/job`, experimental upstream, `Job.Info`) and
+     `DELETE /api/shell/{id}`, which a stop uses; then
+     `opencode2-shell-timeout.live.test.ts`.
 
 At 2.3.0 (re-checked 2026-11-17, Linux x64, all without a login): the live
 set passed (52 tests in 20 files, the new `opencode2-subagents.live.test.ts`
@@ -1871,6 +1897,37 @@ resume a running child. How Orkestrator maps that is in
 [agent-engines.md](../architecture/agent-engines.md#maintaining-the-opencode-integration).
 The `real-stack` and `container` halves were not re-run for 2.3.0 (they need
 a dev:test profile and an image built for the pin).
+
+At 2.3.1 (checked 2026-11-18, Linux x64, all without a login): the live
+set passed (21 files, the new `opencode2-shell-timeout.live.test.ts`
+included) with no other change to the provider.
+2.3.1 removed the flags `shell_timeout_background` and `background_compaction`,
+renamed `schedules` to `automations` (the old name still read as an alias) and
+added `video_generate` and the opt-in-only `full_codemode`; all are named off
+except `todo`. A foreground shell command still running when its timeout
+expires (120 s, also for a `timeout: 0` call) now always moves to the
+background: the call returns `metadata.status: "running"`, the run settles,
+and when the command ends a `<shell>` `synthetic` row (`metadata: { source:
+"shell", shellID, jobID, state }`) is admitted to the session and wakes it into
+a run with no prompt. Orkestrator treats it as it treats a background
+sub-agent (activity `working`, workflows wait for the woken run, a stop
+terminates it through `DELETE /api/shell/{id}`; see
+[agent-engines.md](../architecture/agent-engines.md#maintaining-the-opencode-integration)),
+and `opencode2-shell-timeout.live.test.ts` qualifies it. Background
+compaction became the configuration key `compaction.background`, on by
+default; the launcher leaves it at that default (`OPENCODE2_FLAGS` in
+`opencode2/server.ts` documents what an unused speculative summary costs). The
+OpenAPI diff adds and removes no route the client calls (schedules became
+automations, video generation and blob routes were added) and changes no
+schema it reads; the message, inbox and event schemas are unchanged. The
+database path rule and the provider package layout are unchanged (see
+`OPENCODE2_PACKAGE_LAYOUT_VERSION` and `PROVIDER_STATE_TRACED_VERSIONS`). 2.3.1
+also reads `CLAUDE.md` again where a directory has no `AGENTS.md`, and
+`~/.claude/CLAUDE.md` when the global `AGENTS.md` is missing; Orkestrator does
+not set `OPENCODE_DISABLE_CLAUDE_CODE`, so the user's own
+`~/.claude/CLAUDE.md` (on the host, and the copy a container stages) reaches
+OpenCode sessions whose global configuration has no `AGENTS.md`. The
+`real-stack` and `container` halves were not re-run for 2.3.1.
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).
@@ -1903,6 +1960,12 @@ published two ways:
 
 `tests/unit/version-drift.test.ts` enforces that all three agree, and that the
 Dockerfile pins the same archive digests the manifest does.
+
+The root `patchedDependencies` entry for Pi 1.5.2 checks cancellation before
+the SDK mutates the tree and preserves the original leaf when writing a branch
+summary fails. On upgrade, check the new SDK's `navigateTree` and
+`branchWithSummary`, then port or retire the patch and run the Pi bridge's
+`branch-switch.test.ts` regressions.
 
 ### Procedure
 

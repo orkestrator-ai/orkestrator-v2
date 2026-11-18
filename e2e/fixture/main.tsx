@@ -38,6 +38,7 @@ import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectL
 import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
+import { CursorScreenRecordingFixture } from "./CursorScreenRecordingFixture";
 import { NativeMessageSpacingFixture } from "./NativeMessageSpacingFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
 import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
@@ -53,6 +54,7 @@ import { TmuxComposeFocusFixture, installTmuxComposeFocusFixture } from "./TmuxC
 import { AgentUsageFixture } from "./AgentUsageFixture";
 import { AddProjectDialogFixture } from "./AddProjectDialogFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
+import { WorkflowAgentsFixture } from "./WorkflowAgentsFixture";
 import { CodexSubagentCardsFixture } from "./CodexSubagentCardsFixture";
 import { MachinesSettingsFixture } from "./MachinesSettingsFixture";
 import { DesignCanvasFixture, installDesignCanvasFixture } from "./DesignCanvasFixture";
@@ -2280,6 +2282,9 @@ function fixtureForPath() {
     return <NativeHydratingPreviewFixture />;
   }
   if (window.location.pathname === "/native-attachments") return <NativeAttachmentsFixture />;
+  if (window.location.pathname === "/cursor-screen-recording") {
+    return <CursorScreenRecordingFixture />;
+  }
   if (window.location.pathname === "/native-message-spacing")
     return <NativeMessageSpacingFixture />;
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
@@ -2357,6 +2362,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/ended-agent") return <EndedAgentFixture />;
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;
+  if (window.location.pathname === "/workflow-agents") return <WorkflowAgentsFixture />;
   if (window.location.pathname === "/codex-subagent-cards") return <CodexSubagentCardsFixture />;
   if (window.location.pathname === "/opencode-pipeline-transcript")
     return <OpenCodePipelineTranscriptFixture />;

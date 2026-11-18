@@ -171,6 +171,23 @@ export interface OpenCode2InboxItem {
   payload?: { text?: string; metadata?: Record<string, unknown> };
 }
 
+/**
+ * A background job (`GET /api/experimental/job`, `Job.Info`; unchanged 2.3.0
+ * to 2.3.1). Listed from the moment the work moves to the background until
+ * its report has been admitted to the owning session's inbox, whatever its
+ * `status`. Only the fields the provider reads are typed.
+ */
+export interface OpenCode2BackgroundJob {
+  id: string;
+  kind: string;
+  /** The session the job reports to (for a sub-agent, its parent). */
+  sessionID: string;
+  status: "running" | "completed" | "error" | "cancelled";
+  time: { started: number; completed?: number };
+  /** `kind: "shell"`: the command's id under `/api/shell/{id}`. */
+  shellID?: string;
+}
+
 export interface OpenCode2PermissionRequest {
   id: string;
   sessionID: string;

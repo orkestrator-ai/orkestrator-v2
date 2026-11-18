@@ -373,7 +373,11 @@ catalogue read cannot let `/clear` reach the CLI.
   204 once the command's prompt is admitted (not when its turn ends); an
   unknown name is 404 `CommandNotFoundError`, a refusal. The expanded prompt
   carries no metadata, so an ambiguous command reads `unknown` afterwards and
-  is never re-sent. Refresh re-reads the list (`reread`). Observed on 2.2.6.
+  is never re-sent. Refresh re-reads the list (`reread`). Observed on 2.2.6;
+  on 2.3.1 (2026-11-18) the scripted-model live set ran a catalogue command
+  through this path again (`opencode2-features.live.test.ts`), and the
+  command handlers are unchanged from 2.3.0. The CLI `live-session` scenario
+  was not re-run on 2.3.1.
   OpenCode expands templates on its own server, so a user's arguments to a
   template with `` !`cmd` `` spans can reach a shell there (observed on 1.x);
   Orkestrator adds no shell surface of its own. Until 2026-11-11 OpenCode 1.x

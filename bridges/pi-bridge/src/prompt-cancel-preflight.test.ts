@@ -615,6 +615,14 @@ describe("the startup deadline", () => {
   test("fails the turn explicitly, keeps ownership, and aborts a late acceptance", async () => {
     const pi = preflightSession({ holdPreflight: true });
     const state = seed(pi.session);
+    const prompt = pi.raw.prompt;
+    pi.raw.prompt = (text, options) => {
+      applySessionEvent(state, {
+        type: "message_end",
+        message: { role: "assistant", provider: "test", model: "abandoned", usage: { input: 2 } },
+      });
+      return prompt(text, options);
+    };
     setStartupTimeoutForTests(20);
     const logs = captureLogs();
     try {
@@ -649,6 +657,9 @@ describe("the startup deadline", () => {
       expect(await stop.json()).toEqual({ cancelled: false, pending: true });
       await waitFor(() => pi.counts.abortsBeforeAcceptance === 2);
 
+      // Preflight can run extension code before reporting acceptance.
+      expect(state.currentResponseModelId).toBe("test/abandoned");
+      expect(state.currentTurnResponses?.modelId).toBe("test/abandoned");
       pi.accept();
       await waitFor(() => state.promptClaim === undefined);
       expect(pi.counts.abortsAfterAcceptance).toBe(1);
@@ -660,6 +671,8 @@ describe("the startup deadline", () => {
       expect(state.promptJournal.get("startup-late-accept")?.state).toBe("failed");
       expect(state.promptStartup).toBeUndefined();
       expect(state.cancelRequestedClaim).toBeUndefined();
+      expect(state.currentResponseModelId).toBeUndefined();
+      expect(state.currentTurnResponses).toBeUndefined();
     } finally {
       logs.restore();
       setStartupTimeoutForTests();

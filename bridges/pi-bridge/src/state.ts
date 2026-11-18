@@ -23,6 +23,7 @@ import type {
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { bridgeGeneration, MAX_STEER_JOURNAL } from "./config.js";
+import type { ResponseUsage } from "./turn-usage.js";
 
 export type JsonObject = Record<string, unknown>;
 export type SessionStatus = "idle" | "running" | "error";
@@ -41,7 +42,13 @@ export interface BridgeMessage {
   content: string;
   parts: BridgeMessagePart[];
   createdAt: string;
-  /** Model selected when this assistant response began. */
+  /**
+   * The model that produced this assistant response, as `provider/modelId`:
+   * what the provider reported (`AssistantMessage.responseModel`, set when an
+   * alias resolved or a fallback answered), else the model Pi asked for. A
+   * row opened before Pi named any model, and a row an older bridge wrote,
+   * carries the composer selection instead.
+   */
   modelId?: string;
 }
 
@@ -519,12 +526,20 @@ export interface SessionState {
   /** Bytes appended since the transcript was last measured against its budget. */
   uncheckedTranscriptBytes: number;
   usage?: PersistedUsage;
-  currentTurnUsage?: TurnUsage;
+  /** Runtime-only accounting for completed assistant frames and their stored equivalents. */
+  currentTurnResponses?: ResponseUsage;
+  turnEntryOffset?: number;
   /**
    * Sum of `AssistantMessage.durationMs` over the current turn's model
    * responses — the provider-side share of the turn's wall clock. Runtime-only.
    */
   currentTurnApiDurationMs?: number;
+  /**
+   * The model of the response being written (`provider/modelId`, see
+   * `responseModelId`), so a row opened lazily after Pi named it is
+   * attributed to it. Runtime-only.
+   */
+  currentResponseModelId?: string;
   /**
    * Pi's own verdict on the current turn's run: `agent_settled.aborted`
    * (Pi 1.1). True whoever aborted it — this bridge, an extension's
@@ -580,6 +595,11 @@ export interface SessionState {
    * Runtime-only (see `compaction-controls.ts`).
    */
   manualCompaction?: import("./compaction-controls.js").ManualCompaction;
+  /**
+   * The branch switch whose summary Pi is writing, so a cancel can stop it.
+   * Reported as running, like a compaction. Runtime-only (`branch-switch.ts`).
+   */
+  branchSummary?: import("./branch-switch.js").BranchSummaryRun;
   /**
    * The session's own auto-compaction choice, from the composer toggle.
    * Absent means Pi's setting applies. Persisted; never written to Pi's
@@ -775,7 +795,10 @@ export function publicTurnStatus(state: SessionState): SessionState["status"] {
   // A compaction is work the user can stop, so it reports as running: that is
   // what puts a Stop control in front of a manual compaction, which owns no
   // prompt claim and would otherwise read as idle while it rewrote history.
-  return state.promptClaim !== undefined || state.compacting ? "running" : state.status;
+  // A branch summary is the same kind of work: a model call the user can stop.
+  return state.promptClaim !== undefined || state.compacting || state.branchSummary
+    ? "running"
+    : state.status;
 }
 
 /** Whether cancellation was requested for exactly this claim. */
@@ -856,7 +879,12 @@ export function sessionIsWorking(state: SessionState): boolean {
   // An admitted prompt still preparing (cold attach, preflight) is work in
   // flight: reporting idle there would let a stop request read as settled
   // while Pi may still accept the turn.
-  return state.status === "running" || state.compacting || state.promptClaim !== undefined;
+  return (
+    state.status === "running" ||
+    state.compacting ||
+    state.branchSummary !== undefined ||
+    state.promptClaim !== undefined
+  );
 }
 
 /**

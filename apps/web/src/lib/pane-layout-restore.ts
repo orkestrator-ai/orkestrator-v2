@@ -1,5 +1,5 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
-import { sanitizeDesignAgentPanel } from "@/stores/pane-layout-embedded";
+import { sanitizeDesignAgentPanel } from "@/lib/pane-layout-embedded";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { parseChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import { isGitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";

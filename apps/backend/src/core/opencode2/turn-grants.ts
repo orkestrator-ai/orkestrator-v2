@@ -16,8 +16,7 @@
  *   its reviewer marker are session metadata, so a recreated provider can
  *   settle a turn, and an old request cannot revoke a newer one's grant.
  * - **Restored after.** `settle` puts the steady rules back only for the
- *   request that owns the grant, once its run has settled; `settleOwner`
- *   (abort, close) settles whichever request owns it.
+ *   request that owns the grant, once its run and background work have settled.
  * - **Observers never write.** Reads of status and history go elsewhere.
  *
  * A turn that needs no grant (no read-only boundary, no result tool) writes
@@ -92,9 +91,10 @@ export interface OpenCode2RuleAuthority {
   rules(): Promise<OpenCode2PermissionRule[]>;
 }
 
-export class OpenCode2TurnGrants {
-  private readonly locks = new Map<string, Promise<unknown>>();
+// Several provider instances can dispatch to the same server and session.
+const sessionLocks = new Map<string, Promise<unknown>>();
 
+export class OpenCode2TurnGrants {
   constructor(
     private readonly client: OpenCode2Client,
     private readonly authority?: OpenCode2RuleAuthority,
@@ -110,12 +110,13 @@ export class OpenCode2TurnGrants {
    * settlement of the same session never interleave.
    */
   runExclusive<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.locks.get(sessionId) ?? Promise.resolve();
+    const key = JSON.stringify([this.client.baseUrl, sessionId]);
+    const previous = sessionLocks.get(key) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(operation);
     const tail = next.catch(() => undefined);
-    this.locks.set(sessionId, tail);
+    sessionLocks.set(key, tail);
     void tail.then(() => {
-      if (this.locks.get(sessionId) === tail) this.locks.delete(sessionId);
+      if (sessionLocks.get(key) === tail) sessionLocks.delete(key);
     });
     return next;
   }
@@ -172,8 +173,8 @@ export class OpenCode2TurnGrants {
   }
 
   /** The request holding the grant, settled or not (undefined when none). */
-  async owner(sessionId: string): Promise<OpenCode2SessionMarker["turn"]> {
-    return readMarker(await this.client.getSession(sessionId)).turn;
+  async owner(sessionId: string, signal?: AbortSignal): Promise<OpenCode2SessionMarker["turn"]> {
+    return readMarker(await this.client.getSession(sessionId, signal)).turn;
   }
 
   /**
@@ -185,14 +186,6 @@ export class OpenCode2TurnGrants {
     const session = await this.client.getSession(sessionId);
     const marker = readMarker(session);
     if (marker.turn?.requestId !== requestId || marker.turn.settled) return;
-    await this.restore(session, marker);
-  }
-
-  /** Settle whichever request holds the grant (abort and close). The caller holds the lock. */
-  async settleOwner(sessionId: string): Promise<void> {
-    const session = await this.client.getSession(sessionId);
-    const marker = readMarker(session);
-    if (!marker.turn || marker.turn.settled) return;
     await this.restore(session, marker);
   }
 

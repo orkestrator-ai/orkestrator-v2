@@ -1,15 +1,18 @@
 import { expect, test } from "bun:test";
+import { MAX_USAGE_MODEL_ID_BYTES } from "@orkestrator/protocol/model-id";
 import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
 import {
   UNKNOWN_USAGE_MODEL_ID,
   shiftUsageDay,
   usageDayKey,
 } from "@orkestrator/protocol/usage-history";
+import { normalizeProviderContextUsage } from "./agent-provider-runtime.js";
 import {
   MAX_RECORDED_DAYS,
   MAX_RECORDED_MODELS_PER_DAY,
   applyTurnToRecord,
   emptyUsageSessionRecord,
+  recordedUsageDays,
   usageTurnDay,
   usageTurnKey,
 } from "./usage-history-record.js";
@@ -30,6 +33,24 @@ function dayTotals(models: Record<string, { totalTokens: number; turns: number }
     { totalTokens: 0, turns: 0 },
   );
 }
+
+test("provider usage keeps model buckets distinct past a shared 256-character prefix", () => {
+  const record = emptyUsageSessionRecord("env-1", "pi", AT);
+  const prefix = `pi/${"x".repeat(MAX_USAGE_MODEL_ID_BYTES - 4)}`;
+  const models = [`${prefix}a`, `${prefix}b`];
+  const oversize = `${prefix}é`;
+  const usage = normalizeProviderContextUsage({
+    source: "pi",
+    usedTokens: 300,
+    modelId: models[1],
+    turns: [...models, oversize].map((modelId, index) => turn(`turn-${index}`, { modelId })),
+  });
+
+  expect(usage?.modelId).toBe(models[1]);
+  expect(usage?.turns).toHaveLength(3);
+  for (const item of usage?.turns ?? []) applyTurnToRecord(record, item, DAY, AT);
+  expect(Object.keys(record.days[DAY]!.models)).toEqual([...models, UNKNOWN_USAGE_MODEL_ID]);
+});
 
 test("folding a day's overflow models keeps the day's totals exact", () => {
   const record = emptyUsageSessionRecord("env-1", "claude", AT);
@@ -83,7 +104,7 @@ test("a turn number reused by the next conversation in the same tab is still cou
   expect(applyTurnToRecord(record, turn("turn-1"), DAY, AT, "conv-a")).toBe(true);
   expect(applyTurnToRecord(record, turn("turn-1"), DAY, AT, "conv-a")).toBe(false);
   expect(applyTurnToRecord(record, turn("turn-1"), DAY, AT, "conv-b")).toBe(true);
-  expect(record.days[DAY]!.models["model-a"]!.turns).toBe(2);
+  expect(recordedUsageDays(record)[DAY]!.models["model-a"]!.turns).toBe(2);
   expect(record.turnIds).toEqual([
     usageTurnKey("turn-1", "conv-a"),
     usageTurnKey("turn-1", "conv-b"),

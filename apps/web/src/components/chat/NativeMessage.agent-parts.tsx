@@ -44,6 +44,7 @@ import {
   useDeferredToolResult,
 } from "./NativeMessage.shared";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { WorkflowAgentList, workflowAgentsStatusLine } from "./NativeMessage.workflow-agents";
 
 const NEUTRAL_STATUS_PILL = "border-border/60 bg-muted/40 text-muted-foreground";
 
@@ -615,6 +616,14 @@ function backgroundTaskOutcome(task: NativeBackgroundTask): BackgroundTaskOutcom
 function backgroundTaskLiveStatus(task: NativeBackgroundTask): string | undefined {
   if (!backgroundTaskPresentation(task).live) return undefined;
   const summary = task.progressSummary?.trim();
+  // A workflow's status names its latest agent, one of several that may be running.
+  const workflow = workflowAgentsStatusLine(
+    task.workflowAgents,
+    summary,
+    task.workflowAgentCounts,
+    task.workflowAgentsOmitted,
+  );
+  if (workflow) return workflow;
   if (summary) return summary;
   const tool = task.lastToolName?.trim();
   return tool ? `Using ${tool}` : undefined;
@@ -683,9 +692,11 @@ function formatToolUseCount(count: number): string {
 function BackgroundTaskRail({
   usage,
   durationLabel,
+  className,
 }: {
   usage: BackgroundTaskUsageCounts;
   durationLabel?: string;
+  className?: string;
 }) {
   const hasUsage =
     usage.toolUses !== undefined ||
@@ -693,7 +704,12 @@ function BackgroundTaskRail({
     usage.updates !== undefined;
   if (!hasUsage && !durationLabel) return null;
   return (
-    <div className="flex shrink-0 self-stretch flex-col items-end justify-between gap-1">
+    <div
+      className={cn(
+        "flex shrink-0 self-stretch flex-col items-end justify-between gap-1",
+        className,
+      )}
+    >
       <UsageStatsRow
         toolUses={usage.toolUses}
         tokenCountText={usage.tokenCountText}
@@ -1055,6 +1071,11 @@ export function BackgroundTaskCard({
 }) {
   const [stopError, setStopError] = useState<string | null>(null);
   const presentation = backgroundTaskPresentation(task);
+  const workflow = task.kind === "workflow";
+  const launchReceipt =
+    workflow && result?.startsWith("Workflow launched in background. Task ID: ")
+      ? result
+      : undefined;
   const startedAt = task.startedAt ?? launchStartedAt;
   const durationLabel = useAgentRuntimeLabel(
     presentation.status,
@@ -1089,7 +1110,9 @@ export function BackgroundTaskCard({
     task.outputTail ||
     task.outputFile ||
     metaEntries.length > 0 ||
-    children.length > 0,
+    children.length > 0 ||
+    (task.workflowAgents?.length ?? 0) > 0 ||
+    (task.workflowAgentsOmitted ?? 0) > 0,
   );
 
   // The failure belongs to the attempt, not the task: a later status change
@@ -1120,16 +1143,27 @@ export function BackgroundTaskCard({
           className={cn(
             "flex min-h-7 min-w-0 flex-1 gap-3 rounded-md text-left transition-colors focus-hairline",
             hasPreview ? "items-start" : "items-center",
+            workflow && "max-sm:relative max-sm:flex-wrap max-sm:gap-y-1 max-sm:pr-6",
             hasBody ? "cursor-pointer hover:bg-white/[0.025]" : "cursor-default",
           )}
           disabled={!hasBody}
         >
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-xs">
+          <div className={cn("min-w-0 flex-1", workflow && "max-sm:basis-full")}>
+            <div
+              className={cn(
+                "flex items-center gap-2 text-xs",
+                workflow && "max-sm:flex-wrap max-sm:gap-y-1",
+              )}
+            >
               <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
                 {backgroundTaskKind(task)}
               </span>
-              <span className="min-w-0 truncate text-sm font-medium text-foreground">
+              <span
+                className={cn(
+                  "min-w-0 truncate text-sm font-medium text-foreground",
+                  workflow && "max-sm:order-last max-sm:basis-full",
+                )}
+              >
                 {backgroundTaskLabel(task)}
               </span>
               <span
@@ -1159,11 +1193,16 @@ export function BackgroundTaskCard({
             ) : null}
           </div>
           {/* The rail sits before the chevron so every card's chevron lines up at the edge. */}
-          <BackgroundTaskRail usage={usage} durationLabel={durationLabel} />
+          <BackgroundTaskRail
+            usage={usage}
+            durationLabel={durationLabel}
+            className={workflow ? "max-sm:flex-row max-sm:items-center max-sm:gap-2" : undefined}
+          />
           <ChevronRight
             className={cn(
               "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
               hasPreview && "mt-1",
+              workflow && "max-sm:absolute max-sm:right-0 max-sm:top-1",
               open && hasBody && "rotate-90",
               !hasBody && "opacity-0",
             )}
@@ -1184,7 +1223,12 @@ export function BackgroundTaskCard({
           ) : null}
           {prompt ? <BackgroundTaskTextBlock label="Prompt" text={prompt} /> : null}
           <BackgroundTaskDetails task={task} containerId={containerId} />
-          <AgentResultBlock result={result} />
+          <WorkflowAgentList agents={task.workflowAgents} omitted={task.workflowAgentsOmitted} />
+          {launchReceipt ? (
+            <BackgroundTaskTextBlock label="Launch result" text={launchReceipt} mono />
+          ) : (
+            <AgentResultBlock result={result} />
+          )}
           <BackgroundTaskChildList tasks={children} containerId={containerId} />
         </div>
       </CollapsibleContent>

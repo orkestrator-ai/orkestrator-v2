@@ -134,3 +134,25 @@ describe("POST /sessions/activity", () => {
     expect((await batch("x".repeat(200_000))).status).toBe(413);
   });
 });
+
+test("reads settled usage without touching or hydrating the session", async () => {
+  const { state, writes } = observedSession("acp-usage", {
+    usage: {
+      turn: { inputTokens: 12 },
+      turns: [{ turnId: "turn", costUsd: 0.03, costSource: "provider", revision: 1 }],
+      updatedAt: "2026-11-18T00:00:00.000Z",
+    },
+  });
+  sessions.set(state.id, state);
+  try {
+    const response = await nativeFetch(`${base}/session/${state.id}/usage`, { headers });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      contextUsage: { usedTokens: 12, turns: [{ turnId: "turn", costUsd: 0.03, revision: 1 }] },
+    });
+    expect(writes).toEqual([]);
+    expect(state.child).toBeNull();
+  } finally {
+    sessions.delete(state.id);
+  }
+});

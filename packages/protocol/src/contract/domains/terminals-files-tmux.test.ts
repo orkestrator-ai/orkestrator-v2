@@ -49,6 +49,8 @@ const CRITICAL: Record<string, readonly string[]> = {
   launch_terminal_job: ["requestId"],
   write_local_file: ["expected"],
   write_container_file: ["expected"],
+  rename_local_file: ["expectedKind"],
+  rename_container_file: ["expectedKind"],
   delete_container_annotation_evidence: ["digest"],
   claude_tmux_answer_selection_prompt: [
     "expectedGeneration",

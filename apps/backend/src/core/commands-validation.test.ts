@@ -193,6 +193,19 @@ describe("asNativeAgentSessionAction", () => {
     expect(asNativeAgentSessionAction({ kind: "compact" })).toEqual({ kind: "compact" });
   });
 
+  test("carries a branch switch's summary request only when given", () => {
+    expect(asNativeAgentSessionAction({ kind: "switch-branch", entryId: "e-1" })).toEqual({
+      kind: "switch-branch",
+      entryId: "e-1",
+    });
+    expect(
+      asNativeAgentSessionAction({ kind: "switch-branch", entryId: "e-1", summarize: true }),
+    ).toEqual({ kind: "switch-branch", entryId: "e-1", summarize: true });
+    expect(() =>
+      asNativeAgentSessionAction({ kind: "switch-branch", entryId: "e-1", summarize: "yes" }),
+    ).toThrow();
+  });
+
   test("refuses malformed or oversized compaction instructions", () => {
     expect(() => asNativeAgentSessionAction({ kind: "compact", instructions: 7 })).toThrow();
     expect(() =>

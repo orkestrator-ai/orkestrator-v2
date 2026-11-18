@@ -25,6 +25,8 @@ import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { rememberHistoryMessage } from "./history-target.js";
 import { noteCommandOutput } from "./commands.js";
 import { MAX_TOOL_TITLE_BYTES } from "./config.js";
+import { responseModelId } from "./models.js";
+import { accumulateResponseUsage } from "./turn-usage.js";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import {
   appendBounded,
@@ -48,7 +50,6 @@ import {
   type BridgeToolPart,
   type JsonObject,
   type SessionState,
-  type TurnUsage,
 } from "./state.js";
 
 /**
@@ -137,17 +138,26 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
     case "message_start":
       if (!turnFramesWelcome(state)) break;
       applyResponseBoundary(state, event.message);
+      applyResponseModel(state, event.message);
       applyCommandOutput(state, event.message);
       applySteerDelivery(state, event.message);
       break;
     case "message_update":
       if (!turnFramesWelcome(state)) break;
+      // Before the delta, so a row the delta opens is already attributed.
+      applyResponseModel(state, event.message);
       applyMessageUpdate(state, event.assistantMessageEvent);
       break;
     case "message_end":
       // The assistant message is final. A later delta belongs to a new one.
       state.openTextParts.clear();
       if (!turnFramesWelcome(state)) break;
+      applyResponseModel(state, event.message);
+      state.currentTurnResponses = accumulateResponseUsage(
+        state.currentTurnResponses,
+        event.message,
+        state.composer.selectedModelId,
+      );
       applyResponseOutcome(state, event.message);
       rememberResponseMessage(state, event.message);
       rememberPromptMessage(state, event.message);
@@ -167,7 +177,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
       break;
     case "turn_end":
       if (!turnFramesWelcome(state)) break;
-      applyTurnUsage(state, event.message);
+      recordProviderDuration(state, event.message);
       break;
     case "agent_settled":
       // Pi 1.1: whether the run that just settled was aborted — by this
@@ -249,8 +259,30 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
 function applyResponseBoundary(state: SessionState, value: unknown): void {
   if (!isObject(value) || value.role !== "assistant") return;
   state.currentAssistantMessageId = undefined;
+  state.currentResponseModelId = undefined;
   state.pendingHistoryResponse = undefined;
   state.openTextParts.clear();
+}
+
+/**
+ * Attribute the response being written to the model Pi reports for it.
+ *
+ * Pi names the requested model on `message_start`, and a provider may name the
+ * one that actually answered only once it streams (`responseModel`), so every
+ * assistant frame is consulted and the open row is corrected when the answer
+ * changes. The composer selection is never touched: an alias resolving is not
+ * the user choosing a different model.
+ */
+function applyResponseModel(state: SessionState, message: unknown): void {
+  const modelId = responseModelId(message);
+  if (!modelId || modelId === state.currentResponseModelId) return;
+  state.currentResponseModelId = modelId;
+  const last = state.messages[state.messages.length - 1];
+  if (last?.role !== "assistant" || last.id !== state.currentAssistantMessageId) return;
+  if (last.modelId === modelId) return;
+  last.modelId = modelId;
+  chargeNewEntry(state, { modelId });
+  rowChanged(state, last);
 }
 
 /**
@@ -570,15 +602,7 @@ function appendToolResultImages(
   }
 }
 
-/**
- * Record the usage the finished turn reported.
- *
- * Accumulated rather than replaced: one prompt can run many turns, and the tab
- * shows what the *prompt* cost. `reasoning` is deliberately not added into the
- * total — Pi documents it as a subset of `output`, so counting it separately
- * would double-bill every thinking model.
- */
-function applyTurnUsage(state: SessionState, message: unknown): void {
+function recordProviderDuration(state: SessionState, message: unknown): void {
   if (!isObject(message)) return;
   // Pi 1.1 times each model response (`AssistantMessage.durationMs`); summed,
   // it is the turn's provider time, the neutral `apiDurationMs`.
@@ -586,20 +610,6 @@ function applyTurnUsage(state: SessionState, message: unknown): void {
   if (responseMs !== undefined) {
     state.currentTurnApiDurationMs = (state.currentTurnApiDurationMs ?? 0) + responseMs;
   }
-  if (!isObject(message.usage)) return;
-  const usage = message.usage;
-  const turn: TurnUsage = { ...state.currentTurnUsage };
-  add(turn, "inputTokens", usage.input);
-  add(turn, "outputTokens", usage.output);
-  add(turn, "cacheReadTokens", usage.cacheRead);
-  add(turn, "cacheWriteTokens", usage.cacheWrite);
-  add(turn, "reasoningTokens", usage.reasoning);
-  state.currentTurnUsage = turn;
-}
-
-function add(turn: TurnUsage, key: keyof TurnUsage, value: unknown): void {
-  if (typeof value !== "number" || !Number.isFinite(value)) return;
-  turn[key] = (turn[key] ?? 0) + value;
 }
 
 function applyQueueUpdate(state: SessionState, event: JsonObject): void {
@@ -939,13 +949,15 @@ function applyThinkingLevel(state: SessionState, level: unknown): void {
 export function currentAssistantMessage(state: SessionState): BridgeMessage {
   const last = state.messages[state.messages.length - 1];
   if (last?.role === "assistant" && last.id === state.currentAssistantMessageId) return last;
+  // The selection only until Pi names the response's model (`applyResponseModel`).
+  const modelId = state.currentResponseModelId ?? state.composer.selectedModelId;
   const message: BridgeMessage = {
     id: randomBytes(12).toString("hex"),
     role: "assistant",
     content: "",
     parts: [],
     createdAt: new Date().toISOString(),
-    ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
+    ...(modelId ? { modelId } : {}),
   };
   state.messages.push(message);
   state.currentAssistantMessageId = message.id;

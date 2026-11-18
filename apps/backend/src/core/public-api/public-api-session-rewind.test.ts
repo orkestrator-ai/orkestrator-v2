@@ -5,6 +5,7 @@ import {
   encodePublicSessionId,
   nativeTabLogicalSessionKey,
 } from "@orkestrator/protocol/public-api-resources";
+import { httpProvider, piConnection } from "../agent-provider-test-support.js";
 import { providerCapabilities } from "./providers.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 
@@ -19,6 +20,21 @@ afterEach(cleanupSessionHarnesses);
 
 const TAB_ID = "source-tab";
 const PROVIDER_SESSION = "provider-session";
+
+async function finishedBranch(
+  harness: Awaited<ReturnType<typeof setup>>["harness"],
+  operationId: string,
+) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const response = await harness.call("run.get", { operationId });
+    if (!response.ok) throw new Error(response.error.message);
+    const receipt = response.receipt!;
+    if (receipt.state !== "running") return receipt;
+    await Bun.sleep(5);
+  }
+  throw new Error("Branch operation did not settle");
+}
 
 async function adoptedSession(
   agent: BuildPipelineAgent,
@@ -271,6 +287,98 @@ describe("session.branches and session.branch", () => {
     if (!switched.ok) throw new Error(`branch failed: ${switched.error.message}`);
     expect(switched.result).toEqual({ sessionId, entryId: "leaf-old" });
     expect(actions).toEqual([{ kind: "switch-branch", entryId: "leaf-old" }]);
+  });
+
+  test("Pi switches with a summary when asked, and reports whether it kept one", async () => {
+    const actions: NativeAgentSessionAction[] = [];
+    const completion = Promise.withResolvers<void>();
+    const performSessionAction = mock(
+      async (_providerSessionId: string, action: NativeAgentSessionAction) => {
+        actions.push(action);
+        await completion.promise;
+        return { outcome: "applied" as const, summarized: true };
+      },
+    );
+    const { harness, sessionId } = await adoptedSession("pi", { performSessionAction });
+    const switched = await harness.call(
+      "session.branch",
+      { sessionId, entryId: "leaf-old", summarize: true },
+      { requestId: "branch-summary-1" },
+    );
+    try {
+      expect(switched).toMatchObject({ ok: true, receipt: { state: "running" } });
+      const replay = await harness.call(
+        "session.branch",
+        { sessionId, entryId: "leaf-old", summarize: true },
+        { requestId: "branch-summary-1" },
+      );
+      expect(replay).toMatchObject({
+        ok: true,
+        receipt: { operationId: switched.receipt?.operationId, replayed: true, state: "running" },
+      });
+    } finally {
+      completion.resolve();
+    }
+    expect(await finishedBranch(harness, switched.receipt!.operationId)).toMatchObject({
+      state: "succeeded",
+      result: { sessionId, entryId: "leaf-old", summarized: true },
+    });
+    expect(actions).toEqual([{ kind: "switch-branch", entryId: "leaf-old", summarize: true }]);
+
+    // The same request key with a different intent is a different request.
+    const conflicting = await harness.call(
+      "session.branch",
+      { sessionId, entryId: "leaf-old" },
+      { requestId: "branch-summary-1" },
+    );
+    expect(conflicting.ok).toBe(false);
+    expect(actions).toHaveLength(1);
+  });
+
+  test("a stopped summarized switch fails with the bridge's words, not success", async () => {
+    const performSessionAction = mock(async () => {
+      throw new Error(
+        "The branch switch was stopped before Pi finished the summary; the conversation stayed on its branch.",
+      );
+    });
+    const { harness, sessionId } = await adoptedSession("pi", { performSessionAction });
+    const switched = await harness.call(
+      "session.branch",
+      { sessionId, entryId: "leaf-old", summarize: true },
+      { requestId: "branch-stopped" },
+    );
+    expect(await finishedBranch(harness, switched.receipt!.operationId)).toMatchObject({
+      state: "failed",
+      error: { message: expect.stringContaining("stayed on its branch") },
+    });
+  });
+
+  test("a legacy bridge cannot persist raw provider diagnostics in the branch receipt", async () => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json(
+          {
+            kind: "branch-summary-failed",
+            error: "Provider refused request with synthetic-sensitive-marker",
+          },
+          { status: 422 },
+        ),
+      piConnection,
+    );
+    const { harness, sessionId } = await adoptedSession("pi", {
+      performSessionAction: provider.performSessionAction!.bind(provider),
+    });
+    const switched = await harness.call(
+      "session.branch",
+      { sessionId, entryId: "leaf-old", summarize: true },
+      { requestId: "branch-provider-error" },
+    );
+    const receipt = await finishedBranch(harness, switched.receipt!.operationId);
+    expect(receipt).toMatchObject({
+      state: "failed",
+      error: { message: expect.stringContaining("could not summarize") },
+    });
+    expect(JSON.stringify(receipt)).not.toContain("synthetic-sensitive-marker");
   });
 
   test.each(["codex", "cursor", "claude"] as const)("%s has no branches", async (agent) => {

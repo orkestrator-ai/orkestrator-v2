@@ -11,6 +11,8 @@ import type { UserCommandRecord } from "@orkestrator/protocol/user-commands";
 import type {
   NativeAgentBackgroundTaskKind,
   NativeAgentBackgroundTaskUsage,
+  NativeAgentWorkflowAgent,
+  NativeAgentWorkflowAgentCounts,
 } from "@orkestrator/protocol/native-agent";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import type { UserPromptPresentationKind } from "@orkestrator/protocol/review-evidence-frames";
@@ -94,6 +96,10 @@ export interface NativeBackgroundTask {
   pausedMs?: number;
   /** See the protocol summary's `endReason`. */
   endReason?: "process-restart" | "resume-cleanup";
+  /** A workflow task's agents; see the protocol summary's `workflowAgents`. */
+  workflowAgents?: NativeAgentWorkflowAgent[];
+  workflowAgentsOmitted?: number;
+  workflowAgentCounts?: NativeAgentWorkflowAgentCounts;
 }
 
 /**

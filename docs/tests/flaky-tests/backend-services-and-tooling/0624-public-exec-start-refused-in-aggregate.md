@@ -20,3 +20,35 @@
 - **Cause not established:** `environment.exec` refuses a start (`ok: false`) only for validation errors, a `busy` refusal at the per-environment concurrency limit (each test owns its own storage, so no other test counts against it), or a `neverStarted` control failure when the exec-control subprocess failed to claim the operation. The failure was at 96 ms, far from the control's 30 s deadline. A timing cause cannot be identified from the recorded `started.ok` assertion, which did not print the response.
 - **What changed:** the assertion now reads `expect(started).toMatchObject({ ok: true })`, so a recurrence prints the refusal (code and message) instead of `false`. Nothing was loosened.
 - **Not reproduced:** the file passes here; no contention run completed (host load average 100 to 180). Left open until a recurrence names the refusal.
+
+## Recurrence (2026-11-18): the refusal is the finished command's own failure
+
+- **Run:** CI run 44362605679, job `Tests (backend)` (`mise run test:full`,
+  backend group with 2 worker slots) on branch
+  `rounded-pill-tabs-81e215c601f8-r1` at `a1f7f7131` (PR #2433), base
+  `69f6108c1`. `mise run flaky:recurrence -- 0624 --base 69f6108c1` answered
+  "open. Record the failure as a recurrence".
+- **Failure:** line 60, `expect(started).toMatchObject({ ok: true })`, after
+  1010.88 ms. The backend group ended 22590 pass, 362 skip, 7 fail; the other
+  six were the deterministic `main` breakages fixed on
+  `fix-ci-failures-880982c166b6`. The runner's rerun of the owning file alone
+  passed (3.3 s).
+- **The printed response:** `ok: false`, `error.code: "exec-failed"`,
+  `error.message: "The command exited with 3"`, and a receipt in `stage:
+  "completed"`, `state: "failed"` whose `execution` says `exitCode: 3`,
+  `evidence: "process-exit"`, started 17:50:08.150 and finished 17:50:08.158.
+  The receipt was created at 08.056 and completed at 08.424.
+- **What this establishes:** the command started and exited with status 3
+  about 8 ms later. After spawning the worker, the start control reads and
+  returns one state snapshot. The action uses that snapshot to choose its
+  reply. A `starting` or `running` snapshot yields an accepted start
+  (`ok: true`), even if the process exits before the reply arrives. In this
+  run, the control already read `exited` with status 3, so the action returned
+  the completed failure (`ok: false`, `exec-failed`). The 2026-10-21
+  observation is consistent with this sequence.
+- **Next step:** decide whether the start response should always acknowledge
+  admission and leave the outcome to the receipt, or should report a terminal
+  outcome when the start control observes one. Under the latter contract, the
+  test can exercise the accepted response by holding the command on a file
+  that the test creates after `exec` returns. See
+  [the public CLI contract](../../../architecture/public-cli.md).

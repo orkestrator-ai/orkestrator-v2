@@ -242,9 +242,27 @@ entry id. The branch being left is listed in its turn, so a switch is always
 reversible. Live rows keep their bridge ids; giving them Pi entry ids would
 change a row's id mid-turn (`bridges/AGENTS.md`, "Transcript rows").
 
+A switch can keep a summary of the branch it leaves. The picker's **Keep a
+summary of the branch I leave** box (off by default) adds `summarize: true`
+to `switch-branch`; the bridge then calls Pi's `navigateTree` with
+`summarize: true`, and Pi asks the session's model to summarize the entries
+being left and appends a `branch_summary` entry, as the new leaf, under the
+selected entry. It is in the session file at once, so it survives a reload
+and a restart, it is rendered as a "Branch summary" row, and the next turn's
+context carries it. An ordinary switch passes `summarize: false` and makes
+no model call. While Pi writes the summary the session reports itself
+running. The tab's Stop requests cancellation through `abortBranchSummary`,
+as does the four-minute deadline. The SDK checks cancellation before changing
+the leaf, even when a slow extension delays settlement. A stopped switch, one
+an extension cancels and a failed summary are each answered as "the conversation stayed
+on its branch" (`bridges/pi-bridge/src/branch-switch.ts`). A branch that ends
+on a prompt with no reply is refused a summary before any model call: Pi
+would put the summary before that prompt and leave the prompt off the
+branch.
+
 The public CLI reaches both: `session rewind SESSION --message ID`,
-`session branches SESSION` and `session branch SESSION ENTRY_ID`
-([public-cli.md](public-cli.md)). A Coordinator conversation refuses rewind and
+`session branches SESSION` and `session branch SESSION ENTRY_ID
+[--summarize]` ([public-cli.md](public-cli.md)). A Coordinator conversation refuses rewind and
 a branch switch, as it refuses fork and resume.
 
 **Claude offers fork at a message, not message rewind** (decided by the user
@@ -522,9 +540,21 @@ compatibility surface is spread across the files that normalize the SDK's
 message union into Orkestrator's own `NormalizedMessage`/`NormalizedPart`
 model: `services/session-manager-prompt-handlers/*` (one handler per SDK frame
 type, dispatched in `dispatch.ts`), `services/session-manager-messages.ts`,
-the SDK-facing types and dispositions in `types/index.ts`, and
+the task-frame readers in `services/session-manager-task-records.ts` and
+`services/background-task-workflow.ts` (agent-specific `task_progress` uses
+`description` and `last_tool_name` for the latest agent, while heartbeat
+frames can update the agent list without naming one), the SDK-facing types
+and dispositions in `types/index.ts`, and
 `sdk-compatibility.test.ts`, which drives the installed SDK. Review those on
 every SDK bump.
+
+Workflow cards use the launch description and the task's run ID while the
+workflow is active. The bridge counts reported agents and matches their hook IDs
+before selecting the rows to display. Running and failed agents take priority
+at the 64-row limit. Claude Code 2.1.326 writes the Workflow result and the task
+notification to its rollout. Agent rows arrive through the SDK, so the bridge
+keeps bounded terminal details keyed by the launch call and restores them when
+it reads that rollout.
 
 Turns run through the SDK's `query()` with `includePartialMessages: true` so
 partial assistant output streams as it arrives. Continuation uses the SDK's own
@@ -1023,6 +1053,8 @@ OpenCode bump, re-check:
   plugin `active` before its socket is recorded.
 - The sub-agent tool and its report (below), with
   `opencode2-subagents.live.test.ts`.
+- The shell tool's timeout handling, its report, the background job list and
+  shell removal (below), with `opencode2-shell-timeout.live.test.ts`.
 
 **Background sub-agents (2.3.0).** Every `subagent` call returns at once with
 its child's session id (`metadata.status: "running"`), the parent's run
@@ -1054,13 +1086,66 @@ Claude turn released to background agents, and is reported the same way
   interrupted, and a stopped child's `cancelled` report wakes the parent. A
   stop (and so a close) interrupts the running descendants and then, for up
   to 3 s, any run their reports wake, refreshing descendants even after a quiet
-  snapshot. New external input cancels the stop phase; another provider
-  instance is detected through the parent's input history. Disposal cancels
-  the phase too. Revised launch cards retain folded results after reports
+  snapshot. Prompts and steers from any provider instance wait for the session's
+  Stop lock. A change to the parent's external input fences further cleanup,
+  and disposal cancels the phase. Revised launch cards retain folded results after reports
   leave the head window, and older launches still consult live child state.
 
 A child's own permission or question cards are not shown in the parent's tab
 (as on 2.2.6, where the parent waited on the child instead).
+
+**Background shells (2.3.1).** A shell command still running when its timeout
+expires (120 s unless the call names another; a foreground `timeout: 0` means
+the default too) moves to the background instead of being killed, in every
+build: 2.3.1 removed the `shell_timeout_background` flag that 2.3.0 kept off.
+The call returns `metadata.status: "running"` with its shell id, the run
+settles, and when the command ends a `<shell>` report (a `synthetic` row,
+`metadata: { source: "shell", shellID, jobID, state }`, `state` one of
+`completed`, `error`, `cancelled`) is admitted to the session and wakes it into
+a run Orkestrator never prompted. A command run with `background: true`
+behaves the same. The provider reports it as it reports a background
+sub-agent (`opencode2/background-subagents.ts`):
+
+- Activity: a session whose own run settled reads `working` while it, or one
+  of its descendants, owns a background shell job
+  (`GET /api/experimental/job`, which lists a job until its report has been
+  admitted; one read per activity batch). A settled job is waited on for 3 s
+  more, for its report.
+- Workflows: `observeSession` adds `backgroundWorkLive` while such a job is
+  listed or a shell report waits in the inbox, so a pipeline, review or
+  structured turn waits for the run the report wakes. The request that
+  launched the shell owns that run, even if a newer request has settled
+  in between (`openCode2RequestRun`, `openCode2TurnTerminalError`).
+  Settlement checks jobs, inbox and active runs before confirming the run
+  boundary in history. A report with no `jobID` is a command the user ran
+  themselves and wakes nothing.
+- Stop (and so close): terminates the running background shells of the
+  session and its descendants through `DELETE /api/shell/{id}` (an interrupt
+  alone leaves them running). Stop rescans jobs and interrupts report-woken
+  runs under a shared cleanup deadline. It restores only the stopped request's
+  grant, after cleanup confirms quiescence. 2.3.1 reports a removed command as a failed job whose body
+  is `Shell.NotFoundError`; the transcript shows it as "Background command
+  stopped".
+- Transcript: the report is a status row with the command and its output
+  (`backgroundShellNotice`). The row is in OpenCode's history, so a tab that
+  was not open when the command finished, or a reload, reads it from the
+  snapshot; nothing depends on the live event. OpenCode writes the command
+  into the report's tag unescaped, so the body is found by the row's
+  description first.
+
+The job route is experimental upstream (no compatibility promise) and is held
+to the exact pin; an unreadable job list keeps a workflow waiting, as an
+unreadable inbox does, and leaves activity to the session's own run.
+
+**Background compaction (2.3.1).** `compaction.background` is a configuration
+key, on by default; the launcher leaves it there and writes no setting, so the
+user's own global OpenCode configuration can turn it off. Near the
+compaction threshold OpenCode writes a speculative summary from the prompt
+cache and holds it in memory, so the run that reaches the threshold does not
+pause for one; it adds no rows and wakes nothing. Each one is a billed model
+request whether or not it is used, and it goes unused when the session ends
+or goes quiet before the threshold, or the server restarts. The costs are
+spelled out beside `OPENCODE2_FLAGS` (`opencode2/server.ts`).
 
 A bump is qualified on scripted models, with no login and nothing billed,
 in three layers ([upgrade-agents.md](../development/upgrade-agents.md) has
@@ -1071,7 +1156,10 @@ the commands):
 - `mise run verify:opencode2:real-stack`: the idle-observation spec's
   OpenCode cases (a missed final event, an approval card, a cut event
   stream, a hidden document, a turn finishing with no renderer, composer
-  steer) in a local environment of a disposable profile.
+  steer) in a local environment of a disposable profile. Select the
+  `shell-timeout-return` case with `ORKESTRATOR_AGENT_TEST_IDLE_CASES` to
+  exercise a timed-out command completing while the tab is hidden, then
+  verify its report on return and after reload.
 - `mise run verify:opencode2:container`: the same cases in a container
   environment, with the scripted model served on the container's own
   loopback and named in the profile's `opencode.json`, which each runtime
@@ -1080,8 +1168,10 @@ the commands):
 
 All three passed at 2.2.6 on Linux x86_64 (host 2026-11-11, container
 2026-11-13, behind an egress gateway); at 2.3.0 the live set passed on Linux
-x86_64 on 2026-11-17, and the real-stack and container halves were not
-re-run. The per-case figures are in
+x86_64 on 2026-11-17, and at 2.3.1 on 2026-11-18 (with
+`opencode2-shell-timeout.live.test.ts`), and the real-stack and container
+full matrices were not re-run for either. The focused `shell-timeout-return`
+browser case passed on 2.3.1 on Linux x86_64. The per-case figures are in
 [agent-testing.md](../development/agent-testing.md). Concurrent sessions on
 one server, a steer racing a permission or question card and steer through
 the public CLI passed on scripted models on 2026-11-14

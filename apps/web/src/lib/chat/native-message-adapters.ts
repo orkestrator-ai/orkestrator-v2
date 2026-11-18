@@ -237,7 +237,11 @@ function isBackgroundTaskLaunchPart(
   // decorated with the same lifecycle but launched nothing, so it stays an
   // ordinary tool row rather than becoming a second card for one task.
   if (isBackgroundTaskActionTool(part.toolName)) return false;
-  return part.toolArgs?.run_in_background === true || isBackgroundCapableShellTool(part.toolName);
+  return (
+    isWorkflowLaunch(part.toolName, part.backgroundTask) ||
+    part.toolArgs?.run_in_background === true ||
+    isBackgroundCapableShellTool(part.toolName)
+  );
 }
 
 function groupTaskParts(
@@ -1031,6 +1035,13 @@ function backgroundTaskIdFromLaunchOutput(
   return recoverBackgroundTaskLaunchId(part);
 }
 
+function isWorkflowLaunch(
+  toolName: string | undefined,
+  task: Pick<NativeBackgroundTask, "kind"> | undefined,
+): boolean {
+  return task?.kind === "workflow" && normalizeToolName(toolName) === "workflow";
+}
+
 /**
  * True for a tool row that owns a background task.
  *
@@ -1040,9 +1051,14 @@ function backgroundTaskIdFromLaunchOutput(
  * arguments the command was launched with, so the argument alone would leave
  * both unlabelled and uncontrollable.
  */
-function isBackgroundTaskLaunch(part: ClaudeMessagePart, recoveredId: string | undefined): boolean {
+function isBackgroundTaskLaunch(
+  part: ClaudeMessagePart,
+  recoveredId: string | undefined,
+  task: ClaudeBackgroundTaskState | undefined,
+): boolean {
   if (part.type !== "tool-invocation") return false;
   return (
+    isWorkflowLaunch(part.toolName, task) ||
     part.toolArgs?.run_in_background === true ||
     (recoveredId !== undefined && isBackgroundCapableShellTool(part.toolName))
   );
@@ -1099,6 +1115,9 @@ type BackgroundTaskDetails = Pick<
   | "progressSummary"
   | "pausedMs"
   | "endReason"
+  | "workflowAgents"
+  | "workflowAgentsOmitted"
+  | "workflowAgentCounts"
 >;
 
 const BACKGROUND_TASK_DETAIL_KEYS = [
@@ -1117,6 +1136,9 @@ const BACKGROUND_TASK_DETAIL_KEYS = [
   "progressSummary",
   "pausedMs",
   "endReason",
+  "workflowAgents",
+  "workflowAgentsOmitted",
+  "workflowAgentCounts",
 ] as const satisfies ReadonlyArray<keyof BackgroundTaskDetails>;
 
 /** What the task's record says beyond its lifecycle, carrying only fields it has. */
@@ -1209,6 +1231,9 @@ export interface ClaudeBackgroundTaskState {
   progressSummary?: string;
   pausedMs?: number;
   endReason?: NativeBackgroundTask["endReason"];
+  workflowAgents?: NativeBackgroundTask["workflowAgents"];
+  workflowAgentsOmitted?: number;
+  workflowAgentCounts?: NativeBackgroundTask["workflowAgentCounts"];
 }
 
 export interface ClaudeBackgroundTaskStateOptions {
@@ -1391,7 +1416,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
                 : "ended";
       }
 
-      if (!isAgentTool && isBackgroundTaskLaunch(part, recoveredId)) {
+      if (!isAgentTool && isBackgroundTaskLaunch(part, recoveredId, authoritativeLaunch)) {
         const launch =
           authoritativeLaunch ??
           (recoveredId ? tasksById.get(recoveredId) : undefined) ??
@@ -1526,6 +1551,9 @@ export interface BackgroundTaskSnapshot {
   progressSummary?: string;
   pausedMs?: number;
   endReason?: NativeBackgroundTask["endReason"];
+  workflowAgents?: NativeBackgroundTask["workflowAgents"];
+  workflowAgentsOmitted?: number;
+  workflowAgentCounts?: NativeBackgroundTask["workflowAgentCounts"];
   /** Housekeeping the provider asks hosts to keep out of the transcript. */
   ambient?: boolean;
 }
@@ -1650,7 +1678,8 @@ export function rowlessBackgroundTaskMessages(
     !rendered.has(task.id) &&
     !isResumeCleanupTask(task) &&
     (isLiveBackgroundTask(task.status) ||
-      (anchors.resolve(task.settledAt) !== undefined && !hasLaunchRow(task)));
+      (anchors.resolve(task.settledAt) !== undefined &&
+        (task.kind === "workflow" || !hasLaunchRow(task))));
   const nested = nestedBackgroundTaskIds(
     tasks,
     (task) => rendered.has(task.id) || (!task.ambient && ownRow(task)),

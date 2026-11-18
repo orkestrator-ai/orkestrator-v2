@@ -559,6 +559,9 @@ export function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAc
       return {
         kind,
         entryId: asNonBlankString(raw.entryId, "action.entryId"),
+        ...(raw.summarize === undefined
+          ? {}
+          : { summarize: asRequiredBoolean(raw.summarize, "action.summarize") }),
       };
     case "undo":
       return {

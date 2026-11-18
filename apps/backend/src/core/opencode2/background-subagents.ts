@@ -1,19 +1,26 @@
 /**
- * OpenCode 2.x background sub-agents, as the rest of the backend sees
- * background work (OpenCode 2.3.0, anomalyco/opencode#63382).
+ * OpenCode 2.x background work (sub-agents and shells), as the rest of the
+ * backend sees background work (OpenCode 2.3.0, anomalyco/opencode#63382;
+ * 2.3.1, anomalyco/opencode#63699).
  *
  * Since 2.3.0 every `subagent` call returns at once with the child's session
  * id, the parent's run settles while the child works, and each time the child
  * goes idle a `<subagent>` report (a `synthetic` row, `metadata.source:
  * "subagent"`) is admitted to the parent's inbox and the parent is woken into
- * a run of its own, with no prompt from Orkestrator (probed on 2.3.0). That is
- * the shape of a Claude turn that released to background agents, so it is
- * reported the same way:
+ * a run of its own, with no prompt from Orkestrator (probed on 2.3.0). Since
+ * 2.3.1 a shell command still running when its timeout expires (120 s unless
+ * the call names another) moves to the background instead of being killed,
+ * in every build: the call returns `metadata.status: "running"`, the run
+ * settles, and when the command ends a `<shell>` report (`metadata.source:
+ * "shell"`, with its `jobID`) wakes the session the same way. A command run
+ * with `background: true` (2.3.0 too) behaves the same. That is the shape of a
+ * Claude turn that released to background work, so it is reported the same
+ * way:
  *
  * - **Activity** (`activityBatch`): a session whose own run settled but whose
- *   descendant still runs reads `working`, as a Claude session with a live
- *   background agent does; its composer stays free, because its `status` is
- *   its own run's.
+ *   descendant still runs, or that (or whose descendant) owns a background
+ *   shell, reads `working`, as a Claude session with a live background task
+ *   does; its composer stays free, because its `status` is its own run's.
  * - **Workflows** (`observeSession`, `settleTurn`, `structured`): an idle
  *   session with {@link OpenCode2BackgroundWork.live} work reports
  *   `backgroundWorkLive`, keeps its turn's grant and has no result yet, so a
@@ -21,20 +28,28 @@
  *   to the same request, `openCode2RequestRun`).
  * - **Stop** ({@link OpenCode2BackgroundWork.stop}): 2.3.0 no longer cancels a
  *   parent's children when the parent is interrupted, and a child's cancelled
- *   report wakes its parent. A stop interrupts the running descendants and
- *   then any run their reports wake, so Stop ends the work as it did on 2.2.6
- *   (and as stopping a Claude session ends its background agents).
- * - **Cards**: the transcript folds each report onto the call that launched
- *   it (`transcript.ts`).
+ *   report wakes its parent; 2.3.1 leaves a session's background shells
+ *   running across an interrupt, and their reports wake it too. A stop
+ *   interrupts the running descendants, terminates the session's (and its
+ *   descendants') background shells, and then interrupts any run their
+ *   reports wake, so Stop ends the work as it did on 2.2.6 (where a timed-out
+ *   command was killed, and stopping a run killed its command) and as stopping
+ *   a Claude session ends its background agents.
+ * - **Cards**: the transcript folds each sub-agent report onto the call that
+ *   launched it, and shows a shell report as a status row with the command's
+ *   output (`transcript.ts`). Both are history rows, so a tab that was not
+ *   mounted when the work finished reads them on return or reload.
  *
- * Only stable routes are read: the running sessions, each session's parent
- * (immutable, so remembered), a parent's children and its inbox.
+ * Only stable routes are read, plus one experimental route held to the exact
+ * pin: the running sessions, each session's parent (immutable, so
+ * remembered), a parent's children, its inbox, and the background job list
+ * (`GET /api/experimental/job`).
  */
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { asRecord } from "../agent-provider-runtime.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
-import { openCode2SubagentReport } from "./transcript.js";
-import type { OpenCode2Session } from "./types.js";
+import { openCode2BackgroundReport, openCode2ShellReportMetadata } from "./transcript.js";
+import type { OpenCode2BackgroundJob, OpenCode2Session } from "./types.js";
 
 const log = createLogger("native-agent.opencode2");
 
@@ -46,6 +61,8 @@ const MAX_PARENT_LOOKUPS = 32;
 const MAX_DEPTH = 8;
 /** Descendants a stop interrupts. */
 const MAX_STOPPED_DESCENDANTS = 64;
+/** Background shells a stop terminates. */
+const MAX_STOPPED_SHELLS = 64;
 /**
  * A child created this recently that has not started yet is about to: it is
  * admitted before it drains (2.3.0 `subagent.ts`).
@@ -56,9 +73,19 @@ export const OPENCODE2_CHILD_START_GRACE_MS = 15_000;
  * parent's inbox: it is admitted right after the child releases.
  */
 export const OPENCODE2_CHILD_REPORT_GRACE_MS = 3_000;
+/**
+ * A background shell job that settled this recently may have its report on
+ * its way: the job is listed until its report is admitted, right after the
+ * command exits (2.3.1 `tool/plugin/shell.ts` `notify`). A settled job still
+ * listed after this is not waited on.
+ */
+export const OPENCODE2_SHELL_REPORT_GRACE_MS = 3_000;
 /** How long a stop keeps interrupting runs that its children's reports wake. */
 export const OPENCODE2_STOP_SETTLE_MS = 3_000;
 const STOP_POLL_MS = 100;
+const STOP_DELETE_CONCURRENCY = 4;
+/** Allows the final reconciliation read after the report polling window. */
+export const OPENCODE2_STOP_CLEANUP_MS = OPENCODE2_STOP_SETTLE_MS + 1_000;
 
 export interface OpenCode2BackgroundWorkDependencies {
   /** The server's running sessions; `fresh` skips any cache. */
@@ -70,21 +97,12 @@ export interface OpenCode2BackgroundWorkDependencies {
 export class OpenCode2BackgroundWork {
   /** Session id → its parent's id, `null` for a root session. */
   private readonly parents = new Map<string, string | null>();
-  private readonly stops = new Map<string, object>();
+  private readonly stops = new Set<AbortController>();
 
   dispose(): void {
+    for (const stop of this.stops) stop.abort();
     this.stops.clear();
     this.parents.clear();
-  }
-
-  beginStop(sessionId: string): object {
-    const token = {};
-    this.stops.set(sessionId, token);
-    return token;
-  }
-
-  cancelStop(sessionId: string): void {
-    this.stops.delete(sessionId);
   }
 
   constructor(
@@ -100,10 +118,9 @@ export class OpenCode2BackgroundWork {
   async owners(sessionIds: readonly string[], running: ReadonlySet<string>): Promise<Set<string>> {
     const wanted = new Set(sessionIds);
     const owners = new Set<string>();
-    const others = [...running].filter((id) => !wanted.has(id));
-    if (others.length === 0 || wanted.size === 0) return owners;
+    if (running.size === 0 || wanted.size === 0) return owners;
     let lookups = 0;
-    for (const id of others) {
+    for (const id of running) {
       let current: string | null | undefined = id;
       for (let depth = 0; current && depth < MAX_DEPTH; depth += 1) {
         let parent = this.parents.get(current);
@@ -113,10 +130,7 @@ export class OpenCode2BackgroundWork {
           parent = await this.parentOf(current);
           if (parent === undefined) break;
         }
-        if (parent && wanted.has(parent)) {
-          owners.add(parent);
-          break;
-        }
+        if (parent && parent !== id && wanted.has(parent)) owners.add(parent);
         current = parent;
       }
     }
@@ -124,24 +138,64 @@ export class OpenCode2BackgroundWork {
   }
 
   /**
-   * Whether `sessionId` has background work that will report to it: a
-   * running descendant, a report waiting in its inbox, a child admitted but
-   * not yet started, or a child that settled so recently its report may still
-   * be on its way. An unreadable state stays pending until a read proves completion.
+   * The sessions that own a background shell whose report is still owed (one
+   * read of the server's background shell jobs). A session listed here is
+   * still working even though its own run settled; with {@link owners}, so is
+   * every ancestor of one. Rejects when the jobs cannot be read.
    */
-  async live(sessionId: string): Promise<boolean> {
+  async shellOwners(): Promise<Set<string>> {
+    const jobs = await this.client.listBackgroundJobs({ kind: "shell" });
+    const now = this.deps.now();
+    return new Set(jobs.filter((job) => pendingShell(job, now)).map((job) => job.sessionID));
+  }
+
+  /**
+   * Whether `sessionId` has background work that will report to it: a
+   * running descendant, a background shell of its own or of a descendant, a
+   * report waiting in its inbox, a child admitted but not yet started, or a
+   * child or shell that settled so recently its report may still be on its
+   * way. An unreadable state stays pending until a read proves completion.
+   */
+  async live(
+    sessionId: string,
+    scope?: { shellIds: ReadonlySet<string>; superseded: boolean },
+  ): Promise<boolean> {
     try {
-      const running = await this.deps.running(true);
-      if ((await this.owners([sessionId], running)).has(sessionId)) return true;
-      const [inbox, children] = await Promise.all([
-        this.client.listInbox(sessionId),
-        this.client.listChildSessions(sessionId),
-      ]);
-      if (inbox.some((item) => openCode2SubagentReport({ ...item.payload, type: item.type }))) {
-        return true;
-      }
+      const shellIds = scope?.shellIds;
+      // A shell leaves the job list only after admission to the inbox. Read
+      // in delivery order so a report cannot pass between parallel snapshots.
+      const shells = await this.client.listBackgroundJobs({
+        sessionId,
+        kind: "shell",
+        descendants: true,
+      });
       const now = this.deps.now();
-      return children.some((child) => pendingChild(child, now));
+      if (
+        shells.some(
+          (job) =>
+            pendingShell(job, now) &&
+            (!shellIds || job.sessionID !== sessionId || shellIds.has(job.shellID!)),
+        )
+      )
+        return true;
+      const children = await this.client.listChildSessions(sessionId);
+      const inbox = await this.client.listInbox(sessionId);
+      if (
+        inbox.some((item) => {
+          const row = { ...item.payload, type: item.type };
+          const shell = openCode2ShellReportMetadata(row);
+          if (shell && shellIds)
+            return typeof shell.shellID === "string" && shellIds.has(shell.shellID);
+          return openCode2BackgroundReport(row);
+        })
+      )
+        return true;
+      const running = await this.deps.running(true);
+      return (
+        (!scope?.superseded && running.has(sessionId)) ||
+        (await this.owners([sessionId], running)).has(sessionId) ||
+        children.some((child) => pendingChild(child, now))
+      );
     } catch (error) {
       if (!(error instanceof OpenCode2RequestError && error.status === 404)) {
         log.debug("background.unreadable", { error: formatLogError(error, { message: false }) });
@@ -151,67 +205,136 @@ export class OpenCode2BackgroundWork {
   }
 
   /**
-   * Stop the background work of a session whose own run was just
-   * interrupted: interrupt every running descendant, then, until the reports
-   * those interruptions send have been delivered, interrupt any run they wake
-   * in `sessionId`. Bounded by {@link OPENCODE2_STOP_SETTLE_MS}; best-effort.
+   * Interrupt the parent, repeatedly discover and end descendant work, and
+   * drain runs woken by reports. True only with a quiet final snapshot.
+   * Dispatch and grant settlement hold the same session lock as this phase.
    */
-  async stop(sessionId: string, token = this.beginStop(sessionId)): Promise<void> {
-    const current = () => this.stops.get(sessionId) === token;
+  async stop(
+    sessionId: string,
+    interruptParent?: (signal: AbortSignal) => Promise<void>,
+  ): Promise<boolean> {
+    const controller = new AbortController();
+    this.stops.add(controller);
+    const signal = controller.signal;
+    const timeout = setTimeout(() => controller.abort(), OPENCODE2_STOP_CLEANUP_MS);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+    const inputHead = async () => {
+      const page = await this.client.listMessages(sessionId, { limit: 199, order: "desc", signal });
+      return page.messages.find(
+        (row) =>
+          row.type === "user" || (row.type === "synthetic" && !openCode2BackgroundReport(row)),
+      )?.id;
+    };
     try {
-      const inputHead = async () => {
-        const page = await this.client.listMessages(sessionId, { limit: 199, order: "desc" });
-        return page.messages.find(
-          (row) =>
-            row.type === "user" || (row.type === "synthetic" && !openCode2SubagentReport(row)),
-        )?.id;
-      };
       const initialInput = await inputHead();
-      const descendants = await this.descendants(sessionId);
-      if (!current()) return;
-      if (descendants.length === 0) {
-        const inbox = await this.client.listInbox(sessionId);
-        if (!inbox.some((item) => openCode2SubagentReport({ ...item.payload, type: item.type })))
-          return;
-      }
-      // Poll the whole bounded phase, including quiet snapshots: admission and
-      // report delivery can occur after an initially empty running set.
-      const deadline = this.deps.now() + OPENCODE2_STOP_SETTLE_MS;
+      const ownsStop = async () =>
+        !signal.aborted && (await inputHead()) === initialInput && !signal.aborted;
+      await interruptParent?.(signal);
+      const attempted = new Set<string>();
+      let quiet = false;
       for (let poll = 0; poll <= OPENCODE2_STOP_SETTLE_MS / STOP_POLL_MS; poll += 1) {
-        const running = await this.deps.running(true);
-        if (!current()) return;
-        for (const id of [...descendants, sessionId]) {
-          if (!current()) return;
-          if (running.has(id)) {
-            // Another provider instance (pipeline or mail) can dispatch too.
-            // A new external input owns the parent; only report continuations
-            // of the stopped work may be interrupted here.
-            if (id === sessionId && (await inputHead()) !== initialInput) return;
-            if (!current()) return;
-            await this.client.interrupt(id, { resume: false });
-          }
+        const descendants = await this.descendants(sessionId, signal);
+        const jobs = await this.stopJobs(sessionId, signal);
+        const running = await this.client.activeSessions(signal);
+        const sessions = [...descendants, sessionId];
+        const active = sessions.filter((id) => running.has(id));
+
+        for (const id of active) {
+          if (!(await ownsStop())) return false;
+          await this.client.interrupt(id, { resume: false, signal });
         }
-        if (this.deps.now() >= deadline) break;
-        await sleep(STOP_POLL_MS);
-        if (!current()) return;
-        const refreshed = await this.descendants(sessionId);
-        if (!current()) return;
-        descendants.splice(0, descendants.length, ...refreshed);
+        if (jobs) {
+          const owned = new Set(sessions);
+          await this.stopShells(
+            jobs.filter((job) => owned.has(job.sessionID)),
+            attempted,
+            ownsStop,
+            signal,
+          );
+        }
+
+        // Keep polling empty snapshots too. A command can cross its timeout
+        // during interruption or its report may still be on the way.
+        quiet =
+          !!jobs && !jobs.some((job) => pendingShell(job, this.deps.now())) && active.length === 0;
+        if (poll < OPENCODE2_STOP_SETTLE_MS / STOP_POLL_MS) await sleep(STOP_POLL_MS);
       }
+      if (!quiet || !(await ownsStop())) return false;
+      const descendants = await this.descendants(sessionId, signal);
+      const sessions = [sessionId, ...descendants];
+      const jobs = await this.stopJobs(sessionId, signal);
+      if (!jobs || jobs.some((job) => pendingShell(job, this.deps.now()))) return false;
+      for (const id of sessions) {
+        const inbox = await this.client.listInbox(id, signal);
+        if (inbox.some((item) => openCode2BackgroundReport({ ...item.payload, type: item.type })))
+          return false;
+      }
+      const running = await this.client.activeSessions(signal);
+      return sessions.every((id) => !running.has(id)) && (await ownsStop());
+    } catch (error) {
+      if (signal.aborted) return false;
+      throw error;
     } finally {
-      if (current()) this.stops.delete(sessionId);
+      clearTimeout(timeout);
+      this.stops.delete(controller);
+    }
+  }
+
+  private async stopJobs(sessionId: string, signal: AbortSignal) {
+    try {
+      return await this.client.listBackgroundJobs(
+        { sessionId, kind: "shell", descendants: true },
+        signal,
+      );
+    } catch (error) {
+      if (!signal.aborted) {
+        log.warn("background.unreadable", {
+          error: formatLogError(error, { message: false }),
+        });
+      }
+      return undefined;
+    }
+  }
+
+  private async stopShells(
+    jobs: OpenCode2BackgroundJob[],
+    attempted: Set<string>,
+    ownsStop: () => Promise<boolean>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const running = jobs
+      .filter((job) => job.status === "running" && job.shellID && !attempted.has(job.shellID))
+      .slice(0, MAX_STOPPED_SHELLS - attempted.size);
+    for (let index = 0; index < running.length; index += STOP_DELETE_CONCURRENCY) {
+      if (!(await ownsStop())) return;
+      await Promise.all(
+        running.slice(index, index + STOP_DELETE_CONCURRENCY).map(async (job) => {
+          signal.throwIfAborted();
+          const id = job.shellID!;
+          if (attempted.has(id)) return;
+          attempted.add(id);
+          try {
+            await this.client.removeShell(id, signal);
+          } catch (error) {
+            if (!signal.aborted) {
+              log.warn("background.stop-failed", {
+                error: formatLogError(error, { message: false }),
+              });
+            }
+          }
+        }),
+      );
     }
   }
 
   /** The session's descendants, breadth first and bounded. */
-  private async descendants(sessionId: string): Promise<string[]> {
+  private async descendants(sessionId: string, signal: AbortSignal): Promise<string[]> {
     const found: string[] = [];
     let level = [sessionId];
     for (let depth = 0; depth < MAX_DEPTH && level.length > 0; depth += 1) {
       const next: string[] = [];
       for (const parent of level) {
-        const children = await this.client.listChildSessions(parent);
+        const children = await this.client.listChildSessions(parent, signal);
         for (const child of children) {
           this.remember(child.id, parent);
           if (found.length >= MAX_STOPPED_DESCENDANTS) return found;
@@ -246,6 +369,13 @@ export class OpenCode2BackgroundWork {
       this.parents.delete(this.parents.keys().next().value!);
     }
   }
+}
+
+/** A background shell still running, or one whose report may not have reached its session yet. */
+function pendingShell(job: OpenCode2BackgroundJob, now: number): boolean {
+  if (job.status === "running") return true;
+  const completed = job.time.completed;
+  return completed !== undefined && now - completed < OPENCODE2_SHELL_REPORT_GRACE_MS;
 }
 
 /** A child about to start, or one whose report may not have reached its parent yet. */

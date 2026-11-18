@@ -4,6 +4,8 @@ import {
   normalizeOpenCode2Groups,
   normalizeOpenCode2Message,
   normalizeOpenCode2Transcript,
+  openCode2BackgroundReport,
+  openCode2BackgroundShellReport,
 } from "./transcript.js";
 import { openCode2ToolPart } from "./transcript-tools.js";
 import type { OpenCode2Message } from "./types.js";
@@ -181,6 +183,79 @@ describe("normalizeOpenCode2Transcript", () => {
       type: "status",
       content: `Background command completed: ${command}\nDONE-1`,
     });
+  });
+
+  test("a timed-out command's report shows its output, whatever its command line holds (2.3.1)", () => {
+    // 2.3.1 writes the command into the tag unescaped; a long test run that
+    // timed out often spans lines and quotes.
+    const commands = [`echo "it's" && grep -r 'a"b' .`, "bun test \\\n  --parallel=4"];
+    const result = rows(
+      commands.map((command, index) => ({
+        id: `t${index}`,
+        type: "synthetic",
+        description: command,
+        text: `<shell id="shl_${index}" state="completed" command="${command}">\nPASS ${index}\n</shell>`,
+        metadata: {
+          source: "shell",
+          shellID: `shl_${index}`,
+          jobID: `shl_${index}`,
+          state: "completed",
+          exit: 0,
+        },
+        time: { created: index + 1 },
+      })),
+    );
+    expect(result.map((row) => row.content)).toEqual(
+      commands.map((command, index) => `Background command completed: ${command}\nPASS ${index}`),
+    );
+  });
+
+  test("a command a stop terminated reads as stopped, not as a bare error tag (2.3.1)", () => {
+    const result = rows([
+      {
+        id: "x1",
+        type: "synthetic",
+        description: "sleep 60",
+        text: '<shell id="shl_9" state="error" command="sleep 60">\nShell.NotFoundError\n</shell>',
+        metadata: { source: "shell", shellID: "shl_9", jobID: "shl_9", state: "error" },
+        time: { created: 1 },
+      },
+      {
+        id: "x2",
+        type: "synthetic",
+        description: "false",
+        text: '<shell id="shl_8" state="error" command="false">\nspawn failed\n</shell>',
+        metadata: { source: "shell", shellID: "shl_8", jobID: "shl_8", state: "error" },
+        time: { created: 2 },
+      },
+    ]);
+    expect(result.map((row) => row.content)).toEqual([
+      "Background command stopped: sleep 60",
+      "Background command error: false\nspawn failed",
+    ]);
+  });
+
+  test("background reports: a shell's with a job id and a sub-agent's, never a user's command", () => {
+    const shell = (metadata: Record<string, unknown>) => ({
+      type: "synthetic",
+      text: '<shell id="shl_1" state="completed" command="ls">\nx\n</shell>',
+      metadata: { source: "shell", shellID: "shl_1", state: "completed", ...metadata },
+    });
+    expect(openCode2BackgroundShellReport(shell({ jobID: "shl_1" }))).toBe(true);
+    expect(openCode2BackgroundReport(shell({ jobID: "shl_1" }))).toBe(true);
+    // A command the user ran themselves wakes nothing: no job.
+    expect(openCode2BackgroundShellReport(shell({}))).toBe(false);
+    expect(openCode2BackgroundReport(shell({}))).toBe(false);
+    expect(openCode2BackgroundShellReport({ ...shell({ jobID: "shl_1" }), type: "user" })).toBe(
+      false,
+    );
+    expect(
+      openCode2BackgroundReport({
+        type: "synthetic",
+        text: '<subagent sessionID="ses_c" state="completed">\nok\n</subagent>',
+        metadata: { source: "subagent", childID: "ses_c", state: "completed" },
+      }),
+    ).toBe(true);
   });
 
   test("a failed run reads as one error and a stopped run as an interruption", () => {

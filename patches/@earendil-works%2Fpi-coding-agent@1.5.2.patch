@@ -1,0 +1,26 @@
+diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
+--- a/dist/core/agent-session.js
++++ b/dist/core/agent-session.js
+@@ -3479,6 +3479,10 @@
+                 // Non-user message: leaf = selected node
+                 newLeafId = targetId;
+             }
++            // Extension summaries and empty summary inputs can bypass the summarizer.
++            if (abortController.signal.aborted) {
++                return { cancelled: true, aborted: true };
++            }
+             // Switch leaf (with or without summary)
+             // Summary is attached at the navigation target position (newLeafId), not the old branch
+             let summaryEntry;
+diff --git a/dist/core/session-manager.js b/dist/core/session-manager.js
+--- a/dist/core/session-manager.js
++++ b/dist/core/session-manager.js
+@@ -1194,7 +1194,7 @@
+             throw new Error(`Entry ${branchFromId} not found`);
+         }
+         const fromId = this.leafId ?? "root";
+-        this.leafId = branchFromId;
++        // _appendEntry advances the leaf and restores it on persistence failure.
+         const entry = {
+             type: "branch_summary",
+             id: generateId(this.byId),

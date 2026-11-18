@@ -444,3 +444,19 @@ final suite counts. The complete owner passed with one worker in 181.3 s.
   Evidence `orkestrator-test-run.1BfJdz/review-browser-rerun.log.gz` in the
   host temporary directory.
 - Owner command `mise run test:logged -- --name label-casing-tool-fold-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --output output/playwright/label-casing-tool-fold-owner`.
+
+## Recurrence during Pi branch summary review fixes, 2026-11-18
+
+Linux component validation on `aacb2a5e3`, based on
+`85c55358fd5fce578ef704b1660efdcc95db102f`, reported a 7 px desktop
+no-preference fold gap against a 2 px limit at `e2e/ToolGroupFold.spec.ts:170`.
+The full component command ran with five workers and finished in 24.2 minutes
+with 1,880 passed, 155 skipped and five failed. Four failures were in the
+hover and status-label fixtures. The public-site suite did not start.
+
+- Aggregate command `mise run test:logged -- --name address-findings-browser -- mise run test:browser`.
+  Evidence `output/address-findings-validation/browser.log.gz`.
+- The unchanged desktop owner passed with one worker in 60.5 seconds using
+  `mise run test:logged -- --name browser-tool-fold-owner -- env -u NODE_ENV bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts --project desktop-chromium --workers=1 --output output/playwright/address-findings-tool-fold e2e/ToolGroupFold.spec.ts`.
+- `mise run flaky:recurrence -- 1012 --base 85c55358fd5fce578ef704b1660efdcc95db102f --registry-ref origin/main`
+  confirmed this case is open. The fold assertion and implementation were untouched.

@@ -129,9 +129,9 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "location.reload-unconfirmed":
         "After a 2.x location reload, the wait for the rebuilt location's plugins failed or timed out; catalogues are re-read anyway. Error class or `plugins: timeout` only.",
       "background.unreadable":
-        "Whether a 2.x session still has background sub-agent work could not be read, so it is taken to have none. Error class only.",
+        "Whether a 2.x session still has background work (sub-agents or shells) could not be read, so a workflow keeps waiting and a stop terminates no background shell. Error class only.",
       "background.stop-failed":
-        "A stop could not interrupt one of a 2.x session's running background sub-agents. Error class only.",
+        "A stop could not interrupt one of a 2.x session's running background sub-agents or terminate one of its background shells. Error class only.",
       "credential.legacy-reconciled":
         "A host 2.x database from before OpenCode 1.x was retired was reconciled with auth.json once. Counts of credentials written and removed only.",
       "credential.legacy-reconcile-failed":

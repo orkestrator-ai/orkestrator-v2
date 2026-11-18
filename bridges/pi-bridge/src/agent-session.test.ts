@@ -414,7 +414,13 @@ describe("session ownership", () => {
     // One row per assistant entry, as a live turn writes one per response,
     // and dated when Pi wrote it rather than when it was replayed.
     expect(resumed.messages).toHaveLength(1);
-    expect(resumed.messages[0]).toMatchObject({ id: "assistant-entry", createdAt: timestamp });
+    // The entry names no `responseModel`, as an older Pi wrote it: the row
+    // falls back to the model Pi asked for.
+    expect(resumed.messages[0]).toMatchObject({
+      id: "assistant-entry",
+      createdAt: timestamp,
+      modelId: "test/test",
+    });
     expect(resumed.messages[0]?.content).toBe("Running it");
     expect(tool).toMatchObject({
       toolUseId: "call-1",
@@ -660,9 +666,44 @@ describe("session ownership", () => {
           api: "openai-completions",
           provider: "test",
           model: "test",
+          responseModel: "test-2026-09-22",
           usage,
           stopReason: "stop",
           timestamp: Date.parse(timestamp),
+        },
+      },
+      {
+        type: "model_change",
+        id: "historical-selection",
+        parentId: "assistant-entry",
+        timestamp,
+        provider: "test",
+        modelId: "historical",
+      },
+      {
+        type: "message",
+        id: "missing-provider",
+        parentId: "historical-selection",
+        timestamp,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Legacy reply" }],
+          model: "legacy",
+          usage,
+        },
+      },
+      {
+        type: "message",
+        id: "oversized-model",
+        parentId: "missing-provider",
+        timestamp,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Reply with an oversized model ID" }],
+          provider: "test",
+          model: "requested",
+          responseModel: "é".repeat(1024),
+          usage,
         },
       },
     ];
@@ -674,7 +715,14 @@ describe("session ownership", () => {
     expect(resumed.messages.map((message) => [message.role, message.content])).toEqual([
       ["user", "Hello"],
       ["assistant", "Hi"],
+      ["assistant", "Model changed to test/historical"],
+      ["assistant", "Legacy reply"],
+      ["assistant", "Reply with an oversized model ID"],
     ]);
+    // A reload shows the model that answered, as the live row did.
+    expect(resumed.messages[1]?.modelId).toBe("test/test-2026-09-22");
+    expect(resumed.messages[3]?.modelId).toBe("test/historical");
+    expect(resumed.messages[4]?.modelId).toBe("test/requested");
   });
 
   test("waits for a cold attach and disposes it when the owner closes", async () => {
@@ -1248,7 +1296,6 @@ describe("Pi SDK lifecycle", () => {
     const attached = await ensureSession(state);
     state.status = "running";
     state.promptSequence = 1;
-    state.currentTurnUsage = {};
     const handle = await dispatchPrompt(state, attached, {
       prompt: "ship the change",
       images: [],
@@ -2097,7 +2144,6 @@ describe("command catalogue", () => {
 
     state.status = "running";
     state.promptSequence = 1;
-    state.currentTurnUsage = {};
     const handle = await dispatchPrompt(state, session, { prompt: "work", images: [] });
 
     const refresh = await refreshSessionCommands(state);
@@ -2196,7 +2242,6 @@ describe("command catalogue", () => {
     const session = await ensureSession(state);
     state.status = "running";
     state.promptSequence = 1;
-    state.currentTurnUsage = {};
     state.promptJournal.set("req-wizard", {
       requestId: "req-wizard",
       state: "accepted",

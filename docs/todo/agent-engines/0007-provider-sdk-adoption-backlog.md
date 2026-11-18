@@ -14,9 +14,12 @@ Assumptions and decisions). Task 4 rechecked 2026-11-02 against `main` at
 Task 8 rechecked 2026-11-03 against `main` at `7b48c23fb` (Pi `1.4.0`, Codex
 `0.166.0`, OpenCode `1.19.5`) before its instructions half was built, and
 again 2026-11-06 against `main` at `c1724ab74` (Pi still `1.4.0`) before its
-abort and auto-compaction toggle were built. Task 4 rechecked again 2026-11-18
-against `main` at `85c55358f` (Claude Agent SDK `0.3.326`) before its re-arm
-half was built.
+abort and auto-compaction toggle were built.
+
+Task 4 was rechecked on 2026-11-18 against `main` at `85c55358f` (Claude Agent
+SDK `0.3.326`) before its re-arm half was built. The same review point was
+used to evaluate Codex dynamic tools (task 6) at Codex `0.169.0`. Dynamic
+tools remain deferred, with the conditions for adoption recorded below.
 
 The "Decided out" list is product decisions, not tasks; only where the current
 pins undercut one of them is it raised below (task 1).
@@ -28,12 +31,12 @@ pins undercut one of them is it raised below (task 1).
 3. **Claude in-process MCP server**: decide `createSdkMcpServer()` versus the HTTP loopback for Orkestrator tools. Status: done (decided out: keep HTTP; recorded under "Decided out").
 4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: done (re-arm 2026-11-18: a prompt that rejoins an idle surviving CLI re-reads its initialize inventory, and each request only the CLI still holds becomes one card; proved on the pinned CLI without credentials. Provenance 2026-11-02: an optional `source` on the shared interaction request, filled by Claude, shown on the card). Recovering MCP elicitations the same way waits on an Agent SDK that hands them over (see Candidates).
 5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (decision recorded: until a user-visible MCP server needs it).
-6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates).
+6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates; Codex dynamic tools qualified against a concrete consumer on 2026-11-18 and deferred, with what would justify adoption under "Task 6: Codex dynamic tools deferred").
 7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still at `1.2.0`).
 8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: done (custom instructions 2026-11-03: `/compact <instructions>` behind `actions.compactInstructions`, on for Claude and Pi; 2026-11-06: Stop ends a Pi compaction through the cancel routes, and an Auto-compact composer toggle per session that never writes Pi's settings file). Live check on a signed-in Pi was to-do 7280 (retired 2026-11-10); how it works is in [native-agent-commands.md](../../architecture/native-agent-commands.md).
 9. **Second ACP agent**: Gemini CLI or Claude-over-ACP through `AcpProviderConfig`. Status: deferred (decision recorded: until a user asks for a specific agent).
 10. **Grok MCP elicitation**: `mcp-form` and `mcp-url` cards over `_x.ai/mcp/elicit`. Status: done (2026-10-31; proved signed in on 1.0.67 through the bridge).
-11. **Grok `costUsdTicks` qualification**: once two billed Grok turns establish the tick unit, record the conversion in the `usage.ts` comment and make `parseUsdCost` accept ticks. Status: blocked (waits on 7568: 0007 task 11, the billed Grok turns).
+11. **Grok `costUsdTicks` qualification**: establish the tick unit and scope, then show ticks-only costs. Status: open (depends on the billed two-turn qualification in manual checklist 7568). Accounting is implemented and tick-derived dollars remain disabled.
 12. **OpenCode `find.*` and Session V2 features**: unused 1.x file search; V2 waits on 0008. Status: done for `find.*` (moved to "Decided out"); Session V2 stays with 0008.
 13. **Living-doc drift**: fix `agent-engines.md` (Grok Build, Claude compatibility surface) and `upgrade-agents.md`. Status: done (`docs(agent-engines): fix Claude compatibility surface and Grok ACP drift`).
 
@@ -174,7 +177,42 @@ the CLI withdrew, or one from a CLI that had exited, stayed answerable.
 
 **Context.** Each needs a product reason before adoption; dynamic tools are answered as failure on purpose.
 
-**Investigation.** Claude `additionalDirectories` / `skills` are referenced only in a comment (`bridges/claude-bridge/src/services/coordinator-skills.ts:6`). Codex uses only `config/mcpServer/reload` among config writes (`bridges/codex-bridge/src/engine/app-server-engine.ts:2161,2175`); `item/tool/call` still fails with a transcript explanation (`bridges/codex-bridge/src/app-server/server-request-router.ts:593-600`); `configRequirements/read` exists in the generated protocol and is not projected.
+**Investigation.** Claude `additionalDirectories` / `skills` are referenced only in a comment (`bridges/claude-bridge/src/services/coordinator-skills.ts:6`). Codex uses only `config/mcpServer/reload` among config writes (`bridges/codex-bridge/src/engine/app-server-engine.ts:2161,2175`); `item/tool/call` still fails with a transcript explanation (the `item/tool/call` branch of `bridges/codex-bridge/src/app-server/server-request-router.ts`); `configRequirements/read` exists in the generated protocol and is not projected.
+
+Codex dynamic tools, checked 2026-11-18 against the `0.169.0` pin:
+
+- Registration is experimental and start-only. The committed (stable)
+  protocol has no way to register one: `dynamicTools` is absent from the
+  generated `ThreadStartParams`. Running `codex app-server generate-ts
+  --experimental` on the pinned binary shows `dynamicTools?:
+  Array<DynamicToolSpec>` on `ThreadStartParams` only, not on
+  `ThreadResumeParams`, `ThreadForkParams` or `TurnStartParams`. The bridge
+  initializes with `experimentalApi: false` (`process-supervisor.ts`), so it
+  registers none and an `item/tool/call` is not expected at all.
+- The concrete consumer is the workflow-result submit tool: the one
+  host-provided tool a pipeline or graph result turn must call to finish
+  (`workflowResultTool` and the graph slot tools, admitted in
+  `app-server-runtime-prompt.ts`). The Orkestrator agent tools (mail,
+  tickets, key information, artifacts) are the second candidate. Both are
+  served today by the backend's `orkestrator` MCP server, the same server
+  every other platform reaches.
+- What that consumer needs: the call must reach the backend with the
+  attempt's own credential, the tool set must change per attempt on a thread
+  that keeps its conversation, and the call must bypass Codex's MCP approval
+  gate. The turn should also be refused before dispatch when the tool is
+  unavailable. The MCP path uses a per-attempt credential with
+  `reloadThread` (which keeps the rollout) and a narrow workflow-result
+  server that bypasses the approval gate. A confirmed missing tool returns
+  424 before dispatch. An unverified inventory, such as after a timeout or
+  RPC failure, permits dispatch.
+- What a dynamic tool would change: the call would be answered inside the
+  bridge, which would then need its own backend credential and a proxy route
+  to deliver the result (the same hop that kept Claude off
+  `createSdkMcpServer`, see "Decided out"). A per-attempt tool change would
+  need a new thread, losing the conversation, because tools can be set only
+  on `thread/start`. Whether registered tools survive the idle detach and
+  `thread/resume` from the rollout is unverified. It would also be
+  Codex-only, while the other five platforms keep MCP.
 
 **Decisions.**
 
@@ -185,6 +223,21 @@ the CLI withdrew, or one from a CLI that had exited, stayed answerable.
   - **Move to "Decided out".**
     - Pros: shorter backlog.
     - Cons: needs a real product decision for each, which nobody has made.
+
+- **Codex dynamic tools: adopt one for the workflow-result submit tool, or defer?**
+  - **Defer, answer every call with an explicit failure, and record what would justify adoption (recommended).**
+    - Pros: no experimental opt-in; one tool path for every platform; the
+      shared MCP path already serves the workflow-result submit tool; any
+      unexpected call still gets one answer that tells the model and the
+      user why it failed.
+    - Cons: no in-bridge tool path exists if a future consumer needs one.
+  - **Register the submit tool as a dynamic tool.**
+    - Pros: no MCP server, and none of its configuration, on the thread.
+    - Cons: needs `experimentalApi`, which exposes every experimental field
+      and method to the bridge; registration only on `thread/start`, so a
+      per-attempt change costs the conversation; the bridge would need its own
+      backend credential to deliver the result; Codex would diverge from the
+      other platforms.
 
 ### 7. Cursor `askQuestion`
 
@@ -284,13 +337,34 @@ Probed live 2026-10-31 on 1.0.67: `agent stdio` does forward both modes, the ans
 
 ### 11. Grok `costUsdTicks` qualification
 
-**Problem.** Grok turns show no cost because the tick unit is not confirmed for ACP.
+**Problem.** Grok turns showed no cost because the tick unit and scope were not confirmed for ACP.
 
-**Context.** Grok documents 10¹⁰ ticks per USD for `grok sessions` and headless output; whether ACP's `costUsdTicks` is the same quantity, and whether it is per turn or cumulative, needs two billed turns of different sizes. That run is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (2026-11-10).
+**Context.** Grok documents 10¹⁰ ticks per USD for `grok usage` and headless output. The open question was whether ACP's `costUsdTicks` is the same quantity, and whether it is per turn or cumulative. The billed run planned for it in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (2026-11-10) needs a signed-in Grok CLI and the xAI billing dashboard; this host has no Grok login.
 
-**Investigation.** Ticks are still ignored (`bridges/acp-bridge/src/usage.ts`); the fixture in `usage.test.ts` fits the documented unit, and the bridge treats ACP cost as a cumulative session snapshot.
+**Investigation.** Read 2026-11-18 from the pinned Grok `1.0.77` binary (`strings` over the managed toolchain's `grok`), with no login and no billed turn:
 
-**Decisions.** None left here: once the checklist run records both samples, write the conversion, the samples and the date in the `usage.ts` comment and change `parseUsdCost` to accept ticks (per turn or cumulative, as the run shows).
+- Unit. The embedded docs say headless `total_cost_usd_ticks` "is the same value in exact integer ticks (1 USD = 10^10 ticks)", with the example `0.01268905` USD = `126890500` ticks, and that `grok usage`'s `costUsdTicks` "is 10^10 ticks per USD (divide by `1e10` for dollars)".
+- Same field. ACP's `costUsdTicks` is a member of the `PromptUsage` struct (`inputTokens`, `outputTokens`, `totalTokens`, `cacheCreationTokens`, `reasoningTokens`, `modelCalls`, `apiDurationMs`, `costUsdTicks`, `costIsPartial`, plus `modelUsage` and `usageIsIncomplete`), the shape `turn_completed`'s `usage` and the prompt result's `_meta.usage` carry. The `grok usage` per-turn `UsageSummary` has the same fields under the same names.
+- Scope. `PromptUsage` is the prompt's own usage: the headless docs call ACP `_meta.usage.inputTokens` "(PromptUsage) ... the full prompt sum", and the recorded fixture is one model call of 15,675 tokens at 226,620,000 ticks ($0.022662). The bridge already treats the token counts beside the ticks as per turn. That suggests per-prompt ticks, but the single-prompt fixture cannot distinguish per-prompt and cumulative values.
+- Other carriers. `response_completed` carries `ResponseUsage` (five token fields, no ticks); ACP `usage_update`'s USD `cost` is the session's cumulative total.
+- Ambiguity. Grok omits its own cost floats when `costIsPartial` or `usageIsIncomplete` is set, so ticks beside either flag are a lower bound.
+
+**Decisions.**
+
+- **What evidence qualifies the conversion?**
+  - **The pinned binary's embedded docs and wire structs alone.**
+    - Pros: available without a login or spend; ties the ACP field to the documented unit by name and struct; reproducible at every pin bump.
+    - Cons: static evidence, not an observed bill; a server that stamped a different quantity under the same name would not show here.
+  - **Wait for the billed checklist run (recommended; chosen).**
+    - Pros: reconciles against the dashboard.
+    - Cons: needs a signed-in Grok and access to the billing dashboard.
+- **Where do per-turn ticks show?**
+  - **On each turn's row, and summed into the panel's session cost only while every counted turn had qualified ticks (recommended; chosen).**
+    - Pros: matches the session scope other providers give `costUsd`; usage history, which sums rows, stays exact.
+    - Cons: missing cost hides the session total until the last turn is corrected or a cumulative USD snapshot establishes a new total.
+  - **The last turn's ticks as the panel's cost.**
+    - Pros: simplest.
+    - Cons: a per-turn amount under a session label.
 
 ### 12. OpenCode `find.*` and Session V2 features
 
@@ -488,6 +562,42 @@ user-visible MCP server needs them; the other Claude and Codex surfaces stay as
 candidates and are rechecked on each bump; a second ACP agent waits for a user
 to ask for a specific one. Nothing in the current pins changes those reasons.
 
+### Task 6: Codex dynamic tools deferred (2026-11-18)
+
+Task 6, Codex dynamic tools. Chose to defer, the recommended option above.
+The consumer examined was the workflow-result submit tool, compared with the
+`orkestrator` MCP server that serves it today; the investigation under task 6
+has the comparison, including the admission check for confirmed missing
+tools. A dynamic tool would add an experimental opt-in, a second backend
+credential in the bridge and a Codex-only path.
+
+The router now answers an `item/tool/call` with exactly one failure: no
+JSON-RPC error, `success: false` and one `inputText` item naming the requested
+tool and saying the session registers no dynamic tools, so the model does not
+retry an empty result. The transcript notice names the tool too; the call's
+arguments are never echoed. The tool label is single-line and capped at 120
+Unicode code points before the ellipsis. An unusable tool name gets a generic
+failure notice. The call still counts as an invariant violation, because
+the bridge registers no dynamic tools.
+
+What would justify adoption, all of:
+
+1. `dynamicTools` in the stable protocol, so it appears in the committed
+   generated `ThreadStartParams` without `experimentalApi`.
+2. Registration on `thread/resume` or `turn/start`, or documented persistence
+   of registered tools across `thread/resume`, so an idle detach, a reload
+   and a bridge restart keep them.
+3. A consumer the shared MCP server cannot serve: a tool whose implementation
+   needs bridge-local state (the app-server child or the live thread), or a
+   recorded failure of the MCP path (the 424 refusal firing for users, or the
+   reload losing the tool) that a dynamic tool would avoid.
+
+If adopted, the tool is registered per thread from the session's execution
+policy. Each call gets one answer within that policy. A name the thread did
+not register keeps today's explicit failure. A call pending when its
+generation dies is abandoned as a dead generation's approval is. Logs stay
+content-free.
+
 ### Task 7: still blocked
 
 `@cursor/sdk` is now `1.2.0`, and the upstream gap is unchanged.
@@ -606,10 +716,22 @@ completed Grok elicitation and Cursor compaction adoption. The live elicitation
 evidence remains specific to Grok 1.0.67; merging the 1.0.70 pin does not prove
 a new live run. Kept task 11 open for the remaining ACP cost qualification.
 
-### Task 11: needs live Grok runs
+### Task 11: gate tick conversion on observed billing
 
-It needs a signed-in Grok CLI and billed turns. The exact steps are under
-"Qualification".
+Grok 1.0.77 documents 10¹⁰ ticks per USD. The bridge accepts raw ticks
+from Grok prompt results and `turn_completed` notifications. It rejects
+partial and malformed tick values and requires each attempt of a continued
+turn to have a known tick cost.
+
+The accounting keeps the subtotal before the latest turn so a late report can
+supply or invalidate that turn's cost. Missing cost is independent of token
+counts. The panel can use a cumulative USD snapshot immediately. History uses
+a per-turn delta when the preceding total is known, or the turn's own ticks
+once qualified. History replaces revised Grok rows by turn ID and revision.
+
+Tick-derived dollars remain disabled in production. Reconcile two distinct
+billed increments against their raw ACP usage using checklist 7568 before
+enabling the conversion. Store a sanitized two-turn fixture with the result.
 
 ### Task 12: drop `find.*`
 
@@ -631,6 +753,17 @@ with the reason for each, and of the product decisions that keep some of them
 out. Every entry has already been reviewed against a vendor release and
 deliberately deferred or declined. Without this list, the next SDK review
 rediscovers the same gaps. It is low priority: nothing here is a defect.
+
+### Pi `responseModel` adopted (2026-11-18)
+
+Moved out of "Candidates" under the maintenance rule. Each Pi assistant row
+now names the model that answered (`provider/responseModel`, else the
+requested `provider/model`, which is all a session entry an older Pi wrote
+carries), live and when a resume replays Pi's file; the composer keeps the
+user's selection. A turn's `NativeAgentTurnUsage.modelId` is set only when its
+token and cost contributors all identify the same model. Mixed and
+unidentified spend goes into usage history without a model ID. How it works is under "Model
+attribution" in [`bridges/pi-bridge/AGENTS.md`](../../../bridges/pi-bridge/AGENTS.md#model-attribution).
 
 ## Current state
 
@@ -759,8 +892,13 @@ Unadopted today. Each line says what blocks it or what decision it needs.
 - Codex (`bridges/codex-bridge`):
   - `config/*` writes (only `config/mcpServer/reload` is used), `command/exec`,
     `fs/*`, `feedback/upload`, `gitDiffToRemote`.
-  - Dynamic tools. `item/tool/call` is answered as a failure with a transcript
-    explanation (`server-request-router.ts`).
+  - Dynamic tools. Deferred 2026-11-18 (task 6): the workflow-result submit
+    tool, the concrete consumer, is fully served by the `orkestrator` MCP
+    server, and registration needs `experimentalApi` and works only on
+    `thread/start`. `item/tool/call` is answered as one explicit failure
+    naming the tool (`server-request-router.ts`). Adoption needs a stable
+    `dynamicTools`, registration that survives `thread/resume`, and a
+    consumer MCP cannot serve.
   - `Account.chatgpt.workspaceName` (0.166.0) in the account label. The shared
     account shape (`label`, `plan`) has no workspace field, so it needs a
     protocol field first.
@@ -797,11 +935,8 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     agent is that record plus a platform id in
     `packages/protocol/src/agent-platforms.ts`, with packaging covered by
     `tests/unit/bridge-packaging.test.ts`.
-  - Grok cost. `costUsdTicks` is ignored (`bridges/acp-bridge/src/usage.ts`),
-    and cost is taken only from an explicit USD `usage_update.cost`. Grok
-    documents 10¹⁰ ticks per USD for its own session stats (task 11), so the
-    unit is no longer the blocker. What remains is whether ACP's field is per
-    turn or cumulative; the qualification below settles it.
+  - Grok cost (task 11) parses and accounts for raw ticks. Publishing
+    tick-derived dollars waits on the billed qualification below.
   - Grok `GROK_DISABLE_EXPERIMENTS=1` (1.0.70) for bridge children. It would
     stop config-file experiments changing the default model or update channel,
     but also overrides experiments a user joined. Decide with a user report.
@@ -814,8 +949,6 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     `error_type`, `exhausted`, `is_rate_limited`) for retry UI. Whether they
     reach ACP clients is unverified; belongs with the retry-with-backoff work.
 - Pi (`bridges/pi-bridge`, 1.5.0):
-  - `responseModel` (now also from pi-messages providers) into the existing
-    `NativeAgentTurnUsage.modelId`.
   - `ctx.ui.custom({ blocked })` when extension dialogs are routed;
     `PI_SELF_UPDATE_COMMAND` so `pi update` in a terminal tab defers to the
     managed pin.
@@ -826,7 +959,7 @@ Unadopted today. Each line says what blocks it or what decision it needs.
 
 The billed Grok `costUsdTicks` run moved to the
 [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
-2026-11-10; task 11 is the code change that follows it.
+2026-11-10. Complete it before enabling tick-derived dollars.
 
 ## Constraints and rationale
 
@@ -855,6 +988,12 @@ The billed Grok `costUsdTicks` run moved to the
     component gets a rendering test with synthetic projections.
 
 ## Needs verification
+
+- Grok tick costs (task 11) rest on static evidence from the pinned `1.0.77`
+  binary. No billed turn has been reconciled against the xAI dashboard yet;
+  that run is in the manual-test checklist. Recheck the `PromptUsage` field
+  list on each Grok bump (`strings` over the managed `grok`, search
+  `costUsdTicks`).
 
 - Re-check each deferred item against the current pins before scheduling it.
   At Claude SDK `0.3.314` the symbols below are still present
@@ -916,8 +1055,8 @@ with `git show cd67b7ad9:<path>`.
 - `docs/plans/sdk-coverage/02-typed-engine-boundaries-and-drift.md` (done; the
   drift checks behind the maintenance rule)
 - `docs/plans/sdk-coverage/03-transcript-part-coverage.md` (done)
-- `docs/plans/sdk-coverage/11-usage-cost-and-limits.md` (code done; the Grok
-  `costUsdTicks` evidence check)
+- `docs/plans/sdk-coverage/11-usage-cost-and-limits.md` (Grok
+  `costUsdTicks` billed qualification pending)
 - `docs/plans/sdk-coverage/14-acp-bridge-generalization.md` (done; the
   second-agent path and the implementation notes for the living-doc fix)
 - `docs/plans/sdk-coverage/15-adapter-simplification.md` (the leftovers not

@@ -57,6 +57,22 @@ function stubSession(
   let announce: (accepted: boolean) => void = () => undefined;
   let abortCount = 0;
   let clearCount = 0;
+  const entries = options.entries ?? [];
+  const appendResponse = () => {
+    if (!options.lastAssistantUsage) return;
+    entries.push({
+      type: "message",
+      id: "assistant-entry",
+      parentId: null,
+      timestamp: "2026-09-07T00:00:00.000Z",
+      message: {
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude",
+        usage: options.lastAssistantUsage,
+      },
+    });
+  };
 
   const run = new Promise<void>((resolve, reject) => {
     settleRun = resolve;
@@ -90,25 +106,17 @@ function stubSession(
     getSessionStats: () => options.sessionStats ?? { cost: 0 },
     getLastAssistantText: () => options.lastAssistantText,
     sessionManager: {
-      ...(options.entries ? { getEntries: () => options.entries } : {}),
-      getBranch: () =>
-        options.lastAssistantUsage
-          ? [
-              {
-                type: "message",
-                id: "assistant-entry",
-                parentId: null,
-                timestamp: "2026-09-07T00:00:00.000Z",
-                message: { role: "assistant", usage: options.lastAssistantUsage },
-              },
-            ]
-          : [],
+      ...(options.entries || options.lastAssistantUsage ? { getEntries: () => entries } : {}),
+      getBranch: () => entries,
     },
   } as unknown as AgentSession;
 
   return {
     session,
-    finish: () => settleRun(),
+    finish: () => {
+      appendResponse();
+      settleRun();
+    },
     fail: (error) => rejectRun(error),
     accept: (accepted) => announce(accepted),
     aborted: () => abortCount,
@@ -121,7 +129,6 @@ function runningState(): SessionState {
   const state = newSessionState();
   state.status = "running";
   state.promptSequence = 1;
-  state.currentTurnUsage = {};
   return state;
 }
 
@@ -254,14 +261,23 @@ describe("dispatchPrompt", () => {
 
   test("installs a cancel handle that aborts the live run", async () => {
     const state = runningState();
-    const stub = stubSession();
+    const stub = stubSession({
+      onAbort: () => applySessionEvent(state, { type: "agent_settled", aborted: true }),
+    });
 
     const handle = await dispatchPrompt(state, stub.session, input());
     expect(state.cancelTurn).toBeDefined();
+    applySessionEvent(state, {
+      type: "message_end",
+      message: { role: "assistant", provider: "pi", model: "cancelled", usage: { input: 1 } },
+    });
+    expect(state.currentTurnResponses?.modelId).toBe("pi/cancelled");
 
     await state.cancelTurn?.();
     expect(stub.aborted()).toBe(1);
     await handle.completion;
+    expect(state.currentTurnResponses).toBeUndefined();
+    expect(state.currentResponseModelId).toBeUndefined();
   });
 
   test("rejects when Pi refuses the prompt at preflight", async () => {
@@ -414,11 +430,24 @@ describe("dispatchPrompt", () => {
       const state = runningState();
       const stub = stubSession();
       const handle = await dispatchPrompt(state, stub.session, input({ requestId: "req-2" }));
-      state.turnError = `refused ${SENTINEL}`;
+      applySessionEvent(state, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          provider: "pi",
+          model: "failed",
+          stopReason: "error",
+          errorMessage: `refused ${SENTINEL}`,
+          usage: { input: 1 },
+        },
+      });
+      expect(state.currentTurnResponses?.modelId).toBe("pi/failed");
       stub.finish();
       await handle.completion;
 
       expect(state.status).toBe("error");
+      expect(state.currentTurnResponses).toBeUndefined();
+      expect(state.currentResponseModelId).toBeUndefined();
       expect(turnLines()).toMatchObject([{ level: "warn", event: "turn.failed" }]);
       expect(JSON.stringify(logs.records())).not.toContain(SENTINEL);
     });
@@ -771,7 +800,10 @@ describe("context usage", () => {
     // turn was dispatched on.
     state.session = stub.session;
     const handle = await dispatchPrompt(state, stub.session, input({ requestId: "usage" }));
-    state.currentTurnUsage = { inputTokens: 700, outputTokens: 300 };
+    applySessionEvent(state, {
+      type: "message_end",
+      message: { role: "assistant", usage: { input: 700, output: 300 } },
+    });
     stub.finish();
     await handle.completion;
     return { state, usage: publicContextUsage(state) };
@@ -827,7 +859,7 @@ describe("context usage", () => {
     expect(usage?.maximumTokens).toBeUndefined();
   });
 
-  test("uses Pi's last assistant usage and session stats for the turn row", async () => {
+  test("uses the newly stored assistant usage and session stats for the turn row", async () => {
     const state = runningState();
     state.composer = { ...state.composer, selectedModelId: "anthropic/claude" };
     const stub = stubSession({
@@ -849,7 +881,10 @@ describe("context usage", () => {
     });
     state.session = stub.session;
     const handle = await dispatchPrompt(state, stub.session, input({ requestId: "support-1" }));
-    state.currentTurnUsage = { inputTokens: 999, outputTokens: 999 };
+    applySessionEvent(state, {
+      type: "message_end",
+      message: { role: "assistant", usage: { input: 999, output: 999 } },
+    });
     stub.finish();
     await handle.completion;
 
@@ -901,7 +936,6 @@ describe("context usage", () => {
         };
       }
       const stub = stubSession({
-        lastAssistantUsage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.01 } },
         sessionStats: { cost: options.sessionCost, toolCalls: 0, tokens: { total: 15 } },
         ...(options.entries ? { entries: options.entries } : {}),
       });

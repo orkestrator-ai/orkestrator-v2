@@ -26,6 +26,7 @@ import {
   FIRST_USE_CATALOG_BUDGET_MS,
   firstUseCatalogFetchTimeoutMs,
 } from "./commands-registry-projects.js";
+import { agentAccountLoginKey } from "./agent-accounts-store.js";
 import { cachedLaunchModels } from "./control-shared-actions.js";
 import { StorageService } from "./storage.js";
 import { seedUnreadableStore, storageInternals } from "./storage-test-support.js";
@@ -501,7 +502,11 @@ describe("native agent model catalogue command", () => {
   test("persists every global host catalogue branch", async () => {
     const catalogs = {
       claude: { agent: "claude", models: [{ id: "claude-opus", name: "Opus" }] },
-      codex: { agent: "codex", models: [{ id: "gpt-codex", name: "Codex" }] },
+      codex: {
+        agent: "codex",
+        models: [{ id: "gpt-codex", name: "Codex" }],
+        accountLoginKey: agentAccountLoginKey(),
+      },
       cursor: {
         agent: "cursor",
         models: [{ platform: "cursor", id: "cursor-1", label: "Cursor 1" }],
@@ -644,6 +649,7 @@ describe("native agent model catalogue command", () => {
           defaultReasoningEffort: "high",
         },
       ],
+      accountLoginKey: agentAccountLoginKey(),
     }));
     await withCommands(
       async (invoke, storage) => {

@@ -125,6 +125,10 @@ export interface NativeAgentLaunchActivityReconcilerHost {
     sessionKey: string,
     itemIds: readonly string[],
   ): Promise<void>;
+  recordRevisedUsage?(
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): void;
   /** Drop a stopped environment's outstanding requests from every cached view. */
   withdrawEnvironmentInteractions(environmentId: string): void;
   /**
@@ -872,6 +876,7 @@ export class NativeAgentLaunchActivityReconciler {
         );
         let settledIdle = true;
         let outcomeReadFailed = false;
+        let provider: NativeAgentRuntimeProvider | undefined;
         const applyObservation = async (
           session: PersistedNativeAgentSession,
           activity: AgentActivityState,
@@ -890,6 +895,7 @@ export class NativeAgentLaunchActivityReconciler {
             }
             return;
           }
+          const previous = this.observedSessionActivity.get(session.key);
           const recorded = await this.recordActivity(
             activityByEnvironment,
             session,
@@ -911,6 +917,17 @@ export class NativeAgentLaunchActivityReconciler {
               failedEnvironments.add(session.environmentId);
             }
             return;
+          }
+          if (
+            provider &&
+            session.agent === "grok" &&
+            activity === "idle" &&
+            details.contentRevision !== undefined &&
+            (previous?.providerSessionId !== session.providerSessionId ||
+              previous.state !== "idle" ||
+              previous.contentRevision !== details.contentRevision)
+          ) {
+            this.host.recordRevisedUsage?.(session, provider);
           }
           // Published after the edge is durable, so a storage failure above
           // leaves no fresh record contradicting the retained edge state.
@@ -942,7 +959,6 @@ export class NativeAgentLaunchActivityReconciler {
           await applyBridgeGone();
           continue;
         }
-        let provider: NativeAgentRuntimeProvider | undefined;
         try {
           provider = await this.host.observeProvider(first);
           if (!runtimeStillCurrent()) {

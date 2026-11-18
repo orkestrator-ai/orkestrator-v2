@@ -19,7 +19,7 @@ import {
   DraftRevisionConflictError,
   resolveComposeDraftDiscardConflict,
 } from "@/lib/compose-draft-persistence";
-import { visibleTabsOf, withEmbeddedTabIds } from "@/stores/pane-layout-embedded";
+import { visibleTabsOf, withEmbeddedTabIds } from "@/lib/pane-layout-embedded";
 import { DraggableTab } from "./DraggableTab";
 import { TabLaunchPlaceholder, useEnvironmentTabLaunches } from "./TabLaunchShimmer";
 import { moveTabFocus, TAB_STRIP_CLASS } from "./TabShell";

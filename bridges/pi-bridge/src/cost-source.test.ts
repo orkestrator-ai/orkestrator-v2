@@ -1,10 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  countPiCostParts,
-  piSessionCostSource,
-  piTurnCostSource,
-  piUsageCostSource,
-} from "./cost-source.js";
+import { countPiCostParts, piSessionCostSource, piTurnCostSource } from "./cost-source.js";
 
 /** A pi-ai `Usage` with the fields the counter reads. */
 function usage(total: number, totalFromProvider?: boolean, tokens = 10) {
@@ -99,18 +94,16 @@ describe("piTurnCostSource", () => {
   });
 });
 
-describe("session and single-response sources", () => {
+describe("session cost source", () => {
   test("the session is billed only when every part is", () => {
     expect(piSessionCostSource({ parts: 2, providerParts: 2 })).toBe("provider");
     expect(piSessionCostSource({ parts: 2, providerParts: 1 })).toBe("estimate");
     expect(piSessionCostSource({ parts: 0, providerParts: 0 })).toBeUndefined();
   });
 
-  test("an absent flag means a catalogue estimate", () => {
-    expect(piUsageCostSource(usage(0.02, true))).toBe("provider");
-    expect(piUsageCostSource(usage(0.02, false))).toBe("estimate");
-    expect(piUsageCostSource(usage(0.02))).toBe("estimate");
-    expect(piUsageCostSource(usage(0, undefined, 0))).toBeUndefined();
-    expect(piUsageCostSource(undefined)).toBeUndefined();
+  test("a cost-only response without a billing flag is a catalogue estimate", () => {
+    const parts = countPiCostParts([assistant(usage(0.02, undefined, 0))]);
+    expect(parts).toEqual({ parts: 1, providerParts: 0 });
+    expect(piSessionCostSource(parts)).toBe("estimate");
   });
 });

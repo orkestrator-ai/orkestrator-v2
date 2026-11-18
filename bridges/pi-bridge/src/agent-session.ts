@@ -71,11 +71,13 @@ import {
   SettingsManager,
 } from "./pi-sdk.js";
 import {
+  boundedModelId,
   catalogReadFailed,
   composeModelId,
   hydrateComposer,
   reconcileComposerSelection,
   resolveModel,
+  responseModelId,
   thinkingLevel,
   type ThinkingLevelDefaults,
 } from "./models.js";
@@ -102,6 +104,14 @@ import {
 } from "./transcript.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { newSessionState } from "./session-factory.js";
+import {
+  assertBranchSummaryActive,
+  assertSummaryCanFollow,
+  beginBranchSummary,
+  BranchSwitchCancelledError,
+  endBranchSummary,
+  navigateBranch,
+} from "./branch-switch.js";
 import {
   HistoryTargetError,
   lastUserTarget,
@@ -1699,35 +1709,73 @@ export async function forkSession(
   }
 }
 
-/** Move the active leaf to a prior entry and rehydrate the authoritative branch. */
+/**
+ * Move the active leaf to a prior entry and rehydrate the authoritative branch.
+ *
+ * `summarize` asks Pi to summarize the branch being left first (a model call,
+ * so only on request; see `branch-switch.ts`). The session is claimed for the
+ * whole switch, so no prompt can start on the branch being left while Pi
+ * moves off it.
+ */
 export async function navigateSessionHistory(
   state: SessionState,
   messageOrEntryId: string,
   position: "before" | "at" = "before",
-): Promise<void> {
-  if (state.status === "running" || state.dispatching) throw new SessionBusyError();
-  const session = await ensureSession(state);
-  // A branch switch names an entry of another branch, which no row shows.
-  const target =
-    resolveHistoryTarget(state, session, messageOrEntryId)?.entryId ??
-    (session.sessionManager.getEntry(messageOrEntryId.trim())
-      ? messageOrEntryId.trim()
-      : undefined);
-  if (!target) throw new HistoryTargetError();
-  const result = await session.navigateTree(target, { summarize: false });
-  if (result.cancelled || result.aborted) throw new Error("Pi did not change the active branch");
-  // Tree navigation edits user/custom messages by stopping at their parent.
-  // Branch selection must retain the selected leaf, including reply-less prompts.
-  if (position === "at" && session.sessionManager.getLeafId() !== target) {
-    session.sessionManager.branch(target);
-    session.refreshContext();
+  options: { summarize?: boolean } = {},
+): Promise<{ summarized: boolean }> {
+  if (
+    state.status === "running" ||
+    state.dispatching ||
+    state.compacting ||
+    state.commandReload !== undefined ||
+    state.promptClaim !== undefined
+  ) {
+    throw new SessionBusyError();
   }
-  // In memory only until a prompt appends under it; the render below and every
-  // later reopen of the file read it from here.
-  rememberHistoryLeaf(state, session.sessionManager);
-  resetRenderedHistory(state);
-  hydrateHistory(state);
-  await overlayCommandChanges(state);
+  // Claimed before the first await, as the compact route does: a cold attach
+  // yields, and a prompt must not slip into it.
+  state.dispatching = true;
+  const run = options.summarize ? beginBranchSummary(state) : undefined;
+  let stopped = false;
+  try {
+    const session = await ensureSession(state).catch((error: unknown) => {
+      assertBranchSummaryActive(run);
+      throw error;
+    });
+    assertBranchSummaryActive(run);
+    // A branch switch names an entry of another branch, which no row shows.
+    const target =
+      resolveHistoryTarget(state, session, messageOrEntryId)?.entryId ??
+      (session.sessionManager.getEntry(messageOrEntryId.trim())
+        ? messageOrEntryId.trim()
+        : undefined);
+    if (!target) throw new HistoryTargetError();
+    if (run && position === "at") assertSummaryCanFollow(session.sessionManager.getEntry(target));
+    const { summaryEntryId } = await navigateBranch(session, target, run);
+    // Tree navigation edits user/custom messages by stopping at their parent.
+    // Branch selection must retain the selected leaf, including reply-less
+    // prompts. A summary is Pi's new leaf, a child of the selected entry, and
+    // moving past it would drop it from the branch.
+    if (position === "at" && !summaryEntryId && session.sessionManager.getLeafId() !== target) {
+      session.sessionManager.branch(target);
+      session.refreshContext();
+    }
+    // In memory only until a prompt appends under it; the render below and every
+    // later reopen of the file read it from here.
+    rememberHistoryLeaf(state, session.sessionManager);
+    resetRenderedHistory(state);
+    hydrateHistory(state);
+    await overlayCommandChanges(state);
+    return { summarized: summaryEntryId !== undefined };
+  } catch (error) {
+    stopped = error instanceof BranchSwitchCancelledError;
+    throw error;
+  } finally {
+    state.dispatching = false;
+    state.lastAccessed = Date.now();
+    if (run) endBranchSummary(state, run, stopped);
+    await runDeferredCommandReload(state);
+  }
 }
 
 export async function setSessionTitle(state: SessionState, title: string): Promise<void> {
@@ -1789,7 +1837,13 @@ function hydrateHistory(state: SessionState): void {
   const name = manager.getSessionName();
   if (name?.trim()) state.title = name.trim();
 
-  for (const entry of manager.getBranch()) appendHistoricEntry(state, entry);
+  let selectedModelId = state.composer.selectedModelId;
+  for (const entry of manager.getBranch()) {
+    if (entry.type === "model_change") {
+      selectedModelId = boundedModelId(entry.provider, entry.modelId) ?? selectedModelId;
+    }
+    appendHistoricEntry(state, entry, selectedModelId);
+  }
   boundTranscript(state);
   state.revision += 1;
 }
@@ -1852,7 +1906,11 @@ function entryCreatedAt(entry: SessionEntry): string {
  * change what the model sees without changing the conversation — Pi's own UI
  * keeps showing the edited entries — so the transcript does the same.
  */
-function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
+function appendHistoricEntry(
+  state: SessionState,
+  entry: SessionEntry,
+  selectedModelId: string | undefined,
+): void {
   switch (entry.type) {
     case "compaction":
       appendHistoricNotice(state, entry, {
@@ -1957,7 +2015,16 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
     }
   }
   if (parts.length > 0) {
-    pushMessage(state, "assistant", content, parts, entryCreatedAt(entry), messageId);
+    pushMessage(
+      state,
+      "assistant",
+      content,
+      parts,
+      entryCreatedAt(entry),
+      messageId,
+      // The model Pi recorded for this response, as the live row showed it.
+      responseModelId(message) ?? selectedModelId,
+    );
   }
 }
 
@@ -2000,6 +2067,7 @@ function pushMessage(
   parts: BridgeMessagePart[],
   createdAt: string,
   messageId = randomBytes(12).toString("hex"),
+  modelId?: string,
 ): void {
   const message: BridgeMessage = {
     id: messageId,
@@ -2017,6 +2085,7 @@ function pushMessage(
             },
           ],
     createdAt,
+    ...(modelId ? { modelId } : {}),
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));

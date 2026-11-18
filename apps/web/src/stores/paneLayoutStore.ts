@@ -38,7 +38,7 @@ import { forgetAgentHandoff } from "@/lib/agent-handoff";
 import { reportNativeTabTeardownFailure } from "@/lib/tab-teardown-notice";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { withEmbeddedTabs, type EmbeddedTabActions } from "./pane-layout-embedded-actions";
+import { withEmbeddedTabs, type EmbeddedTabActions } from "@/lib/pane-layout-embedded-actions";
 
 const log = createLogger("web.pane-layout");
 

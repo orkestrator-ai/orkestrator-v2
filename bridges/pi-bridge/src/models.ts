@@ -89,6 +89,24 @@ export function composeModelId(providerId: string, modelId: string): string {
   return `${providerId}/${modelId}`;
 }
 
+/** Compose an ID without clipping either half of the provider's identity. */
+export function boundedModelId(provider: unknown, model: unknown): string | undefined {
+  if (typeof provider !== "string" || typeof model !== "string") return undefined;
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId || !modelId || providerId.includes("/")) return undefined;
+  const id = composeModelId(providerId, modelId);
+  return Buffer.byteLength(id) <= MAX_MODEL_ID_BYTES ? id : undefined;
+}
+
+/** Prefer Pi's answering model, with the requested model as a bounded fallback. */
+export function responseModelId(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || !("role" in message)) return undefined;
+  if (message.role !== "assistant") return undefined;
+  const { provider, responseModel, model } = message as Record<string, unknown>;
+  return boundedModelId(provider, responseModel) ?? boundedModelId(provider, model);
+}
+
 /**
  * Reconcile a composer with the model and thinking level Pi actually accepted.
  *

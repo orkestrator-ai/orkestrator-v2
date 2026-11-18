@@ -34,6 +34,108 @@ describe("HTTP bridge session branches", () => {
     ]);
   });
 
+  test("an ordinary switch sends no body, so it never asks for a summary", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ switched: true, summarized: false }),
+      piConnection,
+    );
+    expect(
+      await provider.performSessionAction!("s", { kind: "switch-branch", entryId: "e-1" }),
+    ).toEqual({ outcome: "applied" });
+    expect(
+      await provider.performSessionAction!("s", {
+        kind: "switch-branch",
+        entryId: "e-1",
+        summarize: false,
+      }),
+    ).toEqual({ outcome: "applied" });
+    expect(requests.map((request) => request.init.body)).toEqual([undefined, undefined]);
+  });
+
+  test("a summarized switch asks for the summary and reports whether Pi kept one", async () => {
+    const answers = [
+      Response.json({ switched: true, summarized: true }),
+      // Nothing to summarize on the branch left.
+      Response.json({ switched: true, summarized: false }),
+      // A bridge that predates summaries ignores the body.
+      Response.json({ switched: true }),
+    ];
+    const { provider, requests } = httpProvider(() => answers.shift()!, piConnection);
+    const action = { kind: "switch-branch" as const, entryId: "e-1", summarize: true };
+    expect(await provider.performSessionAction!("s", action)).toEqual({
+      outcome: "applied",
+      summarized: true,
+    });
+    expect(await provider.performSessionAction!("s", action)).toEqual({
+      outcome: "applied",
+      summarized: false,
+    });
+    expect(await provider.performSessionAction!("s", action)).toEqual({
+      outcome: "applied",
+      summarized: false,
+    });
+    expect(requests[0]!.init.method).toBe("POST");
+    expect(JSON.parse(String(requests[0]!.init.body))).toEqual({ summarize: true });
+  });
+
+  test("a stopped or refused summarized switch fails in the bridge's own words", async () => {
+    const stopped =
+      "The branch switch was stopped before Pi finished the summary; the conversation stayed on its branch.";
+    const refused =
+      "This branch ends on a prompt with no reply, so a summary cannot follow it. Switch without a summary.";
+    const answers = [
+      Response.json({ error: stopped, cancelled: true, reason: "cancelled" }, { status: 409 }),
+      Response.json(
+        { error: refused, kind: "branch-summary-failed", reason: "prompt-leaf" },
+        { status: 422 },
+      ),
+      Response.json({ error: "Session is already running" }, { status: 409 }),
+    ];
+    const { provider } = httpProvider(() => answers.shift()!, piConnection);
+    const action = { kind: "switch-branch" as const, entryId: "e-1", summarize: true };
+    await expect(provider.performSessionAction!("s", action)).rejects.toThrow(
+      new RegExp(`^${stopped.replace(/[.;]/g, "\\$&")}$`),
+    );
+    await expect(provider.performSessionAction!("s", action)).rejects.toThrow(
+      new RegExp(`^${refused.replace(/[.,]/g, "\\$&")}$`),
+    );
+    // Anything else keeps the operation and the status.
+    await expect(provider.performSessionAction!("s", action)).rejects.toThrow(
+      "Pi branch switch failed (HTTP 409): Session is already running",
+    );
+  });
+
+  test.each([false, true])(
+    "rejects an oversized open switch response (summarize=%s)",
+    async (summarize) => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      const { provider } = httpProvider(
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array(16 * 1024 + 1));
+              },
+              cancel: () => promise,
+            }),
+          ),
+        piConnection,
+      );
+      try {
+        await expect(
+          provider.performSessionAction!("s", {
+            kind: "switch-branch",
+            entryId: "e-1",
+            summarize,
+          }),
+        ).rejects.toThrow("Pi branch switch is oversized");
+      } finally {
+        resolve();
+      }
+    },
+    1_000,
+  );
+
   test("drops malformed branches and bounds the rest", async () => {
     const limits = NATIVE_AGENT_BRANCH_LIST_LIMITS;
     const many = Array.from({ length: limits.branches + 3 }, (_, index) => ({

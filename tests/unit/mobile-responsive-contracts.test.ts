@@ -23,12 +23,12 @@ describe("mobile responsive layout contracts", () => {
       "overflow-y-auto",
     ],
     ["apps/web/src/components/chat/VirtualizedMessageList.tsx", "min-w-0"],
-    ["apps/web/src/components/chat/NativeComposeBar.tsx", "overflow-x-auto"],
     [
-      "apps/web/src/components/claude/ClaudeTmuxChatTab.parts.tsx",
+      "apps/web/src/components/chat/NativeComposeBar.tsx",
       "overflow-x-auto",
       "sm:w-[min(calc(100%_-_2rem),56rem)]",
     ],
+    ["apps/web/src/components/claude/ClaudeTmuxChatTab.parts.tsx", "overflow-x-auto"],
     ["apps/web/src/components/docker/DockerSettings.tsx", "grid-cols-1 gap-3 sm:grid-cols-3"],
     [
       "apps/web/src/components/environments/CreateEnvironmentDialog.tsx",

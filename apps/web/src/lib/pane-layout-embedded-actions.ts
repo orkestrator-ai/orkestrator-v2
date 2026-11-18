@@ -5,14 +5,14 @@ import {
   type PaneNode,
   type TabInfo,
 } from "@/types/paneLayout";
-import type { EnvironmentPaneState, PaneLayoutState } from "./paneLayoutStore";
+import type { EnvironmentPaneState, PaneLayoutState } from "@/stores/paneLayoutStore";
 import {
   canHostEmbeddedTabs,
   designAgentPanelOf,
   findEmbeddedTab,
   normalizeEmbeddedTabs,
   sanitizeDesignAgentPanel,
-} from "./pane-layout-embedded";
+} from "@/lib/pane-layout-embedded";
 
 /** Pane store actions for agent tabs shown inside a design canvas tab. */
 export interface EmbeddedTabActions {

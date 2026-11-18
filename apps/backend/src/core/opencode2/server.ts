@@ -21,9 +21,11 @@
  *   the backend's `OPENCODE_CONFIG` is passed as its mirror.
  * - **Pinned behaviour.** `OPENCODE_DISABLE_AUTOUPDATE` keeps the pinned
  *   binary, and `OPENCODE_FLAGS` names every feature flag of the pin
- *   explicitly. Scheduled tasks and Console watches stay off, because they
- *   wake sessions with prompts Orkestrator never sent. A flag added by a
- *   later pin is off in releases unless named here.
+ *   explicitly. Automations (2.3.1's scheduled tasks) and Console watches
+ *   stay off, because they wake sessions with prompts Orkestrator never
+ *   sent. A flag added by a later pin is off in releases unless named here.
+ *   Background compaction is a configuration key since 2.3.1 and keeps
+ *   OpenCode's default, on ({@link OPENCODE2_FLAGS} has its cost).
  * - **No file watchers.** `OPENCODE_DISABLE_FILEWATCHER` turns off the
  *   watchers each location boots: one per ancestor directory of the worktree
  *   up to `/`, the config directory and `.git/HEAD`. On macOS each one took
@@ -48,14 +50,58 @@ const log = createLogger("native-agent.opencode2");
 
 export const OPENCODE2_CREDENTIAL_PLUGIN_ID = "orkestrator-credential";
 /**
- * Every 2.3.0 feature flag, on or off by name (`packages/schema/src/config/flag.ts`).
- * 2.3.0 added three, all off: `shell_timeout_background` (a timed-out shell
- * moves to the background and reports later, waking its session),
- * `console_watches` (OpenCode Console watches that wake sessions) and
- * `mcp_events` (a draft MCP extension Orkestrator does not read).
+ * Every 2.3.1 feature flag, on or off by name (`packages/schema/src/config/flag.ts`).
+ * An unknown name is ignored, so a flag a release removed must be dropped
+ * here rather than left behind.
+ *
+ * - `todo` on; `automations` off (2.3.1's name for `schedules`, which it
+ *   still reads as an alias: it wakes sessions with prompts Orkestrator never
+ *   sent), as are `artifacts`, `media_blob`, `console_watches` (Console
+ *   watches that wake sessions) and `mcp_events` (a draft MCP extension
+ *   Orkestrator does not read).
+ * - 2.3.1 added `video_generate` (an experimental video API) and
+ *   `full_codemode` (opt-in only, off in every build anyway), both off.
+ * - 2.3.1 removed `shell_timeout_background`: a foreground shell still
+ *   running when its timeout expires now always moves to the background and
+ *   reports to its session when it ends, waking it. The provider treats it as
+ *   background work (`background-subagents.ts`). A foreground `timeout: 0`
+ *   now means the default 120 s.
+ * - 2.3.1 removed `background_compaction` (and the `experimental` setting
+ *   behind it) in favour of the configuration key `compaction.background`,
+ *   described below.
+ *
+ * **Background compaction** is left at OpenCode 2.3.1's own default, on.
+ * Orkestrator writes no setting for it, so the user's own global OpenCode
+ * configuration (mirrored by `user-config.ts`) can still turn it off with
+ * `"compaction": { "background": false }`.
+ *
+ * What it does: once a session's context is within 60k tokens of its
+ * automatic-compaction threshold (at most halfway there on a small window),
+ * OpenCode writes the summary in the background from the prompt cache and
+ * holds it, so the run that reaches the threshold swaps it in instead of
+ * pausing 30 to 60 s to summarise. It adds no history rows, wakes nothing and
+ * does not change the session's status, so activity, workflows and the
+ * transcript are unaffected. A held summary lives in the server's memory and
+ * is lost when the server restarts.
+ *
+ * What it costs: one extra model request per compaction cycle on the
+ * session's model (or `agents.compaction.model`), reading the conversation so
+ * far, mostly from the prompt cache, and writing a summary. It is billed when
+ * it finishes (OpenCode records it as compaction usage) whether or not it is
+ * ever used. It goes unused when the session ends, is archived or goes quiet
+ * before reaching the threshold (common for a pipeline or review turn that
+ * finishes near the end of a long context), when the conversation grows more
+ * than about 40% of the threshold past it, when its start changes, or when
+ * the server restarts. OpenCode skips it after a model switch, after a pause
+ * longer than the prompt cache lifetime and for native compaction, and stops
+ * starting new ones after two failures until the next compaction.
+ *
+ * It is kept on because without it a long agent turn stalls for the summary
+ * in the middle of its work, which the user waits through, and the cost is
+ * bounded to at most one summary per cycle that a session nearly completes.
  */
 export const OPENCODE2_FLAGS =
-  "todo,-schedules,-background_compaction,-artifacts,-media_blob,-shell_timeout_background,-console_watches,-mcp_events";
+  "todo,-automations,-artifacts,-media_blob,-video_generate,-console_watches,-mcp_events,-full_codemode";
 /**
  * Set on every 2.x process Orkestrator starts (servers and terminal TUIs).
  * Measured on 2.2.6 in a worktree on macOS: location boot 6,183 ms with the

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
 import {
   createProviderStub,
   waitForCondition,
@@ -282,6 +283,40 @@ test("the queue drain settles the previous turn with the usage its own status re
       expect(storage.getAgentUsageHistory({ days: 1 }).totals.inputTokens).toBe(55);
       // The settle reused the drain's observation instead of reading again.
       expect(stub.sessionStateSnapshot!.mock.calls.length).toBe(reads);
+    },
+  );
+});
+
+test("an idle Grok cost revision reaches history without a mounted session view", async () => {
+  let contentRevision = "g:1";
+  let turn: NativeAgentTurnUsage = { turnId: "turn-1", inputTokens: 50 };
+  const stub = createProviderStub("grok", {
+    sessionStateSnapshot: async () => ({
+      status: "idle",
+      contextUsage: { usedTokens: 50, turns: [turn] },
+    }),
+  });
+  const provider = {
+    ...stub.provider,
+    observeActivity: async () => ({ state: "idle" as const, contentRevision }),
+  };
+  await withService(
+    { prefix: "orkestrator-grok-usage-revision-", provider: async () => provider },
+    async ({ service, storage }) => {
+      await service.ensureSession({
+        environmentId: "env-1",
+        agent: "grok",
+        logicalSessionKey: "tab",
+      });
+      const totals = () => storage.getAgentUsageHistory({ days: 1 }).totals;
+      await service.reconcileAgentActivity();
+      await waitForCondition(() => totals().turns === 1);
+      expect(totals()).toMatchObject({ costUsd: 0, unpricedTokens: 50 });
+      turn = { ...turn, costUsd: 0.03, revision: 1 };
+      contentRevision = "g:2";
+      await service.reconcileAgentActivity();
+      await waitForCondition(() => totals().costUsd === 0.03);
+      expect(totals()).toMatchObject({ turns: 1, totalTokens: 50, unpricedTokens: 0 });
     },
   );
 });

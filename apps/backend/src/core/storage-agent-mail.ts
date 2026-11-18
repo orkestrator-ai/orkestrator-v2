@@ -1020,8 +1020,9 @@ export class AgentMailRepository {
           });
         }
       }
-      const publish = async () => {
-        if (options.mergeNoticeUrl) {
+      if (options.mergeNoticeUrl) {
+        const mergeNoticeUrl = options.mergeNoticeUrl;
+        await this.repos.projects.enqueueEnvironmentMutation(async () => {
           // Synchronous authoritative read after all preparation awaits, immediately
           // before publishing mail. No asynchronous work separates this fence and save.
           const current = this.context.loadStoreRow(
@@ -1040,8 +1041,8 @@ export class AgentMailRepository {
             sender.kind !== "system" ||
             sender.source !== "workflow" ||
             !current ||
-            current.prUrl !== options.mergeNoticeUrl ||
-            current.prMergeNoticePendingUrl !== options.mergeNoticeUrl ||
+            current.prUrl !== mergeNoticeUrl ||
+            current.prMergeNoticePendingUrl !== mergeNoticeUrl ||
             current.prState !== "merged" ||
             current.deletionRequestedAt ||
             current.cleanupAfterMergeRequestedAt
@@ -1049,12 +1050,13 @@ export class AgentMailRepository {
             throw new AgentMailError("recipient-superseded", "Merge notice no longer wanted");
           }
           recipient.mergeNoticeRequestId = requestId;
-        }
+          store.revision += 1;
+          await this.store.save(store);
+        });
+      } else {
         store.revision += 1;
         await this.store.save(store);
-      };
-      if (options.mergeNoticeUrl) await this.repos.projects.enqueueEnvironmentMutation(publish);
-      else await publish();
+      }
       // Ids and decisions only: never subjects or bodies.
       log.info("message.placed", () => ({
         messageId: message.id,

@@ -287,6 +287,7 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 ### Secondary
 - **All-Clear Green** (`brand-green`): the brand green. Site security eyebrows, "allowed" rows, and the end of the headline gradient.
 - **App All-Clear Green** (`success`): the app's one success colour. Diff additions, successful tool calls, running status (`--color-status-running`) and the merge-ready shimmer.
+- **Kanban column colors** are an exception for category identity. Backlog, In Progress, Review, and Done retain their column dot and card stripe colors.
 
 ### Tertiary
 - **Approval Amber** (`brand-amber`): the site's "approval needed" and fix-stage accent. In the app, waiting-on-you and new-activity states are yellow: the needs-answer shimmer uses Tailwind's `yellow-400`, and every bell uses `amber-400` with a `fill-amber-400/20` body (the unread bell on an environment row and in its toast, the sidebar's waiting-environments counter, the project-home activity icon). A bell is how a glance finds the row that changed, so it keeps its yellow at rest rather than taking Signal Blue.

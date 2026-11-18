@@ -18,7 +18,7 @@ import { SuborkGroupActionsContext } from "./subork-context";
 const STATUS_DOT: Record<SuborkStatus, string> = {
   starting: "bg-blue-500",
   running: "bg-blue-500",
-  finished: "bg-emerald-500",
+  finished: "bg-status-running",
   failed: "bg-failure",
   stopped: "bg-muted-foreground",
 };

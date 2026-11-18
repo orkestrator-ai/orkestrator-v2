@@ -170,7 +170,7 @@ export function resolveAgentDefaults(
 }
 
 const MOBILE_TAB_TRIGGER_CLASSES =
-  "h-11 min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-1 py-1 text-[10px] leading-none data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none";
+  "h-11 min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-1 py-1 text-[11px] leading-none data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none";
 const MOBILE_TAB_CONTENT_CLASSES =
   "create-environment-mobile-tab-panel mt-0 data-[state=inactive]:hidden";
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;

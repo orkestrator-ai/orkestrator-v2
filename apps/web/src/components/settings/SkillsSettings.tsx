@@ -599,7 +599,7 @@ export function SkillsSettings({
             {/* Gated on a completed scan: before one lands the counts are all
               zero, which reads as a definitive "no skills, no directories"
               rather than "not looked yet". */}
-            <div className="border-t border-zinc-800 px-3 py-1.5 text-[10px] text-muted-foreground">
+            <div className="border-t border-zinc-800 px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
               {state.scan ? (
                 <>
                   {needle && `${filtered.length} of `}
@@ -747,7 +747,7 @@ export function SkillsSettings({
           </p>
           <ul className="mt-1 space-y-0.5">
             {state.scan.errors.map((entry) => (
-              <li key={entry.path} className="font-mono text-[10px] text-muted-foreground">
+              <li key={entry.path} className="font-mono text-[11px] text-muted-foreground">
                 {entry.path}: {entry.message}
               </li>
             ))}

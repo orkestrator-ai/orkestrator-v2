@@ -288,7 +288,7 @@ function ConversationRow({
             {attentionCount} need{attentionCount === 1 ? "s" : ""} you
           </span>
         ) : (
-          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-[11px] font-medium tabular-nums text-muted-foreground">
             {conversation.messageCount}
           </span>
         )}

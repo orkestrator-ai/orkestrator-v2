@@ -171,7 +171,7 @@ function AccountCell({
         </SelectContent>
       </Select>
       {active && !active.signedIn ? (
-        <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
+        <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-400">
           Signed out
         </span>
       ) : null}
@@ -189,12 +189,12 @@ function AccountCell({
           Use preferred
         </Button>
       ) : preferred?.kind === "signed-out" ? (
-        <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
+        <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-400">
           Preferred login signed out
         </span>
       ) : preferred?.kind === "missing" ? (
         <span
-          className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400"
+          className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-400"
           title={`${machine.name} has no ${preferredEmail} login`}
         >
           No preferred login
@@ -454,7 +454,7 @@ function PreferToggle({
       disabled={busy}
       className={
         preferred
-          ? "flex items-center gap-1 rounded px-1 text-[10px] font-medium text-amber-300 disabled:opacity-50"
+          ? "flex items-center gap-1 rounded px-1 text-[11px] font-medium text-amber-300 disabled:opacity-50"
           : "flex items-center rounded px-1 text-zinc-500 hover:text-zinc-200 disabled:opacity-50"
       }
       onClick={() => onPrefer(platform, preferred ? null : email)}

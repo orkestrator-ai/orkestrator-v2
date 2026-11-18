@@ -11,11 +11,11 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00009</p>
       <h1>00009 · Raise state and label text to 11px in agent info, environments and lists</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-medium">Medium</span>
         <span class="pill">Typography</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 10 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 10 / 10 images</span
         >
       </div>
 
@@ -73,7 +73,7 @@
           </tr>
           <tr>
             <td><code>apps/web/src/components/settings/SkillsSettings.tsx</code></td>
-            <td>6 uses</td>
+            <td>4 uses</td>
           </tr>
           <tr>
             <td>
@@ -83,7 +83,7 @@
           </tr>
           <tr>
             <td><code>apps/web/src/components/agent-mail/AgentMailPanel.tsx</code></td>
-            <td>5 uses</td>
+            <td>4 uses</td>
           </tr>
           <tr>
             <td><code>apps/web/src/components/sidebar/ProjectSearchBar.tsx</code></td>
@@ -295,54 +295,54 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Before images captured on <b>unmodified</b> code for every slot below, and committed
             under <code>design/images/00009/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “10 /
             10”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Type-check and the owning tests pass (commands below);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -350,15 +350,107 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
-      </p>
+      <h3>Classification</h3>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <code>AgentInfoButton.panels.tsx</code> — State and labels include System and Data
+          unavailable, metric labels, runtime state, steering saturation and capacity, Daily tokens,
+          daily and peak counts, reset timing, Account, Context, unavailable version or model, the
+          two reporting qualifiers, Approvals, and Connection. Reference metadata includes metric
+          detail, account identification, notice timestamps, bridge versions and process
+          generations, unknown event kinds, chart dates, and model IDs.
+        </li>
+        <li>
+          <code>AgentInfoButton.tsx</code> — State and labels include Active session, Execution
+          profile, Session options, Session actions, Active turn, Background tasks, and Runtime.
+          Fork and steering helper copy is supplementary metadata.
+        </li>
+        <li>
+          <code>CreateEnvironmentDialog.tsx</code> — The mobile configuration tabs are navigation
+          labels. <code>ChangeFileRowItem.tsx</code> — The status letter is state. Rename provenance
+          and the change reason are outside the scoped status-letter change.
+        </li>
+        <li>
+          <code>GraphLibraryList.tsx</code> — Trust, engine, compile state, compile counts, and
+          read-only are state. The source path or template ID is metadata.
+        </li>
+        <li>
+          <code>SkillsSettings.tsx</code> — Scan counts, scan progress and failure, and directory
+          scan errors are state. Skill locations and paths are metadata.
+        </li>
+        <li>
+          <code>MachineAgentAccountsSection.tsx</code> — Signed out, Preferred login signed out, No
+          preferred login, and Preferred are state labels, including when shown on a colored
+          background.
+        </li>
+        <li>
+          <code>AgentMailPanel.tsx</code> — The plain message count is a label. The
+          <em>need you</em> count is inside a filled pill. The message timestamp and the recipient's
+          environment and project are metadata.
+        </li>
+        <li>
+          <code>ProjectSearchBar.tsx</code> — Both availability markers are state, and the search
+          keycap labels the keyboard shortcut.
+        </li>
       </ul>
+
+      <h3>Decisions</h3>
+      <ul>
+        <li>
+          Use 11px for state and labels. Apply the documented full muted-foreground token to the
+          affected muted agent headings. Existing palette values and semantic status colors are
+          preserved.
+        </li>
+        <li>
+          Keep compact metadata and the filled mail count at 10px. This retains the hierarchy and
+          density specified by the design. Where state shares a row with model IDs, runtime
+          versions, or dates, size the state independently.
+        </li>
+        <li>
+          Keep the existing mobile tab labels. On the 390px fixture, the labels fit without
+          shortening. In the popover, existing wrapped explanatory copy and vertical scrolling
+          accommodate the narrow viewport.
+        </li>
+        <li>
+          Use the Scope table to define the change. The plugin browser appears in the original issue
+          description. Design and annotation components and 9px badges have their own tasks.
+        </li>
+      </ul>
+
+      <h3>Image comparisons</h3>
+      <ul>
+        <li>
+          Desktop agent information at 1440 × 900. Active session, System, Session actions, Runtime,
+          metric labels, and Approvals are easier to scan. The runtime state is larger than its
+          adjacent version.
+        </li>
+        <li>
+          Narrow agent information at 390 × 844. The same headings and runtime state reach 11px. The
+          viewport fits the popover, and scroll captures include its lower sections.
+        </li>
+        <li>
+          Mobile environment dialog at 390 × 844. Prompt, Setup, and Agent reach 11px and fit their
+          tabs on a single line.
+        </li>
+        <li>
+          Changed files at 1440 × 900. The modified, deleted, and added status letters are 11px. The
+          fixture filenames and line counts align in their existing columns.
+        </li>
+        <li>
+          Skills settings at 1440 × 900. The scan summary is 11px and medium weight, including the
+          zero counts shown by the isolated backend.
+        </li>
+      </ul>
+      <p class="note">
+        Captured the real dark renderer from the headless design-00009 profile at 100% scale, before
+        from b2c91abb9 and after from the working change. Before and after use the same worktree,
+        tab, and capture sizes. The agent images combine strips of the scrollable popover. Live
+        system utilization can vary between captures. The Codex session was signed out, so token,
+        plan, and active-turn sections that require a signed-in session or a turn were unavailable.
+        The separate Codex account heading comes from <code>AgentInfoAccountSection</code>, outside
+        the scoped files. The isolated backend suppresses host skill discovery. Docker was
+        unavailable to the profile, so the create dialog shows its local tabs.
+      </p>
 
       <footer>
         Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and

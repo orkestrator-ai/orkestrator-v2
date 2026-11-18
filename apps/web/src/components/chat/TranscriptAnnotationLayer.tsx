@@ -287,7 +287,7 @@ export function TranscriptAnnotationLayer({
           type="button"
           data-transcript-selection-ignore
           data-testid="add-transcript-selection"
-          className="fixed z-[70] flex items-center gap-1.5 whitespace-nowrap rounded-full border border-blue-300/25 bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-[0_10px_30px_rgba(0,0,0,0.42)] transition-colors hover:bg-blue-500 focus-hairline focus-hairline-outset"
+          className="fixed z-[70] flex items-center gap-1.5 whitespace-nowrap rounded-full border border-primary/25 bg-primary-fill px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-[0_10px_30px_rgba(0,0,0,0.42)] transition-colors hover:bg-primary-fill/85 focus-hairline focus-hairline-outset"
           style={anchoredStyle(selection.rect, 34)}
           onPointerDown={(event) => event.preventDefault()}
           onClick={addSelection}
@@ -343,7 +343,7 @@ export function TranscriptAnnotationLayer({
               className="w-full rounded-2xl border border-zinc-600/70 bg-zinc-800/95 px-4 py-3 text-sm text-zinc-100 shadow-[0_16px_42px_rgba(0,0,0,0.46)] outline-none placeholder:text-zinc-500 focus-hairline"
             />
             <span
-              className="relative -mt-0.5 flex h-9 min-w-9 items-center justify-center rounded-full border-2 border-white bg-blue-500 px-2 text-sm font-semibold text-white shadow-lg after:absolute after:-bottom-1 after:left-1 after:h-2 after:w-2 after:-rotate-12 after:rounded-bl-sm after:bg-blue-500"
+              className="relative -mt-0.5 flex h-9 min-w-9 items-center justify-center rounded-full border-2 border-white bg-primary-fill px-2 text-sm font-semibold text-primary-foreground shadow-lg after:absolute after:-bottom-1 after:left-1 after:h-2 after:w-2 after:-rotate-12 after:rounded-bl-sm after:bg-inherit"
               aria-label={`Transcript reference ${annotationNumber}`}
             >
               {annotationNumber}
@@ -355,7 +355,7 @@ export function TranscriptAnnotationLayer({
             type="button"
             data-transcript-selection-ignore
             data-testid="transcript-annotation-marker"
-            className="fixed z-[70] flex h-9 min-w-9 items-center justify-center rounded-full border-2 border-white bg-blue-500 px-2 text-sm font-semibold text-white shadow-lg transition-colors after:absolute after:-bottom-1 after:left-1 after:h-2 after:w-2 after:-rotate-12 after:rounded-bl-sm after:bg-blue-500 hover:bg-blue-400 focus-hairline focus-hairline-outset"
+            className="fixed z-[70] flex h-9 min-w-9 items-center justify-center rounded-full border-2 border-white bg-primary-fill px-2 text-sm font-semibold text-primary-foreground shadow-lg transition-colors after:absolute after:-bottom-1 after:left-1 after:h-2 after:w-2 after:-rotate-12 after:rounded-bl-sm after:bg-inherit hover:bg-primary-fill/85 focus-hairline focus-hairline-outset"
             style={anchoredStyle(anchor.rect, 36)}
             aria-label={`Edit comment for transcript reference ${annotationNumber}`}
             onClick={() => editAnnotation(annotation.id)}

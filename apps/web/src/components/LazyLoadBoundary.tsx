@@ -141,9 +141,9 @@ export function LazyLoadOverlayErrorFallback({
     <div className="fixed inset-0 z-[100] grid place-items-center bg-background/80 p-6 backdrop-blur-sm">
       <div
         role="alert"
-        className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-destructive/40 bg-card p-6 text-center shadow-xl"
+        className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-destructive/40 bg-card p-6 text-center"
       >
-        <AlertTriangle className="h-7 w-7 text-destructive" />
+        <AlertTriangle className="h-7 w-7 text-failure" />
         <div>
           <p className="font-medium">{title}</p>
           <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
@@ -180,9 +180,9 @@ export function LazyLoadInlineErrorFallback({
     >
       <div
         role="alert"
-        className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-destructive/40 bg-card p-6 text-center shadow-lg"
+        className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-destructive/40 bg-card p-6 text-center"
       >
-        <AlertTriangle className="h-7 w-7 text-destructive" />
+        <AlertTriangle className="h-7 w-7 text-failure" />
         <div>
           <p className="font-medium">{title}</p>
           <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
@@ -240,7 +240,7 @@ export function LazyDialogLoadingFallback({ label = "Loading…" }: { label?: st
       aria-label={label}
       className="fixed inset-0 z-[100] grid place-items-center bg-background/70 backdrop-blur-sm"
     >
-      <div className="flex items-center gap-2 rounded-md border border-border bg-card px-4 py-3 text-sm text-muted-foreground shadow-lg">
+      <div className="flex items-center gap-2 rounded-md border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
         <span>{label}</span>
       </div>

@@ -356,7 +356,7 @@ export function DesignExportDialog({
             </p>
           )}
           {pending?.state === "failed" && pending.failure && (
-            <p role="alert" className="text-destructive">
+            <p role="alert" className="text-failure">
               The last export failed: {pending.failure.message}
             </p>
           )}
@@ -404,7 +404,7 @@ export function DesignExportDialog({
               name in .orkdes.
             </p>
             {name && !valid && (
-              <p role="alert" className="text-xs text-destructive">
+              <p role="alert" className="text-xs text-failure">
                 “{name}” is not a valid path. Folder and file names must start with a letter or
                 number, and the file name must end in .orkdes.
               </p>
@@ -421,7 +421,7 @@ export function DesignExportDialog({
               </p>
             )}
             {previewError && !previewing && (
-              <p role="alert" className="text-xs text-destructive">
+              <p role="alert" className="text-xs text-failure">
                 {previewError.message}
               </p>
             )}
@@ -509,7 +509,7 @@ export function DesignExportDialog({
           {waitNotice && <p className="text-xs text-amber-600">{waitNotice}</p>}
 
           {failure && (
-            <p role="alert" className="text-xs text-destructive">
+            <p role="alert" className="text-xs text-failure">
               {failure.code === "export-collision"
                 ? `${failure.message}. The file changed since it was checked; review it again.`
                 : failure.code === "conflict"

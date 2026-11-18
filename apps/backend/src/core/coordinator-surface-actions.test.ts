@@ -878,7 +878,7 @@ describe("Multi Review custom fix and reviewer tabs", () => {
     return workflow;
   }
 
-  test("starts a custom fix once with the review's fix model by default", async () => {
+  test("starts a custom Address Findings once with the review's Address Findings model by default", async () => {
     const workflow = await readyReview();
     const customAddressFindings = mock(async (input: Record<string, unknown>) => ({
       ...workflow,
@@ -915,7 +915,7 @@ describe("Multi Review custom fix and reviewer tabs", () => {
     expect(customAddressFindings).toHaveBeenCalledTimes(1);
     await expect(
       call("custom_fix_coordinator_multi_review_action", {
-        input: { ...input, fixModel: { agent: "claude", model: "opus" } },
+        input: { ...input, addressFindingsModel: { agent: "claude", model: "opus" } },
       }),
     ).rejects.toThrow("different payload");
   });

@@ -4,8 +4,8 @@ import {
   type PrDetection,
   type PrMonitorDetectionOptions,
   type PrMonitorTarget,
-} from "../src/core/pr-monitor";
-import { DEFAULT_PR_MONITOR_POLICY } from "../src/core/pr-monitor-policy";
+} from "../src/core/git/pr-monitor";
+import { DEFAULT_PR_MONITOR_POLICY } from "../src/core/git/pr-monitor-policy";
 
 /**
  * Quiet-PR backoff (#1661, BG-6): an open PR whose reading has

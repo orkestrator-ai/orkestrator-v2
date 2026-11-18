@@ -7,13 +7,13 @@ import {
   type RecurringWorkUnit,
 } from "@orkestrator/protocol/recurring-work";
 import { DiffStatsService, type DiffStatsTarget } from "../src/core/diff-stats-service.js";
-import { GitFetchScheduler } from "../src/core/git-fetch-scheduler.js";
+import { GitFetchScheduler } from "../src/core/git/fetch-scheduler.js";
 import {
   ContainerGitFetchPolicy,
   containerRepoId,
   formatContainerFetchResponse,
 } from "../src/core/container-git-fetch.js";
-import { PrMonitorService, type PrMonitorTarget } from "../src/core/pr-monitor.js";
+import { PrMonitorService, type PrMonitorTarget } from "../src/core/git/pr-monitor.js";
 import { ClaudeStatePollManager } from "../src/core/tmux-poll.js";
 import type { WorktreeSignalReason } from "../src/core/agent-tools.js";
 import { ContainerWorktreeSignals } from "../src/core/container-worktree-signal.js";

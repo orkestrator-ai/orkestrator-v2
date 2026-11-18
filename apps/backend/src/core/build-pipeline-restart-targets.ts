@@ -8,7 +8,6 @@ import {
   isReviewPackagePreparationSession,
   isSupersededPipelineSession,
   reviewValidationStage,
-  REVIEW_PACKAGE_SESSION_LABEL,
   type BuildPipeline,
   type PipelineSession,
   type PipelineSessionPhase,
@@ -19,12 +18,20 @@ import {
   sessionPhaseFor,
 } from "./build-pipeline-service-helpers.js";
 
+/**
+ * The implementation step of the pipeline's current round: Build in the first
+ * round, Rework in every later one. Package preparation follows it.
+ */
+function roundImplementationPhase(pipeline: Pick<BuildPipeline, "iteration">): "build" | "rework" {
+  return pipeline.iteration > 0 ? "rework" : "build";
+}
+
 /** Stage IDs of this form ask to prepare the review package again from the named session. */
 export const PACKAGE_STAGE_PREFIX = "review-package:";
 
 /** The step a coordinator's restart named or resolved, reported back to it. */
 export interface CoordinatorRestartedStep {
-  /** The session phase (`build`, `fix`, `review`…), `review-preparation` or `validation`. */
+  /** The session phase (`build`, `rework`, `review`…), `review-preparation` or `validation`. */
   phase: string;
   /** One-based round. */
   round: number;
@@ -68,7 +75,7 @@ export function locateSessionStep(
         kind: "session",
         session,
         phase: session.phase,
-        forceStage: session.label !== REVIEW_PACKAGE_SESSION_LABEL,
+        forceStage: session.phase !== "package-preparation",
       }
     : new Error("This pipeline stage is no longer available");
 }
@@ -120,10 +127,7 @@ export function currentStepTarget(candidate: BuildPipeline): RestartTarget {
   const validationTarget = reviewValidationStage(candidate, phase);
   if (validationTarget === "validation") return { kind: "validation" };
   if (validationTarget === "review-package") {
-    return {
-      kind: "review-package",
-      implementationPhase: phase === "reworking" ? "rework" : "build",
-    };
+    return { kind: "review-package", implementationPhase: roundImplementationPhase(candidate) };
   }
   // Between a transition and the next tick the current session can still be
   // the previous stage's, so it only stands for this stage when it matches.
@@ -133,7 +137,7 @@ export function currentStepTarget(candidate: BuildPipeline): RestartTarget {
         kind: "session",
         session,
         phase: stagePhase,
-        forceStage: session.label !== REVIEW_PACKAGE_SESSION_LABEL,
+        forceStage: session.phase !== "package-preparation",
       }
     : { kind: "session", phase: stagePhase };
 }
@@ -153,17 +157,14 @@ export function failedStepTarget(candidate: BuildPipeline): RestartTarget {
   const special = reviewValidationStage(candidate, resumablePhase(failure.phase) ?? undefined);
   if (special === "validation") return { kind: "validation" };
   if (special === "review-package")
-    return {
-      kind: "review-package",
-      implementationPhase: failure.phase === "reworking" ? "rework" : "build",
-    };
+    return { kind: "review-package", implementationPhase: roundImplementationPhase(candidate) };
   const session = failure.sessionId ? findStageSession(candidate, failure.sessionId) : undefined;
   return session?.phase === stagePhase
     ? {
         kind: "session",
         session,
         phase: stagePhase,
-        forceStage: session.label !== REVIEW_PACKAGE_SESSION_LABEL,
+        forceStage: session.phase !== "package-preparation",
       }
     : { kind: "session", phase: stagePhase };
 }
@@ -224,7 +225,7 @@ export function locatePackageRestart(pipeline: BuildPipeline, stageId: string): 
     latest?.sessionKey === session.sessionKey &&
     latest.step.kind === "review-package" &&
     (pipeline.restartRequest?.kind === "review-package" ||
-      (current?.label === REVIEW_PACKAGE_SESSION_LABEL &&
+      (current?.phase === "package-preparation" &&
         current.status === "running" &&
         Date.parse(current.startedAt) >= Date.parse(latest.at)))
   ) {

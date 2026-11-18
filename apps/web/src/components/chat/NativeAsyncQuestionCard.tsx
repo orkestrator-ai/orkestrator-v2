@@ -207,7 +207,7 @@ export function NativeAsyncQuestionCard({ part }: { part: NativeAsyncQuestionPar
         </p>
       ) : null}
       {error ? (
-        <p role="alert" className="mt-3 text-xs text-destructive">
+        <p role="alert" className="mt-3 text-xs text-failure">
           {error}
         </p>
       ) : null}

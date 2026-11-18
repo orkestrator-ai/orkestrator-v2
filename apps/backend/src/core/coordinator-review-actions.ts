@@ -1,9 +1,9 @@
 import { coordinatorMultiReviewLaunchHash } from "./coordinator-action-scope.js";
 import {
   addressCoordinatorMultiReviewActionCommand,
-  customFixCoordinatorMultiReviewActionCommand,
+  customAddressCoordinatorMultiReviewActionCommand,
   openCoordinatorMultiReviewCommand,
-  openCoordinatorMultiReviewFixCommand,
+  openCoordinatorMultiReviewAddressFindingsCommand,
   launchCoordinatorMultiReviewActionCommand,
 } from "@orkestrator/protocol/contract/domains/coordinator";
 import { COORDINATOR_REQUEST_ID_REUSED_ERROR } from "@orkestrator/protocol/coordinator";
@@ -150,14 +150,14 @@ export async function startMultiReviewAt(
 
 /**
  * Open a saved review's root or Address Findings tab, or address its findings: the
- * durable UI actions behind `open_multi_review`, `open_multi_review_fix` and
+ * durable UI actions behind `open_multi_review`, `open_multi_review_address_findings` and
  * `address_multi_review`. `beforeAddressFindings` runs once the root tab is open and
  * before the Address Findings handoff is armed (a coordinator adopts the workflow there).
  */
 export async function runMultiReviewSurface(
   context: CommandContext,
   saved: { snapshot: MultiReviewWorkflow; revision: number },
-  surface: "root" | "fix" | "address",
+  surface: "root" | "address-findings" | "address",
   beforeAddressFindings?: () => Promise<void>,
   /** With `root`: open this reviewer's read-only transcript subtab instead. */
   reviewerId?: string,
@@ -208,7 +208,7 @@ export async function runMultiReviewSurface(
     } catch (error) {
       if (customAddressFindings)
         throw new Error(
-          `Custom Address Findings could not open the review tab: ${conciseError(error)} Retry custom_fix_multi_review with the same requestId after resolving the blocker.`,
+          `Custom Address Findings could not open the review tab: ${conciseError(error)} Retry custom_address_multi_review with the same requestId after resolving the blocker.`,
         );
       return result(
         workflow,
@@ -242,7 +242,7 @@ export async function runMultiReviewSurface(
               customAddressFindings.addressFindingsModel.reasoningEffort));
       if (customAddressFindings && !handoffArmed)
         throw new Error(
-          `Custom Address Findings handoff could not be queued: ${conciseError(error)} Retry custom_fix_multi_review with the same requestId after resolving the blocker.`,
+          `Custom Address Findings handoff could not be queued: ${conciseError(error)} Retry custom_address_multi_review with the same requestId after resolving the blocker.`,
         );
       return {
         ...result(
@@ -261,10 +261,14 @@ export async function runMultiReviewSurface(
         ...result(workflow, true, rootUi),
         outcome: "pending",
         recovery:
-          "The Address Findings handoff is durably queued. Inspect get_multi_review until addressPromptPending clears; presentationError reports any Address Findings tab failure. Do not send a separate fix prompt.",
+          "The Address Findings handoff is durably queued. Inspect get_multi_review until addressPromptPending clears; presentationError reports any Address Findings tab failure. Do not send a separate Address Findings prompt.",
       } satisfies MultiReviewActionResult;
     try {
-      return result(workflow, true, await openMultiReviewTab(context.storage, workflow, "fix"));
+      return result(
+        workflow,
+        true,
+        await openMultiReviewTab(context.storage, workflow, "address-findings"),
+      );
     } catch (error) {
       const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
       if (latest && isMultiReviewWorkflow(latest.snapshot))
@@ -274,7 +278,7 @@ export async function runMultiReviewSurface(
           workflow,
           true,
           rootUi,
-          `The Address Findings handoff completed, but its tab could not be opened: ${conciseError(error)} Use open_multi_review_fix after ensuring the environment is ready and has a free tab.`,
+          `The Address Findings handoff completed, but its tab could not be opened: ${conciseError(error)} Use open_multi_review_address_findings after ensuring the environment is ready and has a free tab.`,
         ),
         outcome: "partial",
       };
@@ -290,8 +294,8 @@ export async function runMultiReviewSurface(
       workflow,
       true,
       { status: "unavailable" },
-      surface === "fix"
-        ? `The Address Findings session tab could not be opened: ${conciseError(error)} Wait for any pending handoff, ensure the environment is ready and has a free tab, then retry open_multi_review_fix. No turn was dispatched.`
+      surface === "address-findings"
+        ? `The Address Findings session tab could not be opened: ${conciseError(error)} Wait for any pending handoff, ensure the environment is ready and has a free tab, then retry open_multi_review_address_findings. No turn was dispatched.`
         : `The review tab could not be opened: ${conciseError(error)} Ensure the environment is ready and has a free tab, then retry open_multi_review. No workflow was started or cancelled.`,
     );
   }
@@ -514,10 +518,13 @@ export function registerCoordinatorReviewActions(
   });
 
   const surfaceCommand = async (
-    surface: "root" | "fix" | "address",
+    surface: "root" | "address-findings" | "address",
     args: Record<string, unknown>,
     context: CommandContext,
-    customAddressFindings?: { instruction: string; fixModel?: MultiReviewModelSelection },
+    customAddressFindings?: {
+      instruction: string;
+      addressFindingsModel?: MultiReviewModelSelection;
+    },
   ): Promise<MultiReviewActionResult> => {
     const caller = await identity(args.scope, context);
     const id = asNonBlankString(args.workflowId, "workflowId");
@@ -584,7 +591,7 @@ export function registerCoordinatorReviewActions(
       surface,
       async () => {
         // Address adopts renderer-started work before dispatch so the observer
-        // can deliver the fix outcome even while this conversation is inactive.
+        // can deliver the Address Findings outcome even while this conversation is inactive.
         if (ownedAssociation) return;
         const association = await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
           id: randomUUID(),
@@ -607,7 +614,7 @@ export function registerCoordinatorReviewActions(
             // Omitted, the custom Address Findings runs the review's own Address Findings model, as the
             // dialog's model picker starts on it.
             addressFindingsModel:
-              customAddressFindings.fixModel ?? saved.snapshot.addressFindingsModel,
+              customAddressFindings.addressFindingsModel ?? saved.snapshot.addressFindingsModel,
           }
         : undefined,
     );
@@ -616,38 +623,42 @@ export function registerCoordinatorReviewActions(
   register(openCoordinatorMultiReviewCommand, (args, context) =>
     surfaceCommand("root", args, context),
   );
-  register(openCoordinatorMultiReviewFixCommand, (args, context) =>
-    surfaceCommand("fix", args, context),
+  register(openCoordinatorMultiReviewAddressFindingsCommand, (args, context) =>
+    surfaceCommand("address-findings", args, context),
   );
   register(addressCoordinatorMultiReviewActionCommand, (args, context) =>
     surfaceCommand("address", args, context),
   );
 
   /**
-   * The review tab's custom Address Findings ("…" beside Address Findings): a fix with the caller's
-   * instruction and, optionally, another model. One run per `requestId`.
+   * The review tab's custom Address Findings ("…" beside Address Findings): an
+   * Address Findings run with the caller's instruction and, optionally, another
+   * model. One run per `requestId`.
    */
-  register(customFixCoordinatorMultiReviewActionCommand, async (args, context) => {
+  register(customAddressCoordinatorMultiReviewActionCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const input = args.input;
     if (!input || typeof input !== "object" || Array.isArray(input))
       throw new Error("Expected the custom Address Findings input");
-    const { requestId, workflowId, instruction, fixModel } = input as Record<string, unknown>;
+    const { requestId, workflowId, instruction, addressFindingsModel } = input as Record<
+      string,
+      unknown
+    >;
     const text = asNonBlankString(instruction, "instruction").trim();
     if (text.length > MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH)
       throw new Error("The custom Address Findings instruction is too long");
-    if (fixModel !== undefined && !isMultiReviewModelSelection(fixModel))
-      throw new Error("Expected fixModel to be { agent, model, reasoningEffort? }");
+    if (addressFindingsModel !== undefined && !isMultiReviewModelSelection(addressFindingsModel))
+      throw new Error("Expected addressFindingsModel to be { agent, model, reasoningEffort? }");
     const workflow = asNonBlankString(workflowId, "workflowId");
     // The receipt keeps only the outcome; the workflow is read fresh, so a
-    // replay reports where the fix is now rather than where it was.
+    // replay reports where the run is now rather than where it was.
     const outcome = await withCoordinatorReceipt(
       context,
       caller,
       {
         requestId: asNonBlankString(requestId, "requestId"),
-        action: "custom-fix",
-        payload: { workflowId: workflow, instruction: text, fixModel },
+        action: "custom-address",
+        payload: { workflowId: workflow, instruction: text, addressFindingsModel },
       },
       async () => {
         const { workflow: _workflow, ...rest } = await surfaceCommand(
@@ -656,7 +667,9 @@ export function registerCoordinatorReviewActions(
           context,
           {
             instruction: text,
-            ...(fixModel ? { fixModel: fixModel as MultiReviewModelSelection } : {}),
+            ...(addressFindingsModel
+              ? { addressFindingsModel: addressFindingsModel as MultiReviewModelSelection }
+              : {}),
           },
         );
         return rest as unknown as Record<string, unknown>;

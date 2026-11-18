@@ -31,7 +31,7 @@ test.each(["build", "rework"] as const)(
         });
       }
       const skipped = await service.skipStep(started.id, work.sdkSessionId);
-      expect(skipped.phase).toBe("reworking");
+      expect(skipped.phase).toBe("preparing-package");
       expect(skipped.sessions.find((s) => s.sdkSessionId === work.sdkSessionId)).toMatchObject({
         skipped: true,
         status: "idle",
@@ -39,7 +39,11 @@ test.each(["build", "rework"] as const)(
       });
       expect(provider.aborted).toContain(work.sdkSessionId);
       const preparation = skipped.sessions.at(-1)!;
-      expect(preparation).toMatchObject({ label: REVIEW_PACKAGE_SESSION_LABEL, status: "running" });
+      expect(preparation).toMatchObject({
+        phase: "package-preparation",
+        label: REVIEW_PACKAGE_SESSION_LABEL,
+        status: "running",
+      });
       expect(preparation.sdkSessionId).not.toBe(work.sdkSessionId);
       await expect(service.skipStep(started.id, preparation.sdkSessionId)).rejects.toThrow(
         "Review preparation cannot be skipped",

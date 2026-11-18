@@ -70,7 +70,7 @@ export function WebAnnotationRequestChip({
         Open annotation
       </button>
       {error && (
-        <span role="alert" className="text-destructive">
+        <span role="alert" className="text-failure">
           {error}
         </span>
       )}

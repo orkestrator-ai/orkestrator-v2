@@ -13,7 +13,7 @@
  * closed and the gateway reports `not-ready`.
  */
 import { readFile, writeFile } from "node:fs/promises";
-import { formatGithubRangesSeed, parseGithubMeta } from "../src/core/github-ranges-cache.js";
+import { formatGithubRangesSeed, parseGithubMeta } from "../src/core/git/github-ranges-cache.js";
 
 /** Returns how many ranges were written; throws when the answer is unusable. */
 export async function writeGithubRangesSeed(

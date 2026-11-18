@@ -34,6 +34,7 @@ import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAn
 import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
 import {
   BROWSER_ADDRESS_FORM_CLASS,
+  BROWSER_ADDRESS_FRAME_CLASS,
   BROWSER_ADDRESS_INPUT_CLASS,
   BROWSER_TOOLBAR_ACTIONS_CLASS,
   BROWSER_TOOLBAR_CLASS,
@@ -248,7 +249,7 @@ function UrlBrowserTab({ tabId, environmentId, data, isActive }: BrowserTabProps
     >
       <div className={BROWSER_TOOLBAR_CLASS}>
         <form className={BROWSER_ADDRESS_FORM_CLASS} onSubmit={handleSubmit}>
-          <div className="flex h-8 min-w-0 flex-1 items-center rounded-md border border-border bg-input-surface shadow-sm transition-colors focus-within:border-ring">
+          <div className={cn(BROWSER_ADDRESS_FRAME_CLASS, "border-border")}>
             <input
               ref={addressInputRef}
               value={address}

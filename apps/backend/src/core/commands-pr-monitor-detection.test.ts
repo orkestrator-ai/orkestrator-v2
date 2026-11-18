@@ -4,7 +4,7 @@ import {
   parsePrMonitorCheckResponse,
   parsePrMonitorDetectionResponse,
 } from "./commands-pr-monitor.js";
-import type { PrMonitorTarget } from "./pr-monitor.js";
+import type { PrMonitorTarget } from "./git/index.js";
 
 const target = {
   environmentId: "env-1",

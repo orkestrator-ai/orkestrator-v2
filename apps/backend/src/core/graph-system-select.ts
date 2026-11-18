@@ -32,7 +32,7 @@ import {
   type GraphSelectCandidate,
 } from "@orkestrator/protocol/graphs/run";
 import type { GraphSelectFallback } from "@orkestrator/protocol/graphs/system-actions";
-import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
+import { retryGitWithoutFsmonitorOnTimeout } from "./git/index.js";
 import {
   GraphSystemActionError,
   graphProviderError,

@@ -162,7 +162,7 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "rework"
+        : phase === "build" || phase === "rework" || phase === "package-preparation"
           ? TEST_REVIEW_PREPARATION
           : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
@@ -968,7 +968,7 @@ describe("BuildPipelineService", () => {
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
         const phase = provider.phases.get(sessionId);
-        if (phase === "build" || phase === "rework") {
+        if (phase === "build" || phase === "rework" || phase === "package-preparation") {
           return {
             ok: true,
             provider: "claude",
@@ -1045,7 +1045,7 @@ describe("BuildPipelineService", () => {
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
         const phase = provider.phases.get(sessionId);
-        if (phase === "build" || phase === "rework") {
+        if (phase === "build" || phase === "rework" || phase === "package-preparation") {
           return {
             ok: true,
             provider: "claude",
@@ -1120,7 +1120,7 @@ describe("BuildPipelineService", () => {
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
         const phase = provider.phases.get(sessionId);
-        if (phase === "build" || phase === "rework") {
+        if (phase === "build" || phase === "rework" || phase === "package-preparation") {
           return {
             ok: true,
             provider: "claude",
@@ -1166,7 +1166,7 @@ describe("BuildPipelineService", () => {
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
         const phase = provider.phases.get(sessionId);
-        if (phase === "build" || phase === "rework") {
+        if (phase === "build" || phase === "rework" || phase === "package-preparation") {
           return {
             ok: true,
             provider: "claude",

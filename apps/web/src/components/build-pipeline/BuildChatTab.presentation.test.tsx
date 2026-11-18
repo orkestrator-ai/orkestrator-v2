@@ -460,7 +460,7 @@ describe("BuildChatTab presentation", () => {
     });
     const packageSession: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      phase: "rework",
+      phase: "package-preparation",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,

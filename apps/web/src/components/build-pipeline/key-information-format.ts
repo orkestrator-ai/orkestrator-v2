@@ -16,6 +16,7 @@ import {
 export const KEY_INFORMATION_AUTHOR_LABELS: Record<KeyInformationAuthor, string> = {
   build: "Build",
   rework: "Rework",
+  "package-preparation": "Package preparation",
   review: "Review",
   "address-findings": "Address Findings",
   verify: "Verify",

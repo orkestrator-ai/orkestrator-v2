@@ -212,7 +212,7 @@ There is no Swift preview view.
 embedded flag must flip only per qualified platform.
 
 **Context.** Code items 4 and 5; non-desktop capture is deferred in
-[0047](0047-web-annotation-extensions.md).
+[8306](8306-non-desktop-annotation-capture.md) (from 0047, retired).
 
 **Investigation.** Capture is already hidden off desktop through `canCapture`
 (`apps/web/src/components/browser/annotations/AnnotationPanel.tsx:70`). The
@@ -338,8 +338,8 @@ browser privacy tests.
    Never load a preview into the control WebView.
 4. Report capabilities per surface. Do not advertise annotation capture or
    native DevTools on browser surfaces unless a separate, safe implementation
-   exists (see the non-desktop capture item in
-   [0047-web-annotation-extensions.md](0047-web-annotation-extensions.md)).
+   exists (see
+   [8306-non-desktop-annotation-capture.md](8306-non-desktop-annotation-capture.md)).
 5. When a platform passes, add it to `browserEmbedded.platforms` and set
    `available`. Lift the `browser-embedded` refusal in `PreviewAccessService`
    only for advertised platforms.
@@ -445,7 +445,7 @@ and the revisit trigger is already tracked as 0042 task 3.
 
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md) (top-level Firefox,
   Safari and iOS runs, and the evidence log).
-- [0047-web-annotation-extensions.md](0047-web-annotation-extensions.md) (non-desktop
+- [8306-non-desktop-annotation-capture.md](8306-non-desktop-annotation-capture.md) (non-desktop
   capture needs a trusted inspection path on the same surfaces).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   (Safari and iOS batching).

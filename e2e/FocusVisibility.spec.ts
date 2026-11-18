@@ -71,6 +71,78 @@ test("focus token contrasts at least 3:1 with dark surfaces", async ({ page }) =
   for (const ratio of ratios) expect(ratio).toBeGreaterThanOrEqual(3);
 });
 
+test("keyboard focus draws beyond filled checkboxes and inside an unchecked checkbox", async ({
+  page,
+}) => {
+  await page.goto("/focus-visibility");
+  await page.getByRole("button", { name: "Annotation fill" }).focus();
+
+  for (const [name, checked, offset] of [
+    ["Unchecked", "false", "-2px"],
+    ["Checked", "true", "2px"],
+    ["Mixed", "mixed", "2px"],
+  ] as const) {
+    await page.keyboard.press("Tab");
+    const checkbox = page.getByRole("checkbox", { name, exact: true });
+    await expect(checkbox).toBeFocused();
+    await expect(checkbox).toHaveAttribute("aria-checked", checked);
+    await expect(checkbox).toHaveCSS("outline-style", "solid");
+    await expect(checkbox).toHaveCSS("outline-width", "1px");
+    await expect(checkbox).toHaveCSS("outline-offset", offset);
+  }
+});
+
+test("selected input text uses white on the accessible primary fill", async ({ page }) => {
+  await page.goto("/focus-visibility");
+  const input = page.getByRole("textbox", { name: "Selection sample" });
+  const selection = await input.evaluate((element: HTMLInputElement) => {
+    element.focus();
+    element.select();
+    const style = getComputedStyle(element, "::selection");
+    const luminance = (color: string) => {
+      const context = document.createElement("canvas").getContext("2d")!;
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b] = Array.from(context.getImageData(0, 0, 1, 1).data, (value) => {
+        const channel = value / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return r! * 0.2126 + g! * 0.7152 + b! * 0.0722;
+    };
+    return {
+      text: element.value.slice(element.selectionStart ?? 0, element.selectionEnd ?? 0),
+      color: style.color,
+      fill: style.backgroundColor,
+      contrast: (luminance(style.color) + 0.05) / (luminance(style.backgroundColor) + 0.05),
+    };
+  });
+
+  expect(selection.text).toBe("Selected text");
+  expect(selection.color).toBe("rgb(255, 255, 255)");
+  expect(selection.fill).toBe("rgb(37, 99, 235)");
+  expect(selection.contrast).toBeGreaterThanOrEqual(4.5);
+});
+
+test("Claude approval actions share the same corners and keyboard focus outline", async ({
+  page,
+}) => {
+  await page.goto("/focus-visibility");
+  await page.getByRole("textbox", { name: "Selection sample" }).focus();
+  const card = page.getByRole("group", { name: "Claude wants to use Read" });
+  const allow = card.getByRole("button", { name: "Allow", exact: true });
+  const deny = card.getByRole("button", { name: "Deny", exact: true });
+  const radius = await allow.evaluate((element) => getComputedStyle(element).borderRadius);
+  await expect(deny).toHaveCSS("border-radius", radius);
+
+  for (const button of [allow, deny]) {
+    await page.keyboard.press("Tab");
+    await expect(button).toBeFocused();
+    await expect(button).toHaveCSS("outline-style", "solid");
+    await expect(button).toHaveCSS("outline-width", "1px");
+    await expect(button).toHaveCSS("outline-offset", "2px");
+  }
+});
+
 test("selected flow nodes gain a separate focus outline", async ({ page }) => {
   await page.goto("/pipeline-flow");
   const graph = page.getByRole("tablist", { name: "Build pipeline" });
@@ -84,3 +156,41 @@ test("selected flow nodes gain a separate focus outline", async ({ page }) => {
   await selected.evaluate((el) => (el as HTMLElement).blur());
   await expect(selected).toHaveCSS("outline-offset", "3px");
 });
+
+for (const menu of ["Context", "Dropdown"] as const) {
+  test(`${menu} menu Delete keeps the failure foreground on keyboard focus`, async ({ page }) => {
+    await page.goto("/focus-visibility");
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+    const { failure, wash } = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--color-failure)";
+      probe.style.backgroundColor =
+        "color-mix(in oklab, var(--color-destructive) 20%, transparent)";
+      document.body.append(probe);
+      const styles = getComputedStyle(probe);
+      const result = { failure: styles.color, wash: styles.backgroundColor };
+      probe.remove();
+      return result;
+    });
+
+    const trigger = page.getByRole("button", { name: `${menu} actions` });
+    if (menu === "Context") {
+      await trigger.click({ button: "right" });
+      await expect(page.getByRole("menu")).toBeFocused();
+      await page.keyboard.press("Home");
+    } else {
+      await trigger.focus();
+      await page.keyboard.press("ArrowDown");
+    }
+    await expect(page.getByRole("menuitem", { name: "Rename" })).toBeFocused();
+    const item = page.getByRole("menuitem", { name: "Delete" });
+    await expect(item).toHaveCSS("color", failure);
+    await expect(item).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+
+    await page.keyboard.press("ArrowDown");
+    await expect(item).toBeFocused();
+    await expect(item).toHaveCSS("color", failure);
+    await expect(item.locator("svg")).toHaveCSS("color", failure);
+    await expect(item).toHaveCSS("background-color", wash);
+  });
+}

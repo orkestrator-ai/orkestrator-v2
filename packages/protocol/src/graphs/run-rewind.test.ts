@@ -14,9 +14,9 @@ import {
 
 /**
  * Two rounds of the §9.2 loop. Round 1: build → prepare → package → review →
- * has-issues (issues) → address → verify; fix is a later-only entry, skipped.
- * Round 2: fix (carried from verify@1) → prepare → package → review →
- * has-issues (clean) → verify; address is skipped.
+ * has-issues (issues) → address-findings → verify; rework is a later-only entry, skipped.
+ * Round 2: rework (carried from verify@1) → prepare → package → review →
+ * has-issues (clean) → verify; address-findings is skipped.
  */
 function twoRounds(): { run: GraphRun; artifacts: GraphArtifact[]; key: (id: string) => string } {
   const base = graphRunFixture();
@@ -54,7 +54,7 @@ function twoRounds(): { run: GraphRun; artifacts: GraphArtifact[]; key: (id: str
     return activation.outputs;
   };
   const build = add("build", 1, { ticket: ticket.id, code: target.id }, ["code", "report"]);
-  add("fix", 1, {}, [], { state: "skipped" });
+  add("rework", 1, {}, [], { state: "skipped" });
   const prepare1 = add("prepare", 1, { code: build.code! }, ["plan", "code"]);
   const package1 = add("package", 1, { plan: prepare1.plan!, code: prepare1.code! }, ["package"]);
   const review1 = add("review", 1, { package: package1.package!, ticket: ticket.id }, ["report"]);
@@ -63,30 +63,30 @@ function twoRounds(): { run: GraphRun; artifacts: GraphArtifact[]; key: (id: str
     outlet: "issues",
     outputs: { report: review1.report!, code: prepare1.code! },
   });
-  const address1 = add("address", 1, { report: review1.report!, code: prepare1.code! }, [
+  const address1 = add("address-findings", 1, { report: review1.report!, code: prepare1.code! }, [
     "code",
     "report",
   ]);
   const verify1 = add(
     "verify",
     1,
-    { ticket: ticket.id, code: address1.code!, address: address1.report! },
+    { ticket: ticket.id, code: address1.code!, addressFindings: address1.report! },
     ["verdict", "code"],
   );
-  const fix2 = add(
-    "fix",
+  const rework2 = add(
+    "rework",
     2,
     { ticket: ticket.id, feedback: verify1.verdict!, code: verify1.code! },
     ["code", "report"],
   );
-  const prepare2 = add("prepare", 2, { code: fix2.code! }, ["plan", "code"]);
+  const prepare2 = add("prepare", 2, { code: rework2.code! }, ["plan", "code"]);
   const package2 = add("package", 2, { plan: prepare2.plan!, code: prepare2.code! }, ["package"]);
   const review2 = add("review", 2, { package: package2.package!, ticket: ticket.id }, ["report"]);
   add("has-issues", 2, { report: review2.report!, code: prepare2.code! }, [], {
     outlet: "clean",
     outputs: { report: review2.report!, code: prepare2.code! },
   });
-  add("address", 2, {}, [], { state: "skipped" });
+  add("address-findings", 2, {}, [], { state: "skipped" });
   add("verify", 2, { ticket: ticket.id, code: prepare2.code! }, ["verdict", "code"]);
   const run: GraphRun = {
     ...base,
@@ -121,20 +121,20 @@ describe("graphRestartScope", () => {
     const scope = graphRestartScope(run, artifacts, key("has-issues@1"))!;
     const expected = [
       "has-issues@1",
-      "address@1",
+      "address-findings@1",
       "verify@1",
-      "fix@2",
+      "rework@2",
       "prepare@2",
       "package@2",
       "review@2",
       "has-issues@2",
-      "address@2",
+      "address-findings@2",
       "verify@2",
     ].map(key);
     expect(scope.activations).toEqual(expected);
     // The forwarded review report and prepared code belong to their producers.
     expect(scope.artifacts).toEqual(produced(artifacts, run, expected));
-    for (const kept of ["build", "prepare@1", "package@1", "review@1", "fix@1"]) {
+    for (const kept of ["build", "prepare@1", "package@1", "review@1", "rework@1"]) {
       expect(scope.activations).not.toContain(key(kept));
     }
     // The loop rewinds to the gate's iteration.
@@ -147,20 +147,26 @@ describe("graphRestartScope", () => {
     // address@2 was skipped and verify@2 read the gate's clean outlet: neither
     // consumed review@2's report, but both depend on the gate's decision.
     expect(scope.activations).toEqual(
-      ["review@2", "has-issues@2", "address@2", "verify@2"].map(key),
+      ["review@2", "has-issues@2", "address-findings@2", "verify@2"].map(key),
     );
     expect(scope.loopIterations).toEqual({});
   });
 
   test("inside a loop the later iterations go, the earlier ones and the carry sources stay", () => {
     const { run, artifacts, key } = twoRounds();
-    const scope = graphRestartScope(run, artifacts, key("fix@2"))!;
+    const scope = graphRestartScope(run, artifacts, key("rework@2"))!;
     expect(scope.activations).toEqual(
-      ["fix@2", "prepare@2", "package@2", "review@2", "has-issues@2", "address@2", "verify@2"].map(
-        key,
-      ),
+      [
+        "rework@2",
+        "prepare@2",
+        "package@2",
+        "review@2",
+        "has-issues@2",
+        "address-findings@2",
+        "verify@2",
+      ].map(key),
     );
-    // verify@1's verdict and code (fix@2's carried inputs) stay live.
+    // verify@1's verdict and code (rework@2's carried inputs) stay live.
     const verify1 = run.activations.find((activation) => activation.key === key("verify@1"))!;
     for (const id of Object.values(verify1.outputs)) expect(scope.artifacts).not.toContain(id);
     expect(scope.loopIterations).toEqual({});
@@ -169,9 +175,9 @@ describe("graphRestartScope", () => {
   test("restarting the node before the loop supersedes everything after it and rewinds the loop", () => {
     const { run, artifacts, key } = twoRounds();
     const scope = graphRestartScope(run, artifacts, key("build"))!;
-    // Every activation but the skipped fix@1 (which read nothing build made).
+    // Every activation but the skipped rework@1 (which read nothing build made).
     expect(scope.activations).toHaveLength(run.activations.length - 1);
-    expect(scope.activations).not.toContain(key("fix@1"));
+    expect(scope.activations).not.toContain(key("rework@1"));
     expect(scope.loopIterations).toEqual({ rounds: 1 });
   });
 
@@ -201,7 +207,7 @@ describe("graphRestartScope", () => {
     expect(graphRestartScope(rewound, artifacts, "nope#iter=1#attempt=1")).toBeNull();
     expect(graphRestartScope(rewound, artifacts, key("has-issues@2"))!.activations).toEqual([
       key("has-issues@2"),
-      key("address@2"),
+      key("address-findings@2"),
     ]);
   });
 
@@ -245,10 +251,12 @@ describe("restart and code-rewind blockers", () => {
 
   test("code rewind needs a quiet workspace and a live run", () => {
     const { run, key } = twoRounds();
-    expect(graphRunCodeRewindBlocker(run, key("fix@2"))).toBeUndefined();
-    expect(graphRunCodeRewindBlocker({ ...run, status: "paused" }, key("fix@2"))).toBeUndefined();
-    expect(graphRunCodeRewindBlocker({ ...run, mock: true }, key("fix@2"))).toContain("mock");
-    expect(graphRunCodeRewindBlocker({ ...run, status: "running" }, key("fix@2"))).toContain(
+    expect(graphRunCodeRewindBlocker(run, key("rework@2"))).toBeUndefined();
+    expect(
+      graphRunCodeRewindBlocker({ ...run, status: "paused" }, key("rework@2")),
+    ).toBeUndefined();
+    expect(graphRunCodeRewindBlocker({ ...run, mock: true }, key("rework@2"))).toContain("mock");
+    expect(graphRunCodeRewindBlocker({ ...run, status: "running" }, key("rework@2"))).toContain(
       "Pause the run first",
     );
     const busy: GraphRun = {
@@ -260,6 +268,6 @@ describe("restart and code-rewind blockers", () => {
           : activation,
       ),
     };
-    expect(graphRunCodeRewindBlocker(busy, key("fix@2"))).toContain("running node");
+    expect(graphRunCodeRewindBlocker(busy, key("rework@2"))).toContain("running node");
   });
 });

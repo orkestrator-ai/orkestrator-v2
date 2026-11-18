@@ -710,7 +710,7 @@ function validationHistoryRule(headRef: string, targetBranch: string): string {
 }
 
 /**
- * What the pipeline's Address stage puts in the `fix-result` it submits. The
+ * What the pipeline's Address stage puts in the `address-findings-result` it submits. The
  * result is Verify's evidence for this round (`addressFindingsReportSection`), so it
  * names the evidence for every repair and excuse. `complete` follows the
  * contract's own rule: it cannot be true while a check still fails or a
@@ -752,11 +752,11 @@ function validationAncestrySection(ancestry: ValidationAncestry | undefined): st
 
 /**
  * What Verify reads about this round's Address stage: the accepted typed
- * `fix-result`. Absent when the round had no Address stage or no result of
+ * `address-findings-result`. Absent when the round had no Address stage or no result of
  * it was accepted.
  */
 export type VerificationAddressFindingsReport = {
-  kind: "fix-result";
+  kind: "address-findings-result";
   result: PipelineAddressFindingsResult;
 };
 

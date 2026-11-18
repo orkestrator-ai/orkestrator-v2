@@ -29,7 +29,7 @@ export const COORDINATOR_REFUSAL_SURFACES = [
   "node-mail",
   /** A reply to mail from an environment on another node. */
   "node-mail-reply",
-  /** Addressing or custom-fixing a Multi Review, which starts a turn. */
+  /** Addressing a Multi Review, default or custom, which starts a turn. */
   "review-address",
   /** A build or graph control on a workflow with no environment yet. */
   "workflow-control",

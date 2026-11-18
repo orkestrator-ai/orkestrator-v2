@@ -11,11 +11,11 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00002</p>
       <h1>00002 · Replace hard-coded red and rose classes with the failure token</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-high">High</span>
         <span class="pill">Color tokens</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 6 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 6 / 6 images</span
         >
       </div>
 
@@ -74,7 +74,7 @@
           <code>border-failure/NN</code> and tints to <code>bg-failure/NN</code>. Map destructive
           fills to <code>bg-destructive</code>.
         </li>
-        <li>Leave <b>risk</b> hits alone. They are the Bypass exception.</li>
+        <li>Leave <b>risk</b> hits alone, including the Bypass and root-terminal warnings.</li>
         <li>
           Replace the red-950 banner background with a failure tint so it matches the other error
           banners.
@@ -207,53 +207,53 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Before images captured on <b>unmodified</b> code for every slot below, and committed
             under <code>design/images/00002/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass as shown under Verification.
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -261,14 +261,195 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+      <h3>Hit classification</h3>
+      <p>
+        The task search returned 125 source lines in the unmodified renderer at
+        <code>b2c91abb9</code>. Paths below are relative to <code>apps/web/src</code> and use
+        baseline line numbers. The audit covers the <code>.tsx</code> search in Scope.
       </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <b>Failure.</b> Migrated errors, invalid fields, failed and cancelled states, diff
+          removals, and the negative markers in paired decision and review views. The shared error
+          tone in <code>components/agent-mail/agent-mail-ui.ts</code> was migrated alongside its
+          consumers. Existing success styles were outside this task.
+        </li>
+        <li>
+          <b>Destructive actions.</b> Used the destructive fill for Deny and the confirmation
+          buttons. Container deletion, credential revocation, and machine or route removal use
+          failure-colored foregrounds with a destructive hover wash.
+        </li>
+        <li>
+          <b>Risk.</b> Kept Bypass, the root-terminal privilege warning, the advisory graph
+          execution tier, and the high-risk review badge.
+        </li>
+        <li>
+          <b>Identity.</b> Kept the Caution callout kind, the canvas alignment guide, Java and Ruby
+          file symbols, the usage-period marker, and the P0 severity category.
+        </li>
+      </ul>
+      <details>
+        <summary>Source lines by classification</summary>
+        <details>
+          <summary>Failure and negative outcomes (103 source lines)</summary>
+          <ul>
+            <li><code>App.tsx:919</code></li>
+            <li><code>components/agent-mail/AgentMailConversationView.tsx:269</code></li>
+            <li><code>components/agent-mail/AgentMailPanel.tsx:202, 212, 373</code></li>
+            <li><code>components/agent-mail/MailboxDeliverySettings.tsx:71</code></li>
+            <li><code>components/build-pipeline/PipelineKeyInformation.tsx:571</code></li>
+            <li><code>components/build-pipeline/key-information-tab-sections.tsx:153</code></li>
+            <li><code>components/build/BuildStepInstructionsField.tsx:60, 82</code></li>
+            <li><code>components/chat/GoalTile.tsx:77, 141</code></li>
+            <li><code>components/chat/JsonPayloadPart.tsx:45</code></li>
+            <li><code>components/chat/MailTile.tsx:112, 113</code></li>
+            <li><code>components/chat/PullRequestUpdateNotice.tsx:15</code></li>
+            <li><code>components/chat/SuborkGroup.tsx:22</code></li>
+            <li><code>components/claude/ClaudeTmuxChatTab.tsx:1344</code></li>
+            <li><code>components/docker/DockerSettings.tsx:432, 437, 447</code></li>
+            <li>
+              <code
+                >components/environments/EnvironmentSettingsDialog.tsx:176, 1117, 1121, 1156,
+                1161</code
+              >
+            </li>
+            <li><code>components/environments/StatusIndicator.tsx:24, 25</code></li>
+            <li><code>components/federation/AgentsMdApprovalDialog.tsx:384</code></li>
+            <li><code>components/graph-designer/GraphTemplateReviewPanel.tsx:64</code></li>
+            <li><code>components/graph-launch/GraphLaunchDialog.tsx:232, 273, 279, 357</code></li>
+            <li><code>components/graph-launch/GraphLaunchFields.tsx:24</code></li>
+            <li><code>components/kanban/KanbanCard.tsx:132</code></li>
+            <li><code>components/kanban/TicketSyncStrip.tsx:49</code></li>
+            <li><code>components/layout/PullRequestCheckStatus.tsx:36</code></li>
+            <li><code>components/projects/CoordinatorPanelNotices.tsx:352</code></li>
+            <li><code>components/projects/ProjectSchedulesView.tsx:97</code></li>
+            <li><code>components/review/MultiReviewLaunchDialog.tsx:601</code></li>
+            <li><code>components/review/ReviewLensField.tsx:143</code></li>
+            <li><code>components/review/ReviewValidationStatus.tsx:285</code></li>
+            <li><code>components/review/StructuredReviewReportView.tsx:674</code></li>
+            <li>
+              <code
+                >components/settings/GlobalSettings.sections.tsx:1865, 1879, 1925, 1929, 1967,
+                1970</code
+              >
+            </li>
+            <li><code>components/settings/McpSettings.tsx:371, 373</code></li>
+            <li><code>components/settings/PermissionsSettings.tsx:204</code></li>
+            <li><code>components/settings/ScheduleDialog.tsx:666</code></li>
+            <li><code>components/settings/ScheduleGraphFields.tsx:197, 251, 258</code></li>
+            <li><code>components/settings/ScheduleManager.tsx:71, 272, 495</code></li>
+            <li><code>components/settings/SelfImprovementLists.tsx:146</code></li>
+            <li><code>components/settings/SelfImprovementSettings.tsx:271</code></li>
+            <li><code>components/settings/agent/ReviewLensPresetsEditor.tsx:180</code></li>
+            <li><code>components/settings/machines/FleetUpdatePolicySection.tsx:91</code></li>
+            <li><code>components/settings/machines/MachineSettingsDialog.tsx:415</code></li>
+            <li>
+              <code>components/settings/machines/MachinesSettings.tsx:303, 304, 625, 828, 843</code>
+            </li>
+            <li><code>components/settings/machines/SshRouteDialog.tsx:142, 250</code></li>
+            <li><code>components/settings/machines/machine-ui.tsx:65</code></li>
+            <li><code>components/settings/mcp-servers/McpApplyStatus.tsx:35</code></li>
+            <li><code>components/settings/mcp-servers/McpErrorNotice.tsx:101, 106</code></li>
+            <li><code>components/settings/mcp-servers/McpServerEditor.tsx:414</code></li>
+            <li><code>components/settings/mcp-servers/McpServerForm.tsx:46, 231</code></li>
+            <li><code>components/settings/mcp-servers/McpSourceList.tsx:43, 276</code></li>
+            <li><code>components/settings/settings-config.tsx:90</code></li>
+            <li><code>components/sidebar/ServerConnectionSwitcher.tsx:456</code></li>
+            <li><code>components/terminal/DiffViewerTab.tsx:161, 504, 509, 587, 717, 753</code></li>
+            <li><code>components/terminal/FileViewerTab.tsx:758, 759</code></li>
+            <li><code>components/terminal/InitializationLogs.tsx:142, 143, 172</code></li>
+            <li><code>components/terminal/MonacoFileEditor.tsx:146, 147</code></li>
+            <li><code>components/terminal/TerminalDisconnectedBanner.tsx:28, 30, 35, 44</code></li>
+            <li><code>components/terminal/TerminalHistoryPanel.tsx:152</code></li>
+            <li><code>components/todo/TodoToolPart.tsx:152, 176</code></li>
+          </ul>
+        </details>
+        <details>
+          <summary>Destructive actions (10 source lines)</summary>
+          <ul>
+            <li><code>components/claude/ClaudeTmuxChatTab.parts.tsx:1584</code></li>
+            <li><code>components/docker/DockerSettings.tsx:525</code></li>
+            <li><code>components/settings/McpSettings.tsx:521</code></li>
+            <li>
+              <code>components/settings/machines/DeviceConnectionSection.tsx:341, 445, 516</code>
+            </li>
+            <li>
+              <code>components/settings/machines/MachineSettingsDialog.tsx:491, 503, 527</code>
+            </li>
+            <li><code>components/settings/machines/NodeRoutesSection.tsx:156</code></li>
+          </ul>
+        </details>
+        <details>
+          <summary>Risk markers (4 source lines)</summary>
+          <ul>
+            <li><code>components/chat/ComposerIconPicker.tsx:55</code></li>
+            <li><code>components/graph-launch/GraphLaunchRoleField.tsx:29</code></li>
+            <li><code>components/layout/ActionBar.view.tsx:897</code></li>
+            <li><code>components/review/StructuredReviewReportView.tsx:589</code></li>
+          </ul>
+        </details>
+        <details>
+          <summary>Identity and category colors (8 source lines)</summary>
+          <ul>
+            <li><code>components/chat/rich/RichCallout.tsx:45, 46</code></li>
+            <li><code>components/design/design-canvas-gestures.tsx:390</code></li>
+            <li><code>components/files-panel/FileIcon.tsx:82, 95, 96</code></li>
+            <li><code>components/layout/AgentInfoButton.panels.tsx:1032</code></li>
+            <li><code>components/review/StructuredReviewReportView.tsx:32</code></li>
+          </ul>
+        </details>
+      </details>
+
+      <h3>Decisions</h3>
+      <ul>
+        <li>
+          <b>One failure color.</b> Chose the existing <code>failure</code> token for foregrounds,
+          status dots, and translucent borders and washes. Keeping the original shades would
+          preserve each surface’s previous contrast and hue but would retain multiple colors for the
+          same outcome.
+        </li>
+        <li>
+          <b>Readable overlay.</b> Chose a 10% failure wash and a darkened backdrop for the terminal
+          and backend banners. A wash alone is visually lighter but allows bright content behind the
+          banner to lower text contrast.
+        </li>
+        <li>
+          <b>Destructive confirmation.</b> Deny, Forget and Remove use the existing
+          <code>destructive</code> fill with black labels. The hover and pressed fills keep 95% and
+          90% opacity to maintain at least 4.5:1 label contrast.
+        </li>
+      </ul>
+
+      <h3>What changed in each image pair</h3>
+      <p>
+        Captured the live renderer in the same isolated headless <code>design-00002</code> fixture
+        profile at 1440×900, dark theme, and 1× zoom. Each PNG crops the relevant element from the
+        desktop viewport. The before images came from the clean <code>b2c91abb9</code> checkout. The
+        profile restarted on the changed renderer with the same fixture project and environments.
+      </p>
+      <p>
+        Both runs disabled host seeding, host reachability checks, and real agent credentials. The
+        fixture used a downloaded Codex toolchain and a loopback test model.
+      </p>
+      <ul>
+        <li>
+          <b>Terminal disconnected banner.</b> Interrupting terminal startup in the browser shows
+          the real recovery banner. The red-950 surface becomes a 10% failure wash. The text, icons,
+          and borders now share the failure color. The banner appeared again on reload and Reconnect
+          recovered when the fault was lifted. The banner also fit at 390×844.
+        </li>
+        <li>
+          <b>Failed tool result.</b> A fixture Codex turn ran a local command that returned exit
+          code 7. The fixture repeated that command after the stack restart, and the collapsed row
+          rehydrated after page reload in both captures. The failure badge already used
+          <code>text-failure</code> on the baseline, so its color is identical across the pair. The
+          runtime label shows the measured duration of each invocation.
+        </li>
+        <li>
+          <b>Environment error status.</b> A failed startup with the fixture repository temporarily
+          unavailable persisted a backend <code>error</code> status. The dot on the sidebar search
+          result changed from <code>bg-red-500</code> to <code>bg-failure</code>.
+        </li>
       </ul>
 
       <footer>

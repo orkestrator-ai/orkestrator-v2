@@ -20,7 +20,7 @@ import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
-import { githubRangesSeedFile, readGithubRangesSeed } from "../src/core/github-ranges-cache";
+import { githubRangesSeedFile, readGithubRangesSeed } from "../src/core/git/github-ranges-cache";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;

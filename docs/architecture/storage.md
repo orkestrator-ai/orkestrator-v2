@@ -14,6 +14,9 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing, the native-session owner backfill |
 | `apps/backend/src/core/storage-record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
 | `apps/backend/src/core/storage-workflow-vocabulary-upgrade.ts` | The one-shot rename of stored build pipeline and Multi Review names to Rework and Address Findings (version 11) |
+| `apps/backend/src/core/storage-package-preparation-phase-upgrade.ts` | The one-shot move of stored build pipeline package preparation from Rework to its own phase (version 12) |
+| `apps/backend/src/core/storage-graph-vocabulary-upgrade.ts` | The one-shot rename of stored graph templates, runs, artifacts, workflow results and scheduled workflow actions to Rework and Address Findings names (version 13) |
+| `apps/backend/src/core/storage-coordinator-receipt-vocabulary-upgrade.ts` | The one-shot rename of stored coordinator custom Address Findings receipts (version 14) |
 | `apps/backend/src/core/storage-retired-features.ts` | The migrations that remove data of retired features (Looped Review, the OpenCode 2 preview's session record) |
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
 | `apps/backend/src/core/storage-context.ts` | `StorageContext`, the state every store shares: database handle, `loadJson`/`saveJson` routing, `updateStore`, `serialize` (with the lease order), `atomically` |
@@ -1055,6 +1058,43 @@ and `fixModel`, `fixSession`, `autoFix` and the other `fix…` fields take their
 them (phases, step kinds, authors), never in free text, and session keys are
 kept as written because transcript paths and worker mail tab ids derive from
 them. Readers have no legacy branch, and the version is the downgrade fence.
+
+Version 12 (`package-preparation-phase`,
+`storage-package-preparation-phase-upgrade.ts`) moves build pipeline package
+preparation off Rework (to-do 4740 task 4). A session labelled "Package
+Preparation Session" with phase `rework` becomes `package-preparation`, with
+the `rework` entries of its interaction transcript and a pending interaction
+resolution for it. While preparation is the pipeline's current step (its
+current session is a live preparation session, or it holds a validation run
+without a review package), `reworking` or `building` in `phase`,
+`pausedFromPhase` and the `phase` of the failure, reconnect, pending-prompt
+and active-prompt contexts becomes `preparing-package`. Session keys, restart
+and skip requests, rewinds and key information authors are left as written.
+
+Version 13 (`rename-graph-vocabulary`, `storage-graph-vocabulary-upgrade.ts`)
+renames the graph and workflow result names (to-do 4740 tasks 3 and 5): the
+result kind `fix-result` and type `fix-result@1` become
+`address-findings-result`, the role `fixer` becomes `addresser`, the prompts
+`pipeline-fix`, `fix-review-issues` and `address-review` become
+`pipeline-rework`, `address-findings` and `pipeline-address-findings`, the
+parameter `autoFix` becomes `autoAddressFindings`, the action default
+`fixReviewIssues` becomes `addressFindings`, and the built-in node ids move
+(`fix` to `rework` or `address-findings`, `address` to `address-findings`).
+It rewrites user templates and "Describe a graph" drafts, saved launch
+defaults, scheduled graph launches and workflow calls, workflow result entries
+and slots, and graph runs with their artifacts. Matching subgraph digest pins
+follow the upgraded child definitions. The migration verifies the original run,
+recomputes the plan digest and any changed artifact digests and IDs, and updates
+their references. Session keys retain the original activation key so transcripts
+and provider sessions stay attached. A run whose rewrite
+would not validate is left as it was. Project templates live in their
+repositories and are not rewritten.
+
+Version 14 (`rename-coordinator-receipt-vocabulary`,
+`storage-coordinator-receipt-vocabulary-upgrade.ts`) renames the action of
+stored coordinator receipts from `custom-fix` to `custom-address`, so a
+receipt an older build admitted is still recognised and a retry of it is
+refused rather than run again.
 
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted

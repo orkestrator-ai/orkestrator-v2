@@ -57,7 +57,10 @@ describe("pipelineRestartSlot", () => {
       kind: "review-preparation",
     });
     expect(
-      pipelineRestartSlot(pipeline, { phase: "rework", label: REVIEW_PACKAGE_SESSION_LABEL }),
+      pipelineRestartSlot(pipeline, {
+        phase: "package-preparation",
+        label: REVIEW_PACKAGE_SESSION_LABEL,
+      }),
     ).toEqual({ kind: "review-preparation" });
   });
 

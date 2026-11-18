@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_PR_MONITOR_POLICY } from "../src/core/pr-monitor-policy";
+import { DEFAULT_PR_MONITOR_POLICY } from "../src/core/git/pr-monitor-policy";
 import {
   PR1,
   PR2,

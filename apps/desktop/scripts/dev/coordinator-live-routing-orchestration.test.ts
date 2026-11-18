@@ -231,7 +231,7 @@ async function fixture(script: Script = {}) {
       messages.push({ role: "assistant", parts: [{ type: "text", content: "Looks fine." }] });
       return;
     }
-    const automation = script.reviewAutomation ? { autoFix: true, autoPr: true } : {};
+    const automation = script.reviewAutomation ? { autoAddressFindings: true, autoPr: true } : {};
     const reviewId = id("review");
     reviews.push({
       id: reviewId,
@@ -552,11 +552,11 @@ test("an investigation turned into a build fails, and the build is cancelled", a
   expect(commands.filter((item) => item.command === "cancel_build_pipeline")).toHaveLength(2);
 });
 
-test("a review launched with auto-fix and auto-PR fails, from the call and the workflow", async () => {
+test("a review launched with auto-address findings and auto-PR fails, from the call and the workflow", async () => {
   const { checks } = await run({ reviewAutomation: true });
   expect(failed(checks)).toEqual(["review-auto-actions-off"]);
   expect(checks.find((item) => item.name === "review-auto-actions-off")?.detail).toBe(
-    "requested autoFix, autoPr; workflow autoAddressFindings true, autoPr true",
+    "requested autoAddressFindings, autoPr; workflow autoAddressFindings true, autoPr true",
   );
 });
 

@@ -33,7 +33,7 @@ export function PullRequestCheckStatus({
       className={cn(
         "inline-flex shrink-0 items-center gap-1 tabular-nums",
         state === "failed"
-          ? "text-red-600 dark:text-red-400"
+          ? "text-failure"
           : state === "running"
             ? "text-amber-700 dark:text-amber-400"
             : "text-success",

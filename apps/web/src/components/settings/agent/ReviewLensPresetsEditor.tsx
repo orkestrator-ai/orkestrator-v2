@@ -177,7 +177,7 @@ export function ReviewLensPresetsEditor({
                 id={statusId}
                 className={cn(
                   "mt-1 text-[11px] leading-snug",
-                  labelError || instructionError ? "text-red-400" : "text-zinc-500",
+                  labelError || instructionError ? "text-failure" : "text-zinc-500",
                 )}
               >
                 {labelError ??

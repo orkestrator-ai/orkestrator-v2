@@ -95,8 +95,24 @@ const CANNED_RESPONSES: Record<string, unknown> = {
 
 /** Installed before the fixture renders. */
 export function installTmuxMailTilesFixture() {
+  const showApproval = new URLSearchParams(window.location.search).has("approval");
+  const responses: Record<string, unknown> = showApproval
+    ? {
+        ...CANNED_RESPONSES,
+        claude_tmux_pending_hooks: [
+          {
+            id: "write-approval",
+            kind: "PreToolUse",
+            payload: {
+              tool_name: "Write",
+              tool_input: { file_path: "/fixture/notes.md", content: "Draft notes" },
+            },
+          },
+        ],
+      }
+    : CANNED_RESPONSES;
   window.orkestrator = {
-    invoke: async <T,>(command: string) => (CANNED_RESPONSES[command] ?? null) as T,
+    invoke: async <T,>(command: string) => (responses[command] ?? null) as T,
     listen: () => () => {},
     clipboard: {
       readText: async () => "",

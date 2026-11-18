@@ -302,6 +302,8 @@ export interface BrowserPreviewResultCaptureMetadata {
    * start asked for `sampleUnstable` and both samples could be compared.
    */
   unstableRegions?: WebAnnotationRect[];
+  /** Original-image redactions in document CSS pixels, separate from the after-image masks. */
+  originalMasks?: { captureId: string | null; rects: WebAnnotationRect[] };
 }
 
 /** A region crop derived from the (possibly redacted) spooled source image at read time. */

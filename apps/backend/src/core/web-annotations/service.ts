@@ -280,11 +280,14 @@ export class WebAnnotationService {
   /** The agent tool host; it offers diffs only while `operations.resultDiffs` is on. */
   toolHost(): ReturnType<WebAnnotationResults["toolHost"]> {
     const host = this.results.toolHost();
-    if (!this.diffs.enabled) return host;
+    const diffs = this.diffs;
     return {
       ...host,
-      resultDiff: (scope, requestId, annotationId, resultCaptureId) =>
-        this.diffs.toolDiff(scope, requestId, annotationId, resultCaptureId),
+      resultDiffAvailable: async ({ environmentId }) =>
+        (await this.capabilities(environmentId)).operations.resultDiffs,
+      get resultDiff() {
+        return diffs.enabled ? diffs.toolDiff.bind(diffs) : undefined;
+      },
     };
   }
 

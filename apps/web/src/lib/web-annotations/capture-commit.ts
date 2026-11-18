@@ -16,6 +16,7 @@ import type {
 } from "@orkestrator/protocol/browser-preview";
 import {
   WEB_ANNOTATION_COMMANDS,
+  WEB_ANNOTATION_LIMITS,
   type WebAnnotationAnchor,
   type WebAnnotationCaptureInput,
   type WebAnnotationOperationReceipt,
@@ -88,11 +89,16 @@ export function mergedRedaction(
  * a backend that advertises `operations.resultDiffs` (`diffsAdvertised`).
  */
 export function resultCaptureMetadata(
-  record: Pick<BrowserPreviewPendingCapture, "result">,
+  record: Pick<BrowserPreviewPendingCapture, "result" | "masks"> &
+    Partial<Pick<BrowserPreviewPendingCapture, "imageDataUrl">>,
   diffsAdvertised = false,
 ): WebAnnotationResultCaptureMetadata {
   const meta = record.result;
   if (!meta) return {};
+  const masks = (diffsAdvertised ? record.masks : undefined) ?? meta.masks;
+  const hasMaskList = Array.isArray(masks);
+  const boundedMasks = hasMaskList ? masks.slice(0, WEB_ANNOTATION_LIMITS.redactionRegions) : [];
+  const hasMaskBudget = hasMaskList && boundedMasks.length === masks.length;
   return {
     ...(Number.isFinite(meta.zoomFactor) ? { zoomFactor: meta.zoomFactor } : {}),
     ...(Number.isFinite(meta.deviceScaleFactor)
@@ -100,11 +106,13 @@ export function resultCaptureMetadata(
       : {}),
     ...(meta.scroll ? { scroll: { x: meta.scroll.x, y: meta.scroll.y } } : {}),
     ...(meta.stability ? { stability: meta.stability } : {}),
-    ...(Array.isArray(meta.masks)
-      ? { masks: meta.masks.map((mask) => ({ source: mask.source, rect: mask.rect })) }
-      : {}),
-    ...(diffsAdvertised && Array.isArray(meta.unstableRegions)
+    ...(hasMaskList ? { masks: boundedMasks.map(({ source, rect }) => ({ source, rect })) } : {}),
+    ...(diffsAdvertised &&
+    record.imageDataUrl !== null &&
+    hasMaskBudget &&
+    Array.isArray(meta.unstableRegions)
       ? {
+          ...(meta.originalMasks ? { originalMasks: meta.originalMasks } : {}),
           unstableRegions: meta.unstableRegions.map((rect) => ({
             x: rect.x,
             y: rect.y,

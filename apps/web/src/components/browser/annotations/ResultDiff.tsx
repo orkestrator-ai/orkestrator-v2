@@ -178,6 +178,17 @@ export function ResultDiff({
             </li>
           ))}
         </ul>
+        {diff.reasons.some(({ code }) => code === "busy" || code === "timeout") && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-6 px-2 text-[11px]"
+            onClick={run}
+          >
+            Try again
+          </Button>
+        )}
       </section>
     );
   }

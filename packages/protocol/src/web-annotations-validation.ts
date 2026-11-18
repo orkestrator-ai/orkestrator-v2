@@ -521,6 +521,22 @@ export function validateWebAnnotationResultCaptureMetadata(
     if (!isAnchorResolution(value.targetResolution)) return fail("targetResolution is invalid");
     out.targetResolution = value.targetResolution;
   }
+  if (value.originalMasks !== undefined) {
+    const original = value.originalMasks;
+    if (
+      !isRecord(original) ||
+      (original.captureId !== null && !isWebAnnotationId(original.captureId)) ||
+      !Array.isArray(original.rects) ||
+      original.rects.length > 2 * WEB_ANNOTATION_LIMITS.redactionRegions ||
+      !original.rects.every(isWebAnnotationRect)
+    ) {
+      return fail("originalMasks are invalid");
+    }
+    out.originalMasks = {
+      captureId: original.captureId,
+      rects: original.rects.map(({ x, y, width, height }) => ({ x, y, width, height })),
+    };
+  }
   if (value.unstableRegions !== undefined) {
     if (
       !Array.isArray(value.unstableRegions) ||

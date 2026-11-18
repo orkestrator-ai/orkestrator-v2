@@ -119,3 +119,11 @@ export function webAnnotationAccessAllowed(
   if (mode === "disabled") return false;
   return access !== "author";
 }
+
+/** Advisory diffs follow annotation readability and the host feature flag. */
+export function resultDiffsAllowed(ctx: {
+  rolloutMode: WebAnnotationRolloutMode;
+  options: { resultDiffs?: boolean };
+}): boolean {
+  return ctx.rolloutMode !== "disabled" && ctx.options.resultDiffs !== false;
+}

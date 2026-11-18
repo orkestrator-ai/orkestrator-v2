@@ -110,6 +110,22 @@ describe("compareWebAnnotationRasters", () => {
     expect(result).toEqual({ timedOut: true });
   });
 
+  it("times out inside a large connected region after the raster scan", () => {
+    let reads = 0;
+    const result = compareWebAnnotationRasters(
+      raster(40, 30),
+      raster(40, 30, () => [0, 0, 0]),
+      {
+        cellPixels: 1,
+        minCellPixels: 1,
+        deadline: 1,
+        now: () => (++reads < 4 ? 0 : 1),
+      },
+    );
+    expect(result).toEqual({ timedOut: true });
+    expect(reads).toBe(4);
+  });
+
   it("refuses rasters of different sizes rather than resizing", () => {
     expect(() => compareWebAnnotationRasters(raster(40, 30), raster(41, 30))).toThrow(
       "same size and layout",
@@ -119,9 +135,12 @@ describe("compareWebAnnotationRasters", () => {
 
 describe("diff refusals", () => {
   it("has a fixed, content-free message for every code", () => {
-    for (const [code, message] of Object.entries(WEB_ANNOTATION_DIFF_REFUSALS)) {
+    for (const code of Object.keys(WEB_ANNOTATION_DIFF_REFUSALS) as Array<
+      keyof typeof WEB_ANNOTATION_DIFF_REFUSALS
+    >) {
+      const message = WEB_ANNOTATION_DIFF_REFUSALS[code];
       expect(message.length).toBeGreaterThan(10);
-      expect(webAnnotationDiffRefusal(code as keyof typeof WEB_ANNOTATION_DIFF_REFUSALS)).toEqual({
+      expect(webAnnotationDiffRefusal(code)).toEqual({
         code,
         message,
       });

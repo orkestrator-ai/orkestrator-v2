@@ -548,6 +548,8 @@ export interface WebAnnotationResultCaptureMetadata {
    * advisory diff (`web_annotation_result_diff`) is then refused.
    */
   unstableRegions?: WebAnnotationRect[];
+  /** Original-image redactions in document CSS pixels, separate from the after-image masks. */
+  originalMasks?: { captureId: string | null; rects: WebAnnotationRect[] };
 }
 
 /** How an after-capture relates to the evidence it is compared with. */

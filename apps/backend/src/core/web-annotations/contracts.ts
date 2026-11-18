@@ -270,6 +270,8 @@ export interface WebAnnotationToolHost {
     scope: WebAnnotationToolScope,
     report: WebAnnotationResultReportInput,
   ): Promise<WebAnnotationResult>;
+  /** Environment-specific capability, evaluated when registering agent tools. */
+  resultDiffAvailable?(scope: WebAnnotationToolScope): Promise<boolean>;
   /**
    * Advisory region diff of one annotation's latest after-capture (or the
    * named one) in the assigned request; null when none was captured yet.

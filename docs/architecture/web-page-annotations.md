@@ -720,7 +720,7 @@ and worded as evidence, "not a pass or fail"; it never resolves, reports an
 outcome or counts as a check.
 
 - **Comparable captures only** (`resultDiffPreconditions` in
-  `web-annotations/result-diff.ts`). Same route and service, viewport, scroll
+  `web-annotations/result-diff.ts`). Known and matching route and service, viewport, scroll
   (within 1 CSS px), zoom, device scale and stored image size; both captures
   complete (not stale) with a full-viewport image (a region crop's source,
   never the crop); the after-capture settled (`stability: "stable"`) and
@@ -732,19 +732,24 @@ outcome or counts as a check.
   desktop reports `resultCapture.unstableRegions`, the renderer starts a
   result capture with `sampleUnstable`; main then takes a second screenshot
   300 ms after the first (`sampleUnstableRegions` in
-  `browser-preview-capture.ts`) and compares the two unmasked samples at the
-  stored resolution, in 16 CSS px cells where any changed pixel counts
+  `browser-preview-capture.ts`) and compares the two privacy-verified samples at the
+  stored resolution after painting the union of their sensitive fields and
+  reapplied redactions on both samples, in 16 CSS px cells where any changed pixel counts
   (`unstableRegionsBetween`). The changed cells become `unstableRegions` in
   document CSS pixels (at most 32; more collapse into their bounding box). A
-  navigation, a size or scroll change between samples, unreadable pixels or a
+  failed privacy scan, navigation, a size or scroll change between samples, unreadable pixels or a
   comparison over 1 s gives no mask, which makes a later diff refuse rather
   than trust a wrong mask. The renderer forwards the mask only to a backend
   that advertises diffs, and without the flag a result capture is exactly
-  what it was before (one screenshot, no extra delay).
+  what it was before (one screenshot, no extra delay). Recapture repeats sampling
+  with the same result options. Dropping the image clears its motion mask.
 - **What is compared.** Both images are decoded with `sharp` to 8-bit RGBA.
-  Pixels under any redaction recorded with the after-capture (its own
-  sensitive fields and the original's reapplied masks) and under the unstable
-  mask are left out. A pixel changed when a channel differs by more than 24;
+  Pixels under either capture's recorded redactions and under the motion
+  mask are left out. The after-capture carries the final spool masks, including
+  edits made in the result editor. Original masks are bound to their capture
+  and projected with that image's scroll and scale. A redacted original whose
+  mask cache was lost, or a result with incomplete redaction geometry, must be
+  captured again before it can be compared. A pixel changed when a channel differs by more than 24;
   changed pixels are counted in 8 px cells, a cell needs two to count, and
   touching cells (diagonals included) form one region. The answer carries the
   changed, compared and excluded pixel counts, the changed share, up to 32
@@ -757,13 +762,13 @@ outcome or counts as a check.
   records and are checked against 4,000,000 pixels before decoding, and the
   decoder gets the same limit; at most two diffs run at once, and a third is
   answered `busy`, never queued; a slot is held until its decode actually
-  stops, even after a timeout; the whole diff, decode included, stops at 5 s
+  stops on both reads, even after one decode fails or the request times out; the whole diff, decode included, stops at 5 s
   (`timeout`). A decode failure is `decode-failed`. None of these produce a
   partial diff.
 - **Rendering.** The card outlines each region over the after-image in an
   SVG whose view box is the stored image size, so the outlines scale exactly
   with the picture, and lists what was left out. An incomparable answer lists
-  its reasons instead of any image.
+  its reasons instead of any image. Busy and timed-out comparisons can be retried in place.
 
 Decisions (from to-do 0047, retired 2026-11-18; its earlier decision record
 is `git show b2c91abb9:docs/todo/previews-and-annotations/0047-web-annotation-extensions.md`):

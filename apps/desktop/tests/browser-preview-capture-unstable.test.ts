@@ -73,12 +73,66 @@ describe("unstable-region sampling", () => {
     const harness = createHarness();
     const contents = await harness.attach();
     const scrolled = { ...contents.probe, scroll: { x: 0, y: 400 } };
-    contents.probes = [contents.probe, contents.probe, scrolled];
+    contents.probes = [contents.probe, contents.probe];
+    contents.probe = scrolled;
     const result = await pendingResult(
       harness,
       await startResult(harness, { sampleUnstable: true }),
     );
     expect(result).not.toHaveProperty("unstableRegions");
+  });
+
+  test("changing only pixels in a sensitive field produces an empty mask", async () => {
+    const harness = createHarness();
+    const contents = await harness.attach();
+    contents.probe = {
+      ...contents.probe,
+      sensitive: [{ x: 50, y: 30, width: 20, height: 10 }],
+    };
+    contents.captureBitmaps = [bitmapWith(), bitmapWith({ x: 100, y: 60, width: 40, height: 20 })];
+    const result = await pendingResult(
+      harness,
+      await startResult(harness, { sampleUnstable: true }),
+    );
+    expect(result.unstableRegions).toEqual([]);
+  });
+
+  test("an incomplete privacy scan leaves no derived motion metadata", async () => {
+    const harness = createHarness();
+    const contents = await harness.attach();
+    const incomplete = { ...contents.probe, sensitiveComplete: false };
+    contents.probes = [contents.probe, contents.probe, incomplete, incomplete];
+    const first = await pendingResult(
+      harness,
+      await startResult(harness, { sampleUnstable: true }),
+    );
+    expect(first).not.toHaveProperty("unstableRegions");
+    contents.probe = incomplete;
+    const status = await startResult(harness, { sampleUnstable: true });
+    const pending = await harness.manager.readPendingCaptureWire((status as Json).captureId);
+    expect(pending?.imageBytes).toBeNull();
+    expect(pending?.result).not.toHaveProperty("unstableRegions");
+    expect(contents.capturePage).toHaveBeenCalledTimes(3);
+  });
+
+  test("recapture samples again, and dropping its image clears the motion metadata", async () => {
+    const harness = createHarness();
+    const contents = await harness.attach();
+    const original = await startResult(harness, { sampleUnstable: true });
+    const replacement = await harness.manager.startCapture({
+      tabId: "browser-1",
+      environmentId: "env-fixture",
+      mode: "page",
+      recaptureCaptureId: (original as Json).captureId,
+    });
+    expect((await pendingResult(harness, replacement)).unstableRegions).toEqual([]);
+    expect(contents.capturePage).toHaveBeenCalledTimes(4);
+    const id = (replacement as Json).captureId;
+    await harness.manager.replacePendingCaptureImage(id, { imageDataUrl: null, manualRegions: 0 });
+    const pending = await harness.manager.readPendingCaptureWire(id);
+    expect(pending?.imageBytes).toBeNull();
+    expect(pending?.result).not.toHaveProperty("unstableRegions");
+    expect(pending?.result).not.toHaveProperty("originalMasks");
   });
 
   test("samples whose pixels cannot be read give no mask", async () => {

@@ -26,6 +26,7 @@ import {
 import { decodeBase64Png, planAssetCollection } from "./assets.js";
 import { newId, type WebAnnotationContext } from "./context.js";
 import { planMaterializedCleanup, removeMaterializedEvidence } from "./materialization.js";
+import { resultDiffsAllowed } from "./rollout.js";
 import {
   WebAnnotationServiceError,
   capacityError,
@@ -95,7 +96,7 @@ export class WebAnnotationStoreOperations {
         frameTargets: authoring,
         // Advisory region diffs read stored captures only, so they follow
         // readability, not authoring (`result-diff.ts`).
-        resultDiffs: readable && this.ctx.options.resultDiffs !== false,
+        resultDiffs: readable && resultDiffsAllowed(this.ctx),
       },
       targets: authoring ? [...WEB_ANNOTATION_SUBMITTABLE_TARGET_KINDS] : [],
       maxRequestAnnotations: dispatch ? WEB_ANNOTATION_LIMITS.briefAnnotations : 0,

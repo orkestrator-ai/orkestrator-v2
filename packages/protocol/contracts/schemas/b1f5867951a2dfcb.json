@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "sha256:7518ff020e54ed7ddafbb13360f156c2512f23b7645223d503e89622b7b46b6f",
+  "digest": "sha256:b1f5867951a2dfcbbc59757c1e522735f95195c92f88cc5f3f5f47065383ea85",
   "document": {
     "definitions": {},
     "dialect": "draft-2020-12",
@@ -62,6 +62,49 @@
           "minLength": 1,
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
           "type": "string"
+        },
+        "originalMasks": {
+          "additionalProperties": true,
+          "properties": {
+            "captureId": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rects": {
+              "items": {
+                "additionalProperties": true,
+                "properties": {
+                  "height": {
+                    "type": "number"
+                  },
+                  "width": {
+                    "type": "number"
+                  },
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  }
+                },
+                "required": ["height", "width", "x", "y"],
+                "type": "object"
+              },
+              "maxItems": 64,
+              "type": "array"
+            }
+          },
+          "required": ["captureId", "rects"],
+          "type": "object"
         },
         "provenance": {
           "not": {}

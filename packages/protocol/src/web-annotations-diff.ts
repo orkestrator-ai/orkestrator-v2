@@ -50,6 +50,7 @@ export type WebAnnotationResultDiffRefusal =
   | "stale"
   | "route"
   | "service"
+  | "unknown-page"
   | "viewport"
   | "scroll"
   | "zoom"
@@ -57,6 +58,7 @@ export type WebAnnotationResultDiffRefusal =
   | "image-size"
   | "unstable"
   | "no-unstable-mask"
+  | "missing-redaction-masks"
   | "nothing-comparable"
   | "too-large"
   | "decode-failed"
@@ -74,6 +76,7 @@ export const WEB_ANNOTATION_DIFF_REFUSALS: Readonly<
   stale: "One of the captures is stale: the page changed while it was taken.",
   route: "The captures show different pages.",
   service: "The captures come from different preview services.",
+  "unknown-page": "The page identity could not be verified for one of the captures.",
   viewport: "The captures were taken at different viewport sizes.",
   scroll: "The captures were taken at different scroll positions.",
   zoom: "The captures were taken at different zoom levels.",
@@ -81,7 +84,9 @@ export const WEB_ANNOTATION_DIFF_REFUSALS: Readonly<
   "image-size": "The stored images have different sizes; they are never resized to fit.",
   unstable: "The page had not settled when the after-capture was taken.",
   "no-unstable-mask":
-    "The after-capture has no unstable-region mask (it was taken without sampling for animation).",
+    "The after-capture has no verified motion mask. Capture the result again to sample for movement.",
+  "missing-redaction-masks":
+    "The redaction locations are incomplete. Capture the affected image again to compare it.",
   "nothing-comparable": "Masks and moving regions cover the whole image; nothing was compared.",
   "too-large": "The images are larger than the diff may decode.",
   "decode-failed": "A stored image could not be decoded.",
@@ -230,6 +235,7 @@ export function compareWebAnnotationRasters(
   );
   const maxRegions = Math.max(1, options.maxRegions ?? WEB_ANNOTATION_DIFF_LIMITS.maxRegions);
   const now = options.now ?? Date.now;
+  const expired = () => options.deadline !== undefined && now() >= options.deadline;
   const mask = exclusionMask(width, height, options.excluded ?? []);
   const cols = Math.ceil(width / cell);
   const rows = Math.ceil(height / cell);
@@ -240,13 +246,7 @@ export function compareWebAnnotationRasters(
   let excludedPixels = 0;
 
   for (let y = 0; y < height; y += 1) {
-    if (
-      options.deadline !== undefined &&
-      y % DEADLINE_CHECK_ROWS === 0 &&
-      now() > options.deadline
-    ) {
-      return { timedOut: true };
-    }
+    if (y % DEADLINE_CHECK_ROWS === 0 && expired()) return { timedOut: true };
     const rowCell = Math.floor(y / cell) * cols;
     let offset = y * width * channels;
     for (let x = 0; x < width; x += 1, offset += channels) {
@@ -269,11 +269,15 @@ export function compareWebAnnotationRasters(
     }
   }
 
+  if (expired()) return { timedOut: true };
   const visited = new Uint8Array(cols * rows);
   const components: Array<{ rect: WebAnnotationRect; changedPixels: number }> = [];
   let bounds: { x0: number; y0: number; x1: number; y1: number } | null = null;
   const stack: number[] = [];
+  let visitedCount = 0;
+  const checkCells = 1_024;
   for (let start = 0; start < cellCounts.length; start += 1) {
+    if (start % checkCells === 0 && expired()) return { timedOut: true };
     if (visited[start] === 1 || cellCounts[start]! < minCellPixels) continue;
     visited[start] = 1;
     stack.push(start);
@@ -283,6 +287,7 @@ export function compareWebAnnotationRasters(
     let cy1 = -1;
     let count = 0;
     while (stack.length > 0) {
+      if (++visitedCount % checkCells === 0 && expired()) return { timedOut: true };
       const index = stack.pop()!;
       const cx = index % cols;
       const cy = (index - cx) / cols;
@@ -325,6 +330,7 @@ export function compareWebAnnotationRasters(
   const regions = components
     .slice(0, maxRegions)
     .sort((left, right) => left.rect.y - right.rect.y || left.rect.x - right.rect.x);
+  if (expired()) return { timedOut: true };
   return {
     timedOut: false,
     changedPixels,

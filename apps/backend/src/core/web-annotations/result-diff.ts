@@ -37,6 +37,7 @@ import type {
 import { isWebAnnotationId } from "@orkestrator/protocol/web-annotations-validation";
 import type { WebAnnotationToolScope } from "./contracts.js";
 import type { WebAnnotationContext } from "./context.js";
+import { resultDiffsAllowed } from "./rollout.js";
 import { WebAnnotationServiceError, notFound } from "./service-errors.js";
 import type { WebAnnotationThreads } from "./service-threads.js";
 import type { WebAnnotationEnvironmentStore, WebAnnotationManifest } from "./storage.js";
@@ -90,6 +91,7 @@ export function resultDiffPreconditions(
     before: { width: number; height: number } | null;
     after: { width: number; height: number } | null;
   },
+  missingAsset = false,
 ): WebAnnotationResultDiffRefusal[] {
   const found = new Set<WebAnnotationResultDiffRefusal>();
   const comparison = after.comparison;
@@ -98,6 +100,10 @@ export function resultDiffPreconditions(
     if (capture.redaction.imageExcluded) found.add("image-excluded");
     else if (!fullImageAssetId(capture) || !capture.geometry?.image) found.add("no-image");
     if (capture.state !== "complete") found.add("stale");
+  }
+  if (missingAsset && !found.has("image-excluded")) found.add("no-image");
+  if (before.page.service.kind === "unknown" || after.page.service.kind === "unknown") {
+    found.add("unknown-page");
   }
   if (before.page.route !== after.page.route) found.add("route");
   if (JSON.stringify(before.page.service) !== JSON.stringify(after.page.service)) {
@@ -140,11 +146,33 @@ export function resultDiffPreconditions(
   ) {
     found.add("image-size");
   }
-  if (comparison?.stability === "unstable" || comparison?.differences.includes("unstable")) {
+  if (
+    comparison &&
+    (comparison.stability !== "stable" || comparison.differences.includes("unstable"))
+  ) {
     found.add("unstable");
   }
-  if (comparison && comparison.unstableRegions === undefined) found.add("no-unstable-mask");
+  if (comparison) {
+    if (comparison.unstableRegions === undefined || comparison.originalMasks === undefined) {
+      found.add("no-unstable-mask");
+    }
+    const originalCount = before.redaction.sensitiveRegionsMasked + before.redaction.manualRegions;
+    const resultCount = after.redaction.sensitiveRegionsMasked + after.redaction.manualRegions;
+    if (
+      originalMaskRects(before.id, comparison.originalMasks).length < originalCount ||
+      (comparison.masks?.length ?? 0) < resultCount
+    ) {
+      found.add("missing-redaction-masks");
+    }
+  }
   return REFUSAL_ORDER.filter((code) => found.has(code));
+}
+
+function originalMaskRects(
+  captureId: string,
+  masks: NonNullable<WebAnnotationCapture["comparison"]>["originalMasks"],
+): readonly WebAnnotationRect[] {
+  return masks?.captureId === captureId ? masks.rects : [];
 }
 
 /** Document CSS rectangles → pixels of an image captured at `scroll` with CSS→image `scale`. */
@@ -198,9 +226,7 @@ function withDeadline<T>(work: Promise<T>, deadline: number, now: () => number):
 
 export interface WebAnnotationResultDiffOptions {
   decode?: WebAnnotationPngDecoder;
-  limits?: Partial<
-    Pick<typeof WEB_ANNOTATION_DIFF_LIMITS, "maxPixels" | "timeoutMs" | "maxConcurrent">
-  >;
+  limits?: Partial<Record<"maxPixels" | "timeoutMs" | "maxConcurrent", number>>;
 }
 
 export class WebAnnotationResultDiffs {
@@ -213,7 +239,13 @@ export class WebAnnotationResultDiffs {
 
   /** `operations.resultDiffs` is on unless the host turned diffs off. */
   get enabled(): boolean {
-    return this.ctx.options.resultDiffs !== false;
+    return resultDiffsAllowed(this.ctx);
+  }
+
+  private assertEnabled() {
+    if (!this.enabled) {
+      throw new WebAnnotationServiceError("Advisory result diffs are not available here");
+    }
   }
 
   private limits() {
@@ -222,10 +254,9 @@ export class WebAnnotationResultDiffs {
 
   /** `web_annotation_result_diff`: the diff of one result capture against its original. */
   async diff(environmentId: string, afterCaptureId: string): Promise<WebAnnotationResultDiff> {
-    if (!this.enabled) {
-      throw new WebAnnotationServiceError("Advisory result diffs are not available here");
-    }
+    this.assertEnabled();
     const store = await this.ctx.env(environmentId);
+    this.assertEnabled();
     const manifest = store.manifest;
     if (!isWebAnnotationId(afterCaptureId) || !manifest.captures[afterCaptureId]) {
       throw notFound("Capture");
@@ -250,13 +281,15 @@ export class WebAnnotationResultDiffs {
     const afterAssetId = fullImageAssetId(after);
     const beforeAsset = beforeAssetId ? manifest.assets[beforeAssetId] : undefined;
     const afterAsset = afterAssetId ? manifest.assets[afterAssetId] : undefined;
-    const reasons = resultDiffPreconditions(before, after, {
-      before: beforeAsset ? { width: beforeAsset.width, height: beforeAsset.height } : null,
-      after: afterAsset ? { width: afterAsset.width, height: afterAsset.height } : null,
-    });
-    if ((!beforeAsset || !afterAsset) && !reasons.includes("image-excluded")) {
-      if (!reasons.includes("no-image")) reasons.push("no-image");
-    }
+    const reasons = resultDiffPreconditions(
+      before,
+      after,
+      {
+        before: beforeAsset ? { width: beforeAsset.width, height: beforeAsset.height } : null,
+        after: afterAsset ? { width: afterAsset.width, height: afterAsset.height } : null,
+      },
+      !beforeAsset || !afterAsset,
+    );
     if (reasons.length > 0) return incomparable(before.id, after.id, reasons);
     const limits = this.limits();
     const width = afterAsset!.width;
@@ -267,6 +300,7 @@ export class WebAnnotationResultDiffs {
     if (this.active >= limits.maxConcurrent) {
       return incomparable(before.id, after.id, ["busy"]);
     }
+    this.assertEnabled();
     this.active += 1;
     // The slot is held until the decode itself settles, not until the caller
     // gets its answer: a decode cannot be cancelled, so releasing on timeout
@@ -281,8 +315,9 @@ export class WebAnnotationResultDiffs {
         return decode(bytes, { maxPixels: limits.maxPixels });
       };
       let rasters: [WebAnnotationRaster, WebAnnotationRaster];
-      const work = Promise.all([read(beforeAssetId!), read(afterAssetId!)]);
-      decoding = work;
+      const reads = [read(beforeAssetId!), read(afterAssetId!)] as const;
+      decoding = Promise.allSettled(reads);
+      const work = Promise.all(reads);
       try {
         rasters = await withDeadline(work, deadline, clock);
         decoding = null;
@@ -310,7 +345,9 @@ export class WebAnnotationResultDiffs {
       const scroll = comparison.scroll ?? after.geometry!.scroll;
       const masks = comparison.masks ?? [];
       const unstable = comparison.unstableRegions ?? [];
+      const originalMasks = originalMaskRects(before.id, comparison.originalMasks);
       const excluded = [
+        ...toImageRects(originalMasks, before.geometry!.scroll, before.geometry!.image!.scale),
         ...toImageRects(
           masks.map((mask) => mask.rect),
           scroll,
@@ -347,7 +384,7 @@ export class WebAnnotationResultDiffs {
           changedPixels: region.changedPixels,
         })),
         truncatedRegions: compared.truncatedRegions,
-        excluded: { masks: masks.length, unstableRegions: unstable.length },
+        excluded: { masks: originalMasks.length + masks.length, unstableRegions: unstable.length },
         tolerance: WEB_ANNOTATION_DIFF_LIMITS.channelTolerance,
       };
     } catch (error) {
@@ -375,6 +412,7 @@ export class WebAnnotationResultDiffs {
     annotationId: string,
     resultCaptureId?: string,
   ): Promise<WebAnnotationResultDiff | null> {
+    this.assertEnabled();
     const store = await this.ctx.env(scope.environmentId);
     const manifest = store.manifest;
     const request = isWebAnnotationId(requestId) ? manifest.requests[requestId] : undefined;
@@ -390,6 +428,7 @@ export class WebAnnotationResultDiffs {
       request.resultIds,
       annotationId,
     );
+    this.assertEnabled();
     const chosen =
       resultCaptureId === undefined
         ? captureIds.at(-1)

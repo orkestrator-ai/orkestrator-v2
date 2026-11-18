@@ -111,9 +111,15 @@ function seed() {
     currentCaptureId: "capture-element",
     requestIds: [request.id],
   });
+  backend.assets.set("after-image", "iVBORw0KGgo=");
   backend.captures.set(
     "after-1",
-    fixtureCapture("page", { id: "after-1", annotationId: "annotation-1", comparison: COMPARISON }),
+    fixtureCapture("page", {
+      id: "after-1",
+      annotationId: "annotation-1",
+      comparison: COMPARISON,
+      assetIds: ["after-image"],
+    }),
   );
   seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-1" });
 }
@@ -168,6 +174,16 @@ describe("advisory result diff", () => {
     expect(within(panel).getByText("1 changed region, 0.2% of the compared area.")).toBeTruthy();
     expect(within(panel).getByText("Left out: 1 redaction and 2 moving regions.")).toBeTruthy();
     expect(within(panel).getByText(/only you resolve the note/)).toBeTruthy();
+    const overlay = await within(panel).findByRole("img", { name: /1 changed region outlined/ });
+    expect(overlay.getAttribute("viewBox")).toBe("0 0 1280 800");
+    expect(overlay.querySelector("image")?.getAttribute("href")).toBeTruthy();
+    const region = overlay.querySelector("[data-diff-region]")!;
+    expect(["x", "y", "width", "height"].map((key) => region.getAttribute(key))).toEqual([
+      "640",
+      "480",
+      "64",
+      "32",
+    ]);
   });
 
   test("explains why captures cannot be compared instead of showing a diff", async () => {
@@ -198,6 +214,27 @@ describe("advisory result diff", () => {
     ).toBeTruthy();
     expect(within(panel).getByText(/no unstable-region mask/)).toBeTruthy();
     expect(within(panel).queryByText(/changed region/) === null).toBe(true);
+  });
+
+  test.each(["busy", "timeout"] as const)("retries a %s result on the same card", async (code) => {
+    backend.capabilities = fixtureCapabilities({ resultDiffs: true });
+    let calls = 0;
+    const refusal: WebAnnotationResultDiff = {
+      status: "incomparable",
+      advisory: true,
+      beforeCaptureId: "capture-element",
+      afterCaptureId: "after-1",
+      reasons: [{ code, message: "Try again shortly." }],
+    };
+    backend.overrides.set("web_annotation_result_diff", () => ({
+      diff: ++calls === 1 ? refusal : COMPARED,
+    }));
+    seed();
+    renderInAppCommandScope(<AnnotationHarness />);
+    fireEvent.click(await screen.findByRole("button", { name: "Show what changed (advisory)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("1 changed region, 0.2% of the compared area.")).toBeTruthy();
+    expect(diffCalls()).toHaveLength(2);
   });
 
   test("a failed request can be retried", async () => {

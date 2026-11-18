@@ -141,6 +141,7 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
     "masks",
     "targetResolution",
     // Added with `operations.resultDiffs` (to-do 0047 (retired) task 2), optional.
+    "originalMasks",
     "unstableRegions",
   ],
   web_annotation_result_diff: ["environmentId", "captureId"],

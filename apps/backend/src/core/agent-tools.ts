@@ -982,11 +982,14 @@ async function createAgentToolServer(
     );
   }
   if (annotationTools) {
+    const annotationScope = { environmentId: scope.environmentId, tabId: scope.tabId ?? null };
+    const diffAdvertised = await annotationTools.host.resultDiffAvailable?.(annotationScope);
     registerWebAnnotationTools(
       server,
       annotationTools.host,
-      { environmentId: scope.environmentId, tabId: scope.tabId ?? null },
+      annotationScope,
       annotationTools.limiter,
+      diffAdvertised,
     );
   }
 

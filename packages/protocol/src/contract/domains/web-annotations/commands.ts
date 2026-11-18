@@ -871,6 +871,14 @@ export const webAnnotationResultCaptureCommand = defineCommand({
     targetResolution: optional(Schema.Unknown),
     // The unstable-region mask (`operations.resultDiffs`); bounds-checked by
     // the service like the other metadata.
+    originalMasks: optional(
+      Schema.Struct({
+        captureId: Schema.NullOr(Id),
+        rects: Schema.Array(
+          Schema.Struct({ x: Coordinate, y: Coordinate, width: Coordinate, height: Coordinate }),
+        ).check(Schema.isMaxLength(2 * WEB_ANNOTATION_LIMITS.redactionRegions)),
+      }),
+    ),
     unstableRegions: optional(
       Schema.Array(
         Schema.Struct({ x: Coordinate, y: Coordinate, width: Coordinate, height: Coordinate }),

@@ -5,10 +5,12 @@
  * with reasons. The capability gates the command and the agent tool option.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { deflateSync } from "node:zlib";
 import type {
   WebAnnotationCaptureInput,
   WebAnnotationGeometry,
+  WebAnnotationRolloutMode,
   WebAnnotationResultCaptureMetadata,
 } from "@orkestrator/protocol/web-annotations";
 import {
@@ -93,12 +95,21 @@ async function stage(service: WebAnnotationService, bytes: Buffer): Promise<stri
 }
 
 /** A note whose original capture shows `blocks`, sent as request `req-1`. */
-async function noteWithRequest(service: WebAnnotationService, blocks: Rect[] = []) {
+async function noteWithRequest(
+  service: WebAnnotationService,
+  blocks: Rect[] = [],
+  capture: Partial<WebAnnotationCaptureInput> = {},
+) {
   const assetId = await stage(service, png(blocks));
   const receipt = await service.create({
     environmentId: ENV_A,
     operationId: "op-note",
-    capture: { ...fixtureCaptureInput("element"), geometry: geometry(), assetIds: [assetId] },
+    capture: {
+      ...fixtureCaptureInput("element"),
+      geometry: geometry(),
+      assetIds: [assetId],
+      ...capture,
+    },
     body: "Add a badge next to Save.",
   });
   const { annotation } = await service.get(ENV_A, receipt.annotationId);
@@ -131,6 +142,7 @@ const STABLE: WebAnnotationResultCaptureMetadata = {
   stability: "stable",
   masks: [],
   unstableRegions: [],
+  originalMasks: { captureId: null, rects: [] },
 };
 
 let resultCount = 0;
@@ -226,6 +238,62 @@ describe("advisory result diffs", () => {
     });
   });
 
+  test("projects original redactions from the original scroll and refuses a cache miss", async () => {
+    const service = await diffOptionHarness();
+    const original = await noteWithRequest(service, [{ x: 0, y: 0, w: 8, h: 8 }], {
+      redaction: { ...fixtureCaptureInput().redaction, sensitiveRegionsMasked: 1 },
+    });
+    const missing = await captureResult(service, {
+      metadata: {
+        ...STABLE,
+        // A result-side mask cannot supply missing original geometry.
+        masks: [{ source: "sensitive-field", rect: { x: 30, y: 140, width: 8, height: 8 } }],
+      },
+    });
+    expect(await service.resultDiff(ENV_A, missing.captureId)).toMatchObject({
+      reasons: [{ code: "missing-redaction-masks" }],
+    });
+    const known = await captureResult(service, {
+      capture: { geometry: { ...geometry(), scroll: { x: 0, y: 121 } } },
+      metadata: {
+        ...STABLE,
+        scroll: { x: 0, y: 121 },
+        originalMasks: {
+          captureId: original.originalCaptureId,
+          rects: [{ x: 0, y: 120, width: 8, height: 8 }],
+        },
+      },
+    });
+    expect(await service.resultDiff(ENV_A, known.captureId)).toMatchObject({
+      status: "compared",
+      changedPixels: 0,
+      excludedPixels: 64,
+    });
+  });
+
+  test("refuses unverified identity and stability before decoding", async () => {
+    const service = await diffOptionHarness({
+      resultDiffOptions: {
+        decode: async () => {
+          throw new Error("must not decode");
+        },
+      },
+    });
+    const page = {
+      ...fixtureCaptureInput().page,
+      route: "/",
+      service: { kind: "unknown" as const },
+    };
+    await noteWithRequest(service, [], { page });
+    const { captureId } = await captureResult(service, {
+      capture: { page },
+      metadata: { ...STABLE, stability: undefined },
+    });
+    expect(await service.resultDiff(ENV_A, captureId)).toMatchObject({
+      reasons: [{ code: "unknown-page" }, { code: "unstable" }],
+    });
+  });
+
   test("refuses captures that cannot be compared, naming every reason", async () => {
     const service = await diffOptionHarness();
     await noteWithRequest(service);
@@ -241,9 +309,7 @@ describe("advisory result diffs", () => {
       "image-size",
       "no-unstable-mask",
     ]);
-    expect(diff.status === "incomparable" && diff.reasons[2]!.message).toContain(
-      "unstable-region mask",
-    );
+    expect(diff.status === "incomparable" && diff.reasons[2]!.message).toContain("motion mask");
   });
 
   test("refuses an unsettled page, another scroll position and a text-only capture", async () => {
@@ -317,6 +383,44 @@ describe("advisory result diffs", () => {
     });
   });
 
+  test("a fast decode failure keeps the slot until its sibling settles", async () => {
+    const pending = Promise.withResolvers<WebAnnotationRaster>();
+    const siblingStarted = Promise.withResolvers<void>();
+    let reads = 0;
+    const service = await diffOptionHarness({
+      resultDiffOptions: {
+        limits: { maxConcurrent: 1 },
+        decode: async () => {
+          reads += 1;
+          if (reads === 1) throw new Error("corrupt");
+          if (reads === 2) siblingStarted.resolve();
+          return pending.promise;
+        },
+      },
+    });
+    await noteWithRequest(service);
+    const { captureId } = await captureResult(service);
+    expect(await service.resultDiff(ENV_A, captureId)).toMatchObject({
+      reasons: [{ code: "decode-failed" }],
+    });
+    expect(await service.resultDiff(ENV_A, captureId)).toMatchObject({
+      reasons: [{ code: "busy" }],
+    });
+    await siblingStarted.promise;
+    pending.resolve({
+      width: WIDTH,
+      height: HEIGHT,
+      channels: 4,
+      data: new Uint8Array(WIDTH * HEIGHT * 4),
+    });
+    // Let the settled read and the slot's cleanup microtask finish.
+    await Bun.sleep(0);
+    expect(await service.resultDiff(ENV_A, captureId)).toMatchObject({
+      status: "compared",
+    });
+    expect(reads).toBe(4);
+  });
+
   test("stops at the deadline and refuses diffs past the concurrency limit", async () => {
     const pending = Promise.withResolvers<WebAnnotationRaster>();
     const service = await diffOptionHarness({
@@ -347,6 +451,19 @@ describe("advisory result diffs", () => {
 });
 
 describe("result diff preconditions", () => {
+  test("missing assets are ordered with the other preconditions", async () => {
+    const service = await diffOptionHarness();
+    const { originalCaptureId } = await noteWithRequest(service);
+    const { captureId } = await captureResult(service, { capture: { geometry: geometry(60) } });
+    const original = await service.capture(ENV_A, originalCaptureId);
+    const result = await service.capture(ENV_A, captureId);
+    expect(resultDiffPreconditions(original, result, { before: null, after: null }, true)).toEqual([
+      "no-image",
+      "viewport",
+      "image-size",
+    ]);
+  });
+
   test("a route or service difference is refused even without recorded differences", async () => {
     const service = await diffOptionHarness();
     await noteWithRequest(service);
@@ -402,6 +519,75 @@ function registerTools(service: WebAnnotationService) {
 }
 
 describe("the agent's diff option", () => {
+  test("follows live rollout changes on an installed tab-scoped tool host", async () => {
+    let mode: WebAnnotationRolloutMode = "enabled";
+    const service = await diffOptionHarness({ rolloutMode: () => mode });
+    const { annotationId } = await noteWithRequest(service);
+    await captureResult(service);
+    const host = service.toolHost();
+    const scope = { environmentId: ENV_A, tabId: fixtureDestination.tabId };
+    const limiter = new WebAnnotationToolLimiter();
+    // Register once to exercise calls that already have the old schema.
+    const makeServer = () => {
+      const server = new McpServer({ name: "annotation-test", version: "1.0.0" });
+      registerWebAnnotationTools(server, host, scope, limiter);
+      return server;
+    };
+    const existing = makeServer();
+    const registered = createMcpHandler(() => existing, { legacy: "stateless" });
+    const fresh = createMcpHandler(makeServer, { legacy: "stateless" });
+    const rpc = async (
+      handler: typeof registered,
+      method: string,
+      params?: Record<string, unknown>,
+    ) => {
+      const response = await handler.fetch(
+        new Request("http://localhost/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        }),
+      );
+      const body = await response.text();
+      const json = body.startsWith("{")
+        ? body
+        : body
+            .split("\n")
+            .find((line) => line.startsWith("data: "))
+            ?.slice(6);
+      return JSON.parse(json ?? "{}");
+    };
+    try {
+      mode = "disabled";
+      expect((await service.capabilities(ENV_A)).operations.resultDiffs).toBe(false);
+      const denied = await rpc(registered, "tools/call", {
+        name: "get_annotation_evidence",
+        arguments: { requestId: "req-1", annotationId, diff: true },
+      });
+      expect(denied.result).toMatchObject({ isError: true });
+      expect(denied.result.structuredContent).toMatchObject({ error: { code: "unavailable" } });
+      const listed = await rpc(fresh, "tools/list");
+      const evidence = listed.result.tools.find(
+        (tool: { name: string }) => tool.name === "get_annotation_evidence",
+      );
+      expect(evidence.inputSchema.properties).not.toHaveProperty("diff");
+      mode = "read-only";
+      const enabled = await rpc(fresh, "tools/call", {
+        name: "get_annotation_evidence",
+        arguments: { requestId: "req-1", annotationId, diff: true },
+      });
+      expect(enabled.result.structuredContent).toMatchObject({
+        ok: true,
+        diff: { status: "compared" },
+      });
+    } finally {
+      await Promise.all([registered.close(), fresh.close()]);
+    }
+  });
+
   test("returns the advisory diff of the latest after-capture, or says there is none", async () => {
     const service = await diffOptionHarness();
     const { annotationId } = await noteWithRequest(service);

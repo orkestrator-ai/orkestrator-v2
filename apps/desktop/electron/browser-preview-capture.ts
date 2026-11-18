@@ -123,6 +123,7 @@ export type CaptureStoreLike = Pick<
   | "create"
   | "list"
   | "readWire"
+  | "readRecapture"
   | "replaceImage"
   | "acknowledge"
   | "discard"
@@ -171,6 +172,7 @@ interface CaptureSession {
   inFlight: Promise<void> | null;
   timer: ReturnType<typeof setTimeout> | null;
   purpose: BrowserPreviewCapturePurpose;
+  originalCaptureId: string | null;
   /** Result captures: masks of the original capture, in document CSS pixels. */
   resultMasks: BrowserPreviewCaptureMask[];
   /** Result captures: sample twice for the unstable-region mask. */
@@ -345,8 +347,10 @@ export class BrowserPreviewCaptureSessions {
     let annotationId = input.annotationId ?? null;
     let initialTarget: Record<string, unknown> | null = null;
     let recaptureOf: string | null = null;
+    let purpose = input.purpose ?? "note";
+    let previousResult: Awaited<ReturnType<typeof store.readRecapture>> = null;
     if (input.recaptureCaptureId) {
-      const previous = await store.readWire(input.recaptureCaptureId);
+      const previous = await store.readRecapture(input.recaptureCaptureId);
       if (!previous) {
         return this.error(
           input.tabId,
@@ -359,15 +363,19 @@ export class BrowserPreviewCaptureSessions {
       mode = previous.descriptor.mode;
       environmentId = previous.descriptor.environmentId;
       annotationId = previous.descriptor.annotationId;
-      initialTarget = initialTargetFor(previous.capture.target);
+      initialTarget = initialTargetFor(previous.target);
+      purpose = previous.descriptor.purpose;
+      previousResult = previous;
     }
     if (!(await store.hasCapacity(input.tabId, recaptureOf ? { excluding: recaptureOf } : {}))) {
       return this.error(input.tabId, null, "spool-full");
     }
-    const purpose = input.purpose ?? "note";
+    const originalCaptureId =
+      previousResult?.resultRecapture?.originalCaptureId ?? input.result?.originalCaptureId ?? null;
     let resultMasks: BrowserPreviewCaptureMask[] = [];
     if (purpose === "result") {
       resultMasks =
+        previousResult?.resultRecapture?.masks ??
         input.result?.masks ??
         (input.result?.originalCaptureId
           ? ((await store.masksFor(input.result.originalCaptureId)) ?? [])
@@ -386,8 +394,11 @@ export class BrowserPreviewCaptureSessions {
       inFlight: null,
       timer: null,
       purpose,
+      originalCaptureId,
       resultMasks,
-      sampleUnstable: purpose === "result" && input.result?.sampleUnstable === true,
+      sampleUnstable:
+        purpose === "result" &&
+        (previousResult?.resultRecapture?.sampleUnstable ?? input.result?.sampleUnstable) === true,
       recaptureOf,
     };
     this.sessions.set(input.tabId, session);
@@ -579,13 +590,6 @@ export class BrowserPreviewCaptureSessions {
       const stability: "stable" | "unstable" =
         settled === "stable" && !outcome.staleReason ? "stable" : "unstable";
       const staleReason = isResult && layoutOnly ? null : outcome.staleReason;
-      // Sampled on the unmasked screenshot; only geometry is kept.
-      const unstableRegions =
-        isResult && session.sampleUnstable && outcome.image && !outcome.staleReason
-          ? await this.sampleUnstableRegions(session, outcome.image, view)
-          : null;
-      if (this.sessions.get(session.tabId) !== session) return;
-
       let png: { png: Buffer; width: number; height: number; reduced: boolean } | null = null;
       let unmaskable = false;
       const painted: BrowserPreviewCaptureMask[] = [];
@@ -624,6 +628,11 @@ export class BrowserPreviewCaptureSessions {
           };
         }
       }
+      const unstableRegions =
+        png && session.sampleUnstable && outcome.image && outcome.probe && !outcome.staleReason
+          ? await this.sampleUnstableRegions(session, outcome.image, outcome.probe, url, zoomFactor)
+          : null;
+      if (this.sessions.get(session.tabId) !== session) return;
       const scale = png ? png.width / view.viewport.width : null;
       const geometry: WebAnnotationGeometry = {
         viewport: { ...view.viewport },
@@ -671,7 +680,15 @@ export class BrowserPreviewCaptureSessions {
             scroll: { ...view.scroll },
             stability,
             masks: painted,
-            ...(unstableRegions ? { unstableRegions } : {}),
+            ...(unstableRegions
+              ? {
+                  unstableRegions,
+                  originalMasks: {
+                    captureId: session.originalCaptureId,
+                    rects: session.resultMasks.map(({ rect }) => rect),
+                  },
+                }
+              : {}),
           }
         : undefined;
       if (this.sessions.get(session.tabId) !== session) return;
@@ -685,7 +702,16 @@ export class BrowserPreviewCaptureSessions {
         image: png,
         purpose: session.purpose,
         ...(painted.length > 0 && png ? { masks: painted } : {}),
-        ...(result ? { result } : {}),
+        ...(result
+          ? {
+              result,
+              resultRecapture: {
+                originalCaptureId: session.originalCaptureId,
+                masks: session.resultMasks,
+                sampleUnstable: session.sampleUnstable,
+              },
+            }
+          : {}),
         ...(session.recaptureOf ? { replaces: session.recaptureOf } : {}),
       });
       if (this.sessions.get(session.tabId) !== session) {
@@ -721,7 +747,9 @@ export class BrowserPreviewCaptureSessions {
   private async sampleUnstableRegions(
     session: CaptureSession,
     first: CaptureImageLike,
-    view: Viewport,
+    firstProbe: Probe,
+    url: string,
+    zoomFactor: number,
   ): Promise<WebAnnotationRect[] | null> {
     const delay = this.options.unstableSampleDelayMs ?? UNSTABLE_SAMPLE_DELAY_MS;
     await new Promise<void>((resolve) => {
@@ -738,34 +766,35 @@ export class BrowserPreviewCaptureSessions {
     ) {
       return null;
     }
-    const urlBefore = session.contents.getURL();
-    let second: CaptureImageLike;
-    try {
-      second = await session.contents.capturePage();
-    } catch {
-      return null;
-    }
-    const probe = parseCaptureProbe(
-      await runInPage(session.contents, browserPreviewCaptureProbeScript(session.captureId)).catch(
-        () => null,
-      ),
-      session,
-    );
-    const current = this.options.preview(session.tabId);
+    const second = await this.coherentCapture(session).catch(() => null);
     if (
-      !probe ||
-      !current ||
-      current.generation !== session.generation ||
+      !second?.image ||
+      !second.probe ||
+      !second.privacyVerified ||
+      second.staleReason ||
       session.contents.isDestroyed() ||
-      session.contents.getURL() !== urlBefore ||
-      probe.viewport.width !== view.viewport.width ||
-      probe.viewport.height !== view.viewport.height ||
-      probe.scroll.x !== view.scroll.x ||
-      probe.scroll.y !== view.scroll.y
+      session.contents.getURL() !== url ||
+      (session.contents.getZoomFactor?.() ?? 1) !== zoomFactor ||
+      second.probe.viewport.width !== firstProbe.viewport.width ||
+      second.probe.viewport.height !== firstProbe.viewport.height ||
+      second.probe.devicePixelRatio !== firstProbe.devicePixelRatio ||
+      second.probe.scroll.x !== firstProbe.scroll.x ||
+      second.probe.scroll.y !== firstProbe.scroll.y
     ) {
       return null;
     }
-    return unstableRegionsBetween(first, second, view.viewport, view.scroll, this.now);
+    const { viewport, scroll } = firstProbe;
+    // Mask the union on both frames before any resize can blend private pixels
+    // into their neighbours. The same geometry is used on each frame.
+    const rects = [
+      ...firstProbe.sensitive,
+      ...second.probe.sensitive,
+      ...masksInViewport(session.resultMasks, scroll, viewport).map(({ rect }) => rect),
+    ];
+    const a = maskCaptureImage(first, rects, viewport, this.options.nativeImage);
+    const b = maskCaptureImage(second.image, rects, viewport, this.options.nativeImage);
+    if (rects.length > 0 && (!a.masked || !b.masked)) return null;
+    return unstableRegionsBetween(a.image, b.image, viewport, scroll, this.now);
   }
 
   /** Align the target with the pixels: use the pre-capture rect and derive region image coordinates. */

@@ -317,6 +317,7 @@ export function registerWebAnnotationTools(
   host: WebAnnotationToolHost,
   scope: WebAnnotationToolScope,
   limiter: WebAnnotationToolLimiter,
+  diffAdvertised = true,
 ): void {
   server.registerTool(
     "get_annotation_request",
@@ -354,7 +355,7 @@ export function registerWebAnnotationTools(
 
   // The diff option exists only while the backend advertises
   // `operations.resultDiffs` (the host then offers `resultDiff`).
-  const resultDiff = host.resultDiff?.bind(host);
+  const resultDiff = diffAdvertised ? host.resultDiff?.bind(host) : undefined;
   const evidenceWithDiff = strictObject({
     requestId: idSchema,
     annotationId: idSchema,

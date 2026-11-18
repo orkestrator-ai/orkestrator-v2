@@ -65,6 +65,12 @@ describe("result capture commit", () => {
     };
     expect(resultCaptureMetadata(record)).not.toHaveProperty("unstableRegions");
     expect(resultCaptureMetadata(record, false)).not.toHaveProperty("unstableRegions");
+    const manual = { source: "manual" as const, rect: { x: 1, y: 120, width: 10, height: 10 } };
+    expect(resultCaptureMetadata({ ...record, masks: [manual] }, true).masks).toEqual([manual]);
+    expect(resultCaptureMetadata({ ...record, masks: [manual] }, false).masks).toEqual([]);
+    expect(resultCaptureMetadata({ ...record, imageDataUrl: null }, true)).not.toHaveProperty(
+      "unstableRegions",
+    );
     expect(resultCaptureMetadata(record, true).unstableRegions).toEqual([
       { x: 48, y: 136, width: 32, height: 32 },
     ]);

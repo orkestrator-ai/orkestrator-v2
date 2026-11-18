@@ -145,6 +145,12 @@ export interface BrowserPreviewCaptureStoreOptions {
   onChange?: (change: BrowserPreviewCaptureStoreChange) => void;
 }
 
+interface ResultRecaptureOptions {
+  originalCaptureId: string | null;
+  masks: BrowserPreviewCaptureMask[];
+  sampleUnstable: boolean;
+}
+
 export interface BrowserPreviewCaptureCreateInput {
   captureId: string;
   tabId: string;
@@ -157,6 +163,7 @@ export interface BrowserPreviewCaptureCreateInput {
   masks?: BrowserPreviewCaptureMask[];
   purpose?: BrowserPreviewCapturePurpose;
   result?: BrowserPreviewResultCaptureMetadata;
+  resultRecapture?: ResultRecaptureOptions;
   responsive?: BrowserPreviewResponsiveMember;
   /**
    * Pending capture this one replaces. It is discarded in the same serialized
@@ -174,6 +181,7 @@ interface SpoolRecord {
   imageRevision: number;
   masks?: BrowserPreviewCaptureMask[];
   result?: BrowserPreviewResultCaptureMetadata;
+  resultRecapture?: ResultRecaptureOptions;
 }
 
 interface RememberedMasks {
@@ -211,7 +219,23 @@ function isResultMetadata(value: unknown): value is BrowserPreviewResultCaptureM
     Number.isFinite(scroll.y) &&
     (value.stability === "stable" || value.stability === "unstable") &&
     isMaskList(value.masks) &&
-    (value.unstableRegions === undefined || isUnstableRegionList(value.unstableRegions))
+    (value.unstableRegions === undefined || isUnstableRegionList(value.unstableRegions)) &&
+    (value.originalMasks === undefined ||
+      (isRecord(value.originalMasks) &&
+        (value.originalMasks.captureId === null ||
+          isWebAnnotationId(value.originalMasks.captureId)) &&
+        Array.isArray(value.originalMasks.rects) &&
+        value.originalMasks.rects.length <= MAX_CAPTURE_MASKS &&
+        value.originalMasks.rects.every(isWebAnnotationRect)))
+  );
+}
+
+function isResultRecaptureOptions(value: unknown): value is ResultRecaptureOptions {
+  return (
+    isRecord(value) &&
+    (value.originalCaptureId === null || isWebAnnotationId(value.originalCaptureId)) &&
+    isMaskList(value.masks) &&
+    typeof value.sampleUnstable === "boolean"
   );
 }
 
@@ -516,7 +540,8 @@ export class BrowserPreviewCaptureStore {
         parsed.descriptor.captureId !== captureId ||
         !validateWebAnnotationCaptureInput(parsed.capture).ok ||
         (parsed.masks !== undefined && !isMaskList(parsed.masks)) ||
-        (parsed.result !== undefined && !isResultMetadata(parsed.result))
+        (parsed.result !== undefined && !isResultMetadata(parsed.result)) ||
+        (parsed.resultRecapture !== undefined && !isResultRecaptureOptions(parsed.resultRecapture))
       ) {
         return null;
       }
@@ -665,6 +690,7 @@ export class BrowserPreviewCaptureStore {
         capture: input.capture,
         ...(input.masks && input.masks.length > 0 ? { masks: input.masks } : {}),
         ...(input.result ? { result: input.result } : {}),
+        ...(input.resultRecapture ? { resultRecapture: input.resultRecapture } : {}),
         descriptor: {
           captureId: input.captureId,
           tabId: input.tabId,
@@ -739,6 +765,22 @@ export class BrowserPreviewCaptureStore {
       return Array.from(this.records.values())
         .sort((left, right) => right.sequence - left.sequence)
         .map((record) => ({ ...record.descriptor }));
+    });
+  }
+
+  /** Read only the selection and options needed to recapture a pending image. */
+  async readRecapture(captureId: string) {
+    if (!isBrowserPreviewCaptureId(captureId)) return null;
+    return this.afterReady(async () => {
+      await this.sweepLocked();
+      const record = this.records.get(captureId);
+      return record
+        ? structuredClone({
+            descriptor: record.descriptor,
+            target: record.capture.target,
+            resultRecapture: record.resultRecapture,
+          })
+        : null;
     });
   }
 
@@ -858,7 +900,16 @@ export class BrowserPreviewCaptureStore {
         ),
         imageExcluded: image === null,
       };
-      const masks = [...(record.masks ?? []), ...manualMasks].slice(0, MAX_CAPTURE_MASKS);
+      const allMasks = [...(record.masks ?? []), ...manualMasks];
+      const masks = allMasks.slice(0, MAX_CAPTURE_MASKS);
+      const result = record.result && { ...record.result };
+      if (
+        result &&
+        (!image || added !== manualMasks.length || allMasks.length > MAX_CAPTURE_MASKS)
+      ) {
+        delete result.unstableRegions;
+        delete result.originalMasks;
+      }
       const validation = validateWebAnnotationCaptureInput(capture);
       if (!validation.ok) throw new BrowserPreviewCaptureSpoolError("invalid", validation.error);
       const imageRevision = image ? record.imageRevision + 1 : record.imageRevision;
@@ -870,6 +921,7 @@ export class BrowserPreviewCaptureStore {
         imageFile,
         capture,
         ...(masks.length > 0 ? { masks } : {}),
+        ...(result ? { result } : {}),
         descriptor: {
           ...record.descriptor,
           image: image

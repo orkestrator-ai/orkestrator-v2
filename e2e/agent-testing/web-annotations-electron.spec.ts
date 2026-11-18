@@ -66,6 +66,7 @@ import {
   resolveRuntimeProfile,
   type RuntimeProfile,
 } from "../../apps/desktop/electron/runtime-profile";
+import type { OrkestratorElectronApi } from "../../apps/desktop/electron/preload-api";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { longText } from "../../test-fixtures/agent-project/annotation-app/page";
@@ -3048,6 +3049,124 @@ async function captureResult(
     targetMatch: stored.comparison?.targetMatch ?? null,
   };
 }
+
+test("native result recapture compares real screenshots and excludes editor redactions", async () => {
+  test.setTimeout(90_000);
+  await navigate(ROUTE_VARIANTS.motion);
+  const banner = `[data-testid="${TEST_IDS.animatedBanner}"]`;
+  // Keep the fixture animation within a fixed box, so it does not move the
+  // selected content or undermine the layout settle check.
+  await inPreview(`(() => {
+    const css = document.createElement("style");
+    css.textContent = ${JSON.stringify(`${banner} { animation: none !important; background: #fff; }`)};
+    css.id = "diff-fixture-style";
+    document.head.append(css);
+    return true;
+  })()`);
+  await preview("startCapture", {
+    tabId: TAB_ID,
+    mode: "page",
+    environmentId: s().environmentId,
+  });
+  const originalPending = await awaitCaptureEnd(TAB_ID);
+  if (originalPending.status !== "captured") throw new Error("Original capture failed");
+  const original = await saveCapture(originalPending.pending.captureId, "Compare the fixture.");
+
+  const held = await heldRequest(original.annotationId);
+  try {
+    const started = await preview<BrowserPreviewSelectionStatus>("startCapture", {
+      tabId: TAB_ID,
+      mode: "page",
+      environmentId: s().environmentId,
+      purpose: "result",
+      result: {
+        requestId: held.request.id,
+        originalCaptureId: original.captureId,
+        sampleUnstable: true,
+      },
+    });
+    const first = started.status === "captured" ? started : await awaitCaptureEnd(TAB_ID);
+    if (first.status !== "captured") throw new Error(`Capture failed: ${first.status}`);
+    await inPreview(`(() => {
+      document.getElementById("diff-fixture-style").textContent += ${JSON.stringify(
+        `@keyframes diff-test-flash { 0% { background: #fff } 50% { background: #000 } }
+         ${banner} { animation: diff-test-flash 600ms steps(1) infinite !important; }`,
+      )};
+      return true;
+    })()`);
+    const replacement = await preview<BrowserPreviewSelectionStatus>("startCapture", {
+      tabId: TAB_ID,
+      mode: "page",
+      environmentId: s().environmentId,
+      recaptureCaptureId: first.pending.captureId,
+    });
+    const ready = replacement.status === "captured" ? replacement : await awaitCaptureEnd(TAB_ID);
+    if (ready.status !== "captured") throw new Error(`Recapture failed: ${ready.status}`);
+    const captureId = ready.pending.captureId;
+    const pending = await readPending(captureId);
+    expect(pending.result?.unstableRegions?.length).toBeGreaterThan(0);
+    expect(pending.result?.originalMasks?.captureId).toBe(original.captureId);
+
+    // Run the same renderer canvas and commit code the editor uses, against
+    // the real preload, spool and backend rather than a command double.
+    const diff = await s().window.evaluate(
+      async ({ captureId, requestId, annotationId, environmentId }) => {
+        const redactPath = "/src/lib/web-annotations/redaction.ts";
+        const commitPath = "/src/lib/web-annotations/capture-commit.ts";
+        const desktop = (window as unknown as { orkestrator: OrkestratorElectronApi }).orkestrator;
+        const previewApi = desktop.browserPreview.capture;
+        const pending = (await previewApi.readPendingCapture(captureId))!;
+        const regions = [{ x: 16, y: 16, width: 48, height: 48 }];
+        const { redactPngDataUrl } = await import(redactPath);
+        const { resultCaptureMetadata } = await import(commitPath);
+        const imageDataUrl = await redactPngDataUrl(pending.imageDataUrl!, regions);
+        await previewApi.replacePendingCaptureImage(captureId, {
+          regions,
+          imageDataUrl,
+          manualRegions: regions.length,
+        });
+        const after = (await previewApi.readPendingCapture(captureId))!;
+        const { invoke } = desktop;
+        const { asset } = (await invoke("web_annotation_asset_stage", {
+          environmentId,
+          operationId: `asset-${captureId}`,
+          mediaType: "image/png",
+          data: after.imageDataUrl!.split(",")[1],
+        })) as { asset: { id: string } };
+        const stored = (await invoke("web_annotation_result_capture", {
+          environmentId,
+          operationId: `result-${captureId}`,
+          requestId,
+          annotationId,
+          ...resultCaptureMetadata(after, true),
+          capture: { ...after.capture, assetIds: [asset.id] },
+        })) as { captureId: string };
+        await previewApi.acknowledgePendingCapture({
+          captureId,
+          annotationId,
+          backendCaptureId: stored.captureId,
+        });
+        return invoke("web_annotation_result_diff", { environmentId, captureId: stored.captureId });
+      },
+      {
+        captureId,
+        requestId: held.request.id,
+        annotationId: original.annotationId,
+        environmentId: s().environmentId,
+      },
+    );
+    expect(diff).toMatchObject({
+      diff: {
+        status: "compared",
+        advisory: true,
+        changedPixels: 0,
+        excluded: { masks: 1, unstableRegions: expect.any(Number) },
+      },
+    });
+  } finally {
+    await held.cleanup();
+  }
+});
 
 test("result captures label stability and comparison differences, and Show on page reports an expired sign-in redirect", async () => {
   const testInfo = test.info();

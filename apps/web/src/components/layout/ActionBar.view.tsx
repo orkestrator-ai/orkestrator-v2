@@ -639,11 +639,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         // alongside the sidebar's project search bar. The grid toolbar
         // stretches every button to its cell, so there the tabs take two
         // columns like its other tiles; a scrolling row would show only one.
+        // In the bar the tabs keep their full width and the project navigation
+        // row scrolls them with its scrollbar hidden. The tab list must not
+        // scroll or cap its own width: it would then show a scrollbar of its
+        // own beneath the tabs as soon as they outgrew the cap.
         className={cn(
           "rounded-none border-0 bg-transparent p-0",
-          isGrid
-            ? "col-span-2 grid w-full grid-cols-2 gap-2"
-            : "max-w-[min(100%,48rem)] gap-0.5 overflow-x-auto",
+          isGrid ? "col-span-2 grid w-full grid-cols-2 gap-2" : "shrink-0 gap-0.5",
         )}
         buttonClassName="h-6 shrink-0 px-2 text-xs"
         options={

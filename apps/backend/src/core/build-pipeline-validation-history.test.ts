@@ -237,6 +237,69 @@ describe("validation history", () => {
     });
   });
 
+  test.each(["build", "rework"] as const)(
+    "recovers an accepted %s validation plan and resumes it after a pause",
+    async (sessionPhase) => {
+      await withService(async (service, storage, provider, invocations) => {
+        const { started, session } = await startBuilding(service, storage);
+        if (sessionPhase === "rework") {
+          await mutateStored(storage, started.id, (snapshot) => {
+            snapshot.phase = "reworking";
+            snapshot.sessions[snapshot.currentSessionIndex]!.phase = "rework";
+          });
+          provider.phases.set(session.sdkSessionId, "rework");
+        }
+        provider.structured = async <T>(_sessionId: string, requestId: string) => ({
+          ok: true as const,
+          provider: "claude" as const,
+          requestId,
+          value: { headRef: HEAD, commands: [], limitations: ["Fixture plan."] } as T,
+        });
+
+        let saved = await pipeline(storage, started.id);
+        for (let attempt = 0; attempt < 5 && !saved.validationRun; attempt++) {
+          await service.advanceNow(started.id);
+          saved = await pipeline(storage, started.id);
+        }
+        expect(saved.phase).toBe("preparing-package");
+        expect(saved.validationRun?.status).toBe("planned");
+        expect(saved.sessions[saved.currentSessionIndex]).toMatchObject({
+          sdkSessionId: session.sdkSessionId,
+          phase: sessionPhase,
+        });
+
+        await service.advanceNow(started.id);
+        const recovered = await pipeline(storage, started.id);
+        expect(recovered.validationRun).toMatchObject({
+          id: saved.validationRun!.id,
+          status: "running",
+        });
+        expect(recovered.sessions).toHaveLength(saved.sessions.length);
+
+        const paused = await service.pause(started.id);
+        expect(paused.pausedFromPhase).toBe("preparing-package");
+        expect(paused.validationRun?.status).toBe("cancelled");
+        expect(paused.sessions[paused.currentSessionIndex]?.phase).toBe(sessionPhase);
+        await service.resume(started.id);
+        await service.advanceNow(started.id);
+
+        const resumed = await pipeline(storage, started.id);
+        expect(resumed.phase).toBe("preparing-package");
+        expect(resumed.sessions[resumed.currentSessionIndex]).toMatchObject({
+          phase: "package-preparation",
+          validationPlan: true,
+        });
+        expect(resumed.validationHistory?.at(-1)).toMatchObject({
+          runId: saved.validationRun!.id,
+          status: "cancelled",
+        });
+        expect(
+          invocations.filter(({ command }) => command === "start_review_validation"),
+        ).toHaveLength(1);
+      });
+    },
+  );
+
   test("a failed verification keeps the round's validation summary for the next round", async () => {
     await withService(
       async (service, storage, provider, _invocations, controls) => {

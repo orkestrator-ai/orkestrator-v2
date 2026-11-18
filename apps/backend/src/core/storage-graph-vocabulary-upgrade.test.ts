@@ -3,9 +3,21 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { McpServer } from "@modelcontextprotocol/server";
+import type { CoordinatorWorkspace } from "@orkestrator/protocol/coordinator";
+import { graphMockPinIssues, graphMockPinTargetFromPlan } from "@orkestrator/protocol/graphs/mock";
+import { renderGraphPromptSource } from "@orkestrator/protocol/graphs/prompts";
+import type { ScheduleFire, ScheduledJob } from "@orkestrator/protocol/scheduled-jobs";
 import { canonicalJson } from "@orkestrator/protocol/canonical-json";
-import { multiReviewBuiltInTemplate } from "@orkestrator/protocol/graphs/builtins";
-import { compile, type CompiledGraphPlan } from "@orkestrator/protocol/graphs/compile";
+import {
+  buildPipelineBuiltInTemplate,
+  multiReviewBuiltInTemplate,
+} from "@orkestrator/protocol/graphs/builtins";
+import {
+  compile,
+  graphTemplateDigest,
+  type CompiledGraphPlan,
+} from "@orkestrator/protocol/graphs/compile";
 import {
   GRAPH_ARTIFACT_FORMAT_VERSION,
   GRAPH_RUN_FORMAT,
@@ -19,8 +31,19 @@ import {
   type GraphRun,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
-import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
+import {
+  validateGraphTemplate,
+  type GraphTemplateV1,
+  type GraphSubgraphNode,
+} from "@orkestrator/protocol/graphs/template";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import { registerControlReviewActions } from "./control-mcp/review-actions.js";
+import { computeGraphReadySet } from "./graph-run-ready-set.js";
+import { graphRunFixture } from "./graph-run-test-support.js";
+import { GraphRunView } from "./graph-run-view.js";
+import { callToolInProcess } from "./mcp-in-process.js";
+import { REVIEW_HANDLERS } from "./public-api/actions-reviews.js";
+import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
 import { graphAgentResultKey } from "./graph-agent-state.js";
 import {
   MULTI_REVIEW_GRAPH_NODES,
@@ -33,6 +56,7 @@ import {
   upgradeGraphDescribeStore,
   upgradeGraphRun,
   upgradeGraphTemplate,
+  upgradeGraphTemplatesStore,
   upgradeScheduledJobsStore,
   upgradeWorkflowResultsStore,
 } from "./storage-graph-vocabulary-upgrade.js";
@@ -55,6 +79,8 @@ afterEach(async () => {
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
+
+type GraphSubgraphRef = GraphSubgraphNode["template"];
 
 const AT = "2026-11-10T00:00:00.000Z";
 const RUN_ID = "multi-review-review-1";
@@ -295,6 +321,39 @@ function userTemplate(): GraphTemplateV1 {
   };
 }
 
+function wrapper(id: string, ref: GraphSubgraphRef, child: GraphTemplateV1): GraphTemplateV1 {
+  const inputs = child.inputs ?? [];
+  return {
+    format: "orkestrator.graph",
+    formatVersion: 1,
+    id,
+    revision: 1,
+    name: id,
+    parameters: [],
+    roles: child.roles,
+    workspace: child.workspace,
+    limits: child.limits,
+    inputs,
+    nodes: [
+      {
+        id: "inner",
+        kind: "subgraph",
+        template: ref,
+        inputs: inputs.map(({ name, type, required }) => ({
+          name,
+          type,
+          ...(required === undefined ? {} : { required }),
+        })),
+      },
+    ],
+    edges: inputs.map(({ name }) => ({
+      id: `bind-${name}`,
+      from: { input: name },
+      to: { node: "inner", port: name },
+    })),
+  };
+}
+
 describe("graph vocabulary upgrade", () => {
   test("the former run fixture is a run an older build could load", () => {
     const { run } = formerScenario();
@@ -314,75 +373,225 @@ describe("graph vocabulary upgrade", () => {
   });
 
   test("a Build Pipeline copy renames Rework and Address Findings by their step", () => {
-    const template = {
-      format: "orkestrator.graph",
-      formatVersion: 1,
-      id: "pipeline",
-      nodes: [
-        { id: "fix", kind: "agent", role: "builder", prompt: { builtIn: "pipeline-fix" } },
-        { id: "address", kind: "agent", role: "fixer", prompt: { builtIn: "address-review" } },
-        {
-          id: "verify",
-          kind: "agent",
-          role: "verifier",
-          prompt: { builtIn: "verify" },
-          inputs: [{ name: "address", type: "fix-result@1" }],
-        },
-        // Not a step: a user's own node keeps its name.
-        { id: "fix-docs", kind: "agent", role: "builder", prompt: { template: "fix the docs" } },
-      ],
-      edges: [
-        {
-          id: "fix-prepare",
-          from: { node: "fix", port: "code" },
-          to: { node: "address", port: "code" },
-        },
-        {
-          id: "address-verify-report",
-          from: { node: "address", port: "report" },
-          to: { node: "verify", port: "address" },
-          transform: [{ op: "adapt", adapter: "fix-result-to-file-list" }],
-        },
-      ],
-      loops: [
-        {
-          id: "rounds",
-          nodes: ["fix", "address", "verify"],
-          until: { path: "verify.verdict.complete", op: "eq", value: true },
-          carry: [{ from: { node: "verify", port: "code" }, to: { node: "fix", port: "code" } }],
-        },
-      ],
-      roles: [{ key: "fixer", multiplicity: "one", defaultsFrom: ["fixReviewIssues"] }],
-      parameters: [],
+    const current = buildPipelineBuiltInTemplate();
+    delete current.engine;
+    const verify = current.nodes.find((node) => node.id === "verify")!;
+    verify.when = { path: "addressFindings.complete", op: "eq", value: true };
+    const errors = (template: GraphTemplateV1) =>
+      compile(template).diagnostics.filter((diagnostic) => diagnostic.severity === "error");
+    expect(errors(current)).toEqual([]);
+    const old = JSON.parse(
+      JSON.stringify(current)
+        .replaceAll('"rework"', '"fix"')
+        .replaceAll("pipeline-rework", "pipeline-fix")
+        .replaceAll("pipeline-address-findings", "address-review")
+        .replaceAll("address-findings-result@", "fix-result@")
+        .replaceAll("address-findings", "address")
+        .replaceAll('"addresser"', '"fixer"')
+        .replaceAll('"addressFindings"', '"address"')
+        .replaceAll("addressFindings.complete", "address.complete")
+        .replaceAll('"build-rework"', '"build-fix"')
+        .replaceAll('"rework-prepare"', '"fix-prepare"'),
+    );
+    // The former default-source field and the Verify input used different names.
+    for (const role of old.roles) {
+      if (!role.defaultsFrom) continue;
+      role.defaultsFrom = role.defaultsFrom.map((name: string) =>
+        name === "address" ? "fixReviewIssues" : name,
+      );
+    }
+    const upgraded = upgradeGraphTemplate(old) as GraphTemplateV1;
+    expect(upgraded.nodes.map(({ id }) => id)).toEqual(current.nodes.map(({ id }) => id));
+    expect(upgraded.nodes.find(({ id }) => id === "verify")?.when).toEqual(verify.when);
+    expect(errors(upgraded)).toEqual([]);
+  });
+
+  test("pinned nested templates follow the leaf's final digest and preserve stale pins", () => {
+    const leaf = former(userTemplate());
+    const middle = wrapper(
+      "middle",
+      { scope: "user", id: leaf.id, digest: graphTemplateDigest(leaf) },
+      leaf,
+    );
+    const root = wrapper(
+      "root",
+      { scope: "user", id: middle.id, digest: graphTemplateDigest(middle) },
+      middle,
+    );
+    const stale = wrapper("stale", { scope: "user", id: leaf.id, digest: "0".repeat(64) }, leaf);
+    root.mockPins = { "inner/inner/fix": ["example"] };
+    const stored = {
+      templates: Object.fromEntries(
+        [root, middle, leaf, stale].map((template) => [template.id, { template }]),
+      ),
     };
-    expect(upgradeGraphTemplate(template)).toMatchObject({
-      nodes: [
-        { id: "rework", prompt: { builtIn: "pipeline-rework" } },
-        {
-          id: "address-findings",
-          role: "addresser",
-          prompt: { builtIn: "pipeline-address-findings" },
-        },
-        { id: "verify", inputs: [{ name: "addressFindings", type: "address-findings-result@1" }] },
-        { id: "fix-docs", prompt: { template: "fix the docs" } },
-      ],
-      edges: [
-        { id: "rework-prepare", from: { node: "rework" }, to: { node: "address-findings" } },
-        {
-          id: "address-findings-verify-report",
-          to: { node: "verify", port: "addressFindings" },
-          transform: [{ adapter: "address-findings-result-to-file-list" }],
-        },
-      ],
-      loops: [
-        {
-          nodes: ["rework", "address-findings", "verify"],
-          until: { path: "verify.verdict.complete" },
-          carry: [{ to: { node: "rework" } }],
-        },
-      ],
-      roles: [{ key: "addresser", defaultsFrom: ["addressFindings"] }],
+    const upgraded = upgradeGraphTemplatesStore(stored) as typeof stored;
+    const resolveTemplate = (ref: GraphSubgraphRef) => upgraded.templates[ref.id];
+    const migratedRoot = upgraded.templates.root!.template;
+    expect(
+      compile(migratedRoot, { resolveTemplate }).diagnostics.filter((d) => d.severity === "error"),
+    ).toEqual([]);
+    expect(migratedRoot.mockPins).toEqual({
+      "inner/inner/address-findings": ["example"],
     });
+    expect(
+      compile(upgraded.templates.stale!.template, { resolveTemplate }).diagnostics,
+    ).toContainEqual(expect.objectContaining({ code: "subgraph-digest-mismatch" }));
+  });
+
+  test("the exact former built-in pin and saved child mock preset still compile", () => {
+    const builtin = multiReviewBuiltInTemplate();
+    const old = wrapper(
+      "root",
+      {
+        scope: "builtin",
+        id: builtin.id,
+        digest: "d36469246d09b603f92d4aa1beeedb4c06c897b1bf6fb61d4785403d213cf981",
+      },
+      former(builtin),
+    );
+    old.mockPins = { "inner/fix": ["example"] };
+    const migrated = upgradeGraphTemplate(old) as GraphTemplateV1;
+    expect(migrated.nodes[0]).toMatchObject({ template: { digest: graphTemplateDigest(builtin) } });
+    expect(migrated.mockPins).toEqual({ "inner/address-findings": ["example"] });
+    const compiled = compile(migrated, { resolveTemplate: () => ({ template: builtin }) });
+    expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(
+      graphMockPinIssues(graphMockPinTargetFromPlan(compiled.plan!), migrated.mockPins),
+    ).toEqual([]);
+  });
+
+  test("a migrated run evaluates an inlined predicate with its child parameters", () => {
+    const child = userTemplate();
+    child.inputs = [];
+    child.outputs = [];
+    child.edges = [];
+    const address = child.nodes.find((node) => node.id === "address-findings")!;
+    if (address.kind !== "agent") throw new Error("Expected an agent");
+    child.nodes = [
+      {
+        ...address,
+        prompt: { template: "Address the findings." },
+        // Use only the role and predicate in this test's independent activation.
+        inputs: [],
+        outputs: [],
+        capabilities: { profile: "reviewer" },
+        workspaceAccess: "read",
+        when: { path: "params.autoAddressFindings", op: "eq", value: true },
+      },
+    ];
+    const parent = wrapper("wrapper", { scope: "user", id: child.id }, child);
+    const inner = parent.nodes[0]!;
+    if (inner.kind !== "subgraph") throw new Error("Expected a subgraph");
+    inner.params = { autoAddressFindings: true };
+    const compiled = compile(parent, { resolveTemplate: () => ({ template: child }) });
+    expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    const plan = formerPlan(compiled.plan!);
+    const run = graphRunFixture({
+      plan,
+      template: {
+        id: plan.template.id,
+        revision: plan.template.revision,
+        digest: plan.templateDigest,
+      },
+      loopIterations: {},
+      bindings: { roles: { fixer: { platform: "claude" } }, inputs: {}, params: {} },
+    });
+    const upgraded = upgradeGraphRun(run, [])?.run;
+    expect(upgraded?.plan.subgraphs?.[0]?.params).toMatchObject({
+      autoAddressFindings: { value: true },
+    });
+    expect(
+      computeGraphReadySet(new GraphRunView(upgraded!), { at: AT, loopDone: () => false }).created,
+    ).toContainEqual(expect.objectContaining({ nodeId: "inner/address-findings", state: "ready" }));
+  });
+
+  test("custom prompt references migrate without changing literal text", () => {
+    const old = former(userTemplate());
+    const node = old.nodes.find((entry) => entry.kind === "agent" && entry.id === "fix")!;
+    if (node.kind !== "agent") throw new Error("Expected an agent");
+    node.prompt = {
+      template:
+        "autoFix {{! params.autoFix }}{{# params.autoFix }}{{params.autoFix}}{{/params.autoFix}}",
+    };
+    const migrated = upgradeGraphTemplate(old) as GraphTemplateV1;
+    expect(migrated.nodes.find((entry) => entry.id === "address-findings")).toMatchObject({
+      prompt: {
+        template:
+          "autoFix {{! params.autoFix }}{{# params.autoAddressFindings }}{{params.autoAddressFindings}}{{/params.autoAddressFindings}}",
+      },
+    });
+    expect(compile(migrated).diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    const prompt = migrated.nodes.find((entry) => entry.id === "address-findings");
+    if (prompt?.kind !== "agent" || !("template" in prompt.prompt))
+      throw new Error("Expected a custom prompt");
+    expect(
+      renderGraphPromptSource(prompt.prompt.template, { params: { autoAddressFindings: true } })
+        .text,
+    ).toBe("autoFix true");
+  });
+
+  test("colliding and overlong node and edge proposals keep stable identifiers", () => {
+    const old = former(userTemplate());
+    const fix = old.nodes.find((node) => node.id === "fix")!;
+    const longNode = "fix-" + "a".repeat(60);
+    const longEdge = "fix-" + "b".repeat(60);
+    old.nodes.push(
+      { ...fix, id: "address-findings" },
+      {
+        capabilities: { profile: "reviewer" },
+        workspaceAccess: "read",
+        id: "address-findings-findings",
+        kind: "agent",
+        role: "describer",
+        prompt: { template: "Independent node" },
+      },
+      { ...fix, id: longNode },
+      { ...fix, id: "fix-other" },
+    );
+    const edge = old.edges.find((entry) => "node" in entry.from && entry.from.node === "fix")!;
+    old.edges.push({
+      ...edge,
+      id: longEdge.replace("fix-", "fix-other-").slice(0, 64),
+      from: { node: "fix-other", port: "result" },
+    });
+    const migrated = upgradeGraphTemplate(old) as GraphTemplateV1;
+    expect(validateGraphTemplate(migrated)).toMatchObject({ ok: true });
+    expect(migrated.nodes.map(({ id }) => id)).toEqual(
+      old.nodes.map(({ id }) =>
+        id === "fix-other"
+          ? "address-findings-other"
+          : id === "fix-complete"
+            ? "address-findings-complete"
+            : id,
+      ),
+    );
+    expect(migrated.edges.at(-1)).toMatchObject({
+      id: old.edges.at(-1)!.id,
+      from: { node: "address-findings-other" },
+    });
+  });
+
+  test("a damaged original plan remains unreadable after opening the migrated store", async () => {
+    const directory = await dataDir();
+    const before = new StorageDatabase(directory, {
+      layoutFor: storeLayout,
+      migrations: STORAGE_MIGRATIONS.filter(
+        ({ version }) => version < GRAPH_VOCABULARY_UPGRADE_VERSION,
+      ),
+    });
+    const { run } = formerScenario();
+    run.plan.digest = "0".repeat(64);
+    before.writeStore("graph-runs", { [run.id]: run });
+    before.close();
+
+    const storage = new StorageService(directory);
+    closers.push(() => storage.close());
+    await storage.init();
+    await expect(storage.graphRuns.getGraphRun(run.id)).rejects.toMatchObject({
+      issues: ["plan:digest"],
+    });
+    expect(upgradeGraphRun(run, [])).toBeNull();
   });
 
   test("a run is rewritten consistently: plan digest, keys, artifact ids and lineage", () => {
@@ -469,7 +678,7 @@ describe("graph vocabulary upgrade", () => {
         action: {
           kind: "graph",
           request: {
-            ref: { scope: "built-in", id: "multi-review" },
+            ref: { scope: "builtin", id: "multi-review" },
             roles: { fixer: { platform: "claude" } },
             params: { autoFix: true },
           },
@@ -494,6 +703,168 @@ describe("graph vocabulary upgrade", () => {
     expect((upgradeGraphDescribeStore(drafts) as typeof drafts)["environment-1"].template).toEqual(
       userTemplate(),
     );
+  });
+
+  test("user graph bindings retain separate values where the child declared both names", async () => {
+    const child = former(userTemplate());
+    child.parameters.push({ key: "autoAddressFindings", type: "boolean", default: false });
+    child.roles.push({ key: "addresser", multiplicity: "one" });
+    const parent = wrapper("parent", { scope: "user", id: child.id }, child);
+    const inner = parent.nodes[0]!;
+    if (inner.kind !== "subgraph") throw new Error("Expected a subgraph");
+    inner.roles = { fixer: "preparer", addresser: "addresser" };
+    inner.params = { autoFix: true, autoAddressFindings: false };
+    const directory = await dataDir();
+    const before = new StorageDatabase(directory, {
+      layoutFor: storeLayout,
+      migrations: STORAGE_MIGRATIONS.filter(
+        ({ version }) => version < GRAPH_VOCABULARY_UPGRADE_VERSION,
+      ),
+    });
+    before.writeStore("graph-templates", {
+      templates: Object.fromEntries(
+        [parent, child].map((template) => [
+          template.id,
+          {
+            id: template.id,
+            revision: 1,
+            template,
+            createdAt: AT,
+            updatedAt: AT,
+            bytes: Buffer.byteLength(JSON.stringify(template)),
+          },
+        ]),
+      ),
+    });
+    const request = {
+      ref: { scope: "user", id: child.id },
+      params: { autoFix: true },
+      roles: { fixer: { platform: "claude" } },
+    };
+    before.writeStore("scheduled-jobs", { graph: { action: { kind: "graph", request } } });
+    before.close();
+
+    const after = openBackendDatabase(directory);
+    closers.push(() => after.close());
+    const saved = after.readStore("graph-templates")?.value as {
+      templates: Record<string, { template: GraphTemplateV1 }>;
+    };
+    const compiled = compile(saved.templates.parent!.template, {
+      resolveTemplate: (ref) => saved.templates[ref.id],
+    });
+    expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(compiled.plan?.subgraphs?.[0]).toMatchObject({
+      roles: inner.roles,
+      params: { autoFix: { value: true }, autoAddressFindings: { value: false } },
+    });
+    expect(after.readStore("scheduled-jobs")?.value).toMatchObject({
+      graph: { action: { request } },
+    });
+  });
+
+  test("seeded public and coordinator schedules fire through the renamed action handlers", async () => {
+    const directory = await dataDir();
+    const before = new StorageDatabase(directory, {
+      layoutFor: storeLayout,
+      migrations: STORAGE_MIGRATIONS.filter(
+        ({ version }) => version < GRAPH_VOCABULARY_UPGRADE_VERSION,
+      ),
+    });
+    const oldModel = { agent: "claude", model: "opus" };
+    before.writeStore("scheduled-jobs", {
+      public: {
+        id: "public",
+        owner: { kind: "operator" },
+        action: {
+          kind: "action",
+          action: "review.launch",
+          input: { environmentId: "env-1", autoFix: false, fixModel: oldModel },
+        },
+      },
+      coordinator: {
+        id: "coordinator",
+        owner: {
+          kind: "coordinator",
+          projectId: "project-1",
+          coordinatorId: "coord-1",
+          role: "main",
+        },
+        action: {
+          kind: "action",
+          action: "custom_fix_multi_review",
+          input: { workflowId: "review-1", instruction: "Apply the review", fixModel: oldModel },
+        },
+      },
+    });
+    before.close();
+
+    const after = openBackendDatabase(directory);
+    closers.push(() => after.close());
+    const jobs = after.readStore("scheduled-jobs")?.value as Record<string, ScheduledJob>;
+    const publicHandler = REVIEW_HANDLERS.find((handler) => handler.action === "review.launch")!;
+    const publicInputs: unknown[] = [];
+    const coordinatorInputs: unknown[] = [];
+    const executor = new ScheduledJobExecutor({
+      async invoke<T>(command: string, input?: Record<string, unknown>) {
+        expect(command).toBe("public_action");
+        expect(input?.action).toBe("review.launch");
+        publicInputs.push(publicHandler.parse(input?.input as Record<string, unknown>).value);
+        return { ok: true, result: {} } as T;
+      },
+      storage: {
+        async sendAgentMail() {
+          throw new Error("Unexpected mail");
+        },
+        coordinators: {
+          async getCoordinatorWorkspace() {
+            return {
+              id: "coord-1",
+              conversations: [{ id: "main", role: "main", mailboxIncarnationId: "inc-main" }],
+            } as CoordinatorWorkspace;
+          },
+        },
+      },
+      controlMcp: {
+        credentialPolicy: () => null,
+        listCoordinatorTools: async () => [],
+        async callCoordinatorTool(scope, tool, args) {
+          return callToolInProcess(
+            () => {
+              const server = new McpServer({ name: "schedule-fixture", version: "1" });
+              registerControlReviewActions(
+                server,
+                async <T>(command: string, args?: Record<string, unknown>) => {
+                  if (command === "get_config") return { global: {} } as T;
+                  expect(command).toBe("custom_fix_coordinator_multi_review_action");
+                  coordinatorInputs.push(args?.input);
+                  return { workflow: { id: "review-1" }, outcome: "opened" } as T;
+                },
+                scope,
+              );
+              return server;
+            },
+            tool,
+            args,
+          );
+        },
+      },
+    });
+    for (const job of Object.values(jobs)) {
+      expect(
+        await executor.execute(job, { fireId: job.id } as ScheduleFire, () => {}),
+      ).toMatchObject({ ok: true });
+    }
+    expect(publicInputs).toEqual([
+      { environmentId: "env-1", autoAddressFindings: false, addressFindingsModel: oldModel },
+    ]);
+    expect(coordinatorInputs).toEqual([
+      {
+        workflowId: "review-1",
+        instruction: "Apply the review",
+        addressFindingsModel: oldModel,
+        requestId: "sched:coordinator",
+      },
+    ]);
   });
 
   test("an upgraded database is rewritten once and the backend reads and projects it", async () => {
@@ -523,7 +894,7 @@ describe("graph vocabulary upgrade", () => {
           ceilingRevision: 0,
           trust: [],
           launchDefaults: {
-            "built-in:multi-review": {
+            "builtin:multi-review": {
               roles: { fixer: { platform: "codex" } },
               params: { autoFix: true },
               updatedAt: AT,
@@ -607,7 +978,7 @@ describe("graph vocabulary upgrade", () => {
     expect(saved.revision).toBe(1);
     expect(saved.template).toEqual(userTemplate());
     expect(
-      storage.graphTemplates.getGraphLaunchDefaults("project-1", "built-in:multi-review"),
+      storage.graphTemplates.getGraphLaunchDefaults("project-1", "builtin:multi-review"),
     ).toMatchObject({
       roles: { addresser: { platform: "codex" } },
       params: { autoAddressFindings: true },

@@ -182,6 +182,14 @@ export function stageAfterReview(
 }
 
 /**
+ * Whether a phase's turn submits a review package result (review preparation
+ * or a validation plan), which a message sent into the turn invalidates.
+ */
+export function preparesReviewPackage(phase: ResumableBuildPhase | null | undefined): boolean {
+  return phase === "building" || phase === "reworking" || phase === "preparing-package";
+}
+
+/**
  * Forgets the structured preparation result of an implementation session.
  *
  * Any implementation follow-up — a queued message or a steer into the live
@@ -190,14 +198,6 @@ export function stageAfterReview(
  * `producedReviewPackagePlan`: the transcript still contains that plan, and the
  * renderer keys redaction on the sticky fact.
  */
-/**
- * Whether a phase's turn submits a review package result (review preparation
- * or a validation plan), which a message sent into the turn invalidates.
- */
-export function preparesReviewPackage(phase: ResumableBuildPhase | null | undefined): boolean {
-  return phase === "building" || phase === "reworking" || phase === "preparing-package";
-}
-
 export function discardPreparationResult(session: PipelineSession): void {
   // Further implementation invalidates the earlier decision to skip review too.
   delete session.buildOutcome;

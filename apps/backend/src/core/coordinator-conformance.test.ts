@@ -332,7 +332,8 @@ describe("coordinator read-only conformance", () => {
     expect(COORDINATOR_PR_RULE).toContain("workers never raise them");
     expect(COORDINATOR_PR_RULE).toContain("tell it not to open a pull request");
     expect(COORDINATOR_PR_RULE).toContain("create_pr");
-    expect(COORDINATOR_PR_RULE).toContain("auto-PR raises the PR itself");
+    expect(COORDINATOR_PR_RULE).toContain("the review and Address Findings have finished");
+    expect(COORDINATOR_PR_RULE).not.toMatch(/\b(?:autoAddressFindings|autoPr|fix)\b/);
     expect(COORDINATOR_PR_RULE).toContain("has its own PR step");
     expect(COORDINATOR_PR_RULE).toContain(
       "For a prompt environment, a Multi Review with auto-address findings and auto-PR raises the PR itself",

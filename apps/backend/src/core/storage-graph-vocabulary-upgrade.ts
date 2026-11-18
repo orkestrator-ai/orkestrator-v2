@@ -12,7 +12,8 @@ import {
   type GraphArtifact,
   type GraphRun,
 } from "@orkestrator/protocol/graphs/run";
-import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
+import { isGraphId, isGraphPlanId } from "@orkestrator/protocol/graphs/grammar";
+import { validateGraphTemplate, type GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { graphAgentResultKey, graphAgentSessionKey } from "./graph-agent-state.js";
 import type { StorageMigration } from "./storage-database.js";
 import { isRecord } from "./storage-shared.js";
@@ -34,7 +35,7 @@ import { isRecord } from "./storage-shared.js";
  * `address-findings-complete`. Everything an older build stored under the
  * former names is rewritten once here; the schema bump is the downgrade
  * fence. Names are renamed only in the structural fields that hold them,
- * never in labels, descriptions or prompt text.
+ * leaving labels, descriptions and literal prompt text intact.
  *
  * - `graph-templates`: every user template (and every "Describe a graph"
  *   draft in `graph-describe`), and the saved launch defaults of built-in and
@@ -65,8 +66,8 @@ import { isRecord } from "./storage-shared.js";
  *   whose rewrite would not validate is left exactly as it was.
  * - `workflow-results`: entries and receipts of kind `fix-result`, and graph
  *   output slots whose port type is `fix-result@1`.
- * - `scheduled-jobs`: scheduled graph launches of built-in and user
- *   templates, whose roles and parameters are keyed by the template's names.
+ * - `scheduled-jobs`: saved graph launches, public mutations and coordinator
+ *   tools that used the former vocabulary.
  *
  * Project templates live in their repositories (`.orkestrator/graphs/`), not
  * here, so they are not rewritten; one that names a former built-in prompt or
@@ -96,11 +97,62 @@ const CURRENT_KIND = "address-findings-result";
 const FORMER_VERIFY_PORT = "address";
 const CURRENT_VERIFY_PORT = "addressFindings";
 
-/** Node ids of the built-ins whose ids changed, for pins and keys naming an inlined node. */
-const BUILT_IN_NODE_RENAMES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  "multi-review": { fix: "address-findings", "fix-complete": "address-findings-complete" },
-  "build-pipeline": { fix: "rework", address: "address-findings" },
-};
+type BindingRenames = Pick<GraphRenames, "params" | "roles">;
+interface TemplateUpgrade {
+  bindings: BindingRenames;
+  nodes: ReadonlyMap<string, string>;
+  digests?: { before: string; after: string };
+}
+
+const NO_BINDING_RENAMES: BindingRenames = { params: {}, roles: {} };
+
+/** Digests of the shipped definitions at b2c91abb9 and 1443c5989, respectively. */
+const BUILTIN_UPGRADES = new Map<string, TemplateUpgrade>([
+  [
+    "multi-review",
+    {
+      bindings: { params: PARAM_RENAMES, roles: ROLE_RENAMES },
+      nodes: new Map([
+        ["fix", "address-findings"],
+        ["fix-complete", "address-findings-complete"],
+      ]),
+      digests: {
+        before: "d36469246d09b603f92d4aa1beeedb4c06c897b1bf6fb61d4785403d213cf981",
+        after: "22b3bb73f5faf52217ac1bd6a9c5b7970e2817a8c17489f0400df311f2e86cb9",
+      },
+    },
+  ],
+  [
+    "build-pipeline",
+    {
+      bindings: { params: {}, roles: ROLE_RENAMES },
+      nodes: new Map([
+        ["fix", "rework"],
+        ["address", "address-findings"],
+      ]),
+      digests: {
+        before: "d3cc1f4a77fb2f54f3276b88d8e5121035820470b283947b95e8518728824564",
+        after: "6dbfae4d5c3bb7ff92c5eead0dada9fd99c4fe21b985dfdf5d848ade4146c831",
+      },
+    },
+  ],
+  [
+    "looped-review",
+    {
+      bindings: NO_BINDING_RENAMES,
+      nodes: new Map(
+        [1, 2, 3, 4].flatMap((round) => [
+          [`fix-r${round}`, `address-findings-r${round}`],
+          [`fixed-r${round}`, `address-findings-complete-r${round}`],
+        ]),
+      ),
+      digests: {
+        before: "111309bba55d8f3595fc01f81ccacb08b0568a4305176ff113d458e9d93c60df",
+        after: "2cb7e21eaae9ba4e08d52cd5a2071b3a105b070d6fec7e803ba5705c637f8c21",
+      },
+    },
+  ],
+]);
 
 /** The value as stored JSON: absent fields dropped, as a write would drop them. */
 function plain<T>(value: T): T {
@@ -208,7 +260,7 @@ function nodeRenames(nodes: readonly Rec[], edges: readonly Rec[]): Map<string, 
     if (!step) continue;
     const { prefix, local } = splitPlanId(node.id);
     const next = renamedAgentLocal(local, step);
-    if (next) proposed.set(node.id, prefix + next);
+    if (isGraphId(next) && isGraphPlanId(prefix + next)) proposed.set(node.id, prefix + next);
     if (step === "address-findings") addressFindings.add(node.id);
   }
   for (const node of nodes) {
@@ -224,7 +276,7 @@ function nodeRenames(nodes: readonly Rec[], edges: readonly Rec[]): Map<string, 
     if (!fedByAddressFindings) continue;
     const { prefix, local } = splitPlanId(node.id);
     const next = renamedGateLocal(local);
-    if (next) proposed.set(node.id, prefix + next);
+    if (isGraphId(next) && isGraphPlanId(prefix + next)) proposed.set(node.id, prefix + next);
   }
   const accepted = new Map<string, string>();
   const taken = new Set<string>();
@@ -233,6 +285,16 @@ function nodeRenames(nodes: readonly Rec[], edges: readonly Rec[]): Map<string, 
     if ((ids.has(to) && !proposed.has(to)) || taken.has(to)) continue;
     accepted.set(from, to);
     taken.add(to);
+  }
+  // Reject predecessors of any rejected move. An id is freed only if its
+  // owner really moves, including when several proposals form a chain.
+  const predecessors = new Map(Array.from(accepted, ([from, to]) => [to, from]));
+  for (const [from, to] of Array.from(accepted)) {
+    if (!ids.has(to) || accepted.has(to)) continue;
+    let blocked: string | undefined = from;
+    while (blocked !== undefined && accepted.delete(blocked)) {
+      blocked = predecessors.get(blocked);
+    }
   }
   return accepted;
 }
@@ -278,7 +340,9 @@ function edgeRenames(
     const { prefix, local } = splitPlanId(edge.id);
     const locals = byPrefix.get(prefix);
     if (!locals) continue;
-    const next = prefix + renameWords(local, locals);
+    const nextLocal = renameWords(local, locals);
+    const next = prefix + nextLocal;
+    if (!isGraphId(nextLocal) || !isGraphPlanId(next)) continue;
     if (next === edge.id || ids.has(next) || [...accepted.values()].includes(next)) continue;
     accepted.set(edge.id, next);
   }
@@ -305,21 +369,28 @@ function portRef(renames: GraphRenames, value: unknown): unknown {
 }
 
 /** A predicate with `params.<key>` renamed and, where node ids may be roots, the root node. */
-function predicate(renames: GraphRenames, value: unknown, nodeRoots: boolean): unknown {
-  if (Array.isArray(value)) return value.map((entry) => predicate(renames, entry, nodeRoots));
+function predicate(
+  renames: GraphRenames,
+  value: unknown,
+  nodeRoots: boolean,
+  inputRenames?: Readonly<Record<string, string>>,
+): unknown {
+  if (Array.isArray(value))
+    return value.map((entry) => predicate(renames, entry, nodeRoots, inputRenames));
   if (!isRecord(value)) return value;
   const next: Rec = { ...value };
   if (typeof value.path === "string") {
     const segments = value.path.split(".");
     if (segments[0] === "params" && segments[1] !== undefined) {
       segments[1] = String(renamed(renames.params, segments[1]));
-    } else if (nodeRoots && segments[0] !== undefined) {
-      segments[0] = String(nodeId(renames, segments[0]));
+    } else if (segments[0] !== undefined) {
+      if (nodeRoots) segments[0] = String(nodeId(renames, segments[0]));
+      else if (inputRenames) segments[0] = String(renamed(inputRenames, segments[0]));
     }
     next.path = segments.join(".");
   }
   for (const key of ["all", "any", "not"]) {
-    if (key in value) next[key] = predicate(renames, value[key], nodeRoots);
+    if (key in value) next[key] = predicate(renames, value[key], nodeRoots, inputRenames);
   }
   return next;
 }
@@ -401,11 +472,54 @@ function paramBinding(renames: GraphRenames, value: unknown): unknown {
 
 // ---------------------------------------------------------------- templates
 
-export interface GraphTemplateUpgradeContext {
-  /** A user template's node renames, for pins naming its nodes inside a sub-graph. */
-  userNodeRenames?: ReadonlyMap<string, ReadonlyMap<string, string>>;
-  /** A user template's digest before and after this upgrade, for sub-graph pins. */
-  userDigests?: ReadonlyMap<string, { before: string; after: string }>;
+interface GraphTemplateUpgradeContext {
+  users?: ReadonlyMap<string, TemplateUpgrade>;
+  userTemplates?: Readonly<Record<string, unknown>>;
+  upgradedTemplates?: ReadonlyMap<string, unknown>;
+}
+
+function templateUpgrade(
+  scope: unknown,
+  id: unknown,
+  context: GraphTemplateUpgradeContext,
+): TemplateUpgrade | undefined {
+  if (typeof id !== "string") return undefined;
+  if (scope === "builtin") return BUILTIN_UPGRADES.get(id);
+  if (scope === "user") return context.users?.get(id);
+  return undefined;
+}
+
+function bindingRenames(roles: unknown, parameters: unknown): BindingRenames {
+  return {
+    roles: usableRenames(
+      ROLE_RENAMES,
+      records(roles).map((entry) => entry.key),
+    ),
+    params: usableRenames(
+      PARAM_RENAMES,
+      records(parameters).map((entry) => entry.key),
+    ),
+  };
+}
+
+function promptSource(source: string, params: BindingRenames["params"]): string {
+  // Consume whole tags, including comments and unsupported tags. Edit only
+  // parameter paths in variable, section, inverted-section and close tags.
+  return source.replace(/{{[\s\S]*?}}/g, (tag) =>
+    tag.replace(
+      /^({{\s*(?:[#^/]\s*)?params\.)([\w-]+)((?:\.[\w-]+)*\s*}})$/,
+      (_match, prefix: string, key: string, suffix: string) =>
+        prefix + String(renamed(params, key)) + suffix,
+    ),
+  );
+}
+
+function renamedPrompt(renames: GraphRenames, prompt: Rec): Rec {
+  if ("builtIn" in prompt) return { ...prompt, builtIn: renamed(PROMPT_RENAMES, prompt.builtIn) };
+  if (typeof prompt.template === "string") {
+    return { ...prompt, template: promptSource(prompt.template, renames.params) };
+  }
+  return prompt;
 }
 
 function templateRenames(template: Rec): GraphRenames {
@@ -415,14 +529,7 @@ function templateRenames(template: Rec): GraphRenames {
   return {
     nodes: nodeMap,
     edges: edgeRenames(edges, nodeMap),
-    roles: usableRenames(
-      ROLE_RENAMES,
-      records(template.roles).map((entry) => entry.key),
-    ),
-    params: usableRenames(
-      PARAM_RENAMES,
-      records(template.parameters).map((entry) => entry.key),
-    ),
+    ...bindingRenames(template.roles, template.parameters),
   };
 }
 
@@ -470,11 +577,16 @@ function templateNode(
     );
   }
   if ("outputs" in node) next.outputs = templatePorts(node.outputs, false);
-  if ("when" in node) next.when = predicate(renames, node.when, false);
-  if ("role" in node) next.role = role(renames, node.role);
-  if (isRecord(node.prompt) && "builtIn" in node.prompt) {
-    next.prompt = { ...node.prompt, builtIn: renamed(PROMPT_RENAMES, node.prompt.builtIn) };
+  if ("when" in node) {
+    next.when = predicate(
+      renames,
+      node.when,
+      false,
+      verify ? { [FORMER_VERIFY_PORT]: CURRENT_VERIFY_PORT } : undefined,
+    );
   }
+  if ("role" in node) next.role = role(renames, node.role);
+  if (isRecord(node.prompt)) next.prompt = renamedPrompt(renames, node.prompt);
   if (isRecord(node.session) && typeof node.session.from === "string") {
     next.session = { ...node.session, from: nodeId(renames, node.session.from) };
   }
@@ -484,32 +596,39 @@ function templateNode(
       isRecord(branch) ? { ...branch, when: predicate(renames, branch.when, false) } : branch,
     );
   }
-  if (node.kind === "subgraph") {
-    next.params = childBindings(node.params, PARAM_RENAMES, (entry) =>
+  if (node.kind === "subgraph" && isRecord(node.template)) {
+    const ref = node.template;
+    const child = templateUpgrade(ref.scope, ref.id, context);
+    const bindings = child?.bindings ?? NO_BINDING_RENAMES;
+    next.params = childBindings(node.params, bindings.params, (entry) =>
       paramBinding(renames, entry),
     );
-    next.roles = childBindings(node.roles, ROLE_RENAMES, (entry) => role(renames, entry));
-    const ref = node.template;
-    if (isRecord(ref) && ref.scope === "user" && typeof ref.digest === "string") {
-      const digests = context.userDigests?.get(String(ref.id));
-      if (digests && digests.before === ref.digest)
-        next.template = { ...ref, digest: digests.after };
-    }
+    next.roles = childBindings(node.roles, bindings.roles, (entry) => role(renames, entry));
+    next.template = repin(ref, child);
   }
   return next;
 }
 
-/** A sub-graph child's node renames, for a key `<subgraph node>/<child node>`. */
-function childNodeRenames(
+function repin(ref: Rec, child: TemplateUpgrade | undefined): Rec {
+  const digests = child?.digests;
+  return digests && ref.digest === digests.before ? { ...ref, digest: digests.after } : ref;
+}
+
+function childMockPin(
   template: Rec,
-  subgraphNode: string,
+  parts: string[],
   context: GraphTemplateUpgradeContext,
-): Readonly<Record<string, string>> | ReadonlyMap<string, string> | undefined {
-  const node = records(template.nodes).find((entry) => entry.id === subgraphNode);
-  if (!node || node.kind !== "subgraph" || !isRecord(node.template)) return undefined;
-  if (node.template.scope === "built-in") return BUILT_IN_NODE_RENAMES[String(node.template.id)];
-  if (node.template.scope === "user") return context.userNodeRenames?.get(String(node.template.id));
-  return undefined;
+): string {
+  const [outer, ...inner] = parts;
+  const node = records(template.nodes).find((entry) => entry.id === outer);
+  if (!node || node.kind !== "subgraph" || !isRecord(node.template)) return parts.join("/");
+  const { scope, id } = node.template;
+  const child = templateUpgrade(scope, id, context);
+  if (inner.length === 1) return `${outer}/${child?.nodes.get(inner[0]!) ?? inner[0]}`;
+  const row = scope === "user" && typeof id === "string" && context.userTemplates?.[id];
+  return isRecord(row) && isGraphTemplate(row.template)
+    ? `${outer}/${childMockPin(row.template, inner, context)}`
+    : parts.join("/");
 }
 
 /** Layout and mock pins: keyed by node id, or `<sub-graph node>/<child node>` for pins. */
@@ -522,17 +641,11 @@ function nodeKeyed(
   if (!isRecord(value)) return value;
   const next: Rec = {};
   for (const [key, entry] of Object.entries(value)) {
-    let target = String(nodeId(renames, key));
-    const slash = key.indexOf("/");
-    if (slash > 0 && key.indexOf("/", slash + 1) < 0) {
-      const outer = key.slice(0, slash);
-      const inner = key.slice(slash + 1);
-      const child = childNodeRenames(template, outer, context);
-      const innerNext =
-        child instanceof Map ? child.get(inner) : child ? (child as Rec)[inner] : undefined;
-      target = `${String(nodeId(renames, outer))}/${typeof innerNext === "string" ? innerNext : inner}`;
-    }
-    if (target !== key && Object.hasOwn(value, target)) target = key;
+    const target = key.includes("/")
+      ? childMockPin(template, key.split("/"), context)
+      : String(nodeId(renames, key));
+    // A real node's rename takes precedence over a stale pin at its new id.
+    if (target === key && Object.hasOwn(next, target)) continue;
     next[target] = entry;
   }
   return next;
@@ -623,7 +736,7 @@ export function upgradeGraphTemplate(
   if (!isGraphTemplate(template)) return template;
   try {
     const next = plain(upgradeTemplateValue(template, context));
-    return sameData(next, template) ? template : next;
+    return sameData(next, template) || !validateGraphTemplate(next).ok ? template : next;
   } catch {
     // A record this upgrade cannot read is left exactly as it was.
     return template;
@@ -644,27 +757,74 @@ function safeDigest(template: unknown): string | undefined {
   }
 }
 
+/** Compute accepted user-template changes children first, starting from the original rows. */
+function templateUpgradeContext(stored: unknown): GraphTemplateUpgradeContext {
+  if (!isRecord(stored) || !isRecord(stored.templates)) return {};
+  const userTemplates = stored.templates;
+  const users = new Map<string, TemplateUpgrade>();
+  const upgradedTemplates = new Map<string, unknown>();
+  const context = { users, userTemplates, upgradedTemplates };
+  const before = new Map<string, string>();
+  for (const [id, row] of Object.entries(userTemplates)) {
+    if (!isRecord(row) || !isGraphTemplate(row.template)) continue;
+    const digest = safeDigest(row.template);
+    if (digest) before.set(id, digest);
+    // Resolve binding and node maps even on unpinned references. Digest
+    // dependencies only exist for references that matched the original child.
+    const renames = templateRenames(row.template);
+    users.set(id, { bindings: renames, nodes: renames.nodes });
+  }
+  const pending = new Set(before.keys());
+  const resolve = (id: string) => {
+    if (!pending.delete(id)) return;
+    const row = userTemplates[id] as Rec;
+    const template = row.template as Rec;
+    for (const node of records(template.nodes)) {
+      const ref = node.template;
+      if (
+        node.kind === "subgraph" &&
+        isRecord(ref) &&
+        ref.scope === "user" &&
+        typeof ref.id === "string"
+      ) {
+        resolve(ref.id);
+      }
+    }
+    const upgraded = upgradeGraphTemplate(template, context);
+    upgradedTemplates.set(id, upgraded);
+    const after = safeDigest(upgraded);
+    if (upgraded === template) {
+      users.set(id, { bindings: NO_BINDING_RENAMES, nodes: new Map() });
+    } else if (after) {
+      users.get(id)!.digests = { before: before.get(id)!, after };
+    }
+  };
+  for (const id of before.keys()) resolve(id);
+  return context;
+}
+
+function launchBindings(request: Rec, bindings: BindingRenames): Rec {
+  return {
+    ...request,
+    ...("roles" in request ? { roles: renameKeys(request.roles, bindings.roles) } : {}),
+    ...("params" in request ? { params: renameKeys(request.params, bindings.params) } : {}),
+  };
+}
+
 /** The `graph-templates` store: user templates and saved launch defaults. */
-export function upgradeGraphTemplatesStore(stored: unknown): unknown {
+export function upgradeGraphTemplatesStore(
+  stored: unknown,
+  context: GraphTemplateUpgradeContext = templateUpgradeContext(stored),
+): unknown {
   if (!isRecord(stored)) return stored;
   const next: Rec = { ...stored };
   let changed = false;
-  const templates = isRecord(stored.templates) ? stored.templates : undefined;
-  if (templates) {
-    const userNodeRenames = new Map<string, ReadonlyMap<string, string>>();
-    const userDigests = new Map<string, { before: string; after: string }>();
-    for (const [id, row] of Object.entries(templates)) {
-      if (!isRecord(row)) continue;
-      userNodeRenames.set(id, graphTemplateNodeRenames(row.template));
-      const before = safeDigest(row.template);
-      const after = safeDigest(upgradeGraphTemplate(row.template, { userNodeRenames }));
-      if (before && after && before !== after) userDigests.set(id, { before, after });
-    }
+  if (context.userTemplates) {
     const upgraded: Rec = {};
-    for (const [id, row] of Object.entries(templates)) {
+    for (const [id, row] of Object.entries(context.userTemplates)) {
       upgraded[id] = row;
       if (!isRecord(row)) continue;
-      const template = upgradeGraphTemplate(row.template, { userNodeRenames, userDigests });
+      const template = context.upgradedTemplates?.get(id) ?? row.template;
       if (template === row.template) continue;
       upgraded[id] = {
         ...row,
@@ -687,11 +847,10 @@ export function upgradeGraphTemplatesStore(stored: unknown): unknown {
         defaults[key] = entry;
         // Project templates keep their names in their repositories.
         if (!isRecord(entry) || key.startsWith("project:")) continue;
-        const upgraded = {
-          ...entry,
-          roles: renameKeys(entry.roles, ROLE_RENAMES),
-          params: renameKeys(entry.params, PARAM_RENAMES),
-        };
+        const [scope, id] = key.split(":");
+        const bindings = templateUpgrade(scope, id, context)?.bindings;
+        if (!bindings) continue;
+        const upgraded = launchBindings(entry, bindings);
         if (sameData(upgraded, entry)) continue;
         defaults[key] = upgraded;
         defaultsChanged = true;
@@ -756,9 +915,7 @@ function planNode(renames: GraphRenames, node: unknown): unknown {
     };
   }
   if ("role" in node) next.role = role(renames, node.role);
-  if (isRecord(node.prompt) && "builtIn" in node.prompt) {
-    next.prompt = { ...node.prompt, builtIn: renamed(PROMPT_RENAMES, node.prompt.builtIn) };
-  }
+  if (isRecord(node.prompt)) next.prompt = renamedPrompt(renames, node.prompt);
   if (isRecord(node.session) && typeof node.session.from === "string") {
     next.session = { ...node.session, from: nodeId(renames, node.session.from) };
   }
@@ -767,12 +924,6 @@ function planNode(renames: GraphRenames, node: unknown): unknown {
     next.branches = node.branches.map((branch) =>
       isRecord(branch) ? { ...branch, when: predicate(renames, branch.when, false) } : branch,
     );
-  }
-  if (node.kind === "subgraph") {
-    next.params = childBindings(node.params, PARAM_RENAMES, (entry) =>
-      paramBinding(renames, entry),
-    );
-    next.roles = childBindings(node.roles, ROLE_RENAMES, (entry) => role(renames, entry));
   }
   return next;
 }
@@ -795,7 +946,17 @@ function upgradePlan(plan: Rec, renames: GraphRenames): Rec {
     from: portRef(renames, entry.from),
   }));
   next.order = asArray(plan.order).map((id) => nodeId(renames, id));
-  next.nodes = asArray(plan.nodes).map((node) => planNode(renames, node));
+  const subgraphs = records(plan.subgraphs);
+  const scopedParameters = new Map(
+    subgraphs.map((subgraph) => [subgraph.id, bindingRenames([], subgraph.parameters).params]),
+  );
+  const inScope = (subgraph: unknown): GraphRenames => ({
+    ...renames,
+    params: scopedParameters.get(subgraph) ?? renames.params,
+  });
+  next.nodes = asArray(plan.nodes).map((node) =>
+    planNode(inScope(isRecord(node) ? node.subgraph : undefined), node),
+  );
   next.edges = records(plan.edges).map((edge) => ({
     ...edge,
     id: renames.edges.get(String(edge.id)) ?? edge.id,
@@ -810,7 +971,7 @@ function upgradePlan(plan: Rec, renames: GraphRenames): Rec {
     members: asArray(loop.members).map((id) => nodeId(renames, id)),
     entry: asArray(loop.entry).map((id) => nodeId(renames, id)),
     laterOnly: asArray(loop.laterOnly).map((id) => nodeId(renames, id)),
-    until: loopUntil(renames, loop),
+    until: loopUntil(inScope(loop.subgraph), loop),
     carry: records(loop.carry).map((carry) => ({
       ...carry,
       from: portRef(renames, carry.from),
@@ -819,31 +980,36 @@ function upgradePlan(plan: Rec, renames: GraphRenames): Rec {
     })),
   }));
   if (Array.isArray(plan.subgraphs)) {
-    next.subgraphs = records(plan.subgraphs).map((subgraph) => ({
-      ...subgraph,
-      parameters: records(subgraph.parameters).map((entry) => ({
-        ...entry,
-        key: renamed(PARAM_RENAMES, entry.key),
-      })),
-      params: childBindings(subgraph.params, PARAM_RENAMES, (entry) =>
-        paramBinding(renames, entry),
-      ),
-      roles: childBindings(subgraph.roles, ROLE_RENAMES, (entry) => role(renames, entry)),
-      nodes: asArray(subgraph.nodes).map((id) => nodeId(renames, id)),
-      inputs: isRecord(subgraph.inputs)
-        ? Object.fromEntries(
-            Object.entries(subgraph.inputs).map(([port, targets]) => [
-              port,
-              asArray(targets).map((entry) => portRef(renames, entry)),
-            ]),
-          )
-        : subgraph.inputs,
-      outputs: isRecord(subgraph.outputs)
-        ? Object.fromEntries(
-            Object.entries(subgraph.outputs).map(([port, ref]) => [port, portRef(renames, ref)]),
-          )
-        : subgraph.outputs,
-    }));
+    next.subgraphs = subgraphs.map((subgraph) => {
+      const params = inScope(subgraph.id).params;
+      const roles = usableRenames(
+        ROLE_RENAMES,
+        Object.keys(isRecord(subgraph.roles) ? subgraph.roles : {}),
+      );
+      return {
+        ...subgraph,
+        parameters: records(subgraph.parameters).map((entry) => ({
+          ...entry,
+          key: renamed(params, entry.key),
+        })),
+        params: childBindings(subgraph.params, params, (entry) => paramBinding(renames, entry)),
+        roles: childBindings(subgraph.roles, roles, (entry) => role(renames, entry)),
+        nodes: asArray(subgraph.nodes).map((id) => nodeId(renames, id)),
+        inputs: isRecord(subgraph.inputs)
+          ? Object.fromEntries(
+              Object.entries(subgraph.inputs).map(([port, targets]) => [
+                port,
+                asArray(targets).map((entry) => portRef(renames, entry)),
+              ]),
+            )
+          : subgraph.inputs,
+        outputs: isRecord(subgraph.outputs)
+          ? Object.fromEntries(
+              Object.entries(subgraph.outputs).map(([port, ref]) => [port, portRef(renames, ref)]),
+            )
+          : subgraph.outputs,
+      };
+    });
   }
   if (isRecord(plan.cost)) {
     next.cost = {
@@ -903,6 +1069,10 @@ function nativeHash(text: string): string {
 function planDigest(plan: Rec): string {
   const { digest: _digest, ...rest } = plan;
   return nativeHash(canonicalJson(rest, 128));
+}
+
+function verifyPlanDigest(candidate: { digest: string }): boolean {
+  return candidate.digest === planDigest(candidate);
 }
 
 // ---------------------------------------------------------------- runs
@@ -1003,6 +1173,8 @@ function upgradeReadableGraphRun(
   run: Rec & { plan: Rec; id: string },
   artifacts: readonly unknown[],
 ): GraphRunUpgrade | null {
+  const original = validateGraphRun(run, { verifyPlan: verifyPlanDigest });
+  if (!original.ok) return null;
   const plan = run.plan;
   const renames = planRenames(plan);
   const nextPlan = plain(upgradePlan(plan, renames));
@@ -1136,7 +1308,7 @@ function upgradeReadableGraphRun(
   if (!changedArtifacts && sameData(next, run)) return null;
 
   const validation = validateGraphRun(next, {
-    verifyPlan: (candidate) => candidate.digest === planDigest(candidate as unknown as Rec),
+    verifyPlan: verifyPlanDigest,
   });
   if (!validation.ok) return null;
   for (const artifact of upgradedArtifacts.artifacts) {
@@ -1214,37 +1386,91 @@ export function upgradeWorkflowResultsStore(
   return changed ? { ...stored, entries } : stored;
 }
 
-/** `scheduled-jobs`: graph launches of built-in and user templates. */
-export function upgradeScheduledJobsStore(stored: unknown): unknown {
+const REVIEW_LAUNCH_INPUT_RENAMES = {
+  autoFix: "autoAddressFindings",
+  fixModel: "addressFindingsModel",
+};
+
+function upgradeScheduledAction(job: Rec, action: Rec, context: GraphTemplateUpgradeContext): Rec {
+  if (action.kind === "graph" && isRecord(action.request)) {
+    const { ref } = action.request;
+    if (!isRecord(ref)) return action;
+    const bindings = templateUpgrade(ref.scope, ref.id, context)?.bindings;
+    return bindings ? { ...action, request: launchBindings(action.request, bindings) } : action;
+  }
+  if (action.kind !== "action" || !isRecord(action.input) || !isRecord(job.owner)) return action;
+  const { input } = action;
+  if (job.owner.kind === "operator" || job.owner.kind === "control-mcp") {
+    switch (action.action) {
+      case "review.launch":
+        return { ...action, input: renameKeys(input, REVIEW_LAUNCH_INPUT_RENAMES) };
+      case "review.open":
+        return input.surface === "fix"
+          ? { ...action, input: { ...input, surface: "address-findings" } }
+          : action;
+      case "build.launch":
+        return isRecord(input.steps)
+          ? {
+              ...action,
+              input: { ...input, steps: renameKeys(input.steps, { address: "address-findings" }) },
+            }
+          : action;
+    }
+  }
+  if (job.owner.kind === "coordinator") {
+    switch (action.action) {
+      case "launch_multi_review":
+        return { ...action, input: renameKeys(input, REVIEW_LAUNCH_INPUT_RENAMES) };
+      case "custom_fix_multi_review":
+        return {
+          ...action,
+          action: "custom_address_multi_review",
+          input: renameKeys(input, { fixModel: "addressFindingsModel" }),
+        };
+      case "open_multi_review_fix":
+        return { ...action, action: "open_multi_review_address_findings" };
+      case "launch_graph": {
+        const ref = input.template;
+        if (!isRecord(ref)) return action;
+        const bindings = templateUpgrade(ref.scope, ref.id, context)?.bindings;
+        return bindings ? { ...action, input: launchBindings(input, bindings) } : action;
+      }
+    }
+  }
+  return action;
+}
+
+/** `scheduled-jobs`: saved action names and inputs, scoped to the owning surface. */
+export function upgradeScheduledJobsStore(
+  stored: unknown,
+  context: GraphTemplateUpgradeContext = {},
+): unknown {
   if (!isRecord(stored)) return stored;
   let changed = false;
   const next: Rec = {};
   for (const [id, job] of Object.entries(stored)) {
     next[id] = job;
-    if (!isRecord(job) || !isRecord(job.action) || job.action.kind !== "graph") continue;
-    const request = job.action.request;
-    if (!isRecord(request) || !isRecord(request.ref) || request.ref.scope === "project") continue;
-    const upgraded = {
-      ...request,
-      ...("roles" in request ? { roles: renameKeys(request.roles, ROLE_RENAMES) } : {}),
-      ...("params" in request ? { params: renameKeys(request.params, PARAM_RENAMES) } : {}),
-    };
-    if (sameData(upgraded, request)) continue;
-    next[id] = { ...job, action: { ...job.action, request: upgraded } };
+    if (!isRecord(job) || !isRecord(job.action)) continue;
+    const action = upgradeScheduledAction(job, job.action, context);
+    if (sameData(action, job.action)) continue;
+    next[id] = { ...job, action };
     changed = true;
   }
   return changed ? next : stored;
 }
 
 /** `graph-describe`: a completed job's unsaved draft. */
-export function upgradeGraphDescribeStore(stored: unknown): unknown {
+export function upgradeGraphDescribeStore(
+  stored: unknown,
+  context: GraphTemplateUpgradeContext = {},
+): unknown {
   if (!isRecord(stored)) return stored;
   let changed = false;
   const next: Rec = {};
   for (const [id, job] of Object.entries(stored)) {
     next[id] = job;
     if (!isRecord(job) || !("template" in job)) continue;
-    const template = upgradeGraphTemplate(job.template);
+    const template = upgradeGraphTemplate(job.template, context);
     if (template === job.template) continue;
     next[id] = { ...job, template };
     changed = true;
@@ -1263,9 +1489,11 @@ export const graphVocabularyUpgradeMigration: StorageMigration = {
       const next = upgrade(stored.value);
       if (next !== stored.value) database.writeStoreInTransaction(store, next);
     };
-    rewrite("graph-templates", upgradeGraphTemplatesStore);
-    rewrite("graph-describe", upgradeGraphDescribeStore);
-    rewrite("scheduled-jobs", upgradeScheduledJobsStore);
+    const templates = database.readStoreValueInTransaction("graph-templates");
+    const context = templateUpgradeContext(templates?.value);
+    rewrite("graph-templates", (value) => upgradeGraphTemplatesStore(value, context));
+    rewrite("graph-describe", (value) => upgradeGraphDescribeStore(value, context));
+    rewrite("scheduled-jobs", (value) => upgradeScheduledJobsStore(value, context));
 
     let resultKeys = new Map<string, string>();
     const runs = database.readStoreValueInTransaction("graph-runs");

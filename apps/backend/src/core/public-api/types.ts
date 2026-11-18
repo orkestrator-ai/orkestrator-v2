@@ -104,6 +104,8 @@ export interface PreparedMutation {
   /** Content-free defaults resolved now and kept for replay. */
   resolved?: PublicOperationRecord["resolved"];
   resources?: PublicOperationResources;
+  /** Publish a running receipt and settle it in the owning backend. */
+  background?: boolean;
   execute(operation: OperationHandle): Promise<ExecuteOutcome>;
 }
 

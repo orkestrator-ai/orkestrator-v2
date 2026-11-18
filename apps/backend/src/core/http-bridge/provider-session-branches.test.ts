@@ -81,10 +81,14 @@ describe("HTTP bridge session branches", () => {
   test("a stopped or refused summarized switch fails in the bridge's own words", async () => {
     const stopped =
       "The branch switch was stopped before Pi finished the summary; the conversation stayed on its branch.";
-    const refused = "This branch ends on a prompt with no reply, so a summary cannot follow it.";
+    const refused =
+      "This branch ends on a prompt with no reply, so a summary cannot follow it. Switch without a summary.";
     const answers = [
       Response.json({ error: stopped, cancelled: true, reason: "cancelled" }, { status: 409 }),
-      Response.json({ error: refused, kind: "branch-summary-failed" }, { status: 422 }),
+      Response.json(
+        { error: refused, kind: "branch-summary-failed", reason: "prompt-leaf" },
+        { status: 422 },
+      ),
       Response.json({ error: "Session is already running" }, { status: 409 }),
     ];
     const { provider } = httpProvider(() => answers.shift()!, piConnection);
@@ -100,6 +104,37 @@ describe("HTTP bridge session branches", () => {
       "Pi branch switch failed (HTTP 409): Session is already running",
     );
   });
+
+  test.each([false, true])(
+    "rejects an oversized open switch response (summarize=%s)",
+    async (summarize) => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      const { provider } = httpProvider(
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array(16 * 1024 + 1));
+              },
+              cancel: () => promise,
+            }),
+          ),
+        piConnection,
+      );
+      try {
+        await expect(
+          provider.performSessionAction!("s", {
+            kind: "switch-branch",
+            entryId: "e-1",
+            summarize,
+          }),
+        ).rejects.toThrow("Pi branch switch is oversized");
+      } finally {
+        resolve();
+      }
+    },
+    1_000,
+  );
 
   test("drops malformed branches and bounds the rest", async () => {
     const limits = NATIVE_AGENT_BRANCH_LIST_LIMITS;

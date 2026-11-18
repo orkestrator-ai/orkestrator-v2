@@ -1,5 +1,6 @@
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import { publicActionCommand } from "@orkestrator/protocol/contract/domains/public-api";
+import { createLogger } from "@orkestrator/protocol/logger";
 import { relayController, withRelayController } from "./relay-context.js";
 import {
   isPublicActionName,
@@ -54,6 +55,7 @@ import type {
 export type PublicHandlerTable = ReadonlyMap<PublicActionName, PublicActionHandler>;
 
 const MAX_INPUT_BYTES = 1024 * 1024;
+const log = createLogger("public-api");
 
 function backendIdentity(context: PublicActionContext) {
   return { installationId: context.installationId, generation: context.generation };
@@ -401,7 +403,30 @@ async function execute(
   replayed: boolean,
 ): Promise<PublicActionResponse> {
   const handle = operationHandle(record, context);
-  await handle.update({ state: "running", stage: "executing" });
+  const running = await handle.update({
+    state: "running",
+    stage: "executing",
+    ...(prepared.background ? { result: {} } : {}),
+  });
+  const execution = finishExecution(handler, prepared, handle, replayed);
+  if (prepared.background) {
+    void execution.catch(() => {
+      log.error("outcome.record-failed", {
+        action: handler.action,
+        operationId: handle.operationId,
+      });
+    });
+    return publicSuccessEnvelope(handler.action, {}, toReceipt(running, replayed));
+  }
+  return execution;
+}
+
+async function finishExecution(
+  handler: MutationActionHandler,
+  prepared: Awaited<ReturnType<MutationActionHandler["prepare"]>>,
+  handle: OperationHandle,
+  replayed: boolean,
+): Promise<PublicActionResponse> {
   let final: PublicOperationRecord;
   let warnings: string[] | undefined;
   let retryable: boolean | undefined;

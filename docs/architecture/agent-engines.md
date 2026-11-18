@@ -251,9 +251,10 @@ selected entry. It is in the session file at once, so it survives a reload
 and a restart, it is rendered as a "Branch summary" row, and the next turn's
 context carries it. An ordinary switch passes `summarize: false` and makes
 no model call. While Pi writes the summary the session reports itself
-running, the tab's Stop stops it through `abortBranchSummary`, and the bridge
-stops it itself after four minutes; a stopped switch, one an extension
-cancels and a failed summary are each answered as "the conversation stayed
+running. The tab's Stop requests cancellation through `abortBranchSummary`,
+as does the four-minute deadline. The SDK checks cancellation before changing
+the leaf, even when a slow extension delays settlement. A stopped switch, one
+an extension cancels and a failed summary are each answered as "the conversation stayed
 on its branch" (`bridges/pi-bridge/src/branch-switch.ts`). A branch that ends
 on a prompt with no reply is refused a summary before any model call: Pi
 would put the summary before that prompt and leave the prompt off the

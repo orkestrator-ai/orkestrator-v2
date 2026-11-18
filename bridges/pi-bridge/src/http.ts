@@ -823,7 +823,7 @@ async function routeSession(
     if (!body.ok) throw new HttpError(400, body.error);
     const switched = await navigateSessionHistory(state, decodeURIComponent(subject), "at", {
       summarize: body.summarize,
-    }).finally(() => void runDeferredCommandReload(state).catch(() => undefined));
+    });
     await persistBarrier();
     return json(response, 200, { switched: true, summarized: switched.summarized });
   }

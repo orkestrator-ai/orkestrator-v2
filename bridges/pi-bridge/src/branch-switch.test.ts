@@ -5,9 +5,9 @@
  * for the provider (as in `compaction-controls.test.ts`). No credential, no
  * network call and no billed turn.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ const projectDirectory = await mkdtemp(join(tmpdir(), "pi-branch-switch-project-
 process.env.CWD = projectDirectory;
 
 const { server, start, shutdown } = await import("./server.js");
+const { setCancelAckTimeoutForTests } = await import("./http.js");
 const { authToken: TOKEN } = await import("./config.js");
 const { closeSession, detachSession, resumeSession, setAgentSessionTestHooks } =
   await import("./agent-session.js");
@@ -35,6 +36,7 @@ const { ModelRuntime, SessionManager } = await import("./pi-sdk.js");
 const { fauxAssistantMessage, fauxProvider } = await import("@earendil-works/pi-ai");
 const { parseBranchSwitchBody, setBranchSummaryTimeoutForTests } =
   await import("./branch-switch.js");
+type AgentSession = import("@earendil-works/pi-coding-agent").AgentSession;
 
 type SessionState = NonNullable<ReturnType<typeof sessions.get>>;
 type FauxResponseFactory = import("@earendil-works/pi-ai").FauxResponseFactory;
@@ -60,6 +62,7 @@ afterAll(async () => {
 
 afterEach(() => {
   setBranchSummaryTimeoutForTests();
+  setCancelAckTimeoutForTests();
 });
 
 function call(path: string, init: RequestInit = {}): Promise<Response> {
@@ -94,6 +97,8 @@ interface FakeEngine {
   calls: ModelCall[];
   /** Hold every summary request until the bridge aborts it. */
   holdSummaries: (hold: boolean) => void;
+  failSummary: (diagnostic: string) => void;
+  holdNextAttach: (until: Promise<void>) => void;
   prompt: (text: string) => Promise<void>;
   /** The Pi entry id of the branch a rewind left, from the bridge's own list. */
   otherBranch: () => Promise<string>;
@@ -114,6 +119,7 @@ async function withTwoBranches(
   process.env.PI_SESSION_DIR = directory;
   const calls: ModelCall[] = [];
   let holdSummaries = false;
+  let summaryDiagnostic: string | undefined;
   let state: SessionState | undefined;
   setAgentSessionTestHooks(undefined);
   try {
@@ -128,6 +134,9 @@ async function withTwoBranches(
       const summary = /structured summary of this conversation branch/.test(last);
       calls.push({ kind: summary ? "summary" : "turn", prompts });
       if (!summary) return fauxAssistantMessage(`Answer to: ${last}`);
+      if (summaryDiagnostic) {
+        return fauxAssistantMessage("", { stopReason: "error", errorMessage: summaryDiagnostic });
+      }
       const signal = requestOptions?.signal;
       if (holdSummaries && signal && !signal.aborted) {
         await new Promise<void>((resolve) =>
@@ -177,6 +186,15 @@ async function withTwoBranches(
       prompt,
       holdSummaries: (hold) => {
         holdSummaries = hold;
+      },
+      failSummary: (diagnostic) => {
+        summaryDiagnostic = diagnostic;
+      },
+      holdNextAttach: (until) => {
+        setModelRuntimeFactoryForTests(async () => {
+          await until;
+          return runtime;
+        });
       },
       otherBranch: async () => {
         const listed = (await (await call(`/session/${current.id}/branches`)).json()) as {
@@ -229,6 +247,24 @@ function renderedSummaryRows(state: SessionState): string[] {
   return state.messages
     .map((row) => row.content)
     .filter((content) => content.startsWith("Branch summary:"));
+}
+
+function pauseTreeHook(session: AgentSession, summary?: string) {
+  const gate = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const runner = session.extensionRunner;
+  const hasHandlers = runner.hasHandlers.bind(runner);
+  spyOn(runner, "hasHandlers").mockImplementation(
+    (event) => event === "session_before_tree" || hasHandlers(event),
+  );
+  const originalEmit = runner.emit.bind(runner);
+  spyOn(runner, "emit").mockImplementation((async (event: Parameters<typeof originalEmit>[0]) => {
+    if (event.type !== "session_before_tree") return originalEmit(event);
+    entered.resolve();
+    await gate.promise;
+    return summary ? { summary: { summary } } : undefined;
+  }) as typeof runner.emit);
+  return { entered: entered.promise, release: gate.resolve };
 }
 
 describe("switching branches with a summary", () => {
@@ -380,6 +416,207 @@ describe("switching branches with a summary", () => {
     );
   });
 
+  test.each(["cancelled", "timeout"] as const)(
+    "auth preparation rejection reports %s",
+    async (reason) => {
+      await withTwoBranches(`branch-auth-${reason}`, async ({ state, calls, otherBranch }) => {
+        const target = await otherBranch();
+        const session = state.session!;
+        const leaf = session.sessionManager.getLeafId();
+        const authEntered = Promise.withResolvers<void>();
+        // The normal faux runtime supplies its own stream function, so inject
+        // the abortable SDK preparation step before that stream starts.
+        const sdk = session as unknown as {
+          _getSummarizationRequestAuth(model: unknown, signal: AbortSignal): Promise<never>;
+        };
+        spyOn(sdk, "_getSummarizationRequestAuth").mockImplementation(async (_model, signal) => {
+          authEntered.resolve();
+          return new Promise<never>((_resolve, reject) => {
+            if (signal.aborted) reject(signal.reason);
+            else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        });
+        if (reason === "timeout") setBranchSummaryTimeoutForTests(50);
+        const switching = post(`/session/${state.id}/branches/${target}`, { summarize: true });
+        await authEntered.promise;
+        if (reason === "cancelled") {
+          const stop = await post(`/session/${state.id}/cancel`);
+          expect(stop.status).toBe(200);
+          expect(await stop.json()).toEqual({ cancelled: true });
+        }
+        const answer = await switching;
+        expect(answer.status).toBe(409);
+        expect(await answer.json()).toMatchObject({ cancelled: true, reason });
+        expect(session.sessionManager.getLeafId()).toBe(leaf);
+        expect(calls).toEqual([]);
+      });
+    },
+  );
+
+  test.each(["cancelled", "timeout"] as const)(
+    "a late extension summary cannot commit after %s",
+    async (reason) => {
+      await withTwoBranches(
+        `branch-late-extension-${reason}`,
+        async ({ state, calls, otherBranch }) => {
+          const target = await otherBranch();
+          const leaf = state.session!.sessionManager.getLeafId();
+          const hook = pauseTreeHook(state.session!, SUMMARY_TEXT);
+          setCancelAckTimeoutForTests(10);
+          if (reason === "timeout") setBranchSummaryTimeoutForTests(50);
+          const switching = post(`/session/${state.id}/branches/${target}`, { summarize: true });
+          try {
+            await hook.entered;
+            if (reason === "cancelled") {
+              const stop = await post(`/session/${state.id}/cancel`);
+              expect(stop.status).toBe(202);
+              expect(await stop.json()).toEqual({ cancelled: false, pending: true });
+            } else {
+              await waitFor(() => state.branchSummary?.stopReason === "timeout");
+            }
+            expect((await readStatus(state)).status).toBe("running");
+          } finally {
+            hook.release();
+          }
+          const answer = await switching;
+          expect(answer.status).toBe(409);
+          expect(await answer.json()).toMatchObject({ cancelled: true, reason });
+          expect(state.session!.sessionManager.getLeafId()).toBe(leaf);
+          expect(await summaryEntries(state)).toEqual([]);
+          expect(calls).toEqual([]);
+        },
+      );
+    },
+  );
+
+  test("Stop during cold attach prevents navigation after the session attaches", async () => {
+    await withTwoBranches(
+      "branch-stop-cold-attach",
+      async ({ state, calls, otherBranch, holdNextAttach }) => {
+        const target = await otherBranch();
+        const leaf = state.session!.sessionManager.getLeafId();
+        await detachSession(state);
+        const attach = Promise.withResolvers<void>();
+        holdNextAttach(attach.promise);
+        setCancelAckTimeoutForTests(10);
+        const switching = post(`/session/${state.id}/branches/${target}`, { summarize: true });
+        try {
+          await waitFor(() => state.attaching !== undefined && state.branchSummary !== undefined);
+          const stop = await post(`/session/${state.id}/cancel`);
+          expect(stop.status).toBe(202);
+          expect(await stop.json()).toEqual({ cancelled: false, pending: true });
+        } finally {
+          attach.resolve();
+        }
+        const answer = await switching;
+        expect(answer.status).toBe(409);
+        expect(await answer.json()).toMatchObject({ cancelled: true, reason: "cancelled" });
+        expect(state.session!.sessionManager.getLeafId()).toBe(leaf);
+        expect(calls).toEqual([]);
+      },
+    );
+  });
+
+  test("a failed summary write leaves the source leaf, context and next prompt parent intact", async () => {
+    await withTwoBranches(
+      "branch-summary-write-failed",
+      async ({ state, calls, otherBranch, prompt }) => {
+        const target = await otherBranch();
+        const manager = state.session!.sessionManager;
+        const leaf = manager.getLeafId();
+        const rows = state.messages.map((row) => row.content);
+        const file = state.sessionFile!;
+        const backup = `${file}.test-backup`;
+        await rename(file, backup);
+        await mkdir(file);
+        try {
+          const answer = await post(`/session/${state.id}/branches/${target}`, { summarize: true });
+          expect(answer.status).toBe(422);
+          expect(await answer.json()).toMatchObject({ kind: "branch-summary-failed" });
+          expect(manager.getLeafId()).toBe(leaf);
+          // The bridge appends a write-loss advisory without changing the
+          // conversation rows that were already rendered.
+          expect(state.messages.slice(0, rows.length).map((row) => row.content)).toEqual(rows);
+          expect(renderedSummaryRows(state)).toEqual([]);
+        } finally {
+          await rm(file, { recursive: true });
+          await rename(backup, file);
+        }
+        await prompt("after failed write");
+        const nextPrompt = manager
+          .getEntries()
+          .findLast((entry) => entry.type === "message" && entry.message.role === "user");
+        expect(nextPrompt?.parentId).toBe(leaf);
+        expect(calls.at(-1)?.prompts).toContain("after failed write");
+        expect(calls.at(-1)?.prompts).toContain("third");
+        expect(calls.at(-1)?.prompts).not.toContain("second");
+        expect(await summaryEntries(state)).toEqual([]);
+      },
+    );
+  });
+
+  test("a provider diagnostic stays out of the bridge error", async () => {
+    await withTwoBranches(
+      "branch-provider-diagnostic",
+      async ({ state, calls, otherBranch, failSummary }) => {
+        const target = await otherBranch();
+        const leaf = state.session!.sessionManager.getLeafId();
+        failSummary("Provider refused request with synthetic-sensitive-marker");
+        const answer = await post(`/session/${state.id}/branches/${target}`, { summarize: true });
+        expect(answer.status).toBe(422);
+        const body = await answer.text();
+        expect(body).toContain("could not summarize");
+        expect(body).not.toContain("synthetic-sensitive-marker");
+        expect(calls.some((call) => call.kind === "summary")).toBe(true);
+        expect(state.session!.sessionManager.getLeafId()).toBe(leaf);
+      },
+    );
+  });
+
+  test("navigation refuses to enter Pi during an active command reload", async () => {
+    await withTwoBranches("branch-during-reload", async ({ state, otherBranch }) => {
+      const target = await otherBranch();
+      const session = state.session!;
+      const navigate = spyOn(session, "navigateTree");
+      const gate = Promise.withResolvers<void>();
+      spyOn(session, "reload").mockImplementation(() => gate.promise);
+      const refresh = post(`/session/${state.id}/commands/refresh`);
+      try {
+        await waitFor(() => state.commandReload !== undefined);
+        const answer = await post(`/session/${state.id}/branches/${target}`, { summarize: true });
+        expect(answer.status).toBe(409);
+        expect(navigate).not.toHaveBeenCalled();
+      } finally {
+        gate.resolve();
+        await refresh;
+      }
+    });
+  });
+
+  test("rewind drains the command refresh it deferred", async () => {
+    await withTwoBranches("rewind-drains-reload", async ({ state }) => {
+      const session = state.session!;
+      const row = state.messages.find((message) => message.content === "third")!;
+      const hook = pauseTreeHook(session);
+      const reload = spyOn(session, "reload").mockImplementation(async () => {});
+      const rewinding = post(`/session/${state.id}/rewind-messages`, { messageId: row.id });
+      try {
+        await hook.entered;
+        const refresh = await post(`/session/${state.id}/commands/refresh`);
+        expect(await refresh.json()).toMatchObject({ outcome: "deferred" });
+        expect(state.commandCatalogue.status).toBe("stale");
+        expect(state.commandReloadPending).toBe(true);
+        expect(reload).not.toHaveBeenCalled();
+      } finally {
+        hook.release();
+      }
+      expect((await rewinding).status).toBe(200);
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(state.commandCatalogue.status).toBe("ready");
+      expect(state.commandReloadPending).toBe(false);
+    });
+  });
+
   test("a branch ending on a prompt with no reply is refused before any model call", async () => {
     await withTwoBranches("branch-switch-prompt-leaf", async ({ state, calls }) => {
       const session = state.session!;
@@ -394,6 +631,7 @@ describe("switching branches with a summary", () => {
       expect(await refused.json()).toEqual({
         error: expect.stringContaining("Switch without a summary"),
         kind: "branch-summary-failed",
+        reason: "prompt-leaf",
       });
       expect(calls).toEqual([]);
       expect(manager.getLeafId()).toBe(active);

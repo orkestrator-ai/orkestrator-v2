@@ -141,6 +141,10 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   so the "keep the selected leaf" step must not move past it. The switch
   claims `dispatching` before its first await; while Pi summarizes,
   `branchSummary` reports the session running and the cancel routes abort it.
+  The timeout starts with the claim, so a stopped or timed-out cold attach
+  cannot enter navigation when it finishes. The pinned SDK patch checks the
+  cancellation signal before mutating the tree, including after extension
+  hooks, and keeps the original leaf when summary persistence fails.
   Every way it ends without moving the leaf answers as that (409
   `cancelled: true` with a `reason`, or 422 `branch-summary-failed`), never
   200 and never the opaque 500.

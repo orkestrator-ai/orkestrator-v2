@@ -25,10 +25,9 @@ import { isObject, type SessionState } from "./state.js";
 /**
  * How long the bridge lets Pi summarize before it stops the switch.
  *
- * Shorter than the backend's own wait for the route (five minutes), so the
- * bridge always answers first with what actually happened: at the backend's
- * deadline the user would be told the bridge was unavailable while the
- * summary went on and the switch landed anyway.
+ * Shorter than the backend's five-minute wait, allowing time for Pi to
+ * acknowledge the abort. A slow hook can delay settlement, but the SDK
+ * checks cancellation before it changes the leaf.
  */
 export const BRANCH_SUMMARY_TIMEOUT_MS = 4 * 60_000;
 
@@ -40,13 +39,13 @@ export function setBranchSummaryTimeoutForTests(timeoutMs?: number): void {
 
 /** A summarized switch in flight. Runtime-only: a restarted process has none. */
 export interface BranchSummaryRun {
-  cancelRequested: boolean;
-  timedOut: boolean;
+  stopReason?: "cancelled" | "timeout";
   /** Pi's abort, once Pi has been asked to navigate. */
   abort?: () => void;
   /** Settles when the switch is done; `true` when it was stopped. */
   settled: Promise<boolean>;
   settle: (stopped: boolean) => void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export type BranchSwitchCancelReason = "cancelled" | "timeout" | "extension";
@@ -84,8 +83,15 @@ export class BranchSummaryError extends Error {
   override readonly name = "BranchSummaryError";
   readonly status = 422;
 
+  constructor(
+    message: string,
+    readonly reason: "prompt-leaf" | "summary-failed",
+  ) {
+    super(message);
+  }
+
   body(): Record<string, unknown> {
-    return { error: this.message, kind: "branch-summary-failed" };
+    return { error: this.message, kind: "branch-summary-failed", reason: this.reason };
   }
 }
 
@@ -112,7 +118,12 @@ export function beginBranchSummary(state: SessionState): BranchSummaryRun {
   const settled = new Promise<boolean>((resolve) => {
     settle = resolve;
   });
-  const run: BranchSummaryRun = { cancelRequested: false, timedOut: false, settled, settle };
+  const timer = setTimeout(() => {
+    run.stopReason ??= "timeout";
+    run.abort?.();
+  }, branchSummaryTimeoutMs);
+  timer.unref?.();
+  const run: BranchSummaryRun = { settled, settle, timer };
   state.branchSummary = run;
   state.revision += 1;
   return run;
@@ -124,6 +135,7 @@ export function endBranchSummary(
   stopped: boolean,
 ): void {
   if (state.branchSummary === run) state.branchSummary = undefined;
+  clearTimeout(run.timer);
   run.abort = undefined;
   run.settle(stopped);
   state.revision += 1;
@@ -138,9 +150,13 @@ export function requestBranchSummaryCancellation(
 ): Promise<boolean> | undefined {
   const run = state.branchSummary;
   if (!run) return undefined;
-  run.cancelRequested = true;
+  run.stopReason ??= "cancelled";
   run.abort?.();
   return run.settled;
+}
+
+export function assertBranchSummaryActive(run: BranchSummaryRun | undefined): void {
+  if (run?.stopReason) throw new BranchSwitchCancelledError(run.stopReason);
 }
 
 /**
@@ -155,6 +171,7 @@ export function assertSummaryCanFollow(entry: SessionEntry | undefined): void {
   if (endsOnPrompt) {
     throw new BranchSummaryError(
       "This branch ends on a prompt with no reply, so a summary cannot follow it. Switch without a summary.",
+      "prompt-leaf",
     );
   }
 }
@@ -174,41 +191,28 @@ export async function navigateBranch(
     if (result.cancelled) throw new BranchSwitchCancelledError("extension");
     return {};
   }
-  // A cancel recorded while the route was still attaching: Pi was never asked.
-  if (run.cancelRequested) throw new BranchSwitchCancelledError("cancelled");
+  assertBranchSummaryActive(run);
   const leafBefore = session.sessionManager.getLeafId();
   // Pi creates the summary's abort controller synchronously inside
   // `navigateTree`, before its first await, so the abort is live from here.
   run.abort = () => session.abortBranchSummary();
-  const timer = setTimeout(() => {
-    run.timedOut = true;
-    session.abortBranchSummary();
-  }, branchSummaryTimeoutMs);
-  (timer as { unref?: () => void }).unref?.();
   let result: Awaited<ReturnType<AgentSession["navigateTree"]>>;
   try {
     result = await session.navigateTree(target, { summarize: true });
   } catch (error) {
-    // Pi throws a failed summary ("No model available for summarization", a
-    // provider error) before it moves the leaf. Say so only when that holds.
+    // The SDK restores the original leaf if writing the summary fails.
     if (session.sessionManager.getLeafId() !== leafBefore) throw error;
-    const detail = error instanceof Error ? error.message.trim().slice(0, 300) : "";
+    assertBranchSummaryActive(run);
     throw new BranchSummaryError(
-      `Pi could not summarize the branch being left, so the conversation stayed on its branch${
-        detail ? `: ${detail}` : "."
-      }`,
+      "Pi could not summarize the branch being left. The conversation stayed on its branch. You can retry or switch without a summary.",
+      "summary-failed",
     );
   } finally {
-    clearTimeout(timer);
     run.abort = undefined;
   }
   if (result.cancelled) {
     throw new BranchSwitchCancelledError(
-      !result.aborted
-        ? "extension"
-        : run.timedOut && !run.cancelRequested
-          ? "timeout"
-          : "cancelled",
+      run.stopReason ?? (result.aborted ? "cancelled" : "extension"),
     );
   }
   return result.summaryEntry ? { summaryEntryId: result.summaryEntry.id } : {};

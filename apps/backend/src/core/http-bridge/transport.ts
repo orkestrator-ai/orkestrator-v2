@@ -392,7 +392,8 @@ export async function boundedJson(
       if (done) break;
       budget.remaining -= value.byteLength;
       if (budget.remaining < 0) {
-        await reader.cancel().catch(() => undefined);
+        // Cancellation may wait on the source or another branch of a tee.
+        void reader.cancel().catch(() => undefined);
         throw new ProviderUnavailableError(`${operation} is oversized`);
       }
       text += decoder.decode(value, { stream: true });
@@ -592,18 +593,27 @@ export async function assertOkWithErrorDetail(
 ): Promise<void> {
   if (response.ok) return;
   const payload = asRecord(await boundedJson(response, operation).catch(() => null));
+  throwBridgeResponseError(response.status, operation, payload, options.detailAlone);
+}
+
+export function throwBridgeResponseError(
+  status: number,
+  operation: string,
+  payload: Record<string, unknown> | null | undefined,
+  detailAlone = false,
+): never {
   const rawDetail = nonEmptyString(payload?.error)?.trim();
   const detail = rawDetail ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500) : "";
   const message =
-    options.detailAlone && detail
+    detailAlone && detail
       ? detail
       : `${operation} ${
-          isTransientHttpStatus(response.status) ? "is temporarily unavailable" : "failed"
-        } (HTTP ${response.status})${detail ? `: ${detail}` : ""}`;
-  if (isTransientHttpStatus(response.status)) {
+          isTransientHttpStatus(status) ? "is temporarily unavailable" : "failed"
+        } (HTTP ${status})${detail ? `: ${detail}` : ""}`;
+  if (isTransientHttpStatus(status)) {
     throw new ProviderUnavailableError(message);
   }
-  if (response.status === 403 && payload?.code === POLICY_WIDENING_REFUSED_CODE) {
+  if (status === 403 && payload?.code === POLICY_WIDENING_REFUSED_CODE) {
     throw new BridgePolicyWideningRefusedError(message);
   }
   throw new Error(message);

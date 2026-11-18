@@ -105,6 +105,7 @@ import {
 import { renderToolCall } from "./tool-rendering.js";
 import { newSessionState } from "./session-factory.js";
 import {
+  assertBranchSummaryActive,
   assertSummaryCanFollow,
   beginBranchSummary,
   BranchSwitchCancelledError,
@@ -1726,6 +1727,7 @@ export async function navigateSessionHistory(
     state.status === "running" ||
     state.dispatching ||
     state.compacting ||
+    state.commandReload !== undefined ||
     state.promptClaim !== undefined
   ) {
     throw new SessionBusyError();
@@ -1736,7 +1738,11 @@ export async function navigateSessionHistory(
   const run = options.summarize ? beginBranchSummary(state) : undefined;
   let stopped = false;
   try {
-    const session = await ensureSession(state);
+    const session = await ensureSession(state).catch((error: unknown) => {
+      assertBranchSummaryActive(run);
+      throw error;
+    });
+    assertBranchSummaryActive(run);
     // A branch switch names an entry of another branch, which no row shows.
     const target =
       resolveHistoryTarget(state, session, messageOrEntryId)?.entryId ??
@@ -1745,13 +1751,7 @@ export async function navigateSessionHistory(
         : undefined);
     if (!target) throw new HistoryTargetError();
     if (run && position === "at") assertSummaryCanFollow(session.sessionManager.getEntry(target));
-    let summaryEntryId: string | undefined;
-    try {
-      ({ summaryEntryId } = await navigateBranch(session, target, run));
-    } catch (error) {
-      stopped = error instanceof BranchSwitchCancelledError;
-      throw error;
-    }
+    const { summaryEntryId } = await navigateBranch(session, target, run);
     // Tree navigation edits user/custom messages by stopping at their parent.
     // Branch selection must retain the selected leaf, including reply-less
     // prompts. A summary is Pi's new leaf, a child of the selected entry, and
@@ -1767,10 +1767,14 @@ export async function navigateSessionHistory(
     hydrateHistory(state);
     await overlayCommandChanges(state);
     return { summarized: summaryEntryId !== undefined };
+  } catch (error) {
+    stopped = error instanceof BranchSwitchCancelledError;
+    throw error;
   } finally {
     state.dispatching = false;
     state.lastAccessed = Date.now();
     if (run) endBranchSummary(state, run, stopped);
+    await runDeferredCommandReload(state);
   }
 }
 

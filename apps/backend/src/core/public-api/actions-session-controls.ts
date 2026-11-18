@@ -702,6 +702,7 @@ const sessionBranch: MutationActionHandler<TargetInput & { entryId: string; summ
       }
       assertSessionIdle(context, session, "switching branches");
       return {
+        background: input.summarize,
         resources: {
           environmentId: session.environment.id,
           sessionId: session.sessionId,

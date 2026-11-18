@@ -1961,6 +1961,12 @@ published two ways:
 `tests/unit/version-drift.test.ts` enforces that all three agree, and that the
 Dockerfile pins the same archive digests the manifest does.
 
+The root `patchedDependencies` entry for Pi 1.5.2 checks cancellation before
+the SDK mutates the tree and preserves the original leaf when writing a branch
+summary fails. On upgrade, check the new SDK's `navigateTree` and
+`branchWithSummary`, then port or retire the patch and run the Pi bridge's
+`branch-switch.test.ts` regressions.
+
 ### Procedure
 
 1. Bump the three SDK dependencies in `bridges/pi-bridge/package.json`, then

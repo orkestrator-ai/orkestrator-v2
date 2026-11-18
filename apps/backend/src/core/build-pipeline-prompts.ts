@@ -20,6 +20,7 @@ import {
   buildReviewBody,
   buildStructuredReviewOutputGuide,
 } from "@orkestrator/protocol/review-workflow";
+import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./review-consolidation-scope.js";
 import {
   ADDRESS_FINDINGS_RESULT_FRAME_CLOSE,
   ADDRESS_FINDINGS_RESULT_FRAME_INSTRUCTION,
@@ -506,7 +507,13 @@ export function structuredReportRepairPrompt(
   const omitted = issues.length - shown.length;
   const shortened = bounded.filter((entry) => entry.shortened).length;
   const structuralPreflight =
-    schema === STRUCTURED_REVIEW_REPORT_JSON_SCHEMA ? buildStructuredReviewOutputGuide() : "";
+    schema === CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA
+      ? buildStructuredReviewOutputGuide(
+          CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA.properties.reviewScope.required,
+        )
+      : schema === STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
+        ? buildStructuredReviewOutputGuide()
+        : "";
   const prompt = [
     `Your ${workLabel} was accepted. Only the ${resultLabel} you emitted was rejected: it did not satisfy the result contract, which enforces rules the JSON schema alone cannot express.`,
     `The complete expected JSON Schema is below. The corrected report must satisfy every required field, type, enum, and additionalProperties rule in this schema.

@@ -20,6 +20,7 @@ const realClaudeSignInSnapshot = { ...realClaudeSignIn };
 // The real session map (not mocked): the mixed-version suite places a session
 // here so the real catalogue functions serve real rows through the route.
 import { sessions as coreSessions } from "../services/session-manager-core.js";
+import { claudeLaunchProfile } from "../services/session-manager-runtime.js";
 import type { SessionState } from "../types/index.js";
 
 // --- Mock session-manager before importing the route ---
@@ -121,7 +122,9 @@ const mockSteerClaudeSession = mock(async () => "applied" as const);
 const mockAnswerIdleSteerPrompt = mock(async () => "There is no active Claude turn to steer.");
 const mockReadClaudeSteerDispatch = mock(() => "dispatched" as const);
 const mockConfigureClaudeSession = mock(async () => undefined);
-const mockAssertClaudeRuntimeAccepts = mock((_session: unknown, _options: unknown) => {});
+const mockAssertClaudeRuntimeAccepts = mock<typeof realSessionManager.assertClaudeRuntimeAccepts>(
+  async () => {},
+);
 const mockRefreshClaudeContextUsage = mock(async () => ({
   usedTokens: 25,
   totalTokens: 100,
@@ -343,7 +346,7 @@ describe("session routes", () => {
     mockSendPrompt.mockReset();
     mockSendPrompt.mockImplementation(successfulPromptStart);
     mockAssertClaudeRuntimeAccepts.mockReset();
-    mockAssertClaudeRuntimeAccepts.mockImplementation(() => {});
+    mockAssertClaudeRuntimeAccepts.mockImplementation(async () => {});
     mockConfigureClaudeSession.mockReset();
     mockConfigureClaudeSession.mockImplementation(async () => undefined);
     mockAbortSession.mockClear();
@@ -944,6 +947,41 @@ describe("session routes", () => {
         expect.objectContaining({ id: "s-1" }),
         expect.objectContaining(options),
       );
+      expect(mockClaimPromptDispatch).not.toHaveBeenCalled();
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("refuses a result turn on a streaming pipeline CLI with live work before journaling", async () => {
+      const session = {
+        ...defaultGetSession("s-1")!,
+        executionPolicy: {
+          id: "pipeline",
+          sandbox: "none",
+          approvals: "auto-approve",
+          projectResources: false,
+          networkAccess: "full",
+        },
+      } as SessionState;
+      session.claudeRuntime = {
+        session,
+        state: "open",
+        abortController: new AbortController(),
+        launch: claudeLaunchProfile(session, undefined),
+        tasks: { candidates: new Set(["background-bash"]) },
+      } as NonNullable<SessionState["claudeRuntime"]>;
+      mockGetSession.mockReturnValueOnce(session);
+      mockAssertClaudeRuntimeAccepts.mockImplementationOnce(
+        realSessionManagerSnapshot.assertClaudeRuntimeAccepts,
+      );
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Submit the report",
+        requestId: "review-1",
+        workflowResultTool: "submit_consolidated_review",
+        workflowResultKey: "review-1",
+      });
+      expect(res.status).toBe(409);
+      expect((await jsonBody(res)).error).toContain("tool input streaming");
       expect(mockClaimPromptDispatch).not.toHaveBeenCalled();
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });

@@ -53,6 +53,8 @@ import {
   runtimeEnvironmentForSessionQuery,
   withReadOnlyGitConfig,
   withUnattendedOverloadRetry,
+  buffersToolInput,
+  withBufferedToolInput,
 } from "./runtime-env.js";
 import { withReadOnlyConnectionEnv } from "./read-only-connection-env.js";
 import {
@@ -310,11 +312,17 @@ export async function resolveQueryPlan(
   // A graph agent's policy denies `github.write`: its CLI gets no GitHub
   // credential. A read-only turn loads no settings file, so it gets the user
   // settings' model connection here instead (#2133).
-  const queryEnvironment = withReadOnlyGitConfig(
-    policy,
-    withUnattendedOverloadRetry(
-      session.executionPolicy,
-      await withReadOnlyConnectionEnv(policy, await runtimeEnvironmentForSessionQuery(policy)),
+  // A pipeline session's workflow-result turn gets a CLI whose tool input the
+  // API validates before streaming (`claudeLaunchProfile` records the same
+  // decision, so a result turn never joins a CLI launched without it).
+  const queryEnvironment = withBufferedToolInput(
+    buffersToolInput(session.executionPolicy, options?.workflowResultTurn),
+    withReadOnlyGitConfig(
+      policy,
+      withUnattendedOverloadRetry(
+        session.executionPolicy,
+        await withReadOnlyConnectionEnv(policy, await runtimeEnvironmentForSessionQuery(policy)),
+      ),
     ),
   );
   const liveSettings = claudeLiveSettings({

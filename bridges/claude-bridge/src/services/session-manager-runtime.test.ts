@@ -513,10 +513,18 @@ describe("runtime routing", () => {
       cwd: "/work",
       boundary: '{"policy":null}',
       outputSchema: null,
+      bufferedToolInput: false,
       agent: undefined,
       settingSources: '["user","project"]',
     };
     expect(claudeLaunchConflict(launched, { ...launched })).toBeUndefined();
+    // A result turn needs a CLI that buffers tool input; any turn may join one.
+    expect(claudeLaunchConflict(launched, { ...launched, bufferedToolInput: true })).toBe(
+      "tool input streaming",
+    );
+    expect(
+      claudeLaunchConflict({ ...launched, bufferedToolInput: true }, { ...launched }),
+    ).toBeUndefined();
     expect(
       claudeLaunchConflict(launched, { ...launched, agent: undefined, settingSources: undefined }),
     ).toBeUndefined();

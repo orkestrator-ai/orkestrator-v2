@@ -113,6 +113,7 @@ import {
   type ProviderSessionObservation,
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
+import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./review-consolidation-scope.js";
 import {
   addressFindingsReportPrompt,
   structuredReportRepairPrompt,
@@ -229,6 +230,7 @@ import {
   consolidationOverlap,
   deriveConsolidatedProvenance,
   consolidationResultContext,
+  consolidationScopeFilledByBackend,
   parseStructuredReportResult,
   promptWorktreeSnapshot,
   resolveUnattendedReviewerInteractions,
@@ -4630,6 +4632,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               !workflow.reviewPackage && workflow.reviewSnapshotStale === true,
             reviewPackage: workflow.reviewPackage,
             reports: consolidationReports(workflow.reviewers),
+            // Only the result tool's slot fills the scope lists in; a
+            // provider-enforced schema still takes the full report.
+            scopeFilledByBackend:
+              request.resultTransport === "tool-v1" &&
+              consolidationScopeFilledByBackend(workflow.reviewers),
             onEvidenceStats: (stats) =>
               recordEfficiency(this.options.efficiency, {
                 owner: "multi-review",
@@ -5273,7 +5280,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               preserveInstruction:
                 "Do not repeat the fix, re-run validation, or edit any file. Keep the files changed, commands run, notes, and limitations you already established, and change only what the errors above require.",
             }
-          : undefined,
+          : request.resultTransport === "tool-v1" &&
+              consolidationScopeFilledByBackend(workflow.reviewers)
+            ? { schema: CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA }
+            : undefined,
     );
     delete request.idleResultPolls;
     session.requestIds.push(requestId);

@@ -14,6 +14,7 @@
  * a schema change that this template does not follow fails there first.
  */
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import { CONSOLIDATION_SCOPE_LIST_FIELDS } from "./review-consolidation-scope.js";
 
 /** The source ID strings the template cites, for the test's trusted context. */
 export const CONSOLIDATED_REVIEW_EXAMPLE_SOURCE_IDS = Object.freeze({
@@ -116,16 +117,40 @@ export const CONSOLIDATED_REVIEW_EXAMPLE = {
 };
 
 /**
+ * The template as a submission takes it when the backend fills in the scope
+ * lists (`review-consolidation-scope.ts`): the same report without them.
+ */
+export const CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE = {
+  ...CONSOLIDATED_REVIEW_EXAMPLE,
+  reviewScope: Object.fromEntries(
+    Object.entries(CONSOLIDATED_REVIEW_EXAMPLE.reviewScope).filter(
+      ([key]) => !(CONSOLIDATION_SCOPE_LIST_FIELDS as readonly string[]).includes(key),
+    ),
+  ),
+};
+
+/**
  * The prompt section carrying the template. It names the common misses
  * explicitly, because those are the ones a second call was spent on.
+ *
+ * With `scopeFilledByBackend`, the template and the checks leave out the
+ * scope lists the backend fills in, and the section says so: they are most of
+ * what a consolidation would otherwise copy verbatim.
  */
-export function consolidatedReviewExampleSection(): string {
+export function consolidatedReviewExampleSection(
+  options: { scopeFilledByBackend?: boolean } = {},
+): string {
+  const filled = options.scopeFilledByBackend === true;
+  const example = filled ? CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE : CONSOLIDATED_REVIEW_EXAMPLE;
+  const filledNote = filled
+    ? `\n\nThe backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.map((field) => `\`reviewScope.${field}\``).join(", ")} itself, from the reviewer reports, so the submission leaves them out. Every other \`reviewScope\` key is yours to reconcile: record scope disagreements and narrower snapshots under \`limitations\`.`
+    : "";
   return `## Consolidated report shape
 
-The JSON below has the exact shape the consolidated report must have: every required key at every level, the enum spellings, and \`null\` where a nullable field has no value. It is a shape template, not content. Replace every \`<...>\` string with content from the reviewer reports, use as many array entries as the reports need (including none), and copy real \`reviewSourceIds\` values from the source findings. Its authoritative JSON Schema is the result's own schema (the submission tool's input schema when a result tool is assigned).
+The JSON below has the exact shape the consolidated report must have: every required key at every level, the enum spellings, and \`null\` where a nullable field has no value. It is a shape template, not content. Replace every \`<...>\` string with content from the reviewer reports, use as many array entries as the reports need (including none), and copy real \`reviewSourceIds\` values from the source findings. Its authoritative JSON Schema is the result's own schema (the submission tool's input schema when a result tool is assigned).${filledNote}
 
 \`\`\`json
-${JSON.stringify(CONSOLIDATED_REVIEW_EXAMPLE, null, 2)}
+${JSON.stringify(example, null, 2)}
 \`\`\`
 
 Before sending it, check the misses that most often cost a resend: all ${STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.required.length} top-level keys are present (\`testResults\`, \`whatChanged\` and \`riskProfile\` included, even when there is little to say); \`reviewScope\` has exactly the keys shown; \`file\` and \`symbol\` are always strings, never \`null\`; \`line\` is a positive integer or \`null\`; and \`testResults.total\` equals \`passed + failed + notRun\`, with one \`failures\` entry per failed test.`;

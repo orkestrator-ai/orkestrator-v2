@@ -95,6 +95,12 @@ export interface WorkflowResultKindDefinition {
   schema(slot: WorkflowResultSlotView): JsonSchema;
   /** The schema a provider sees (tool input, structured output). Defaults to {@link schema}. */
   providerSchema?(slot: WorkflowResultSlotView): JsonSchema;
+  /**
+   * The schema a surface that serves every slot of the kind publishes (the
+   * OpenCode broker's one tool per kind). It must accept whatever any slot's
+   * {@link providerSchema} accepts. Defaults to {@link schema} with no slot.
+   */
+  anySlotSchema?(): JsonSchema;
   /** The submission tool. */
   toolName(slot: WorkflowResultSlotView): string;
   /** The read-only validation tool. */
@@ -107,6 +113,13 @@ export interface WorkflowResultKindDefinition {
    * (graph budgets).
    */
   structural?(value: unknown, slot: WorkflowResultSlotView): WorkflowResultValidationIssue[] | null;
+  /**
+   * Fills in fields the backend owns before a value is validated and stored
+   * (a consolidated review's scope lists, from its slot context). Must be
+   * deterministic and idempotent: a resent or held value is filled in again.
+   * Returns the value unchanged when it cannot fill anything in.
+   */
+  complete?(value: unknown, slot: WorkflowResultSlotView): unknown;
   /** Domain validation after the structure passed. May throw; the message becomes one issue. */
   validator?(value: unknown, slot: WorkflowResultSlotView): WorkflowResultValidationIssue[];
   /** Final-content checks (placeholders, probes) on a valid object. */
@@ -141,6 +154,12 @@ const DEFINITIONS = new Map<WorkflowResultKind, WorkflowResultKindDefinition>();
 export function registerWorkflowResultKind(definition: WorkflowResultKindDefinition): void {
   if (DEFINITIONS.has(definition.kind))
     throw new Error(`Workflow result kind ${definition.kind} is already registered`);
+  // The environment check runs on the value as submitted, before the service
+  // fills anything in, so a kind cannot have both.
+  if (definition.complete && definition.environmentValidator)
+    throw new Error(
+      `Workflow result kind ${definition.kind} cannot both complete values and check the environment`,
+    );
   DEFINITIONS.set(definition.kind, Object.freeze({ ...definition }));
 }
 
@@ -205,6 +224,21 @@ export function validateRegisteredWorkflowResult(
   const issues = [...(definition.finalContent?.(value, slot) ?? [])];
   issues.push(...(definition.contextValidator?.(value, slot) ?? []));
   return issues.slice(0, WORKFLOW_RESULT_MAX_ISSUES);
+}
+
+/** The value with the fields the kind's backend owns filled in (`complete`). */
+export function completeWorkflowResult(
+  kind: WorkflowResultKind,
+  value: unknown,
+  slot: WorkflowResultSlotView = {},
+): unknown {
+  return workflowResultKindDefinition(kind).complete?.(value, slot) ?? value;
+}
+
+/** The schema a surface serving every slot of a kind publishes (`anySlotSchema`). */
+export function workflowResultAnySlotSchema(kind: WorkflowResultKind): JsonSchema {
+  const definition = workflowResultKindDefinition(kind);
+  return definition.anySlotSchema?.() ?? definition.schema({});
 }
 
 /** The schema a provider sees for a slot. */

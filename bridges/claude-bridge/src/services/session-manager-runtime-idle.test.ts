@@ -485,6 +485,94 @@ describe("a warm Claude CLI between turns", () => {
   });
 });
 
+describe("tool input streaming for workflow results", () => {
+  const STREAMING_ENV = "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING";
+  const resultTurn = { workflowResultTurn: { tool: "submit_review_report", resultKey: "key" } };
+  // An agent running this suite inside an Orkestrator pipeline turn inherits
+  // the variable; each case must see only what the bridge sets.
+  const inherited = process.env[STREAMING_ENV];
+  afterEach(() => {
+    if (inherited === undefined) delete process.env[STREAMING_ENV];
+    else process.env[STREAMING_ENV] = inherited;
+  });
+
+  function policySession(name: string, id: "pipeline" | "interactive-host") {
+    delete process.env[STREAMING_ENV];
+    const session = createSession(name);
+    track(session.id);
+    session.executionPolicy = {
+      id,
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    };
+    return session;
+  }
+
+  test.each([
+    ["a pipeline result turn", "pipeline", resultTurn, "0"],
+    [
+      "a pipeline reviewer's read-only result turn",
+      "pipeline",
+      { ...resultTurn, readOnly: true },
+      "0",
+    ],
+    ["a pipeline turn without a result", "pipeline", {}, undefined],
+    ["an interactive result turn", "interactive-host", resultTurn, undefined],
+  ] as const)("%s launches with streaming %s", async (_label, id, options, expected) => {
+    controlIdleWindow();
+    const session = policySession(`streaming ${_label}`, id);
+    const prompt = sendPrompt(session.id, "Review it", options);
+    const call = await nextQueryCall();
+    expect(call.options.env[STREAMING_ENV]).toBe(expected);
+    expect(session.claudeRuntime?.launch.bufferedToolInput).toBe(expected === "0");
+    call.push({ type: "result", subtype: "success" });
+    await prompt;
+    call.finish();
+  });
+
+  test("a result turn replaces an idle pipeline CLI that streams tool input", async () => {
+    controlIdleWindow();
+    const session = policySession("result after plain turn", "pipeline");
+    const first = sendPrompt(session.id, "Look around");
+    const call = await nextQueryCall();
+    const input = inputOf(call);
+    expect((await input.next()).done).toBe(false);
+    call.push({ type: "result", subtype: "success" });
+    await first;
+    expect(call.options.env[STREAMING_ENV]).toBeUndefined();
+
+    const result = sendPrompt(session.id, "Submit the report", resultTurn);
+    expect(await input.next()).toEqual({ done: true, value: undefined });
+    expect(pendingCalls).toHaveLength(0);
+    call.finish();
+    const relaunch = await nextQueryCall();
+    expect(relaunch.options.env[STREAMING_ENV]).toBe("0");
+    relaunch.push({ type: "result", subtype: "success" });
+    await result;
+    relaunch.finish();
+  });
+
+  test("a turn without a result joins a pipeline CLI that buffers tool input", async () => {
+    controlIdleWindow();
+    const session = policySession("plain after result turn", "pipeline");
+    const first = sendPrompt(session.id, "Submit the report", resultTurn);
+    const call = await nextQueryCall();
+    const input = inputOf(call);
+    expect((await input.next()).done).toBe(false);
+    call.push({ type: "result", subtype: "success" });
+    await first;
+
+    const followUp = sendPrompt(session.id, "One more thing");
+    expect((await input.next()).done).toBe(false);
+    expect(pendingCalls).toHaveLength(0);
+    call.push({ type: "result", subtype: "success" });
+    await followUp;
+    call.finish();
+  });
+});
+
 describe("launch-only changes on a warm CLI", () => {
   test("an idle CLI is replaced rather than refused", async () => {
     controlIdleWindow();

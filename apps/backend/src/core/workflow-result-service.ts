@@ -35,10 +35,12 @@ import {
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { StoreCorruptError, type StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
+import { isConsolidationScopeLists } from "./review-consolidation-scope.js";
 import { validateWorkflowResult } from "./workflow-result-contracts.js";
 import {
   WORKFLOW_RESULT_MAX_ISSUES as WORKFLOW_RESULT_ISSUE_LIMIT,
   WorkflowResultRegistry,
+  completeWorkflowResult,
   workflowResultKindDefinition,
   type WorkflowResultAcceptanceCheck,
   type WorkflowResultAttempt,
@@ -70,6 +72,7 @@ const HELD_VALIDATION_MAX_BYTES = WORKFLOW_RESULT_MAX_PENDING_BYTES;
 /** The newest payload that passed validation for one slot. In memory only. */
 interface HeldValidation {
   digest: string;
+  completionContext?: string;
   result: unknown;
   bytes: number;
   at: number;
@@ -189,6 +192,33 @@ function checkEnvelope(database: StorageDatabase): boolean {
   return true;
 }
 
+/** The value with the fields the backend owns filled in, as it is validated and stored. */
+function completeEntryResult(entry: StoredWorkflowResult, result: unknown): unknown {
+  return completeWorkflowResult(entry.kind, result, {
+    schema: entry.schema,
+    context: entry.context,
+  });
+}
+
+/** The raw preflight already checked the byte limit if completion left the value alone. */
+function completedResultSizeError(
+  submitted: unknown,
+  completed: unknown,
+): WorkflowResultError | null {
+  if (
+    completed === submitted ||
+    Buffer.byteLength(JSON.stringify(completed), "utf8") <= WORKFLOW_RESULT_MAX_BYTES
+  ) {
+    return null;
+  }
+  return {
+    code: "result_too_large",
+    nextAction: "correct",
+    message: `The result exceeds the ${WORKFLOW_RESULT_MAX_BYTES}-byte limit after the backend fills in the review scope. Shorten the text in your report and try again.`,
+  };
+}
+
+/** Validates the completed value that will be stored. */
 function validateEntryResult(
   entry: StoredWorkflowResult,
   result: unknown,
@@ -271,6 +301,7 @@ function validContext(value: WorkflowResultSlotInput["context"]): boolean {
   }
   return (
     value.type === "consolidated-review" &&
+    (value.scope === undefined || isConsolidationScopeLists(value.scope)) &&
     value.sources !== null &&
     typeof value.sources === "object" &&
     !Array.isArray(value.sources) &&
@@ -279,6 +310,30 @@ function validContext(value: WorkflowResultSlotInput["context"]): boolean {
       (candidate) => candidate === "issue" || candidate === "coverage-gap",
     )
   );
+}
+
+/**
+ * Whether `next` is `previous` plus the merged scope lists: a consolidation
+ * slot an older backend prepared, prepared again after an upgrade.
+ */
+function gainsConsolidationScope(
+  previous: WorkflowResultSlotInput["context"],
+  next: WorkflowResultSlotInput["context"],
+): boolean {
+  if (previous?.type !== "consolidated-review" || next?.type !== "consolidated-review")
+    return false;
+  if (previous.scope !== undefined || next.scope === undefined) return false;
+  const { scope: _scope, ...rest } = next;
+  return serialize(previous) === serialize(rest);
+}
+
+/** Bind a held validation to the scope used to complete the submitted report. */
+function completionContext(entry: StoredWorkflowResult): string | undefined {
+  if (entry.kind !== "consolidated-review") return undefined;
+  const scope = entry.context?.type === "consolidated-review" ? entry.context.scope : undefined;
+  return createHash("sha256")
+    .update(serialize(scope ?? null))
+    .digest("hex");
 }
 
 function validStoredEntry(key: string, value: unknown): value is StoredWorkflowResult {
@@ -427,13 +482,19 @@ export class WorkflowResultService {
     this.nudgedResults.delete(resultKey);
   }
 
-  private hold(resultKey: string, digest: string, result: unknown, bytes: number): void {
+  private hold(
+    resultKey: string,
+    digest: string,
+    result: unknown,
+    bytes: number,
+    completionContext: string | undefined,
+  ): void {
     this.releaseHeld(resultKey);
     const now = Date.now();
     for (const [key, entry] of Array.from(this.held)) {
       if (now - entry.at > HELD_VALIDATION_TTL_MS) this.releaseHeld(key);
     }
-    this.held.set(resultKey, { digest, result, bytes, at: now });
+    this.held.set(resultKey, { digest, result, bytes, completionContext, at: now });
     this.heldBytes += bytes;
     while (
       this.held.size > 0 &&
@@ -451,14 +512,25 @@ export class WorkflowResultService {
    * never committed it.
    */
   heldValidation(resultKey: string): { digest: string; ageMs: number } | undefined {
+    const held = this.readHeld(resultKey);
+    return held ? { digest: held.digest, ageMs: Date.now() - held.at } : undefined;
+  }
+
+  private readHeld(resultKey: string, entry?: StoredWorkflowResult): HeldValidation | undefined {
     const held = this.held.get(resultKey);
     if (!held) return undefined;
-    const ageMs = Date.now() - held.at;
-    if (ageMs > HELD_VALIDATION_TTL_MS) {
+    if (held.completionContext !== undefined) {
+      const current = entry ?? this.readEntry(resultKey);
+      if (!current || completionContext(current) !== held.completionContext) {
+        this.releaseHeld(resultKey);
+        return undefined;
+      }
+    }
+    if (Date.now() - held.at > HELD_VALIDATION_TTL_MS) {
       this.releaseHeld(resultKey);
       return undefined;
     }
-    return { digest: held.digest, ageMs };
+    return held;
   }
 
   /** Claims a best-effort nudge once per slot across supervisor passes. */
@@ -692,11 +764,24 @@ export class WorkflowResultService {
           existing.expectedStoryId !== input.expectedStoryId ||
           existing.toolName !== persisted.toolName ||
           serialize(existing.schema ?? null) !== serialize(persisted.schema ?? null) ||
-          serialize(existing.context ?? null) !== serialize(input.context ?? null)
+          (input.kind === "consolidated-review" &&
+            input.schema !== undefined &&
+            serialize(definition.schema({})) !== serialize(input.schema))
         ) {
           throw new Error("Workflow result key is already bound to another attempt");
         }
-        return { result: undefined };
+        if (serialize(existing.context ?? null) === serialize(input.context ?? null))
+          return { result: undefined };
+        if (
+          existing.kind !== "consolidated-review" ||
+          !gainsConsolidationScope(existing.context, input.context)
+        )
+          throw new Error("Workflow result key is already bound to another attempt");
+        // Only an open consolidation may adopt the lists from a newer backend.
+        if (existing.lifecycle !== "open" || existing.receipt) return { result: undefined };
+        existing.context = input.context;
+        existing.updatedAt = new Date().toISOString();
+        return { result: undefined, entry: existing };
       }
       const now = new Date().toISOString();
       const { schema: _schema, toolName: _toolName, ...identity } = input;
@@ -816,15 +901,22 @@ export class WorkflowResultService {
             },
           };
         }
+        const completed = completeEntryResult(entry, result);
+        const sizeError = completedResultSizeError(result, completed);
+        const delivery = this.counters(resultKey);
+        delivery.validationCalls += 1;
+        if (sizeError) {
+          outcome = "result_too_large";
+          delivery.lastValidation = "invalid";
+          return { ok: false, error: sizeError };
+        }
         const validationStartedAt = Date.now();
         let issues: WorkflowResultValidationIssue[];
         try {
-          issues = validateEntryResult(entry, result);
+          issues = validateEntryResult(entry, completed);
         } finally {
           this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
         }
-        const delivery = this.counters(resultKey);
-        delivery.validationCalls += 1;
         delivery.lastValidation = issues.length > 0 ? "invalid" : "valid";
         if (issues.length > 0) {
           return {
@@ -867,13 +959,35 @@ export class WorkflowResultService {
       }
       const refused = await this.runAcceptanceCheck(resultKey, validEntry);
       if (!refused) {
+        const current = this.readEntry(resultKey);
+        const validatedContext = completionContext(validEntry);
+        if (current && completionContext(current) !== validatedContext) {
+          outcome = "invalid_result";
+          if (this.pendingValidations.get(resultKey) === generation) {
+            this.counters(resultKey).lastValidation = "invalid";
+          }
+          return {
+            ok: false,
+            error: {
+              code: "invalid_result",
+              nextAction: "correct",
+              message: "The workflow result scope changed. Validate the complete result again.",
+            },
+          };
+        }
         // Publish only after the probe succeeds. An older completion must not
         // replace a candidate from a newer validation, even for equal digests.
         if (
           this.pendingValidations.get(resultKey) === generation &&
-          this.readEntry(resultKey)?.lifecycle === "open"
+          current?.lifecycle === "open"
         ) {
-          this.hold(resultKey, validation.validatedDigest!, result, validationBytes);
+          this.hold(
+            resultKey,
+            validation.validatedDigest!,
+            result,
+            validationBytes,
+            validatedContext,
+          );
         }
         return validation;
       }
@@ -1020,7 +1134,7 @@ export class WorkflowResultService {
     }
     let candidate = result;
     if (validatedDigest !== undefined) {
-      const held = this.held.get(resultKey);
+      const held = this.readHeld(resultKey, entry);
       if (!held || held.digest !== validatedDigest) return null;
       candidate = held.result;
     }
@@ -1270,8 +1384,8 @@ export class WorkflowResultService {
             return { result: { ok: false, error: refused } };
           }
           if (validatedDigest !== undefined) {
-            const held = this.held.get(resultKey);
-            if (!held || held.digest !== validatedDigest || !this.heldValidation(resultKey)) {
+            const held = this.readHeld(resultKey, entry);
+            if (!held || held.digest !== validatedDigest) {
               return {
                 result: {
                   ok: false,
@@ -1293,9 +1407,23 @@ export class WorkflowResultService {
             }
             result = held.result;
           }
+          // Stored as validated: with the fields the backend owns filled in.
+          // The digest stays the submitted value's, so a resend of the same
+          // submission is still a duplicate.
+          const completed = completeEntryResult(entry, result);
+          const sizeError = completedResultSizeError(result, completed);
+          if (sizeError) {
+            this.metrics.recordSubmission({
+              provider: entry.provider,
+              kind: entry.kind,
+              outcome: "rejected",
+              code: sizeError.code,
+            });
+            return { result: { ok: false, error: sizeError } };
+          }
           if (!entry.firstSubmissionAt) entry.firstSubmissionAt = new Date().toISOString();
           const validationStartedAt = Date.now();
-          let issues = validateEntryResult(entry, result);
+          let issues = validateEntryResult(entry, completed);
           this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
           if (
             issues.length === 0 &&
@@ -1375,7 +1503,7 @@ export class WorkflowResultService {
             acceptedAt,
           };
           entry.lifecycle = "accepted";
-          entry.result = result;
+          entry.result = completed;
           entry.digest = resultDigest;
           entry.receipt = receipt;
           entry.updatedAt = acceptedAt;
@@ -1518,6 +1646,10 @@ export class WorkflowResultService {
       entry.projectId !== scope.projectId
     ) {
       return null;
+    }
+    // A consolidation slot with merged scope omits those lists from its published schema.
+    if (entry.context?.type === "consolidated-review" && entry.context.scope) {
+      return { kind: entry.kind, provider: entry.provider, slot: { context: entry.context } };
     }
     if (entry.kind !== "graph-output") return { kind: entry.kind, provider: entry.provider };
     return {

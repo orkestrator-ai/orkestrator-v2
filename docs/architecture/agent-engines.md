@@ -1753,7 +1753,7 @@ that the tool instruction supersedes any earlier "final JSON only" guidance.
 
 **One submission call, with its schema up front.** Consolidation agents used
 to find their tools with ToolSearch, then alternate between validation and
-submission two to four times before a result was accepted. Four things keep
+submission two to four times before a result was accepted. Six things keep
 the first submission the normal path:
 
 - Every result tool lists `_meta["anthropic/alwaysLoad"]: true`
@@ -1772,6 +1772,33 @@ the first submission the normal path:
 - The consolidation prompt carries a complete shape template of the report
   (`review-consolidation-example.ts`), checked against the contract by its
   test, and names the misses that most often cost a resend.
+- A pipeline session's result turn runs its Claude CLI with fine-grained tool
+  streaming off (`CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=0`,
+  `buffersToolInput` in `bridges/claude-bridge/src/services/runtime-env.ts`).
+  With it on, the API streams a tool's input unchecked, and one bad escape in
+  a 15–40 KB report reaches the CLI as JSON it cannot parse: it refuses the
+  call (`InputValidationError … could not be parsed as JSON`, the input kept as
+  `__unparsedToolInput`) without reaching the backend. In one week on one host
+  that refused 52 of 185 Haiku consolidations and 32 of 167 Opus reviewer
+  reports. Interactive chats keep the streaming. See
+  [`bridges/claude-bridge/AGENTS.md`](../../bridges/claude-bridge/AGENTS.md#tool-input-streaming).
+- A consolidation over the result tool does not retype the reviewers' scope
+  lists. Its slot context carries `scope`, the union of the reviewers'
+  `filesReviewed`, `filesSkipped`, `filesLeftUncommitted`, `commandsRun` and
+  `commandsNotRun` (`review-consolidation-scope.ts`). The model writes the full
+  scope when the union exceeds a report list limit or 32 KiB, or contains text
+  the result tool would reject. Otherwise initial and repair prompts and the
+  published per-slot tool schema omit the five lists. The backend still accepts
+  full reports from saved prompts. The kind's `complete` hook fills the lists
+  in before validation and storage, so every consumer reads a complete report.
+  Judgement about the scope
+  (`limitations`, `outcome`, the commit range) stays with the model. A slot an
+  older backend prepared takes the lists when the same attempt is prepared again
+  while open. A held validation must be refreshed after that scope change.
+  The OpenCode broker publishes one tool per kind for every slot, so its
+  consolidated-review tool takes the report with or without the lists
+  (`anySlotSchema`); the service still requires them where a slot does not
+  fill them in.
 
 **Legacy mode.** Review and pipeline attempts fall back to
 `structured-output-v1`, the provider-enforced final-output schema. Feature

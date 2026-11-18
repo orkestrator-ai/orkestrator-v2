@@ -627,10 +627,15 @@ function inlineCodeList(values: readonly string[]): string {
  * keeps this human-readable preflight from becoming a second, drifting
  * contract.
  */
-export function buildStructuredReviewOutputGuide(): string {
+export function buildStructuredReviewOutputGuide(
+  reviewScopeRequired: readonly string[] = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties
+    .reviewScope.required,
+): string {
   const schema = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA;
   const requiredObjects = Object.entries(schema.properties).flatMap(([name, property]) =>
-    "required" in property ? ([[name, property.required]] as const) : [],
+    "required" in property
+      ? ([[name, name === "reviewScope" ? reviewScopeRequired : property.required]] as const)
+      : [],
   );
 
   return `## Structured report structural preflight

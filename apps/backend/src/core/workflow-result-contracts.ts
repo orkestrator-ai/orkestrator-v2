@@ -44,6 +44,13 @@ import {
   REVIEW_CONSOLIDATION_PROVENANCE,
   REVIEW_CONSOLIDATION_WORDING,
 } from "./review-consolidation-provenance.js";
+import {
+  CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA,
+  CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA,
+  completeConsolidatedReview,
+  inspectScopeListText,
+} from "./review-consolidation-scope.js";
+import { inspectFinalText } from "./workflow-result-final-text.js";
 import { graphOutputKindDefinition } from "./workflow-result-graph-output.js";
 import { graphTemplateKindDefinition } from "./workflow-result-graph-template.js";
 import {
@@ -57,25 +64,6 @@ import {
 } from "./workflow-result-registry.js";
 
 const MAX_ISSUES = WORKFLOW_RESULT_MAX_ISSUES;
-const PLACEHOLDER_VALUES = new Set([
-  "asdf",
-  "dummy",
-  "lorem ipsum",
-  "placeholder",
-  "probe",
-  "sample",
-  "tbd",
-  "test",
-  "testing",
-  "todo",
-  // Filler a model uses to shrink a payload until a call goes through.
-  "x",
-  "xx",
-  "xxx",
-]);
-const PLACEHOLDER_PHRASE =
-  /^(?:(?:this|that) is (?:a )?)?(?:dummy|placeholder|probe|sample|tbd|test|testing|todo)(?: (?:content|only|result|value))?[.!]?$/;
-
 function issue(path: string, code: string, message: string): WorkflowResultValidationIssue {
   return { path: path.slice(0, 256), code, message: message.slice(0, 512) };
 }
@@ -100,23 +88,6 @@ function canonical(value: unknown): unknown {
 
 function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
-}
-
-function inspectFinalText(
-  issues: WorkflowResultValidationIssue[],
-  candidate: unknown,
-  path: string,
-): void {
-  if (typeof candidate !== "string") return;
-  const normalized = candidate.trim().toLocaleLowerCase("en-US");
-  if (!PLACEHOLDER_VALUES.has(normalized) && !PLACEHOLDER_PHRASE.test(normalized)) return;
-  issues.push(
-    issue(
-      path,
-      "placeholder_value",
-      "A workflow result must contain final content, not a probe or placeholder.",
-    ),
-  );
 }
 
 function inspectTextArray(
@@ -163,19 +134,7 @@ function validateReviewNarratives(value: Record<string, unknown>): WorkflowResul
   const reviewScope = record(value.reviewScope) ? value.reviewScope : undefined;
   if (reviewScope) {
     inspectTextArray(issues, reviewScope.limitations, "$.reviewScope.limitations");
-    for (const field of ["filesSkipped", "filesLeftUncommitted", "commandsNotRun"]) {
-      if (!Array.isArray(reviewScope[field])) continue;
-      reviewScope[field].forEach((entry, index) => {
-        if (record(entry))
-          inspectFinalText(issues, entry.reason, `$.reviewScope.${field}[${index}].reason`);
-      });
-    }
-    if (Array.isArray(reviewScope.commandsRun)) {
-      reviewScope.commandsRun.forEach((entry, index) => {
-        if (record(entry))
-          inspectFinalText(issues, entry.summary, `$.reviewScope.commandsRun[${index}].summary`);
-      });
-    }
+    inspectScopeListText(issues, reviewScope);
   }
   if (record(value.whatChanged)) {
     inspectFinalText(issues, value.whatChanged.overview, "$.whatChanged.overview");
@@ -314,6 +273,10 @@ type ConsolidationContext = Extract<
 >;
 
 export { REVIEW_CONSOLIDATION_PROVENANCE, REVIEW_CONSOLIDATION_WORDING };
+
+function consolidationScope(slot: WorkflowResultSlotView): ConsolidationContext["scope"] {
+  return slot.context?.type === "consolidated-review" ? slot.context.scope : undefined;
+}
 
 function validateConsolidationContext(
   value: Record<string, unknown>,
@@ -568,6 +531,16 @@ const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
     finalContent: validateReviewNarratives,
   }),
   builtInKind("consolidated-review", () => STRUCTURED_REVIEW_REPORT_JSON_SCHEMA, {
+    // A scoped slot advertises the fields the model supplies.
+    providerSchema: (slot) =>
+      consolidationScope(slot)
+        ? CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA
+        : STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+    anySlotSchema: () => CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA,
+    complete: (value, slot) => {
+      const scope = consolidationScope(slot);
+      return scope ? completeConsolidatedReview(value, scope) : value;
+    },
     structural: reviewReportStructure,
     validator: reviewReportDomain,
     finalContent: validateReviewNarratives,

@@ -13,6 +13,7 @@ import {
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { MULTI_REVIEW_PLAN_TOOL_PROHIBITION } from "@orkestrator/protocol/multi-review";
 import { reviewLensSection, type ReviewLens } from "@orkestrator/protocol/review-lens";
+import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./review-consolidation-scope.js";
 import { consolidatedReviewExampleSection } from "./review-consolidation-example.js";
 import {
   buildConsolidationEvidence,
@@ -150,6 +151,12 @@ export function createMultiReviewConsolidationPrompt(input: {
   worktree?: ReviewWorktreeSnapshot;
   worktreeChangedDuringReview?: boolean;
   reviewPackage?: ReviewPackageReference;
+  /**
+   * The result slot fills in the scope lists itself
+   * (`consolidationScopeFilledByBackend`), so the report leaves them out.
+   * Only a consolidation over the result tool can say so.
+   */
+  scopeFilledByBackend?: boolean;
   /** Receives content-free size statistics for the envelope actually sent. */
   onEvidenceStats?: (stats: ConsolidationEvidenceStats) => void;
 }): string {
@@ -177,9 +184,13 @@ ${MULTI_REVIEW_CONSOLIDATION_PROMPT_CONTINUATION}${JSON.stringify(input.targetBr
 - This is a report-consolidation turn, not a planning turn. ${MULTI_REVIEW_PLAN_TOOL_PROHIBITION} A plan, plan-review card, or approval request is not a valid result. Do not ask anyone to approve a plan or switch modes. Return the consolidated structured report directly.
 - Do not edit files, run validation or any command beyond those targeted reads, ask questions, or add prose outside the provider-enforced structured result.
 
-${buildStructuredReviewOutputGuide()}
+${buildStructuredReviewOutputGuide(
+  input.scopeFilledByBackend
+    ? CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA.properties.reviewScope.required
+    : undefined,
+)}
 
-${consolidatedReviewExampleSection()}`;
+${consolidatedReviewExampleSection({ scopeFilledByBackend: input.scopeFilledByBackend })}`;
 }
 
 /**

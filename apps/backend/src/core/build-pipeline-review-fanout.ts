@@ -89,6 +89,7 @@ import {
   readProviderStatus,
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
+import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./review-consolidation-scope.js";
 import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
 import { createDiscoveryPrompt } from "./review-prompts.js";
@@ -109,6 +110,7 @@ import {
   createReviewConsolidationPrompt,
   deriveConsolidatedProvenance,
   consolidationResultContext,
+  consolidationScopeFilledByBackend,
   parseStructuredReportResult,
   resolveUnattendedReviewerInteractions,
   reviewFanoutErrorMessage,
@@ -1254,6 +1256,10 @@ export class BuildPipelineReviewFanout {
           createReviewConsolidationPrompt({
             targetBranch,
             reports: consolidationReports(state.reviewers),
+            // Only the result tool's slot fills the scope lists in.
+            scopeFilledByBackend:
+              consolidation.resultTransport === "tool-v1" &&
+              consolidationScopeFilledByBackend(state.reviewers),
             onEvidenceStats: (stats) =>
               recordEfficiency(this.deps.efficiency, {
                 owner: "build-pipeline",
@@ -1837,6 +1843,9 @@ export class BuildPipelineReviewFanout {
       error.issues,
       attempt,
       MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS,
+      previousTransport === "tool-v1" && consolidationScopeFilledByBackend(state.reviewers)
+        ? { schema: CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA }
+        : undefined,
     );
     consolidation.requestId = randomUUID();
     consolidation.state = "prepared";

@@ -106,7 +106,8 @@ writers on one `.jsonl`. When touching the prompt path:
   claim for the 30 s stale window (flakes 1305, 1308).
 - **Launch-only settings are refused, not ignored.** Output schema, execution
   policy, agent, settings sources, effective context beta, prompt suggestions,
-  effective Chrome access, plugins and managed credentials cannot change on a live CLI. Adaptive thinking
+  effective Chrome access, plugins, managed credentials and tool input
+  streaming cannot change on a live CLI. Adaptive thinking
   can only reset a runtime launched in adaptive mode; bypass mode requires the
   launch capability. A prompt that changes them while the runtime still owes
   work (a live task, an owed continuation, a parked card) is a 409 before
@@ -390,3 +391,27 @@ session's policy, not the turn's: a read-only turn replaces the policy it runs
 under. Never set `CLAUDE_CODE_RETRY_WATCHDOG` or raise `CLAUDE_CODE_MAX_RETRIES`
 for this: both also wait out usage and rate limits. See
 [1010](../../docs/todo/agent-engines/1010-model-capacity-backoff-retry.md).
+
+## Tool input streaming
+
+A `pipeline` session's turn that submits a workflow result (its prompt names
+`workflowResultTool`) launches its CLI with
+`CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=0` (`buffersToolInput` and
+`withBufferedToolInput`, `runtime-env.ts`). The pinned CLI turns fine-grained
+tool streaming on for first-party models through a server-side flag; with it
+on, the API streams a tool's input without checking it, and a large report
+with one bad escape reaches the CLI as JSON it cannot parse. The CLI then
+refuses the call without reaching the backend and keeps the input as
+`{"__unparsedToolInput": {raw, len}}`, which the model reads as a wrapper it
+added. `0` is the only override the CLI reads, and it wins over the flag.
+
+- **Pipeline result turns only.** Interactive chats and pipeline turns without
+  a result keep the streaming, which shows a long Write or Edit as it is
+  generated. Read the session's policy, as for overload retries: a reviewer's
+  read-only turn replaces the policy it runs under.
+- **It is launch-only, one way.** The launch profile records
+  `bufferedToolInput`. A result turn cannot join a CLI launched with streaming
+  on (an idle one is replaced; one that owes work refuses with 409), but any
+  turn may join a CLI launched with it off.
+- **Recheck on every Claude bump** that the variable is still read as a
+  tri-state boolean and still gates `eager_input_streaming`.

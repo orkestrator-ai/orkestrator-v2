@@ -289,13 +289,16 @@ function jsonSchemaFieldRefusal(
 }
 
 /**
- * A field validated by a JSON Schema (Zod's `z.fromJSONSchema`): published
- * verbatim and checked by the MCP SDK's JSON Schema validator. A refusal
- * names each field at fault by its path from the field (`$.a.b`).
+ * A field checked by the MCP SDK's JSON Schema validator. A caller can supply
+ * an acceptance schema to support older payloads alongside the published shape.
+ * A refusal names each field at fault by its path from the field (`$.a.b`).
  */
-export function jsonSchemaField<T = unknown>(json: Record<string, unknown>): Schema.Codec<T, T> {
-  const standard = fromJsonSchema<T>(json as JsonSchemaType)["~standard"];
-  const { $schema: _dialect, ...published } = json;
+export function jsonSchemaField<T = unknown>(
+  publishedSchema: Record<string, unknown>,
+  acceptanceSchema = publishedSchema,
+): Schema.Codec<T, T> {
+  const standard = fromJsonSchema<T>(acceptanceSchema as JsonSchemaType)["~standard"];
+  const { $schema: _dialect, ...published } = publishedSchema;
   // `Unknown` publishes `{}` whatever its checks say; `Any` publishes them.
   return Schema.Any.check(
     Schema.makeFilter(
@@ -304,7 +307,7 @@ export function jsonSchemaField<T = unknown>(json: Record<string, unknown>): Sch
         if (result instanceof Promise) return "Asynchronous validation is not supported";
         if (!result.issues) return true;
         return jsonSchemaFieldRefusal(
-          json,
+          acceptanceSchema,
           value,
           result.issues.map((issue) => issue.message).join("; "),
         );

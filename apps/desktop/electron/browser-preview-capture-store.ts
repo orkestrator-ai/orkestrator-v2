@@ -179,6 +179,7 @@ interface SpoolRecord {
   capture: WebAnnotationCaptureInput;
   imageFile: string | null;
   imageRevision: number;
+  masksIncomplete?: boolean;
   masks?: BrowserPreviewCaptureMask[];
   result?: BrowserPreviewResultCaptureMetadata;
   resultRecapture?: ResultRecaptureOptions;
@@ -187,6 +188,7 @@ interface SpoolRecord {
 interface RememberedMasks {
   backendCaptureId: string;
   savedAt: string;
+  complete?: boolean;
   masks: BrowserPreviewCaptureMask[];
 }
 
@@ -483,6 +485,7 @@ export class BrowserPreviewCaptureStore {
             isRecord(entry) &&
             isWebAnnotationId(entry.backendCaptureId) &&
             isIso(entry.savedAt) &&
+            (entry.complete === undefined || typeof entry.complete === "boolean") &&
             isMaskList(entry.masks),
         )
         .slice(0, MAX_REMEMBERED_MASK_SETS);
@@ -539,6 +542,7 @@ export class BrowserPreviewCaptureStore {
         !isDescriptor(parsed.descriptor) ||
         parsed.descriptor.captureId !== captureId ||
         !validateWebAnnotationCaptureInput(parsed.capture).ok ||
+        (parsed.masksIncomplete !== undefined && typeof parsed.masksIncomplete !== "boolean") ||
         (parsed.masks !== undefined && !isMaskList(parsed.masks)) ||
         (parsed.result !== undefined && !isResultMetadata(parsed.result)) ||
         (parsed.resultRecapture !== undefined && !isResultRecaptureOptions(parsed.resultRecapture))
@@ -902,11 +906,12 @@ export class BrowserPreviewCaptureStore {
       };
       const allMasks = [...(record.masks ?? []), ...manualMasks];
       const masks = allMasks.slice(0, MAX_CAPTURE_MASKS);
+      const masksIncomplete =
+        record.masksIncomplete === true ||
+        added !== manualMasks.length ||
+        allMasks.length > MAX_CAPTURE_MASKS;
       const result = record.result && { ...record.result };
-      if (
-        result &&
-        (!image || added !== manualMasks.length || allMasks.length > MAX_CAPTURE_MASKS)
-      ) {
+      if (result && (!image || masksIncomplete)) {
         delete result.unstableRegions;
         delete result.originalMasks;
       }
@@ -920,6 +925,7 @@ export class BrowserPreviewCaptureStore {
         imageRevision,
         imageFile,
         capture,
+        ...(masksIncomplete ? { masksIncomplete } : {}),
         ...(masks.length > 0 ? { masks } : {}),
         ...(result ? { result } : {}),
         descriptor: {
@@ -1012,6 +1018,7 @@ export class BrowserPreviewCaptureStore {
             backendCaptureId: ack.backendCaptureId,
             savedAt: new Date(this.now()).toISOString(),
             masks: record.masks,
+            complete: record.masksIncomplete !== true,
           },
           ...this.rememberedMasks.filter(
             (entry) => entry.backendCaptureId !== ack.backendCaptureId,
@@ -1026,14 +1033,20 @@ export class BrowserPreviewCaptureStore {
     if (tabId !== null) this.notify(ack.captureId, tabId, "acknowledged");
   }
 
-  /** Masks remembered for an acknowledged backend capture, or null. */
-  async masksFor(backendCaptureId: string): Promise<BrowserPreviewCaptureMask[] | null> {
+  /** Known masks to reapply, with whether they account for the whole original. */
+  async masksFor(backendCaptureId: string) {
     if (!isWebAnnotationId(backendCaptureId)) return null;
     return this.afterReady(async () => {
       const entry = this.rememberedMasks.find(
         (candidate) => candidate.backendCaptureId === backendCaptureId,
       );
-      return entry ? structuredClone(entry.masks) : null;
+      return entry
+        ? {
+            masks: structuredClone(entry.masks),
+            // A legacy entry at the cap may have been truncated.
+            complete: entry.complete ?? entry.masks.length < MAX_CAPTURE_MASKS,
+          }
+        : null;
     });
   }
 

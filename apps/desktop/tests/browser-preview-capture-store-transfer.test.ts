@@ -169,9 +169,22 @@ describe("receipts, resume, and re-acknowledgement", () => {
     const masks = [{ source: "manual" as const, rect: { x: 1, y: 2, width: 3, height: 4 } }];
     const created = await store.create(input("browser-1", { masks }));
     await store.acknowledge(ack(created.captureId, "capture-original"));
-    expect(await store.masksFor("capture-original")).toEqual(masks);
-    expect(await open().masksFor("capture-original")).toEqual(masks);
+    expect(await store.masksFor("capture-original")).toEqual({ masks, complete: true });
+    expect(await open().masksFor("capture-original")).toEqual({ masks, complete: true });
     expect(await store.masksFor("capture-unknown")).toBeNull();
+  });
+
+  test("count-only edits leave the remembered geometry incomplete after a restart", async () => {
+    const { store, open } = harness();
+    const masks = [{ source: "manual" as const, rect: { x: 1, y: 2, width: 3, height: 4 } }];
+    const created = await store.create(input("browser-1", { masks }));
+    await store.replaceImage(created.captureId, {
+      imageBytes: pngBytes(64, 40, 2),
+      imageDataUrl: null,
+      manualRegions: 1,
+    });
+    await store.acknowledge(ack(created.captureId, "capture-original"));
+    expect(await open().masksFor("capture-original")).toEqual({ masks, complete: false });
   });
 });
 

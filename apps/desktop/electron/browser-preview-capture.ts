@@ -370,17 +370,20 @@ export class BrowserPreviewCaptureSessions {
     if (!(await store.hasCapacity(input.tabId, recaptureOf ? { excluding: recaptureOf } : {}))) {
       return this.error(input.tabId, null, "spool-full");
     }
-    const originalCaptureId =
-      previousResult?.resultRecapture?.originalCaptureId ?? input.result?.originalCaptureId ?? null;
-    let resultMasks: BrowserPreviewCaptureMask[] = [];
-    if (purpose === "result") {
-      resultMasks =
-        previousResult?.resultRecapture?.masks ??
-        input.result?.masks ??
-        (input.result?.originalCaptureId
-          ? ((await store.masksFor(input.result.originalCaptureId)) ?? [])
-          : []);
-    }
+    const previousOptions = previousResult?.resultRecapture;
+    const requestedOriginalId = input.result?.originalCaptureId;
+    const remembered =
+      purpose === "result" && !previousOptions && requestedOriginalId && !input.result?.masks
+        ? await store.masksFor(requestedOriginalId)
+        : null;
+    const resultMasks = previousOptions?.masks ?? input.result?.masks ?? remembered?.masks ?? [];
+    // Incomplete geometry can still be reapplied to the new image, but it
+    // cannot establish which pixels to exclude from the original.
+    const originalCaptureId = previousOptions
+      ? previousOptions.originalCaptureId
+      : remembered?.complete || resultMasks.length === 0
+        ? (requestedOriginalId ?? null)
+        : null;
     const session: CaptureSession = {
       tabId: input.tabId,
       captureId: createBrowserPreviewCaptureId(),

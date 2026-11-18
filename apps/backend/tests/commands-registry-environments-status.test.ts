@@ -1,6 +1,13 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
+import { createProject } from "../src/core/storage";
+import {
+  seedStore,
+  storageDatabase,
+  storageInternals,
+  withTemporaryStorage,
+} from "../src/core/storage-test-support";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -26,6 +33,85 @@ const {
 } = await createCommandFixtures();
 
 describe("environment status and settings commands", () => {
+  test("lists and snapshots only the requested project's persisted environments", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const projectId = "project-1";
+      const destination = "project-2";
+      const older = createEnvironment({ id: "z-older", order: 2, setupScriptsComplete: true });
+      const tied = createEnvironment({ id: "a-tied", order: 2 });
+      const first = createEnvironment({ id: "first", order: 0 });
+      const unrelated = Array.from({ length: 49 }, (_, index) =>
+        createEnvironment({ id: `other-${index}`, projectId: `other-project-${index}` }),
+      );
+      seedStore(
+        dataDir,
+        "projects.json",
+        [projectId, destination, ...unrelated.map((environment) => environment.projectId)].map(
+          (id) => ({ ...createProject(`https://example.invalid/${id}.git`), id }),
+        ),
+      );
+      seedStore(dataDir, "environments.json", [older, ...unrelated, tied, first]);
+
+      const { context } = createContext([], { dataDir });
+      context.storage = storage;
+      // These services independently reconcile the whole node. Measure the
+      // commands' project lookup without their background storage reads.
+      const diffSync = spyOn(context.runtime.diffStats, "sync").mockResolvedValue(undefined);
+      const prSync = spyOn(context.runtime.prMonitor, "sync").mockResolvedValue(undefined);
+      const commands = createCommandRegistry();
+      const database = storageDatabase(storage);
+      const ownerReads = spyOn(database, "readStoreRowsByOwner");
+      const fullReads = spyOn(database, "readStore");
+
+      async function expectProject(owner: string, ids: string[]) {
+        const expected = (await storage.loadEnvironments())
+          .filter((environment) => environment.projectId === owner)
+          .map(toClientEnvironment);
+        expect(expected.map((environment) => environment.id)).toEqual(ids);
+        if (ids.includes(older.id)) {
+          expect(expected.find((environment) => environment.id === older.id)).toMatchObject({
+            setupPhase: "ready",
+            setupOverride: false,
+          });
+        }
+
+        for (const command of ["get_environments", "get_environment_snapshots"]) {
+          ownerReads.mockClear();
+          fullReads.mockClear();
+          await expect(commands.get(command)!({ projectId: owner }, context)).resolves.toEqual(
+            expected,
+          );
+          expect(ownerReads.mock.calls).toEqual([["environments", owner]]);
+          expect(fullReads).not.toHaveBeenCalledWith("environments");
+        }
+      }
+
+      try {
+        await expectProject(projectId, [first.id, older.id, tied.id]);
+        await expectProject(destination, []);
+
+        const created = await storage.addEnvironment(createEnvironment({ id: "created" }));
+        await expectProject(projectId, [first.id, older.id, tied.id, created.id]);
+
+        const { projects } = storageInternals(storage).repos;
+        await projects.enqueueEnvironmentMutation(async () => {
+          projects.saveEnvironment({ ...created, projectId: destination });
+        });
+        await expectProject(projectId, [first.id, older.id, tied.id]);
+        await expectProject(destination, [created.id]);
+
+        await storage.removeEnvironment(created.id);
+        await expectProject(destination, []);
+      } finally {
+        fullReads.mockRestore();
+        ownerReads.mockRestore();
+        prSync.mockRestore();
+        diffSync.mockRestore();
+        await storage.close();
+      }
+    });
+  });
+
   test("fake Docker pins and exactly restores host credential paths", async () => {
     const names = [
       "ORKESTRATOR_AGENT_TEST_HOST_HOME",

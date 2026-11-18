@@ -34,3 +34,30 @@ settings passed all six cases in 35.8 seconds. It used log label
 
 The observed scroll offsets show that edge scrolling started, then stopped
 before reaching the test's threshold. The cause of the stall is unconfirmed.
+
+## Merge validation on 2026-11-18
+
+On the merge of `869537b07ec592111a956baba70bc807d2e0657d` with base
+`f27527be7f27878c9fb947056c570c1a6b270281`, the sibling test
+`scrolling during drag keeps the pointer's after placement` timed out after
+30 seconds on mobile Chromium. The initial two-worker run finished with
+21 passes and one failure at scroll offset 76. The first isolated owner run
+had five passes and one failure at offset 150. The final isolated owner run
+passed all six cases in 19.1 seconds. The incoming base passed all four
+placement cases and three additional repetitions of the mobile after-placement
+case. `mise run flaky:recurrence` classified case 9991 as open on this base.
+
+The initial and final runs used the private loopback namespace:
+
+```sh
+mise run test:logged -- --name merge-linear-browser -- env -u NODE_ENV \
+  bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- \
+  bunx playwright test --config e2e/playwright.config.ts \
+  --output output/visual-previews/merge-linear-check/owning-tests \
+  --workers 2 LinearBoard HoverWashes.spec.ts
+
+mise run test:logged -- --name merge-linear-owning-browser -- env -u NODE_ENV \
+  bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- \
+  bunx playwright test --config e2e/playwright.config.ts e2e/LinearBoardDrag.spec.ts \
+  --workers=1 --retries=0 --output=output/visual-previews/merge-linear-check/owning-drag
+```

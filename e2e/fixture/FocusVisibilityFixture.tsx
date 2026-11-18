@@ -2,6 +2,26 @@ import { useState } from "react";
 import { WorkflowSnapshotGraph } from "../../apps/web/src/components/chat/rich/WorkflowSnapshotCardGraph";
 import { OptionCards } from "../../apps/web/src/components/settings/agent/InheritedValue";
 import { Button } from "../../apps/web/src/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "../../apps/web/src/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../apps/web/src/components/ui/dropdown-menu";
+
+function MenuIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" fill="currentColor">
+      <circle cx="8" cy="8" r="4" />
+    </svg>
+  );
+}
 
 export function FocusVisibilityFixture() {
   const [selected, setSelected] = useState<string | null>("selected");
@@ -50,6 +70,32 @@ export function FocusVisibilityFixture() {
       <button className="rounded-full bg-blue-600 px-3 py-2 text-white focus-hairline focus-hairline-outset">
         Annotation fill
       </button>
+      <div className="flex gap-2">
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <Button variant="outline">Context actions</Button>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem>Rename</ContextMenuItem>
+            <ContextMenuItem variant="destructive">
+              <MenuIcon />
+              Delete
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline">Dropdown actions</Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuItem>Rename</DropdownMenuItem>
+            <DropdownMenuItem variant="destructive">
+              <MenuIcon />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </main>
   );
 }

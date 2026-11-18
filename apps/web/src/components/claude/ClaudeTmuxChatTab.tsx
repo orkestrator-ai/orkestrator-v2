@@ -1341,7 +1341,7 @@ export function ClaudeTmuxChatTab({
 
       {/* Inline error bar */}
       {error && (
-        <div className="px-3 py-1.5 text-xs text-red-400 bg-red-950/30 border-b border-red-900/40 shrink-0">
+        <div className="px-3 py-1.5 text-xs text-failure bg-failure/10 border-b border-failure/40 shrink-0">
           {error}
         </div>
       )}

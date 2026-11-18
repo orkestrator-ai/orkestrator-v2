@@ -184,7 +184,7 @@ export function GraphDescribeDialog({
               It keeps working if you close this dialog or switch tabs.
             </p>
             {error ? (
-              <p role="alert" className="text-sm text-destructive">
+              <p role="alert" className="text-sm text-failure">
                 {error}
               </p>
             ) : null}
@@ -221,7 +221,7 @@ export function GraphDescribeDialog({
                 placeholder="Three reviewers look at the change through security, performance and simplicity lenses; a judge picks the best findings; a builder fixes them; then open a pull request."
               />
               {tooLong ? (
-                <p className="text-xs text-destructive">
+                <p className="text-xs text-failure">
                   At most {GRAPH_DESCRIBE_BOUNDS.maxDescriptionChars} characters.
                 </p>
               ) : null}
@@ -285,7 +285,7 @@ export function GraphDescribeDialog({
             {error || failure ? (
               <p
                 role="alert"
-                className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+                className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-failure"
               >
                 {error ?? `The last request failed: ${failure}`}
               </p>

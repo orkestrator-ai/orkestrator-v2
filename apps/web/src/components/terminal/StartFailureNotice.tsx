@@ -53,7 +53,7 @@ export function StartFailureNotice({
       className="mx-auto mb-4 w-full max-w-md rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-left"
     >
       <div className="flex gap-2">
-        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden />
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-failure" aria-hidden />
         <p className="text-sm text-foreground">{message}</p>
       </div>
       {offerHttps && (

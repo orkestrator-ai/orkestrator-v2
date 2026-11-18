@@ -3,6 +3,7 @@ import type { VirtuosoHandle } from "react-virtuoso";
 import { useRef, useState } from "react";
 import { renderAgentMailCarrier, type AgentMailMessage } from "@orkestrator/protocol/agent-mail";
 import { NativeMessage } from "../../apps/web/src/components/chat/NativeMessage";
+import { MailTile } from "../../apps/web/src/components/chat/MailTile";
 import { createPeerMailNativeMessagesFromCarrier } from "../../apps/web/src/lib/chat/client-only-messages";
 
 const REPORT = [
@@ -126,6 +127,24 @@ export function MailTilesFixture() {
   const [mounted, setMounted] = useState(true);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const variant = new URLSearchParams(window.location.search).get("variant");
+  if (variant === "delivery-failed") {
+    return (
+      <main className="bg-background p-4 text-foreground">
+        <MailTile
+          mail={{
+            messageId: "fixture-failed-delivery",
+            kind: "message",
+            sender: "To Codex 2",
+            body: "Ready for review.",
+            warning: "",
+            direction: "out",
+            status: { label: "delivery failed", tone: "error" },
+          }}
+          expansionKey="fixture-failed-delivery"
+        />
+      </main>
+    );
+  }
   const rows = createPeerMailNativeMessagesFromCarrier({
     content: variant === "attachments" ? IMAGE_MAIL : BATCH,
     createdAt: "2026-10-16T10:04:00.000Z",

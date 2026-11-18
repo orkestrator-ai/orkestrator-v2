@@ -12,6 +12,14 @@ import {
   Square,
   X,
 } from "lucide-react";
+import {
+  COMPOSE_FRAME_CLASS_NAME,
+  COMPOSE_COLUMN_CLASS_NAME,
+} from "@/components/chat/NativeComposeBar";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "@/components/chat/compose-metrics";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks";
 import { useNodeScope } from "@/lib/node-scope/providers";
@@ -1008,7 +1016,7 @@ export function TmuxComposeBar({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 12 * 20 + 16)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSE_MAX_INPUT_HEIGHT)}px`;
   }, [value]);
 
   const selectSlashCommand = (command: SlashCommand) => {
@@ -1201,7 +1209,8 @@ export function TmuxComposeBar({
   return (
     <div
       className={cn(
-        "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
+        COMPOSE_COLUMN_CLASS_NAME,
+        COMPOSE_FRAME_CLASS_NAME,
         layout === "bottom" ? "mb-4 mt-2" : "my-0",
       )}
     >
@@ -1343,14 +1352,14 @@ export function TmuxComposeBar({
           // editing; focus stays here for the next prompt.
           readOnly={submitting || queueSubmitting}
           aria-busy={submitting || queueSubmitting}
-          rows={2}
+          rows={1}
           autoFocus={autoFocus && !isMobile}
           className={cn(
             "w-full resize-none bg-transparent text-sm leading-5",
             "px-1 py-1 focus:outline-none placeholder:text-muted-foreground/60",
             "disabled:opacity-60 read-only:opacity-60",
           )}
-          style={{ minHeight: 28, maxHeight: 12 * 20 + 16 }}
+          style={{ minHeight: COMPOSE_MIN_INPUT_HEIGHT, maxHeight: COMPOSE_MAX_INPUT_HEIGHT }}
         />
       </div>
 
@@ -1459,7 +1468,7 @@ export function TmuxComposeBar({
             className={cn(
               "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
               queueRecovery.dispatchError
-                ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
+                ? "bg-destructive/10 text-failure hover:bg-destructive/20"
                 : "text-muted-foreground bg-muted/50 hover:bg-muted",
             )}
             aria-label={
@@ -1581,7 +1590,7 @@ export function ApprovalCard({
             type="button"
             onClick={() => void respond(onDeny)}
             disabled={submitting}
-            className="flex-1 px-3 py-1.5 rounded bg-red-800 hover:bg-red-700 text-white text-sm font-medium"
+            className="flex-1 px-3 py-1.5 rounded bg-destructive text-black hover:bg-destructive/95 active:bg-destructive/90 text-sm font-medium"
           >
             Deny
           </button>

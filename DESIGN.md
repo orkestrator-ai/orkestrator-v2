@@ -281,8 +281,8 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 
 ### Primary
 - **Signal Blue** (`brand-blue`): the brand blue. On the site it carries the primary button, links and the start of the headline gradient; its brighter partner **Signal Blue Bright** (`brand-blue-bright`) carries eyebrows, focus outlines and the gradient's first stop.
-- **App Signal Blue** (`primary`): the app's current blue for lines, text and marks: links, the selected row's 2px accent bar, the focus hairline (`--color-ring`), the active tab underline, the unread-mail count, and the "creating" status. Bells are not blue; see Approval Amber.
-- **Deep Signal Fill** (`primary-fill`): the same blue one step deeper, for any fill that carries white text or glyphs: primary buttons (Create PR), the selected segment, the compose bar's Send. White on `primary` is 3.7:1, below AA for 14px text; white on `primary-fill` is 5.2:1.
+- **App Signal Blue** (`primary`): the app's current blue for lines, text and marks: links, the selected row's 2px accent bar, the focus hairline (`--color-ring`), the active tab underline, and the "creating" status. Bells are not blue; see Approval Amber.
+- **Deep Signal Fill** (`primary-fill`): the same blue one step deeper, for any fill that carries white text or glyphs: primary buttons (Create PR), the selected segment, the compose bar's Send, and the unread-mail count pill. White on `primary` is 3.7:1, below AA for 14px text; white on `primary-fill` is 5.2:1.
 
 ### Secondary
 - **All-Clear Green** (`brand-green`): the brand green. Site security eyebrows, "allowed" rows, and the end of the headline gradient.
@@ -300,7 +300,7 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 - **Panel Surface** (`panel-surface`): raised informational panels (for example the coordinator's "How it works" box).
 - **Elevated** (`elevated`, `elevated-hover`): the resting fill of a control sitting on chrome or sidebar. Controls use `elevated`, never `accent`/`secondary`, because those are rebound inside the central panel and would vanish.
 - **Ink** (`foreground`, `muted-foreground`): primary and secondary text. **Hairlines** (`border`, `divider`): `divider` separates shell panels, tool-card rows and modal header/footer; it is a flat colour so it renders identically over any layer.
-- **Selection** (`selected` → `selected-edge`, `selected-foreground`): a left-to-right blue-tinted gradient for the selected row. **Hover** (`hover`, `environment-hover`) is a weaker shade of the same blue, never a grey wash.
+- **Selection** (`selected` → `selected-edge`, `selected-foreground`): a left-to-right blue-tinted gradient for the selected row. **Hover** (`hover`, `environment-hover`) uses a weaker shade of the same blue in these lists. Dropdown and context menu items and select options use a neutral highlight for pointer and keyboard navigation when the popover has no blue selected row.
 - **The cool zinc ramp** (`--color-zinc-50`…`950`, OKLCH at hue 264): Tailwind's `zinc` retinted so the ~200 call sites that name it share the cool cast. Use the semantic tokens above first; the ramp is for steps they don't name.
 - **Site neutrals** (`site-night`, `site-surface`, `site-surface-raised`, `site-ink*`, `site-line*`): the public site's own deeper night and three-step ink scale.
 - **Flow graph** (`flow-canvas`, `flow-node`, `flow-edge`): Multi Review, build pipeline and Graphs canvases. The canvas sits below the panel, nodes above it; `flow-edge` is the dashed line of an unreached step.
@@ -369,6 +369,7 @@ The app is flat. Depth comes from tonal layers (sidebar darkest, then background
 - **Compose dock** (`shadow-xl` at black 20%): the native tab's compose bar, which floats over the bottom of the transcript.
 - **Floating notice** (`shadow-xl` at black 40% with a small backdrop blur; its folded pill uses `shadow-lg` at black 30%): agent mail and other pane notices floating at a pane's top right.
 - **Design canvas frames** (`shadow-xl`): the canvas treats frames as floating windows, so each page stays distinct from the canvas.
+- **Transcript annotation pins** (`shadow-lg`): the numbered marks float above transcript content and use a 2px white ring to stay legible over text and tinted rows.
 - **Control lift** (`shadow-xs` / `shadow-sm`): inputs and the selected segment only.
 - **Site window** (`box-shadow: inset 0 1px 0 #2a3446, 0 30px 80px rgb(0 0 0 / 0.45), 0 2px 6px rgb(0 0 0 / 0.4)`): illustration frames on the public site.
 - **Site primary glow** (`box-shadow: inset 0 1px 0 #86aef5, 0 10px 30px rgb(39 81 155 / 0.3)`): the site's primary button; it lifts 1px on hover.

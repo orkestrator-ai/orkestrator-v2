@@ -536,7 +536,7 @@ export interface NativeAgentServiceOptions {
     projectId: string,
     tabId: string,
     target: "host" | "container",
-  ) => { url: string; token: string };
+  ) => { url: string; token: string } | Promise<{ url: string; token: string }>;
   /**
    * Transcript-artifact turn bookkeeping. `beginTurn` attributes the
    * conversation's artifact tool calls to the dispatched turn and, for a

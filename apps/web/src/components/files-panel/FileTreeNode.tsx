@@ -198,8 +198,8 @@ export const FileTreeNode = memo(function FileTreeNode({
             }
           }}
           className={cn(
-            "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50",
-            isDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
+            "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors",
+            isDragOver ? "bg-primary/15 ring-1 ring-inset ring-primary/60" : "hover:bg-hover",
           )}
           style={{ paddingLeft }}
         >
@@ -335,9 +335,9 @@ export const FileTreeNode = memo(function FileTreeNode({
         }}
         onDragEnd={() => setIsDragging(false)}
         className={cn(
-          "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50",
+          "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors",
           onMove && !movePending && "cursor-grab active:cursor-grabbing",
-          isSelected && "bg-accent",
+          isSelected ? "bg-accent" : "hover:bg-hover",
           isDragging && "opacity-50",
         )}
         style={{ paddingLeft: paddingLeft + 14 }} // Extra indent for files (no chevron)

@@ -242,7 +242,7 @@ export function DestinationPicker({
         </span>
       </legend>
       {error && (
-        <p role="alert" className="text-[11px] text-destructive">
+        <p role="alert" className="text-[11px] text-failure">
           {error}
         </p>
       )}

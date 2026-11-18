@@ -207,7 +207,7 @@ export function AgentsMdApprovalDialog({
         <DialogHeader className="shrink-0">
           <DialogTitle>Save decisions to AGENTS.md?</DialogTitle>
           <DialogDescription>
-            The project coordinator proposes updating the ## Orkestrator section of AGENTS.md in{" "}
+            The project Coordinator proposes updating the ## Orkestrator section of AGENTS.md in{" "}
             {where}
             {target?.nodeName ? ` on ${target.nodeName}` : ""}. Edit or drop entries below.
             Approving opens a pull request with only this change; nothing happens unless you
@@ -396,7 +396,7 @@ export function AgentsMdApprovalDialog({
                 {conflicts.length > 0 ? (
                   <p className="text-xs text-destructive" role="alert">
                     {conflicts.map((outcome) => outcome.detail).join(" ")} Drop that entry or
-                    decline and ask the coordinator to propose again.
+                    decline and ask the Coordinator to propose again.
                   </p>
                 ) : unchanged ? (
                   <p className="text-xs text-muted-foreground">

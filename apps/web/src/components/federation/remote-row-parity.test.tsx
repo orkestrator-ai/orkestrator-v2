@@ -208,7 +208,7 @@ test("another machine's project header sums its mail and shows its home's activi
   expect(within(header).getAllByLabelText("3 unread agent messages")).toHaveLength(1);
   expect(within(header).getByLabelText("Agent message delivery failed")).toBeTruthy();
 
-  fireEvent.click(within(header).getByRole("button", { name: "app Home needs attention" }));
+  fireEvent.click(within(header).getByRole("button", { name: "app home needs attention" }));
   await waitFor(() =>
     expect(useRemoteWorkspaceStore.getState().requests.a?.request).toMatchObject({
       projectId: "project-1",
@@ -279,7 +279,7 @@ test("the cross-machine activity list has the controls bar and home rows this wi
   expect(within(list).getByLabelText("2 environments")).toBeTruthy();
   expect(within(list).getByLabelText("1 waiting environment")).toBeTruthy();
   // A working build pipeline on the home reads as working, as on its own machine.
-  expect(within(list).getByRole("button", { name: "app Home working" })).toBeTruthy();
+  expect(within(list).getByRole("button", { name: "app home working" })).toBeTruthy();
   expect(within(list).getAllByTestId("federated-environment-row")).toHaveLength(2);
 });
 

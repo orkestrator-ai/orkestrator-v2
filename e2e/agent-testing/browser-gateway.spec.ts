@@ -516,7 +516,7 @@ test("project Home retains background work and unread attention beneath the boar
       })
       .toBe(true);
     await invoke("set_environment_unread", { environmentId: home.id, unread: true });
-    const attention = page.getByRole("button", { name: `${fixture.name} Home needs attention` });
+    const attention = page.getByRole("button", { name: `${fixture.name} home needs attention` });
     await expect(attention).toBeVisible();
     await expect
       .poll(
@@ -1594,7 +1594,7 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.goto(status.browserUrl!);
     await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
+    await page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }).click();
     await page.getByTestId("agent-mail-conversation-row").first().click();
     const panel = page.getByTestId("agent-mail-panel");
     await panel.getByRole("button", { name: "Deliver now", exact: true }).click();
@@ -1630,7 +1630,7 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.reload();
     await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
+    await page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }).click();
     await page.getByTestId("agent-mail-conversation-row").first().click();
     await expect(panel.getByText(/^(delivered|handled)$/)).toBeVisible();
     await expect(panel.getByRole("button", { name: "Deliver now", exact: true })).toHaveCount(0);
@@ -1747,7 +1747,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       "Inactive recipient",
     );
     await expect(
-      page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }),
+      page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }),
     ).toBeVisible();
 
     await page.reload();
@@ -1760,12 +1760,14 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       "Inactive recipient",
     );
     await expect(
-      page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }),
+      page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }),
     ).toBeVisible();
     // A committed send whose response is lost must retain its draft and retry
     // key across both list navigation and closing the panel.
     const openConversation = async () => {
-      await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
+      await page
+        .getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ })
+        .click();
       await page.getByTestId("agent-mail-conversation-row").first().click();
     };
     await openConversation();

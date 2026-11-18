@@ -73,7 +73,7 @@ describe("launch override marker on the tab strip", () => {
     const marker = await screen.findByTestId("tab-launch-override");
     expect(marker.textContent).toBe("requested");
     expect(marker.getAttribute("title")).toBe(
-      "This launch uses opus · max. The coordinator overrode the saved default.",
+      "This launch uses opus · max. The Coordinator overrode the saved default.",
     );
   });
 
@@ -85,7 +85,7 @@ describe("launch override marker on the tab strip", () => {
     renderTabs([agentTab("job-tab")]);
     const marker = await screen.findByTestId("tab-launch-override");
     expect(marker.getAttribute("title")).toBe(
-      "This launch uses opus · high. The coordinator overrode the saved default.",
+      "This launch uses opus · high. The Coordinator overrode the saved default.",
     );
   });
 
@@ -105,7 +105,7 @@ describe("launch override marker on the tab strip", () => {
     answer = { overrides: [{ environmentId: "worker", tabId: "startup-agent" }] };
     renderTabs([agentTab("startup-agent")]);
     expect((await screen.findByTestId("tab-launch-override")).getAttribute("title")).toBe(
-      "The coordinator overrode the saved default for this launch.",
+      "The Coordinator overrode the saved default for this launch.",
     );
   });
 

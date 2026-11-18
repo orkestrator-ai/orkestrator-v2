@@ -55,11 +55,11 @@ export function ProjectHomeMessageApprovalDialog({
       <DialogContent size="lg" data-testid="project-home-message-request" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>
-            Send the coordinator&apos;s message to the project home “{home}”?
+            Send the Coordinator&apos;s message to the project home “{home}”?
           </DialogTitle>
           <DialogDescription>
             The project home is your own checkout. An agent working there can conflict with your own
-            changes, so the coordinator normally uses an isolated environment. Nothing is sent
+            changes, so the Coordinator normally uses an isolated environment. Nothing is sent
             unless you approve; approving also lets its further messages to the project home through
             without asking for the next 3 hours.
           </DialogDescription>

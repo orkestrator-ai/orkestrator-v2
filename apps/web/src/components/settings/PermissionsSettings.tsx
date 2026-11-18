@@ -170,7 +170,7 @@ export function PermissionsSettings() {
   return (
     <SettingsPageLayout
       title="Permissions"
-      description="Rules saved with “Approve and remember” on an approval card. Orkestrator answers a matching request with a one-time approval, so a rule you remove stops applying at the very next request. Rules never apply to coordinators, pipelines, reviews, plan mode or anything an agent's policy denies, and they are kept on this machine only."
+      description="Rules saved with “Approve and remember” on an approval card. Orkestrator answers a matching request with a one-time approval, so a rule you remove stops applying at the very next request. Rules never apply to Coordinators, pipelines, reviews, plan mode or anything an agent's policy denies, and they are kept on this machine only."
     >
       <div className="flex flex-wrap gap-2">
         <Select value={provider} onValueChange={setProvider}>

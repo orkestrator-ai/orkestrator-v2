@@ -46,8 +46,8 @@ export function ProjectHomeActivityButton({
   return (
     <button
       type="button"
-      aria-label={`${projectName} Home ${status.label}`}
-      title={`Open Home — ${status.label}`}
+      aria-label={`${projectName} home ${status.label}`}
+      title={`Open project home — ${status.label}`}
       className={
         compact
           ? "shrink-0 rounded-md p-1 text-amber-400 hover:bg-hover"
@@ -62,7 +62,7 @@ export function ProjectHomeActivityButton({
       )}
       {!compact && (
         <span>
-          {projectName} Home — {status.label}
+          {projectName} home — {status.label}
         </span>
       )}
     </button>

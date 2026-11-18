@@ -13,7 +13,7 @@ test("a worker's stored transcript draws mail as tiles, with no envelope on scre
 
   // A coordinator on another node, steered in between the worker's own updates.
   await expect(tiles(page).nth(0)).toHaveAttribute("data-mail-kind", "coordinator");
-  await expect(tiles(page).nth(0)).toContainText("Project coordinator on mini");
+  await expect(tiles(page).nth(0)).toContainText("Project Coordinator on mini");
   await expect(tiles(page).nth(0)).toContainText("Scope change");
   await expect(tiles(page).nth(0)).toContainText("Please also cover escaped quotes");
   await expect(tiles(page).nth(1)).toHaveAttribute("data-mail-kind", "message");

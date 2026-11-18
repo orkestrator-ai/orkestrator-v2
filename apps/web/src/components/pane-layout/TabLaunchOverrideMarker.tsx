@@ -21,8 +21,8 @@ export function TabLaunchOverrideMarker({
       className="shrink-0 rounded-sm border border-amber-400/40 px-1 text-[10px] leading-4 text-amber-400"
       title={
         selection
-          ? `This launch uses ${selection}. The coordinator overrode the saved default.`
-          : "The coordinator overrode the saved default for this launch."
+          ? `This launch uses ${selection}. The Coordinator overrode the saved default.`
+          : "The Coordinator overrode the saved default for this launch."
       }
     >
       requested

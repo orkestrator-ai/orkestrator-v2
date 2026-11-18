@@ -1264,7 +1264,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   const renderCoordinator = () => (
     <SettingsPageLayout
       title="Coordinator"
-      description="How this machine's project coordinators are held to read-only and what they may look up."
+      description="How this machine's project Coordinators are held to read-only and what they may look up."
     >
       <div>
         <h3 className="text-sm font-medium text-foreground">Coordinator safety level</h3>
@@ -1313,7 +1313,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <div>
         <h3 className="text-sm font-medium text-foreground">Messaging</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          Workers report back to a coordinator through agent messaging, so delegation needs it on.
+          Workers report back to a Coordinator through agent messaging, so delegation needs it on.
           Coordinator status updates are set there too, with the rest of messaging.
         </p>
         <Button
@@ -2513,7 +2513,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 Schedules run an action, a prompt to an agent tab or an environment launch at a set
                 time, once or on a cron or interval. Turning this on adds Settings → Schedules, the{" "}
                 <code>orkestrator schedule</code> commands and the agents&apos; and
-                coordinators&apos; schedule tools. While it is off, saved schedules are kept but do
+                Coordinators&apos; schedule tools. While it is off, saved schedules are kept but do
                 not fire.
               </>
             }

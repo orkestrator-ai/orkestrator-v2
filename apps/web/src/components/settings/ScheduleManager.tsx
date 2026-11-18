@@ -136,7 +136,7 @@ export function AccountSwitchPermissionBadge({
           : "border-amber-500/40 text-amber-300",
       )}
       data-testid="schedule-account-switch-permission"
-      title={`You asked: “${grant.userInstruction}”. The coordinator may switch the active ${providers} account on ${machines} without asking, for ${hours} hours after this timer fires. Cancel the timer to withdraw it.`}
+      title={`You asked: “${grant.userInstruction}”. The Coordinator may switch the active ${providers} account on ${machines} without asking, for ${hours} hours after this timer fires. Cancel the timer to withdraw it.`}
     >
       {status === "lapsed"
         ? `${providers} switch permission lapsed`

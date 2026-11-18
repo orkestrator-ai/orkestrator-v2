@@ -74,13 +74,13 @@ function sendingHeldReason(
   if (agent && !snapshot.providerAvailability[agent]?.available) {
     return platformOff
       ? `${AGENT_PLATFORM_LABELS[agent]} is turned off. Turn it on to send.`
-      : `${AGENT_PLATFORM_LABELS[agent]} is below the coordinator safety level. Change it to send.`;
+      : `${AGENT_PLATFORM_LABELS[agent]} is below the Coordinator safety level. Change it to send.`;
   }
   if (snapshot.workspace.lifecycleState === "paused") {
     return "Coordination is paused. Resume to send.";
   }
   if (snapshot.workspace.lifecycleState === "error") {
-    return "The coordinator could not start. Retry to send.";
+    return "The Coordinator could not start. Retry to send.";
   }
   if (conversation.startupError) return "This conversation could not start. Retry to send.";
   return undefined;
@@ -158,7 +158,7 @@ export function CoordinatorConversationPane({
       <div className="grid h-full place-items-center text-center">
         <div>
           <p className="text-sm text-muted-foreground">
-            No coordinator is open. Mail for the coordinator will start one with the default agent.
+            No Coordinator is open. Mail for the Coordinator will start one with the default agent.
           </p>
           <Button
             className="mt-3"
@@ -271,7 +271,7 @@ export function CoordinatorConversationPane({
               // Only the main coordinator delegates, so only it is offered work
               // that has to run in a pipeline or environment.
               {...(conversation.role === "main" ? MAIN_UNASSIGNED : {})}
-              emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
+              emptyPlatformsMessage="No agent platform meets this Coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the Coordinator safety level in Settings."
               emptyPlatformsAction={EMPTY_PLATFORMS_ACTION}
               onAssignPlatform={conversation.agent ? undefined : onAssignPlatform}
               beforeSend={side ? undefined : beforeSend}

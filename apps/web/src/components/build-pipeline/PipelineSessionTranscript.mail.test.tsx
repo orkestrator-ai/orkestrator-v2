@@ -126,7 +126,7 @@ describe("PipelineSessionTranscript agent mail", () => {
 
       const tile = container.querySelector<HTMLElement>("[data-mail-tile]");
       expect(tile?.dataset.mailKind).toBe("coordinator");
-      expect(tile?.textContent).toContain("Project coordinator on mini");
+      expect(tile?.textContent).toContain("Project Coordinator on mini");
       expect(tile?.textContent).toContain("Scope change");
       expect(tile?.textContent).toContain("Please also cover the parser.");
       expect(container.textContent).not.toContain("orkestrator-peer");

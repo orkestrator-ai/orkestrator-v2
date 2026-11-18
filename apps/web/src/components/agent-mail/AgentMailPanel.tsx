@@ -166,7 +166,7 @@ function AgentMailConversationList({ focus }: { focus?: string }) {
           )}
           <div className="min-w-0 flex-1">
             <SheetTitle>
-              {focus ? (focusedMailbox?.displayName ?? "Agent") : "Agent messages"}
+              {focus ? (focusedMailbox?.displayName ?? "Agent") : "Agent mail"}
             </SheetTitle>
             <SheetDescription>
               {focus

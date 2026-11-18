@@ -470,7 +470,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
     const view = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
 
-    const card = await screen.findByRole("region", { name: "How the coordinator works" });
+    const card = await screen.findByRole("region", { name: "How the Coordinator works" });
     for (const line of COORDINATOR_INTRO_LINES) expect(card.textContent).toContain(line);
     expect(card.textContent).toContain("never changes it");
     expect(card.textContent).toContain("Change agent");
@@ -478,10 +478,10 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     expect(screen.getByRole("group", { name: "Starter prompts" })).toBeTruthy();
 
     fireEvent.click(
-      within(card).getByRole("button", { name: "Dismiss how the coordinator works" }),
+      within(card).getByRole("button", { name: "Dismiss how the Coordinator works" }),
     );
     await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "How the coordinator works" }) === null).toBe(
+      expect(screen.queryByRole("region", { name: "How the Coordinator works" }) === null).toBe(
         true,
       ),
     );
@@ -490,10 +490,10 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     view.unmount();
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("textbox", { name: COORDINATOR_COMPOSER_PLACEHOLDER });
-    expect(screen.queryByRole("region", { name: "How the coordinator works" }) === null).toBe(true);
+    expect(screen.queryByRole("region", { name: "How the Coordinator works" }) === null).toBe(true);
 
     // The toolbar's ? shows the same lines, whatever the composer's state.
-    fireEvent.pointerDown(screen.getByRole("button", { name: "How the coordinator works" }), {
+    fireEvent.pointerDown(screen.getByRole("button", { name: "How the Coordinator works" }), {
       button: 0,
       ctrlKey: false,
     });
@@ -721,7 +721,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test.each([
     ["paused", "Coordination is paused. Resume to send."],
-    ["error", "The coordinator could not start. Retry to send."],
+    ["error", "The Coordinator could not start. Retry to send."],
     ["startup-failed", "This conversation could not start. Retry to send."],
   ] as const)("a %s pane holds mail across remount until recovery", async (hold, reason) => {
     ensuredSnapshot = withWorkspace(
@@ -1008,7 +1008,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       {
         cause: "below the safety level",
         enabled: ["codex", "claude"] as const,
-        reason: "Codex is below the coordinator safety level. Change it to send.",
+        reason: "Codex is below the Coordinator safety level. Change it to send.",
         action: "Coordinator settings",
       },
     ])(
@@ -1087,7 +1087,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByText(/Codex is unavailable for Coordinator/);
       expect(placeholder(await screen.findByRole("textbox"))).toBe(
-        "Codex is below the coordinator safety level. Change it to send.",
+        "Codex is below the Coordinator safety level. Change it to send.",
       );
       expect(ensureSession).not.toHaveBeenCalled();
     });
@@ -1404,7 +1404,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog.textContent).toContain("Close the main conversation?");
     expect(dialog.textContent).toContain(
-      "The next message to the coordinator starts a new main conversation",
+      "The next message to the Coordinator starts a new main conversation",
     );
     expect(closeConversation).not.toHaveBeenCalled();
 

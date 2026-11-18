@@ -2943,20 +2943,20 @@ describe("HierarchicalSidebar", () => {
     expect(projectButton.getAttribute("aria-current")).toBe("page");
     fireEvent.click(projectButton);
     expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
-    fireEvent.click(screen.getByRole("button", { name: "Project One Home needs attention" }));
+    fireEvent.click(screen.getByRole("button", { name: "Project One home needs attention" }));
     expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("home");
     expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
     act(() => useUIChromeStore.getState().setEnvironmentSortMode("activity"));
     expect(screen.getByLabelText("1 environment")).toBeTruthy();
     expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Project One Home needs attention" }));
+    fireEvent.click(screen.getByRole("button", { name: "Project One home needs attention" }));
     expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
     environmentsValue = [
       { ...home, hasUnreadWork: false, agentActivityState: "working" },
       createdEnvironment,
     ];
     view.rerender(<HierarchicalSidebar />);
-    expect(screen.getByRole("button", { name: "Project One Home working" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Project One home working" })).toBeTruthy();
     environmentsValue = [
       { ...home, hasUnreadWork: false, agentActivityState: "idle" },
       createdEnvironment,

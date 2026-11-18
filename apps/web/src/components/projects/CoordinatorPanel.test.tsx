@@ -1609,7 +1609,7 @@ describe("CoordinatorPanel", () => {
     };
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     // With no main open, the action starts the main coordinator.
-    const newConversation = await screen.findAllByRole("button", { name: "Start coordinator" });
+    const newConversation = await screen.findAllByRole("button", { name: "Start Coordinator" });
     fireEvent.click(newConversation.at(-1)!);
     expect(await screen.findByText("create failed")).toBeTruthy();
   });
@@ -1638,7 +1638,7 @@ describe("CoordinatorPanel", () => {
     const side = screen.getByRole("tab", { name: "Side 1, Codex" });
     expect(main.compareDocumentPosition(side) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "New side agent" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Start coordinator" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Start Coordinator" }) === null).toBe(true);
   });
 
   test("selects a conversation from the full tab shell and shows its agent brand", async () => {
@@ -2008,7 +2008,7 @@ describe("CoordinatorPanel", () => {
       },
     };
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
-    await screen.findByText(/No coordinator is open/);
+    await screen.findByText(/No Coordinator is open/);
     expectNoContextNotice();
   });
 

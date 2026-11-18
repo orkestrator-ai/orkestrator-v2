@@ -165,7 +165,7 @@ export function WorkerQuestionApprovalDialog({
             Answer the question in “{tab}” of “{worker}”{remote}?
           </DialogTitle>
           <DialogDescription>
-            The project coordinator proposes the answer below to a question this worker is waiting
+            The project Coordinator proposes the answer below to a question this worker is waiting
             on. Change it if you like; nothing is sent to the worker unless you approve.
             {request.reason ? ` Its reason: “${request.reason}”` : ""}
           </DialogDescription>

@@ -40,7 +40,7 @@ test.each(["deletionError", "cleanupAfterMergeError"] as const)(
     } as Environment;
     appCommandStore(environmentStore).getState().setEnvironments([home]);
     const view = renderInAppCommandScope(<ProjectHomeActivity home={home} projectName="Project" />);
-    fireEvent.click(screen.getByRole("button", { name: "Project Home needs attention" }));
+    fireEvent.click(screen.getByRole("button", { name: "Project home needs attention" }));
     expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("home");
     const failed = { ...home, deletionRequestedAt: "2026-11-05T12:00:00Z", [field]: "failed" };
     act(() => {
@@ -48,7 +48,7 @@ test.each(["deletionError", "cleanupAfterMergeError"] as const)(
       appCommandStore(environmentStore).getState().setEnvironments([failed]);
     });
     view.rerender(<ProjectHomeActivity home={failed} projectName="Project" />);
-    expect(screen.queryByRole("button", { name: /Project Home/ }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /Project home/ }) === null).toBe(true);
     view.unmount();
     renderInAppCommandScope(
       <ProjectHomeActivity
@@ -56,7 +56,7 @@ test.each(["deletionError", "cleanupAfterMergeError"] as const)(
         projectName="Project"
       />,
     );
-    expect(screen.queryByRole("button", { name: /Project Home/ }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /Project home/ }) === null).toBe(true);
     expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
   },
 );

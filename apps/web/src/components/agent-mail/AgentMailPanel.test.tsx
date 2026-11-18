@@ -248,7 +248,7 @@ describe("AgentMailButton", () => {
   test("renders nothing when messaging is disabled", () => {
     setMessagingEnabled(false);
     renderInAppCommandScope(<AgentMailButton />);
-    expect(screen.queryByRole("button", { name: /Agent messages/ }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /Agent mail/ }) === null).toBe(true);
   });
 
   test("counts only mail that needs the person and opens the panel", () => {
@@ -260,7 +260,7 @@ describe("AgentMailButton", () => {
       ]),
     });
     renderInAppCommandScope(<AgentMailButton />);
-    fireEvent.click(screen.getByRole("button", { name: "Agent messages, 3 need you" }));
+    fireEvent.click(screen.getByRole("button", { name: "Agent mail, 3 messages need you" }));
     expect(appCommandStore(agentMailStore).getState().panel).toEqual({});
   });
 
@@ -269,7 +269,7 @@ describe("AgentMailButton", () => {
       summary: new Map([[AGENT_1, summaryEntry({ attentionCount: 0 })]]),
     });
     renderInAppCommandScope(<AgentMailButton />);
-    expect(screen.getByRole("button", { name: "Agent messages" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Agent mail" })).toBeTruthy();
   });
 });
 

@@ -205,9 +205,9 @@ export function agentMailSenderLabel(from: MailActor, environmentName?: string):
     case "system":
       return from.source === "self-reminder" ? "Reminder you set" : "Orkestrator workflow";
     case "coordinator":
-      return from.title || "Project coordinator";
+      return from.title || "Project Coordinator";
     case "node":
-      return `${from.title || "Project coordinator"} on ${from.nodeName}`;
+      return `${from.title || "Project Coordinator"} on ${from.nodeName}`;
     case "tab":
       return from.title || from.tabId;
   }

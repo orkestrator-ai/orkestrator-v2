@@ -157,7 +157,7 @@ export function MessagingSettings() {
         </SettingsRow>
         <SettingsRow
           label="Unattended exchange budget"
-          description="Messages two agents may trade automatically before delivery pauses. A coordinator request, your prompt to either agent, or Resume starts a new budget."
+          description="Messages two agents may trade automatically before delivery pauses. A Coordinator request, your prompt to either agent, or Resume starts a new budget."
         >
           <div className="flex items-center gap-2">
             <Input
@@ -210,7 +210,7 @@ export function MessagingSettings() {
         </SettingsRow>
         <SettingsRow
           label="Coordinator status updates"
-          description="Wake a coordinator when work it started changes state: a Multi Review ready or fixed, a build that ends or stops on an error, a stall, a worker waiting for input or approval. Updates that land together arrive as one wake."
+          description="Wake a Coordinator when work it started changes state: a Multi Review ready or fixed, a build that ends or stops on an error, a stall, a worker waiting for input or approval. Updates that land together arrive as one wake."
         >
           <select
             aria-label="Coordinator status updates"

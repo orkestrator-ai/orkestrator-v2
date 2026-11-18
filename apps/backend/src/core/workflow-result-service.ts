@@ -200,12 +200,29 @@ function completeEntryResult(entry: StoredWorkflowResult, result: unknown): unkn
   });
 }
 
-/** Validates the value as it would be stored: filled in first (`completeEntryResult`). */
+/** The raw preflight already checked the byte limit if completion left the value alone. */
+function completedResultSizeError(
+  submitted: unknown,
+  completed: unknown,
+): WorkflowResultError | null {
+  if (
+    completed === submitted ||
+    Buffer.byteLength(JSON.stringify(completed), "utf8") <= WORKFLOW_RESULT_MAX_BYTES
+  ) {
+    return null;
+  }
+  return {
+    code: "result_too_large",
+    nextAction: "correct",
+    message: `The result exceeds the ${WORKFLOW_RESULT_MAX_BYTES}-byte limit after the backend fills in the review scope. Shorten the text in your report and try again.`,
+  };
+}
+
+/** Validates the completed value that will be stored. */
 function validateEntryResult(
   entry: StoredWorkflowResult,
-  submitted: unknown,
+  result: unknown,
 ): WorkflowResultValidationIssue[] {
-  const result = completeEntryResult(entry, submitted);
   const issues = validateWorkflowResult(entry.kind, result, entry.schema, entry.context);
   if (
     issues.length === 0 &&
@@ -884,15 +901,22 @@ export class WorkflowResultService {
             },
           };
         }
+        const completed = completeEntryResult(entry, result);
+        const sizeError = completedResultSizeError(result, completed);
+        const delivery = this.counters(resultKey);
+        delivery.validationCalls += 1;
+        if (sizeError) {
+          outcome = "result_too_large";
+          delivery.lastValidation = "invalid";
+          return { ok: false, error: sizeError };
+        }
         const validationStartedAt = Date.now();
         let issues: WorkflowResultValidationIssue[];
         try {
-          issues = validateEntryResult(entry, result);
+          issues = validateEntryResult(entry, completed);
         } finally {
           this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
         }
-        const delivery = this.counters(resultKey);
-        delivery.validationCalls += 1;
         delivery.lastValidation = issues.length > 0 ? "invalid" : "valid";
         if (issues.length > 0) {
           return {
@@ -1386,10 +1410,20 @@ export class WorkflowResultService {
           // Stored as validated: with the fields the backend owns filled in.
           // The digest stays the submitted value's, so a resend of the same
           // submission is still a duplicate.
-          result = completeEntryResult(entry, result);
+          const completed = completeEntryResult(entry, result);
+          const sizeError = completedResultSizeError(result, completed);
+          if (sizeError) {
+            this.metrics.recordSubmission({
+              provider: entry.provider,
+              kind: entry.kind,
+              outcome: "rejected",
+              code: sizeError.code,
+            });
+            return { result: { ok: false, error: sizeError } };
+          }
           if (!entry.firstSubmissionAt) entry.firstSubmissionAt = new Date().toISOString();
           const validationStartedAt = Date.now();
-          let issues = validateEntryResult(entry, result);
+          let issues = validateEntryResult(entry, completed);
           this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
           if (
             issues.length === 0 &&
@@ -1469,7 +1503,7 @@ export class WorkflowResultService {
             acceptedAt,
           };
           entry.lifecycle = "accepted";
-          entry.result = result;
+          entry.result = completed;
           entry.digest = resultDigest;
           entry.receipt = receipt;
           entry.updatedAt = acceptedAt;

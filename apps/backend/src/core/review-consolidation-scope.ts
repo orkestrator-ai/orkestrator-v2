@@ -18,6 +18,7 @@
  * limitation. The lists below only say what the reviewers looked at and ran;
  * nothing downstream decides on them.
  */
+import { posix } from "node:path";
 import {
   STRUCTURED_REVIEW_MAX_FILES_REVIEWED,
   STRUCTURED_REVIEW_MAX_LIST_ITEMS,
@@ -78,6 +79,8 @@ function uniqueBy<T>(items: Iterable<T>, key: (item: T) => string, limit: number
  * order. An overflowing list makes the union unavailable for automatic completion.
  *
  * - A file one reviewer skipped and another reviewed counts as reviewed.
+ *   File paths are compared in normalized repository-relative form, keeping
+ *   the first spelling in each list for display.
  * - A command one reviewer ran is not also listed as not run.
  * - The same command run with the same outcome is listed once, with the first
  *   reviewer's summary; one that passed for one reviewer and failed for
@@ -89,11 +92,11 @@ export function mergeConsolidationScopeLists(
   const scopes = reports.map((report) => report.reviewScope);
   const filesReviewed = uniqueBy(
     scopes.flatMap((scope) => scope.filesReviewed),
-    (file) => file,
+    posix.normalize,
     LIST_LIMITS.filesReviewed,
   );
   if (!filesReviewed) return undefined;
-  const reviewed = new Set(filesReviewed);
+  const reviewed = new Set(filesReviewed.map(posix.normalize));
   const commandsRun = uniqueBy(
     scopes.flatMap((scope) => scope.commandsRun),
     (command) => JSON.stringify([command.command, command.result]),
@@ -102,13 +105,15 @@ export function mergeConsolidationScopeLists(
   if (!commandsRun) return undefined;
   const ran = new Set(commandsRun.map((entry) => entry.command));
   const filesSkipped = uniqueBy(
-    scopes.flatMap((scope) => scope.filesSkipped).filter((entry) => !reviewed.has(entry.file)),
-    (entry) => entry.file,
+    scopes
+      .flatMap((scope) => scope.filesSkipped)
+      .filter((entry) => !reviewed.has(posix.normalize(entry.file))),
+    (entry) => posix.normalize(entry.file),
     LIST_LIMITS.filesSkipped,
   );
   const filesLeftUncommitted = uniqueBy(
     scopes.flatMap((scope) => scope.filesLeftUncommitted),
-    (entry) => entry.file,
+    (entry) => posix.normalize(entry.file),
     LIST_LIMITS.filesLeftUncommitted,
   );
   const commandsNotRun = uniqueBy(
@@ -196,14 +201,14 @@ export function inspectScopeListText(
 const FULL_REPORT_SCHEMA = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA;
 const FULL_SCOPE_SCHEMA = FULL_REPORT_SCHEMA.properties.reviewScope;
 
-function reportSchemaWithScope(properties: JsonSchema, note: string) {
+function reportSchemaWithScope(properties: JsonSchema, description: string) {
   return {
     ...FULL_REPORT_SCHEMA,
     properties: {
       ...FULL_REPORT_SCHEMA.properties,
       reviewScope: {
         ...FULL_SCOPE_SCHEMA,
-        description: `${FULL_SCOPE_SCHEMA.description} ${note}`,
+        description,
         properties,
         required: FULL_SCOPE_SCHEMA.required.filter((key) => !BACKEND_FILLED_SCOPE_FIELDS.has(key)),
       },
@@ -217,7 +222,7 @@ export const CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA = reportSchemaWithScope(
       ([key]) => !BACKEND_FILLED_SCOPE_FIELDS.has(key),
     ),
   ),
-  "The backend fills in the reviewed files and validation command lists from the reviewer reports.",
+  `The backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")} from the reviewer reports. Leave these fields out of your submission.`,
 );
 
 /**
@@ -227,7 +232,7 @@ export const CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA = reportSchemaWithScope(
  */
 export const CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA = reportSchemaWithScope(
   FULL_SCOPE_SCHEMA.properties,
-  `When your instructions say the backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")}, leave them out; otherwise send them.`,
+  `When your instructions say the backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")}, leave them out. Otherwise, include all five lists and record unrun commands under commandsNotRun with a reason.`,
 );
 
 /**

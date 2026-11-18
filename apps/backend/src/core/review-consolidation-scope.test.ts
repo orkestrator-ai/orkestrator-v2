@@ -12,7 +12,10 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import { validateWorkflowJsonSchema } from "@orkestrator/protocol/workflow-json-schema";
-import type { ConsolidationScopeLists } from "@orkestrator/protocol/workflow-results";
+import {
+  WORKFLOW_RESULT_MAX_BYTES,
+  type ConsolidationScopeLists,
+} from "@orkestrator/protocol/workflow-results";
 import { createMultiReviewConsolidationPrompt } from "./multi-review-prompts.js";
 import {
   CONSOLIDATED_REVIEW_EXAMPLE,
@@ -120,6 +123,27 @@ describe("mergeConsolidationScopeLists", () => {
       reportWith({ commandsRun: [{ command: "bun test", result: "failed", summary: "Fail." }] }),
     ]);
     expect(merged?.commandsRun.map((entry) => entry.result)).toEqual(["passed", "failed"]);
+  });
+
+  test("reconciles equivalent paths across all three file lists", () => {
+    const reviewed = reportWith({
+      filesReviewed: ["./src/a.ts"],
+      filesSkipped: [{ file: "./src/b.ts", reason: "First reason." }],
+      filesLeftUncommitted: [{ file: "./src/c.ts", reason: "First reason." }],
+    });
+    const other = reportWith({
+      filesReviewed: ["src/a.ts", "src/A.ts"],
+      filesSkipped: [
+        { file: "src/./a.ts", reason: "Already reviewed." },
+        { file: "src/b.ts", reason: "Second reason." },
+      ],
+      filesLeftUncommitted: [{ file: "src//c.ts", reason: "Second reason." }],
+    });
+    expect(mergeConsolidationScopeLists([reviewed, other])).toMatchObject({
+      filesReviewed: reviewed.reviewScope.filesReviewed.concat("src/A.ts"),
+      filesSkipped: reviewed.reviewScope.filesSkipped,
+      filesLeftUncommitted: reviewed.reviewScope.filesLeftUncommitted,
+    });
   });
 
   test("retains opposite outcomes at the count limit and falls back above it", () => {
@@ -255,6 +279,10 @@ describe("the consolidated review submission schema", () => {
     const { required } = CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA.properties.reviewScope;
     const published = schema["~standard"].jsonSchema.input();
     expect(published).toHaveProperty("properties.result.properties.reviewScope.required", required);
+    expect(published).toHaveProperty(
+      "properties.result.properties.reviewScope.description",
+      `The backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")} from the reviewer reports. Leave these fields out of your submission.`,
+    );
     const scopeProperties = (
       published as {
         properties: { result: { properties: { reviewScope: { properties: object } } } };
@@ -291,6 +319,13 @@ describe("the OpenCode broker's consolidated review tool", () => {
     };
     expect(accepts(CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE)).toBe(true);
     expect(accepts(CONSOLIDATED_REVIEW_EXAMPLE)).toBe(true);
+    const schema = schemas.get("submit_consolidated_review") as {
+      "~standard": { jsonSchema: { input: () => unknown } };
+    };
+    expect(schema["~standard"].jsonSchema.input()).toHaveProperty(
+      "properties.result.properties.reviewScope.description",
+      `When your instructions say the backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")}, leave them out. Otherwise, include all five lists and record unrun commands under commandsNotRun with a reason.`,
+    );
     // Everything else is still the report's shape.
     expect(accepts({ ...CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE, verdict: undefined })).toBe(false);
   });
@@ -428,6 +463,57 @@ describe("WorkflowResultService with merged scope lists", () => {
     ).toMatchObject({ ok: false, error: { code: "invalid_result" } });
     expect(await service.submit(scope, resultKey, CONSOLIDATED_REVIEW_EXAMPLE)).toMatchObject({
       ok: true,
+    });
+  });
+
+  test("checks the completed UTF-8 size before holding or accepting a report", async () => {
+    const resultKey = await prepare({ type: "consolidated-review", sources, scope: MERGED });
+    const limitations = Array.from(
+      { length: 24 },
+      (_, index) => `Scope note ${index} ${"é".repeat(8_000)}`,
+    );
+    const candidate = {
+      ...CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE,
+      reviewScope: {
+        ...CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE.reviewScope,
+        limitations: [...limitations, ""],
+      },
+    };
+    const completedBytes = () =>
+      utf8Bytes(JSON.stringify(completeConsolidatedReview(candidate, MERGED)));
+    candidate.reviewScope.limitations[limitations.length] = "a".repeat(
+      WORKFLOW_RESULT_MAX_BYTES + 1 - completedBytes(),
+    );
+    expect(utf8Bytes(JSON.stringify(candidate))).toBeLessThan(WORKFLOW_RESULT_MAX_BYTES);
+    expect(completedBytes()).toBe(WORKFLOW_RESULT_MAX_BYTES + 1);
+
+    const refusal = {
+      ok: false,
+      error: {
+        code: "result_too_large",
+        nextAction: "correct",
+        message: expect.stringContaining("Shorten"),
+      },
+    };
+    expect(await service.validate(scope, resultKey, candidate)).toMatchObject(refusal);
+    expect(service.heldValidation(resultKey)).toBeUndefined();
+    expect(await service.submit(scope, resultKey, candidate)).toMatchObject(refusal);
+    expect(await service.projection(resultKey)).toBe("preparing");
+
+    candidate.reviewScope.limitations[limitations.length] =
+      candidate.reviewScope.limitations[limitations.length]!.slice(1);
+    expect(completedBytes()).toBe(WORKFLOW_RESULT_MAX_BYTES);
+    const validation = await service.validate(scope, resultKey, candidate);
+    if (!validation.ok || !validation.validatedDigest) throw new Error("expected a digest");
+    expect(
+      await service.submitValidated(scope, resultKey, validation.validatedDigest),
+    ).toMatchObject({
+      ok: true,
+      duplicate: false,
+    });
+    expect(await service.submit(scope, resultKey, candidate)).toMatchObject({
+      ok: true,
+      duplicate: true,
     });
   });
 
@@ -651,7 +737,9 @@ describe("WorkflowResultService with merged scope lists", () => {
     });
     const validation = service.validate(scope, resultKey, CONSOLIDATED_REVIEW_EXAMPLE);
     try {
-      await Promise.race([entered.promise, validation]);
+      expect(await Promise.race([entered.promise.then(() => "checking"), validation])).toBe(
+        "checking",
+      );
       await service.prepare({
         resultKey,
         kind: "consolidated-review",
@@ -663,7 +751,19 @@ describe("WorkflowResultService with merged scope lists", () => {
       resume.resolve();
       remove();
     }
-    expect(await validation).toMatchObject({ ok: false, error: { code: "invalid_result" } });
+    expect(await validation).toEqual({
+      ok: false,
+      error: {
+        code: "invalid_result",
+        nextAction: "correct",
+        message: "The workflow result scope changed. Validate the complete result again.",
+      },
+    });
     expect(service.heldValidation(resultKey)).toBeUndefined();
+    const fresh = await service.validate(scope, resultKey, CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE);
+    if (!fresh.ok || !fresh.validatedDigest) throw new Error("expected a fresh digest");
+    expect(await service.submitValidated(scope, resultKey, fresh.validatedDigest)).toMatchObject({
+      ok: true,
+    });
   });
 });

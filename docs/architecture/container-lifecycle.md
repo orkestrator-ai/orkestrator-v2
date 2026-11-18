@@ -1731,7 +1731,7 @@ name proves it broken. Three checks share one probe script and parser:
 | --- | --- | --- |
 | Backend startup (Linux, desktop and backend-only runs) | Throwaway containers of a pinned ~1 MB `busybox` image on the default bridge and on a temporary per-environment style network (both in parallel) | Publishes `container-host-reachability-changed`; the app shows a banner and a fix dialog |
 | Bridge start (`resolveContainerAgentToolConnection`, Cursor/Grok/Pi starts) | `docker exec` in the environment container, after the host alias and network-policy repair | Logged; a result that contradicts the host verdict re-runs the host check (at most once a minute) |
-| Before a tool-mode workflow stage dispatches (Multi Review, build pipeline, feature planning), and before every Claude Multi Review step or reviewer turn in a container on either result transport | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
+| Before a tool-mode workflow stage dispatches (Multi Review, build pipeline, feature planning), and before every Claude Multi Review step or reviewer turn in a container on either result transport | Same, cached 60 s for success and 10 s for failure | Route preparation must succeed before using a cached probe. A proven block fails the stage at once with the cause and the fix; an inconclusive transport probe passes |
 
 A Claude Multi Review turn on the structured-output transport needs no result tool,
 but it is preflighted on both the bespoke and graph engines: a container's
@@ -1770,18 +1770,32 @@ probe URL carries no credential. Commands: `get_container_host_reachability`,
 On a rootless daemon (`dockerRootless`) `host-gateway` names a bridge inside
 RootlessKit's network namespace, where nothing of the host listens. When
 those probes do not all answer, the check probes again through RootlessKit's
-host loopback addresses (`ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES`): slirp4netns's
-`10.0.2.2`, then gvisor-tap-vsock's `10.0.2.1`, which `dockerd-rootless.sh`
-falls back to on a host without slirp4netns, pasta or vpnkit. The daemon
-refuses both unless it runs with
-`DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`. The first address
-that answers on every probe network becomes the snapshot's `hostAddress`, and
-new containers and gateways get `--add-host host.docker.internal:<address>`
-(creation waits up to 45 s for the
-first check, `resolveContainerHostAddress`), so the firewall's host-service
-rule names it; the in-container alias repair before a bridge start uses it
-too; an existing container whose alias already names either address keeps it
-while no check has answered. If none answers, the verdict is `blocked` with a
+host loopback addresses (`ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES`), one per
+network driver, in this order:
+
+| Driver | Host loopback address |
+| --- | --- |
+| slirp4netns, pasta | `10.0.2.2` |
+| gvisor-tap-vsock (the fallback on a host without slirp4netns, pasta or vpnkit) | `10.0.2.1` |
+| VPNKit (network `192.168.65.0/24`) | `192.168.65.2` |
+
+The daemon refuses each unless it runs with
+`DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`. Off its own driver
+an address can leave RootlessKit's namespace through that driver's NAT (on
+slirp4netns a probe to `192.168.65.2` goes out to the host's network), so a
+candidate counts only when both probe networks receive a valid signature for
+their own fresh challenge. The agent tools server signs challenges only for
+loopback peers and keeps its signing key in memory. These requests carry no
+agent credential. An HTTP response without the expected proof is recorded in
+the probe detail. The first address that proves its identity on both networks
+becomes the snapshot's `hostAddress`. New containers and gateways get
+`--add-host host.docker.internal:<address>` (creation waits up to 45 s for
+the first check via `resolveContainerHostAddress`), so the firewall's
+host-service rule names it. Alias repair uses the selected address, or
+rewrites an old explicit loopback alias to the network gateway after a
+completed blocked verdict. During inconclusive discovery the alias is
+preserved and credential-bearing callers wait for verification or fail the
+preparation. If none answers, the verdict is `blocked` with a
 rootless remediation instead of firewall rules, which cannot help: a systemd
 drop-in for the user's Docker service and its cost (a Docker restart, and
 every container of that daemon reaching the host's loopback services). It
@@ -1799,15 +1813,16 @@ trade only the user can make. Publishing the service back through a
 container's forwarded port would need a multiplexing relay in every
 container for one path, and the host's LAN address was tried live and
 refused. `10.0.2.2` is the slirp4netns and pasta address; on the
-gvisor-tap-vsock driver host loopback is `10.0.2.1`, which the check probes
-and reports `reachable` (to-do 7548, retired 2026-11-10;
+gvisor-tap-vsock driver host loopback is `10.0.2.1` (to-do 7548, retired
+2026-11-10;
 [evidence](../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)),
-and other drivers stay `blocked` with the same remediation. VPNKit's is
-`192.168.65.2` (observed 2026-11-17,
-[evidence](../development/container-qualification.md#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17)),
-which the check does not probe yet, so a VPNKit daemon with host loopback
-enabled is reported `blocked`
-([8305](../todo/containers-and-environments/8305-vpnkit-host-loopback-address.md)).
+and on VPNKit it is `192.168.65.2` (to-do 8305, retired 2026-11-18;
+[evidence](../development/container-qualification.md#vpnkit-host-loopback-in-the-reachability-check-8305-2026-11-18)).
+The check probes all three and reports `reachable` on each driver with host
+loopback enabled, and `blocked` with the same remediation when it is
+refused. On a daemon with host loopback refused the extra candidates cost
+the verdict up to one probe timeout each (about 15 s in all on VPNKit,
+10 s on slirp4netns, observed 2026-11-18).
 
 ### Port selection and the loopback address (`agent-tools-listen.ts`)
 
@@ -1910,6 +1925,7 @@ The peer address a container's call arrives from, by topology:
 | Linux Engine (rootful) | The container's own address on its network (no NAT for traffic to a host address): `172.30.0.2` on the environment network, `10.213.0.2` on the default bridge; an unowned network's `172.30.1.2` is refused | The network's subnet | Run twice 2026-11-10 on beelink with the same script, inside the network namespace of `docker:disposable`'s nested rootful daemon (Engine 29.9.3, linux/amd64) on the host's rootful Engine 29.9.2; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) task 1 |
 | Rootless, slirp4netns, host loopback on (`10.0.2.2`) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-09 on a disposable rootless daemon (Engine 29.9.2, RootlessKit 3.3.0, slirp4netns 1.3.3, linux/amd64) with the same script; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) task 2 |
 | Rootless, gvisor-tap-vsock, host loopback on (`10.0.2.1`) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike; `10.0.2.2` is unreachable | Loopback | Run 2026-11-10 on a disposable rootless daemon (Engine 29.9.2, RootlessKit 3.3.0, linux/amd64) with the same script; todo 7548, [evidence](../development/container-qualification.md#rootless-host-loopback-and-docker-cp-refusals-on-beelink-2026-11-10) |
+| Rootless, VPNKit, host loopback on (`192.168.65.2`) | `127.0.0.1`, for the default bridge and an environment network (the backend's check and the live suites; the peer-evidence script was not run) | Loopback | Run 2026-11-18 on a disposable rootless daemon (Engine 29.9.2, RootlessKit 3.3.0, vpnkit `7f0eff0d`, linux/amd64) with the production agent tools server; to-do 8305 (retired), [evidence](../development/container-qualification.md#vpnkit-host-loopback-in-the-reachability-check-8305-2026-11-18) |
 | Rootless, `host-gateway` | Nothing: the gateway is RootlessKit's own bridge, which refuses the connection | — | Same runs; the host check then switches to whichever host loopback address answers |
 
 On Docker Desktop no VM subnet grants admission. This means every container

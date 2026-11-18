@@ -27,7 +27,7 @@ import {
 } from "@/lib/chat/transcript-annotations";
 
 export const COMPOSE_FRAME_CLASS_NAME =
-  "rounded-xl border border-border/70 bg-compose-surface p-3 shadow-xl shadow-black/20 transition-colors duration-150 has-[textarea:focus]:border-zinc-700";
+  "rounded-xl border border-border/70 bg-compose-surface p-3 shadow-xl shadow-black/20 transition-colors duration-150 has-[.native-compose-input:focus]:border-zinc-700 has-[textarea:focus]:border-zinc-700";
 
 export const COMPOSE_COLUMN_CLASS_NAME =
   "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 sm:w-[min(calc(100%_-_2rem),56rem)]";

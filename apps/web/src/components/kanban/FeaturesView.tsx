@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -858,6 +858,23 @@ export function NativeStyleChatPanel({
     // latest exchange.
     activation: "latest",
   });
+  const dockRef = useRef<HTMLDivElement>(null);
+  const [dockHeight, setDockHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const dock = dockRef.current;
+    if (!dock) return;
+
+    const measure = () => setDockHeight(dock.offsetHeight);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(dock);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
 
   const handleSend = useCallback(() => {
     const trimmed = draft.trim();
@@ -921,7 +938,8 @@ export function NativeStyleChatPanel({
                     </div>
                   </div>
                 )}
-                <div className="h-32" aria-hidden="true" />
+                {/* The dock's fade extends 2rem above its measured box. */}
+                <div style={{ height: `calc(${dockHeight}px + 2rem)` }} aria-hidden="true" />
               </>
             }
             scrollProps={scrollProps}
@@ -931,6 +949,7 @@ export function NativeStyleChatPanel({
       </div>
 
       <NativeComposeDock
+        rootRef={dockRef}
         centered={false}
         topAccessory={
           !isAtBottom ? (

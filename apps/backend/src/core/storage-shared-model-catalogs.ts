@@ -8,6 +8,21 @@ import type {
 } from "./models.js";
 import { isNonBlankString, isOneOf, isRecord } from "./storage-shared-core.js";
 
+/**
+ * How long a host-wide model catalogue is trusted before a read refreshes it
+ * in the background: one day. A provider ships a new model with no signal to
+ * this machine, so without an age limit a list seeded once stayed frozen until
+ * someone pressed Refresh in Settings for this exact machine.
+ */
+export const AGENT_MODEL_CATALOG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How often an unchanged catalogue re-confirms its `updatedAt`: hourly. Live
+ * bridge reads re-cache the same list on every picker refresh, and rewriting
+ * the store for each would be a write per read.
+ */
+export const AGENT_MODEL_CATALOG_RECONFIRM_INTERVAL_MS = 60 * 60 * 1000;
+
 export function isClaudeModelCatalogSnapshot(
   value: unknown,
   environmentId: string,

@@ -197,3 +197,65 @@ test("summary reads bound icons before serialization without changing ordinary r
     Promise.resolve().then(() => handler({ summaryIcons: "yes" }, context)),
   ).rejects.toThrow("summaryIcons");
 });
+
+describe("host catalogue reads refresh a stale Codex list", () => {
+  function registryWith(codexUpdatedAt: string) {
+    const cache: Record<string, unknown> = {
+      schemaVersion: 1,
+      codex: { updatedAt: codexUpdatedAt, models: [{ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" }] },
+    };
+    const downloaded = Promise.withResolvers<void>();
+    const refresh = mock(async (_context: unknown, agent: string) => {
+      downloaded.resolve();
+      return { agent, models: [{ id: "gpt-6.2-sol", name: "GPT-6.2-Sol" }] };
+    });
+    const context = {
+      runtime: { localServers: { catalogSeeds: new HostCatalogSeeds() } },
+      storage: {
+        getAgentModelCatalogCache: async () => cache,
+        cacheAgentModelCatalog: async (agent: string, models: unknown[]) => {
+          cache[agent] = { updatedAt: new Date().toISOString(), models };
+          return cache;
+        },
+        loadConfig: async () => ({ global: { enabledAgentPlatforms: ["codex"] } }),
+      },
+    } as unknown as CommandContext;
+    const commands = new Map();
+    registerProjectCommands(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+      { commands, refreshHostModelCatalog: refresh } as never,
+    );
+    const read = (args: Record<string, unknown>) =>
+      commands.get("get_agent_model_catalog_cache")(args, context);
+    return { cache, refresh, downloaded: downloaded.promise, read };
+  }
+
+  const twoDaysAgo = () => new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+
+  test("a launcher's read answers from the cache and refreshes behind it", async () => {
+    const { cache, refresh, downloaded, read } = registryWith(twoDaysAgo());
+    const answered = await read({});
+    expect(answered.codex.models.map((model: { id: string }) => model.id)).toEqual(["gpt-6.1-sol"]);
+    await downloaded;
+    await Bun.sleep(0);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect((cache.codex as { models: Array<{ id: string }> }).models[0]!.id).toBe("gpt-6.2-sol");
+  });
+
+  test("startup's seeding read waits for the refresh", async () => {
+    const { refresh, read } = registryWith(twoDaysAgo());
+    const answered = await read({ seed: true });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(answered.codex.models.map((model: { id: string }) => model.id)).toEqual(["gpt-6.2-sol"]);
+  });
+
+  test("the pre-render read and a fresh list start nothing", async () => {
+    const stale = registryWith(twoDaysAgo());
+    await stale.read({ seed: false });
+    const fresh = registryWith(new Date().toISOString());
+    await fresh.read({});
+    await Bun.sleep(0);
+    expect(stale.refresh).not.toHaveBeenCalled();
+    expect(fresh.refresh).not.toHaveBeenCalled();
+  });
+});

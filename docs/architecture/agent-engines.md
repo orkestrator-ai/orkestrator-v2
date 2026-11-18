@@ -443,6 +443,36 @@ a link that leaves the working directory is not followed) and sends it as a
 | Grok | The session trusts the checkout (`GROK_FOLDER_TRUST=0`) | Added to `_meta.rules` on `session/new`. A checkout the user trusted in Grok itself may load it twice |
 | Cursor | The `project` setting source is on | Added to the prompt frame once per Cursor agent (`repositoryInstructionsFor`), and again after a replacement agent or a compaction. It is too large to repeat on every prompt |
 
+## Host model catalogues
+
+Each machine keeps its own saved model list per platform (the
+`agent-model-catalog` store; OpenCode's is per project in
+`opencode-model-catalog`). Launch dialogs and the native composer read the
+list of the machine that will run the agent, so a list refreshed on one machine
+says nothing about another's.
+
+A list is kept current in three ways:
+
+- **Running bridges.** `get_native_agent_model_catalog` re-reads
+  `/global/models` from every agent bridge already running in the environment
+  (never starting one) and saves what it gets: Cursor, Grok and Pi
+  (`fetchAcpNormalizedModelsResult`) and Codex (`fetchCodexBridgeModels` in
+  `codex-live-model-catalog.ts`, which accepts only an `app-server` answer,
+  never the bridge's own cached or bundled fallback). Claude's per-environment
+  discovery saves the host list the same way.
+- **Age.** A Claude or Codex list last confirmed more than a day ago
+  (`AGENT_MODEL_CATALOG_MAX_AGE_MS`) is downloaded again through the host probe
+  Settings uses. Startup's seeding read waits for it; every other read answers
+  from the cache and refreshes behind it
+  (`refreshStaleHostModelCatalogs*` in `host-model-catalog-seed.ts`). It shares
+  the first-use seed's single flight and 15-minute failure cooldown.
+  `updatedAt` is the time the provider last confirmed the list: saving an
+  unchanged list moves it forward, at most hourly.
+- **Settings Refresh**, for the machine chosen in Settings' machine strip.
+
+The create dialog reloads its machine's saved lists each time it opens and
+after a Settings refresh.
+
 ## Activity observation
 
 The backend's activity sweep (every 2 s) is the one observer of whether a

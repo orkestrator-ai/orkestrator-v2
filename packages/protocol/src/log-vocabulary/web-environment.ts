@@ -33,6 +33,8 @@ export const WEB_ENVIRONMENT_LOG_AREAS = defineLogAreas({
       "create.attachment-read-failed": "A file dropped on the create dialog could not be read.",
       "auto-start.failed": "A background start after creating an environment was rejected.",
       "models.pi-seed-failed": "The create dialog could not seed the Pi model catalogue.",
+      "models.hydrate-failed":
+        "The create dialog could not reload its machine's saved model catalogues.",
       "models.opencode-cache-load-failed":
         "The create dialog could not read cached OpenCode models.",
       "github-credential.check-failed": "The GitHub credential check before creating failed.",

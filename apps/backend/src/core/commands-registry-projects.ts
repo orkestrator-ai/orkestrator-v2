@@ -129,7 +129,10 @@ import {
   seedEnabledHostModelCatalogs,
   HOST_OPENCODE_CATALOG_SCOPE,
   seedHostModelCatalogIfMissing,
+  refreshStaleHostModelCatalogs,
+  refreshStaleHostModelCatalogsInBackground,
 } from "./host-model-catalog-seed.js";
+import { fetchCodexBridgeModels } from "./codex-live-model-catalog.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 import { openCode2EnvironmentServer } from "./opencode2/container-server-lifecycle.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -627,9 +630,17 @@ export function registerProjectCommands(
     // control surface, the pickers) keeps the Pi first-use probe below.
     if (args.seed === true) {
       await seedEnabledHostModelCatalogs(context, refreshHostModelCatalog).catch(() => undefined);
+      // Startup's background read is the one that may wait for a download, so
+      // a window opened after a day away shows the provider's current list.
+      await refreshStaleHostModelCatalogs(context, refreshHostModelCatalog).catch(() => undefined);
     }
     let cache = await context.storage.getAgentModelCatalogCache();
     if (args.seed === false) return cache;
+    // Every other read (a launcher opening, often on another machine's node)
+    // answers from the cache and lets the next read see a refreshed list.
+    if (args.seed === undefined) {
+      refreshStaleHostModelCatalogsInBackground(context, refreshHostModelCatalog, cache);
+    }
     if (!cache.pi?.models.length) {
       const config = await context.storage.loadConfig();
       if (config.global.enabledAgentPlatforms?.includes("pi")) {
@@ -665,6 +676,7 @@ export function registerProjectCommands(
     }
     const environment = await storage.getEnvironment(id);
     let cache = await storage.getAgentModelCatalogCache();
+    refreshStaleHostModelCatalogsInBackground(context, refreshHostModelCatalog, cache);
     if (!environment) {
       // A bug report, like a coordinator, has no environment row; it belongs
       // to no project and offers only the bug-report agents.
@@ -872,7 +884,7 @@ export function registerProjectCommands(
         ? firstUseCatalogFetchTimeoutMs(firstUseDeadline)
         : undefined;
     const claudeModels = environment.claudeModelCatalog?.models ?? cache.claude?.models ?? [];
-    const codexModels = cache.codex?.models ?? [];
+    let codexModels = cache.codex?.models ?? [];
     // The live catalogue is already filtered by the provider, but a cache
     // written before the allowlist changed is not. Filter here too so the
     // renderer never receives a provider the user excluded.
@@ -918,7 +930,7 @@ export function registerProjectCommands(
         isSelectableOpenCodeModelId(model.id, openCodeModelProviders) &&
         isConnectedOpenCodeModel(model.id),
     );
-    const [cursorFetch, grokFetch, piFetch] = await Promise.all([
+    const [cursorFetch, grokFetch, piFetch, codexFetch] = await Promise.all([
       fetchAcpNormalizedModelsResult(
         environment,
         context,
@@ -927,7 +939,18 @@ export function registerProjectCommands(
       ),
       fetchAcpNormalizedModelsResult(environment, context, "grok", firstUseFetchTimeoutMs("grok")),
       fetchAcpNormalizedModelsResult(environment, context, "pi", firstUseFetchTimeoutMs("pi")),
+      // A running Codex bridge is the only place a machine learns of a new
+      // Codex model without an explicit Settings refresh.
+      fetchCodexBridgeModels(environment, context),
     ]);
+    if (codexFetch.status === "ok") {
+      codexModels = codexFetch.models;
+      try {
+        await storage.cacheAgentModelCatalog("codex", codexFetch.models);
+      } catch (error) {
+        log.warn("cache.write-failed", { agent: "codex", error: formatLogError(error) });
+      }
+    }
     const cursorModels = cursorFetch.models;
     const grokModels = grokFetch.models;
     const piModels = piFetch.models;

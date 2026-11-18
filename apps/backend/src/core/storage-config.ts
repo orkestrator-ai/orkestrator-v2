@@ -37,6 +37,7 @@ import {
   createHash,
   defaultConfig,
   defaultRepositoryConfig,
+  AGENT_MODEL_CATALOG_RECONFIRM_INTERVAL_MS,
   firstEnabledAgentPlatform,
   fs,
   getUnscopedLegacyOpenCodeModelCatalog,
@@ -476,7 +477,14 @@ export class ConfigRepository {
       async () => {
         const current = await this.getAgentModelCatalogCache();
         const existing = current[agent];
-        if (existing && JSON.stringify(existing.models) === JSON.stringify(normalizedModels)) {
+        // `updatedAt` is when the provider last confirmed this list, which is
+        // what the staleness checks read. An unchanged list re-confirms it,
+        // but at most once per interval, so a picker read is not a write.
+        if (
+          existing &&
+          JSON.stringify(existing.models) === JSON.stringify(normalizedModels) &&
+          Date.now() - Date.parse(existing.updatedAt) < AGENT_MODEL_CATALOG_RECONFIRM_INTERVAL_MS
+        ) {
           return current;
         }
         const next: AgentModelCatalogCache = {

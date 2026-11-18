@@ -177,7 +177,7 @@ function AccountUsage({
     };
   }, [platform, idsKey, reloadToken, readToken, refreshToken, machine]);
 
-  if (error) return <p className="text-xs text-destructive">{error}</p>;
+  if (error) return <p className="text-xs text-failure">{error}</p>;
   if (!snapshot) {
     return (
       <p className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -525,7 +525,7 @@ function AccountRow({
                 type="button"
                 size="sm"
                 variant="ghost"
-                className={confirmingRemove ? "text-destructive" : undefined}
+                className={confirmingRemove ? "text-failure" : undefined}
                 onClick={() => {
                   if (confirmingRemove) onRemove();
                   else setConfirmingRemove(true);
@@ -740,7 +740,7 @@ export function AgentAccountsSection({
       </div>
 
       {error ? (
-        <p className="mt-3 flex items-start gap-2 text-xs text-destructive">
+        <p className="mt-3 flex items-start gap-2 text-xs text-failure">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           {error}
         </p>

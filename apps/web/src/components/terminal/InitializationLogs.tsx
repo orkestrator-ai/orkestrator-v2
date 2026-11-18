@@ -139,8 +139,8 @@ function ContainerInitializationLogs({
         {error ? (
           <div className="flex items-center justify-center h-full text-muted-foreground">
             <div className="text-center">
-              <TerminalIcon className="h-8 w-8 mx-auto mb-2 opacity-50 text-red-400" />
-              <p className="text-red-400">{error}</p>
+              <TerminalIcon className="h-8 w-8 mx-auto mb-2 opacity-50 text-failure" />
+              <p className="text-failure">{error}</p>
             </div>
           </div>
         ) : isLoading && logs.length === 0 ? (
@@ -169,7 +169,7 @@ function ContainerInitializationLogs({
                     line.includes("error") ||
                     line.includes("Failed") ||
                     line.includes("failed")
-                    ? "text-red-400"
+                    ? "text-failure"
                     : line.includes("WARNING") ||
                         line.includes("Warning") ||
                         line.includes("warning")

@@ -111,7 +111,7 @@ export function SessionBranchPicker({
             </p>
           ) : state.kind === "error" ? (
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs text-destructive">{state.message}</p>
+              <p className="text-xs text-failure">{state.message}</p>
               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => void load()}>
                 Retry
               </Button>

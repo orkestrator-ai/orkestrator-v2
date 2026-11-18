@@ -38,10 +38,10 @@ test("CI status announces running, failed, and successful completion", async ({ 
   await expect(status).toHaveText("3 of 4 CI checks passed; 1 failed; all checks complete");
   expect(await status.textContent()).not.toBe(runningText);
   await expect(status).toHaveAttribute("data-state", "failed");
-  await expect(visualStatus).toHaveClass(/text-red-600/);
+  await expect(visualStatus).toHaveClass(/text-failure/);
   await expect(visualStatus.locator('[data-status-icon="failed"]')).toBeVisible();
   expect(await visualStatus.evaluate((element) => getComputedStyle(element).color)).toBe(
-    await colorForClass(page, "text-red-600"),
+    await colorForClass(page, "text-failure"),
   );
 
   await page.getByRole("button", { name: "Complete successfully" }).click();
@@ -84,9 +84,9 @@ test("CI status applies each dark-theme state color", async ({ page }) => {
   );
 
   await page.getByRole("button", { name: "Complete with failure" }).click();
-  await expect(status).toHaveClass(/dark:text-red-400/);
+  await expect(status).toHaveClass(/text-failure/);
   expect(await status.evaluate((element) => getComputedStyle(element).color)).toBe(
-    await colorForClass(page, "text-red-400"),
+    await colorForClass(page, "text-failure"),
   );
 
   await page.getByRole("button", { name: "Complete successfully" }).click();

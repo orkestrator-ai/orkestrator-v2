@@ -153,7 +153,7 @@ export function NodeRoutesSection({
               type="button"
               variant="ghost"
               size="icon"
-              className="h-6 w-6 text-zinc-500 hover:text-red-300"
+              className="h-6 w-6 text-zinc-500 hover:bg-destructive/15 hover:text-failure"
               disabled={busy || routes.length === 1}
               onClick={() => setRoutes(routes.filter((entry) => entry.id !== route.id))}
               aria-label={`Remove ${routeText(route)}`}

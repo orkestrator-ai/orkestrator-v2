@@ -510,6 +510,8 @@ export class AgentMailRepository {
     options: {
       /** Backend-only cancellation fence, checked under the mail writer lease. */
       isStillWanted?: () => boolean;
+      /** Backend-only expected merge identity, fenced at admission. */
+      mergeNoticeUrl?: string;
       newDelegation?: boolean;
       /** Backend-owned node transport metadata; never accepted from an agent directly. */
       nodeParent?: { id: string; threadId: string; hopCount: number };
@@ -655,6 +657,9 @@ export class AgentMailRepository {
       this.assertRecipientAllowed(store, sender, input, settings.allowCrossProject);
       const destinationId = agentMailboxId(input.toEnvironmentId, input.toTabId);
       const recipient = store.mailboxes[destinationId]!;
+      if (options.mergeNoticeUrl && recipient.mergeNoticeRequestId === requestId) {
+        throw new AgentMailError("message-not-found", "Merge notice already admitted");
+      }
 
       let parent: AgentMailMessage | undefined;
       if (input.replyToMessageId) {
@@ -1015,8 +1020,41 @@ export class AgentMailRepository {
           });
         }
       }
-      store.revision += 1;
-      await this.store.save(store);
+      const publish = async () => {
+        if (options.mergeNoticeUrl) {
+          // Synchronous authoritative read after all preparation awaits, immediately
+          // before publishing mail. No asynchronous work separates this fence and save.
+          const current = this.context.loadStoreRow(
+            this.files.environmentsFile(),
+            input.toEnvironmentId,
+          ) as
+            | {
+                prUrl?: string;
+                prState?: string;
+                prMergeNoticePendingUrl?: string;
+                deletionRequestedAt?: string;
+                cleanupAfterMergeRequestedAt?: string;
+              }
+            | undefined;
+          if (
+            sender.kind !== "system" ||
+            sender.source !== "workflow" ||
+            !current ||
+            current.prUrl !== options.mergeNoticeUrl ||
+            current.prMergeNoticePendingUrl !== options.mergeNoticeUrl ||
+            current.prState !== "merged" ||
+            current.deletionRequestedAt ||
+            current.cleanupAfterMergeRequestedAt
+          ) {
+            throw new AgentMailError("recipient-superseded", "Merge notice no longer wanted");
+          }
+          recipient.mergeNoticeRequestId = requestId;
+        }
+        store.revision += 1;
+        await this.store.save(store);
+      };
+      if (options.mergeNoticeUrl) await this.repos.projects.enqueueEnvironmentMutation(publish);
+      else await publish();
       // Ids and decisions only: never subjects or bodies.
       log.info("message.placed", () => ({
         messageId: message.id,

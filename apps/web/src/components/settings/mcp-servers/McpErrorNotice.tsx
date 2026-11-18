@@ -98,12 +98,12 @@ export function McpErrorNotice({
   return (
     <div
       className={cn(
-        "flex items-start gap-2 rounded-md border border-red-500/20 bg-red-500/5 px-3 py-2 text-sm",
+        "flex items-start gap-2 rounded-md border border-failure/20 bg-failure/5 px-3 py-2 text-sm",
         className,
       )}
       role="alert"
     >
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" aria-hidden="true" />
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-failure" aria-hidden="true" />
       <div className="min-w-0 space-y-2">
         <p className="break-words">{problem.message}</p>
         {problem.reference ? <McpErrorReference reference={problem.reference} /> : null}

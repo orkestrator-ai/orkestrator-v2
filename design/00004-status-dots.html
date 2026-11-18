@@ -23,9 +23,12 @@
       <p>
         <code>index.css</code> defines <code>--color-status-running</code>,
         <code>status-stopped</code>, <code>status-error</code> and <code>status-creating</code>.
-        Before this change, <code>StatusIndicator.tsx</code> used the running and error tokens for
-        label text. Its dots and spinners used raw green, red, blue, gray, and orange. Other
-        surfaces used <code>emerald-500</code> for their green status dots.
+        Before this change, <code>StatusIndicator.tsx</code> used the running and error status
+        tokens for label text. Its dots and spinners used hard-coded colors, except for the Error
+        dot, which used <code>bg-failure</code> after
+        <a href="00002-failure-red-hardcoded.html">task 00002</a>. The Error dot now inherits
+        <code>status-error</code>, which shares the failure color. Other surfaces used
+        <code>emerald-500</code> for their green status dots.
       </p>
       <div class="rule">
         <div>

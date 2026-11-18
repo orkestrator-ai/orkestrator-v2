@@ -242,7 +242,7 @@ function AutoMergeErrorMessage({ message }: { message: string }) {
           event.preventDefault();
           content.scrollTop += offset;
         }}
-        className="line-clamp-2 max-w-64 rounded-sm text-xs text-destructive outline-none focus-hairline"
+        className="line-clamp-2 max-w-64 rounded-sm text-xs text-failure outline-none focus-hairline"
       >
         Auto-merge: {message}
       </span>
@@ -1258,7 +1258,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       // the whole message shows on its own row.
                       <span
                         role="status"
-                        className="order-last col-span-2 px-3 py-1 text-xs wrap-anywhere text-destructive"
+                        className="order-last col-span-2 px-3 py-1 text-xs wrap-anywhere text-failure"
                       >
                         Auto-merge: {selectedEnvironment.autoMergeError}
                       </span>
@@ -1350,7 +1350,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                               : "bg-green-600 text-white hover:bg-green-700"),
                           isGrid &&
                             (mergeability === "conflicts"
-                              ? "text-destructive"
+                              ? "text-failure"
                               : "text-green-600 dark:text-green-400"),
                         )}
                         data-mergeability={mergeability}
@@ -1744,7 +1744,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {cleanupError && (
-            <div className="min-w-0 max-h-[min(16rem,40vh)] overflow-y-auto overflow-x-hidden rounded-md bg-destructive/10 p-3 text-sm text-destructive whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+            <div className="min-w-0 max-h-[min(16rem,40vh)] overflow-y-auto overflow-x-hidden rounded-md bg-destructive/10 p-3 text-sm text-failure whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
               Failed to delete environment: {cleanupError}
             </div>
           )}

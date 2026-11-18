@@ -94,7 +94,7 @@ export function ProjectSchedulesView({ projectId }: { projectId: string }) {
             : "Turn it on in Settings → Experimental"}
         </Button>
         {enableError ? (
-          <p role="alert" className="mt-3 text-red-400">
+          <p role="alert" className="mt-3 text-failure">
             {enableError}
           </p>
         ) : null}

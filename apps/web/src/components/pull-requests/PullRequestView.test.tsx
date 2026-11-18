@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GitHubPullRequestDetail } from "@orkestrator/protocol/github-pull-requests";
+import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
 import type { Environment } from "@/types";
 import { uiStore } from "@/stores/uiStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
@@ -41,10 +43,43 @@ function renderView(detail: GitHubPullRequestDetail, props: { onSummaryLoaded?: 
   );
 }
 
+const originalConfig = appCommandStore(configStore).getState().config;
+
 beforeEach(() => {
   resetPullRequestsStore();
   appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(projectStore).setState({ projects: [] });
+  appCommandStore(configStore).setState({ config: originalConfig });
 });
+
+/** A project tracking acme/widget whose settings name `prBaseBranch` as the PR target. */
+function trackWidgetProject(prBaseBranch: string) {
+  appCommandStore(projectStore).setState({
+    projects: [
+      {
+        id: "project-widget",
+        name: "widget",
+        gitUrl: "git@github.com:acme/widget.git",
+        localPath: null,
+        addedAt: "2026-11-01T00:00:00.000Z",
+        order: 0,
+      },
+    ],
+  });
+  appCommandStore(configStore).setState({
+    config: {
+      ...originalConfig,
+      repositories: {
+        ...originalConfig.repositories,
+        "project-widget": {
+          ...originalConfig.repositories["project-widget"],
+          defaultBranch: "main",
+          prBaseBranch,
+        },
+      },
+    },
+  });
+}
 
 afterEach(() => {
   cleanup();
@@ -208,6 +243,46 @@ describe("PullRequestView", () => {
       );
     });
   }
+
+  test("a base other than the project's target branch is red and the merge asks first", async () => {
+    trackWidgetProject("main");
+    renderView(makeDetail({ baseRef: "dev" }));
+    await screen.findByText("feat: add usage history tab");
+
+    const base = screen.getByTestId("pull-request-base-ref");
+    expect(base.getAttribute("data-target-mismatch")).toBe("true");
+    expect(base.className).toContain("text-failure");
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Merge into non-target branch?")).toBeTruthy();
+    expect(within(dialog).getByTestId("merge-target-mismatch").textContent).toContain(
+      "targets dev, but the target branch set in this project's settings is main. Do you wish to accept?",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Accept and merge" }));
+    await waitFor(() => expect(callsFor("merge_github_pull_request")).toHaveLength(1));
+  });
+
+  test("a base matching the project's target branch keeps its usual colour and dialog", async () => {
+    trackWidgetProject("main");
+    renderView(makeDetail({ baseRef: "main" }));
+    await screen.findByText("feat: add usage history tab");
+    expect(
+      screen.getByTestId("pull-request-base-ref").getAttribute("data-target-mismatch"),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Merge pull request #42?")).toBeTruthy();
+    expect(within(dialog).queryByTestId("merge-target-mismatch") === null).toBe(true);
+  });
+
+  test("a pull request in a repository no project tracks is never flagged", async () => {
+    renderView(makeDetail({ baseRef: "dev" }));
+    await screen.findByText("feat: add usage history tab");
+    expect(
+      screen.getByTestId("pull-request-base-ref").getAttribute("data-target-mismatch"),
+    ).toBeNull();
+  });
 
   test("hides the Merge button once the pull request is merged", async () => {
     renderView(makeDetail({ state: "merged", mergeability: "unavailable" }));

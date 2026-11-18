@@ -7116,6 +7116,49 @@ describe("ActionBar successful cleanup and merge actions", () => {
       expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
     });
 
+    test("a PR into another branch than the project's target is red and asks first", async () => {
+      currentRepositoryConfig = { "project-1": { prBaseBranch: "main" } };
+      currentEnvironment = {
+        ...selectedEnvironment,
+        prState: "open",
+        hasMergeConflicts: false,
+        prBaseBranch: "dev",
+      };
+      renderInAppCommandScope(<ActionBar />);
+      expect(screen.getByTestId("pr-target-mismatch").textContent).toBe("→ dev");
+
+      fireEvent.click(mergePrButton());
+      const dialog = screen.getByTestId("alert-dialog-content");
+      expect(dialog.querySelector('[data-target-mismatch="true"]')?.textContent).toBe("dev");
+      expect(screen.getByTestId("merge-target-mismatch").textContent).toContain(
+        "targets dev, not main",
+      );
+      fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
+      expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
+      expect(screen.getByText("Merge into non-target branch?")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Accept and merge" }));
+
+      await waitFor(() =>
+        expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
+      );
+    });
+
+    test("a PR into the project's target branch merges without the extra question", async () => {
+      currentRepositoryConfig = { "project-1": { prBaseBranch: "main" } };
+      currentEnvironment = {
+        ...selectedEnvironment,
+        prState: "open",
+        hasMergeConflicts: false,
+        prBaseBranch: "main",
+      };
+      renderInAppCommandScope(<ActionBar />);
+      expect(screen.queryByTestId("pr-target-mismatch") === null).toBe(true);
+      confirmMerge();
+      await waitFor(() =>
+        expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
+      );
+    });
+
     test("selects a different row through real selection state and merges its PR", async () => {
       const { EnvironmentItem } = await import("@/components/environments/EnvironmentItem");
       const target = { ...selectedEnvironment, id: "env-target", prState: "open" as const };

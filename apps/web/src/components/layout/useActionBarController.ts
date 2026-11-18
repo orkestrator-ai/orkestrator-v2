@@ -70,6 +70,7 @@ import {
 } from "@/stores/paneLayoutStore";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
+import { configuredPrTargetBranch, prTargetMismatch } from "@/lib/pr-target-mismatch";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { mergePrControl } from "@/lib/merge-pr-control";
 import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
@@ -2274,6 +2275,15 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     ? defaultPrTargetBranch(config.repositories[selectedProjectId]?.prBaseBranch)
     : "main";
   const sourceBranch = selectedEnvironment?.branch || "current branch";
+  // The branch the open PR really merges into, as the PR monitor last read it,
+  // and whether that is not the target set in the project's settings.
+  const mergeTargetMismatch = prTargetMismatch({
+    actualBase: selectedEnvironment?.prBaseBranch,
+    configuredBase: selectedProjectId
+      ? configuredPrTargetBranch(config.repositories[selectedProjectId])
+      : null,
+  });
+  const mergeTargetBranch = selectedEnvironment?.prBaseBranch?.trim() || targetBranch;
 
   return {
     isGrid,
@@ -2443,5 +2453,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     handleMergePR,
     targetBranch,
     sourceBranch,
+    mergeTargetBranch,
+    mergeTargetMismatch,
   };
 }

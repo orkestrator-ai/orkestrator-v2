@@ -109,9 +109,15 @@ import { formatObservedAt, hydrationFreshnessNotice } from "@/lib/view-freshness
 const ToolbarTooltipsEnabledContext = createContext(true);
 
 /** A branch name styled like inline code in a transcript, so it stands out from the prose. */
-function BranchName({ children }: { children: ReactNode }) {
+function BranchName({ children, mismatch = false }: { children: ReactNode; mismatch?: boolean }) {
   return (
-    <code className="rounded-md bg-primary/12 px-1.5 py-0.5 font-mono text-xs text-blue-300 break-all">
+    <code
+      data-target-mismatch={mismatch ? "true" : undefined}
+      className={cn(
+        "rounded-md px-1.5 py-0.5 font-mono text-xs break-all",
+        mismatch ? "bg-destructive/15 font-semibold text-failure" : "bg-primary/12 text-blue-300",
+      )}
+    >
       {children}
     </code>
   );
@@ -401,6 +407,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     handleMergePR,
     targetBranch,
     sourceBranch,
+    mergeTargetBranch,
+    mergeTargetMismatch,
   } = useActionBarController({ presentation });
   const coordinatorActivity = useCoordinatorActivity(selectedProjectId);
   const autoMerge = useAutoMergeToggle(selectedEnvironment ?? null);
@@ -1211,6 +1219,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           : isPRClosed
                             ? "PR was closed without merging - click to view"
                             : "Open PR in the sidebar (⌘-click opens GitHub)"}
+                        {!isPRFinished && mergeTargetMismatch && (
+                          <span className="mt-1 block text-failure">
+                            This PR targets {mergeTargetMismatch.actual}, not{" "}
+                            {mergeTargetMismatch.configured}, the target branch in the
+                            project&apos;s settings
+                          </span>
+                        )}
                         {prFreshnessNotice && (
                           <span className="mt-1 block text-amber-300">
                             {prFreshnessNotice.detail}
@@ -1240,6 +1255,18 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       <span className={cn(isGrid && "truncate text-xs")}>
                         {isPRMerged ? "PR merged" : isPRClosed ? "PR closed" : "View PR"}
                       </span>
+                      {!isPRFinished && mergeTargetMismatch && (
+                        <span
+                          data-testid="pr-target-mismatch"
+                          aria-label={`Targets ${mergeTargetMismatch.actual}, not the project's target branch ${mergeTargetMismatch.configured}`}
+                          className={cn(
+                            "max-w-32 truncate font-mono text-xs font-semibold text-failure",
+                            isGrid && "max-w-20",
+                          )}
+                        >
+                          → {mergeTargetMismatch.actual}
+                        </span>
+                      )}
                       {!isPRFinished && checkSummary && checkSummary.total > 0 && (
                         <PullRequestCheckStatus
                           checkSummary={checkSummary}
@@ -1326,6 +1353,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                                   ? "GitHub is still checking whether this PR can be merged"
                                   : "Squash and merge this PR"}
                             </p>
+                            {mergeTargetMismatch && (
+                              <p className="text-xs text-failure">
+                                Targets {mergeTargetMismatch.actual}, not the project&apos;s target
+                                branch {mergeTargetMismatch.configured}
+                              </p>
+                            )}
                             {canConfigureResolve && (
                               <p className="text-xs text-muted-foreground">
                                 ⌘⇧U or right-click/long-press to configure Resolve
@@ -1776,7 +1809,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         onOpenChange={setMergeDialogOpenClearingError}
         mergeability={mergeability}
         sourceBranch={<BranchName>{sourceBranch}</BranchName>}
-        targetBranch={<BranchName>{targetBranch}</BranchName>}
+        targetBranch={
+          <BranchName mismatch={mergeTargetMismatch !== null}>{mergeTargetBranch}</BranchName>
+        }
+        targetMismatch={mergeTargetMismatch}
         deletesBranch={Boolean(
           selectedEnvironment &&
           isEnvironmentOwnedBranch(selectedEnvironment.id, selectedEnvironment.branch),

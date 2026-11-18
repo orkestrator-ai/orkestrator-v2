@@ -19,7 +19,7 @@ import { useConfigStore, useEnvironmentStore } from "@/stores";
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { isEnvironmentOwnedBranch } from "@orkestrator/protocol/environment-branch";
-import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
+import { configuredPrTargetBranch, prTargetMismatch } from "@/lib/pr-target-mismatch";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import { TicketActionBar } from "./TicketActionBar";
@@ -78,9 +78,14 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
   const syncStatus = usePrMonitorStore((state) => state.syncStatus);
   const hold = useAutoMergeHold(environmentId, environment);
   const autoMerge = useAutoMergeToggle(environment ?? null);
-  const prBaseBranch = useConfigStore((state) =>
-    environment ? state.config.repositories[environment.projectId]?.prBaseBranch : undefined,
+  const configuredTarget = useConfigStore((state) =>
+    environment ? configuredPrTargetBranch(state.config.repositories[environment.projectId]) : null,
   );
+  const targetMismatch = prTargetMismatch({
+    actualBase: environment?.prBaseBranch,
+    configuredBase: configuredTarget,
+  });
+  const mergeTarget = environment?.prBaseBranch?.trim() || configuredTarget || "main";
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [merging, setMerging] = useState(false);
 
@@ -207,7 +212,15 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
         onOpenChange={setOptionsOpen}
         mergeability={prMergeability(environment?.hasMergeConflicts)}
         sourceBranch={prNumber ? `#${prNumber}` : "this pull request"}
-        targetBranch={defaultPrTargetBranch(prBaseBranch)}
+        targetBranch={
+          <span
+            data-target-mismatch={targetMismatch ? "true" : undefined}
+            className={cn("font-mono", targetMismatch && "font-semibold text-failure")}
+          >
+            {mergeTarget}
+          </span>
+        }
+        targetMismatch={targetMismatch}
         deletesBranch={Boolean(
           environment && isEnvironmentOwnedBranch(environment.id, environment.branch),
         )}

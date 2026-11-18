@@ -49,7 +49,7 @@ function KeyboardShortcutsPanel({
 
   return (
     <>
-      <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-4 py-3">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-4 py-3 has-[>input:focus-visible]:focus-hairline-frame">
         <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <input
           ref={searchRef}

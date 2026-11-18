@@ -109,7 +109,7 @@ export function TranscriptPromptNavigator({
               tabIndex={prompt.id === tabStopId ? 0 : -1}
               aria-label={`Go to prompt ${index + 1} of ${prompts.length}: ${prompt.text}`}
               aria-current={index === activeIndex ? "true" : undefined}
-              className="relative h-2 min-h-0 w-full shrink cursor-pointer outline-none"
+              className="relative h-2 min-h-0 w-full shrink cursor-pointer focus-hairline"
               // Jumping through the transcript leaves focus in the composer.
               onMouseDown={(event) => event.preventDefault()}
               onPointerEnter={(event) => activate(prompt.id, event.currentTarget)}

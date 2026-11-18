@@ -11,7 +11,7 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00014</p>
       <h1>00014 · Audit controls that remove the outline without a hairline</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-medium">Medium</span>
         <span class="pill">Focus</span>
         <span class="pill evidence-badge" data-evidence-badge data-complete="false"
@@ -21,10 +21,9 @@
 
       <h2>Problem</h2>
       <p>
-        Eighteen files contain <code>outline-none</code> or
-        <code>focus-visible:outline-none</code> and no <code>focus-hairline</code>. Some are
-        intentional (a borderless text area inside a framed composer), others are buttons and rows
-        with no visible keyboard focus.
+        The audit covered eighteen files that suppress an outline. Some suppressions are
+        intentional, such as a borderless text area inside a framed composer. Several controls
+        needed a visible focus hairline.
       </p>
       <div class="rule">
         <div>
@@ -65,12 +64,12 @@
             <td>input inside a framed composer</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/kanban/FeaturesView.tsx:1004</code></td>
+            <td><code>apps/web/src/components/kanban/FeaturesView.tsx:947</code></td>
             <td>input inside a framed composer</td>
           </tr>
           <tr>
             <td><code>apps/web/src/components/settings/FullscreenSettingsLayout.tsx:200</code></td>
-            <td>mobile search input</td>
+            <td>mobile settings section selector</td>
           </tr>
           <tr>
             <td><code>…and the other files from the grep</code></td>
@@ -121,7 +120,6 @@
               <img
                 src="images/00014/before-mail-panel-row-focus-desktop.png"
                 alt="Before: Agent mail panel row focused by keyboard (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -133,7 +131,6 @@
               <img
                 src="images/00014/after-mail-panel-row-focus-desktop.png"
                 alt="After: Agent mail panel row focused by keyboard (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -154,7 +151,6 @@
               <img
                 src="images/00014/before-repository-picker-focus-desktop.png"
                 alt="Before: GitHub repository picker row focused (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -166,7 +162,6 @@
               <img
                 src="images/00014/after-repository-picker-focus-desktop.png"
                 alt="After: GitHub repository picker row focused (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -185,7 +180,6 @@
               <img
                 src="images/00014/before-find-bar-focus-desktop.png"
                 alt="Before: Chat find bar focused (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -197,7 +191,6 @@
               <img
                 src="images/00014/after-find-bar-focus-desktop.png"
                 alt="After: Chat find bar focused (desktop)"
-                loading="lazy"
               />
             </div>
           </figure>
@@ -205,8 +198,8 @@
       </section>
 
       <section class="capture" id="cap-settings-search-focus-narrow">
-        <h3>Mobile settings search focused <span class="pill">narrow 390×844</span></h3>
-        <p class="how">Open settings at 390px width.</p>
+        <h3>Mobile settings section selector focused <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Open settings at 390px width and Tab to the section selector.</p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -215,8 +208,7 @@
             <div class="frame">
               <img
                 src="images/00014/before-settings-search-focus-narrow.png"
-                alt="Before: Mobile settings search focused (narrow)"
-                loading="lazy"
+                alt="Before: Mobile settings section selector focused (narrow)"
               />
             </div>
           </figure>
@@ -227,8 +219,7 @@
             <div class="frame">
               <img
                 src="images/00014/after-settings-search-focus-narrow.png"
-                alt="After: Mobile settings search focused (narrow)"
-                loading="lazy"
+                alt="After: Mobile settings section selector focused (narrow)"
               />
             </div>
           </figure>
@@ -254,54 +245,54 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00014/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: Add a short rule to DESIGN.md if “inputs
             inside a frame show focus on the frame” is the settled pattern.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -310,13 +301,77 @@ mise run lint</code></pre>
 
       <h2>Notes</h2>
       <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+        The baseline command returned 17 files at <code>b2c91abb9</code>.
+        <code>HtmlFileTab</code> already used a hairline on another control, so its preview host was
+        reviewed separately as the eighteenth named file.
+      </p>
+      <h3>Hit classification on the baseline</h3>
+      <ul>
+        <li>
+          <b>Missing hairline.</b> Agent mail and GitHub picker rows used a focus tint. The
+          transcript prompt navigator expanded its marker and opened a preview. The design hierarchy
+          resize handle tinted its 1px divider.
+        </li>
+        <li>
+          <b>Missing frame cue.</b> Chat find, keyboard shortcuts search, coordinator action search,
+          project search, pipeline message composer, feature planning composer
+          (<code>FeaturesView</code>), and terminal message composer suppressed the input outline
+          without drawing a focus cue on the surrounding frame.
+        </li>
+        <li>
+          <b>Missing hairline.</b> The mobile settings section selector suppressed the standard
+          select focus outline.
+        </li>
+        <li>
+          <b>OK.</b> The native composer frame already lightens its neutral border when its
+          <code>MentionableInput</code> has focus.
+        </li>
+        <li>
+          <b>N/A.</b> The annotation heading, static HTML artifact fallback, HTML file preview host,
+          mobile project drawer, and fullscreen settings dialog are focus-management targets outside
+          the normal Tab sequence. The Tiptap editor manages its own caret.
+        </li>
+      </ul>
+      <h3>Decisions</h3>
+      <ul>
+        <li>
+          Use the existing inset hairline on edge-to-edge list rows and the prompt navigator to keep
+          it inside the scrolling list or the active marker's hit area. Use the outset hairline on
+          the thin resize handle and the borderless mobile settings selector to keep the line clear
+          of the divider and text.
+        </li>
+        <li>
+          Put one hairline on the frame of a borderless input. Match the input's
+          <code>:focus-visible</code> state specifically so a neighboring button keeps its own cue.
+          A hairline on the input would omit the field's icon and surrounding frame. The native
+          composer retains its established neutral border cue.
+        </li>
+      </ul>
+      <h3>Image pairs</h3>
+      <p>
+        Both sets use the headless <code>design-00014</code> profile, dark theme, 100% zoom, and
+        device scale 1. Agent mail was seeded in the local fixture, chat history was created with a
+        loopback model, and the GitHub account and repository responses came from fixed browser
+        fixtures.
       </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <a href="#cap-mail-panel-row-focus-desktop">Agent mail row.</a> The focused row gains a
+          blue inset hairline in place of its subtle background tint.
+        </li>
+        <li>
+          <a href="#cap-repository-picker-focus-desktop">GitHub repository row.</a> The focused
+          repository gains a blue line inside the list's existing border, replacing its focus tint.
+        </li>
+        <li>
+          <a href="#cap-find-bar-focus-desktop">Chat find.</a> Opening Find from the keyboard draws
+          a blue line around the full bar, including its icon and match controls.
+        </li>
+        <li>
+          <a href="#cap-settings-search-focus-narrow">Mobile settings.</a> The section selector
+          gains an outset hairline. This is the control identified by the scope's source reference.
+          The PNG filenames retain the specified <code>settings-search</code> suffix.
+        </li>
       </ul>
 
       <footer>

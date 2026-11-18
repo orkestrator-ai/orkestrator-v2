@@ -119,7 +119,7 @@ function SearchableList<T>({
                 type="button"
                 onClick={() => onSelect(item)}
                 disabled={isDisabled?.(item)}
-                className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors hover:bg-hover focus-visible:bg-muted/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
+                className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors hover:bg-hover focus-hairline disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
               >
                 {renderItem(item)}
               </button>

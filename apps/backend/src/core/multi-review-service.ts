@@ -229,6 +229,7 @@ import {
   consolidationOverlap,
   deriveConsolidatedProvenance,
   consolidationResultContext,
+  consolidationScopeFilledByBackend,
   parseStructuredReportResult,
   promptWorktreeSnapshot,
   resolveUnattendedReviewerInteractions,
@@ -4630,6 +4631,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               !workflow.reviewPackage && workflow.reviewSnapshotStale === true,
             reviewPackage: workflow.reviewPackage,
             reports: consolidationReports(workflow.reviewers),
+            // Only the result tool's slot fills the scope lists in; a
+            // provider-enforced schema still takes the full report.
+            scopeFilledByBackend:
+              request.resultTransport === "tool-v1" &&
+              consolidationScopeFilledByBackend(workflow.reviewers),
             onEvidenceStats: (stats) =>
               recordEfficiency(this.options.efficiency, {
                 owner: "multi-review",

@@ -254,6 +254,7 @@ export {
   consolidationOverlap,
   consolidationReports,
   consolidationResultContext,
+  consolidationScopeFilledByBackend,
   deriveConsolidatedProvenance,
   reviewerProvenanceLabel,
 } from "./review-fanout-provenance.js";

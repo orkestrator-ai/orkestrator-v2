@@ -195,6 +195,56 @@ export function withUnattendedOverloadRetry(
 }
 
 /**
+ * Turns off the Claude CLI's fine-grained tool streaming, so the API checks a
+ * tool call's input before streaming it.
+ *
+ * With fine-grained tool streaming the API passes a tool's input through
+ * unbuffered and unvalidated, so a model that slips once (an unescaped quote
+ * or control character) in a large JSON argument produces input the CLI
+ * cannot parse. It answers `InputValidationError: … could not be parsed as
+ * JSON` without calling the tool, and records the call as
+ * `{"__unparsedToolInput": {raw, len}}`, which the model then misreads as a
+ * wrapper it added itself. A 15–40 KB consolidated review is exactly that
+ * input: on one host in a week, 52 of 185 Haiku consolidation submissions and
+ * 32 of 167 Opus review reports failed this way, none under 7 KB. The pinned
+ * CLI (2.1.326) enables the streaming for first-party models through a
+ * server-side flag; this variable, read as a tri-state boolean, is the only
+ * override, and `0` wins over the flag.
+ *
+ * Interactive chats keep the streaming, which is what shows a long Write or
+ * Edit as it is generated.
+ */
+export const BUFFERED_TOOL_INPUT_ENV = {
+  CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING: "0",
+} as const;
+
+/**
+ * Whether a turn's CLI should run with {@link BUFFERED_TOOL_INPUT_ENV}: a
+ * `pipeline` session's turn that submits a workflow result (a review report,
+ * a consolidated review, a stage result) as one JSON tool call. Takes the
+ * session's own policy, as {@link withUnattendedOverloadRetry} does: a
+ * reviewer's read-only turn replaces the policy it runs under.
+ */
+export function buffersToolInput(
+  sessionPolicy: Pick<NativeAgentExecutionPolicy, "id"> | undefined,
+  workflowResultTurn: unknown,
+): boolean {
+  return sessionPolicy?.id === "pipeline" && workflowResultTurn !== undefined;
+}
+
+/**
+ * Adds {@link BUFFERED_TOOL_INPUT_ENV} when `buffered`. It overrides a value
+ * the environment already has, because a submission that cannot be parsed
+ * fails the step it belongs to.
+ */
+export function withBufferedToolInput(
+  buffered: boolean,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return buffered ? { ...environment, ...BUFFERED_TOOL_INPUT_ENV } : environment;
+}
+
+/**
  * Configuration that stops the checkout's own Git config from naming a
  * program for an admitted read: `core.fsmonitor` runs on every `git status`
  * and `git diff`, and a hook path covers the hooks an index refresh can fire

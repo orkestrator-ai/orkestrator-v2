@@ -35,10 +35,12 @@ import {
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { StoreCorruptError, type StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
+import { isConsolidationScopeLists } from "./review-consolidation-scope.js";
 import { validateWorkflowResult } from "./workflow-result-contracts.js";
 import {
   WORKFLOW_RESULT_MAX_ISSUES as WORKFLOW_RESULT_ISSUE_LIMIT,
   WorkflowResultRegistry,
+  completeWorkflowResult,
   workflowResultKindDefinition,
   type WorkflowResultAcceptanceCheck,
   type WorkflowResultAttempt,
@@ -189,10 +191,20 @@ function checkEnvelope(database: StorageDatabase): boolean {
   return true;
 }
 
+/** The value with the fields the backend owns filled in, as it is validated and stored. */
+function completeEntryResult(entry: StoredWorkflowResult, result: unknown): unknown {
+  return completeWorkflowResult(entry.kind, result, {
+    schema: entry.schema,
+    context: entry.context,
+  });
+}
+
+/** Validates the value as it would be stored: filled in first (`completeEntryResult`). */
 function validateEntryResult(
   entry: StoredWorkflowResult,
-  result: unknown,
+  submitted: unknown,
 ): WorkflowResultValidationIssue[] {
+  const result = completeEntryResult(entry, submitted);
   const issues = validateWorkflowResult(entry.kind, result, entry.schema, entry.context);
   if (
     issues.length === 0 &&
@@ -271,6 +283,7 @@ function validContext(value: WorkflowResultSlotInput["context"]): boolean {
   }
   return (
     value.type === "consolidated-review" &&
+    (value.scope === undefined || isConsolidationScopeLists(value.scope)) &&
     value.sources !== null &&
     typeof value.sources === "object" &&
     !Array.isArray(value.sources) &&
@@ -279,6 +292,21 @@ function validContext(value: WorkflowResultSlotInput["context"]): boolean {
       (candidate) => candidate === "issue" || candidate === "coverage-gap",
     )
   );
+}
+
+/**
+ * Whether `next` is `previous` plus the merged scope lists: a consolidation
+ * slot an older backend prepared, prepared again after an upgrade.
+ */
+function gainsConsolidationScope(
+  previous: WorkflowResultSlotInput["context"],
+  next: WorkflowResultSlotInput["context"],
+): boolean {
+  if (previous?.type !== "consolidated-review" || next?.type !== "consolidated-review")
+    return false;
+  if (previous.scope !== undefined || next.scope === undefined) return false;
+  const { scope: _scope, ...rest } = next;
+  return serialize(previous) === serialize(rest);
 }
 
 function validStoredEntry(key: string, value: unknown): value is StoredWorkflowResult {
@@ -694,7 +722,15 @@ export class WorkflowResultService {
           serialize(existing.schema ?? null) !== serialize(persisted.schema ?? null) ||
           serialize(existing.context ?? null) !== serialize(input.context ?? null)
         ) {
-          throw new Error("Workflow result key is already bound to another attempt");
+          if (!gainsConsolidationScope(existing.context, input.context))
+            throw new Error("Workflow result key is already bound to another attempt");
+          // The same consolidation, prepared again by a backend that merges
+          // the scope lists. An open slot takes them, so it matches the
+          // prompt the re-dispatch now sends; a settled one keeps its own.
+          if (existing.lifecycle !== "open" || existing.receipt) return { result: undefined };
+          existing.context = input.context;
+          existing.updatedAt = new Date().toISOString();
+          return { result: undefined, entry: existing };
         }
         return { result: undefined };
       }
@@ -1293,6 +1329,10 @@ export class WorkflowResultService {
             }
             result = held.result;
           }
+          // Stored as validated: with the fields the backend owns filled in.
+          // The digest stays the submitted value's, so a resend of the same
+          // submission is still a duplicate.
+          result = completeEntryResult(entry, result);
           if (!entry.firstSubmissionAt) entry.firstSubmissionAt = new Date().toISOString();
           const validationStartedAt = Date.now();
           let issues = validateEntryResult(entry, result);
@@ -1518,6 +1558,11 @@ export class WorkflowResultService {
       entry.projectId !== scope.projectId
     ) {
       return null;
+    }
+    // A consolidation slot that carries the merged scope lists offers a
+    // submission schema without them (`review-consolidation-scope.ts`).
+    if (entry.context?.type === "consolidated-review" && entry.context.scope) {
+      return { kind: entry.kind, provider: entry.provider, slot: { context: entry.context } };
     }
     if (entry.kind !== "graph-output") return { kind: entry.kind, provider: entry.provider };
     return {

@@ -16,7 +16,9 @@ import {
   type ReviewContractValidationIssue,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
+import type { ConsolidationScopeLists } from "@orkestrator/protocol/workflow-results";
 import type { createMultiReviewConsolidationPrompt } from "./multi-review-prompts.js";
+import { consolidationScopeLists } from "./review-consolidation-scope.js";
 
 export function reviewerProvenanceLabel(
   reviewer: Pick<ReviewerModelSelection, "agent" | "model">,
@@ -110,16 +112,39 @@ function provenanceSources(
   return sources;
 }
 
+function completedReports(reviewers: readonly ReviewerRecord[]): StructuredReviewReport[] {
+  return reviewers.flatMap((reviewer) =>
+    reviewer.status === "completed" && reviewer.report ? [reviewer.report] : [],
+  );
+}
+
+/**
+ * The trusted context of a consolidation result slot: the source finding IDs
+ * it may cite and, when they fit, the scope lists the backend fills in
+ * (`review-consolidation-scope.ts`). A prompt for this slot must say whether
+ * the lists are filled in: pass {@link consolidationScopeFilledByBackend}.
+ */
 export function consolidationResultContext(reviewers: readonly ReviewerRecord[]): {
   type: "consolidated-review";
   sources: Record<string, SourceFindingKind>;
+  scope?: ConsolidationScopeLists;
 } {
+  const scope = consolidationScopeLists(completedReports(reviewers));
   return {
     type: "consolidated-review",
     sources: Object.fromEntries(
       Array.from(provenanceSources(reviewers), ([sourceId, source]) => [sourceId, source.kind]),
     ),
+    ...(scope ? { scope } : {}),
   };
+}
+
+/**
+ * Whether a consolidation over the result tool leaves the scope lists to the
+ * backend: the same decision {@link consolidationResultContext} makes.
+ */
+export function consolidationScopeFilledByBackend(reviewers: readonly ReviewerRecord[]): boolean {
+  return consolidationScopeLists(completedReports(reviewers)) !== undefined;
 }
 
 export function deriveConsolidatedProvenance(

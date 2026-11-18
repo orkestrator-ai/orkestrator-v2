@@ -150,6 +150,12 @@ export function createMultiReviewConsolidationPrompt(input: {
   worktree?: ReviewWorktreeSnapshot;
   worktreeChangedDuringReview?: boolean;
   reviewPackage?: ReviewPackageReference;
+  /**
+   * The result slot fills in the scope lists itself
+   * (`consolidationScopeFilledByBackend`), so the report leaves them out.
+   * Only a consolidation over the result tool can say so.
+   */
+  scopeFilledByBackend?: boolean;
   /** Receives content-free size statistics for the envelope actually sent. */
   onEvidenceStats?: (stats: ConsolidationEvidenceStats) => void;
 }): string {
@@ -179,7 +185,7 @@ ${MULTI_REVIEW_CONSOLIDATION_PROMPT_CONTINUATION}${JSON.stringify(input.targetBr
 
 ${buildStructuredReviewOutputGuide()}
 
-${consolidatedReviewExampleSection()}`;
+${consolidatedReviewExampleSection({ scopeFilledByBackend: input.scopeFilledByBackend })}`;
 }
 
 /**

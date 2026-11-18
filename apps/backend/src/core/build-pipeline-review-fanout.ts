@@ -109,6 +109,7 @@ import {
   createReviewConsolidationPrompt,
   deriveConsolidatedProvenance,
   consolidationResultContext,
+  consolidationScopeFilledByBackend,
   parseStructuredReportResult,
   resolveUnattendedReviewerInteractions,
   reviewFanoutErrorMessage,
@@ -1254,6 +1255,10 @@ export class BuildPipelineReviewFanout {
           createReviewConsolidationPrompt({
             targetBranch,
             reports: consolidationReports(state.reviewers),
+            // Only the result tool's slot fills the scope lists in.
+            scopeFilledByBackend:
+              consolidation.resultTransport === "tool-v1" &&
+              consolidationScopeFilledByBackend(state.reviewers),
             onEvidenceStats: (stats) =>
               recordEfficiency(this.deps.efficiency, {
                 owner: "build-pipeline",

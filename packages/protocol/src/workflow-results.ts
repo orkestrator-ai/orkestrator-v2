@@ -2,7 +2,11 @@ import { wrapSystemInstructions } from "./review-evidence-frames.js";
 import type { JsonSchema, StructuredOutputProvider } from "./structured-output.js";
 import type { WorkflowGraphOutputContext } from "./graphs/output-slots.js";
 import type { GraphTemplateResultContext } from "./graphs/describe.js";
-import type { ReviewFindingPool, StructuredReviewReport } from "./structured-review.js";
+import type {
+  ReviewFindingPool,
+  ReviewScope,
+  StructuredReviewReport,
+} from "./structured-review.js";
 
 export const WORKFLOW_RESULT_STORE_VERSION = 1;
 export const WORKFLOW_RESULT_SCHEMA_VERSION = 1;
@@ -119,6 +123,16 @@ export interface WorkflowResultDelivery {
   hint?: string;
 }
 
+/**
+ * The scope lists of a consolidated review that the backend merges from the
+ * reviewer reports instead of asking the consolidation model to retype them.
+ * See `review-consolidation-scope.ts` in the backend.
+ */
+export type ConsolidationScopeLists = Pick<
+  ReviewScope,
+  "filesReviewed" | "filesSkipped" | "filesLeftUncommitted" | "commandsRun" | "commandsNotRun"
+>;
+
 export interface WorkflowResultStatus {
   resultKey: string;
   lifecycle: WorkflowResultLifecycle;
@@ -156,6 +170,13 @@ export interface WorkflowResultSlotInput {
     | {
         type: "consolidated-review";
         sources: Record<string, "issue" | "coverage-gap">;
+        /**
+         * The merged scope lists. When present, the submission tool's schema
+         * leaves these fields out and the backend fills them in before it
+         * validates and stores the report. Slots prepared before this field
+         * existed carry none and take the full report.
+         */
+        scope?: ConsolidationScopeLists;
       }
     | WorkflowGraphOutputContext
     | GraphTemplateResultContext;

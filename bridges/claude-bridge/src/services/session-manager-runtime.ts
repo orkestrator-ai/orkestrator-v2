@@ -14,7 +14,7 @@
 
 import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { createHash } from "node:crypto";
-import { runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
+import { buffersToolInput, runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
 import { connectionEnvFingerprint, withReadOnlyConnectionEnv } from "./read-only-connection-env.js";
 import type {
   CanUseTool,
@@ -124,6 +124,11 @@ export interface ClaudeLaunchProfile {
   readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>;
   /** JSON of the structured-output schema, or null for an ordinary turn. */
   outputSchema: string | null;
+  /**
+   * The CLI runs without fine-grained tool streaming (`buffersToolInput` in
+   * `runtime-env.ts`): a pipeline session's workflow-result turn.
+   */
+  bufferedToolInput: boolean;
   agent: string | undefined;
   settingSources: string | undefined;
 }
@@ -180,6 +185,7 @@ export function claudeLaunchProfile(
         : {}),
     }),
     outputSchema: options?.outputSchema === undefined ? null : JSON.stringify(options.outputSchema),
+    bufferedToolInput: buffersToolInput(session.executionPolicy, options?.workflowResultTurn),
     agent: options?.agent,
     settingSources:
       options?.includeLocalSettings === undefined
@@ -459,6 +465,9 @@ export function claudeLaunchConflict(
   if (request.thinking === "adaptive" && runtime.thinking !== "adaptive")
     return "adaptive thinking";
   if (request.bypassCapable && !runtime.bypassCapable) return "bypass permission capability";
+  // Only one way: a turn that needs a validated submission cannot run on a
+  // CLI that streams tool input, but any turn may run on one that does not.
+  if (request.bufferedToolInput && !runtime.bufferedToolInput) return "tool input streaming";
   if (
     request.repositoryInstructions !== undefined &&
     runtime.repositoryInstructions !== request.repositoryInstructions

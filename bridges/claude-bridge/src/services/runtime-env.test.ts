@@ -12,6 +12,8 @@ import {
   UNATTENDED_OVERLOAD_RETRY_ENV,
   withReadOnlyGitConfig,
   withUnattendedOverloadRetry,
+  buffersToolInput,
+  withBufferedToolInput,
 } from "./runtime-env.js";
 
 const noGhToken = async () => undefined;
@@ -338,6 +340,32 @@ describe("withUnattendedOverloadRetry", () => {
       CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS: "4000",
       CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS: "32000",
     });
+  });
+});
+
+describe("buffered tool input", () => {
+  const turn = { tool: "submit_consolidated_review", resultKey: "key" };
+
+  test("is for a pipeline session's workflow-result turn only", () => {
+    expect(buffersToolInput({ id: "pipeline" }, turn)).toBe(true);
+    expect(buffersToolInput({ id: "pipeline" }, undefined)).toBe(false);
+    for (const policy of [
+      undefined,
+      { id: "interactive-host" },
+      { id: "interactive-container" },
+      { id: "coordinator-read-only" },
+    ] as const) {
+      expect(buffersToolInput(policy, turn)).toBe(false);
+    }
+  });
+
+  test("turns fine-grained tool streaming off, over a value already set", () => {
+    const environment = { PATH: "/usr/bin", CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING: "1" };
+    expect(withBufferedToolInput(true, environment)).toEqual({
+      PATH: "/usr/bin",
+      CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING: "0",
+    });
+    expect(withBufferedToolInput(false, environment)).toBe(environment);
   });
 });
 

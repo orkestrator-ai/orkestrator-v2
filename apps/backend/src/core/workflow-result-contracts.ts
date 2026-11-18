@@ -44,6 +44,11 @@ import {
   REVIEW_CONSOLIDATION_PROVENANCE,
   REVIEW_CONSOLIDATION_WORDING,
 } from "./review-consolidation-provenance.js";
+import {
+  CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA,
+  CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA,
+  completeConsolidatedReview,
+} from "./review-consolidation-scope.js";
 import { graphOutputKindDefinition } from "./workflow-result-graph-output.js";
 import { graphTemplateKindDefinition } from "./workflow-result-graph-template.js";
 import {
@@ -315,6 +320,10 @@ type ConsolidationContext = Extract<
 
 export { REVIEW_CONSOLIDATION_PROVENANCE, REVIEW_CONSOLIDATION_WORDING };
 
+function consolidationScope(slot: WorkflowResultSlotView): ConsolidationContext["scope"] {
+  return slot.context?.type === "consolidated-review" ? slot.context.scope : undefined;
+}
+
 function validateConsolidationContext(
   value: Record<string, unknown>,
   context: ConsolidationContext,
@@ -568,6 +577,18 @@ const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
     finalContent: validateReviewNarratives,
   }),
   builtInKind("consolidated-review", () => STRUCTURED_REVIEW_REPORT_JSON_SCHEMA, {
+    // A slot that carries the merged scope lists takes the report without
+    // them and fills them in (`review-consolidation-scope.ts`); one prepared
+    // before the lists existed takes the full report.
+    providerSchema: (slot) =>
+      consolidationScope(slot)
+        ? CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA
+        : STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+    anySlotSchema: () => CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA,
+    complete: (value, slot) => {
+      const scope = consolidationScope(slot);
+      return scope ? completeConsolidatedReview(value, scope) : value;
+    },
     structural: reviewReportStructure,
     validator: reviewReportDomain,
     finalContent: validateReviewNarratives,

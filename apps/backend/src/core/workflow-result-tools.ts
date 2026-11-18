@@ -15,9 +15,11 @@ import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import { Schema } from "effect";
 import { jsonSchemaField, str, strictObject, toolInput } from "./tool-schema.js";
-import { workflowResultJsonSchema } from "./workflow-result-contracts.js";
+// Registers the built-in kinds the registry functions below look up.
+import "./workflow-result-contracts.js";
 import { graphOutputContext } from "./workflow-result-graph-output.js";
 import {
+  workflowResultAnySlotSchema,
   workflowResultKindDefinition,
   workflowResultProviderSchema,
   type WorkflowResultSlotView,
@@ -557,7 +559,9 @@ export function registerWorkflowResultBrokerTools(
           strictObject({
             resultKey: str({ uuid: true }),
             capability: str({ min: 32, max: 2_048 }),
-            result: Schema.optionalKey(jsonSchemaField(workflowResultJsonSchema(kind))),
+            // One tool serves every slot of the kind, so it takes any shape a
+            // slot's own tool would; the service checks the slot's contract.
+            result: Schema.optionalKey(jsonSchemaField(workflowResultAnySlotSchema(kind))),
             validatedDigest: Schema.optionalKey(validatedDigestSchema),
           }),
         ),

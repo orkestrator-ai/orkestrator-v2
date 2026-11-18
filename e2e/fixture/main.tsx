@@ -1,3 +1,4 @@
+import { TabStylesFixture, installTabStylesFixture } from "./TabStylesFixture";
 import { DesignAgentDockFixture } from "./DesignAgentDockFixture";
 import { LinearBoardDragFixture } from "./LinearBoardDragFixture";
 import { LinearBoardAssigneesFixture } from "./LinearBoardAssigneesFixture";
@@ -2007,6 +2008,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/tab-styles") return <TabStylesFixture />;
   if (window.location.pathname === "/html-preview") return <HtmlPreviewFixture />;
   if (window.location.pathname === "/annotation-destination-layout")
     return <AnnotationDestinationLayoutFixture />;
@@ -2368,6 +2370,7 @@ function fixtureForPath() {
 
 if (window.location.pathname === "/diff-base") installDiffBaseFixture();
 if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
+if (window.location.pathname === "/tab-styles") installTabStylesFixture();
 // The app's window scope and command scope, as `App.tsx` mounts them: a
 // per-node store hook outside a provider throws in a development renderer.
 createRoot(document.getElementById("root")!).render(

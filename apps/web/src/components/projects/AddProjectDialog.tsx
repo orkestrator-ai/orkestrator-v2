@@ -24,9 +24,8 @@ type ProjectSource = "existing" | "scratch";
 
 const PATH_DETECTION_DEBOUNCE_MS = 2000;
 
-/** Matches the bordered option cards used on settings pages. */
 const SOURCE_SELECTOR_TRIGGER_CLASSES =
-  "h-auto justify-start gap-2 rounded-lg border p-3 text-left text-sm font-medium !text-foreground shadow-none data-[state=active]:!border-ring data-[state=active]:!bg-primary/5 data-[state=active]:!text-foreground data-[state=active]:shadow-none data-[state=inactive]:border-transparent data-[state=inactive]:!bg-zinc-900 hover:data-[state=inactive]:border-zinc-600";
+  "h-auto min-h-10 min-w-0 justify-start px-2 py-1.5 text-left whitespace-normal";
 
 interface AddProjectDialogProps {
   open: boolean;
@@ -372,7 +371,11 @@ export function AddProjectDialog({
         ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
             <Tabs value={source} onValueChange={handleSourceChange}>
-              <TabsList className="grid h-auto w-full grid-cols-2 gap-2 bg-transparent p-0">
+              <TabsList
+                variant="segmented"
+                aria-label="Project source"
+                className="grid w-full grid-cols-2 items-stretch"
+              >
                 <TabsTrigger value="existing" className={SOURCE_SELECTOR_TRIGGER_CLASSES}>
                   <FolderGit2 className="h-4 w-4" />
                   Existing repository

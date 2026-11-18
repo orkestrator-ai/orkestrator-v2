@@ -52,8 +52,8 @@ const SCOPE_LABELS: Record<AgentSkillScope, string> = {
 };
 
 /** Matches the compact tab strip in ActionBar so the two read as one system. */
-const TAB_TRIGGER_CLASSES =
-  "h-7 gap-1.5 px-3 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-primary/50";
+const TAB_TRIGGER_CLASSES = "h-7 text-xs";
+const TAB_COUNT_CLASS = "tabular-nums opacity-70 group-data-[state=active]/count:opacity-100";
 
 /**
  * The two panes scroll independently, which needs a definite height. The
@@ -423,7 +423,7 @@ export function SkillsSettings({
       value={provider}
       onValueChange={(value) => setInternalProvider(value as AgentSkillProvider)}
     >
-      <TabsList aria-label="Agent" className="h-auto min-h-8 flex-wrap bg-zinc-900/80">
+      <TabsList variant="pill" aria-label="Agent" className="h-auto flex-wrap">
         {PROVIDERS.map((entry) => (
           <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
             <AgentPlatformIcon platform={entry.id} accent className="h-3.5 w-3.5" />
@@ -458,17 +458,15 @@ export function SkillsSettings({
 
       {showPlugins && (
         <Tabs value={view} onValueChange={(value) => setView(value as "skills" | "plugins")}>
-          <TabsList aria-label="Skills or plugins" className="h-8 bg-zinc-900/80">
-            <TabsTrigger value="skills" className={TAB_TRIGGER_CLASSES}>
+          <TabsList variant="pill" aria-label="Skills or plugins">
+            <TabsTrigger value="skills" className={cn(TAB_TRIGGER_CLASSES, "group/count")}>
               Skills
-              {state.scan && <span className="tabular-nums opacity-70">{skills.length}</span>}
+              {state.scan && <span className={TAB_COUNT_CLASS}>{skills.length}</span>}
             </TabsTrigger>
-            <TabsTrigger value="plugins" className={TAB_TRIGGER_CLASSES}>
+            <TabsTrigger value="plugins" className={cn(TAB_TRIGGER_CLASSES, "group/count")}>
               Plugins
               {plugins.state.catalog && !plugins.state.catalog.pluginError && (
-                <span className="tabular-nums opacity-70">
-                  {plugins.state.catalog.plugins.length}
-                </span>
+                <span className={TAB_COUNT_CLASS}>{plugins.state.catalog.plugins.length}</span>
               )}
             </TabsTrigger>
           </TabsList>
@@ -651,7 +649,7 @@ export function SkillsSettings({
                       value={rawMode ? "raw" : "rendered"}
                       onValueChange={(v) => setRawMode(v === "raw")}
                     >
-                      <TabsList className="h-7 bg-zinc-900/80">
+                      <TabsList variant="segmented" aria-label="Skill preview">
                         <TabsTrigger value="rendered" className={TAB_TRIGGER_CLASSES}>
                           Rendered
                         </TabsTrigger>

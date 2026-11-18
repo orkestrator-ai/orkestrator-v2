@@ -414,6 +414,7 @@ Quiet until touched. Most app buttons are ghost or tonal; the filled blue is rar
 - **Sidebar rows:** 8px-radius rows inset 4px from the panel edge. Hover is `environment-hover`; the selected row is the `selected` → `selected-edge` gradient with a 2px Signal Blue bar on the left that gives way to the drag grip on hover. Offline machines dim to 60%.
 - **Workspace tabs:** 12–14px labels with an icon; the active tab gets a 2px Signal Blue underline. The top section tabs (Home, Coordinator, Kanban…) mark the active one with a filled blue pill.
 - **Segmented selector:** an `input-surface` track with a `divider` border and 2px inset; the selected segment is a filled blue with bold text.
+- **Shared Tabs variants:** use `underline` for icon-and-label views within a pane, `pill` to switch sections, and `segmented` to choose between modes or representations. The segmented variant uses the same track as the segmented selector.
 - **Mobile:** hamburger to a slide-over sidebar; touch targets at least 40–44px.
 
 ### Live Signals (signature)

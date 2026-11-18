@@ -1491,14 +1491,15 @@ export function EnvironmentSettingsDialog({
               onValueChange={(value) => setActiveExtensionAgent(value as backend.AgentExtensionId)}
             >
               <TabsList
+                variant="pill"
                 aria-label="Agent extensions"
-                className="h-auto min-h-10 w-full flex-wrap justify-start rounded-xl border border-border/70 bg-muted/30 p-1 sm:w-fit"
+                className="w-full flex-wrap sm:w-fit"
               >
                 {AGENT_ORDER.map((agent) => (
                   <TabsTrigger
                     key={agent}
                     value={agent}
-                    className="h-8 min-w-0 flex-1 gap-2 px-4 text-xs data-[state=active]:bg-background data-[state=active]:text-foreground sm:min-w-32"
+                    className="min-w-0 gap-2 px-4 text-xs sm:min-w-32"
                   >
                     <AgentExtensionIcon agent={agent} className="h-4 w-4" />
                     {AGENT_EXTENSION_COPY[agent].label}

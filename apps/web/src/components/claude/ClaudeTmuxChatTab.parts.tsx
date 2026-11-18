@@ -1569,14 +1569,15 @@ export function ApprovalCard({
         <div className="text-sm font-mono text-amber-200 mb-2">{approval.toolName}</div>
         <ApprovalToolInput toolName={approval.toolName} toolInput={approval.toolInput} />
         <div className="flex gap-2">
-          <button
+          <Button
             type="button"
+            size="sm"
             onClick={() => void respond(onApprove)}
             disabled={submitting}
-            className="flex-1 px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium"
+            className="flex-1"
           >
             Allow
-          </button>
+          </Button>
           <button
             type="button"
             onClick={() => void respond(onDeny)}

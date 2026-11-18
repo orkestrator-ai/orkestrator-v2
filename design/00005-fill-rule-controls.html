@@ -11,7 +11,7 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00005</p>
       <h1>00005 · Put white text only on primary-fill</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-high">High</span>
         <span class="pill">Color tokens</span>
         <span class="pill evidence-badge" data-evidence-badge data-complete="false"
@@ -246,7 +246,7 @@
 
       <h2>Verification</h2>
       <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
-NODE_ENV=test mise run test:logged -- --name ui -- bun --cwd=apps/web test src/components/ui --parallel=2 --only-failures
+NODE_ENV=test mise run test:logged -- --name ui -- bun test --cwd apps/web ./src/components/ui --parallel=2 --only-failures
 mise run format:check
 mise run lint</code></pre>
       <p class="note">
@@ -258,53 +258,53 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" checked aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00005/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" checked aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -312,15 +312,69 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
-      </p>
+      <h3>Hit classification</h3>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          White glyph on a solid blue fill. Checked and mixed checkboxes, chosen indicators in both
+          question surfaces, completed Auto-pipeline badges, and the PR diff comment button.
+        </li>
+        <li>White text on a selection highlight. Shared input text selection.</li>
+        <li>Standing green action. Claude's tmux tool approval used an emerald Allow button.</li>
+        <li>
+          The scan also found the Linear multi-card drag count. It falls outside the seven surfaces
+          listed in Scope. Annotation pins are covered by
+          <a href="00006-annotation-layer-colors.html">task 00006</a>.
+        </li>
       </ul>
+      <h3>Decisions</h3>
+      <ul>
+        <li>
+          Use the existing <code>primary-fill</code> token under white text and glyphs, including
+          input selection. It gives 5.2:1 contrast and lets <code>primary</code> continue to mark
+          borders and focus. Changing the blue value would also change its contrast on dark ground.
+        </li>
+        <li>
+          Keep the checked checkbox's outset focus hairline and apply it to the mixed state. Both
+          filled states leave a gap between the fill and the focus line.
+        </li>
+        <li>
+          Use the shared default <code>Button</code> at the small size for Allow. It preserves the
+          32px height and inherits primary hover, active and focus styles. Restyling the raw button
+          would duplicate those styles.
+        </li>
+      </ul>
+      <h3>Image pairs</h3>
+      <ul>
+        <li>
+          <a href="#cap-checkbox-states-desktop">Checkbox states</a>. In Machines settings, the
+          selected row's check and the mixed header's dash sit on the deeper blue. The mixed header
+          shows an outset keyboard focus line. The unselected boxes stay neutral.
+        </li>
+        <li>
+          <a href="#cap-question-card-chosen-desktop">Native question</a>. The chosen radio-shaped
+          indicator uses the deeper blue inside its existing border, and the unchosen option stays
+          outlined.
+        </li>
+        <li>
+          <a href="#cap-auto-pipeline-steps-desktop">Auto-pipeline steps</a>. The three completed
+          step checks use the deeper blue. Confirm still appears as the current step.
+        </li>
+        <li>
+          <a href="#cap-pr-diff-comment-button-desktop">PR diff</a>. The plus button on new line 2
+          uses the deeper blue. Pointer hover and keyboard focus both reveal it.
+        </li>
+      </ul>
+      <p>
+        All four baselines came from unmodified commit <code>b2c91abb9</code>. Both sets use the
+        same isolated headless <code>design-00005</code> profile, fixture data, dark theme, 1440×900
+        viewport, and 100% zoom. The profile started with <code>--no-host-seed</code>,
+        <code>--no-agent-credentials</code>, and
+        <code>ORKESTRATOR_HOST_REACHABILITY_CHECK=off</code>. The machines and PR use scripted
+        responses. A scripted Codex session supplies the native question, and a saved fixture draft
+        supplies the Auto-pipeline steps. Reload restored the pending question and draft.
+        Supplementary browser checks covered the input highlight, both worker option shapes, and
+        Claude's Allow action at desktop and 390px widths.
+      </p>
 
       <footer>
         Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and

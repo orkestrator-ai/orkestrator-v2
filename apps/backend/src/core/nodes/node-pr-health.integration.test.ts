@@ -13,9 +13,11 @@ import { stopTestNodeNetworks, TestNodeNetwork, settle } from "./node-network-te
 afterEach(stopTestNodeNetworks);
 import { evaluatePrMergeReadiness } from "@orkestrator/protocol/pr-merge-readiness";
 
-// No workspace subscription or PR lifecycle command: only the real summary
-// handlers may arm monitoring. Timers run manually so restoration has no wait.
-test("summary-only traffic starts a cold leaf monitor again after restart and relays rollup-only transitions", async () => {
+// No workspace subscription or PR lifecycle command: backend startup arms
+// monitoring (`PrAutoMergeController.resume` calls `prMonitor.sync`), and the
+// summary handlers only relay what it announces. Timers run manually so
+// restoration has no wait.
+test("startup recovery restarts a leaf monitor and summary-only traffic relays rollup-only transitions", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ork-node-pr-health-"));
   const storage = new StorageService(root);
   await storage.init();
@@ -82,6 +84,8 @@ test("summary-only traffic starts a cold leaf monitor again after restart and re
         },
       });
       const context = { storage, runtime, emit: () => undefined } as unknown as CommandContext;
+      // What backend startup does after a restart; summary reads never re-arm.
+      await runtime.prMonitor.sync(context);
       const registry = createCommandRegistry();
       for (const name of ["get_projects", "get_environment_snapshots"]) {
         leaf.commands.set(name, (args) => registry.get(name)!(args, context));

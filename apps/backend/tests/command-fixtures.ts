@@ -1742,6 +1742,7 @@ exit 0
     resolveBrowserOpenCommand,
     resolveFileManagerRevealCommands,
     runGit,
+    scheduleMergeCleanupRecovery,
     setAgentSkillsHomeForTesting,
     localServerHooks,
     shutdownLocalServers,

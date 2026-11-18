@@ -1,3 +1,7 @@
+import {
+  StatusReadabilityFixture,
+  installStatusReadabilityFixture,
+} from "./StatusReadabilityFixture";
 import { TabStylesFixture, installTabStylesFixture } from "./TabStylesFixture";
 import { DesignAgentDockFixture } from "./DesignAgentDockFixture";
 import { LinearBoardDragFixture } from "./LinearBoardDragFixture";
@@ -2253,6 +2257,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/linear-board-labels") return <LinearBoardLabelsFixture />;
   if (window.location.pathname === "/linear-board-assignees")
     return <LinearBoardAssigneesFixture />;
+  if (window.location.pathname === "/status-readability") return <StatusReadabilityFixture />;
   if (window.location.pathname === "/ticket-view") return <TicketViewFixture />;
   if (window.location.pathname === "/agent-launch") return <AgentLaunchDialogFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
@@ -2382,6 +2387,7 @@ function fixtureForPath() {
 
 if (window.location.pathname === "/diff-base") installDiffBaseFixture();
 if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
+if (window.location.pathname === "/status-readability") installStatusReadabilityFixture();
 if (window.location.pathname === "/tab-styles") installTabStylesFixture();
 // The app's window scope and command scope, as `App.tsx` mounts them: a
 // per-node store hook outside a provider throws in a development renderer.

@@ -518,47 +518,65 @@ describe("CoordinatorPanel", () => {
       };
       const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
       const mailboxId = `${environmentId}\0${conversation.tabId}`;
+      const mailboxIdentity = {
+        mailboxId,
+        projectId: snapshot.workspace.projectId,
+        environmentId,
+        tabId: conversation.tabId,
+      };
+      const counts = {
+        unreadCount: 2,
+        userUnseenCount: 2,
+        agentUnackedCount: 2,
+        pendingInjectCount: 0,
+        failedInjectCount: 0,
+      };
+      const mailbox: AgentMailMailboxSnapshot = {
+        descriptor: {
+          ...mailboxIdentity,
+          ...counts,
+          incarnationId: conversation.mailboxIncarnationId,
+          projectName: "Project",
+          environmentName: "Coordinator",
+          environmentStatus: "running",
+          tabType: "agent-native",
+          title: conversation.title,
+          displayName: conversation.title,
+          tabOrdinal: 1,
+          agent: null,
+          kind: "native",
+          capabilities: { canPull: false, canSend: false, canInject: false },
+          injectPolicy: "off",
+          presence: "unknown",
+          mutedInbound: false,
+          mutedOutbound: false,
+        },
+        messages: ["first", "second"].map((id) => ({
+          version: 1,
+          id,
+          threadId: `thread-${id}`,
+          requestId: `request-${id}`,
+          createdAt: "2026-11-05T12:00:00.000Z",
+          from: { kind: "user" },
+          toEnvironmentId: environmentId,
+          toTabId: conversation.tabId,
+          toIncarnationId: conversation.mailboxIncarnationId,
+          bodyBytes: 5,
+          trust: "user",
+          injectDepth: 0,
+          threadDepth: 0,
+          placement: "stored",
+          placementReason: "recipient-cannot-inject",
+          revision: 1,
+        })),
+        total: counts.unreadCount,
+        offset: 0,
+        limit: 100,
+        revision: 1,
+      };
       appCommandStore(agentMailStore).setState({
-        summary: new Map([
-          [
-            mailboxId,
-            {
-              mailboxId,
-              projectId: "project-1",
-              environmentId,
-              tabId: conversation.tabId,
-              unreadCount: 2,
-              userUnseenCount: 2,
-              agentUnackedCount: 2,
-              pendingInjectCount: 0,
-              failedInjectCount: 0,
-              revision: 1,
-            },
-          ],
-        ]),
-        mailboxes: new Map([
-          [
-            mailboxId,
-            {
-              descriptor: {
-                capabilities: { canPull: false, canSend: false, canInject: false },
-                injectPolicy: "off",
-                presence: "unknown",
-              },
-              messages: ["first", "second"].map((id) => ({
-                id,
-                from: { kind: "user" },
-                createdAt: "2026-11-05T12:00:00.000Z",
-                placement: "stored",
-                placementReason: "recipient-cannot-inject",
-              })),
-              total: 2,
-              offset: 0,
-              limit: 100,
-              revision: 1,
-            } as unknown as AgentMailMailboxSnapshot,
-          ],
-        ]),
+        summary: new Map([[mailboxId, { ...mailboxIdentity, ...counts, revision: 1 }]]),
+        mailboxes: new Map([[mailboxId, mailbox]]),
         refreshSummary: async () => undefined,
         refreshMailbox: async () => undefined,
       });

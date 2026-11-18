@@ -199,7 +199,7 @@ export function DesignFrameInspector({
                     }}
                   />
                   {errors[field] && (
-                    <p id={errorId} className="text-[10px] text-failure">
+                    <p id={errorId} className="text-[11px] text-failure">
                       {errors[field]}
                     </p>
                   )}

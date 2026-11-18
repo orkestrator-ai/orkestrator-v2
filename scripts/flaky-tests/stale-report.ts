@@ -176,7 +176,7 @@ export async function staleReport(options: StaleOptions): Promise<StaleReport> {
     (a, b) =>
       SIGNAL_ORDER.indexOf(a.signal) - SIGNAL_ORDER.indexOf(b.signal) ||
       (a.lastObserved ?? "").localeCompare(b.lastObserved ?? "") ||
-      a.row.id.localeCompare(b.row.id) ||
+      Number(a.row.id) - Number(b.row.id) ||
       a.row.group.localeCompare(b.row.group),
   );
   return { options, openCases: openRows.length, cases };

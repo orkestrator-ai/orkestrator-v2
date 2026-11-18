@@ -19,7 +19,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.settings");
 
-/** Other machines' catalogues and project IDs never enter workspace stores. */
+/** Remote Settings reads use the selected machine and its project IDs. */
 export function useSettingsModelCatalog() {
   const { machine } = useAccountMachine();
   const own = isWindowMachine(machine);
@@ -119,7 +119,7 @@ export function useSettingsModelCatalog() {
             refreshOpenCode: (projectId) =>
               backend.refreshHostAgentModelCatalog("opencode", projectId, machine),
             hydrate: load,
-            dispatch: () => true,
+            nodeId: machine,
           }),
     [catalogProjectId, machine, own, load],
   );

@@ -1,8 +1,15 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import * as backend from "@/lib/backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { hydrateAgentModelCatalogCache } from "@/lib/agent-model-catalog-cache";
 
 export const MODEL_CATALOG_REFRESHED_EVENT = "orkestrator:model-catalog-refreshed";
+
+/** A null target means the window's command node. */
+export function modelCatalogRefreshTargetsScope(event: Event, scope: NodeScope): boolean {
+  const nodeId = (event as CustomEvent<string | null>).detail ?? null;
+  return nodeId === null ? scope.role === "command" : scope.nodeId === nodeId;
+}
 
 type GlobalCatalogAgent = Exclude<AgentPlatform, "opencode">;
 type RefreshResult = { agent: AgentPlatform; modelCount: number };
@@ -11,14 +18,14 @@ type RefreshDependencies = {
   refreshGlobal(agent: GlobalCatalogAgent): Promise<RefreshResult>;
   refreshOpenCode(projectId: string): Promise<RefreshResult>;
   hydrate(): Promise<void>;
-  dispatch(event: Event): boolean;
+  nodeId?: string | null;
+  dispatch?(event: Event): boolean;
 };
 
 const defaultDependencies: RefreshDependencies = {
   refreshGlobal: (agent) => backend.refreshHostAgentModelCatalog(agent),
   refreshOpenCode: (projectId) => backend.refreshHostAgentModelCatalog("opencode", projectId),
   hydrate: hydrateAgentModelCatalogCache,
-  dispatch: (event) => window.dispatchEvent(event),
 };
 
 /** Pick a durable OpenCode cache scope even when Global Settings has no active repository. */
@@ -48,6 +55,10 @@ export async function refreshSettingsModelCatalog(
     result = await dependencies.refreshGlobal(platform);
   }
   await dependencies.hydrate();
-  dependencies.dispatch(new Event(MODEL_CATALOG_REFRESHED_EVENT));
+  const event = new CustomEvent(MODEL_CATALOG_REFRESHED_EVENT, {
+    detail: dependencies.nodeId ?? null,
+  });
+  if (dependencies.dispatch) dependencies.dispatch(event);
+  else window.dispatchEvent(event);
   return result;
 }

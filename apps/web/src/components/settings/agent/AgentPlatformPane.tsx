@@ -277,7 +277,7 @@ export function AgentPlatformPane({
             }
             options={CLAUDE_BACKEND_OPTIONS}
           />
-          <p className="text-xs text-muted-foreground/60">
+          <p className="text-xs text-muted-foreground">
             With Tmux, Orkestrator merges a <code className="px-1 font-mono">hooks</code> block into
             the environment&apos;s{" "}
             <code className="px-1 font-mono">.claude/settings.local.json</code> while a session

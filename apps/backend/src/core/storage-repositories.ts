@@ -97,7 +97,8 @@ export class StorageRepositories {
     this.scheduledJobs = new ScheduledJobsRepository(context);
     this.permissionRules = new PermissionRulesRepository(context);
     this.projects = new ProjectsRepository(context, files, this);
-    this.config = new ConfigRepository(context, files);
+    this.agentAccounts = new AgentAccountsRepository(context);
+    this.config = new ConfigRepository(context, files, this.agentAccounts);
     this.sessions = new SessionsRepository(context, files, this);
     this.reviews = new ReviewsRepository(context, files, this);
     this.nativeAgentSessions = new NativeAgentSessionsRepository(context, files, this);
@@ -120,7 +121,6 @@ export class StorageRepositories {
     this.coordinatorNotices = new CoordinatorNoticesRepository(context);
     this.publicOperations = new PublicOperationsRepository(context, files, this);
     this.coordinators = new CoordinatorsRepository(context, files, this);
-    this.agentAccounts = new AgentAccountsRepository(context);
     this.bugReports = new BugReportsRepository(context, files);
     this.graphTemplates = new GraphTemplatesRepository(context);
     this.graphRuns = new GraphRunsRepository(context, this);

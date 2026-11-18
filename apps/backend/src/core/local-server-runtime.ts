@@ -91,6 +91,8 @@ export type LocalServerLaunch = {
   workingDirectory: string;
   /** Account bound to a Claude or Codex bridge. */
   accountId?: string;
+  /** Credential generation captured with the account used for model discovery. */
+  accountLoginKey?: string;
   /** Expiry of a short-lived token handed to a coordinator Claude or Codex bridge. */
   tokenExpiresAt?: number;
   /**
@@ -169,6 +171,7 @@ export class LocalServerRuntime {
    * may be holding the old (or missing) login, so each is replaced once idle.
    * Cleared when the bridge is launched.
    */
+  private readonly accountLoginKeys = new Map<string, string>();
   private readonly staleLoginBridges = new Set<string>();
   /**
    * Container environments whose Claude login was renewed on the host. An
@@ -235,6 +238,8 @@ export class LocalServerRuntime {
     this.workingDirectories.set(key, launch.workingDirectory);
     if (launch.accountId) this.accountIds.set(key, launch.accountId);
     else this.accountIds.delete(key);
+    if (launch.accountLoginKey) this.accountLoginKeys.set(key, launch.accountLoginKey);
+    else this.accountLoginKeys.delete(key);
     this.staleLoginBridges.delete(key);
     if (launch.tokenExpiresAt) this.tokenExpiry.set(key, launch.tokenExpiresAt);
     else this.tokenExpiry.delete(key);
@@ -254,6 +259,7 @@ export class LocalServerRuntime {
     this.unresponsiveMarkers.delete(key);
     this.healthyAnswers.delete(key);
     this.accountIds.delete(key);
+    this.accountLoginKeys.delete(key);
     this.tokenExpiry.delete(key);
     this.loginlessBridges.delete(key);
     const separator = key.indexOf(":");
@@ -430,6 +436,10 @@ export class LocalServerRuntime {
 
   launchedAccountId(key: string): string | undefined {
     return this.accountIds.get(key);
+  }
+
+  launchedAccountLoginKey(key: string): string | undefined {
+    return this.accountLoginKeys.get(key);
   }
 
   launchedTokenExpiry(key: string): number | undefined {

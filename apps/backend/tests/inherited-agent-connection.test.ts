@@ -48,7 +48,11 @@ printf '%s' "$PATH"
           async init() {
             await refreshHostModelCatalog({
               appRoot: ${JSON.stringify(root)}, resourceRoot: ${JSON.stringify(root)},
-              storage: { getDataDir: () => ${JSON.stringify(root)}, loadConfig: async () => ({ global: {} }) },
+              storage: {
+                getDataDir: () => ${JSON.stringify(root)},
+                loadConfig: async () => ({ global: {} }),
+                agentAccounts: { loadAgentAccounts: async () => ({ active: {} }) },
+              },
               runtime: new BackendRuntime({ emit: () => undefined }),
             }, "codex");
             process.exit(0);

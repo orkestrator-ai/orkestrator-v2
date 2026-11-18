@@ -137,6 +137,8 @@ import {
   type CoordinatorAgentAccount,
 } from "./agent-accounts-active.js";
 
+import { agentAccountLoginKey } from "./agent-accounts-store.js";
+
 /**
  * How long an unresponsive bridge with a turn or background work in progress is
  * left alone before it is replaced anyway. Replacing it kills that work, so a
@@ -529,15 +531,19 @@ export async function fetchAcpNormalizedModelsResult(
   kind: "cursor" | "grok" | "pi",
   timeoutMs?: number,
 ): Promise<AcpNormalizedModelsResult> {
-  const bridge =
-    environment.environmentType === "local"
-      ? await peekLocalAgentBridge(environment.id, context, kind)
-      : environment.containerId
-        ? await peekContainerAgentBridge(environment.containerId, kind)
-        : null;
-  if (!bridge) return { status: "unavailable", models: [] };
-  const port = "port" in bridge ? bridge.port : bridge.hostPort;
-  return fetchAcpNormalizedModelsAtResult(port, bridge.authToken, kind, timeoutMs);
+  try {
+    const bridge =
+      environment.environmentType === "local"
+        ? await peekLocalAgentBridge(environment.id, context, kind)
+        : environment.containerId
+          ? await peekContainerAgentBridge(environment.containerId, kind)
+          : null;
+    if (!bridge) return { status: "unavailable", models: [] };
+    const port = "port" in bridge ? bridge.port : bridge.hostPort;
+    return await fetchAcpNormalizedModelsAtResult(port, bridge.authToken, kind, timeoutMs);
+  } catch {
+    return { status: "failed", models: [] };
+  }
 }
 
 /**
@@ -859,6 +865,7 @@ async function startLocalServerAttempt(
   let command = "";
   let cwd = environment.worktreePath;
   let launchedAccountId: string | undefined;
+  let launchedAccountLoginKey: string | undefined;
   let launchedTokenExpiresAt: number | undefined;
   let launchedLoginless = false;
   let env: NodeJS.ProcessEnv = {
@@ -1042,7 +1049,9 @@ async function startLocalServerAttempt(
       launchedLoginless =
         login.loginless === true && !env.CODEX_API_KEY?.trim() && !env.OPENAI_API_KEY?.trim();
     } else {
-      launchedAccountId = await applyActiveAgentAccountEnvironment(context, "codex", env);
+      const account = await resolveActiveAgentAccount(context, "codex");
+      launchedAccountId = await applyActiveAgentAccountEnvironment(context, "codex", env, account);
+      launchedAccountLoginKey = agentAccountLoginKey(account.accountId, account.loginGeneration);
     }
   } else if (kind === "pi") {
     command = resolveBunBinary(context);
@@ -1231,6 +1240,7 @@ async function startLocalServerAttempt(
   localServers.adoptProcess(key, child, {
     workingDirectory: environment.worktreePath,
     accountId: launchedAccountId,
+    accountLoginKey: launchedAccountLoginKey,
     tokenExpiresAt: launchedTokenExpiresAt,
     loginless: launchedLoginless,
   });

@@ -38,6 +38,7 @@ import {
   ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
 } from "@orkestrator/protocol/transcript-artifacts";
 import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
+import type { AcpSessionCost } from "./acp-usage-cost.js";
 import type { AcpTurnUsage } from "./usage.js";
 import type { PromptTurnClock } from "./acp-prompt-clock.js";
 import { formatAcpRpcError } from "./acp-errors.js";
@@ -425,12 +426,17 @@ export interface SessionState {
   /** Deduplicated carriers for this ACP attempt and consumption before it. */
   currentAttemptUsage?: AcpTurnUsage;
   completedAttemptUsage?: AcpTurnUsage;
+  /** Live-child correlation for late usage. Persisted rows keep their own ids. */
+  lastUsageTurnSequence?: number;
+  lastUsageTurnId?: string;
   /** Support correlation retained until the current turn is finalized. */
   currentTurnRequestId?: string;
   /** Whether the active turn already received a vendor terminal usage carrier. */
   currentTurnSawVendorUsage?: boolean;
   /** Usage carriers for one completed turn while session/load replays history. */
   historyReplayTurnUsage?: AcpTurnUsage;
+  historyReplaySawPrompt?: boolean;
+  historyReplayKeepsUsage?: boolean;
   /**
    * A just-completed turn that may still emit an uncorrelated vendor carrier.
    * If another turn starts before that carrier arrives, the stream becomes
@@ -527,6 +533,8 @@ export interface PersistedUsage {
   lastTurnTokens?: number;
   /** Cumulative tokens consumed by completed turns in this session. */
   sessionTokens?: number;
+  /** Absent before accounting starts. An empty ledger records unknown spend. */
+  cost?: AcpSessionCost;
   modelId?: string;
   durationMs?: number;
   updatedAt: string;

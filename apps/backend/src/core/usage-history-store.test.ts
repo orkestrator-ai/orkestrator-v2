@@ -13,6 +13,8 @@ import {
   USAGE_REPORT_CACHE_MAX_ENTRIES,
   UsageHistoryStore,
 } from "./usage-history-store.js";
+import { UsageHistoryRecorder } from "./usage-history-recorder.js";
+import { normalizeProviderContextUsage } from "./agent-provider-runtime.js";
 import { MAX_RECORDED_TURN_IDS } from "./usage-history-record.js";
 
 const directories: string[] = [];
@@ -847,5 +849,59 @@ describe("the finished report cache", () => {
     store.clearReportCache();
     expect(cache.reportCache.size).toBe(0);
     expect(cache.reportCacheBytes).toBe(0);
+  });
+});
+
+test("Grok history replaces a late price across restart without double-counting", async () => {
+  const clock = { value: new Date("2026-10-20T10:00:00Z") };
+  const { store, directory } = await storeWithClock(clock);
+  const input = {
+    sessionKey: "env-1:grok:tab-1",
+    environmentId: "env-1",
+    platform: "grok" as const,
+    providerSessionId: "conversation",
+  };
+  const first = turn("first", { costUsd: 0.02, modelId: "grok-4.6" });
+  const second = turn("second", { costUsd: undefined, modelId: "grok-4.6" });
+  const priced = { ...second, costUsd: 0.03, costSource: "provider", revision: 1 } as const;
+  const recorder = new UsageHistoryRecorder({
+    write: ({ turns = [], ...input }) => store.recordTurns({ ...input, turns }),
+  });
+  const observe = (turns: NativeAgentTurnUsage[]) =>
+    recorder.observe({ ...input, usage: normalizeProviderContextUsage({ usedTokens: 1, turns }) });
+
+  observe([first, second]);
+  await recorder.drain();
+  expect(store.report({ days: 1 }).totals.costUsd).toBe(0.02);
+  observe([first, priced]);
+  observe([first, second]);
+  await recorder.drain();
+  expect(store.report({ days: 1 }).totals.costUsd).toBeCloseTo(0.05, 12);
+
+  const restarted = (await storeWithClock(clock, directory)).store;
+  expect(restarted.recordTurns({ ...input, turns: [second, priced] })).toBe(0);
+  expect(restarted.recordTurns({ ...input, turns: [{ ...second, revision: 2 }] })).toBe(1);
+  expect(restarted.report({ days: 1 }).totals).toMatchObject({
+    turns: 2,
+    costUsd: 0.02,
+    totalTokens: 2_320,
+    unpricedTokens: 1_160,
+  });
+});
+
+test("Grok history folds evicted revisions into its bounded day totals", async () => {
+  const clock = { value: new Date("2026-10-20T10:00:00Z") };
+  const { store } = await storeWithClock(clock);
+  const input = {
+    sessionKey: "env-1:grok:tab-1",
+    environmentId: "env-1",
+    platform: "grok" as const,
+  };
+  for (let index = 0; index <= MAX_RECORDED_TURN_IDS; index += 1) {
+    store.recordTurns({ ...input, turns: [turn(`turn-${index}`, { costUsd: 0.25 })] });
+  }
+  expect(store.report({ days: 1 }).totals).toMatchObject({
+    turns: MAX_RECORDED_TURN_IDS + 1,
+    costUsd: (MAX_RECORDED_TURN_IDS + 1) * 0.25,
   });
 });

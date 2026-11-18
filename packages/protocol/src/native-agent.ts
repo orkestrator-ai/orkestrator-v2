@@ -1511,6 +1511,8 @@ export interface NativeAgentContextCategory {
 
 export interface NativeAgentContextUsage {
   usedTokens: number;
+  /** Cost-only snapshots use a placeholder for the required token field. */
+  occupancyUnknown?: true;
   maximumTokens?: number;
   percentage?: number;
   modelId?: string;
@@ -1561,6 +1563,8 @@ export interface NativeAgentContextUsage {
 
 export interface NativeAgentTurnUsage {
   turnId: string;
+  /** Advances when a provider corrects the recorded usage of this turn. */
+  revision?: number;
   /**
    * When the bridge finalized this turn, ISO-8601.
    *

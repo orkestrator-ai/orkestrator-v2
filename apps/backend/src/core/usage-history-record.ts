@@ -35,7 +35,7 @@ export const USAGE_SESSION_RECORD_VERSION = 1;
  * The key a row de-duplicates one turn by.
  *
  * A row is keyed by the tab, which outlives the conversation inside it, while
- * the ACP and Pi bridges fall back to minting a turn id from a per-session
+ * the Pi bridge falls back to minting a turn id from a per-session
  * counter (`turn-1`, `turn-2`, …) when the provider gave them nothing better.
  * Unscoped, the first turns of a conversation that replaced another in the
  * same tab would be refused as duplicates of the previous one's and vanish
@@ -77,6 +77,20 @@ export interface UsageDayBucket {
   models: Record<string, UsageTotals>;
 }
 
+interface RecentUsageTurn {
+  key: string;
+  day: string;
+  modelId: string;
+  revision: number;
+  totals: UsageTotals;
+}
+
+export function usageTurnRevision(turn: NativeAgentTurnUsage): number {
+  return typeof turn.revision === "number" && Number.isSafeInteger(turn.revision)
+    ? Math.max(0, turn.revision)
+    : 0;
+}
+
 export interface UsageSessionRecord {
   version: number;
   environmentId: string;
@@ -87,6 +101,8 @@ export interface UsageSessionRecord {
   days: Record<string, UsageDayBucket>;
   /** Oldest first; bounded by {@link MAX_RECORDED_TURN_IDS}. */
   turnIds: string[];
+  /** Revisable Grok contributions until their ids leave the deduplication window. */
+  recentTurns?: RecentUsageTurn[];
   /**
    * What the environment and its project were called, stamped onto the row
    * when the environment is deleted (see {@link UsageEnvironmentLabel}). A
@@ -135,6 +151,27 @@ function readTotals(value: unknown): UsageTotals | null {
   return totals;
 }
 
+function readRecentTurns(value: unknown, turnIds: string[]): RecentUsageTurn[] {
+  if (!Array.isArray(value)) return [];
+  const turns = new Map<string, RecentUsageTurn>();
+  for (const entry of value.slice(-MAX_RECORDED_TURN_IDS)) {
+    if (!isRecord(entry) || typeof entry.key !== "string" || !turnIds.includes(entry.key)) continue;
+    if (!isUsageDayKey(entry.day) || typeof entry.modelId !== "string") continue;
+    const totals = readTotals(entry.totals);
+    if (!totals || totals.turns !== 1) continue;
+    const revision = entry.revision;
+    if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) continue;
+    turns.set(entry.key, {
+      key: entry.key,
+      day: entry.day,
+      modelId: entry.modelId,
+      revision,
+      totals,
+    });
+  }
+  return Array.from(turns.values());
+}
+
 /** Validates a stored row. An unreadable row is a miss, never a throw. */
 export function parseUsageSessionRecord(value: unknown): UsageSessionRecord | null {
   if (!isRecord(value)) return null;
@@ -153,6 +190,10 @@ export function parseUsageSessionRecord(value: unknown): UsageSessionRecord | nu
   }
   const firstSeenAt = typeof value.firstSeenAt === "string" ? value.firstSeenAt : "";
   const lastSeenAt = typeof value.lastSeenAt === "string" ? value.lastSeenAt : firstSeenAt;
+  const turnIds = Array.isArray(value.turnIds)
+    ? value.turnIds.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+  const recentTurns = value.platform === "grok" ? readRecentTurns(value.recentTurns, turnIds) : [];
   const environmentName = usageLabelName(value.environmentName);
   const projectName = usageLabelName(value.projectName);
   return {
@@ -162,9 +203,8 @@ export function parseUsageSessionRecord(value: unknown): UsageSessionRecord | nu
     firstSeenAt,
     lastSeenAt,
     days,
-    turnIds: Array.isArray(value.turnIds)
-      ? value.turnIds.filter((id): id is string => typeof id === "string" && id.length > 0)
-      : [],
+    turnIds,
+    ...(recentTurns.length ? { recentTurns } : {}),
     ...(environmentName ? { environmentName } : {}),
     ...(projectName ? { projectName } : {}),
   };
@@ -237,10 +277,14 @@ export function usageTurnIsEmpty(totals: UsageTotals): boolean {
 }
 
 function trimDays(record: UsageSessionRecord): void {
-  const days = Object.keys(record.days).sort();
-  for (const day of days.slice(0, Math.max(0, days.length - MAX_RECORDED_DAYS))) {
-    delete record.days[day];
-  }
+  const days = [
+    ...new Set([
+      ...Object.keys(record.days),
+      ...(record.recentTurns ?? []).map((turn) => turn.day),
+    ]),
+  ].sort();
+  const oldestRetained = days.at(-MAX_RECORDED_DAYS);
+  if (oldestRetained) pruneRecordDays(record, oldestRetained);
 }
 
 function trimModels(bucket: UsageDayBucket): void {
@@ -258,9 +302,42 @@ function trimModels(bucket: UsageDayBucket): void {
   bucket.models[UNKNOWN_USAGE_MODEL_ID] = existing ? addUsageTotals(existing, overflow) : overflow;
 }
 
+function addTurnTotals(
+  days: Record<string, UsageDayBucket>,
+  { day, modelId, totals }: Omit<RecentUsageTurn, "key" | "revision">,
+): void {
+  if (usageTurnIsEmpty(totals)) return;
+  const bucket = (days[day] ??= { models: {} });
+  const existing = Object.hasOwn(bucket.models, modelId) ? bucket.models[modelId] : undefined;
+  Object.defineProperty(bucket.models, modelId, {
+    value: existing ? addUsageTotals(existing, totals) : { ...totals },
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+  trimModels(bucket);
+}
+
+/** Materialize Grok corrections over immutable historical aggregates. */
+export function recordedUsageDays(record: UsageSessionRecord): Record<string, UsageDayBucket> {
+  if (!record.recentTurns?.length) return record.days;
+  const days = { ...record.days };
+  for (const day of new Set(record.recentTurns.map((turn) => turn.day))) {
+    const bucket = days[day];
+    if (bucket) {
+      days[day] = {
+        models: Object.fromEntries(
+          Object.entries(bucket.models).map(([id, totals]) => [id, { ...totals }]),
+        ),
+      };
+    }
+  }
+  for (const turn of record.recentTurns) addTurnTotals(days, turn);
+  return days;
+}
+
 /**
- * Applies one turn to a record. Returns false when the turn was already
- * recorded (its id is in `turnIds`) or carries nothing.
+ * Applies a new turn or a newer revision to a record.
  *
  * `day` is the day it was observed; the bucket it lands in is
  * {@link usageTurnDay}, which prefers the turn's own time.
@@ -278,22 +355,43 @@ export function applyTurnToRecord(
   // were scoped holds unscoped ids: re-recording the turns the provider is
   // still republishing would count them a second time. Those entries leave
   // the window as the session records new turns.
+  const recent = record.recentTurns?.find((entry) => entry.key === key);
+  const revision = usageTurnRevision(turn);
+  if (recent) {
+    if (revision <= recent.revision) return false;
+    recent.revision = revision;
+    recent.totals = usageTotalsFromTurn(turn);
+    record.lastSeenAt = at;
+    return true;
+  }
   if (record.turnIds.includes(key) || record.turnIds.includes(turn.turnId)) return false;
   const totals = usageTotalsFromTurn(turn);
-  // The id is retained either way: a turn that reported nothing must not be
-  // re-examined on every later read.
+  // Keep empty turns, since a late revision can supply their first cost.
   record.turnIds.push(key);
-  if (record.turnIds.length > MAX_RECORDED_TURN_IDS) {
-    record.turnIds.splice(0, record.turnIds.length - MAX_RECORDED_TURN_IDS);
-  }
+  const evicted = record.turnIds.splice(
+    0,
+    Math.max(0, record.turnIds.length - MAX_RECORDED_TURN_IDS),
+  );
+  const contribution = {
+    key,
+    day: usageTurnDay(turn, day),
+    modelId: turn.modelId?.trim() || UNKNOWN_USAGE_MODEL_ID,
+    revision,
+    totals,
+  };
   record.lastSeenAt = at;
   if (!record.firstSeenAt) record.firstSeenAt = at;
-  if (usageTurnIsEmpty(totals)) return true;
-  const modelId = turn.modelId?.trim() || UNKNOWN_USAGE_MODEL_ID;
-  const bucket = (record.days[usageTurnDay(turn, day)] ??= { models: {} });
-  const existing = bucket.models[modelId];
-  bucket.models[modelId] = existing ? addUsageTotals(existing, totals) : totals;
-  trimModels(bucket);
+  if (record.platform === "grok") {
+    const recentTurns = (record.recentTurns ??= []);
+    const oldest = recentTurns[0];
+    if (oldest && evicted.includes(oldest.key)) {
+      addTurnTotals(record.days, oldest);
+      recentTurns.shift();
+    }
+    recentTurns.push(contribution);
+  } else {
+    addTurnTotals(record.days, contribution);
+  }
   trimDays(record);
   return true;
 }
@@ -304,6 +402,11 @@ export function pruneRecordDays(record: UsageSessionRecord, oldestDay: string): 
   for (const day of Object.keys(record.days)) {
     if (day >= oldestDay) continue;
     delete record.days[day];
+    pruned = true;
+  }
+  const retained = record.recentTurns?.filter((turn) => turn.day >= oldestDay);
+  if (retained && retained.length !== record.recentTurns?.length) {
+    record.recentTurns = retained.length ? retained : undefined;
     pruned = true;
   }
   return pruned;

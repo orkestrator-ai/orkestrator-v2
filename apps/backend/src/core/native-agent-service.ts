@@ -686,6 +686,11 @@ export class NativeAgentService {
       trackScan: (task) => this.trackScan(task),
       recordAsyncQuestionAttention: (environmentId, sessionKey, itemIds) =>
         this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds),
+      recordRevisedUsage: (session, provider) =>
+        this.settledTurnUsage.record(
+          session,
+          provider.refreshUsage ? { refreshUsage: provider.refreshUsage.bind(provider) } : provider,
+        ),
       withdrawEnvironmentInteractions: (environmentId) =>
         this.withdrawEnvironmentInteractions(environmentId),
       ...(this.permissionRules

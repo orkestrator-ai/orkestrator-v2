@@ -97,6 +97,7 @@ import {
  * | Linked task terminal comment       | task comment text (URL-specific)                 | exact text check                    |
  * | Linked task completion flag        | task `prMergeCommented:true` for that URL/state  | durable marker                      |
  * | Merge-cleanup recovery             | environment `cleanupAfterMergeRequestedAt`/`…Error` | `resumeTerminalEffects`; owner dedupes per environment |
+ * | Open agent tabs told of the merge  | environment `prMergeNoticePendingUrl`, armed with the merged state | `resumeTerminalEffects`; one mail request id per tab (`pr-merge-tab-notices.ts`) |
  * | Transition display (toast)         | none — best-effort (step 11)                     | clients dedupe per (env, url, state) |
  *
  * Every obligation is reconstructible from storage, so a restart loses only

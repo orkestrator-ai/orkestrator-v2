@@ -13,16 +13,18 @@
 // agent type, the CLI's own type `workflow-subagent`. Recorded as tasks, those
 // hooks became cards that could never say anything, so they are not recorded.
 
+import type { NativeAgentWorkflowAgentCounts } from "@orkestrator/protocol/native-agent";
 import type { BackgroundTaskSnapshot, BackgroundWorkflowAgent } from "../types/index.js";
-import type { BackgroundTaskSystemMessage } from "./session-manager-messages.js";
+import type { BackgroundTaskSystemMessage } from "./session-manager-task-records.js";
+import { LIVE_BACKGROUND_TASK_STATUSES } from "./background-task-snapshot.js";
 
 /** The agent type Claude Code gives a workflow's agents when the script names none. */
 export const WORKFLOW_SUBAGENT_TYPE = "workflow-subagent";
 
 /**
  * Most agents kept for one workflow. The whole task map is re-sent on every
- * edge, and a workflow can run hundreds of agents; past this the live ones,
- * then the failed ones, then the most recent are kept.
+ * edge, and a workflow can run hundreds of agents; past this running and failed agents
+ * take priority over other rows.
  */
 export const MAX_WORKFLOW_AGENTS = 64;
 /** Most rows read from one frame. The CLI keeps at most 500 log rows beside its agents. */
@@ -66,20 +68,35 @@ function boundedName(value: unknown): string | undefined {
 }
 
 function count(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= Number.MAX_SAFE_INTEGER
     ? Math.floor(value)
     : undefined;
 }
 
-function workflowAgentRow(raw: unknown): BackgroundWorkflowAgent | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  const row = raw as Record<string, unknown>;
+function progressRow(raw: unknown): Record<string, unknown> | undefined {
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
+}
+
+function rowIndex(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function workflowAgentRow(
+  row: Record<string, unknown>,
+  phases?: ReadonlyMap<number, string>,
+): BackgroundWorkflowAgent | undefined {
   if (row.type !== "workflow_agent") return undefined;
-  const index = row.index;
-  if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0) return undefined;
+  const index = rowIndex(row.index);
+  if (index === undefined) return undefined;
   if (!AGENT_STATES.has(row.state as BackgroundWorkflowAgent["state"])) return undefined;
   const label = boundedText(row.label, LABEL_MAX_CHARS) ?? `agent ${index}`;
-  const phaseTitle = boundedText(row.phaseTitle, LABEL_MAX_CHARS);
+  const phaseTitle =
+    boundedText(row.phaseTitle, LABEL_MAX_CHARS) ?? phases?.get(rowIndex(row.phaseIndex) ?? -1);
   const agentId = boundedName(row.agentId);
   const agentType = boundedName(row.agentType);
   const model = boundedName(row.model);
@@ -115,48 +132,224 @@ function workflowAgentRow(raw: unknown): BackgroundWorkflowAgent | undefined {
   };
 }
 
-function isLiveAgent(agent: BackgroundWorkflowAgent): boolean {
-  return agent.state === "start" || agent.state === "progress";
+function isRunningAgent(agent: BackgroundWorkflowAgent): boolean {
+  return agent.state === "progress" || (agent.state === "start" && agent.startedAt !== undefined);
 }
 
-/**
- * The agents one frame's `workflow_progress` lists, or nothing when the frame
- * carries no list. Each frame carries the whole list, so it replaces the last.
- * `omitted` adds the rows the CLI says it left out (`workflow_progress_omitted`,
- * on a terminal frame) to those this bound drops.
- */
+function isFailedAgent(agent: BackgroundWorkflowAgent): boolean {
+  return agent.state === "error" && agent.endedWithRun === undefined;
+}
+
+type WorkflowAgentLabels = NonNullable<BackgroundTaskSnapshot["workflowAgentLabels"]>;
+
+export interface WorkflowProgress {
+  agents: BackgroundWorkflowAgent[];
+  omitted: number;
+  counts: NativeAgentWorkflowAgentCounts;
+  ids: ReadonlySet<string>;
+  labels: WorkflowAgentLabels;
+}
+
+/** Read ownership and counts before applying the display bound. */
 export function parseWorkflowProgress(
   value: unknown,
   cliOmitted?: unknown,
-): { agents: BackgroundWorkflowAgent[]; omitted: number } | undefined {
+): WorkflowProgress | undefined {
   if (!Array.isArray(value)) return undefined;
-  const byIndex = new Map<number, BackgroundWorkflowAgent>();
-  for (const raw of value.slice(0, MAX_WORKFLOW_PROGRESS_ROWS)) {
-    const agent = workflowAgentRow(raw);
-    // The CLI replaces a row in place; a repeat is the newer state.
-    if (agent) byIndex.set(agent.index, agent);
+  const rows = value.slice(0, MAX_WORKFLOW_PROGRESS_ROWS);
+  const phases = new Map<number, string>();
+  for (const raw of rows) {
+    const row = progressRow(raw);
+    if (row?.type !== "workflow_phase") continue;
+    const index = rowIndex(row.index);
+    const title = boundedText(row.title, LABEL_MAX_CHARS);
+    if (index !== undefined && title) phases.set(index, title);
   }
-  let agents = [...byIndex.values()];
-  let omitted = count(cliOmitted) ?? 0;
+  const byIndex = new Map<number, BackgroundWorkflowAgent>();
+  const ids = new Set<string>();
+  for (const raw of rows) {
+    const row = progressRow(raw);
+    const agent = row && workflowAgentRow(row, phases);
+    if (!agent) continue;
+    if (agent.agentId) ids.add(agent.agentId);
+    // The CLI replaces a row in place; a repeat is the newer state.
+    byIndex.set(agent.index, agent);
+  }
+
+  const labels = new Map<number, Pick<BackgroundWorkflowAgent, "phaseTitle" | "agentType">>();
+  const providerOmitted = count(cliOmitted) ?? 0;
+  const counts: NativeAgentWorkflowAgentCounts = {
+    total: byIndex.size,
+    running: 0,
+    queued: 0,
+    finished: 0,
+    failed: 0,
+  };
+  if (providerOmitted > 0 || value.length > rows.length) counts.partial = true;
+  for (const agent of byIndex.values()) {
+    const { phaseTitle, agentType } = agent;
+    if (phaseTitle || agentType) labels.set(agent.index, { phaseTitle, agentType });
+    if (isRunningAgent(agent)) counts.running++;
+    else if (agent.state === "start") counts.queued++;
+    else counts.finished++;
+    if (isFailedAgent(agent)) counts.failed++;
+  }
+
+  const agents = [...byIndex.values()];
   if (agents.length > MAX_WORKFLOW_AGENTS) {
-    const kept = new Set(
-      [...agents]
-        .sort(
-          (left, right) =>
-            Number(isLiveAgent(right)) - Number(isLiveAgent(left)) ||
-            Number(right.state === "error") - Number(left.state === "error") ||
-            right.index - left.index,
-        )
-        .slice(0, MAX_WORKFLOW_AGENTS),
+    agents.sort(
+      (left, right) =>
+        Number(isRunningAgent(right)) - Number(isRunningAgent(left)) ||
+        Number(isFailedAgent(right)) - Number(isFailedAgent(left)) ||
+        right.index - left.index,
     );
-    omitted += agents.length - kept.size;
-    agents = agents.filter((agent) => kept.has(agent));
+    agents.length = MAX_WORKFLOW_AGENTS;
   }
   agents.sort((left, right) => left.index - right.index);
-  return { agents, omitted };
+  return {
+    agents,
+    omitted: Math.min(Number.MAX_SAFE_INTEGER, providerOmitted + byIndex.size - agents.length),
+    counts,
+    ids,
+    labels,
+  };
 }
 
-type WorkflowEdge = Pick<BackgroundTaskSystemMessage, "subtype" | "task_type" | "workflow_agents">;
+export function mergeWorkflowProgress(
+  progress: WorkflowProgress,
+  previous?: BackgroundTaskSnapshot,
+) {
+  const ids = new Set(progress.ids);
+  for (const id of previous?.workflowAgentIds ?? []) {
+    if (ids.size >= MAX_WORKFLOW_PROGRESS_ROWS) break;
+    ids.add(id);
+  }
+  const labels = new Map(progress.labels);
+  for (const [index, prior] of previous?.workflowAgentLabels ?? []) {
+    const current = labels.get(index);
+    if (!current && labels.size >= MAX_WORKFLOW_PROGRESS_ROWS) continue;
+    labels.set(index, {
+      phaseTitle: current?.phaseTitle ?? prior.phaseTitle,
+      agentType: current?.agentType ?? prior.agentType,
+    });
+  }
+  return {
+    workflowAgentIds: ids,
+    workflowAgentLabels: labels,
+    workflowAgentCounts: progress.counts,
+    workflowAgents: progress.agents.map((agent) => ({ ...agent, ...labels.get(agent.index) })),
+    workflowAgentsOmitted: progress.omitted || undefined,
+  };
+}
+
+/** Terminal row details the pinned CLI sends over SDK but does not write to its rollout. */
+export interface WorkflowTaskDetails {
+  taskId: string;
+  toolUseId: string;
+  workflowAgents: BackgroundWorkflowAgent[];
+  workflowAgentsOmitted?: number;
+  usage?: BackgroundTaskSnapshot["usage"];
+}
+
+export const MAX_WORKFLOW_TASK_DETAILS = 32;
+const MAX_WORKFLOW_TASK_DETAILS_BYTES = 256 * 1024;
+
+export function parseWorkflowTaskDetails(raw: unknown): WorkflowTaskDetails | undefined {
+  const entry = progressRow(raw);
+  const taskId = boundedName(entry?.taskId);
+  const toolUseId = boundedName(entry?.toolUseId);
+  if (!taskId || !toolUseId || !Array.isArray(entry?.workflowAgents)) return undefined;
+  const workflowAgents = entry.workflowAgents.slice(0, MAX_WORKFLOW_AGENTS).flatMap((raw) => {
+    const row = progressRow(raw);
+    const agent = row && workflowAgentRow({ ...row, type: "workflow_agent" });
+    return agent ? [agent] : [];
+  });
+  const workflowAgentsOmitted = count(entry.workflowAgentsOmitted);
+  const usage = progressRow(entry.usage);
+  const totalTokens = count(usage?.totalTokens);
+  const toolUses = count(usage?.toolUses);
+  const durationMs = count(usage?.durationMs);
+  return {
+    taskId,
+    toolUseId,
+    workflowAgents,
+    ...(workflowAgentsOmitted ? { workflowAgentsOmitted } : {}),
+    ...(totalTokens !== undefined && toolUses !== undefined && durationMs !== undefined
+      ? { usage: { totalTokens, toolUses, durationMs } }
+      : {}),
+  };
+}
+
+export function boundWorkflowTaskDetails(entries: WorkflowTaskDetails[]): WorkflowTaskDetails[] {
+  let bytes = 2;
+  let first = entries.length;
+  while (first > 0 && entries.length - first < MAX_WORKFLOW_TASK_DETAILS) {
+    bytes += Buffer.byteLength(JSON.stringify(entries[first - 1])) + 1;
+    if (bytes > MAX_WORKFLOW_TASK_DETAILS_BYTES) break;
+    first--;
+  }
+  return entries.slice(first);
+}
+
+type WorkflowEdge = Pick<
+  BackgroundTaskSystemMessage,
+  "subtype" | "task_type" | "workflow_progress"
+>;
+
+export function isWorkflowRelaunch(
+  message: BackgroundTaskSystemMessage,
+  previous: BackgroundTaskSnapshot,
+): boolean {
+  return (
+    isWorkflowTaskEdge(message, previous) &&
+    message.run_id !== undefined &&
+    previous.workflowRunId !== undefined &&
+    message.run_id !== previous.workflowRunId
+  );
+}
+
+/** Older runs and progress arriving after settlement cannot change a workflow. */
+export function ignoreWorkflowTaskEdge(
+  message: BackgroundTaskSystemMessage,
+  previous: BackgroundTaskSnapshot | undefined,
+): boolean {
+  if (!previous || !isWorkflowTaskEdge(message, previous)) return false;
+  if (message.subtype === "task_progress" && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)) {
+    return true;
+  }
+  if (message.run_id !== undefined && previous.workflowRunId !== undefined) {
+    return message.run_id !== previous.workflowRunId;
+  }
+  return (
+    message.tool_use_id !== undefined &&
+    previous.toolUseId !== undefined &&
+    message.tool_use_id !== previous.toolUseId
+  );
+}
+
+/** A settled workflow cannot still own queued or running work. */
+export function settleWorkflowAgents(
+  task: BackgroundTaskSnapshot,
+  reason?: string,
+): BackgroundTaskSnapshot {
+  const agents = task.workflowAgents;
+  if (!agents || LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) return task;
+  const counts = task.workflowAgentCounts;
+  return {
+    ...task,
+    workflowAgents: agents.map((agent) =>
+      agent.state === "start" || agent.state === "progress"
+        ? { ...agent, state: "error", endedWithRun: "stopped", error: agent.error ?? reason }
+        : agent,
+    ),
+    workflowAgentCounts: counts && {
+      ...counts,
+      finished: counts.finished + counts.running + counts.queued,
+      running: 0,
+      queued: 0,
+    },
+  };
+}
 
 /** Whether an edge belongs to a workflow task, from the edge or what came before it. */
 export function isWorkflowTaskEdge(
@@ -166,7 +359,7 @@ export function isWorkflowTaskEdge(
   return (
     message.task_type === "local_workflow" ||
     previous?.taskType === "local_workflow" ||
-    message.workflow_agents !== undefined ||
+    message.workflow_progress !== undefined ||
     previous?.workflowAgents !== undefined
   );
 }
@@ -202,26 +395,26 @@ export function taskEdgeDescription(
  */
 export function workflowAgentHookTaskIds(
   tasks: Record<string, BackgroundTaskSnapshot> | undefined,
-  agents: readonly BackgroundWorkflowAgent[] | undefined,
+  agentIds: ReadonlySet<string> | undefined,
 ): string[] {
-  if (!tasks || !agents) return [];
+  if (!tasks || !agentIds) return [];
   const ids: string[] = [];
-  for (const agent of agents) {
-    const task = agent.agentId ? tasks[agent.agentId] : undefined;
+  for (const id of agentIds) {
+    const task = tasks[id];
     if (task && task.taskType === undefined && task.subagentType !== undefined) ids.push(task.id);
   }
   return ids;
 }
 
-/** Whether a `SubagentStart` hook announces one of a workflow's agents. */
-export function isWorkflowAgentLaunch(
+/** Whether a subagent hook belongs to a workflow. */
+export function isWorkflowAgentHook(
   tasks: Record<string, BackgroundTaskSnapshot> | undefined,
   agentId: string,
   agentType: string | undefined,
 ): boolean {
   if (agentType === WORKFLOW_SUBAGENT_TYPE) return true;
   for (const task of Object.values(tasks ?? {})) {
-    if (task.workflowAgents?.some((agent) => agent.agentId === agentId)) return true;
+    if (task.workflowAgentIds?.has(agentId)) return true;
   }
   return false;
 }

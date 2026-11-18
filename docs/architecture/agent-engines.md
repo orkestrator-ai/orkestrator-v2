@@ -530,6 +530,14 @@ only in `workflow_progress`), the SDK-facing types and dispositions in
 `sdk-compatibility.test.ts`, which drives the installed SDK. Review those on
 every SDK bump.
 
+Workflow cards use the launch description and the task's run ID while the
+workflow is active. The bridge counts reported agents and matches their hook IDs
+before selecting the rows to display. Running and failed agents take priority
+at the 64-row limit. Claude Code 2.1.326 writes the Workflow result and the task
+notification to its rollout. Agent rows arrive through the SDK, so the bridge
+keeps bounded terminal details keyed by the launch call and restores them when
+it reads that rollout.
+
 Turns run through the SDK's `query()` with `includePartialMessages: true` so
 partial assistant output streams as it arrives. Continuation uses the SDK's own
 `resume` with the stored `sdkSessionId` rather than replaying the transcript.

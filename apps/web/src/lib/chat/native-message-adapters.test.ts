@@ -385,6 +385,69 @@ describe("Claude activity in the shared native transcript", () => {
       expect(rows[0]?.createdAt).toBe("2026-08-16T10:00:00.000Z");
     });
 
+    test("keeps one card for a Workflow tool launch after it settles", () => {
+      const source: NativeMessage[] = [
+        {
+          ...transcript[0]!,
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Workflow",
+              toolName: "Workflow",
+              toolUseId: "toolu_workflow",
+              toolState: "success",
+              toolArgs: { script: "fixture workflow" },
+              toolOutput:
+                "Workflow launched in background. Task ID: wf-task\nSummary: Review the fixture",
+            },
+          ],
+        },
+      ];
+      const running = {
+        id: "wf-task",
+        kind: "workflow",
+        toolUseId: "toolu_workflow",
+        status: "running",
+        description: "Review the fixture",
+        workflowAgents: [{ index: 0, label: "Inspect", status: "running" }],
+      } as const;
+      const stopped = {
+        ...running,
+        status: "killed",
+        settledAt: "2026-08-16T10:00:15.000Z",
+        workflowAgents: [
+          { index: 0, label: "Inspect", status: "stopped", error: "Workflow stopped" },
+          { index: 1, label: "Verify", status: "failed", error: "Check failed" },
+        ],
+      } as const;
+      for (const snapshot of [running, stopped]) {
+        const task = { ...snapshot, workflowAgents: [...snapshot.workflowAgents] };
+        const display = normalizeNativeMessages(
+          applyClaudeBackgroundTaskStates(source, { [task.id]: task }),
+        );
+        expect(collectRenderedBackgroundTaskIds(display)).toEqual(new Set(["wf-task"]));
+        expect(rowlessBackgroundTaskMessages([task], display)).toEqual([]);
+        expect(display.flatMap(({ parts }) => parts)).toContainEqual(
+          expect.objectContaining({
+            type: "task-group",
+            task: expect.objectContaining({
+              toolUseId: "toolu_workflow",
+              backgroundTask: expect.objectContaining({
+                status: task.status,
+                workflowAgents: task.workflowAgents,
+              }),
+            }),
+          }),
+        );
+      }
+      expect(
+        rowlessBackgroundTaskMessages(
+          [{ ...stopped, workflowAgents: [...stopped.workflowAgents] }],
+          transcript,
+        ),
+      ).toHaveLength(1);
+    });
+
     test("carries a workflow's agents onto its card", () => {
       const workflowAgents = [{ index: 0, label: "Plan", status: "running" as const }];
       const rows = rowlessBackgroundTaskMessages(

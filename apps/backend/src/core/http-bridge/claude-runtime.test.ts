@@ -72,12 +72,49 @@ describe("normalizeClaudeBackgroundTasks", () => {
     expect(task?.endReason).toBe("resume-cleanup");
   });
 
+  test("projects whole-workflow counts when the snapshot omits the agent list", () => {
+    const [outline, invalid] = normalizeClaudeBackgroundTasks({
+      outline: {
+        status: "running",
+        taskType: "local_workflow",
+        workflowAgentsOmitted: 80,
+        workflowAgentCounts: {
+          total: 80,
+          running: 1,
+          queued: 9,
+          finished: 70,
+          failed: 1,
+          partial: true,
+        },
+      },
+      invalid: {
+        status: "running",
+        taskType: "local_workflow",
+        workflowAgentCounts: { total: 1, running: 2, queued: 0, finished: 0, failed: 0 },
+      },
+    })!;
+    expect(outline).toMatchObject({
+      workflowAgentsOmitted: 80,
+      workflowAgentCounts: {
+        total: 80,
+        running: 1,
+        queued: 9,
+        finished: 70,
+        failed: 1,
+        partial: true,
+      },
+    });
+    expect(outline?.workflowAgents).toBeUndefined();
+    expect(invalid?.workflowAgentCounts).toBeUndefined();
+  });
+
   test("carries a workflow's agents in neutral terms", () => {
     const [task] = normalizeClaudeBackgroundTasks({
       wf: {
         status: "running",
         taskType: "local_workflow",
         workflowAgentsOmitted: 2,
+        workflowAgentCounts: { total: 8, running: 1, queued: 1, finished: 6, failed: 1 },
         workflowAgents: [
           { index: 0, label: "Plan", state: "done", durationMs: 4000, tokens: 10, toolCalls: 1 },
           { index: 1, label: "Skip", state: "done", skipped: true },
@@ -104,6 +141,13 @@ describe("normalizeClaudeBackgroundTasks", () => {
       },
     })!;
     expect(task?.workflowAgentsOmitted).toBe(2);
+    expect(task?.workflowAgentCounts).toEqual({
+      total: 8,
+      running: 1,
+      queued: 1,
+      finished: 6,
+      failed: 1,
+    });
     expect(task?.workflowAgents?.map((agent) => [agent.index, agent.status])).toEqual([
       [0, "completed"],
       [1, "skipped"],

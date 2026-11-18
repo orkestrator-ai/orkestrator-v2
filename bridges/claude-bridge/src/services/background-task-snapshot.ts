@@ -65,6 +65,9 @@ function tailText(value: string | undefined, max: number): string | undefined {
 /** One task with every free-text field cut to what the backend keeps. */
 function cappedTask(task: BackgroundTaskSnapshot): BackgroundTaskSnapshot {
   const capped: BackgroundTaskSnapshot = { ...task };
+  delete capped.workflowRunId;
+  delete capped.workflowAgentIds;
+  delete capped.workflowAgentLabels;
   const set = <K extends keyof BackgroundTaskSnapshot>(
     key: K,
     value: BackgroundTaskSnapshot[K],
@@ -87,6 +90,9 @@ function cappedTask(task: BackgroundTaskSnapshot): BackgroundTaskSnapshot {
 function outlineTask(task: BackgroundTaskSnapshot): BackgroundTaskSnapshot {
   const outline: BackgroundTaskSnapshot = { ...task };
   for (const field of DETAIL_FIELDS) delete outline[field];
+  if (task.workflowAgentCounts && task.workflowAgents) {
+    outline.workflowAgentsOmitted = (task.workflowAgentsOmitted ?? 0) + task.workflowAgents.length;
+  }
   if (outline.error !== undefined) outline.error = headText(outline.error, OUTLINE_ERROR_MAX_CHARS);
   return outline;
 }

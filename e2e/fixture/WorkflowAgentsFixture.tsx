@@ -1,8 +1,13 @@
+import { useState } from "react";
 import { NativeMessage } from "../../apps/web/src/components/chat/NativeMessage";
 import {
+  applyClaudeBackgroundTaskStates,
+  normalizeNativeMessages,
   rowlessBackgroundTaskMessages,
   type BackgroundTaskSnapshot,
 } from "../../apps/web/src/lib/chat/native-message-adapters";
+
+import type { NativeMessage as TranscriptMessage } from "../../apps/web/src/lib/chat/native-message-types";
 
 /*
  * A Claude workflow mid-run, as the snapshot describes it.
@@ -16,6 +21,7 @@ const agentStartedAt = new Date(Date.now() - 83_000).toISOString();
 
 const workflow = {
   id: "wz29ruejm",
+  toolUseId: "toolu_fixture_workflow",
   status: "running",
   kind: "workflow",
   description: "Build investor Discover/Saved/Introductions with info requests and founder tags",
@@ -98,15 +104,67 @@ const before: BackgroundTaskSnapshot[] = [
   ),
 ];
 
+const launch: TranscriptMessage = {
+  id: "workflow-launch",
+  role: "assistant",
+  content: "",
+  createdAt: startedAt,
+  parts: [
+    {
+      type: "tool-invocation",
+      content: "Workflow",
+      toolName: "Workflow",
+      toolUseId: workflow.toolUseId,
+      toolArgs: { script: "fixture script" },
+      toolState: "success",
+      toolOutput: `Workflow launched in background. Task ID: ${workflow.id}\nSummary: ${workflow.description}`,
+    },
+  ],
+};
+
+const settled: BackgroundTaskSnapshot = {
+  ...workflow,
+  status: "killed",
+  settledAt: new Date().toISOString(),
+  workflowAgents: [
+    workflow.workflowAgents[0]!,
+    {
+      ...workflow.workflowAgents[1]!,
+      status: "stopped",
+      error: "Workflow stopped before this agent finished",
+      toolUses: 0,
+      totalTokens: 0,
+    },
+    { index: 2, label: "Build: saved", status: "failed", error: "Fixture check failed" },
+  ],
+};
+
 export function WorkflowAgentsFixture() {
   const params = new URLSearchParams(window.location.search);
-  const tasks = params.has("before") ? before : [workflow];
-  const messages = rowlessBackgroundTaskMessages(tasks, []);
+  const [isSettled, setIsSettled] = useState(params.has("settled"));
+  const task = isSettled ? settled : workflow;
+  const launchRows = normalizeNativeMessages(
+    applyClaudeBackgroundTaskStates([launch], { [task.id]: task }),
+  );
+  const messages = params.has("before")
+    ? rowlessBackgroundTaskMessages(before, [])
+    : [...launchRows, ...rowlessBackgroundTaskMessages([task], launchRows)];
   return (
     <main className="mx-auto max-w-3xl space-y-3 p-4" data-testid="workflow-agents-fixture">
       {messages.map((message) => (
         <NativeMessage key={message.id} message={message} />
       ))}
+      {!params.has("before") && !isSettled ? (
+        <button
+          type="button"
+          onClick={() => {
+            window.history.replaceState(null, "", "?settled");
+            setIsSettled(true);
+          }}
+        >
+          Settle workflow
+        </button>
+      ) : null}
     </main>
   );
 }

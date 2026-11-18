@@ -825,8 +825,10 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    `types/index.ts`) for option, event, and message-union changes. For
    workflows, recheck the `workflow_progress` row shape and that a workflow
    agent's `SubagentStart` still carries the `workflow-subagent` type and its
-   row's `agentId`. Pay
-   particular attention to the version-pinned `canUseTool` comment in
+   row's `agentId`. Recheck `run_id`, compact terminal phase rows, and the
+   persisted Workflow launch and notification shapes against the
+   [captured loopback fixture](../../bridges/claude-bridge/test-fixtures/workflow-claude-2.1.326.json).
+   Pay particular attention to the version-pinned `canUseTool` comment in
    `session-manager-prompt-query.ts` and re-prove that `AskUserQuestion` remains parked
    until the callback resolves. The `routes AskUserQuestion through canUseTool
    under bypassPermissions` case in `sdk-compatibility.test.ts` is that proof —

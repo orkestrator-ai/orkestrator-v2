@@ -10,6 +10,7 @@ import type {
   TaskListSnapshot,
   BackgroundTaskSnapshot,
 } from "../types/index.js";
+import { settleWorkflowAgents } from "./background-task-workflow.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
@@ -35,6 +36,8 @@ import {
   persistedRecordTime,
   persistedTaskIdentifier,
   persistedTaskText,
+  persistedNotificationStatus,
+  persistedWorkflowLaunch,
   reducePersistedBackgroundTaskMessage,
 } from "./session-manager-task-records.js";
 
@@ -1405,12 +1408,58 @@ export function bashToolUseIdsFromAssistantMessage(message: unknown): string[] {
   return ids;
 }
 
+function recoverWorkflowTaskRecords(
+  raw: { message: unknown; origin?: unknown },
+  tasks: Record<string, BackgroundTaskSnapshot> | undefined,
+  toolTracker: ToolTracker,
+  timestamp: number,
+): Record<string, BackgroundTaskSnapshot> | undefined {
+  const content = (raw.message as { content?: unknown } | undefined)?.content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block?.type !== "tool_result" || block.is_error) continue;
+      const toolUseId = persistedTaskIdentifier(block.tool_use_id);
+      if (!toolUseId || toolTracker.getTool(toolUseId)?.toolName !== "Workflow") continue;
+      const launch = persistedWorkflowLaunch(block.content, toolUseId);
+      if (!launch || tasks?.[launch.task_id]?.toolUseId === toolUseId) continue;
+      tasks = reducePersistedBackgroundTaskMessage(tasks, launch, timestamp);
+    }
+    return tasks;
+  }
+  const origin = raw.origin as { kind?: unknown; runId?: unknown } | undefined;
+  if (origin?.kind !== "task-notification" || typeof content !== "string") return tasks;
+  const report = parseTaskNotification(content);
+  const id = persistedTaskIdentifier(report?.taskId);
+  const status = persistedNotificationStatus(report?.status);
+  const task = id ? tasks?.[id] : undefined;
+  if (
+    !id ||
+    !status ||
+    task?.taskType !== "local_workflow" ||
+    !LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
+  )
+    return tasks;
+  return reducePersistedBackgroundTaskMessage(
+    tasks,
+    {
+      subtype: "task_notification",
+      task_id: id,
+      tool_use_id: persistedTaskIdentifier(report?.toolUseId),
+      run_id: persistedTaskIdentifier(origin?.runId),
+      status,
+      summary: persistedTaskText(report?.summary),
+    },
+    timestamp,
+  );
+}
+
 export function normalizePersistedSessionMessages(
   persisted: Array<{
     type: "user" | "assistant" | "system";
     uuid: string;
     session_id: string;
     message: unknown;
+    origin?: unknown;
     parent_tool_use_id: string | null;
     isSidechain?: boolean;
   }>,
@@ -1463,9 +1512,6 @@ export function normalizePersistedSessionMessages(
     if (raw.type === "system") {
       const system = raw as unknown as Record<string, unknown>;
       const taskMessage = persistedBackgroundTaskMessage(raw);
-      if (taskMessage?.tool_use_id) {
-        toolTracker.noteBackgroundTaskCall(taskMessage.task_id, taskMessage.tool_use_id);
-      }
       if (taskMessage) {
         backgroundTasks = reducePersistedBackgroundTaskMessage(
           backgroundTasks,
@@ -1478,6 +1524,8 @@ export function normalizePersistedSessionMessages(
           // to now rather than to the value it just refused.
           persistedRecordTime(raw, providerTimestamp === undefined ? positionAt : undefined),
         );
+        const toolUseId = backgroundTasks[taskMessage.task_id]?.toolUseId;
+        if (toolUseId) toolTracker.noteBackgroundTaskCall(taskMessage.task_id, toolUseId);
       }
       let notice = persistedSystemNoticePart(system, timestamp);
       if (system.subtype === "permission_denied") {
@@ -1516,6 +1564,14 @@ export function normalizePersistedSessionMessages(
         }
       }
       continue;
+    }
+    if (raw.type === "user") {
+      backgroundTasks = recoverWorkflowTaskRecords(
+        raw,
+        backgroundTasks,
+        toolTracker,
+        persistedRecordTime(raw, positionAt),
+      );
     }
     const result = parseMessageContent(
       raw,
@@ -1619,12 +1675,16 @@ export function normalizePersistedSessionMessages(
         Object.entries(backgroundTasks).map(([id, task]) => [
           id,
           LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
-            ? {
-                ...task,
-                status: "killed" as const,
-                endedAt: task.endedAt ?? processEndedAt,
-                error: task.error ?? "The Claude process that owned this task is no longer running",
-              }
+            ? settleWorkflowAgents(
+                {
+                  ...task,
+                  status: "killed",
+                  endedAt: task.endedAt ?? processEndedAt,
+                  error:
+                    task.error ?? "The Claude process that owned this task is no longer running",
+                },
+                "The Claude process that owned this task is no longer running",
+              )
             : task,
         ]),
       ),

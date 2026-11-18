@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type {
   NativeAgentWorkflowAgent,
+  NativeAgentWorkflowAgentCounts,
   NativeAgentWorkflowAgentStatus,
 } from "@orkestrator/protocol/native-agent";
 import { cn } from "@/lib/utils";
@@ -62,19 +63,25 @@ function isLiveWorkflowAgent(agent: NativeAgentWorkflowAgent): boolean {
 export function workflowAgentsStatusLine(
   agents: readonly NativeAgentWorkflowAgent[] | undefined,
   latest: string | undefined,
+  counts: NativeAgentWorkflowAgentCounts | undefined,
+  omitted: number | undefined,
 ): string | undefined {
-  if (!agents || agents.length === 0) return undefined;
-  const running = agents.filter((agent) => agent.status === "running").length;
-  const queued = agents.filter((agent) => agent.status === "queued").length;
-  const finished = agents.filter((agent) => !isLiveWorkflowAgent(agent)).length;
-  const failed = agents.filter((agent) => agent.status === "failed").length;
+  const total = counts?.total ?? agents?.length ?? 0;
+  if (total === 0) return undefined;
+  const running =
+    counts?.running ?? agents?.filter((agent) => agent.status === "running").length ?? 0;
+  const queued = counts?.queued ?? agents?.filter((agent) => agent.status === "queued").length ?? 0;
+  const finished =
+    counts?.finished ?? agents?.filter((agent) => !isLiveWorkflowAgent(agent)).length ?? 0;
+  const failed = counts?.failed ?? agents?.filter((agent) => agent.status === "failed").length ?? 0;
   const parts = [
     ...(running > 0 ? [`${running} running`] : []),
     ...(queued > 0 ? [`${queued} queued`] : []),
-    `${finished}/${agents.length} done`,
+    `${finished}/${total} done`,
     ...(failed > 0 ? [`${failed} failed`] : []),
   ];
-  const progress = parts.join(" · ");
+  const scope = counts?.partial ? "Reported agents: " : !counts && omitted ? "Shown agents: " : "";
+  const progress = scope + parts.join(" · ");
   return latest ? `${progress} — ${latest}` : progress;
 }
 
@@ -125,7 +132,10 @@ function WorkflowAgentRow({ agent }: { agent: NativeAgentWorkflowAgent }) {
             </span>
           ) : null}
           {role ? (
-            <span className="hidden shrink-0 text-[11px] text-muted-foreground/80 sm:inline">
+            <span
+              className="max-w-[45%] shrink-0 truncate text-[11px] text-muted-foreground/80"
+              title={role}
+            >
               {role}
             </span>
           ) : null}
@@ -151,8 +161,8 @@ function WorkflowAgentRow({ agent }: { agent: NativeAgentWorkflowAgent }) {
 }
 
 function WorkflowAgentUsage({ agent }: { agent: NativeAgentWorkflowAgent }) {
-  const toolUses = agent.toolUses ? agent.toolUses : undefined;
-  const tokens = agent.totalTokens ? formatTokenCount(agent.totalTokens) : undefined;
+  const toolUses = agent.toolUses;
+  const tokens = agent.totalTokens === undefined ? undefined : formatTokenCount(agent.totalTokens);
   const duration =
     agent.durationMs !== undefined && !isLiveWorkflowAgent(agent)
       ? formatAgentDurationMs(agent.durationMs)

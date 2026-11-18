@@ -165,7 +165,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "Writing to an event stream failed; the connection closes and the client reconnects.",
       "task.candidate-bound-reached":
         "An unresolved Bash call was not tracked as a background task: the candidate bound is full.",
-      "task.details-persist-failed": "Shell task details could not be saved; the task carries on.",
+      "task.details-persist-failed":
+        "Background task details could not be saved; the transcript remains available.",
       "task.settling-bound-reached": "A settling task was not tracked: the settling bound is full.",
       "task.stop-failed": "Stopping a background task failed on a control channel that had closed.",
       "task.stop-route-failed": "The stop-task route failed.",

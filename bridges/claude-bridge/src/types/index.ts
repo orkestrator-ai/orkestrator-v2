@@ -10,6 +10,7 @@ import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interacti
 import type {
   NativeAgentContextCategory,
   NativeAgentCostSource,
+  NativeAgentWorkflowAgentCounts,
 } from "@orkestrator/protocol/native-agent";
 
 export type {
@@ -1076,6 +1077,15 @@ export interface BackgroundTaskSnapshot {
   workflowAgents?: BackgroundWorkflowAgent[];
   /** Agents the CLI or this bridge left out of `workflowAgents` to bound it. */
   workflowAgentsOmitted?: number;
+  workflowAgentCounts?: NativeAgentWorkflowAgentCounts;
+  /** Internal only: identity and labels retained through display and CLI compaction. */
+  workflowAgentIds?: ReadonlySet<string>;
+  workflowAgentLabels?: ReadonlyMap<
+    number,
+    Pick<BackgroundWorkflowAgent, "phaseTitle" | "agentType">
+  >;
+  /** Internal only: identifies delayed frames from an earlier workflow run. */
+  workflowRunId?: string;
 }
 
 /** One `workflow_agent` row of a workflow's `workflow_progress`, validated and bounded. */

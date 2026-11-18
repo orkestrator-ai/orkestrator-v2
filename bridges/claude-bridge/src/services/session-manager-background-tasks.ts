@@ -10,14 +10,18 @@ import { MAX_SHELL_TASK_DETAILS, updateSessionPreferences } from "./session-pref
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import { sessions } from "./session-manager-core.js";
-import type { BackgroundTaskSystemMessage } from "./session-manager-messages.js";
+import type { BackgroundTaskSystemMessage } from "./session-manager-task-records.js";
 import type { ClaudeRuntime } from "./session-manager-runtime.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   backgroundTasksForSnapshot,
   LIVE_BACKGROUND_TASK_STATUSES,
 } from "./background-task-snapshot.js";
-import { isWorkflowTaskEdge } from "./background-task-workflow.js";
+import {
+  isWorkflowTaskEdge,
+  mergeWorkflowProgress,
+  settleWorkflowAgents,
+} from "./background-task-workflow.js";
 
 const log = createLogger("bridge.claude");
 
@@ -274,6 +278,10 @@ type BackgroundTaskMetadata = Pick<
   | "endReason"
   | "workflowAgents"
   | "workflowAgentsOmitted"
+  | "workflowAgentCounts"
+  | "workflowAgentIds"
+  | "workflowAgentLabels"
+  | "workflowRunId"
 >;
 
 const BACKGROUND_TASK_METADATA_KEYS = [
@@ -290,6 +298,10 @@ const BACKGROUND_TASK_METADATA_KEYS = [
   "endReason",
   "workflowAgents",
   "workflowAgentsOmitted",
+  "workflowAgentCounts",
+  "workflowAgentIds",
+  "workflowAgentLabels",
+  "workflowRunId",
 ] as const satisfies ReadonlyArray<keyof BackgroundTaskMetadata>;
 
 /**
@@ -318,6 +330,10 @@ export const RUN_SCOPED_TASK_METADATA_RESET = {
   endReason: undefined,
   workflowAgents: undefined,
   workflowAgentsOmitted: undefined,
+  workflowAgentCounts: undefined,
+  workflowAgentIds: undefined,
+  workflowAgentLabels: undefined,
+  workflowRunId: undefined,
 } as const satisfies BackgroundTaskMetadata;
 
 /**
@@ -341,18 +357,20 @@ export function taskMessageMetadata(
         ? (message.summary ?? message.description)
         : message.summary;
   return {
-    ...(message.task_type ? { taskType: message.task_type } : {}),
+    ...(message.task_type
+      ? { taskType: message.task_type }
+      : workflow
+        ? { taskType: "local_workflow" }
+        : {}),
     ...(message.parent_task_id ? { parentTaskId: message.parent_task_id } : {}),
     ...(message.prompt ? { prompt: message.prompt } : {}),
     ...(message.workflow_name ? { workflowName: message.workflow_name } : {}),
     ...(message.ambient ? { ambient: true } : {}),
     ...(message.last_tool_name && !workflow ? { lastToolName: message.last_tool_name } : {}),
     ...(progressSummary ? { progressSummary } : {}),
-    ...(message.workflow_agents
-      ? {
-          workflowAgents: message.workflow_agents,
-          workflowAgentsOmitted: message.workflow_agents_omitted || undefined,
-        }
+    ...(workflow && message.run_id ? { workflowRunId: message.run_id } : {}),
+    ...(message.workflow_progress
+      ? mergeWorkflowProgress(message.workflow_progress, previous)
       : {}),
     ...(message.patch?.total_paused_ms !== undefined
       ? { pausedMs: message.patch.total_paused_ms }
@@ -656,6 +674,33 @@ export const NO_CONTROL_CHANNEL: StopBackgroundTaskResult = {
   message: "No live Claude control channel can reach this task",
 };
 
+/** Keep the terminal agent list across eviction and bridge restarts. */
+export function persistSettledWorkflowDetails(
+  session: SessionState,
+  task: BackgroundTaskSnapshot,
+): void {
+  if (
+    !session.sdkSessionId ||
+    !task.toolUseId ||
+    !task.workflowAgents ||
+    LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
+  )
+    return;
+  void updateSessionPreferences(session.sdkSessionId, {
+    workflowTaskDetails: [
+      {
+        taskId: task.id,
+        toolUseId: task.toolUseId,
+        workflowAgents: task.workflowAgents,
+        workflowAgentsOmitted: task.workflowAgentsOmitted,
+        usage: task.usage,
+      },
+    ],
+  }).catch((error) =>
+    log.warn("task.details-persist-failed", { error: formatLogError(error, { message: false }) }),
+  );
+}
+
 /**
  * Move one task to a terminal state and forget which handle owned it.
  *
@@ -672,15 +717,20 @@ export function settleBackgroundTask(
 ): boolean {
   const previous = session.backgroundTasks?.[taskId];
   if (!previous || !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)) return false;
-  session.backgroundTasks = boundBackgroundTaskHistory({
-    ...session.backgroundTasks,
-    [taskId]: {
+  const task = settleWorkflowAgents(
+    {
       ...previous,
       status,
       endedAt: previous.endedAt ?? Date.now(),
       ...(error !== undefined ? { error: previous.error ?? error } : {}),
     },
+    error,
+  );
+  session.backgroundTasks = boundBackgroundTaskHistory({
+    ...session.backgroundTasks,
+    [taskId]: task,
   });
+  persistSettledWorkflowDetails(session, task);
   releaseBackgroundTask(session, taskId);
   // The process that owned it stays up; its idle window decides when it goes.
   session.finishTurnInputIfSettled?.();

@@ -12,6 +12,7 @@ import {
   isHookRunningBackgroundTask,
   noteBackgroundTasksChanged,
   parkSettlingBackgroundTask,
+  persistSettledWorkflowDetails,
   resumeOrphanScanOutcome,
   takeShellTaskFields,
   takeProvisionalBackgroundTask,
@@ -25,7 +26,13 @@ import {
   persistedTaskName,
   persistedTaskUsage,
 } from "../session-manager-messages.js";
-import { taskEdgeDescription, workflowAgentHookTaskIds } from "../background-task-workflow.js";
+import {
+  ignoreWorkflowTaskEdge,
+  isWorkflowRelaunch,
+  settleWorkflowAgents,
+  taskEdgeDescription,
+  workflowAgentHookTaskIds,
+} from "../background-task-workflow.js";
 import { waitForContinuationAfterNotification } from "../session-manager-prompt-turn-lifecycle.js";
 import type { TurnState } from "../session-manager-prompt-turn.js";
 
@@ -96,12 +103,13 @@ function noteTaskCall(turn: TurnState, task: BackgroundTaskSnapshot): void {
  */
 function retireWorkflowAgentHookTasks(turn: TurnState, task: BackgroundTaskSnapshot): void {
   const { session } = turn;
-  const ids = workflowAgentHookTaskIds(session.backgroundTasks, task.workflowAgents);
+  const ids = workflowAgentHookTaskIds(session.backgroundTasks, task.workflowAgentIds);
   if (ids.length === 0) return;
   const tasks = { ...session.backgroundTasks };
   for (const id of ids) {
     delete tasks[id];
     session.claudeRuntime?.tasks.live.delete(id);
+    session.claudeRuntime?.tasks.settling.delete(id);
   }
   session.backgroundTasks = tasks;
 }
@@ -117,8 +125,8 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     !LIVE_BACKGROUND_TASK_STATUSES.has(taskMessage.patch.status)
   )
     return "stop";
-  const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
-  const stored = session.backgroundTasks?.[taskMessage.task_id] ?? correlated.task;
+  const parsed = persistedBackgroundTaskMessage({ message });
+  const stored = session.backgroundTasks?.[taskMessage.task_id];
   // A `SendMessage` resume re-runs a finished agent under its old task
   // id, announced by a `task_started` from the resuming call. That is a
   // new run, not a late edge of the old one: left terminal, nothing
@@ -128,8 +136,12 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     taskMessage.subtype === "task_started" &&
     stored !== undefined &&
     !LIVE_BACKGROUND_TASK_STATUSES.has(stored.status) &&
-    typeof taskMessage.tool_use_id === "string" &&
-    taskMessage.tool_use_id !== stored.toolUseId;
+    ((parsed !== undefined && isWorkflowRelaunch(parsed, stored)) ||
+      (typeof taskMessage.tool_use_id === "string" &&
+        taskMessage.tool_use_id !== stored.toolUseId));
+  const knownRun = stored ?? session.claudeRuntime?.tasks.settling.get(taskMessage.task_id);
+  if (!resumedRun && parsed && ignoreWorkflowTaskEdge(parsed, knownRun)) return "stop";
+  const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
   if (resumedRun) {
     // The finished run's parked snapshot must not describe this one.
     takeSettlingBackgroundTask(session, taskMessage.task_id);
@@ -138,6 +150,7 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     ? {
         ...stored,
         ...RUN_SCOPED_TASK_METADATA_RESET,
+        toolUseId: undefined,
         status: "running" as const,
         startedAt: Date.now(),
         endedAt: undefined,
@@ -146,7 +159,7 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
         outputFile: undefined,
         usage: undefined,
       }
-    : stored;
+    : (stored ?? correlated.task);
   const patchedStatus = taskMessage.patch?.status ?? previous?.status ?? "running";
   // Within one run, level and edge messages may be delivered in either
   // order, so a late start/progress edge must enrich a terminal record
@@ -157,9 +170,7 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     LIVE_BACKGROUND_TASK_STATUSES.has(patchedStatus)
       ? previous.status
       : patchedStatus;
-  // Validated as on replay.
-  const parsed = persistedBackgroundTaskMessage({ message });
-  const task: BackgroundTaskSnapshot = {
+  const task = settleWorkflowAgents({
     id: taskMessage.task_id,
     toolUseId: taskMessage.tool_use_id ?? previous?.toolUseId,
     description: parsed
@@ -180,7 +191,7 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
         : (persistedTaskUsage(taskMessage.usage) ?? previous?.usage),
     ...carriedTaskMetadata(previous),
     ...(parsed ? taskMessageMetadata(parsed, previous) : {}),
-  };
+  });
   Object.assign(
     task,
     takeShellTaskFields(session, task.toolUseId),
@@ -196,6 +207,9 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
   if (LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) {
     turn.runtime?.tasks.live.add(task.id);
   } else {
+    if (previous && LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)) {
+      persistSettledWorkflowDetails(session, task);
+    }
     const owner = backgroundTaskOwner(session, task.id) ?? correlated.owner;
     session.claudeRuntime?.tasks.live.delete(task.id);
     // A finishing task sends its terminal patch before the
@@ -232,6 +246,10 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
   if (isHookRunningBackgroundTask(session.backgroundTasks?.[notification.task_id])) {
     return "stop";
   }
+  const stored =
+    session.backgroundTasks?.[notification.task_id] ??
+    session.claudeRuntime?.tasks.settling.get(notification.task_id);
+  if (ignoreWorkflowTaskEdge(notification, stored)) return "stop";
   // The ending of a task this bridge stopped re-enters nothing: the CLI
   // queues its notification for the next prompt rather than starting a turn
   // (`ClaudeRuntimeTasks.stopRequested`), so no continuation is owed for it.
@@ -279,7 +297,7 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
       : notification.status === "stopped"
         ? "killed"
         : "completed";
-  const task: BackgroundTaskSnapshot = {
+  const task = settleWorkflowAgents({
     id: notification.task_id,
     toolUseId: notification.tool_use_id ?? previous?.toolUseId,
     description: previous?.description ?? notification.description ?? notification.summary,
@@ -296,7 +314,7 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
     ...carriedTaskMetadata(previous),
     ...taskMessageMetadata(notification, previous),
     ...(orphanScan === "cleanup" ? { endReason: "resume_cleanup" as const } : {}),
-  };
+  });
   Object.assign(
     task,
     takeShellTaskFields(session, task.toolUseId),
@@ -306,6 +324,7 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
     ...session.backgroundTasks,
     [task.id]: task,
   });
+  persistSettledWorkflowDetails(session, task);
   retireWorkflowAgentHookTasks(turn, task);
   noteTaskCall(turn, task);
   // A task that ended on its own while the bridge's stop was in flight: a
@@ -388,7 +407,10 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
     replacement[id] = {
       id,
       toolUseId: previous?.toolUseId,
-      description: entry.description ?? previous?.description,
+      description:
+        previous?.taskType === "local_workflow"
+          ? (previous.description ?? entry.description)
+          : (entry.description ?? previous?.description),
       status: LIVE_BACKGROUND_TASK_STATUSES.has(previous?.status ?? "running")
         ? (previous?.status ?? "running")
         : "running",

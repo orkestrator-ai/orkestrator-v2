@@ -338,7 +338,19 @@ export async function readPersistedSessionMessages(session: SessionState): Promi
   const shellDetails = new Map(
     preferences?.shellTaskDetails?.map((entry) => [entry.toolUseId, entry]),
   );
+  const workflowDetails = new Map(
+    preferences?.workflowTaskDetails?.map((entry) => [entry.toolUseId, entry]),
+  );
   for (const task of Object.values(normalized.backgroundTasks ?? {})) {
+    const workflow =
+      task.taskType === "local_workflow" && task.toolUseId
+        ? workflowDetails.get(task.toolUseId)
+        : undefined;
+    if (workflow?.taskId === task.id) {
+      task.workflowAgents ??= workflow.workflowAgents;
+      task.workflowAgentsOmitted ??= workflow.workflowAgentsOmitted;
+      task.usage ??= workflow.usage;
+    }
     const fields = task.toolUseId ? shellDetails.get(task.toolUseId) : undefined;
     if (!fields) continue;
     task.command ??= fields.command;

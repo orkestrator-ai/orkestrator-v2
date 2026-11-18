@@ -3,11 +3,7 @@
 // line into one validated shape, and the reducer that folds them into the
 // task map when a session is materialized from its rollout.
 
-import type {
-  BackgroundTaskSnapshot,
-  BackgroundTaskUsage,
-  BackgroundWorkflowAgent,
-} from "../types/index.js";
+import type { BackgroundTaskSnapshot, BackgroundTaskUsage } from "../types/index.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
   RUN_SCOPED_TASK_METADATA_RESET,
@@ -16,12 +12,20 @@ import {
   resumeOrphanScanOutcome,
   taskMessageMetadata,
 } from "./session-manager-background-tasks.js";
-import { parseWorkflowProgress, taskEdgeDescription } from "./background-task-workflow.js";
+import {
+  ignoreWorkflowTaskEdge,
+  isWorkflowRelaunch,
+  parseWorkflowProgress,
+  settleWorkflowAgents,
+  taskEdgeDescription,
+  type WorkflowProgress,
+} from "./background-task-workflow.js";
 
 export interface BackgroundTaskSystemMessage {
   subtype: "task_started" | "task_progress" | "task_updated" | "task_notification";
   task_id: string;
   tool_use_id?: string;
+  run_id?: string;
   description?: string;
   summary?: string;
   status?: "completed" | "failed" | "stopped";
@@ -40,8 +44,7 @@ export interface BackgroundTaskSystemMessage {
   reason?: "worker_restart";
   ambient?: boolean;
   /** A workflow's agents, from `workflow_progress`; see `background-task-workflow.ts`. */
-  workflow_agents?: BackgroundWorkflowAgent[];
-  workflow_agents_omitted?: number;
+  workflow_progress?: WorkflowProgress;
   patch?: {
     status?: BackgroundTaskSnapshot["status"];
     description?: string;
@@ -234,6 +237,7 @@ export function persistedBackgroundTaskMessage(raw: {
       subtype: message.subtype,
       task_id: taskId,
       tool_use_id: persistedTaskIdentifier(message.tool_use_id),
+      run_id: persistedTaskIdentifier(message.run_id),
       description: persistedTaskText(message.description),
       summary: persistedTaskText(message.summary),
       status: notificationStatus,
@@ -246,9 +250,7 @@ export function persistedBackgroundTaskMessage(raw: {
       ...(lastToolName ? { last_tool_name: lastToolName } : {}),
       ...(message.reason === "worker_restart" ? { reason: "worker_restart" as const } : {}),
       ...(message.ambient === true || message.skip_transcript === true ? { ambient: true } : {}),
-      ...(workflow
-        ? { workflow_agents: workflow.agents, workflow_agents_omitted: workflow.omitted }
-        : {}),
+      ...(workflow ? { workflow_progress: workflow } : {}),
       ...(hasPatch
         ? {
             patch: {
@@ -264,6 +266,30 @@ export function persistedBackgroundTaskMessage(raw: {
     };
   }
   return undefined;
+}
+
+/** The launch bookend in a pinned Claude rollout when SDK system frames are absent. */
+export function persistedWorkflowLaunch(
+  output: unknown,
+  toolUseId: string,
+): BackgroundTaskSystemMessage | undefined {
+  if (typeof output !== "string") return undefined;
+  const match =
+    /^Workflow launched in background\. Task ID: ([^\r\n]+)\r?\nSummary: ([^\r\n]*)/.exec(
+      output.slice(
+        0,
+        MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH + MAX_PERSISTED_BACKGROUND_TASK_TEXT_LENGTH + 64,
+      ),
+    );
+  const taskId = persistedTaskIdentifier(match?.[1]);
+  if (!taskId) return undefined;
+  return {
+    subtype: "task_started",
+    task_id: taskId,
+    tool_use_id: toolUseId,
+    task_type: "local_workflow",
+    description: persistedTaskText(match?.[2]),
+  };
 }
 
 /**
@@ -302,12 +328,14 @@ export function reducePersistedBackgroundTaskMessage(
     message.subtype === "task_started" &&
     stored !== undefined &&
     !LIVE_BACKGROUND_TASK_STATUSES.has(stored.status) &&
-    message.tool_use_id !== undefined &&
-    message.tool_use_id !== stored.toolUseId;
+    (isWorkflowRelaunch(message, stored) ||
+      (message.tool_use_id !== undefined && message.tool_use_id !== stored.toolUseId));
+  if (!resumedRun && ignoreWorkflowTaskEdge(message, stored)) return tasks ?? {};
   const previous = resumedRun
     ? {
         ...stored,
         ...RUN_SCOPED_TASK_METADATA_RESET,
+        toolUseId: undefined,
         status: "running" as const,
         startedAt: timestamp,
         endedAt: undefined,
@@ -335,7 +363,7 @@ export function reducePersistedBackgroundTaskMessage(
             : "killed";
     return boundBackgroundTaskHistory({
       ...tasks,
-      [message.task_id]: {
+      [message.task_id]: settleWorkflowAgents({
         id: message.task_id,
         toolUseId: message.tool_use_id ?? previous?.toolUseId,
         description: previous?.description ?? message.description ?? message.summary,
@@ -351,7 +379,7 @@ export function reducePersistedBackgroundTaskMessage(
         ...carriedTaskMetadata(previous),
         ...taskMessageMetadata(message, previous),
         ...(orphanScan === "cleanup" ? { endReason: "resume_cleanup" as const } : {}),
-      },
+      }),
     });
   }
 
@@ -369,7 +397,7 @@ export function reducePersistedBackgroundTaskMessage(
       : undefined;
   return boundBackgroundTaskHistory({
     ...tasks,
-    [message.task_id]: {
+    [message.task_id]: settleWorkflowAgents({
       id: message.task_id,
       toolUseId: message.tool_use_id ?? previous?.toolUseId,
       description: taskEdgeDescription(message, previous),
@@ -388,6 +416,6 @@ export function reducePersistedBackgroundTaskMessage(
       subagentType: previous?.subagentType,
       ...carriedTaskMetadata(previous),
       ...taskMessageMetadata(message, previous),
-    },
+    }),
   });
 }

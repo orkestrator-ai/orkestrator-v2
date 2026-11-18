@@ -174,12 +174,43 @@ function workflowAgentStatus(
   }
 }
 
+function workflowAgentCountsField(
+  value: unknown,
+): Pick<NativeAgentBackgroundTaskSummary, "workflowAgentCounts"> {
+  const counts = asRecord(value);
+  if (!counts) return {};
+  const { total, running, queued, finished, failed, partial } = counts;
+  const isCount = (count: unknown): count is number =>
+    typeof count === "number" && Number.isSafeInteger(count) && count >= 0;
+  if (
+    !isCount(total) ||
+    !isCount(running) ||
+    !isCount(queued) ||
+    !isCount(finished) ||
+    !isCount(failed) ||
+    running + queued + finished !== total ||
+    failed > finished
+  ) {
+    return {};
+  }
+  return {
+    workflowAgentCounts: {
+      total,
+      running,
+      queued,
+      finished,
+      failed,
+      ...(partial === true ? { partial } : {}),
+    },
+  };
+}
+
 function workflowAgentsField(
   value: unknown,
   omitted: unknown,
 ): Pick<NativeAgentBackgroundTaskSummary, "workflowAgents" | "workflowAgentsOmitted"> {
-  if (!Array.isArray(value)) return {};
-  const agents = value.slice(0, WORKFLOW_AGENTS_MAX).flatMap((raw): NativeAgentWorkflowAgent[] => {
+  const rows = Array.isArray(value) ? value : [];
+  const agents = rows.slice(0, WORKFLOW_AGENTS_MAX).flatMap((raw): NativeAgentWorkflowAgent[] => {
     const row = asRecord(raw);
     if (!row) return [];
     const index = row.index;
@@ -216,8 +247,7 @@ function workflowAgentsField(
       },
     ];
   });
-  const dropped =
-    (nonNegativeCount(omitted) ?? 0) + Math.max(0, value.length - WORKFLOW_AGENTS_MAX);
+  const dropped = (nonNegativeCount(omitted) ?? 0) + Math.max(0, rows.length - WORKFLOW_AGENTS_MAX);
   return {
     ...(agents.length > 0 ? { workflowAgents: agents } : {}),
     ...(dropped > 0 ? { workflowAgentsOmitted: dropped } : {}),
@@ -264,6 +294,7 @@ export function normalizeClaudeBackgroundTasks(
           ...pausedMsField(task.pausedMs),
           ...endReasonField(task.endReason),
           ...workflowAgentsField(task.workflowAgents, task.workflowAgentsOmitted),
+          ...workflowAgentCountsField(task.workflowAgentCounts),
         },
       ];
     });

@@ -2137,6 +2137,18 @@ export interface NativeAgentBackgroundTaskSummary {
   workflowAgents?: NativeAgentWorkflowAgent[];
   /** Agents left out of `workflowAgents` to keep it bounded. */
   workflowAgentsOmitted?: number;
+  /** Counts from the provider's rows before the display limit is applied. */
+  workflowAgentCounts?: NativeAgentWorkflowAgentCounts;
+}
+
+export interface NativeAgentWorkflowAgentCounts {
+  total: number;
+  running: number;
+  queued: number;
+  finished: number;
+  failed: number;
+  /** The provider or parser omitted rows before their statuses could be counted. */
+  partial?: true;
 }
 
 export type NativeAgentWorkflowAgentStatus =

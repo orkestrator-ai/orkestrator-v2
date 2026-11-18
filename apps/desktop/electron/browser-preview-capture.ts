@@ -364,7 +364,7 @@ export class BrowserPreviewCaptureSessions {
       environmentId = previous.descriptor.environmentId;
       annotationId = previous.descriptor.annotationId;
       initialTarget = initialTargetFor(previous.target);
-      purpose = previous.descriptor.purpose;
+      purpose = previous.descriptor.purpose ?? "note";
       previousResult = previous;
     }
     if (!(await store.hasCapacity(input.tabId, recaptureOf ? { excluding: recaptureOf } : {}))) {

@@ -893,6 +893,64 @@ describe("files panel views", () => {
     );
   });
 
+  test("keeps a renamed selection and range anchor across nested lazy reads", async () => {
+    const store = appCommandStore(filesPanelStore);
+    const nestedFiles = [
+      { name: "a.ts", path: "src/deep/a.ts", isDirectory: false },
+      { name: "b.ts", path: "src/deep/b.ts", isDirectory: false },
+    ];
+    const child = { name: "deep", path: "src/deep", isDirectory: true, truncated: true };
+    store.setState({
+      fileTree: [{ name: "src", path: "src", isDirectory: true, truncated: true }],
+      expandedFolders: ["src", "src/deep"],
+      fileSubtrees: {
+        src: { children: [child], truncated: false },
+        "src/deep": { children: nestedFiles, truncated: false },
+      },
+    });
+    const onRename = mock(async () => {
+      store.setState({
+        fileTree: [{ name: "lib", path: "lib", isDirectory: true, truncated: true }],
+        expandedFolders: ["lib", "lib/deep"],
+        fileSubtrees: {},
+      });
+      return "lib";
+    });
+
+    renderWithTerminal(<AllFilesView onRename={onRename} />);
+    fireEvent.click(screen.getByRole("button", { name: "a.ts" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "src" }));
+    fireEvent.click(await screen.findByText("Rename…"));
+    fireEvent.change(screen.getByLabelText("Folder name"), { target: { value: "lib" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Rename folder" }) === null).toBe(true),
+    );
+
+    const lib = { children: [{ ...child, path: "lib/deep" }], truncated: false };
+    act(() => store.setState({ fileSubtrees: { lib } }));
+    expect(screen.getByRole("button", { name: "deep" })).toBeTruthy();
+    act(() =>
+      store.setState({
+        fileSubtrees: {
+          lib,
+          "lib/deep": {
+            children: nestedFiles.map((file) => ({ ...file, path: `lib/deep/${file.name}` })),
+            truncated: false,
+          },
+        },
+      }),
+    );
+    expect(screen.getByRole("button", { name: "a.ts" }).getAttribute("aria-pressed")).toBe("true");
+
+    createFileTab.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "b.ts" }), { shiftKey: true });
+    expect(createFileTab).not.toHaveBeenCalled();
+    for (const name of ["a.ts", "b.ts"]) {
+      expect(screen.getByRole("button", { name }).getAttribute("aria-pressed")).toBe("true");
+    }
+  });
+
   test("keeps Rename disabled while a mutation is pending", async () => {
     appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onRename={mock(async () => "x")} movePending />);
@@ -961,6 +1019,29 @@ describe("files panel views", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rename" }));
     expect(await screen.findByText("Folder names cannot contain / or \\")).toBeTruthy();
     expect(onRename).not.toHaveBeenCalled();
+  });
+
+  test("RenameFileDialog validates the folder limit in UTF-8 bytes", async () => {
+    const onRename = mock(async () => undefined);
+    renderInAppCommandScope(
+      <RenameFileDialog
+        filePath="src/docs"
+        isFolder
+        isPending={false}
+        onCancel={() => undefined}
+        onRename={onRename}
+      />,
+    );
+    const input = screen.getByLabelText("Folder name");
+    fireEvent.change(input, { target: { value: "é".repeat(128) } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    expect(await screen.findByText("Folder names cannot exceed 255 bytes")).toBeTruthy();
+    expect(onRename).not.toHaveBeenCalled();
+
+    const allowedName = "é".repeat(127) + "z";
+    fireEvent.change(input, { target: { value: allowedName } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    expect(onRename).toHaveBeenCalledWith("src/docs", allowedName);
   });
 
   test("RenameFileDialog ignores dismissals while renaming is pending", () => {

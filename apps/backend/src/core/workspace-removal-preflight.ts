@@ -1,5 +1,9 @@
 /** Self-contained so the container runs the same preflight under Node. */
-export async function assertNoNestedRepositories(root: string, target: string): Promise<void> {
+export async function assertNoNestedRepositories(
+  root: string,
+  target: string,
+  operation: "delete" | "rename" = "delete",
+): Promise<void> {
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
   const stat = async (filename: string) =>
@@ -18,14 +22,27 @@ export async function assertNoNestedRepositories(root: string, target: string): 
         (await stat(path.join(absolute, "objects")))?.isDirectory() &&
         (await stat(path.join(absolute, "refs")))?.isDirectory())
     ) {
-      throw new Error(`Cannot delete ${target}: nested Git repository at ${directory}`);
+      throw new Error(`Cannot ${operation} ${target}: nested Git repository at ${directory}`);
     }
     const entries = await fs.opendir(absolute);
     for await (const entry of entries) {
       if (entry.isDirectory()) await visit(path.join(directory, entry.name));
     }
   };
-  await visit(target);
+  try {
+    await visit(target);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (operation === "rename" && (code === "EACCES" || code === "EPERM")) {
+      throw new Error(
+        `Cannot rename ${target}: permission denied while checking for nested Git repositories`,
+        {
+          cause: error,
+        },
+      );
+    }
+    throw error;
+  }
 }
 
 export function containerRemovalPreflightScript(): string {

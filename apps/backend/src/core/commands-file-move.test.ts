@@ -235,19 +235,49 @@ describe("workspace file moves", () => {
       "Source is not a regular file: source/nested",
     );
 
-    const elsewhere = run("source/nested", "destination/nested", "rename-in-place");
+    const elsewhere = run("source/nested", "destination/nested", "rename-folder-in-place");
     expect(await elsewhere.exited).toBe(1);
     expect(await new Response(elsewhere.stderr).text()).toContain(
       "A folder can only be renamed in place",
     );
 
-    const collision = run("source/nested", "source/taken", "rename-in-place");
+    const collision = run("source/nested", "source/taken", "rename-folder-in-place");
     expect(await collision.exited).toBe(1);
     expect(await new Response(collision.stderr).text()).toContain(
       "A file or folder already exists at source/taken",
     );
 
-    const renamed = run("source/nested", "source/renamed", "rename-in-place");
+    for (const [source, mode, message] of [
+      ["source/nested", "rename-file-in-place", "Source is not a regular file"],
+      ["source/nested/a.txt", "rename-folder-in-place", "Source is not a folder"],
+    ] as const) {
+      const mismatch = run(source, `${path.posix.dirname(source)}/renamed`, mode);
+      expect(await mismatch.exited).toBe(1);
+      expect(await new Response(mismatch.stderr).text()).toContain(message);
+    }
+
+    const marker = path.join(worktreePath, "source", "nested", ".git");
+    await fs.writeFile(marker, "gitdir: ../../.git/modules/nested");
+    const nestedGit = run("source/nested", "source/renamed", "rename-folder-in-place");
+    expect(await nestedGit.exited).toBe(1);
+    expect(await new Response(nestedGit.stderr).text()).toContain("nested Git repository");
+    await fs.unlink(marker);
+
+    if (process.getuid?.() !== 0) {
+      const folder = path.join(worktreePath, "source", "nested");
+      await fs.chmod(folder, 0o300);
+      try {
+        const unreadable = run("source/nested", "source/renamed", "rename-folder-in-place");
+        expect(await unreadable.exited).toBe(1);
+        expect(await new Response(unreadable.stderr).text()).toContain(
+          "permission denied while checking for nested Git repositories",
+        );
+      } finally {
+        await fs.chmod(folder, 0o700);
+      }
+    }
+
+    const renamed = run("source/nested", "source/renamed", "rename-folder-in-place");
     expect(await renamed.exited).toBe(0);
     await expect(
       fs.readFile(path.join(worktreePath, "source", "renamed", "a.txt"), "utf8"),
@@ -255,11 +285,11 @@ describe("workspace file moves", () => {
 
     expect(
       containerMoveFileCommand("source/nested", "source", "source/renamed", {
-        renameInPlace: true,
+        renameKind: "folder",
       }),
-    ).toContain('"$destination" rename-in-place');
+    ).toContain('"$destination" rename-folder-in-place');
     expect(containerMoveFileCommand("source/a.txt", ".", "a.txt")).not.toContain(
-      '"$destination" rename-in-place',
+      '"$destination" rename-folder-in-place',
     );
   });
 });

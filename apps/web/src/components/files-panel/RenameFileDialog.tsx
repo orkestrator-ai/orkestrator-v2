@@ -1,3 +1,7 @@
+import {
+  MAX_WORKSPACE_FILE_NAME_BYTES,
+  MAX_WORKSPACE_FOLDER_NAME_BYTES,
+} from "@orkestrator/protocol/contract/domains/files";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   Dialog,
@@ -45,6 +49,7 @@ export function RenameFileDialog({
   const newName = value.trim();
   const unchanged = newName === currentName;
   const noun = isFolder ? "folder" : "file";
+  const maxBytes = isFolder ? MAX_WORKSPACE_FOLDER_NAME_BYTES : MAX_WORKSPACE_FILE_NAME_BYTES;
   const capitalNoun = isFolder ? "Folder" : "File";
 
   // Opening the dialog for a file starts from its current name.
@@ -73,6 +78,10 @@ export function RenameFileDialog({
     if (!filePath || !newName || unchanged || isPending) return;
     if (newName.includes("/") || newName.includes("\\")) {
       setError(`${capitalNoun} names cannot contain / or \\`);
+      return;
+    }
+    if (new TextEncoder().encode(newName).length > maxBytes) {
+      setError(`${capitalNoun} names cannot exceed ${maxBytes} bytes`);
       return;
     }
     setError(null);
@@ -111,7 +120,6 @@ export function RenameFileDialog({
               ref={inputRef}
               autoFocus
               value={value}
-              maxLength={255}
               disabled={isPending}
               onChange={(event) => {
                 setValue(event.target.value);

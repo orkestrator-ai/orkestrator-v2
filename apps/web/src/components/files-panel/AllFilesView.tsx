@@ -126,16 +126,36 @@ export function AllFilesView({
     () => collectVisibleFilePaths(fileTree, expandedFolders),
     [fileTree, expandedFolders],
   );
-  const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
+  const existingPaths = useMemo(() => new Set(collectAllFilePaths(fileTree)), [fileTree]);
+  // Keep unresolved paths out of actions until their rows are available again.
+  const selectedPathSet = useMemo(
+    () => new Set(selectedPaths.filter((path) => existingPaths.has(path))),
+    [selectedPaths, existingPaths],
+  );
 
-  // Files that left the tree leave the selection, while rendering.
+  // A missing file may still be in a truncated subtree. In particular, a
+  // renamed branch can publish several partial trees before its files return.
   const [selectionTree, setSelectionTree] = useState(fileTree);
   if (fileTree !== selectionTree) {
     setSelectionTree(fileTree);
-    const existing = new Set(collectAllFilePaths(fileTree));
-    const kept = selectedPaths.filter((path) => existing.has(path));
+    const directoriesByPath = new Map(directories.map((node) => [node.path, node]));
+    const mayExist = (path: string) => {
+      if (existingPaths.has(path)) return true;
+      if (directoriesByPath.has(path)) return false;
+      for (
+        let parent = workspaceParentDirectory(path);
+        parent !== ".";
+        parent = workspaceParentDirectory(parent)
+      ) {
+        const directory = directoriesByPath.get(parent);
+        if (directory) return directory.truncated === true;
+        if (existingPaths.has(parent)) return false;
+      }
+      return false;
+    };
+    const kept = selectedPaths.filter(mayExist);
     if (kept.length !== selectedPaths.length) setSelectedPaths(kept);
-    if (anchorPath && !existing.has(anchorPath)) setAnchorPath(null);
+    if (anchorPath && !mayExist(anchorPath)) setAnchorPath(null);
   }
 
   const handleFileClick = (path: string, event: MouseEvent<HTMLButtonElement>) => {

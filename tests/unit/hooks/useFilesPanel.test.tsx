@@ -105,10 +105,20 @@ const mockMoveLocalFile = mock<
 const renamedPath = (filePath: string, newName: string) =>
   filePath.includes("/") ? `${filePath.slice(0, filePath.lastIndexOf("/"))}/${newName}` : newName;
 const mockRenameContainerFile = mock<
-  (environmentId: string, filePath: string, newName: string) => Promise<string>
+  (
+    environmentId: string,
+    filePath: string,
+    newName: string,
+    kind: "file" | "folder",
+  ) => Promise<string>
 >((_environmentId, filePath, newName) => Promise.resolve(renamedPath(filePath, newName)));
 const mockRenameLocalFile = mock<
-  (environmentId: string, filePath: string, newName: string) => Promise<string>
+  (
+    environmentId: string,
+    filePath: string,
+    newName: string,
+    kind: "file" | "folder",
+  ) => Promise<string>
 >((_environmentId, filePath, newName) => Promise.resolve(renamedPath(filePath, newName)));
 const mockCreateContainerFolder = mock<
   (environmentId: string, parentDirectory: string, folderName: string) => Promise<string>
@@ -969,83 +979,91 @@ describe("useFilesPanel", () => {
     expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(freshTree);
   });
 
-  test("does not refresh or overwrite the new environment after switching during a mutation", async () => {
-    const firstEnvironment = createMockEnvironment({
-      id: "env-a",
-      projectId: "project-1",
-      environmentType: "containerized",
-      containerId: "container-a",
-      status: "running",
-    });
-    const secondEnvironment = createMockEnvironment({
-      id: "env-b",
-      projectId: "project-1",
-      environmentType: "containerized",
-      containerId: "container-b",
-      status: "running",
-    });
-    const secondChange = { ...change, path: "src/Second.tsx", filename: "Second.tsx" };
-    const secondTree: FileNode[] = [
-      { name: "Second.tsx", path: "src/Second.tsx", isDirectory: false },
-    ];
-    let resolveDelete: (path: string) => void = () => {};
-    resetStores(firstEnvironment);
-    appCommandStore(environmentStore).setState({
-      environments: [firstEnvironment, secondEnvironment],
-    });
-    mockDeleteContainerFile.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveDelete = resolve;
-        }),
-    );
-
-    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
-    let mutation: Promise<void>;
-    act(() => {
-      mutation = result.current.deleteFile("src", { target: "folder" });
-    });
-    await waitFor(() => expect(result.current.fileActionPending).toBe("src"));
-
-    act(() => {
-      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-b" });
-    });
-    await waitFor(() => expect(result.current.environmentId).toBe("env-b"));
-    const pendingLoadToken = Symbol("env-b-load");
-    act(() => {
-      appCommandStore(filesPanelStore).setState({
-        changes: [secondChange],
-        fileTree: secondTree,
-        expandedFolders: ["src"],
-        fileSubtrees: { src: { children: secondTree, truncated: false } },
-        fileSubtreeDigests: { src: "env-b-digest" },
-        folderLoadTokens: new Map([["src/loading", pendingLoadToken]]),
-        loadingFolders: ["src/loading"],
+  test.each(["delete", "rename"] as const)(
+    "does not refresh or overwrite the new environment after switching during a folder %s",
+    async (operation) => {
+      const firstEnvironment = createMockEnvironment({
+        id: "env-a",
+        projectId: "project-1",
+        environmentType: "containerized",
+        containerId: "container-a",
+        status: "running",
       });
-    });
+      const secondEnvironment = createMockEnvironment({
+        id: "env-b",
+        projectId: "project-1",
+        environmentType: "containerized",
+        containerId: "container-b",
+        status: "running",
+      });
+      const secondChange = { ...change, path: "src/Second.tsx", filename: "Second.tsx" };
+      const secondTree: FileNode[] = [
+        { name: "Second.tsx", path: "src/Second.tsx", isDirectory: false },
+      ];
+      let resolveMutation: (path: string) => void = () => {};
+      resetStores(firstEnvironment);
+      appCommandStore(environmentStore).setState({
+        environments: [firstEnvironment, secondEnvironment],
+      });
+      const mockMutation =
+        operation === "rename" ? mockRenameContainerFile : mockDeleteContainerFile;
+      mockMutation.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveMutation = resolve;
+          }),
+      );
 
-    await act(async () => {
-      resolveDelete("src");
-      await mutation;
-    });
+      const { result } = renderHookInAppCommandScope(() => useFilesPanel());
+      let mutation: Promise<void | string>;
+      act(() => {
+        mutation =
+          operation === "rename"
+            ? result.current.renameFile("src", "lib", { target: "folder" })
+            : result.current.deleteFile("src", { target: "folder" });
+      });
+      await waitFor(() => expect(result.current.fileActionPending).toBe("src"));
 
-    expect(mockGetGitStatus).not.toHaveBeenCalled();
-    expect(mockGetFileTree).not.toHaveBeenCalled();
-    expect(appCommandStore(filesPanelStore).getState().changes).toEqual([secondChange]);
-    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(secondTree);
-    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual(["src"]);
-    expect(appCommandStore(filesPanelStore).getState().fileSubtrees.src?.children).toEqual(
-      secondTree,
-    );
-    expect(appCommandStore(filesPanelStore).getState().fileSubtreeDigests).toEqual({
-      src: "env-b-digest",
-    });
-    expect(appCommandStore(filesPanelStore).getState().folderLoadTokens.get("src/loading")).toBe(
-      pendingLoadToken,
-    );
-    expect(appCommandStore(filesPanelStore).getState().loadingFolders).toEqual(["src/loading"]);
-    expect(result.current.fileActionPending).toBeNull();
-  });
+      act(() => {
+        appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-b" });
+      });
+      await waitFor(() => expect(result.current.environmentId).toBe("env-b"));
+      const pendingLoadToken = Symbol("env-b-load");
+      act(() => {
+        appCommandStore(filesPanelStore).setState({
+          changes: [secondChange],
+          fileTree: secondTree,
+          expandedFolders: ["src"],
+          fileSubtrees: { src: { children: secondTree, truncated: false } },
+          fileSubtreeDigests: { src: "env-b-digest" },
+          folderLoadTokens: new Map([["src/loading", pendingLoadToken]]),
+          loadingFolders: ["src/loading"],
+        });
+      });
+
+      await act(async () => {
+        resolveMutation(operation === "rename" ? "lib" : "src");
+        await mutation;
+      });
+
+      expect(mockGetGitStatus).not.toHaveBeenCalled();
+      expect(mockGetFileTree).not.toHaveBeenCalled();
+      expect(appCommandStore(filesPanelStore).getState().changes).toEqual([secondChange]);
+      expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(secondTree);
+      expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual(["src"]);
+      expect(appCommandStore(filesPanelStore).getState().fileSubtrees.src?.children).toEqual(
+        secondTree,
+      );
+      expect(appCommandStore(filesPanelStore).getState().fileSubtreeDigests).toEqual({
+        src: "env-b-digest",
+      });
+      expect(appCommandStore(filesPanelStore).getState().folderLoadTokens.get("src/loading")).toBe(
+        pendingLoadToken,
+      );
+      expect(appCommandStore(filesPanelStore).getState().loadingFolders).toEqual(["src/loading"]);
+      expect(result.current.fileActionPending).toBeNull();
+    },
+  );
 
   test("setting and clearing a comparison override retargets snapshots and file reverts", async () => {
     const created = "c".repeat(40);
@@ -1271,6 +1289,7 @@ describe("useFilesPanel", () => {
       "env-container",
       "src/App.tsx",
       "Main.tsx",
+      "file",
     );
     expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
     expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
@@ -1290,7 +1309,7 @@ describe("useFilesPanel", () => {
     await act(async () => {
       await localHook.result.current.renameFile("README.md", "readme.md");
     });
-    expect(mockRenameLocalFile).toHaveBeenCalledWith("env-local", "README.md", "readme.md");
+    expect(mockRenameLocalFile).toHaveBeenCalledWith("env-local", "README.md", "readme.md", "file");
     expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
     expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
   });
@@ -1551,36 +1570,45 @@ describe("useFilesPanel", () => {
     expect(result.current.fileActionPending).toBeNull();
   });
 
-  test("renames a folder with folder wording and keeps its expanded branch open", async () => {
-    const environment = createMockEnvironment({
-      id: "env-container",
-      projectId: "project-1",
-      environmentType: "containerized",
-      containerId: "container-1",
-      status: "running",
-    });
-    resetStores(environment);
-    appCommandStore(filesPanelStore).setState({
-      expandedFolders: ["src", "src/hooks", "srcs", "docs"],
-    });
-    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
+  test.each(["local", "containerized"] as const)(
+    "renames a %s folder and keeps its expanded branch open",
+    async (environmentType) => {
+      const environment = createMockEnvironment({
+        id: "env-folder",
+        projectId: "project-1",
+        environmentType,
+        worktreePath: "/tmp/worktree",
+        containerId: "container-1",
+        status: "running",
+      });
+      resetStores(environment);
+      appCommandStore(filesPanelStore).setState({
+        expandedFolders: ["src", "src/hooks", "srcs", "docs"],
+      });
+      const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
-    await act(async () => {
-      await expect(result.current.renameFile("src", "lib", { target: "folder" })).resolves.toBe(
+      await act(async () => {
+        await expect(result.current.renameFile("src", "lib", { target: "folder" })).resolves.toBe(
+          "lib",
+        );
+      });
+      if (environmentType === "local") {
+        expect(mockRenameLocalFile).toHaveBeenCalledWith("env-folder", "src", "lib", "folder");
+        expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
+      } else {
+        expect(mockRenameContainerFile).toHaveBeenCalledWith("env-folder", "src", "lib", "folder");
+        expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
+      }
+      expect(mockToastSuccess).toHaveBeenCalledWith("Folder renamed", { description: "lib" });
+      expect([...appCommandStore(filesPanelStore).getState().expandedFolders].sort()).toEqual([
+        "docs",
         "lib",
-      );
-    });
-    expect(mockRenameContainerFile).toHaveBeenCalledWith("env-container", "src", "lib");
-    expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
-    expect(mockToastSuccess).toHaveBeenCalledWith("Folder renamed", { description: "lib" });
-    expect([...appCommandStore(filesPanelStore).getState().expandedFolders].sort()).toEqual([
-      "docs",
-      "lib",
-      "lib/hooks",
-      "srcs",
-    ]);
-    expect(result.current.fileActionPending).toBeNull();
-  });
+        "lib/hooks",
+        "srcs",
+      ]);
+      expect(result.current.fileActionPending).toBeNull();
+    },
+  );
 
   test("keeps pending state while a mutation runs and clears it after failure", async () => {
     const environment = createMockEnvironment({

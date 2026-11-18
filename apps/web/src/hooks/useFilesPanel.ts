@@ -1069,8 +1069,13 @@ export function useFilesPanel() {
         try {
           renamed =
             isLocalEnvironment && worktreePath
-              ? await backendForScope(scope).renameLocalFile(environmentId, filePath, newName)
-              : await backendForScope(scope).renameContainerFile(environmentId, filePath, newName);
+              ? await backendForScope(scope).renameLocalFile(environmentId, filePath, newName, noun)
+              : await backendForScope(scope).renameContainerFile(
+                  environmentId,
+                  filePath,
+                  newName,
+                  noun,
+                );
         } catch (error) {
           // A case-only rename may have staged the file before failing. Refresh
           // both snapshots even on failure so any recovery file is visible.

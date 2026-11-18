@@ -553,6 +553,9 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         if (!inputRef.current.contains(range.commonAncestorContainer)) return;
 
         const cursorPosition = getCursorOffset(inputRef.current);
+        // Programmatic restores and input already record their caret position.
+        // A queued selectionchange at that position is not a caret move.
+        if (cursorPosition === lastCursorPositionRef.current) return;
         lastCursorPositionRef.current = cursorPosition;
         onCursorChange(cursorPosition, extractText(inputRef.current));
       };

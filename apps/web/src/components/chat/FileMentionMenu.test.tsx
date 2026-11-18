@@ -22,6 +22,26 @@ describe("FileMentionMenu", () => {
     expect(screen.getByRole("status").textContent).toBe("No files or folders found");
   });
 
+  test("updates a persistent loading status outside the busy listbox", () => {
+    const props = { files: [], selectedIndex: 0, onSelect: () => {}, onClose: () => {} };
+    const { container, rerender } = render(<FileMentionMenu {...props} open={false} />);
+    const liveRegion = () => container.querySelector('[aria-live="polite"]')!;
+    const status = liveRegion();
+    expect(status.textContent).toBe("");
+
+    rerender(<FileMentionMenu {...props} open loading />);
+    const listbox = screen.getByRole("listbox", { name: "File and folder suggestions" });
+    expect(listbox.getAttribute("aria-busy")).toBe("true");
+    expect(listbox.contains(status)).toBe(false);
+    expect(liveRegion()).toBe(status);
+    expect(status.textContent).toBe("Loading workspace files…");
+
+    rerender(<FileMentionMenu {...props} open files={files} />);
+    expect(listbox.hasAttribute("aria-busy")).toBe(false);
+    expect(liveRegion()).toBe(status);
+    expect(status.textContent).toBe("");
+  });
+
   test("selects a file on left mouse down without waiting for blur-prone click", () => {
     const onSelect = mock(() => {});
 

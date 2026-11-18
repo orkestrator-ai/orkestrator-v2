@@ -41,9 +41,7 @@ import {
   mergeReorderedFavoriteModels,
   useAgentModelFavorites,
 } from "@/hooks/useAgentModelFavorites";
-import { useFileMentions } from "@/hooks/useFileMentions";
-import { useFileSearch } from "@/hooks/useFileSearch";
-import { useComposerFileSearchFeedback } from "@/hooks/useComposerFileSearchFeedback";
+import { useComposerFileMentions } from "@/hooks/useComposerFileMentions";
 import { useComposerMountFocus } from "@/hooks/useComposerMountFocus";
 import { useFocusComposerShortcut } from "@/hooks/useFocusComposerShortcut";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
@@ -728,8 +726,8 @@ export function UnassignedNativeAgentComposer({
       window.removeEventListener(MODEL_CATALOG_REFRESHED_EVENT, retryAfterRefresh);
     };
   }, [environmentId, modelCatalogScope, models, platform]);
-  const fileSearch = useFileSearch(containerId, worktreePath);
   const {
+    fileSearch,
     isMenuOpen: fileMentionMenuOpen,
     selectedIndex: fileMentionSelectedIndex,
     filteredFiles,
@@ -738,7 +736,7 @@ export function UnassignedNativeAgentComposer({
     closeMenu: closeFileMentionMenu,
     serializeForLLM,
     createMention,
-  } = useFileMentions({ searchFiles: fileSearch.searchFiles });
+  } = useComposerFileMentions(containerId, worktreePath);
   const platformModels = models.filter((model) => model.platform === platform);
   const configuredModel = configured.model
     ? models.find((model) => model.platform === platform && model.id === configured.model)
@@ -913,11 +911,6 @@ export function UnassignedNativeAgentComposer({
     onImageRejected: handleImageRejected,
     logLabel: "UnassignedNativeAgentComposer",
   });
-  useComposerFileSearchFeedback({
-    error: fileSearch.error,
-    refresh: fileSearch.refresh,
-    mentionMenuOpen: fileMentionMenuOpen,
-  });
   useComposerMountFocus(inputRef, isActive);
   useFocusComposerShortcut({
     isActive: ownsGlobalShortcuts ?? isActive,
@@ -1060,14 +1053,22 @@ export function UnassignedNativeAgentComposer({
           placeholder={placeholder ?? "Ask an agent anything…"}
           disabled={disabled}
           menus={
-            fileMentionMenuOpen ? (
-              <FileMentionMenu
-                files={filteredFiles}
-                selectedIndex={fileMentionSelectedIndex}
-                onSelect={handleFileMentionSelect}
-                onClose={closeFileMentionMenu}
-              />
-            ) : null
+            <FileMentionMenu
+              open={fileMentionMenuOpen}
+              files={filteredFiles}
+              loading={fileSearch.isLoading}
+              onRetry={
+                fileSearch.error
+                  ? () => {
+                      inputRef.current?.focus();
+                      void fileSearch.refresh();
+                    }
+                  : undefined
+              }
+              selectedIndex={fileMentionSelectedIndex}
+              onSelect={handleFileMentionSelect}
+              onClose={closeFileMentionMenu}
+            />
           }
           primaryControls={
             <>

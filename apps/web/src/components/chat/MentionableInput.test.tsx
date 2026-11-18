@@ -1362,7 +1362,6 @@ describe("MentionableInput", () => {
     inputRange.collapse(true);
     selection.removeAllRanges();
     selection.addRange(inputRange);
-    onCursorChange.mockClear();
     document.dispatchEvent(new Event("selectionchange"));
 
     expect(onCursorChange).toHaveBeenCalledTimes(1);

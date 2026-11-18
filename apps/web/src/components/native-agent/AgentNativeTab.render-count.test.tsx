@@ -142,9 +142,13 @@ const ensureMock = mock(async (_input: Record<string, unknown>) => {
     agent: identity.platform,
   };
 });
-const getLocalFileTreeMock = mock(async (_worktreePath: string) => [
-  { name: "image.png", path: "src/image.png", isDirectory: false },
-]);
+const getLocalFileTreeSnapshotMock = mock<typeof realBackend.getLocalFileTreeSnapshot>(
+  async () => ({
+    unchanged: false,
+    digest: "tree",
+    value: [{ name: "image.png", path: "src/image.png", isDirectory: false }],
+  }),
+);
 /** Queue items the session state carries; empty for every case but one. */
 let queuedItems: Array<{ id: string; text: string }> = [];
 const removeQueuedMock = mock(async (..._args: unknown[]) => {});
@@ -222,7 +226,7 @@ mock.module("@/lib/backend", () => ({
     ].filter((model) => model.platform === platform),
   listNativeAgentResumableSessions: async () => [],
   getFileTree: async () => [],
-  getLocalFileTree: getLocalFileTreeMock,
+  getLocalFileTreeSnapshot: getLocalFileTreeSnapshotMock,
   removePromptQueueMessage: removeQueuedMock,
   runUserCommand: runUserCommandMock,
   listUserCommands: async () => ({ commands: [] }),
@@ -312,7 +316,7 @@ beforeEach(() => {
   runUserCommandMock.mockReset();
   dispatchMock.mockClear();
   ensureMock.mockClear();
-  getLocalFileTreeMock.mockClear();
+  getLocalFileTreeSnapshotMock.mockClear();
   clearTabInitialPromptMock.mockClear();
   appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   appCommandStore(nativeAgentProjectionStore).getState().reset();
@@ -885,14 +889,19 @@ test.each(["locked", "unassigned"] as const)(
       OWN_TAB,
       kind === "locked" ? { ...lockedTab, containerId: undefined, isLocal: true } : unassignedTab,
     );
-    expect(getLocalFileTreeMock).not.toHaveBeenCalled();
+    expect(getLocalFileTreeSnapshotMock).not.toHaveBeenCalled();
 
-    for (const worktreePath of ["/workspace/one", "/workspace/two"]) {
-      getLocalFileTreeMock.mockClear();
+    for (const worktreePath of [`/workspace/${kind}/one`, `/workspace/${kind}/two`]) {
+      getLocalFileTreeSnapshotMock.mockClear();
       await writeEnvironment({ worktreePath });
-      await waitFor(() => expect(getLocalFileTreeMock).toHaveBeenCalledWith(worktreePath));
+      expect(getLocalFileTreeSnapshotMock).not.toHaveBeenCalled();
       fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Attach file from workspace" }));
+      await waitFor(() =>
+        expect(getLocalFileTreeSnapshotMock).toHaveBeenCalledWith(worktreePath, undefined, {
+          refresh: true,
+        }),
+      );
       await act(async () => {
         fireEvent.click(await screen.findByRole("button", { name: /image.png/ }));
       });

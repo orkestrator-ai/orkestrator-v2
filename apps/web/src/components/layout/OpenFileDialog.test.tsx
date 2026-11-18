@@ -1,15 +1,13 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import * as realContexts from "@/contexts";
 import * as realStores from "@/stores";
-import * as realUseFileSearch from "@/hooks/useFileSearch";
-import type { FileCandidate } from "@/types";
+import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 
 const realContextsSnapshot = { ...realContexts };
 const realStoresSnapshot = { ...realStores };
-const realUseFileSearchSnapshot = { ...realUseFileSearch };
 const createFileTabMock = mock((_path: string) => undefined);
-const refreshMock = mock(async () => undefined);
+let client: FakeNodeClient;
 
 let selectedEnvironment: {
   id: string;
@@ -20,14 +18,6 @@ let selectedEnvironment: {
   containerId: "container-1",
   worktreePath: null,
 };
-let searchResults: FileCandidate[] = [
-  { filename: "src", relativePath: "src", isDirectory: true },
-  { filename: "App.tsx", relativePath: "src/App.tsx", isDirectory: false },
-  { filename: "index.ts", relativePath: "src/index.ts", isDirectory: false },
-];
-let searchError: string | null = null;
-let searchAvailable = true;
-
 mock.module("@/stores", () => ({
   ...realStoresSnapshot,
   useUIStore: <T,>(selector: (state: { selectedEnvironmentId: string | null }) => T) =>
@@ -49,22 +39,11 @@ mock.module("@/contexts", () => ({
   useTerminalContext: () => ({ createFileTab: createFileTabMock }),
 }));
 
-mock.module("@/hooks/useFileSearch", () => ({
-  useFileSearch: () => ({
-    searchFiles: () => searchResults,
-    isLoading: false,
-    error: searchError,
-    isAvailable: searchAvailable,
-    refresh: refreshMock,
-  }),
-}));
-
 const { OpenFileDialog } = await import("./OpenFileDialog");
 
 afterAll(() => {
   mock.module("@/stores", () => realStoresSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
-  mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
 });
 
 describe("OpenFileDialog", () => {
@@ -74,24 +53,31 @@ describe("OpenFileDialog", () => {
       containerId: "container-1",
       worktreePath: null,
     };
-    searchResults = [
-      { filename: "src", relativePath: "src", isDirectory: true },
-      { filename: "App.tsx", relativePath: "src/App.tsx", isDirectory: false },
-      { filename: "index.ts", relativePath: "src/index.ts", isDirectory: false },
-    ];
-    searchError = null;
-    searchAvailable = true;
+    client = new FakeNodeClient({
+      invoke: {
+        get_file_tree: [
+          {
+            name: "src",
+            path: "src",
+            isDirectory: true,
+            children: [
+              { name: "App.tsx", path: "src/App.tsx", isDirectory: false },
+              { name: "index.ts", path: "src/index.ts", isDirectory: false },
+            ],
+          },
+        ],
+      },
+    });
     createFileTabMock.mockClear();
-    refreshMock.mockClear();
     if (!HTMLElement.prototype.scrollIntoView) {
       HTMLElement.prototype.scrollIntoView = () => {};
     }
   });
 
-  afterEach(cleanup);
+  afterEach(cleanupNodeScopes);
 
   test("keeps mobile and sm viewport gutters while capping the dialog at 42rem", async () => {
-    render(<OpenFileDialog />);
+    renderInNodeScope(<OpenFileDialog />, { client });
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
 
     const dialog = await screen.findByRole("dialog", { name: "Open file" });
@@ -102,12 +88,15 @@ describe("OpenFileDialog", () => {
     ).toBe(true);
   });
 
-  test("opens from the shortcut, filters directories, and opens the keyboard selection", async () => {
-    render(<OpenFileDialog />);
+  test("reads independently once per opening and opens the current keyboard selection", async () => {
+    renderInNodeScope(<OpenFileDialog />, { client });
+    expect(client.calls("get_file_tree")).toHaveLength(0);
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
 
-    expect(await screen.findByRole("dialog")).toBeTruthy();
-    await waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("index.ts")).toBeTruthy();
+    expect(client.calls("get_file_tree").map((call) => call.args)).toEqual([
+      { containerId: "container-1" },
+    ]);
     expect(screen.queryByText("src", { selector: ".font-medium" }) === null).toBe(true);
     const input = screen.getByRole("textbox", { name: "Search files" });
     fireEvent.keyDown(input, { key: "ArrowDown" });
@@ -115,11 +104,23 @@ describe("OpenFileDialog", () => {
 
     expect(createFileTabMock).toHaveBeenCalledWith("src/index.ts");
     await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+    expect(client.calls("get_file_tree")).toHaveLength(1);
+
+    client.respond("get_file_tree", [{ name: "new.ts", path: "src/new.ts", isDirectory: false }]);
+    fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
+    expect(await screen.findByText("new.ts")).toBeTruthy();
+    expect(screen.queryByText("index.ts") === null).toBe(true);
+    expect(client.calls("get_file_tree").map((call) => call.args)).toEqual([
+      { containerId: "container-1" },
+      { containerId: "container-1" },
+    ]);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search files" }), { key: "Enter" });
+    expect(createFileTabMock).toHaveBeenLastCalledWith("src/new.ts");
   });
 
   test("reports missing and unavailable environments without opening files", async () => {
     selectedEnvironment = null;
-    const { unmount } = render(<OpenFileDialog />);
+    const { unmount } = renderInNodeScope(<OpenFileDialog />, { client });
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
     expect(await screen.findByText("Select an environment to open files.")).toBeTruthy();
     unmount();
@@ -129,8 +130,7 @@ describe("OpenFileDialog", () => {
       containerId: null,
       worktreePath: null,
     };
-    searchAvailable = false;
-    render(<OpenFileDialog />);
+    renderInNodeScope(<OpenFileDialog />, { client });
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
     expect(
       await screen.findByText("Start the selected environment to search its files."),
@@ -139,8 +139,10 @@ describe("OpenFileDialog", () => {
   });
 
   test("shows search errors and ignores shortcuts with extra modifiers", async () => {
-    searchError = "Workspace scan failed";
-    render(<OpenFileDialog />);
+    client.respond("get_file_tree", () => {
+      throw new Error("Workspace scan failed");
+    });
+    renderInNodeScope(<OpenFileDialog />, { client });
     fireEvent.keyDown(window, {
       key: "p",
       metaKey: true,

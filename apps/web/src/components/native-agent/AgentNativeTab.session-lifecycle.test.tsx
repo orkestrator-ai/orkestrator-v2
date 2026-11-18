@@ -68,7 +68,8 @@ import {
   sessionProjectionMock,
   sessionHistoryMock,
   sessionBackend,
-  getLocalFileTreeMock,
+  getLocalFileTreeSnapshotMock,
+  typeFileMention,
   composeDraftRecords,
   deliverResourceChange,
   settleCoordinatedReads,
@@ -2456,7 +2457,14 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Waiting for setup scripts to complete...") === null).toBe(true);
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(getLocalFileTreeMock).toHaveBeenCalledWith("/tmp/project"));
+    const input = await screen.findByRole("textbox");
+    expect(getLocalFileTreeSnapshotMock).not.toHaveBeenCalled();
+    typeFileMention(input);
+    await waitFor(() =>
+      expect(getLocalFileTreeSnapshotMock).toHaveBeenCalledWith("/tmp/project", undefined, {
+        refresh: true,
+      }),
+    );
     expect(ensureNativeAgentSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agent: "codex",

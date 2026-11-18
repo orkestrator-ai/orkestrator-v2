@@ -606,7 +606,7 @@ export function DesignWorkspaceDialog({
           </DialogDescription>
         </DialogHeader>
         <Tabs value={mode} onValueChange={(value) => setMode(value as DesignWorkspaceMode)}>
-          <TabsList className="w-full">
+          <TabsList variant="segmented" aria-label="Design workspace mode" className="w-full">
             <TabsTrigger value="new">New design</TabsTrigger>
             <TabsTrigger value="open">Open design</TabsTrigger>
             <TabsTrigger value="saved">Saved designs</TabsTrigger>

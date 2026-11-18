@@ -28,8 +28,7 @@ interface FilesPanelHeaderProps {
   onChooseDiffBase?: () => void;
 }
 
-const TAB_TRIGGER_CLASS =
-  "rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent";
+const TAB_TRIGGER_CLASS = "shrink-0 px-2.5 text-xs";
 
 export function FilesPanelHeader({
   onRefresh,
@@ -74,20 +73,16 @@ export function FilesPanelHeader({
         onValueChange={(v) => setActiveTab(v as FilesPanelTab)}
         className="min-w-0"
       >
-        {/*
-          The list itself is unpainted: only the selected tab carries a surface,
-          so the pair reads as one label plus one alternative rather than as a
-          segmented control competing with the header band behind it.
-        */}
-        <TabsList className="h-8 max-w-full justify-start gap-1 overflow-x-auto bg-transparent p-0 [scrollbar-width:none]">
+        <TabsList
+          variant="pill"
+          aria-label="Files panel views"
+          className="max-w-full overflow-x-auto [scrollbar-width:none]"
+        >
           {/* Right-click, or long-press on touch, picks the commit Changes are measured from. */}
           <ContextMenu>
             <ContextMenuTrigger asChild disabled={!changeEnvironmentId || !onChooseDiffBase}>
               <span className="inline-flex">
-                <TabsTrigger
-                  value="changes"
-                  className="rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent"
-                >
+                <TabsTrigger value="changes" className={TAB_TRIGGER_CLASS}>
                   Changes
                   {changesCount !== null && (changesCount === "?" || changesCount > 0) && (
                     <span className="ml-1.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-foreground">
@@ -110,10 +105,7 @@ export function FilesPanelHeader({
               )}
             </ContextMenuContent>
           </ContextMenu>
-          <TabsTrigger
-            value="all-files"
-            className="rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent"
-          >
+          <TabsTrigger value="all-files" className={TAB_TRIGGER_CLASS}>
             All files
           </TabsTrigger>
           <TabsTrigger value="pull-requests" className={TAB_TRIGGER_CLASS} title="Pull requests">

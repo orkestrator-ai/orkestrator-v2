@@ -64,8 +64,7 @@ type RightPaneTab = "chat" | "stories" | `story:${string}`;
 
 const RIGHT_PANE_CONTENT_CLASS =
   "h-full min-h-0 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col";
-const COMPACT_TAB_LIST_CLASS = "h-8 bg-zinc-900/80";
-const COMPACT_TAB_TRIGGER_CLASS = "px-2 text-xs data-[state=active]:!bg-zinc-800";
+const COMPACT_TAB_TRIGGER_CLASS = "flex-none px-2 text-xs";
 
 /** How long feature chat drafts settle before the project's draft record is written. */
 export const FEATURE_CHAT_DRAFT_SAVE_DELAY_MS = 400;
@@ -606,7 +605,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             className="h-full min-h-0 gap-0"
           >
             <div className="flex h-14 items-center gap-3 border-b border-border px-4">
-              <TabsList className={COMPACT_TAB_LIST_CLASS}>
+              <TabsList variant="underline" aria-label="Feature views">
                 <TabsTrigger value="chat" className={cn(COMPACT_TAB_TRIGGER_CLASS, "gap-1.5")}>
                   <MessageSquare className="h-3.5 w-3.5" />
                   Chat

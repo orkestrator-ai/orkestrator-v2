@@ -647,7 +647,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           "rounded-none border-0 bg-transparent p-0",
           isGrid ? "col-span-2 grid w-full grid-cols-2 gap-2" : "shrink-0 gap-0.5",
         )}
-        buttonClassName="h-6 shrink-0 px-2 text-xs"
+        buttonClassName="h-6 shrink-0 rounded-lg px-2 text-xs"
         options={
           [
             ...(hasProjectCheckout

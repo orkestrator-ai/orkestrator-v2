@@ -21,10 +21,9 @@ test("drafting runs in a tab that can be left and returned to without losing it"
   const region = draftRegion(page);
   await expect(region.getByText(/Waiting for the agent in the source tab/)).toBeVisible();
   await expect(region.getByTestId("auto-pipeline-spinner")).toBeVisible();
-  await expect(steps(page).getByRole("button", { name: /Draft/ })).toHaveAttribute(
-    "aria-current",
-    "step",
-  );
+  const draftStep = steps(page).getByRole("button", { name: /Draft/ });
+  await expect(draftStep).toHaveAttribute("aria-current", "step");
+  await expect(draftStep).toHaveCSS("border-radius", "8px");
   await shot(page, "tab-drafting", testInfo.project.name);
   // Leave while it drafts, then come back: the draft finished in the background.
   await page.getByRole("tab", { name: "Codex 1" }).click();

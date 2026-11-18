@@ -104,17 +104,26 @@ async function contrast(foreground: Locator, background: Locator) {
   }, base);
 }
 
-test("selected Files pills keep counts, status and keyboard close controls legible", async ({
-  page,
-}) => {
+test("selected Files tabs have 8px corners and keep their controls legible", async ({ page }) => {
   await page.goto("/tab-styles?view=files");
   const tabs = page.getByRole("tablist", { name: "Files panel views" });
   const changes = tabs.getByRole("tab", { name: "Changes 1" });
   await expect(changes).toHaveAttribute("data-state", "active");
-  await expect(changes).toHaveClass(/rounded-full/);
+  await expect(changes).toHaveCSS("border-radius", "8px");
   await expect
     .poll(() => contrast(changes.getByText("1", { exact: true }), changes))
     .toBeGreaterThanOrEqual(4.5);
+
+  await changes.focus();
+  for (const name of ["All files", "PRs"]) {
+    await page.keyboard.press("ArrowRight");
+    const tab = tabs.getByRole("tab", { name, exact: true });
+    await expect(tab).toBeFocused();
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+    await expect(tab).toHaveCSS("border-radius", "8px");
+    await expect(tab).toHaveCSS("outline-style", "solid");
+    await expect(tab).toHaveCSS("outline-width", "1px");
+  }
 
   for (const [number, state] of [
     [1, "Draft"],
@@ -124,6 +133,7 @@ test("selected Files pills keep counts, status and keyboard close controls legib
     const close = tabs.getByRole("button", { name: `Close example/workspace #${number}` });
     await tab.click();
     await expect(tab).toHaveAttribute("aria-selected", "true");
+    await expect(tab).toHaveCSS("border-radius", "8px");
     await expect
       .poll(() => contrast(tab.getByRole("img", { name: state }), tab))
       .toBeGreaterThanOrEqual(3);
@@ -136,16 +146,18 @@ test("selected Files pills keep counts, status and keyboard close controls legib
   }
 });
 
-test("selected Skills and Plugins counts inherit the full pill text colour", async ({ page }) => {
+test("selected Skills and Plugins tabs have 8px corners and readable counts", async ({ page }) => {
   await page.goto("/tab-styles?view=skills");
   const list = page.getByRole("tablist", { name: "Skills or plugins" });
   const skills = list.getByRole("tab", { name: "Skills 0" });
+  await expect(skills).toHaveCSS("border-radius", "8px");
   await expect
     .poll(() => contrast(skills.getByText("0", { exact: true }), skills))
     .toBeGreaterThanOrEqual(4.5);
   await list.getByRole("tab", { name: "Plugins" }).click();
   const plugins = list.getByRole("tab", { name: "Plugins 1" });
   await expect(plugins).toHaveAttribute("aria-selected", "true");
+  await expect(plugins).toHaveCSS("border-radius", "8px");
   await expect
     .poll(() => contrast(plugins.getByText("1", { exact: true }), plugins))
     .toBeGreaterThanOrEqual(4.5);

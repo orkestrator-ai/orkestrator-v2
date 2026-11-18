@@ -138,7 +138,7 @@ test("the tab's spinner follows its outline, unclipped, on the shared timeline",
     height: tabBox.height - 2,
   });
   const tabRadius = await tab.evaluate((element) => getComputedStyle(element).borderRadius);
-  expect(tabRadius).toBe("6px");
+  expect(tabRadius).toBe("8px");
   const ringRadius = await ring.evaluate((element) => {
     return getComputedStyle(element, "::before").borderRadius;
   });
@@ -309,7 +309,7 @@ test("forced colours replace the tab's spinner with a static outline", async ({ 
       spinner: getComputedStyle(element, "::before").display,
     };
   });
-  expect(style).toEqual({ width: "2px", line: "solid", radius: "6px", spinner: "none" });
+  expect(style).toEqual({ width: "2px", line: "solid", radius: "8px", spinner: "none" });
 });
 
 for (const palette of ["dark", "simulated-light"] as const) {
@@ -417,7 +417,7 @@ for (const presentation of ["bar", "grid"] as const) {
     expect(geometry.box.top).toBeGreaterThanOrEqual(clip.top);
     expect(geometry.box.bottom).toBeLessThanOrEqual(clip.bottom);
     if (presentation === "bar") expect(geometry.box.left - clip.left).toBeLessThan(1);
-    expect(geometry.tabRadius).toBe(presentation === "grid" ? "8px" : "6px");
+    expect(geometry.tabRadius).toBe("8px");
     expect(geometry.ringRadius).toBe(geometry.tabRadius);
     const dimensions = await scrollport.evaluate((e) => [e.scrollWidth, e.scrollHeight]);
     await page.getByRole("button", { name: "Coordinator idle" }).click();

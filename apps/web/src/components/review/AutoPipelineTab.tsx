@@ -347,7 +347,7 @@ export function AutoPipelineTab({
                     aria-current={current ? "step" : undefined}
                     onClick={() => setStep(entry.id)}
                     className={cn(
-                      "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
+                      "flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors",
                       current
                         ? "border-primary/60 bg-primary/10 text-foreground"
                         : "border-border/70 text-muted-foreground",

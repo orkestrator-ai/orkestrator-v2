@@ -85,11 +85,18 @@ import { requestsUltracode } from "./ultracode.js";
 // permission mode, resolved once per turn, and the SDK options a launch uses.
 
 /**
- * `ProposeGoal` starts Claude Code's own goal loop. Orkestrator's runs in the
+ * The tool that starts Claude Code's own goal loop. Orkestrator's runs in the
  * backend, and two must never stack on one session (`docs/architecture/goals.md`).
+ *
+ * Claude Code renamed it `SetGoal` between 2.1.319 and 2.1.326 (unannounced),
+ * and Agent SDK 0.3.326 lists `ProposeGoal` only as a legacy alias
+ * (`LEGACY_TOOL_NAME_ALIASES`). Both are named, so neither the current CLI nor
+ * an older `claude` on PATH keeps it.
  */
+export const NATIVE_GOAL_TOOL_NAMES = ["SetGoal", "ProposeGoal"] as const;
+
 export function withNativeGoalClosed(disallowed: readonly string[] | undefined): string[] {
-  return [...(disallowed ?? []), "ProposeGoal"];
+  return [...(disallowed ?? []), ...NATIVE_GOAL_TOOL_NAMES];
 }
 
 export const PLAN_MODE_INSTRUCTIONS = `The user has enabled planning mode. Use this phase to:
@@ -591,7 +598,7 @@ export function claudeQueryOptions(
     // would have to render model-written HTML. Explicit, so an SDK whose
     // default changes cannot start sending a format the card does not expect.
     toolConfig: { askUserQuestion: { previewFormat: "markdown" } },
-    // Pinned against @anthropic-ai/claude-agent-sdk 0.3.314: although the
+    // Pinned against @anthropic-ai/claude-agent-sdk 0.3.326: although the
     // SDK warns that bypassPermissions shadows canUseTool for ordinary
     // tool permission checks, AskUserQuestion is a special case. A live
     // contract probe confirmed it still reaches this callback and the SDK

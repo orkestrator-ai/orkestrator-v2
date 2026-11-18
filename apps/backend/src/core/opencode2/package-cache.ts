@@ -20,7 +20,9 @@
  * `npm/<name>@<tag>/<generation>`, where the tag is the configured version or
  * `latest`, except that a bare `@ai-sdk/<name>` is installed as
  * `@ai-sdk/<name>@ai-v6` (2.2.6's npm service, `tW` and `we` in its bundle,
- * read on 2026-11-10). 2.2.6 imports the newest numeric generation whose
+ * read on 2026-11-10; unchanged in 2.3.0, whose provider import still maps a
+ * bare `@ai-sdk/<name>` to `@ai-v6` and whose `packages/util/src/npm.ts`
+ * changed only an error message, read 2026-11-17). 2.2.6 imports the newest numeric generation whose
  * `node_modules/<name>` exists without installing again; root's is always
  * `1`. That rule is the binary's, not the configuration's, so it is pinned to
  * {@link OPENCODE2_PACKAGE_LAYOUT_VERSION} and re-checked on every bump
@@ -52,7 +54,7 @@ export const OPENCODE_PACKAGE_CACHE_TIMEOUT_MS =
  * reproduces. A bump of the pinned `opencode2` fails a test until the layout
  * is checked against the new binary and this is moved.
  */
-export const OPENCODE2_PACKAGE_LAYOUT_VERSION = "2.2.6";
+export const OPENCODE2_PACKAGE_LAYOUT_VERSION = "2.3.0";
 
 /** The image's Bun, run as root from `/` with no configuration or `.env` of the working directory. */
 const ROOT_BUN = "/usr/local/bin/bun --config=/dev/null --no-env-file";

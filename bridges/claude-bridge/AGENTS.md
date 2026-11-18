@@ -375,7 +375,8 @@ invariants keep it honest:
 
 Orkestrator's goal loop runs in the backend ([goals.md](../../docs/architecture/goals.md);
 decisions D1 and D2 of the retired goal plan, `git show 2b876486b:plans/goals.md`), so
-`ProposeGoal` is in `disallowedTools` on every turn, and the catalogue's `/goal`
+the CLI's goal tool is in `disallowedTools` on every turn (`SetGoal`, and its
+name before 2.1.326, `ProposeGoal`; `NATIVE_GOAL_TOOL_NAMES`), and the catalogue's `/goal`
 row is replaced by the backend's session action. Two loops must never stack on
 one session.
 

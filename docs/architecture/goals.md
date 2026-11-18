@@ -141,7 +141,8 @@ Coordinator goals finish as unverified claims.
 ## Native goals stay off
 
 Codex's `features.goals=false` stays, and `/goal` is reserved over a provider's own
-row. Claude's `ProposeGoal` is in `disallowedTools`. See each bridge's `AGENTS.md`.
+row. Claude's `SetGoal` (formerly `ProposeGoal`; both are named) is in
+`disallowedTools`. See each bridge's `AGENTS.md`.
 Any pin change can add a native goal or move a turn edge, so upgrades re-run
 `mise run test:agent:goals`.
 

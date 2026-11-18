@@ -28,7 +28,7 @@ import {
   OPENCODE2_GITHUB_ENV_PLUGIN_ID,
   buildOpenCode2GitHubEnvironmentPluginSource,
 } from "./container-server.js";
-import { OPENCODE2_FLAGS } from "./server.js";
+import { OPENCODE2_CREDENTIAL_PLUGIN_ID, OPENCODE2_FLAGS } from "./server.js";
 import { mintOpenCode2InputId } from "./steer.js";
 
 /**
@@ -214,8 +214,12 @@ liveTest(
     // Before the warm request the server is still dumpable: its environment is readable.
     const environ = `/proc/${started.server.pid}/environ`;
     expect((await readFile(environ)).length).toBeGreaterThan(0);
-    // The backend's warm request loads the plugins, which make it non-dumpable.
-    await client.api("GET", "/api/agent", "OpenCode agents", {});
+    // The backend's warm loads the plugins, which make it non-dumpable. Since
+    // 2.2.7 `/api/agent` answers before they load, so the warm waits for the
+    // credential plugin to be listed active (`warmContainerOpenCode2`).
+    expect(
+      await client.awaitPlugins({ timeoutMs: 30_000, pluginId: OPENCODE2_CREDENTIAL_PLUGIN_ID }),
+    ).toBe("loaded");
     await expect(readFile(environ)).rejects.toThrow();
 
     const session = await client.createSession({

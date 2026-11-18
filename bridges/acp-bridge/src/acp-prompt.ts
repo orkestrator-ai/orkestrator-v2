@@ -69,7 +69,8 @@ export const FLATTENED_RETRIABLE_PROVIDER_SUFFIX = new RegExp(
   "i",
 );
 /**
- * Grok's own wording for a model overload (Grok 1.0.70), which carries no
+ * Grok's own wording for a model overload (Grok 1.0.70; both sentences are
+ * unchanged in the 1.0.88 binary), which carries no
  * `[code]`. Accepted on a JSON-RPC error only: assistant text is
  * model-controlled, and this exact sentence there proves nothing.
  */

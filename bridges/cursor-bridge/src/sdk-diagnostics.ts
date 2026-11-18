@@ -207,6 +207,8 @@ export function instrumentSdk(seam: SdkDiagnosticSeam): () => void {
     const scope = scopes.getStore();
     if (!scope) return run.apply(this, args);
     const manager = this.controlledExecManager;
+    // Since 1.4.1 `run` hands each exec to `execute`, which reads this field
+    // when it is called; `run` awaits every one, so the facade covers them.
     // A controller owns this facade. Never mutate the shared executor manager:
     // multiple simultaneous turns can use it with different diagnostic scopes.
     this.controlledExecManager = {

@@ -7,15 +7,17 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.319`, Anthropic SDK `1.6.0`, CLI `2.1.319` (npm `latest`, verified 2026-11-06) |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.167.0` |
-| OpenCode | No SDK: the backend's own 2.x client (`apps/backend/src/core/opencode2/`) | The pinned `opencode2` executable (OpenCode 2.x) runs `opencode serve` | CLI `2.2.6` (`opencode2`; OpenCode 1.x is retired) |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.3.1` (npm `latest`, verified 2026-11-06) |
-| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.77` (stable channel; verified 2026-11-06), ACP SDK `2.4.0` |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.5.0` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.326`, Anthropic SDK `1.10.0`, CLI `2.1.326` (npm `latest`, verified 2026-11-17) |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.169.0` (latest stable, verified 2026-11-17) |
+| OpenCode | No SDK: the backend's own 2.x client (`apps/backend/src/core/opencode2/`) | The pinned `opencode2` executable (OpenCode 2.x) runs `opencode serve` | CLI `2.3.0` (`opencode2`; npm `latest`, verified 2026-11-17; OpenCode 1.x is retired) |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.4.1` (npm `latest`, verified 2026-11-17) |
+| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.88` (stable channel; verified 2026-11-17), ACP SDK `2.7.0` |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.5.2` (npm `latest`, verified 2026-11-17) |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
-Verified against upstream stable releases on 2026-11-06.
+Verified against upstream stable releases on 2026-11-17. The MCP client
+(`@modelcontextprotocol/client`, used by the backend and the Cursor and Pi
+bridges) is pinned at `2.4.0` and the support tool `gh` at `2.104.0`.
 
 ## What is enforced, and what is not
 
@@ -65,7 +67,7 @@ Still not enforced anywhere, by nature:
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
 
-Cursor 1.3.1 also has a Bun-export diagnostic seam patch registered in root
+Cursor 1.4.1 also has a Bun-export diagnostic seam patch registered in root
 `patchedDependencies`. Keep the pin, patch filename, registration, and lockfile
 aligned. The appended export references the SDK's minified stall-detector and
 execution-controller bindings: simply renaming the patch on upgrade is not
@@ -75,12 +77,17 @@ are found by their field lists: the stall detector opens with
 `timer;advisoryTimer;heartbeatOnlyTimer` and is assigned inside the lazy
 initializer that names `@anysphere/agent-client:stall-detector` (which the
 export must call first); the controller is the class opening with
-`serverStream;clientStream;controlledExecManager`. In 1.3.1 those are `rg0`,
-`HZ1` and `cg0` (1.3.0: `Pg0`, `m91`, `Dg0`; 1.2.0: `Vm0`, `N71`, `Qm0`;
-1.0.40: `W_0`, `x01`, `Z_0`; 1.0.37: `eR0`, `Er0`, `aR0`; 1.0.36: `aE0`,
-`Xn0`, `dE0`). All three live in `dist/bundled/index.js`, and
-the controller loop is still
-`for await (let D of N) await this.clientStream.write(D)`. Run the Cursor
+`serverStream;clientStream;controlledExecManager`. In 1.4.1 those are `XQ1`,
+`YQ1` and `$Q1` (1.3.1: `rg0`, `HZ1`, `cg0`; 1.3.0: `Pg0`, `m91`, `Dg0`;
+1.2.0: `Vm0`, `N71`, `Qm0`; 1.0.40: `W_0`, `x01`, `Z_0`; 1.0.37: `eR0`,
+`Er0`, `aR0`; 1.0.36: `aE0`, `Xn0`, `dE0`). All three live in
+`dist/bundled/index.js`. The controller loop is still
+`for await (let q of Q) await this.clientStream.write(q)`, but since 1.4.1 it
+sits in the controller's `execute` method, which `run` calls once per exec and
+awaits, rather than inline in `run`. The hook wraps `run` only; it still
+covers every exec because `execute` reads `controlledExecManager` when `run`
+calls it. The seam test in `sdk-diagnostics.test.ts` accepts the loop in
+either place and fails if neither holds it. Run the Cursor
 SDK diagnostics tests and version-drift test, then build/vendor the bridge and
 verify the packaged Bun import exposes `__orkestratorDiagnosticsV1`. Do not
 enable raw SDK logs as a substitute for the bounded observer.
@@ -440,7 +447,7 @@ Update the traced version only after doing the steps below.
    | OpenCode | `strings "$BIN" \| grep -E 'OPENCODE_DB\|opencode\.db\|snapshot'` on the `opencode2` binary | `OPENCODE_DB` is still a full database path (`OPENCODE2_DB_PATH`), sessions live only in that database, and `snapshot/` is still revert history rather than session state. (The 1.x seeded-data qualifier was retired with 1.x: `git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh`.) |
    | Pi | The pinned bundle's own docs: `sessions.md` and `environment-variables.md` under its `docs` directory | Sessions default to `~/.pi/agent/sessions`. The bridge passes `PI_SESSION_DIR` to `SessionManager` itself |
    | Cursor | `JsonlLocalAgentStore` and `getDefaultSdkStateRoot` in the bundled SDK | The store writes only under the root `cursor-bridge/src/sdk-runtime.ts` passes it, which sits under `CURSOR_BRIDGE_STATE_DIR` |
-   | Grok | The help docs the CLI writes to `~/.grok/docs` (sessions and storage chapters), `CHANGELOG.md`, and `strings` for `GROK_HOME` | `session/load` needs only `~/.grok/sessions/<cwd>/<id>/` (`updates.jsonl` is authoritative). `active_sessions.json` lists live processes only and `worktrees.db` tracks only Grok's own worktrees |
+   | Grok | The help docs the CLI writes to `~/.grok/docs/user-guide` (`17-sessions.md` "Storage Layout" and "Session Storage Details"), and `strings` for `GROK_HOME` and the file names; 1.0.88 writes no `CHANGELOG.md` there, so diff the guide against the previous binary's embedded copy | `session/load` needs only `~/.grok/sessions/<cwd>/<id>/` (`updates.jsonl` is authoritative). `active_sessions.json` lists live processes only and `worktrees.db` tracks only Grok's own worktrees |
 
 2. Classify every location the new version writes as one of:
    - **Preserve**: needed to resume, rewind or fork a session, or a bridge
@@ -505,6 +512,12 @@ was first made from (Pi 1.2.0, OpenCode 1.19.0):
   refreshToken`), Meta re-mints from its identity token, OpenRouter stores an
   empty `refresh` that never expires; every other one stores the response's
   `refresh_token` (xAI keeps the old one only when the response omits it).
+  Rechecked 2026-11-17 against Pi 1.5.2 (`pi-ai` 1.5.2): `dist/auth/` is
+  unchanged from 1.5.0 except `oauth/load.js`, which now resolves the flow
+  module against its own URL (bundling only); the same nine providers, no
+  refresh, `expires` or refresh-window change. 1.5.1 made Pi lock the
+  resolved `auth.json` (symlinked aliases share one lock) and wait for a
+  refresh in progress to be saved before exit; neither moves a provider.
 - OpenCode 1.19.0 to 1.19.5: no change under `src/plugin/`, and the same
   `opencode-gitlab-auth` 2.1.0 and `opencode-poe-auth` 0.0.1. GitLab stores
   the new refresh token on every refresh, so it rotates. Poe's OAuth login
@@ -518,6 +531,18 @@ was first made from (Pi 1.2.0, OpenCode 1.19.0):
   Snowflake Cortex keep the old one only when the response omits it. Poe now
   stores an empty `refresh`. It refreshes a login with five minutes or less
   left (`integration.ts` in OpenCode's `packages/core/src/`).
+  Rechecked 2026-11-17 against OpenCode 2.3.0 (2.2.7 included), by
+  comparing the tags' blobs under `packages/core/src/plugin/provider/` and
+  `integration.ts`: no provider plugin added or removed (the new
+  `opencode-watches.ts` is Console watches, not a login). Copilot still
+  stores `refresh: access` with `expires` 0 and registers no refresh (it now
+  reads the account's API endpoint with that token on each model refresh);
+  GitLab still rotates (it now joins concurrent refreshes of one token);
+  OpenAI, ChatGPT and OpenCode's own login store the response's refresh
+  token; Snowflake Cortex and xAI keep the old one only when it is omitted;
+  Poe's `refresh` is still empty. The five-minute window moved into
+  `Credential.expiring` (`expires !== 0 && expires <= now + 5 min`), still in
+  milliseconds. No change to either list.
 
 No provider moved between the two lists, so `NON_ROTATING_OAUTH_PROVIDERS`
 was left as it was.
@@ -537,11 +562,13 @@ rewritten. A run that could not start or died on a signal counts as a
 mismatch, and an unknown or empty `--cases` selection is refused before
 anything runs. It exits non-zero on any mismatch, which means
 `refreshHostClaudeLogin` and `TOKEN_REPLACEMENT_LEAD_MS` need re-reading.
+All nine cases matched on 2.1.314, 2.1.319 and 2.1.326 (the last on
+2026-11-17, under `unshare -rn`; see "Last verified" under Claude).
 
 On every Codex bump, run `bun scripts/codex-access-only-auth-probe.ts --codex
 <pinned binary>`. It hands the pinned Codex the access-only `auth.json` a
 coordinator home or container receives, built from a synthetic login against
-a local server, and reports every refresh attempt. On 0.164.0, 0.166.0 and 0.167.0
+a local server, and reports every refresh attempt. On 0.164.0, 0.166.0, 0.167.0 and 0.169.0
 alike: no refresh for an access token more than five minutes from its `exp`,
 whatever `last_refresh` says; inside those five minutes a few attempts (four
 in the probe's run) and after a 401 one, each with the blank refresh token,
@@ -556,12 +583,21 @@ Each provider's retry rests on facts read from its pinned release
 them breaks a build when it changes, so check them on a bump:
 
 - **Codex:** `CodexErrorInfo` for a new capacity code, and the two messages in
-  `sessions/capacity-retry.ts`.
+  `sessions/capacity-retry.ts` (0.169.0: messages unchanged; its one new
+  code, `inferenceHookDenied`, is a terminal refusal, not capacity).
 - **Claude:** `CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS` and `..._MAX_DELAY_MS`
-  still apply to overloads only and accept the values in `runtime-env.ts`.
-- **OpenCode:** a turn still ends with an `APIError` carrying `statusCode` once
-  OpenCode's own retries run out (`isOpenCodeCapacityError`).
-- **Grok:** the two overload sentences in `acp-prompt.ts`.
+  still apply to overloads only and accept the values in `runtime-env.ts`
+  (still so at 2.1.326, which adds an optional total-wait cap for the main
+  loop, `CLAUDE_CODE_OVERLOADED_RETRY_MAX_WAIT_MS`; unset, nothing changes,
+  and the bridge does not set it).
+- **OpenCode:** nothing to check since 1.x was retired: OpenCode 2.x has no
+  Orkestrator capacity retry (`isOpenCodeCapacityError` went with the 1.x
+  provider), so OpenCode's own retries are the only ones. 2.3.0 retries an
+  exhausted request rate limit (a transient 429) instead of ending the turn
+  on it (anomalyco/opencode#59816).
+- **Grok:** the two overload sentences in `acp-prompt.ts` (1.0.88: both
+  still in the binary word for word, as are the `PermissionRejected` and
+  `PermissionCancelled` cancellation categories).
 - **Cursor:** whether the SDK now names a capacity error (task 4 is waiting on
   this).
 
@@ -576,7 +612,9 @@ None of them breaks a build when it changes, so check them on a bump:
   2.1.309 binary). Search the new binary for that flag name. If it is gone or
   on by default, Windows Claude coordinators may now get the sandbox
   (`unavailable` already asks for it); the tier stays `provider-configured`
-  until the Windows live run on the manual-test checklist passes.
+  until the Windows live run on the manual-test checklist passes. At 2.1.326
+  the flag is still read with default `false` (and the
+  `CLAUDE_CODE_NANKEEN_KESTREL` override), unchanged from 2.1.319.
 - **Claude (read boundary):** run
   `bridges/claude-bridge/src/conformance-coordinator-read-boundary-live.test.ts`
   on macOS and on Linux with bubblewrap (it runs the pinned CLI against a
@@ -601,6 +639,11 @@ None of them breaks a build when it changes, so check them on a bump:
   coordinators get web search. The `data-dir-reads` variant answers whether
   Grok's own reading tools ask permission
   ([7401](../todo/coordinator-and-multi-review/7401-grok-coordinator-data-dir-reads.md)).
+  At 1.0.88 `--help` still lists only `--disable-web-search` ("Disable web
+  search and web fetch tools"), so the probes were not run. The bundled
+  config reference still documents `GROK_WEB_FETCH` / `features.web_fetch`
+  (default off) for the separate `web_fetch` tool only; nothing removes the
+  hosted search's `open_page`.
 
 ## Claude
 
@@ -808,9 +851,21 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    [Container environments](#container-environments) and
    [The SDK's own Claude binary is not vendored](#the-sdks-own-claude-binary-is-not-vendored)), so an SDK that resolved
    its binary even when given a path would fail every container and packaged
-   desktop turn. At 0.3.319 the only lookup in `sdk.mjs` sits behind
+   desktop turn. At 0.3.326, as at 0.3.319, the only lookup in `sdk.mjs` sits behind
    `if(!<pathToClaudeCodeExecutable>)` and throws `Native CLI binary for
    <platform>-<arch> not found` when it finds nothing.
+
+   Re-decide `mcpServersDelivery` (`claudeExecutableOptions()` in
+   `session-manager-core.ts`). 0.3.326 deprecates its default, `argv` (the
+   servers' `env` and `headers`, including the Orkestrator servers' bearer
+   tokens, go on the CLI's command line), warns once per process while a host
+   that names its own CLI leaves it unset, and says a later release defaults to
+   `initialize` (stdin), which ends the session at start on a CLI older than
+   the SDK's bundled one. The bridge states `argv`, because
+   `resolveClaudeBinary` can fall back to a `claude` on PATH of any version. If
+   the SDK's new default has landed, or the bridge can tell the managed pin
+   from a PATH fallback, switch it to `initialize` and re-run every live check
+   below.
    `bridges/claude-bridge/src/sdk-compatibility.test.ts` (slow tier, so run
    it by path or through `mise run test:full`) pins both halves against the
    new SDK: it copies the SDK package alone into a temporary tree, as the
@@ -821,7 +876,7 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    is the end-to-end proof.
 
    Check whether `SlashCommand` in the new `sdk.d.ts` has gained a marker for
-   terminal-only commands (at 0.3.322 it is still
+   terminal-only commands (at 0.3.326 it is still
    `{ name, description, argumentHint, aliases?, builtin? }`, and only the
    init frame's `terminal_slash_commands` names them). If it has, read it from
    the probe's rows and delete the per-CLI-version list in
@@ -841,6 +896,12 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    task". If the wording changed, update the pattern and the synthetic frames
    in `claude-mcp-task-results.test.ts`; if the report gained a
    `<tool-use-id>`, the task-id lookup becomes a fallback and can stay.
+   At 2.1.326 both openings and the `<tool-use-id>`-less report are
+   unchanged. New since 2.1.319: when the server's own note carries
+   Artifact content by other authors, the CLI puts an
+   `<artifact-content-authored-by-others/>` notice before `MCP tool`, so the
+   anchored pattern does not match and that card keeps the placeholder (it
+   degrades; nothing throws).
 
    Re-prove how a running CLI handles MCP updates. The bridge relies on
    `setMcpServers` unloading only servers an earlier call gave it, and on an
@@ -975,7 +1036,12 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    bump run `live-coordinator-skills.test.ts` with `RUN_LIVE_CODEX_APP_SERVER=1`
    (no credits); a Pi or Cursor SDK bump re-runs that bridge's
    `coordinator-skills.test.ts`, and a Grok bump re-checks whether `GROK_CONFIG`
-   now accepts a `skills` section.
+   now accepts a `skills` section. At 1.0.88 it still does not: with a
+   throwaway `HOME` and `GROK_HOME`, `grok inspect --json` lists no skill from
+   `[skills] paths` given through `GROK_CONFIG` or `GROK_CONFIG_PATH`, and
+   lists it when the same section is in `$GROK_HOME/config.toml`; the bundled
+   configuration guide still allowlists only `models`, `features`, a narrowed
+   `toolset` and `shell_environment_policy` for the overlay.
 7. Rebuild the vendored bridge and verify it:
 
    ```bash
@@ -1057,6 +1123,73 @@ and with the API unreachable it was still retrying when the refresher's 60 s
 budget ran out, the refresh having been attempted in its first second. With `ANTHROPIC_BASE_URL` set, the CLI
 also asked `api.anthropic.com` for the OAuth profile (refused by the probe's
 proxy).
+
+Last verified 2026-11-17 at Agent SDK 0.3.326 (`claudeCodeVersion` 2.1.326,
+so the SDK's CLI and the managed one are the same build) and Anthropic SDK
+1.10.0, with the managed CLI 2.1.326 on Arch Linux (x64, bubblewrap, Bun
+1.4.4), `CLAUDE_CLI_PATH` pointing at a copy outside the data directory, temporary
+homes and no credentials: the typecheck; `sdk-compatibility.test.ts` 12 of 12,
+including the `canUseTool` proof (the comment in
+`session-manager-prompt-query.ts` now names 0.3.326), the no-platform-package
+check and the `getSettings` probe; `test:bridge` 1,997 passed, 7 skipped;
+`mise run build:claude-bridge`; `verify:claude:mcp-live` 2 of 2;
+`verify:claude:plugin-mcp-live` 2 of 2; `verify:claude:first-turn-live` 3 of
+3; `claude-mcp-tool-hints.live.test.ts` 1 of 1;
+`read-only-hardened-git.live.test.ts` 1 of 1; `verify:claude:sandbox-live` 1
+of 1; `conformance-coordinator-sandbox-live.test.ts` 19 of 19; the
+read-boundary live test 6 of 6; and `verify:accounts:resend-live` 19 of 20 with
+Codex 0.169.0 beside it. Its one failure, the Claude two-reviewer scenario at
+`--parallel=2` on a loaded host, passed alone and with its whole file (10 of
+10); it is flake
+[9968](../tests/flaky-tests/agent-bridges/9968-claude-two-reviewer-resend-under-load.md).
+The refresh trigger probe matched all nine cases in a loopback-only
+namespace (`unshare -rn`): the token host is still `platform.claude.com`, a
+fake Messages API ended the run with exit 1 in 0.8-0.9 s (2.6 s after a 401),
+and the credential file was never rewritten. Not run: the billed
+coordinator-skills probe and `mise run test:agent:goals` (real provider
+turns; both on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)), and
+the macOS sandbox checks.
+
+What changed between 0.3.319 and 0.3.326, and where it went:
+
+- `SDKStartupFailureReason` gained `managed_settings_not_delivered`, mapped
+  in `claudeStartupFailureMessage`. The bridge's `managedSettings` still go by
+  `--managed-settings` (the SDK's default `managedSettingsDelivery`), so the
+  reason is not reached today. `config_file_invalid` results now also carry
+  `invalid_config_file` (paths as fields); the CLI's `errors` text, which the
+  bridge already appends, names the same file.
+- The `SDKMessage` union, every `system` subtype and the context-category ids
+  are unchanged. New `system/informational` lines (`hook_no_verdict`,
+  `managed_mcp_arrived`, the incomplete-tool-rule warning) are `warning`
+  level, so they already reach the transcript as shared `status` rows. The
+  hook-wait `tool_progress` heartbeat (`tool_use_id` starting `hook-`) names
+  no tool row and is dropped by the existing lookup.
+- The goal tool is now `SetGoal`; `ProposeGoal` is only a legacy alias.
+  `withNativeGoalClosed` disallows both (`NATIVE_GOAL_TOOL_NAMES`), and the
+  compatibility test checks the first is a built-in tool name.
+- `mcpServersDelivery` is new and its default deprecated; the bridge states
+  `argv` (see step 6).
+- The CLI's `fable` alias now resolves to Fable 5.2, which also offers fast
+  mode. The live catalogue carries it unchanged; the static fallback in
+  `packages/protocol/src/claude-model-catalog.ts` still lists Fable 5.1, which
+  2.1.326 accepts.
+- The `sandbox` option no longer auto-approves sandboxed Bash unless
+  `autoAllowBashIfSandboxed` is set; `claudeExecutionSandbox` and the
+  read-only command sandbox already set it explicitly, and the sandbox live
+  checks above passed.
+- Not adopted: `archiveSession`/`unarchiveSession` and `archived` on
+  `listSessions` (Orkestrator archives in the backend; the CLI's mark lives in
+  `archived.json` beside the transcript under `projects/`), `matchDeniedModels`,
+  `machinePolicy`, `reloadPlugins({ refuseIfBusy })`, and `supersedes`, which
+  the bridge does not apply (an assistant frame a refusal fallback or an
+  unparsable tool call replaced stays in the transcript, as before).
+
+Preserved state was re-traced at 2.1.326 against the "Application data"
+table and the binary: resume, continue and rewind still need only
+`projects/` and `file-history/`. The new `archived.json` sits beside
+`mcp-tasks/` under `projects/<project>/<session>/`, and the only new top-level directory,
+`child-logs/` (Remote Control debug logs), is dropped.
 
 The compatibility test's deterministic CLI fixture does not authenticate or
 spend credits, but it is not a full real-CLI smoke test. Before release, start a
@@ -1215,7 +1348,8 @@ the pinned binary's parser over the production argument shape.
    thread's request kept the build turn's `web__run` after a read-only reload
    dropped it from the turn's own tools. Thread config cannot turn the
    feature off, so every bridge launches app-server with
-   `features.incremental_tools=false`: each request then declares only the
+   `features.incremental_tools=false` (and, since 0.169.0, its Bedrock and
+   GCP twins; see below): each request then declares only the
    current turn's tools and nothing is written to the history. The engine
    fails closed around it. It reads the setting back through `config/read`
    before a search-denied thread, and refuses a search-denied resume or fork
@@ -1249,7 +1383,7 @@ the pinned binary's parser over the production argument shape.
      bun test bridges/codex-bridge/src/app-server/live-refused-calls.test.ts
    ```
 
-   It expects 0.164.0's behaviour, unchanged in 0.166.0: no item for a refused `apply_patch` or
+   It expects 0.164.0's behaviour, unchanged through 0.169.0: no item for a refused `apply_patch` or
    refused command, the cell and its refusal kept in the rollout, and the
    bridge showing each refused cell as a failed `exec` row in the order it
    ran. It also pins the exception: a cell an interrupt stops (below) records
@@ -1273,7 +1407,7 @@ the pinned binary's parser over the production argument shape.
    Every Orkestrator turn runs in Codex's Default collaboration mode, which
    refuses `request_user_input` unless the thread turns on the
    under-development `default_mode_request_user_input` feature
-   (`codexRequestUserInputConfig`). The test expects 0.164.0's behaviour, unchanged in 0.166.0: an
+   (`codexRequestUserInputConfig`). The test expects 0.164.0's behaviour, unchanged through 0.169.0: an
    interactive session's call parks as a pausable question, the turn waits for
    the answer, and a `pipeline` session still gets "unavailable in Default
    mode". If the feature is renamed or removed, the first case fails: find the
@@ -1321,7 +1455,7 @@ the pinned binary's parser over the production argument shape.
 
    Orkestrator never offers or sends Codex's exec-policy and network-policy
    amendments (see `bridges/codex-bridge/AGENTS.md`): accepting one writes a
-   rule into the Codex home that Orkestrator can show but not revoke. The test expects 0.164.0's (and 0.166.0's)
+   rule into the Codex home that Orkestrator can show but not revoke. The test expects 0.164.0's (and, unchanged, 0.169.0's)
    behaviour: an `untrusted` command approval carries
    `proposedExecpolicyAmendment`, **Approve** leaves `CODEX_HOME/rules/`
    empty, and the identical command asks again in the next turn. Its control
@@ -1348,7 +1482,7 @@ the pinned binary's parser over the production argument shape.
    must run in Codex's `workspace-write` sandbox instead of being refused.
    Both runs read the reported policy's note, so they fail if
    `configRequirements/read` stops reporting `allowedSandboxModes` or the
-   `network` block (0.167.0 reports `network` without the experimental API,
+   `network` block (0.167.0 and 0.169.0 report `network` without the experimental API,
    although the generated bindings omit it).
 
    Treat a failure in the "live MCP protocol era" block as a release blocker
@@ -1478,7 +1612,58 @@ the pinned binary's parser over the production argument shape.
    loopback tests pass with it on, so the bridge does not turn it off. Every
    other `features.*` the bridge depends on kept its 0.166.0 stage and default.
 
-   On Linux, Codex's bubblewrap sandbox (0.166.0 and 0.167.0) masks each
+   Codex 0.169.0 (read with 0.168.0's notes; both shipped the same day) kept
+   `turn/start.clientUserMessageId`, `userMessage.clientId`, every server
+   request, notification, `ThreadItem` variant, status enum and thread source
+   kind. What changed, and what the bridge does:
+
+   - The tool-history switch is now per model route
+     (`StepContext::incremental_tools_feature`): `incremental_tools` covers
+     Responses-lite models, the new `incremental_tools_legacy` Amazon Bedrock
+     and `incremental_tools_legacy_gcp` (stable, **on**) GCP. A `config.toml`
+     that picks a GCP provider (0.168.0's TUI can now set the default
+     provider) would have written tool declarations despite
+     `incremental_tools=false`. Every bridge now turns all three off and
+     `codexToolHistoryGaps` refuses unless `config/read` reports each one
+     `false` (`CODEX_TOOL_HISTORY_FEATURES`; `config/read` reports only the
+     features something set). On a bump, check `codex features list` for a
+     new `incremental_tools*` route switch and add it there.
+   - `agentMessage.moderation` (`{ moderated, display }`) is a ChatGPT
+     presentation hint on a final answer. Codex's own TUI ignores it and the
+     text is unchanged, so the bridge ignores it too; no shared concept.
+   - `CodexErrorInfo` gained `inferenceHookDenied` (a workspace inference
+     hook refused the request; terminal in Codex). It passes through
+     `codexErrorInfoToCode` and is never retried. The two capacity messages
+     are unchanged.
+   - `features.untrusted_as_tool_output` became stable and on: additional
+     context and goal objectives reach the model as `function_call_output`
+     items in the `agent` namespace instead of user messages. The bridge sends
+     no additional context and runs with goals off; a reload ignores an output
+     with no call, and the live `functionCallOutput` item is not rendered.
+     `CODEX_CONTEXT_FRAGMENTS` needed nothing: the only new fragment,
+     `<side_conversation>`, is a developer message.
+   - `features.multi_agent` is deprecated (still on); the title runner's
+     `--disable multi_agent` is still accepted under `--strict-config`.
+   - `code_mode_host_grpc`, `code_mode_host_output_truncation`,
+     `retain_client_tool_outputs` and `unified_image_budget` became stable and
+     on; every loopback test passes with them. Deny globs in the Linux
+     sandbox are expanded in process instead of by `rg`; the bwrap masks and
+     `LINUX_PLATFORM_DEFAULT_READ_ROOTS` are unchanged.
+   - New client methods (`modelProvider/list`, `modelProvider/config/write`,
+     `account/securitySetup/read`), `ItemCompletedNotification.contentTokenCount`,
+     `QueuedSubmission.responsesapiClientMetadata`,
+     `ThreadListParams.currentAccountOnly` and `Config.client_search_provider`
+     are unused. A repeated `turn/interrupt` now answers "no active turn to
+     interrupt"; the engine's second ask already ignores errors.
+   - The bundled model catalogue is unchanged (`codex debug models
+     --bundled`), as are the `request_user_input` handler's `is_blocking`
+     and the context fragments.
+
+   On Linux, `live-mailed-image-read.test.ts` reads a file beside a
+   coordinator's grant as "No such file or directory" (bubblewrap does not
+   mount it); 0.167.0 did the same, and the test now expects that text there.
+
+   On Linux, Codex's bubblewrap sandbox (0.166.0 through 0.169.0) masks each
    denied directory with a read-only tmpfs, shallowest first and after the
    read grants. So a coordinator's `":tmpdir" = "deny"` inside its
    `":slash_tmp" = "deny"` (any `TMPDIR` under `/tmp`, such as
@@ -1613,7 +1798,7 @@ To bump it:
    call `installPinnedToolchains({ dataDir: <temp>, tools: ["opencode2"] })`
    from `packages/toolchain/src/install.ts` with `HOME` and `XDG_*` pointed
    into the same temporary directory. It downloads, verifies, probes
-   `--version` (2.2.6 prints `opencode v2.2.6`) and activates. 2.x's
+   `--version` (2.3.0 prints `opencode v2.3.0`) and activates. 2.x's
    `--version` creates its XDG directories and a log file but no database.
 7. Run `bun test ./tests/unit/version-drift.test.ts ./tests/unit/download-agent.test.ts --parallel=2`.
 8. Run the 2.x live set against the new binary. Every test starts its own
@@ -1645,9 +1830,47 @@ To bump it:
    replaced are listed in
    [agent-engines.md](../architecture/agent-engines.md#maintaining-the-opencode-integration). If
    `opencode2-silence.live.test.ts` fails, the server's `: heartbeat` interval
-   (15 s at 2.2.6) has changed: measure it again and set
-   `OPENCODE2_EVENT_STREAM_SILENCE_MS` (`opencode2/stream-silence.ts`) to about
-   three missed heartbeats plus 5 s.
+   (15 s at 2.2.6, measured again at 2.3.0: still 15 s) has changed: measure
+   it again and set `OPENCODE2_EVENT_STREAM_SILENCE_MS`
+   (`opencode2/stream-silence.ts`) to about three missed heartbeats plus 5 s.
+9. Re-read what the new release changed against what the provider assumes:
+   - `OPENCODE2_FLAGS` (`opencode2/server.ts`) names every key of
+     OpenCode's own `src/config/flag.ts` (under its `packages/schema/`) at the
+     tag; a new one is off unless
+     named, so decide and name it.
+   - Diff the tags' `openapi.json` (in OpenCode's `packages/protocol/`; paths and methods, then
+     the schemas of the rows and routes the client reads). 2.2.6 to 2.3.0
+     added and removed no route.
+   - Request handlers that wait for plugins: since 2.2.7 none does, so
+     anything that needs a plugin loaded (the container warm before the
+     socket is recorded, the command catalogue after a location reload)
+     waits through `OpenCode2Client.awaitPlugins` (`GET /api/plugin`).
+   - The package cache layout (`OPENCODE2_PACKAGE_LAYOUT_VERSION`,
+     `opencode2/package-cache.ts`): the npm service and the provider import
+     (`@ai-sdk/<name>` → `@ai-v6`), then
+     `opencode2-package-cache.live.test.ts`.
+   - Sub-agents: the `subagent` tool, its report (`subagent-completion.ts`)
+     and what `opencode2-subagents.live.test.ts` asserts.
+
+At 2.3.0 (re-checked 2026-11-17, Linux x64, all without a login): the live
+set passed (52 tests in 20 files, the new `opencode2-subagents.live.test.ts`
+included), after two changes 2.2.7 forced. `/api/agent` no longer waits for plugins, so
+the container warm now waits for the credential plugin to be listed active
+before the server's socket is recorded (the server turned non-dumpable about
+250 ms after `/api/agent` answered), and a location reload waits for its
+plugin list to refill (the commands reappear with it). 2.3.0 added the flags
+`shell_timeout_background`, `console_watches` and `mcp_events`, all named off.
+Sub-agents now always run in the background (anomalyco/opencode#63382): the
+call returns at once with `metadata.status: "running"`, the parent's run
+settles while the child works, and each time the child goes idle a
+`<subagent>` `synthetic` row (`metadata: { source: "subagent", childID,
+state }`) reaches the parent and wakes it into a run with no prompt;
+interrupting the parent no longer stops its children, and a stopped child's
+`cancelled` report wakes the parent too; a plain server restart does not
+resume a running child. How Orkestrator maps that is in
+[agent-engines.md](../architecture/agent-engines.md#maintaining-the-opencode-integration).
+The `real-stack` and `container` halves were not re-run for 2.3.0 (they need
+a dev:test profile and an image built for the pin).
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).
@@ -1672,7 +1895,8 @@ published two ways:
   `pi-agent-core` since `1.5.0`, which replaced their TypeBox dependency) is a
   declared dependency of the package that
   imports it, which is what the vendor step follows — the `0.85.0` failure
-  mode was an undeclared import.
+  mode was an undeclared import. Rechecked at `1.5.2`: the same set, all
+  declared (`pi-mcp` now also supplies the shared `mcpServers` validator).
 - `packages/toolchain/src/manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
   and four `bundleIntegrity` records.
 - `docker/Dockerfile` — `PI_CLI_VERSION` and the two Linux archive digests.
@@ -1738,6 +1962,10 @@ Dockerfile pins the same archive digests the manifest does.
    request retried) render as the shared retry row, settled by
    `compaction_end`. `src/sdk-session.test.ts` drives a real SDK session over a
    scripted model stream for the behaviours a fake session cannot show.
+   1.5.1 and 1.5.2 added no event and changed none of these fields. Since
+   1.5.1 a cancel that lands while Pi lazily loads a provider or resolves its
+   auth ends the response `aborted`, not `error`, so the turn ends cancelled
+   rather than failed, which is the shared meaning.
 6. Review `src/models.ts` against `Model` and `ThinkingLevel`. A new thinking
    level that is not in `THINKING_LEVELS` is simply never offered. Remember the
    rule is asymmetric: `xhigh` and `max` need an *explicit* mapping, while every
@@ -1755,12 +1983,35 @@ Dockerfile pins the same archive digests the manifest does.
    `models.test.ts` reads Pi's (unexported) `defaultModelPerProvider` table
    from `dist/core/model-resolver.js` and fails when a bump moves it. The
    `openai` catalogue now starts on `chat-latest` rather than `gpt-4`.
+   At 1.5.2 both ChatGPT defaults are still `gpt-6.1-sol`; 1.5.1 moved other
+   providers' defaults (`anthropic` to `claude-opus-5-5`, among others), which
+   the bridge never reads, and renamed `openai-codex` back to "OpenAI Codex".
+   `ThinkingLevel` and `Model` did not change. 1.5.1 added Copilot classifier
+   models (`Microsoft-Decision-1`); a provider's `getModels()` returns chat
+   models only, so the picker never offers them.
 
    1.5.0 also stopped a package that fails to install from failing the
    session: it is reported in `LoadExtensionsResult.warnings` instead, which
    `recordExtensionLoadDiagnostics` turns into a warning notice. A resumed
    session now runs in the working directory it recorded, not the caller's;
    the bridge's worktree and container paths are stable, so nothing moved.
+
+   1.5.1 changed three defaults an SDK session inherits:
+   - `cacheWarming` defaults to `"idle"`: Pi may refresh a prompt cache
+     between runs (up to 30 minutes, only when it expects to save $0.05), and
+     each refresh is a `usage` entry. The bridge's idle detach (10 minutes)
+     disposes the session and with it the warmer. The turn cost is a delta of
+     Pi's session sum (`cost-source.ts`), so a refresh between turns is
+     charged to the next turn; the shared layer has no warming setting, and a
+     user who wants the old behaviour sets `"cacheWarming": "streaming"` in
+     Pi's global `settings.json`.
+   - `steer()`/`followUp()` images are resized on delivery, with Pi's notes
+     appended to the queued text. The bridge pre-sizes them to the model's
+     profile (`readPromptImages`), so Pi's pass is a no-op and no note reaches
+     the steer row.
+   - Anthropic sessions use server-side message threads, falling back to a full
+     request when the context changed (compaction, a rewind, a tool change).
+     Nothing in the bridge depends on the request shape.
 
 7. Re-verify the three SDK behaviours the bridge depends on, in
    `dist/core/agent-session.js`, rather than trusting the version in a comment:
@@ -1776,11 +2027,24 @@ Dockerfile pins the same archive digests the manifest does.
      at `agent_start` and waits for it to settle, while an `abort()` earlier in
      preflight (input handlers, auth) reaches nothing and is erased when
      `_startRun` resets the flag. That is why the bridge aborts both at once and
-     on acceptance, and never awaits the startup abort.
+     on acceptance, and never awaits the startup abort. 1.5.1 moved the first
+     stage into `_preparePrompt` without changing either stage, and counts it
+     (`_promptPreflightCount`) so `navigateTree` refuses during preflight; a
+     `prompt()` during a tree navigation is refused like one during compaction.
+     The bridge already refuses a rewind while `dispatching` or `running`.
    - **Steer and follow-up.** `steer()` and `followUp()` resolve to
      `queued` or `handled`. `handled` means an extension's `input` handler
      consumed the instruction, so no delivery event will follow; `handleSteer`
      removes its FIFO entry rather than let the next delivery be credited to it.
+     Since 1.5.1 Pi also dequeues an image-only queued message on delivery; the
+     steer route requires text, so the bridge never sends one.
+   - **Reload and dispose.** Since 1.5.1 `reload()` throws while streaming or
+     compacting, which `commandReloadBlocked` already avoids, and
+     `AgentSessionRuntime.dispose()` (what `detachSession` calls) first aborts
+     the session and waits for it to settle, then waits for credential writes
+     in progress (`settleCredentialWrites`), so an OAuth refresh that has
+     already spent a single-use refresh token is saved before shutdown. A
+     shutdown during a running turn therefore waits for that turn to stop.
    - **Nested tool calls.** A call another tool made through `ctx.executeTool()`
      (how `codemode` scripts call tools) carries `parentToolCallId`, which
      `translate.ts` stamps as the shared `parentTaskUseId`. A resume has only
@@ -1798,7 +2062,10 @@ Dockerfile pins the same archive digests the manifest does.
    **not** run `!command` values: an entry that needs one is skipped, as Pi skips
    an entry it cannot resolve. The merge follows Pi 1.0's loader
    (`dist/extensions/mcp/config.js`): an entry Pi's validator
-   (`validateMcpServerConfig` in `dist/core/mcp-servers.js`) rejects hides
+   (`validateMcpServerConfig` in `dist/core/mcp-servers.js`; since 1.5.1 it
+   checks the shared fields through `@earendil-works/pi-mcp`'s
+   `validateMcpServerConfig` and `isMcpServerOverride` in `dist/config.js`,
+   with the same rules) rejects hides
    nothing, a project override (no `command`, `url` or `type`) flips only the
    user server's `enabled`, names that differ only in `-`/`_` clash, and
    `auth: { provider }` on an HTTP server is refused in a project file and, in
@@ -1823,8 +2090,9 @@ Dockerfile pins the same archive digests the manifest does.
    bridge's own `orkestrator-mcp` extension; a Pi terminal tab does load them,
    which is why the MCP editor's Pi terminal guidance describes Pi's own
    loader. Confirm
-   that with `rg builtInExtensions node_modules/@earendil-works/pi-coding-agent/dist`
-   on each bump.
+   that with `rg -l builtInExtensions bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist --glob '!*.map'`
+   on each bump: at 1.5.2 it matches `main.js`, `extensions/index.*` and the
+   CLI's own `bundle/` chunk, never `core/sdk.js`.
 
    The resume list reads Pi's session files itself (`src/session-headers.ts`,
    to-do 5980) instead of calling `SessionManager.list`, which reads every
@@ -1833,7 +2101,9 @@ Dockerfile pins the same archive digests the manifest does.
    fails when the reader stops agreeing with `SessionManager.list` on files
    the pinned SDK wrote, or when `CURRENT_SESSION_VERSION` moves past
    `KNOWN_SESSION_VERSIONS`. A new version needs the reader checked against
-   it first: until then every list falls back to Pi's full read. If Pi has
+   it first: until then every list falls back to Pi's full read.
+   `dist/core/session-manager.js` is unchanged from 1.5.0 to 1.5.2
+   (`CURRENT_SESSION_VERSION` 3). If Pi has
    shipped a bounded listing
    ([upstream request](../upstream-issues/pi-bounded-session-listing.md)),
    switch to it and retire the reader (5980 task 2).
@@ -1847,8 +2117,13 @@ Dockerfile pins the same archive digests the manifest does.
    ```bash
    bun run --cwd bridges/pi-bridge typecheck
    mise run build:pi-bridge
-   bun test bridges/pi-bridge/src --parallel
+   bun test bridges/pi-bridge/src --parallel=4 --preload ./tests/setup-node.ts --preload ./bridges/pi-bridge/src/testing/test-isolation.ts
    ```
+
+   The isolation preload keeps the suite out of the developer's `~/.pi/agent`.
+   At 1.5.2 that is 900 tests in 55 files (898 pass, 2 skipped live tests).
+   `bun run --cwd bridges/pi-bridge test:bridge` runs the default tier, which
+   skips the files listed as slow, unless `ORKESTRATOR_TEST_TIER=all` is set.
 
 9. Smoke-test one interactive Pi tab and one terminal tab, including a model
    switch, a compaction, and the inactive-environment path. Because Pi fronts
@@ -1939,7 +2214,40 @@ trusting a green result.
    ```
 2. Review the five compatibility files above against the new type definitions.
    Pay particular attention to `InteractionUpdate` variants and tool cases added
-   upstream: both degrade silently by design.
+   upstream: both degrade silently by design. (`HANDLED_UPDATE_TYPES` in
+   `src/translate.ts` makes a new update type fail the typecheck; a new tool
+   case only shows in the bundle's public tool-call conversion, so diff its
+   `case"...ToolCall"` labels too.) Also read `SteerAckOutcome` in `run.d.ts`:
+   `handleSteer` in `src/http.ts` must count every outcome that means "the
+   text was taken" as delivered, or the caller sends it again.
+
+   1.4.1 (checked 2026-11-17 by diffing the 1.3.1 and 1.4.1 typings and
+   bundles):
+   - New `model-call-completed` update: one model call's exact usage. It is
+     the live context gauge's occupancy reading (`currentRunModelCalls` in
+     `src/translate.ts`); `turn-ended` stays the turn total and is no longer
+     allowed to replace it. The per-call and per-turn sums are combined by
+     taking the larger value in each category, so a stream that sends both
+     counts each call once.
+   - `run.steer()` may answer `{ outcome: "queued" }` (cloud runs only; local
+     runs still answer the two strings). It is journaled as delivered and
+     answered `applied`.
+   - `FeatureUnavailableError` (cloud steering not available to the account):
+     the bridge does not steer cloud runs.
+   - New tool cases `executeToolCall` and `manageAccessToolCall`. The SDK's
+     public conversion drops them (returns `null`), so nothing reaches the
+     bridge.
+   - `ReadArgs.maxVideoBytes` and `ReadSuccess.redacted`: the bridge's own
+     coordinator Read leaves both unset on purpose (see `src/read-tools.ts`).
+   - Team MCP tool limits and allowlist notices
+     (`onMcpAdminToolLimitCounts`, `[cursor-sdk] MCP server ...` lines via
+     `console.warn`) are SDK-internal analytics and stderr; there is no option
+     or update to map.
+   - No change to `ModelListItem`/`ModelSelection`, `RunResult.usage`,
+     `LocalAgentOptions` (still no approval or tool-call callback, so D6 is
+     unchanged), the credential store or login typings, the Max-mode rule,
+     or `CURSOR_BACKEND_URL`. No error names model capacity (capacity task 4
+     still waits).
 3. Rebuild and prove the distributable shape, which a typecheck alone does not:
 
    ```bash
@@ -1990,7 +2298,10 @@ trusting a green result.
    confirm the SDK's local agent store still writes only under the root
    `cursorSdkStateDirectoryPath()` hands it. (1.0.40 added an OS-temp
    `cursor-transcripts-*` fallback for agent transcripts when the home
-   directory is not writable; those are not resume state.)
+   directory is not writable; those are not resume state.) Re-traced at
+   1.4.1: `getDefaultSdkStateRoot` is unchanged, and `JsonlLocalAgentStore`
+   still writes only `agents.ndjson`, `runs.ndjson`, `run_events.ndjson` and
+   `checkpoints.ndjson`, each joined onto the root it is given.
 8. Check how the SDK decides Max mode. Since 1.0.40 a send runs in Max mode
    (premium billing) when every catalogue variant consistent with its
    parameters is `isMaxMode`. `selectionIsMaxMode` in `src/models.ts` mirrors
@@ -2018,7 +2329,7 @@ nothing in CI can check. See
 `docs/architecture/agent-engines.md` for the bridge architecture.
 
 The bridge does pin the protocol's own package,
-`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.4.0`). It
+`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.7.0`). It
 supplies the wire types and `PROTOCOL_VERSION`, not a client: every request is
 still hand-written over the bridge's own JSON-RPC loop.
 `tests/unit/version-drift.test.ts` lists it as Grok's SDK pin with
@@ -2037,8 +2348,9 @@ ACP v1 only, and `PROTOCOL_VERSION` there is still `1`; unstable types moved to
 `@agentclientprotocol/sdk/unstable` and ACP v2 to `…/experimental/v2`. Moved
 off the default import: `PromptResponse.usage` and `Usage`, the `acp` variant
 of `McpServer`, and the `plan_update`, `subagent_update` and `session_message`
-updates. The bridge's three imports (`acp-prompt.ts`, `acp-context.ts`,
-`acp-client-methods.ts`) are all still on the default export. It reads usage
+updates. The bridge's imports (`acp-prompt.ts`, `acp-context.ts`,
+`acp-client-methods.ts`, and since 2.7.0 `acp-provider-config.ts` for
+`SystemPrompt`) are all still on the default export. It reads usage
 and every session update untyped, so moved types change nothing at runtime,
 and it builds only `http` MCP servers. Import from `/unstable` only for a
 surface the bridge really implements; never mix the v2 types into the v1 wire.
@@ -2057,6 +2369,33 @@ such as `"credits"`, which `parseUsdCost` already ignores. The unstable surface
 gained `session/archive`, `auth/status`, `session/set_title` and
 `session/status`, none of which Grok 1.0.77 advertises, and dropped JSON-RPC
 batch types the bridge never used.
+
+2.4.0 → 2.7.0 (schema 1.29.1 → 1.32.0; the package has no changelog, the
+GitHub releases of `agentclientprotocol/typescript-sdk` and the
+`schema-v1.3x.0` releases of `agentclientprotocol/agent-client-protocol` list
+the changes) made one stable addition: client-provided system prompts.
+`sessionCapabilities.systemPrompt` (`{}` means `append`; `mode.override` adds
+`override`) lets a client send `systemPrompt: { mode, content }` on
+`session/new`, `session/load` and `session/resume`. The bridge now uses it
+generically: an agent that advertises it gets the session instructions as an
+`append` text block on create and again on load, as ACP asks
+(`sessionInstructionsCarrier` in `acp-provider-config.ts`). Grok 1.0.88 does
+not advertise it and keeps `_meta.rules`, which wins for Grok even if a later
+release starts advertising, so the instructions never arrive twice. Of the
+fourteen stable types the bridge imports only `InitializeResponse` changed
+(through the optional capability), and `PROTOCOL_VERSION` is still `1`. The
+unstable surface gained `session/options` (the modes and config options a
+session would start with), initial `configOptions` values on
+`session/new`/`load`/`resume`/`fork`, a `speed` config option category, a
+`prompt_suggestions_update` update behind a client capability, a `session`
+tool-call content type (a subagent's `sessionId`), `path` on markdown plans
+(replacing the `file` plan type) and `AuthAccount.description`. The bridge maps
+the `speed` category onto the shared fast-mode toggle (it wins over the older
+`model_config` guess; a `speed` select runs slowest to fastest, so off is its
+first value and on its last). It does not advertise prompt suggestions, so
+none are sent; a `session` tool-call content block and a markdown plan are
+ignored as before (no text, no checklist), and Grok 1.0.88's binary carries
+none of these names.
 
 The bridge launches Grok with `--always-approve agent stdio`. Grok 1.0.52 still
 asks over ACP for every edit, command, fetch and MCP call (MCP calls arrive as
@@ -2089,8 +2428,9 @@ grok --help | rg -- '--always-approve'
 
 # Then prove the handshake and a real `session/new` with the bridge's own params
 # (typed `headers` array, `additionalDirectories: []`). 1.0.44, 1.0.46 and
-# 1.0.52 answer both; 1.0.67 and 1.0.70 were checked signed out only
-# (`initialize` answers, identically on both, and the liveness probes stay up). Run it signed in (`grok login`): signed out, `session/new` ends
+# 1.0.52 answer both; 1.0.67, 1.0.70, 1.0.77 and 1.0.88 were checked signed
+# out only (`initialize` answers and the liveness probes stay up, including
+# with `--model … --reasoning-effort …`). Run it signed in (`grok login`): signed out, `session/new` ends
 # in `Authentication required`, and once signed in `authMethods[0]` (the id the
 # bridge authenticates with) is `cached_token` rather than `grok.com`.
 ```
@@ -2227,6 +2567,35 @@ switch for search and fetch. `PromptResponse._meta` also carries a
 `cancelTrigger` beside `cancellationCategory` (binary strings; unverified
 signed in).
 
+At 1.0.88 the same signed-out checks (2026-11-17, throwaway `HOME` and
+`GROK_HOME`) found nothing the bridge depends on changed. `initialize` still
+answers `protocolVersion: 1`, `loadSession: true`, `promptCapabilities`
+`image` and `embeddedContext` `true` (`audio` `false`), `http` and `sse` MCP,
+`sessionCapabilities` `list`, `resume` and `close` (no `fork`, no
+`systemPrompt`, no ACP 2.5–2.7 unstable surface), and `authMethods[0]`
+`grok.com`. Every `x.ai/*` method and `GROK_*` variable the bridge names is
+still in the binary, as are its seven `_meta.availableCommands` (`compact`
+first) and the `_x.ai/session/setup` phase notifications `session/new` sends.
+Every argv vector above stays up (exit 124), with or without `--model …
+--reasoning-effort …`, and a bogus flag exits 2. 1.0.88 does not unpack a
+`CHANGELOG.md` into `$GROK_HOME` (the TUI's `/changelog` fetches release notes
+from a CDN on demand), so the release was read by diffing the bundled guide
+against the 1.0.77 binary's embedded copy (`strings`, line by line). Of note:
+MCP servers may set `headers_helper` (`headersHelper` in `.mcp.json`), a
+command run through `sh -c` on every connect whose JSON output becomes
+headers; a project's helper runs only where folder trust already admits the
+project's MCP servers, so it opens no path past that gate (the known gap,
+Grok loading a checkout the user trusted in Grok whatever `projectResources`
+says, still applies), and the MCP editor keeps the key as a preserved field. The agent-mode chapter now spells out that
+`_meta.yoloMode` (and `autoMode`) are also read on `session/load` and
+`session/resume`, where `yoloMode: false` turns always-approve off for a
+running session; the bridge sends neither and relies on `--always-approve`.
+Writeback behaves as at 1.0.77 (below), and there is still no "never trust"
+switch for a trusted checkout (`GROK_FOLDER_TRUST=0` only ungates). `grok
+--version` prints `[stable]` once a home's `version.json` records the stable
+channel and no label in a fresh home, so the label reflects the updater's
+state, not the build.
+
 **Session writeback.** 1.0.77 can sync session history to code.grok.com
 ("writeback"). Checked signed out on 2026-11-06 with throwaway `HOME` and
 `GROK_HOME`: `--storage-mode` is a hidden global option ("Session storage
@@ -2248,7 +2617,11 @@ remote settings, which can switch writeback on ("storage mode upgraded from
 remote settings"; the remote field is `writeback_enabled`). Only a
 `requirements.toml` `features.writeback = false` is documented to override
 the flag, the variable and remote settings alike. On a bump, re-run the
-`strings` and `--debug-file` checks above for those messages.
+`strings` and `--debug-file` checks above for those messages. Re-run on
+1.0.88 (2026-11-17) with the same results: the hidden flag still parses any
+value and is still an argv error after `agent`, `writeback` still logs the
+"requires auth" line, and `local`, `writeback` and unset all log "Creating new
+session in JSONL".
 
 ### How to upgrade Grok
 
@@ -2282,6 +2655,9 @@ the flag, the variable and remote settings alike. On a bump, re-run the
    enable. Also diff the guide Grok unpacks into `$GROK_HOME/docs/user-guide`
    (`07-mcp-servers.md`, `05-configuration.md`, `09-plugins.md`) against the
    previous version's for new sources or policy keys the guard does not cover.
+   The guide is embedded as plain text, so `strings` on the previous binary
+   gives its copy without running it. 1.0.88 passes (31 tests); its only new
+   MCP key is `headers_helper` (see above), and its sources are unchanged.
 8. Smoke-test an interactive tab, including the inactive-environment path.
 
 The `stable` pointer, not the binary, decides the channel. `grok --version` for

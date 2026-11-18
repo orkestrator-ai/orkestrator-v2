@@ -162,6 +162,7 @@ closes those out on the way in.
 ## Goals
 
 Orkestrator's goal loop runs in the backend ([goals.md](../../docs/architecture/goals.md)). Cursor's model is
-offered its own `CreateGoal` and `UpdateGoal`, and `@cursor/sdk` 1.2.0 has no option to
-turn them off, so this path stays open. The carrier tells the agent to use no other
+offered its own `CreateGoal` and `UpdateGoal`, and `@cursor/sdk` has no option to
+turn them off (re-checked at 1.4.1: `ToolName`, which `disallowedTools` takes, names no
+goal tool), so this path stays open. The carrier tells the agent to use no other
 goal tool. Re-check on each SDK upgrade.

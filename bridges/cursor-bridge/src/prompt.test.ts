@@ -2014,6 +2014,72 @@ describe("context occupancy versus turn spend", () => {
     expect(usage?.usedTokens).toBeLessThan(usage?.maximumTokens ?? 0);
   });
 
+  test("keeps the last model-call-completed as the context reading over a turn total", async () => {
+    // `@cursor/sdk` 1.4.1 reports each model call's own usage; the stream's
+    // usage message is built from `turn-ended`, the turn's total.
+    const state = runningSession();
+    const first = {
+      inputTokens: 1_000,
+      outputTokens: 100,
+      cacheReadTokens: 50_000,
+      cacheWriteTokens: 0,
+    };
+    const second = {
+      inputTokens: 1_500,
+      outputTokens: 200,
+      cacheReadTokens: 51_000,
+      cacheWriteTokens: 0,
+    };
+    const total = {
+      inputTokens: 2_500,
+      outputTokens: 300,
+      cacheReadTokens: 101_000,
+      cacheWriteTokens: 0,
+    };
+    applyInteractionUpdate(state, {
+      type: "model-call-completed",
+      modelCallId: "m1",
+      usage: first,
+    });
+    applyInteractionUpdate(state, {
+      type: "model-call-completed",
+      modelCallId: "m2",
+      usage: second,
+    });
+    const run: FollowableRun = {
+      async *stream() {
+        yield { type: "usage", usage: total };
+      },
+      cancel: async () => undefined,
+      wait: async () => ({ status: "finished", usage: total }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.usage?.context).toEqual(second);
+    expect(state.currentRunModelCalls).toBeUndefined();
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 52_700,
+      lastTurnTokens: 103_800,
+    });
+  });
+
+  test("a single model call is persisted as one reading", async () => {
+    const state = runningSession();
+    const call = { inputTokens: 30, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    applyInteractionUpdate(state, { type: "model-call-completed", modelCallId: "m1", usage: call });
+    const run: FollowableRun = {
+      async *stream() {},
+      cancel: async () => undefined,
+      wait: async () => ({ status: "finished", usage: { ...call, totalTokens: 40 } }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.usage?.context).toBeUndefined();
+    expect(publicContextUsage(state)).toMatchObject({ usedTokens: 40, lastTurnTokens: 40 });
+  });
+
   test("reports one figure when the run made a single model call", async () => {
     const state = runningSession();
     const run: FollowableRun = {

@@ -747,6 +747,76 @@ describe("session-wide state", () => {
     });
   });
 
+  test("model-call-completed is the live occupancy reading and survives a turn total", () => {
+    const state = running();
+    state.composer.selectedModelId = "grok-4.6";
+    state.currentRunModelId = "grok-4.6";
+    const first = { inputTokens: 100, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 0 };
+    const second = { inputTokens: 140, outputTokens: 30, cacheReadTokens: 10, cacheWriteTokens: 1 };
+
+    applyInteractionUpdate(state, { type: "token-delta", tokens: 9 });
+    applyInteractionUpdate(
+      state,
+      InteractionUpdateSchema.parse({
+        type: "model-call-completed",
+        modelCallId: "m1",
+        usage: first,
+      }),
+    );
+    // Exact usage supersedes the call's estimate.
+    expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
+    expect(state.currentTurnUsage).toEqual(first);
+    expect(publicContextUsage(state)).toMatchObject({ usedTokens: 125, lastTurnTokens: 125 });
+
+    applyInteractionUpdate(state, {
+      type: "model-call-completed",
+      modelCallId: "m2",
+      usage: second,
+    });
+    expect(publicContextUsage(state)).toMatchObject({ usedTokens: 181, lastTurnTokens: 306 });
+
+    // `turn-ended` reports the turn's total. It neither replaces the last
+    // call as the occupancy reading nor counts the calls a second time.
+    applyInteractionUpdate(state, {
+      type: "turn-ended",
+      usage: { inputTokens: 240, outputTokens: 50, cacheReadTokens: 15, cacheWriteTokens: 1 },
+    });
+    expect(state.currentTurnUsage).toEqual(second);
+    expect(state.currentRunUsage).toEqual({
+      inputTokens: 240,
+      outputTokens: 50,
+      cacheReadTokens: 15,
+      cacheWriteTokens: 1,
+    });
+    expect(publicContextUsage(state)).toMatchObject({ usedTokens: 181, lastTurnTokens: 306 });
+    expect(state.health.drift()).toBeUndefined();
+  });
+
+  test("a per-call turn-ended beside model-call-completed counts each call once", () => {
+    const state = running();
+    const call = { inputTokens: 100, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 0 };
+    for (const modelCallId of ["m1", "m2"]) {
+      applyInteractionUpdate(state, { type: "model-call-completed", modelCallId, usage: call });
+      applyInteractionUpdate(state, { type: "turn-ended", usage: call });
+    }
+    expect(state.currentRunUsage).toEqual({
+      inputTokens: 200,
+      outputTokens: 40,
+      cacheReadTokens: 10,
+      cacheWriteTokens: 0,
+    });
+  });
+
+  test("a model-call-completed without usable usage changes nothing", () => {
+    const state = running();
+    const revision = state.revision;
+    applyInteractionUpdate(state, { type: "model-call-completed", modelCallId: "m1" });
+    applyInteractionUpdate(state, { type: "model-call-completed", modelCallId: "m1", usage: {} });
+    expect(state.currentRunModelCalls).toBeUndefined();
+    expect(state.revision).toBe(revision);
+    expect(state.health.drift()).toBeUndefined();
+  });
+
   test("retains omitted latest-call categories and ignores empty usage updates", () => {
     const state = running();
     applyInteractionUpdate(state, {

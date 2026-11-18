@@ -126,6 +126,14 @@ export class FakeOpenCode2Server {
     fakeOpenCode2Model("fixture", "fixture", ["low", "high"]),
   ];
   defaultModel: Record<string, unknown> | null = null;
+  plugins: Array<Record<string, unknown>> = [
+    {
+      id: "opencode.agent",
+      source: { type: "builtin" },
+      features: { server: true },
+      state: { status: "active" },
+    },
+  ];
   agents: Array<Record<string, unknown>> = [
     { id: "build", name: "Build", mode: "primary", hidden: false, description: "Default" },
     { id: "plan", name: "Plan", mode: "primary", hidden: false, description: "Read-only" },
@@ -243,6 +251,57 @@ export class FakeOpenCode2Server {
       time: { created: 1, completed: 1 },
     });
     session.running = false;
+  }
+
+  /**
+   * A child session a `subagent` call created under `parentId`. On 2.3.0 it
+   * runs in the background while its parent's run settles.
+   */
+  addChildSession(parentId: string, options: { running?: boolean } = {}): string {
+    const id = this.id("ses");
+    this.sessions.set(id, {
+      id,
+      parentID: parentId,
+      rows: [],
+      inbox: [],
+      running: options.running ?? true,
+      agent: "general",
+      permissions: [],
+      forms: [],
+      replies: [],
+      info: {
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+      busy: { busy: Date.now() },
+    });
+    return id;
+  }
+
+  /**
+   * The child goes idle and reports to its parent as 2.3.0 does: a
+   * `synthetic` `<subagent>` row in the parent, which then runs (`wake`).
+   */
+  reportChild(
+    childId: string,
+    state: "completed" | "error" | "cancelled" = "completed",
+    body = "done",
+    wake = true,
+  ): void {
+    const child = this.sessions.get(childId)!;
+    child.running = false;
+    child.busy = { ...child.busy, idle: Date.now() };
+    const parent = this.sessions.get(child.parentID!)!;
+    parent.rows.push({
+      id: this.id("msg"),
+      type: "synthetic",
+      description: "child",
+      metadata: { source: "subagent", childID: childId, agent: "General", state },
+      text: `<subagent sessionID="${childId}" state="${state}" description="child">\n${body}\n</subagent>`,
+      time: { created: 1 },
+    });
+    if (wake) parent.running = true;
+    this.emit(parent.id, "session.synthetic");
   }
 
   /** Append a history row as the server would (a tool-call response, a shell row, …). */
@@ -554,8 +613,14 @@ export class FakeOpenCode2Server {
     }
     if (path === "/api/session" && request.method === "GET") {
       const archived = url.searchParams.get("archived");
+      const parentID = url.searchParams.get("parentID");
       const listed = [...this.sessions.values()]
         .filter((session) => archived !== "false" || !session.archived)
+        .filter(
+          (session) =>
+            parentID === null ||
+            (parentID === "null" ? !session.parentID : session.parentID === parentID),
+        )
         .reverse()
         .map((session) => this.sessionInfo(session));
       return Response.json({ data: listed, cursor: {} });
@@ -565,6 +630,8 @@ export class FakeOpenCode2Server {
       return Response.json({ location: {}, data: this.defaultModel ?? this.models[0] ?? null });
     }
     if (path === "/api/agent") return ok(this.agents);
+    // A loaded location lists its plugins (2.2.7+ handlers never wait for them).
+    if (path === "/api/plugin") return ok(this.plugins);
     const instructions = path.match(
       /^\/api\/experimental\/session\/([^/]+)\/instructions\/entries\/([^/]+)$/,
     );
@@ -825,6 +892,9 @@ export class FakeOpenCode2Server {
       const held = this.takeHeldSteers(session);
       if (interrupted) this.finishRun(session.id, "interrupted");
       session.inbox.push(...held);
+      // 2.3.0: a stopped child reports `cancelled` to its parent and wakes it.
+      if (interrupted && session.parentID)
+        this.reportChild(session.id, "cancelled", "Subagent cancelled");
       // Bare, like the real route.
       return Response.json({ interrupted });
     }

@@ -5,8 +5,8 @@
  * (AGENTS.md invariants 3 and 4). Durable events carry
  * `durable: { aggregateID, seq }`, a per-session sequence, so a missed event
  * shows up as a sequence gap; the caller then re-reads the snapshot. The gap
- * signal is conservative, not exact: 2.2.6 never broadcasts a few durable
- * sequence numbers (about two per run, observed live), so some gaps cost a
+ * signal is conservative, not exact: 2.2.6 and 2.3.0 never broadcast a few
+ * durable sequence numbers (about two per run, observed live), so some gaps cost a
  * re-read that finds nothing new. Ephemeral events (`session.text.delta`,
  * `session.tool.progress`, …) carry no sequence and may be lost without
  * consequence.
@@ -16,7 +16,7 @@
  * than trusting a partial picture.
  *
  * An idle healthy stream sends no events, only `: heartbeat` SSE comments
- * (on connect and every 15 s at 2.2.6). The parser drops comments, so the
+ * (on connect and every 15 s at 2.2.6 and 2.3.0). The parser drops comments, so the
  * optional `onLife` callback is how a caller's silence watchdog sees them:
  * it is called for every chunk read, and with `heartbeat: true` for every
  * heartbeat comment, which is what arms the watchdog.

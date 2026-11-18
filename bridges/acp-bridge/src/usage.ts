@@ -84,8 +84,8 @@ function money(value: unknown): number | undefined {
 /**
  * What an ACP dollar amount is: the agent's own figure, never one this bridge
  * computed. The only amounts `parseUsdCost` accepts are ones the agent states
- * in dollars (ACP `usage_update.cost` with `currency: "USD"`, which ACP 2.4.0
- * defines as the session's "Total cumulative cost", or an explicit
+ * in dollars (ACP `usage_update.cost` with `currency: "USD"`, which ACP 2.7.0
+ * (as since 2.4.0) defines as the session's "Total cumulative cost", or an explicit
  * `costUsd`/`cost_usd`), so the bridge passes them on as the provider's
  * amount. ACP does not say how an agent arrived at its figure; an agent that
  * reports a computed estimate in this field is indistinguishable here. Other

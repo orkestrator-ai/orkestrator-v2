@@ -22,6 +22,13 @@
  *   instructions; only its description is shown, never the instruction text.
  *   A `synthetic` row that reports a finished background shell shows the
  *   command and the output it emitted (`backgroundShellNotice`).
+ * - A `synthetic` row that reports a background sub-agent (`<subagent …>`,
+ *   `metadata.source: "subagent"`) is folded onto the `subagent` call that
+ *   launched it, as the Claude bridge folds a `<task-notification>` onto its
+ *   launch: the report's body becomes the card's output and its state the
+ *   card's `agentState`, and the row itself shows nothing. A report whose
+ *   launch is not among the rows read shows as a status row of its own
+ *   ({@link applyOpenCode2SubagentReports}).
  * - `location-switched` → dropped (no user-facing content).
  *
  * A kind the table does not name (a newer server) is dropped and reported
@@ -30,7 +37,11 @@
  */
 import { providerInlineErrorMessageId } from "@orkestrator/protocol/native-agent";
 import { asRecord, nonEmptyString } from "../agent-provider-runtime.js";
-import { OPENCODE2_TOOL_VALUE_LIMIT, openCode2ToolPart } from "./transcript-tools.js";
+import {
+  OPENCODE2_TOOL_VALUE_LIMIT,
+  openCode2BackgroundSubagentLaunch,
+  openCode2ToolPart,
+} from "./transcript-tools.js";
 import type { OpenCode2Message } from "./types.js";
 
 const UNKNOWN_CREATED_AT = "1970-01-01T00:00:00.000Z";
@@ -39,10 +50,110 @@ const MAX_PARTS = 2_048;
 const MAX_NOTICE_CHARS = 16_384;
 /** Text shown for a stopped run, as the Claude bridge shows it. */
 export const OPENCODE2_INTERRUPTED_TEXT = "Interrupted by user";
+/** Bound on a sub-agent report shown as a row of its own, as the Claude bridge bounds one. */
+const MAX_SUBAGENT_NOTICE_CHARS = 4_000;
+/**
+ * How long after its call returned a background sub-agent with no report
+ * reads Active although its child is not (yet) listed as running: the child
+ * is admitted before it starts draining (2.3.0 `subagent.ts`).
+ */
+export const OPENCODE2_SUBAGENT_START_GRACE_MS = 15_000;
+/** What OpenCode appends to a report whose child still has background work (2.3.0). */
+const SUBAGENT_STILL_RUNNING = "\n\nBackground work still running:\n";
+
+/**
+ * What a read knows beyond its rows. `liveSessions` (the server's running
+ * sessions) is given only to a read that ends at the session's newest row:
+ * there, a background sub-agent with no report yet reads Active while its
+ * child runs (or within {@link OPENCODE2_SUBAGENT_START_GRACE_MS} of its
+ * launch) and Ended once it does not, as after a server restart that did not
+ * resume it. Without it (an older page), such a launch reads Ended: its
+ * report, if any, lies in newer rows.
+ */
+export interface OpenCode2TranscriptContext {
+  /** `unknown`: the read is at the head but the running sessions could not be read; Active. */
+  liveSessions?: ReadonlySet<string> | "unknown";
+  now?: number;
+}
+
+/** Whether any row is a background sub-agent launch, so a head read needs the running sessions. */
+export function openCode2HasBackgroundSubagents(messages: readonly OpenCode2Message[]): boolean {
+  return messages.some((message) => {
+    const row = asRecord(message);
+    return (
+      row?.type === "assistant" &&
+      Array.isArray(row.content) &&
+      row.content.some((entry) => openCode2BackgroundSubagentLaunch(entry) !== undefined)
+    );
+  });
+}
+
+/**
+ * The context of a read that ends at the session's newest row: the running
+ * sessions, read only when a row needs them, `unknown` when that read failed.
+ */
+export async function openCode2HeadContext(
+  messages: readonly OpenCode2Message[],
+  liveSessions: (() => Promise<ReadonlySet<string>>) | undefined,
+): Promise<OpenCode2TranscriptContext> {
+  if (!liveSessions || !openCode2HasBackgroundSubagents(messages)) return {};
+  return { liveSessions: await liveSessions().catch(() => "unknown" as const) };
+}
+
+/** A sub-agent's report to its parent (2.3.0 `subagent-completion.ts`). */
+interface OpenCode2SubagentReport {
+  childId: string;
+  /** `completed`, `error` or `cancelled` (a job status). */
+  state: string;
+  body: string;
+  description?: string;
+}
+
+/** The report a `synthetic` row carries, or undefined for any other row. */
+export function openCode2SubagentReport(message: unknown): OpenCode2SubagentReport | undefined {
+  const row = asRecord(message);
+  if (row?.type !== "synthetic") return undefined;
+  const meta = asRecord(row.metadata);
+  const childId = nonEmptyString(meta?.childID);
+  if (meta?.source !== "subagent" || !childId) return undefined;
+  const text = typeof row.text === "string" ? row.text : "";
+  // Attributes are quoted; the body sits between the tag's lines.
+  const wrapped = /^\s*<subagent\b(?:[^>"]|"[^"]*")*>\r?\n?([\s\S]*?)\r?\n?<\/subagent>\s*$/.exec(
+    text,
+  );
+  const description = nonEmptyString(row.description);
+  return {
+    childId,
+    state: nonEmptyString(meta.state) ?? "completed",
+    body: (wrapped ? (wrapped[1] ?? "") : text).trim(),
+    ...(description ? { description } : {}),
+  };
+}
+
+function subagentReportState(report: OpenCode2SubagentReport): "active" | "finished" | "failed" {
+  if (report.state === "error" || report.state === "cancelled") return "failed";
+  // A child that went idle with its own background work still running reports
+  // again when that work ends.
+  return report.body.includes(SUBAGENT_STILL_RUNNING.trim()) ? "active" : "finished";
+}
+
+/** The status row for a report with no launch among the rows read. */
+function subagentReportRow(id: string, createdAt: string, report: OpenCode2SubagentReport) {
+  const verb =
+    report.state === "error" ? "failed" : report.state === "cancelled" ? "stopped" : "reported";
+  const heading = `Sub-agent ${verb}${report.description ? `: ${report.description}` : ""}`;
+  const text = report.body ? `${heading}\n${report.body}` : heading;
+  return statusRow(
+    id,
+    createdAt,
+    clip(text, MAX_SUBAGENT_NOTICE_CHARS),
+    report.state === "error" ? "error" : "info",
+  );
+}
 
 export type OpenCode2RowFate = "rendered" | "status" | "dropped";
 
-/** Every 2.x row kind (2.2.6 `Session.Message.Info`) and what the transcript does with it. */
+/** Every 2.x row kind (`Session.Message.Info`, unchanged 2.2.6 to 2.3.0) and what the transcript does with it. */
 export const OPENCODE2_ROW_FATES: Record<string, OpenCode2RowFate> = {
   user: "rendered",
   assistant: "rendered",
@@ -324,6 +435,8 @@ export function normalizeOpenCode2Group(
       }
       return [];
     case "synthetic": {
+      const report = openCode2SubagentReport(row);
+      if (report) return [subagentReportRow(id, createdAt, report)];
       const description = nonEmptyString(row.description);
       const text = typeof row.text === "string" ? row.text : "";
       const shell = backgroundShellNotice(row.metadata, description, text);
@@ -361,9 +474,10 @@ export function normalizeOpenCode2Message(
 export function normalizeOpenCode2Groups(
   messages: readonly OpenCode2Message[],
   onUnknown?: (type: string) => void,
+  context: OpenCode2TranscriptContext = {},
 ): Record<string, unknown>[][] {
   let lastResponseError: string | undefined;
-  return messages.map((message) => {
+  const groups = messages.map((message) => {
     const row = asRecord(message);
     const group = normalizeOpenCode2Group(message, onUnknown);
     if (row?.type === "assistant") {
@@ -381,12 +495,107 @@ export function normalizeOpenCode2Groups(
     }
     return group;
   });
+  return applyOpenCode2SubagentReports(messages, groups, context);
+}
+
+/**
+ * Fold each background sub-agent's reports onto the `subagent` calls that
+ * launched it, within one read (`messages` oldest first, `groups` their rows).
+ *
+ * A report answers every launch of its child since the previous report: a
+ * follow-up to a running child joins its run, so one report settles both
+ * calls. A report with no launch since then is a later round of the same
+ * child (it went idle again after its own background work) and replaces the
+ * previous report on those launches. The newest report wins: its body is the
+ * card's output (an error report its error) and its state the card's
+ * `agentState`; the report row then shows nothing. A report whose child has no
+ * launch among the rows read keeps its own status row.
+ *
+ * A launch with no report reads by {@link OpenCode2TranscriptContext}.
+ */
+export function applyOpenCode2SubagentReports(
+  messages: readonly OpenCode2Message[],
+  groups: Record<string, unknown>[][],
+  context: OpenCode2TranscriptContext = {},
+): Record<string, unknown>[][] {
+  type Launch = { group: number; callId: string; childId: string; launchedAt?: number };
+  const pending = new Map<string, Launch[]>();
+  const previous = new Map<string, Launch[]>();
+  const answered = new Map<Launch, OpenCode2SubagentReport>();
+  const folded = new Set<number>();
+  const launches: Launch[] = [];
+  messages.forEach((message, index) => {
+    const row = asRecord(message);
+    if (row?.type === "assistant" && Array.isArray(row.content)) {
+      for (const entry of row.content.slice(0, MAX_PARTS)) {
+        const launch = openCode2BackgroundSubagentLaunch(entry);
+        if (!launch) continue;
+        const record: Launch = { group: index, ...launch };
+        launches.push(record);
+        pending.set(launch.childId, [...(pending.get(launch.childId) ?? []), record]);
+      }
+      return;
+    }
+    const report = openCode2SubagentReport(message);
+    if (!report) return;
+    const since = pending.get(report.childId) ?? [];
+    const targets = since.length > 0 ? since : (previous.get(report.childId) ?? []);
+    pending.delete(report.childId);
+    if (targets.length === 0) return;
+    previous.set(report.childId, targets);
+    for (const launch of targets) answered.set(launch, report);
+    folded.add(index);
+  });
+  if (launches.length === 0) return groups;
+  const now = context.now ?? Date.now();
+  const next = groups.map((group) => group);
+  for (const launch of launches) {
+    const report = answered.get(launch);
+    const live = context.liveSessions;
+    const agentState = report
+      ? subagentReportState(report)
+      : live === "unknown" ||
+          (live !== undefined &&
+            (live.has(launch.childId) ||
+              (launch.launchedAt !== undefined &&
+                now - launch.launchedAt < OPENCODE2_SUBAGENT_START_GRACE_MS)))
+        ? "active"
+        : "ended";
+    next[launch.group] = (next[launch.group] ?? []).map((row) => {
+      if (!Array.isArray(row.parts)) return row;
+      let changed = false;
+      const parts = row.parts.map((candidate) => {
+        const part = asRecord(candidate);
+        if (part?.type !== "subagent" || part.toolUseId !== launch.callId) return candidate;
+        // A retained folded result is authoritative when its report has
+        // already left the head window. A new report still replaces it.
+        if (!report && (part.agentState === "finished" || part.agentState === "failed"))
+          return candidate;
+        changed = true;
+        const settled: Record<string, unknown> = { ...part, agentState };
+        if (report && report.state !== "error" && report.state !== "cancelled") {
+          if (report.body) settled.toolOutput = clip(report.body, OPENCODE2_TOOL_VALUE_LIMIT);
+        } else if (report) {
+          settled.toolError = clip(
+            report.body ||
+              (report.state === "cancelled" ? "Subagent cancelled" : "Subagent failed"),
+            OPENCODE2_TOOL_VALUE_LIMIT,
+          );
+        }
+        return settled;
+      });
+      return changed ? { ...row, parts } : row;
+    });
+  }
+  for (const index of folded) next[index] = [];
+  return next;
 }
 
 /** Oldest first in, oldest first out; rows the tab does not show are dropped. */
 export function normalizeOpenCode2Transcript(
   messages: readonly OpenCode2Message[],
   onUnknown?: (type: string) => void,
+  context?: OpenCode2TranscriptContext,
 ): Record<string, unknown>[] {
-  return normalizeOpenCode2Groups(messages, onUnknown).flat();
+  return normalizeOpenCode2Groups(messages, onUnknown, context).flat();
 }

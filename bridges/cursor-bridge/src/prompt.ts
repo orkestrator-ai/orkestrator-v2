@@ -639,7 +639,7 @@ function recordUsage(
   // publishing it here, which used to leave the bridge with no snapshot at
   // all. Prefer the terminal value when it exists, and keep the delta
   // accumulator as the fallback. It is not dead: the pinned `@cursor/sdk`
-  // 1.3.1 declares `RunResult.usage` optional ("absent when none did"), and a
+  // (1.3.1 and 1.4.1 alike) declares `RunResult.usage` optional ("absent when none did"), and a
   // turn failed without a terminal result (`failTurn` after a timeout or a
   // rejected wait) has no `RunResult` at all, only what streamed.
   const turn =
@@ -651,8 +651,11 @@ function recordUsage(
   // `RunResult.usage` sums every model call the run made, so on a run with
   // several calls it is a multiple of anything the window ever held. Only a
   // single call's own snapshot answers "how full is the context", and the last
-  // one is the one still standing when the turn ended.
-  const context = streamed.last ?? state.currentTurnUsage;
+  // one is the one still standing when the turn ended. The SDK's own
+  // per-call reading (`model-call-completed`, 1.4.1) comes first: the stream's
+  // usage message is built from `turn-ended`, which 1.4.1 documents as the
+  // turn's total.
+  const context = state.currentRunModelCalls?.last ?? streamed.last ?? state.currentTurnUsage;
   const elapsed =
     result?.durationMs ?? (state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined);
   const modelId = result?.model?.id ?? state.composer.selectedModelId;
@@ -691,9 +694,12 @@ function recordUsage(
     state.usage = {
       turn,
       // Recorded only when it is genuinely a second reading. A run that
-      // reported one snapshot hands the same object to both, and persisting a
-      // duplicate would invite the two to drift apart across a trim.
-      ...(context && context !== turn && Object.keys(context).length > 0 ? { context } : {}),
+      // reported one snapshot reports the same figures for both, and
+      // persisting a duplicate would invite the two to drift apart across a
+      // trim.
+      ...(context && Object.keys(context).length > 0 && !sameReading(context, turn)
+        ? { context }
+        : {}),
       ...(modelId ? { modelId } : {}),
       ...(elapsed !== undefined ? { durationMs: elapsed } : {}),
       // Carried forward rather than rebuilt from nothing. These are cumulative
@@ -717,6 +723,7 @@ function recordUsage(
   state.currentTurnOutputTokenEstimate = undefined;
   state.currentRunDeltaUsage = undefined;
   state.currentRunStreamUsage = undefined;
+  state.currentRunModelCalls = undefined;
   state.currentRunUsageUpdatedAt = undefined;
   state.currentRunModelId = undefined;
   state.turnStartedAt = undefined;
@@ -930,6 +937,18 @@ const USAGE_CATEGORY_KEYS = [
 ] as const;
 
 const TURN_USAGE_KEYS = [...USAGE_CATEGORY_KEYS, "reasoningTokens", "totalTokens"] as const;
+
+/**
+ * Whether two usage readings report the same categories. `totalTokens` is left
+ * out: the SDK's per-call reading never carries it and the run result does,
+ * so a single-call run would otherwise persist one reading twice.
+ */
+function sameReading(left: TurnUsage, right: TurnUsage): boolean {
+  if (left === right) return true;
+  return [...USAGE_CATEGORY_KEYS, "reasoningTokens" as const].every(
+    (key) => left[key] === right[key],
+  );
+}
 
 function terminalTurnUsage(usage: unknown): TurnUsage | undefined {
   if (!isObject(usage)) return undefined;

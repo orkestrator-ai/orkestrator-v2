@@ -95,7 +95,7 @@ export function codexNetworkDeniedConfig(
  * once the user trusts the project, or its main checkout, in Codex. Pinning
  * the thread's cwd untrusted drops that layer for this thread only, and stops
  * a writable thread from marking the project trusted in the user's
- * `config.toml`. Verified against 0.167.0 (`live-project-trust.test.ts`):
+ * `config.toml`. Verified against 0.169.0 (`live-project-trust.test.ts`):
  *
  * - The pin must be a nested table. A dotted `projects."<path>".trust_level`
  *   key, which works as a process `-c` override, is ignored in thread config.
@@ -131,7 +131,7 @@ export function codexProjectTrustConfig(
  * in Default mode" and the model falls back to asking in plain text. The
  * `default_mode_request_user_input` feature lifts that refusal, so the call
  * reaches the bridge as `item/tool/requestUserInput` and parks as a question
- * card. Verified against 0.167.0 (`live-request-user-input.test.ts`).
+ * card. Verified against 0.169.0 (`live-request-user-input.test.ts`).
  *
  * Unattended sessions (`pipeline`, which every workflow owner resolves) keep
  * the refusal: nobody would see the question, and their owner would only
@@ -413,20 +413,50 @@ export function codexUserMcpThreadConfig(
  * the request declares only the current turn's tools and writes no record
  * (`live-network-lock.test.ts`). Thread configuration cannot turn it off, so
  * the process override must hold; only an explicit `false` passes.
+ *
+ * Since 0.169.0 the switch depends on the route: `incremental_tools` covers
+ * Responses-lite models, `incremental_tools_legacy` Amazon Bedrock and
+ * `incremental_tools_legacy_gcp` (on by default) GCP (`StepContext::
+ * incremental_tools_feature`). A user's `config.toml` can pick any of those
+ * providers, so all three must read back `false`. `config/read` reports only
+ * the features something set, which the process overrides do.
  */
 export function codexToolHistoryGaps(config: unknown): string[] {
   if (!config || typeof config !== "object" || Array.isArray(config)) {
     return ["config/read returned no configuration"];
   }
   const features = (config as Record<string, unknown>).features;
-  const value =
+  const read = (key: string): unknown =>
     features && typeof features === "object" && !Array.isArray(features)
-      ? (features as Record<string, unknown>).incremental_tools
+      ? (features as Record<string, unknown>)[key]
       : undefined;
-  return value === false
-    ? []
-    : [`features.incremental_tools is ${JSON.stringify(value ?? null)}, not false`];
+  return CODEX_TOOL_HISTORY_FEATURES.flatMap((key) => {
+    const value = read(key);
+    return value === false
+      ? []
+      : [`features.${key} is ${JSON.stringify(value ?? null)}, not false`];
+  });
 }
+
+/**
+ * The features that write each turn's tool declarations into thread history,
+ * one per model route (see {@link codexToolHistoryGaps}). Every bridge turns
+ * all of them off (`codexAppServerConfigOverrides`).
+ */
+export const CODEX_TOOL_HISTORY_FEATURES = [
+  "incremental_tools",
+  "incremental_tools_legacy",
+  "incremental_tools_legacy_gcp",
+] as const;
+
+/** {@link CODEX_TOOL_HISTORY_FEATURES}, all off: what `config/read` reports. */
+export const CODEX_TOOL_HISTORY_FEATURES_OFF: Readonly<
+  Record<(typeof CODEX_TOOL_HISTORY_FEATURES)[number], false>
+> = {
+  incremental_tools: false,
+  incremental_tools_legacy: false,
+  incremental_tools_legacy_gcp: false,
+};
 
 /**
  * Whether an effective configuration (`config/read`) runs search in the
@@ -549,7 +579,7 @@ export const CODEX_COORDINATOR_SHELL_EXCLUDE: readonly string[] = Object.freeze(
  * Which of a coordinator profile's temporary-directory denials
  * (`":tmpdir" = "deny"`, `":slash_tmp" = "deny"`) Codex can apply.
  *
- * Codex's Linux sandbox (bubblewrap; 0.166.0 and 0.167.0) turns each denied
+ * Codex's Linux sandbox (bubblewrap; 0.166.0 through 0.169.0) turns each denied
  * directory into `--perms 000 --tmpfs <path> --remount-ro <path>`, shallowest
  * first and after every read grant is bound. Two cases break a coordinator:
  *
@@ -623,9 +653,11 @@ export function codexAppServerConfigOverrides(
     // regardless of which multi-agent implementation Codex selects.
     "features.multi_agent_v2.max_concurrent_threads_per_session": String(childLimit + 1),
     // Off for every bridge, since any thread can later run a turn that denies
-    // hosted search. See `codexToolHistoryGaps`.
-    "features.incremental_tools": "false",
-    // Goals are stable and on by default (0.164.0 through 0.167.0), which
+    // hosted search. See `codexToolHistoryGaps`; one switch per model route.
+    ...Object.fromEntries(
+      CODEX_TOOL_HISTORY_FEATURES.map((feature) => [`features.${feature}`, "false"]),
+    ),
+    // Goals are stable and on by default (0.164.0 through 0.169.0), which
     // offers the model `create_goal`, `get_goal` and `update_goal`. Orkestrator's
     // goal loop runs in the backend on every provider
     // (`docs/architecture/goals.md`) and ignores `thread/goal/*`: a goal Codex continued on its own would

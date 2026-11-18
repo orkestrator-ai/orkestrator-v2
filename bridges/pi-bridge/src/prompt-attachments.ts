@@ -179,10 +179,13 @@ export async function readPromptImages(
 export type ImageResizeProfile = NonNullable<Parameters<typeof resizeImage>[2]>;
 
 /**
- * `modelResize` is for input Pi queues as-is. Since 0.87 `prompt()` resizes
- * every image to the model's own profile, but `steer()` and `followUp()` hand
- * theirs to the agent untouched, so those callers pass the profile here. The
- * bridge's own ceiling still applies when the profile allows more.
+ * `modelResize` is for input Pi queues. Since 0.87 `prompt()` resizes every
+ * image to the model's own profile; `steer()` and `followUp()` handed theirs
+ * to the agent untouched until Pi 1.5.1, which resizes them on delivery and
+ * appends its resize notes (`[Image: original …]`) to the queued text. Those
+ * callers still pass the profile here: the bridge's own ceiling applies at the
+ * boundary, and an image already within the profile is not resized again, so
+ * no note lands in the steer row `applySteerDelivery` renders from Pi's text.
  */
 async function normalizeImageForPi(
   bytes: Buffer,

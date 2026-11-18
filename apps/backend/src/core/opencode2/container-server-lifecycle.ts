@@ -77,7 +77,7 @@ import {
   publishesOpenCode2Port,
 } from "./container-server.js";
 import type { OpenCode2ServerConnection } from "./environment-provider.js";
-import { waitForOpenCode2Ready } from "./server.js";
+import { OPENCODE2_CREDENTIAL_PLUGIN_ID, waitForOpenCode2Ready } from "./server.js";
 import {
   OPENCODE2_LAUNCH_FINGERPRINT,
   recordOpenCode2Listener,
@@ -196,22 +196,34 @@ export async function containerRunsOpenCode2(
  * Load the workspace's instance, and with it the server's plugins: the
  * credential plugin's hardening (non-dumpable, password out of the
  * environment) is then in place before an agent's first tool call, and before
- * a launched server's socket is recorded. On 2.2.6 `/api/agent` loads them;
- * `/api/session/active` does not (probed 2026-11-10).
+ * a launched server's socket is recorded. `/api/agent` starts the load;
+ * `/api/session/active` does not (probed 2026-11-10). Since 2.2.7 it answers
+ * before the plugins finish loading, so the warm also waits for the
+ * credential plugin to be listed `active` (`awaitPlugins`; on 2.3.0 the
+ * server turned non-dumpable about 250 ms after `/api/agent` answered).
+ * A required warm fails unless it is.
  */
 async function warmContainerOpenCode2(
   client: OpenCode2Client,
   required = false,
   timeoutMs = 30_000,
 ): Promise<void> {
-  await client
-    .api("GET", "/api/agent", "OpenCode agents", { signal: AbortSignal.timeout(timeoutMs) })
+  const loaded = await client
+    .awaitPlugins({ timeoutMs, pluginId: OPENCODE2_CREDENTIAL_PLUGIN_ID })
     .catch((error: unknown) => {
       if (required) throw error;
       log.warn("container-server.warm-incomplete", {
         error: formatLogError(error, { message: false }),
       });
+      return undefined;
     });
+  if (loaded === undefined || loaded === "loaded") return;
+  if (required) {
+    throw new ProviderUnavailableError(
+      `OpenCode 2's credential plugin did not load in this container (${loaded}); restart the environment`,
+    );
+  }
+  log.warn("container-server.warm-incomplete", { plugin: loaded });
 }
 
 /** Wait for a fresh server, with its log tail in the error when it never answers. */

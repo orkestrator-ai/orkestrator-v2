@@ -93,5 +93,6 @@ export type { WebSearchContextSize } from "./WebSearchContextSize.js";
 export type { WebSearchItem } from "./WebSearchItem.js";
 export type { WebSearchLocation } from "./WebSearchLocation.js";
 export type { WebSearchMode } from "./WebSearchMode.js";
+export type { WebSearchProvider } from "./WebSearchProvider.js";
 export type { WebSearchToolConfig } from "./WebSearchToolConfig.js";
 export * as v2 from "./v2/index.js";

@@ -127,6 +127,73 @@ describe("ACP bridge", () => {
     });
   }
 
+  for (const scenario of ["generic", "generic-without-capability", "grok"] as const) {
+    test(`session instructions use standard ACP systemPrompt only where advertised and no rules field exists (${scenario})`, async () => {
+      const directory = await temporaryDirectory();
+      const workspace = resolve(directory, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(
+        resolve(workspace, "AGENTS.md"),
+        "Always show visual changes as images.\n",
+      );
+      const requestFile = resolve(directory, "session-requests.jsonl");
+      const bridge = await spawnBridge({
+        env: {
+          ...(scenario === "grok" ? { ACP_PROVIDER: "grok" } : {}),
+          CWD: workspace,
+          FAKE_ACP_SESSION_REQUEST_FILE: requestFile,
+          ...(scenario === "generic-without-capability"
+            ? {}
+            : { FAKE_ACP_SYSTEM_PROMPT_CAPABILITY: "1" }),
+        },
+      });
+      const response = await nativeFetch(`${bridge.base}/session/create`, {
+        method: "POST",
+        headers: bridge.headers,
+        body: JSON.stringify({
+          policy: {
+            id: "interactive-host",
+            sandbox: "none",
+            approvals: "auto-approve",
+            projectResources: false,
+            networkAccess: "full",
+          },
+        }),
+      });
+      expect(response.status).toBe(201);
+      const created = (await fs.readFile(requestFile, "utf8"))
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              method: string;
+              meta?: { rules?: string };
+              systemPrompt?: { mode: string; content: { type: string; text: string }[] };
+            },
+        )
+        .find((request) => request.method === "session/new");
+      expect(created).toBeDefined();
+      if (scenario === "generic") {
+        expect(created?.meta?.rules).toBeUndefined();
+        expect(created?.systemPrompt?.mode).toBe("append");
+        expect(created?.systemPrompt?.content).toHaveLength(1);
+        expect(created?.systemPrompt?.content[0]?.type).toBe("text");
+        expect(created?.systemPrompt?.content[0]?.text).toStartWith(agentSystemInstructions());
+        expect(created?.systemPrompt?.content[0]?.text).toContain(
+          "Always show visual changes as images.",
+        );
+      } else if (scenario === "grok") {
+        // The verified vendor field wins, so the instructions never arrive twice.
+        expect(created?.systemPrompt).toBeUndefined();
+        expect(created?.meta?.rules).toContain("Always show visual changes as images.");
+      } else {
+        expect(created?.systemPrompt).toBeUndefined();
+        expect(created?.meta?.rules).toBeUndefined();
+      }
+    });
+  }
+
   for (const scenario of ["unset", "environment", "user-config"] as const) {
     test(`launches Grok with its question timeout raised only when nothing sets it (${scenario})`, async () => {
       const directory = await temporaryDirectory();

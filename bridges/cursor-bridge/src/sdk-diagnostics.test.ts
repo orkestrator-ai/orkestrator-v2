@@ -83,7 +83,20 @@ describe("Cursor SDK boundary diagnostics", () => {
       expect(typeof seam.execControllerPrototype.run).toBe("function");
       // Fail on a changed vendor loop: response-ready relies on awaiting the
       // write before advancing the executor iterator. No network/auth needed.
-      expect(seam.execControllerPrototype.run.toString()).toContain("clientStream.write");
+      const awaitedWrite =
+        /for await\s*\(\s*let ([\w$]+) of [\w$]+\)\s*await this\.clientStream\.write\(\1\)/;
+      const run = seam.execControllerPrototype.run.toString();
+      if (!awaitedWrite.test(run)) {
+        // Since 1.4.1 `run` hands each exec to `execute`, which holds the loop.
+        // It reads `controlledExecManager` when `run` calls it, so the facade
+        // the hook installs for the duration of `run` still covers it.
+        expect(run).toContain("this.execute(");
+        const execute: unknown = Reflect.get(seam.execControllerPrototype, "execute");
+        expect(typeof execute).toBe("function");
+        const source = String(execute);
+        expect(source).toMatch(awaitedWrite);
+        expect(source).toContain("this.controlledExecManager.handle(");
+      }
     });
   });
 

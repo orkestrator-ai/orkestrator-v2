@@ -491,6 +491,63 @@ describe("planComposerApply", () => {
       },
     ]);
   });
+
+  test("an ACP `speed` boolean is the fast-mode toggle, not a generic parameter", () => {
+    const normalized = normalizeAcpSessionConfig("gemini", {
+      configOptions: [
+        { configId: "turbo", category: "speed", type: "boolean", currentValue: false },
+        // Without the category this id would win the older `model_config` guess.
+        { configId: "fast", category: "model_config", type: "boolean", currentValue: true },
+      ],
+    });
+
+    expect(normalized.composer.fastModeAvailable).toBe(true);
+    expect(normalized.composer.fastModeEnabled).toBe(false);
+    expect(planComposerApply("sess", normalized, { fastMode: true })).toEqual([
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "turbo", type: "boolean", value: true },
+      },
+    ]);
+  });
+
+  test("an ACP `speed` select runs slowest to fastest", () => {
+    const speed = (currentValue: string) =>
+      normalizeAcpSessionConfig("gemini", {
+        configOptions: [
+          {
+            configId: "service_tier",
+            category: "speed",
+            type: "select",
+            currentValue,
+            options: [
+              { value: "standard", name: "Standard" },
+              { value: "priority", name: "Priority" },
+            ],
+          },
+        ],
+      });
+
+    const slow = speed("standard");
+    expect(slow.composer.fastModeAvailable).toBe(true);
+    expect(slow.composer.fastModeEnabled).toBe(false);
+    expect(planComposerApply("sess", slow, { fastMode: true })).toEqual([
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "service_tier", value: "priority" },
+      },
+    ]);
+
+    const fast = speed("priority");
+    expect(fast.composer.fastModeEnabled).toBe(true);
+    expect(planComposerApply("sess", fast, { fastMode: true })).toEqual([]);
+    expect(planComposerApply("sess", fast, { fastMode: false })).toEqual([
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "service_tier", value: "standard" },
+      },
+    ]);
+  });
 });
 
 describe("session config updates", () => {

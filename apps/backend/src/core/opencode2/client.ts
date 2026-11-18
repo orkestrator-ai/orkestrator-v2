@@ -3,15 +3,16 @@
  *
  * OpenCode 2.x serves no legacy routes, so the 1.x SDK cannot drive it
  * (to-do 0008, retired (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`)). This client covers only the
- * routes the 2.x provider uses, verified against the pinned 2.2.6 server and
- * its committed `packages/protocol/openapi.json`. It is written here rather
+ * routes the 2.x provider uses, verified against the pinned server and its
+ * committed `packages/protocol/openapi.json` (2.2.6; 2.3.0's adds and removes
+ * no route). It is written here rather
  * than taken from `@opencode/client` because that package pins `effect` to an
  * exact version the backend does not use, and because every read must be
  * bounded (AGENTS.md invariant 11).
  *
  * Successful 2.x answers are `{ data }` envelopes (list routes add a
  * `cursor`), except `/api/info` and `interrupt`, which answer bare objects, and
- * the mutations that answer 204 (verified against the 2.2.6 OpenAPI). A 4xx is a definitive refusal and surfaces as
+ * the mutations that answer 204 (verified against the 2.2.6 and 2.3.0 OpenAPI). A 4xx is a definitive refusal and surfaces as
  * {@link OpenCode2RequestError} with the server's `_tag`; anything else
  * (network, 5xx, an oversized or malformed body) is
  * {@link ProviderUnavailableError}, which says nothing about whether the
@@ -39,6 +40,8 @@ export const OPENCODE2_MAX_RESPONSE_BYTES = 256 * 1024;
 /** Message pages carry tool output and can be large; they get their own bound. */
 export const OPENCODE2_MAX_MESSAGE_PAGE_BYTES = 8 * 1024 * 1024;
 export const OPENCODE2_DEFAULT_TIMEOUT_MS = 30_000;
+/** Child sessions read per parent; 2.x's own list default is 50. */
+export const OPENCODE2_CHILD_SESSION_LIMIT = 50;
 /** OpenCode 2.x fixes the Basic-auth username. */
 export const OPENCODE2_USERNAME = "opencode";
 
@@ -282,6 +285,71 @@ export class OpenCode2Client {
       throw new ProviderUnavailableError("OpenCode active sessions is malformed");
     }
     return new Set(Object.keys(data).filter((id) => id.startsWith("ses")));
+  }
+
+  /**
+   * The newest child sessions of `parentId` (`GET /api/session?parentID=`):
+   * the sessions its `subagent` calls created. Since 2.3.0 every subagent
+   * runs in the background, so a child may still run after its parent's run
+   * settled. Bounded to {@link OPENCODE2_CHILD_SESSION_LIMIT}.
+   */
+  async listChildSessions(parentId: string, signal?: AbortSignal): Promise<OpenCode2Session[]> {
+    const data = await this.request<unknown>("GET", "/api/session", "OpenCode child sessions", {
+      query: { parentID: parentId, limit: String(OPENCODE2_CHILD_SESSION_LIMIT), order: "desc" },
+      signal,
+    });
+    if (!Array.isArray(data)) {
+      throw new ProviderUnavailableError("OpenCode child sessions is malformed");
+    }
+    // The filter is the server's; a row naming another parent is never trusted.
+    return data.filter(
+      (session): session is OpenCode2Session =>
+        !!session &&
+        typeof session === "object" &&
+        typeof (session as { id?: unknown }).id === "string" &&
+        (session as { parentID?: unknown }).parentID === parentId,
+    );
+  }
+
+  /**
+   * Wait until the location's plugins have loaded, so a plugin's effects (the
+   * credential plugin's hardening, a rebuilt location's commands) are in place.
+   *
+   * Since 2.2.7 no request handler waits for plugins: `/api/agent` and the
+   * catalogue reads answer with whatever has loaded so far, and a location
+   * that has not activated lists no plugins. `GET /api/agent` activates the
+   * location; `GET /api/plugin` then lists the whole set at once when its load
+   * finishes (observed on 2.3.0), which is what is waited for. With
+   * `pluginId`, that plugin must be among them and `active`; a server that
+   * loaded without it answers `missing`, one whose setup threw `failed`.
+   * Resolves `timeout` when nothing loaded in time; transport errors throw.
+   */
+  async awaitPlugins(options: {
+    timeoutMs: number;
+    pluginId?: string;
+    intervalMs?: number;
+    signal?: AbortSignal;
+  }): Promise<"loaded" | "missing" | "failed" | "timeout"> {
+    const deadline = Date.now() + options.timeoutMs;
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs)])
+      : AbortSignal.timeout(options.timeoutMs);
+    await this.request("GET", "/api/agent", "OpenCode agent list", { signal });
+    for (;;) {
+      const plugins = await this.request<unknown>("GET", "/api/plugin", "OpenCode plugin list", {
+        signal,
+      });
+      if (Array.isArray(plugins) && plugins.length > 0) {
+        if (!options.pluginId) return "loaded";
+        const plugin = plugins
+          .map((entry) => asRecord(entry))
+          .find((entry) => entry?.id === options.pluginId);
+        if (!plugin) return "missing";
+        return asRecord(plugin.state)?.status === "active" ? "loaded" : "failed";
+      }
+      if (Date.now() >= deadline) return "timeout";
+      await new Promise((resolve) => setTimeout(resolve, options.intervalMs ?? 25));
+    }
   }
 
   /** Input admitted but not yet delivered into the history. */

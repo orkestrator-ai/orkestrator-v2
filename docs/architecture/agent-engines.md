@@ -418,7 +418,7 @@ coordinator policy, so a read-only review there gets none either.
 | Codex | `developerInstructions` on every `thread/start`, `thread/resume` and `thread/fork`. That parameter replaces the configured `developer_instructions`, so the engine reads them back (`config/read`, with the project layer only when the thread loads project resources) and keeps them after Orkestrator's | `AppServerEngine.developerInstructions` |
 | OpenCode | A durable instruction entry on the session (`PUT /api/experimental/session/:id/instructions/entries/orkestrator`), written at create and resume; OpenCode 2's prompt has no `system` field | `opencode2/instructions.ts` |
 | Pi | `appendSystemPromptOverride`, after any `APPEND_SYSTEM.md`, followed by the connected MCP servers' own instructions (Pi's SDK has no MCP client, so the bridge's client collects them) | `piAppendedInstructions` |
-| Grok | `_meta.rules` on `session/new`, appended to Grok's system prompt and kept with the session, so a `session/load` in a new process still has them (both verified live on 1.0.70). The `--rules` flag is ignored under `agent stdio` (also verified live) | `sessionInstructions`, `sessionInstructionsMeta` |
+| Grok | `_meta.rules` on `session/new`, appended to Grok's system prompt and kept with the session, so a `session/load` in a new process still has them (both verified live on 1.0.70). The `--rules` flag is ignored under `agent stdio` (also verified live). Another ACP agent gets them as standard `systemPrompt` (`append`) on `session/new` and `session/load` when its `initialize` advertises `sessionCapabilities.systemPrompt` (ACP SDK 2.5.0+); Grok 1.0.88 does not | `sessionInstructions`, `sessionInstructionsCarrier` |
 | Cursor | A system-instructions frame after the user's text on every prompt: the SDK's `systemPrompt` replaces Cursor's whole prompt and is enabled per account. History reload strips the frame | `cursorPromptText` |
 
 ### The repository's AGENTS.md
@@ -968,6 +968,51 @@ OpenCode bump, re-check:
   under `apps/backend/src/core/opencode2/`.
 - The routes the client and the feature modules call (`GET /openapi.json` on a
   running server lists them).
+- That nothing relies on a request handler waiting for plugins: since 2.2.7
+  none does (`/api/agent` included), so the container warm and a location
+  reload wait for `GET /api/plugin` to list the location's plugins
+  (`OpenCode2Client.awaitPlugins`); the container's must list the credential
+  plugin `active` before its socket is recorded.
+- The sub-agent tool and its report (below), with
+  `opencode2-subagents.live.test.ts`.
+
+**Background sub-agents (2.3.0).** Every `subagent` call returns at once with
+its child's session id (`metadata.status: "running"`), the parent's run
+settles while the child works, and each time the child goes idle a
+`<subagent>` report (a `synthetic` row, `metadata: { source: "subagent",
+childID, state }`, `state` one of `completed`, `error`, `cancelled`) reaches
+the parent and wakes it into a run Orkestrator never prompted. That is a
+Claude turn released to background agents, and is reported the same way
+(`opencode2/background-subagents.ts`):
+
+- Transcript: each report is folded onto the call that launched it, as the
+  Claude bridge folds a `<task-notification>` (`transcript.ts`): the card's
+  output becomes the report's body and its `agentState` follows the report
+  (`completed` Finished; `error` and `cancelled` Failed, as Codex reads an
+  interrupted child; a report that lists background work still running keeps
+  it Active). A report whose launch is outside the rows read is a status row
+  of its own. A launch with no report reads Active while its child is listed
+  running (or within 15 s of the call), and Ended otherwise, as after a
+  server restart, which does not resume a running child.
+- Activity: a session whose own run settled but whose descendant still runs
+  reads `working`; its `status` (and so the composer) is its own run's.
+- Workflows: `observeSession` adds `backgroundWorkLive` while a descendant
+  runs, a report waits in the inbox, a child was just admitted, or one settled
+  within 3 s; `settleTurn` keeps the turn's grant and `structured` answers
+  nothing meanwhile. Unreadable background state also stays pending until a
+  successful read proves completion. A run a report wakes belongs to the same request
+  (`openCode2RequestRun`, `openCode2TurnTerminalError`).
+- Stop: 2.3.0 no longer stops a parent's children when the parent is
+  interrupted, and a stopped child's `cancelled` report wakes the parent. A
+  stop (and so a close) interrupts the running descendants and then, for up
+  to 3 s, any run their reports wake, refreshing descendants even after a quiet
+  snapshot. New external input cancels the stop phase; another provider
+  instance is detected through the parent's input history. Disposal cancels
+  the phase too. Revised launch cards retain folded results after reports
+  leave the head window, and older launches still consult live child state.
+
+A child's own permission or question cards are not shown in the parent's tab
+(as on 2.2.6, where the parent waited on the child instead).
 
 A bump is qualified on scripted models, with no login and nothing billed,
 in three layers ([upgrade-agents.md](../development/upgrade-agents.md) has
@@ -986,7 +1031,9 @@ the commands):
   on the same session because `opencode2.db` came with it.
 
 All three passed at 2.2.6 on Linux x86_64 (host 2026-11-11, container
-2026-11-13, behind an egress gateway); the per-case figures are in
+2026-11-13, behind an egress gateway); at 2.3.0 the live set passed on Linux
+x86_64 on 2026-11-17, and the real-stack and container halves were not
+re-run. The per-case figures are in
 [agent-testing.md](../development/agent-testing.md). Concurrent sessions on
 one server, a steer racing a permission or question card and steer through
 the public CLI passed on scripted models on 2026-11-14
@@ -1004,8 +1051,9 @@ restart interruption (`opencode2/restart-cut.ts`,
 `opencode2-restart.live.test.ts`), naming the open run's newest
 Orkestrator request: 2.2.6 writes no `idle` for the cut run, so a
 continuation joins it, and a second restart that cuts the continuation
-reports the continuation. The backend's host plugin stops a server whose
-backend is gone. Record any real-provider run here.
+reports the continuation (2.3.0 still writes none). The backend's host
+plugin stops a server whose backend is gone. Record any real-provider run
+here.
 
 **Mitigations, accepted by the user on 2026-11-14** (0008, retired, task 7;
 `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`, "Task 2:

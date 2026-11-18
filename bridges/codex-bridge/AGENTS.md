@@ -218,8 +218,11 @@ replay shows it as the card, never as a message the user typed. See
   search-denied turn run on a history that declares tools: with
   `features.incremental_tools` (default-on since 0.164.0) each turn's tools,
   `web__run` included, are written into the history and replayed on resume,
-  and thread config cannot turn it off. Every bridge runs app-server with it
-  off (`codexAppServerConfigOverrides`); the engine reads that back
+  and thread config cannot turn it off. Since 0.169.0 Bedrock and GCP
+  routes have their own switches (`incremental_tools_legacy`,
+  `incremental_tools_legacy_gcp`, the latter on by default), so the switch
+  is `CODEX_TOOL_HISTORY_FEATURES`. Every bridge runs app-server with all
+  of them off (`codexAppServerConfigOverrides`); the engine reads that back
   (`codexToolHistoryGaps`, and for coordinators `codexHostedNetworkLockGaps`)
   and refuses a search-denied resume or fork whose rollout, or fork ancestor,
   holds an `additional_tools` record (`sessions/tool-history-guard.ts`). The
@@ -230,7 +233,7 @@ replay shows it as the card, never as a message the user typed. See
 - Never send a `readOnly` turn to Codex's `read-only` sandbox where that
   sandbox cannot run. In an environment's container bubblewrap cannot create
   its user namespace, so every command fails and a reviewer reads nothing.
-  There the turn runs `danger-full-access` under `untrusted`. Codex 0.167.0
+  There the turn runs `danger-full-access` under `untrusted`. Codex 0.169.0
   asks for every command no exec-policy rule allows, so before the thread
   starts the bridge writes `CODEX_HOME/rules/orkestrator-read-only.rules`
   (`codex-read-only-exec-rules.ts`), allowing only programs none of whose
@@ -372,8 +375,8 @@ replay shows it as the card, never as a message the user typed. See
   checks keep comparing the held policy, so the backend re-sending it is not
   a widening. Never narrow a container session, a permission profile or a
   read-only turn without the command sandbox: a narrowed sandbox cannot run
-  there, so Codex's own refusal stands. Codex 0.167.0 reports `network` there
-  without the experimental API although the generated bindings omit it;
+  there, so Codex's own refusal stands. Codex 0.167.0 and 0.169.0 report
+  `network` there without the experimental API although the generated bindings omit it;
   re-check on a bump with `mise run verify:codex:network-card` (to-do 8085
   (retired)).
 - Every turn runs in Codex's Default collaboration mode, which refuses

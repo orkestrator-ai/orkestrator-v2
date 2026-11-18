@@ -20,6 +20,7 @@ import {
   threadPayload,
   waitUntil,
 } from "./app-server-runtime-test-harness.js";
+import { CODEX_TOOL_HISTORY_FEATURES_OFF } from "./codex-config.js";
 
 jest.setTimeout(30_000);
 
@@ -4372,7 +4373,7 @@ describe("coordinator project skills", () => {
         "skills/list": listing,
         // What a coordinator's process configuration reads back as.
         "config/read": () => ({
-          config: { web_search: "disabled", features: { incremental_tools: false } },
+          config: { web_search: "disabled", features: CODEX_TOOL_HISTORY_FEATURES_OFF },
         }),
         "thread/start": () => ({
           thread: { id: "thread-1", turns: [] },

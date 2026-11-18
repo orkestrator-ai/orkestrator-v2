@@ -1506,6 +1506,32 @@ describe("steering", () => {
       await (await call(`/session/${state.id}/steer/dispatch?requestId=steer-1`)).json(),
     ).toEqual({ dispatch: "dispatched" });
   });
+
+  test("a steer the SDK queued as a follow-up is applied, never answered idle", async () => {
+    // `@cursor/sdk` 1.4.1: the text is already queued, so an `idle` answer
+    // would have the caller send it a second time.
+    const state = await createSession();
+    state.status = "running";
+    state.activeRun = {
+      id: "run-1",
+      supports: (feature: string) => feature === "stream",
+      steer: async () => ({ outcome: "queued" }),
+    } as unknown as SessionState["activeRun"];
+
+    const queued = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "narrow the scope",
+        requestId: "steer-queued",
+        expectedRunId: "run-1",
+      }),
+    });
+    expect(queued.status).toBe(202);
+    expect(await queued.json()).toEqual({ outcome: "applied", requestId: "steer-queued" });
+    expect(
+      await (await call(`/session/${state.id}/steer/dispatch?requestId=steer-queued`)).json(),
+    ).toEqual({ dispatch: "dispatched" });
+  });
 });
 
 describe("routes the SDK has no surface for", () => {

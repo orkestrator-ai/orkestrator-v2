@@ -75,6 +75,15 @@ the record would be dropped).
   reported on `/status`, `/session/:id` and the transcript source; `null`
   clears it, an absent or malformed `title` changes nothing. It is metadata,
   so a replay applies it too.
+- **Session instructions use `systemPrompt` where advertised.** An agent whose
+  `initialize` declares `sessionCapabilities.systemPrompt` (stable ACP since
+  SDK 2.5.0) gets them as `systemPrompt` in `append` mode on `session/new` and
+  again on `session/load`, as ACP asks. A provider with a verified vendor field
+  (Grok's `_meta.rules`, on create only) keeps it, so they never arrive twice
+  (`sessionInstructionsCarrier`).
+- **A `speed` config option is the fast-mode toggle.** ACP's `speed` category
+  wins over the older `model_config` guess; a `speed` select runs slowest to
+  fastest, so off is its first value and on its last.
 - **The `compact` action runs the agent's own `/compact`.** ACP has no
   compaction request. `POST /session/:id/compact` becomes a selected
   `/compact` on the prompt route, so it is journaled (optional `requestId`),

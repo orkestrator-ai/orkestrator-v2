@@ -22,7 +22,7 @@ export type SessionStatus = "idle" | "running" | "error";
 
 /**
  * Every Cursor dollar figure is a bill. The only cost this bridge reads is
- * `getUsage()`'s `UsageCost.chargedCents`, which @cursor/sdk 1.3.1 documents
+ * `getUsage()`'s `UsageCost.chargedCents`, which @cursor/sdk 1.4.1 documents
  * as the "Dollar cost of billed usage … Server-derived" and the "Amount
  * actually charged, with discounts and the Cursor Token Fee included"
  * (`agent/usage-types.d.ts`). It is eventually consistent, not estimated: a
@@ -452,8 +452,8 @@ export interface SessionState {
   /**
    * Heuristic output-token progress for the model call still in flight.
    *
-   * Cursor publishes `token-delta` before its first exact `turn-ended.usage`
-   * frame. Keeping the estimate separate prevents it from contaminating the
+   * Cursor publishes `token-delta` before the call's exact usage frame
+   * (`model-call-completed`, or `turn-ended.usage`). Keeping the estimate separate prevents it from contaminating the
    * exact provider categories that replace it at the turn boundary.
    */
   currentTurnOutputTokenEstimate?: number;
@@ -461,6 +461,13 @@ export interface SessionState {
   currentRunDeltaUsage?: TurnUsage;
   /** Independent accumulator for usage delivered through the run message stream. */
   currentRunStreamUsage?: TurnUsage;
+  /**
+   * Usage of the current run's model calls, from `model-call-completed`
+   * (SDK 1.4.1): their sum, and the latest call as the occupancy reading.
+   * Absent until the run reports one, which a stream from an older server
+   * never does.
+   */
+  currentRunModelCalls?: { total: TurnUsage; last: TurnUsage };
   /** Timestamp of the latest in-flight usage update exposed to polling clients. */
   currentRunUsageUpdatedAt?: string;
   /** Model selected when the current run was dispatched. */

@@ -691,7 +691,8 @@ export const grokCodec: ProviderCodec = {
 //
 // Everything below mirrors `bridges/pi-bridge/src/mcp-config.ts`, which in turn
 // follows Pi's own loader (`dist/extensions/mcp/config.js` and
-// `validateMcpServerConfig` in `dist/core/mcp-servers.js`). The backend parity
+// `validateMcpServerConfig` in `dist/core/mcp-servers.js`, which since Pi 1.5.1
+// delegates the shared fields to `@earendil-works/pi-mcp`). The backend parity
 // test (`pi-mcp-parity.test.ts`) runs both over the same fixtures.
 // ---------------------------------------------------------------------------
 

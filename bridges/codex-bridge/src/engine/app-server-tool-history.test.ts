@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUILD, harness, thread } from "./app-server-engine-test-harness.js";
 import type { EngineTurnConfig } from "./types.js";
+import { CODEX_TOOL_HISTORY_FEATURES_OFF } from "../codex-config.js";
 
 const DENIED: EngineTurnConfig = {
   ...BUILD,
@@ -30,7 +31,9 @@ describe("tool history configuration lock", () => {
       `refuses ${operation} unless incremental_tools is explicitly false (%s)`,
       async (value) => {
         const h = harness({
-          "config/read": () => ({ config: { features: { incremental_tools: value } } }),
+          "config/read": () => ({
+            config: { features: { ...CODEX_TOOL_HISTORY_FEATURES_OFF, incremental_tools: value } },
+          }),
         });
         try {
           const pending =
@@ -53,7 +56,7 @@ describe("tool history configuration lock", () => {
     const h = harness({
       "config/read": () => {
         if (unreadable) throw new Error("config unavailable");
-        return { config: { features: { incremental_tools: false } } };
+        return { config: { features: CODEX_TOOL_HISTORY_FEATURES_OFF } };
       },
       "thread/start": () => ({ thread: thread("fresh") }),
     });
@@ -94,7 +97,9 @@ describe("tool history configuration lock", () => {
   test("verifies once per generation and rechecks after replacement", async () => {
     let locked = true;
     const h = harness({
-      "config/read": () => ({ config: { features: { incremental_tools: !locked } } }),
+      "config/read": () => ({
+        config: { features: { ...CODEX_TOOL_HISTORY_FEATURES_OFF, incremental_tools: !locked } },
+      }),
       "thread/start": () => ({ thread: thread("fresh") }),
       "thread/resume": () => ({ thread: thread("existing") }),
       "thread/fork": () => ({ thread: thread("forked") }),

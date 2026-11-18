@@ -4,7 +4,7 @@ import { readRepositoryInstructions } from "@orkestrator/protocol/node/repositor
 
 /**
  * The system-level instructions a new session carries
- * (`sessionInstructionsMeta`): the instructions every Orkestrator provider
+ * (`sessionInstructionsCarrier`): the instructions every Orkestrator provider
  * receives, which a read-only coordinator does not get, then the
  * repository's AGENTS.md unless the session trusts the checkout, in which
  * case the agent loads it itself (`PROJECT_TRUST`). Read-only sessions exclude

@@ -127,7 +127,11 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "provider.dispose-failed":
         "Disposing the 2.x provider of a replaced server failed. Error class only.",
       "location.reload-unconfirmed":
-        "After a 2.x location reload, the read that waits for the rebuilt location failed; catalogues are re-read anyway. Error class only.",
+        "After a 2.x location reload, the wait for the rebuilt location's plugins failed or timed out; catalogues are re-read anyway. Error class or `plugins: timeout` only.",
+      "background.unreadable":
+        "Whether a 2.x session still has background sub-agent work could not be read, so it is taken to have none. Error class only.",
+      "background.stop-failed":
+        "A stop could not interrupt one of a 2.x session's running background sub-agents. Error class only.",
       "credential.legacy-reconciled":
         "A host 2.x database from before OpenCode 1.x was retired was reconciled with auth.json once. Counts of credentials written and removed only.",
       "credential.legacy-reconcile-failed":
@@ -145,7 +149,7 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "container-server.cleanup-failed":
         "Cleanup after OpenCode startup failed; step names only, while the original startup error is preserved.",
       "container-server.warm-incomplete":
-        "The first workspace request to a container's new 2.x server failed, so its plugins load on the next one. Error class only.",
+        "The first workspace request to a container's new 2.x server failed, or its credential plugin was not listed active, so its plugins load on the next one. Error class or the plugin state only.",
       "instructions.unavailable":
         "The 2.x server refused Orkestrator's shared instructions entry for a session, which runs without them. Error class only.",
       "host-database-server.exit-unclean":

@@ -154,10 +154,25 @@ export function touchSession(session: SessionState): void {
   session.lastAccessedAt = Date.now();
 }
 
+/**
+ * The CLI every SDK call runs, and how its MCP servers reach it.
+ *
+ * `mcpServersDelivery` is stated, not left to the SDK's default. Agent SDK
+ * 0.3.326 deprecates the default (`argv`, one `--mcp-config` flag) for a host
+ * that names its own CLI, warns once per process while it is unset, and plans
+ * to switch the default to `initialize` (stdin), which a CLI older than the
+ * SDK's bundled one cannot read: the session would end at start. The managed
+ * pin matches the bundled CLI, but `resolveClaudeBinary` can fall back to a
+ * `claude` on PATH of any version, so the bridge keeps `argv` until it can tell
+ * the two apart. `argv` puts each server's `env` and `headers` (the
+ * Orkestrator servers' bearer tokens) on the CLI's command line, where another
+ * user of the machine can read them; see "How to upgrade Claude" in
+ * docs/development/upgrade-agents.md.
+ */
 export function claudeExecutableOptions():
-  { pathToClaudeCodeExecutable: string } | Record<string, never> {
+  { pathToClaudeCodeExecutable: string; mcpServersDelivery: "argv" } | Record<string, never> {
   const executable = process.env.CLAUDE_CLI_PATH?.trim();
-  return executable ? { pathToClaudeCodeExecutable: executable } : {};
+  return executable ? { pathToClaudeCodeExecutable: executable, mcpServersDelivery: "argv" } : {};
 }
 
 // Pending questions waiting for answers

@@ -233,7 +233,7 @@ describe("ACP provider configuration", () => {
   });
 
   test("keeps every Grok child's sessions out of writeback to code.grok.com", () => {
-    // Grok 1.0.77 can sync session history to code.grok.com once signed in.
+    // Grok 1.0.77 and 1.0.88 can sync session history to code.grok.com once signed in.
     // `agent stdio` reads GROK_STORAGE_MODE (not the hidden flag), and `local`
     // keeps the on-disk sessions `session/load` reads. Forced over the
     // inherited environment and the launcher record, whatever the policy.

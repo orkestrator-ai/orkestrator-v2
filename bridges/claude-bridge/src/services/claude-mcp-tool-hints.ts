@@ -8,8 +8,8 @@ import {
 // (retired) task 12), for the approval card of a Claude `mcp__*` call.
 //
 // `canUseTool` carries no annotations; only the CLI's MCP status read does.
-// Observed against the pinned CLI 2.1.319 with a loopback model and a local
-// MCP server (no credentials):
+// Observed against the pinned CLI 2.1.319, and re-proved on 2.1.326, with a
+// loopback model and a local MCP server (no credentials):
 //
 // - `mcpServerStatus()` lists each server under its configured name and each
 //   tool under the bare name the server gave it (`wipe.disk tool`), while

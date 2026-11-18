@@ -43,7 +43,13 @@ import { asRecord, nonEmptyString } from "../agent-provider-runtime.js";
 import { inlineFileContentLabel, inlineFileUrlDisposition } from "../native-agent-inline-files.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import type { OpenCode2Event } from "./events.js";
-import { normalizeOpenCode2Group, normalizeOpenCode2Groups } from "./transcript.js";
+import {
+  applyOpenCode2SubagentReports,
+  normalizeOpenCode2Group,
+  normalizeOpenCode2Groups,
+  openCode2HeadContext,
+  type OpenCode2TranscriptContext,
+} from "./transcript.js";
 import { openCode2RevertMarker } from "./revert.js";
 import type { OpenCode2Message } from "./types.js";
 
@@ -108,6 +114,8 @@ const MAX_TRACKED_ROW_VERSIONS = 256;
 /** Events whose data names the response row they changed. */
 const ROW_EVENTS = new Set([
   "session.step.started",
+  // 2.3.0: the response's first streamed token.
+  "session.step.first-token",
   "session.step.ended",
   "session.step.failed",
   "session.text.ended",
@@ -128,8 +136,15 @@ type SessionTranscriptState = {
   revised: RecentlyRevisedRows;
   /** `revised.version` when each noted row last changed. */
   rowVersions: Map<string, number>;
-  /** Row groups fetched for `revisedMessages`, by row id, with the note version they reflect. */
-  revisedCache: Map<string, { version: number; rows: Record<string, unknown>[] }>;
+  /**
+   * Row groups fetched for `revisedMessages`, by row id, with the note version
+   * they reflect and the row itself (a sub-agent launch is folded against the
+   * window's reports on every read, `applyOpenCode2SubagentReports`).
+   */
+  revisedCache: Map<
+    string,
+    { version: number; message: OpenCode2Message; rows: Record<string, unknown>[] }
+  >;
 };
 
 /**
@@ -253,13 +268,19 @@ export class OpenCode2TranscriptState {
 
   cachedRevised(sessionId: string, rowId: string, version: number) {
     const cached = this.state(sessionId).revisedCache.get(rowId);
-    return cached && cached.version >= version ? cached.rows : undefined;
+    return cached && cached.version >= version ? cached : undefined;
   }
 
-  cacheRevised(sessionId: string, rowId: string, version: number, rows: Record<string, unknown>[]) {
+  cacheRevised(
+    sessionId: string,
+    rowId: string,
+    version: number,
+    message: OpenCode2Message,
+    rows: Record<string, unknown>[],
+  ) {
     const cache = this.state(sessionId).revisedCache;
     cache.delete(rowId);
-    cache.set(rowId, { version, rows });
+    cache.set(rowId, { version, message, rows });
     while (cache.size > BRIDGE_REVISED_MESSAGES_MAX * 2) cache.delete(cache.keys().next().value!);
   }
 }
@@ -367,6 +388,9 @@ export interface OpenCode2TranscriptReadOptions {
   knownSourceToken?: string;
 }
 
+/** The server's running sessions, for a background sub-agent's card at the head (`transcript.ts`). */
+export type OpenCode2LiveSessions = () => Promise<ReadonlySet<string>>;
+
 /**
  * The newest window of a session's transcript, with its paging cursor and
  * any revised rows from before it.
@@ -377,6 +401,7 @@ export async function openCode2TranscriptSnapshot(
   sessionId: string,
   options: OpenCode2TranscriptReadOptions,
   onUnknown?: (type: string) => void,
+  liveSessions?: OpenCode2LiveSessions,
 ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
   const session = await client.getSession(sessionId).catch((error: unknown) => {
     if (error instanceof OpenCode2RequestError && error.status === 404) return undefined;
@@ -413,11 +438,42 @@ export async function openCode2TranscriptSnapshot(
   }
   const more = page.messages.length > count;
   const window = page.messages.slice(0, count).reverse();
-  const groups = normalizeOpenCode2Groups(window, onUnknown);
+  // The window ends at the newest row (or the staged revert's), so a
+  // background sub-agent with no report reads by the running sessions.
+  let runningRead: Promise<ReadonlySet<string>> | undefined;
+  const readLive = liveSessions ? () => (runningRead ??= liveSessions()) : undefined;
+  const context = await openCode2HeadContext(window, readLive);
+  const groups = normalizeOpenCode2Groups(window, onUnknown, context);
   const start = newestGroups(groups, { rows: count, targetBytes: options.targetBytes });
   const olderHistory = more || start > 0;
   const kept = window.slice(start);
-  const keptGroups = groups.slice(start);
+  // Normalized again when rows were cut: a report folded onto a launch the
+  // cut dropped must keep a row of its own.
+  const rawKeptGroups = start > 0 ? normalizeOpenCode2Groups(kept, onUnknown, context) : groups;
+  const keptGroups = applyOpenCode2SubagentReports(
+    kept,
+    rawKeptGroups.map((group, index) => {
+      const id = rowId(kept[index]);
+      return id
+        ? (state.cachedRevised(sessionId, id, state.rowVersion(sessionId, id))?.rows ?? group)
+        : group;
+    }),
+    context,
+  );
+  // Retain folded results while the launch is still in the head too.
+  const revisedIds = new Set(state.revisedIds(sessionId));
+  kept.forEach((message, index) => {
+    const id = rowId(message);
+    if (id && revisedIds.has(id)) {
+      state.cacheRevised(
+        sessionId,
+        id,
+        state.rowVersion(sessionId, id),
+        message,
+        keptGroups[index] ?? [],
+      );
+    }
+  });
   const firstKept = rowId(kept[0]);
   const historyCursor =
     olderHistory && firstKept ? openCode2HistoryCursor(firstKept, historyEpoch) : undefined;
@@ -428,7 +484,7 @@ export async function openCode2TranscriptSnapshot(
   const shown = new Set(window.map(rowId));
   const revised = revert
     ? { rows: [], ids: new Set<string>() }
-    : await revisedRows(client, state, sessionId, window, kept, onUnknown);
+    : await revisedRows(client, state, sessionId, window, kept, context, onUnknown, readLive);
   const omitted = state
     .revisedIds(sessionId)
     .filter((id) => !shown.has(id) && !revised.ids.has(id));
@@ -493,7 +549,9 @@ async function revisedRows(
   sessionId: string,
   window: readonly OpenCode2Message[],
   kept: readonly OpenCode2Message[],
+  context: OpenCode2TranscriptContext,
   onUnknown?: (type: string) => void,
+  liveSessions?: () => Promise<ReadonlySet<string>>,
 ): Promise<{ rows: Record<string, unknown>[]; ids: Set<string> }> {
   const keptIds = new Set(kept.map(rowId));
   const wanted = state
@@ -507,8 +565,8 @@ async function revisedRows(
   let bytes = 0;
   for (const id of wanted) {
     const version = state.rowVersion(sessionId, id);
-    let group = state.cachedRevised(sessionId, id, version);
-    if (!group) {
+    let cached = state.cachedRevised(sessionId, id, version);
+    if (!cached) {
       let message = inWindow.get(id);
       if (!message) {
         try {
@@ -518,9 +576,20 @@ async function revisedRows(
           continue;
         }
       }
-      group = normalizeOpenCode2Group(message, onUnknown);
-      state.cacheRevised(sessionId, id, version, group);
+      const rows = normalizeOpenCode2Group(message, onUnknown);
+      state.cacheRevised(sessionId, id, version, message, rows);
+      cached = { version, message, rows };
     }
+    // A launch before the window takes its child's report from the window,
+    // which is newer than the launch whenever the report exists.
+    const revisedContext = await openCode2HeadContext([cached.message, ...window], liveSessions);
+    const group =
+      applyOpenCode2SubagentReports(
+        [cached.message, ...window],
+        [cached.rows, ...window.map(() => [])],
+        { ...context, ...revisedContext },
+      )[0] ?? cached.rows;
+    state.cacheRevised(sessionId, id, version, cached.message, group);
     if (rows.length + group.length > BRIDGE_REVISED_MESSAGES_MAX) break;
     const size = group.reduce((total, row) => total + openCodeDisplayBytes(row), 0);
     if (bytes + size > BRIDGE_REVISED_MESSAGES_MAX_BYTES) continue;

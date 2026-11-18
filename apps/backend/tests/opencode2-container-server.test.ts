@@ -220,8 +220,26 @@ const FAKE_DOCKER_LAUNCHER = FAKE_DOCKER.replace(
   *"--user root"*"cat /run/orkestrator-bridge/opencode2-token"*) printf '%s\\n\\n%b\\n' "$FAKE_ROOT_TOKEN" "$FAKE_LISTENER" ;;`,
 );
 
-/** A 2.x stand-in that appends each request path to the exec log, after the launcher ran. */
-async function serveAfterLaunch(log: () => string, warmStatus = 200, delayedPolls = 0) {
+/**
+ * A 2.x stand-in that appends each request path to the exec log, after the
+ * launcher ran. `/api/plugin` lists `plugins` (the credential plugin, active,
+ * by default) once `pluginPolls` reads have answered the empty list a
+ * location still loading gives.
+ */
+async function serveAfterLaunch(
+  log: () => string,
+  warmStatus = 200,
+  delayedPolls = 0,
+  plugins: unknown[] = [
+    {
+      id: "orkestrator-credential",
+      source: { type: "local", path: "/x" },
+      state: { status: "active" },
+    },
+  ],
+  pluginPolls = 2,
+  pluginStatus = warmStatus,
+) {
   let launched = false;
   const server = createHttpServer(async (request, response) => {
     if (!launched)
@@ -244,6 +262,10 @@ async function serveAfterLaunch(log: () => string, warmStatus = 200, delayedPoll
     }
     response.statusCode = warmStatus;
     if (url.pathname === "/api/agent") return response.end(JSON.stringify({ data: [] }));
+    if (url.pathname === "/api/plugin") {
+      response.statusCode = pluginStatus;
+      return response.end(JSON.stringify({ data: pluginPolls-- > 0 ? [] : plugins }));
+    }
     response.statusCode = 404;
     response.end("{}");
   });
@@ -282,13 +304,68 @@ describe("startContainerOpenCode2Server on an opencode2-launch image", () => {
       expect(argv).not.toContain(password);
       expect(stdin).toContain(`STDIN:${password}`);
       expect(stdin).toContain(`OPENCODE_PASSWORD=${password}`);
-      // Warmed (plugins loaded, non-dumpable) before the socket is recorded.
+      // Warmed (plugins loaded, non-dumpable) before the socket is recorded:
+      // since 2.2.7 `/api/agent` answers before the plugins load, so the
+      // warm waits until the plugin list names the credential plugin.
       const warmed = raw.indexOf("HTTP:/api/agent");
+      const loaded = raw.lastIndexOf("HTTP:/api/plugin");
       const recorded = raw.indexOf(`mv "$tmp" ${OPENCODE2_LISTENER_RECORD}`);
       expect(warmed).toBeGreaterThan(-1);
-      expect(recorded).toBeGreaterThan(warmed);
+      expect(raw.match(/HTTP:\/api\/plugin/g)?.length).toBe(3);
+      expect(loaded).toBeGreaterThan(warmed);
+      expect(recorded).toBeGreaterThan(loaded);
     });
   });
+
+  test("required warm refuses a failing plugin route even when activation succeeds", async () => {
+    let logFile = "";
+    const holder = await serveAfterLaunch(() => logFile, 200, 0, [], 0, 500);
+    held.push(holder);
+    setEnv({ FAKE_DOCKER_PORT: String(holder.port), FAKE_ROOT_TOKEN: "", FAKE_LISTENER: "" });
+    const { context } = createContext(containerEnvironment());
+    await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+      logFile = logs.exec;
+      await expect(
+        startContainerOpenCode2Server(context, "container-1", async () => "opencode2-launcher"),
+      ).rejects.toThrow();
+      const { argv } = await readLog(logs.exec);
+      expect(argv).not.toContain(`mv "$tmp" ${OPENCODE2_LISTENER_RECORD}`);
+    });
+  });
+
+  for (const [label, plugins] of [
+    [
+      "missing",
+      [{ id: "opencode.agent", source: { type: "builtin" }, state: { status: "active" } }],
+    ],
+    [
+      "failed",
+      [
+        {
+          id: "orkestrator-credential",
+          source: { type: "local", path: "/x" },
+          state: { status: "failed", error: "x" },
+        },
+      ],
+    ],
+  ] as const) {
+    test(`refuses a server whose credential plugin is ${label}`, async () => {
+      let logFile = "";
+      const holder = await serveAfterLaunch(() => logFile, 200, 0, [...plugins], 0);
+      held.push(holder);
+      setEnv({ FAKE_DOCKER_PORT: String(holder.port), FAKE_ROOT_TOKEN: "", FAKE_LISTENER: "" });
+      const { context } = createContext(containerEnvironment());
+      await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+        logFile = logs.exec;
+        await expect(
+          startContainerOpenCode2Server(context, "container-1", async () => "opencode2-launcher"),
+        ).rejects.toThrow(`credential plugin did not load in this container (${label})`);
+        const { argv } = await readLog(logs.exec);
+        expect(argv).toContain(`rm -f ${containerCredentialFile("opencode2")}`);
+        expect(argv).not.toContain(`mv "$tmp" ${OPENCODE2_LISTENER_RECORD}`);
+      });
+    });
+  }
 
   for (const failure of ["http", "timeout"] as const) {
     test(`refuses startup and cleans up after warm-up ${failure}`, async () => {

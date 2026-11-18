@@ -338,7 +338,7 @@ export function DeviceConnectionSection({
                       type="button"
                       size="icon"
                       variant="ghost"
-                      className="h-6 w-6 text-zinc-500 hover:text-red-300"
+                      className="h-6 w-6 text-zinc-500 hover:bg-destructive/15 hover:text-failure"
                       aria-label={`Remove ${route.label} from this device`}
                       disabled={routes.length <= 1 || disabled}
                       title={
@@ -442,7 +442,7 @@ export function DeviceConnectionSection({
               type="button"
               size="sm"
               variant="ghost"
-              className="text-zinc-400 hover:bg-red-500/10 hover:text-red-300"
+              className="text-zinc-400 hover:bg-destructive/15 hover:text-failure"
               disabled={disabled}
               onClick={() => setForgetting(true)}
             >
@@ -513,7 +513,7 @@ export function DeviceConnectionSection({
                 void forget();
               }}
               disabled={disabled}
-              className="bg-red-600 text-white hover:bg-red-500"
+              className="bg-destructive text-white hover:bg-destructive/85 active:bg-destructive/75"
             >
               {busy === "forget" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Forget on this device

@@ -1581,7 +1581,7 @@ export function ApprovalCard({
             type="button"
             onClick={() => void respond(onDeny)}
             disabled={submitting}
-            className="flex-1 px-3 py-1.5 rounded bg-red-800 hover:bg-red-700 text-white text-sm font-medium"
+            className="flex-1 px-3 py-1.5 rounded bg-destructive hover:bg-destructive/85 text-white text-sm font-medium"
           >
             Deny
           </button>

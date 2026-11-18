@@ -173,7 +173,7 @@ function ExtensionStatusIcon({ status }: { status: backend.AgentExtensionItem["s
     return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />;
   }
   if (status === "failed") {
-    return <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />;
+    return <XCircle className="h-3.5 w-3.5 shrink-0 text-failure" />;
   }
   if (status === "pending") {
     return <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />;
@@ -1114,11 +1114,11 @@ export function EnvironmentSettingsDialog({
                     disabled={useGlobalDefaults}
                     placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"}
                     rows={8}
-                    className={`font-mono text-sm ${domainErrors.length > 0 ? "border-red-500" : ""} ${useGlobalDefaults ? "opacity-50" : ""}`}
+                    className={`font-mono text-sm ${domainErrors.length > 0 ? "border-failure/60" : ""} ${useGlobalDefaults ? "opacity-50" : ""}`}
                   />
                 </div>
                 {domainErrors.length > 0 && (
-                  <div className="text-sm text-red-500 space-y-1">
+                  <div className="text-sm text-failure space-y-1">
                     {domainErrors.map((error, i) => (
                       <div key={i} className="flex items-center gap-1">
                         <XCircle className="h-3 w-3" />
@@ -1153,12 +1153,12 @@ export function EnvironmentSettingsDialog({
                         ) : result.valid ? (
                           <AlertCircle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
                         ) : (
-                          <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                          <XCircle className="h-4 w-4 text-failure mt-0.5 shrink-0" />
                         )}
                         <div className="min-w-0">
                           <span className="font-mono text-xs break-all">{result.domain}</span>
                           {result.error && (
-                            <span className="text-red-500 text-xs block">{result.error}</span>
+                            <span className="text-failure text-xs block">{result.error}</span>
                           )}
                         </div>
                       </div>

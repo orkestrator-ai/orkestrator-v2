@@ -25,14 +25,14 @@ export function TerminalDisconnectedBanner({
     <div
       role="status"
       aria-live="polite"
-      className="absolute top-2 left-2 z-30 flex max-w-[min(36rem,calc(100%-1rem))] items-start gap-2 rounded-md border border-red-500/40 bg-red-950/90 px-2.5 py-1.5 text-xs text-red-100 shadow-md backdrop-blur-sm"
+      className="absolute top-2 left-2 z-30 flex max-w-[min(36rem,calc(100%-1rem))] items-start gap-2 rounded-md border border-failure/40 bg-failure/10 backdrop-brightness-10 px-2.5 py-1.5 text-xs text-failure shadow-md backdrop-blur-sm"
     >
-      <PlugZap className="mt-px h-3.5 w-3.5 shrink-0 text-red-300" aria-hidden="true" />
+      <PlugZap className="mt-px h-3.5 w-3.5 shrink-0 text-failure" aria-hidden="true" />
       <span className="min-w-0 flex-1">{message}</span>
       <button
         type="button"
         onClick={onReconnect}
-        className="shrink-0 cursor-pointer rounded-sm border border-red-400/40 px-1.5 py-0.5 font-medium text-red-100 transition-colors hover:bg-red-500/20 focus-hairline"
+        className="shrink-0 cursor-pointer rounded-sm border border-failure/40 px-1.5 py-0.5 font-medium text-failure transition-colors hover:bg-failure/20 focus-hairline"
       >
         Reconnect
       </button>
@@ -41,7 +41,7 @@ export function TerminalDisconnectedBanner({
         aria-label="Dismiss disconnected notice"
         title="Dismiss"
         onClick={onDismiss}
-        className="-mr-0.5 shrink-0 cursor-pointer rounded-sm p-0.5 text-red-300 transition-colors hover:bg-red-500/20 hover:text-red-100 focus-hairline"
+        className="-mr-0.5 shrink-0 cursor-pointer rounded-sm p-0.5 text-failure transition-colors hover:bg-failure/20 focus-hairline"
       >
         <X className="h-3.5 w-3.5" />
       </button>

@@ -1862,7 +1862,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               value={terminalBackgroundColor}
               onChange={(e) => handleBackgroundColorChange(e.target.value)}
               placeholder={DEFAULT_TERMINAL_APPEARANCE.backgroundColor}
-              className={cn("font-mono w-32", colorError && "border-red-500")}
+              className={cn("font-mono w-32", colorError && "border-failure/60")}
             />
             <Button
               type="button"
@@ -1876,7 +1876,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </Button>
           </div>
           {colorError && (
-            <div className="text-sm text-red-500 flex items-center gap-1">
+            <div className="text-sm text-failure flex items-center gap-1">
               <XCircle className="h-3 w-3" />
               {colorError}
             </div>
@@ -1922,11 +1922,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           onChange={handleDomainsChange}
           placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"}
           rows={8}
-          className={cn("font-mono text-sm", domainErrors.length > 0 && "border-red-500")}
+          className={cn("font-mono text-sm", domainErrors.length > 0 && "border-failure/60")}
         />
 
         {domainErrors.length > 0 && (
-          <div className="text-sm text-red-500 space-y-1">
+          <div className="text-sm text-failure space-y-1">
             {domainErrors.map((error, i) => (
               <div key={i} className="flex items-center gap-1">
                 <XCircle className="h-3 w-3" />
@@ -1964,10 +1964,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 ) : result.valid ? (
                   <AlertCircle className="h-3 w-3 text-yellow-500" />
                 ) : (
-                  <XCircle className="h-3 w-3 text-red-500" />
+                  <XCircle className="h-3 w-3 text-failure" />
                 )}
                 <span className="font-mono">{result.domain}</span>
-                {result.error && <span className="text-red-500 ml-1">{result.error}</span>}
+                {result.error && <span className="text-failure ml-1">{result.error}</span>}
               </div>
             ))}
           </div>

@@ -23,10 +23,12 @@
       <p>
         <code>index.css</code> defines <code>--color-status-running</code>,
         <code>status-stopped</code>, <code>status-error</code> and <code>status-creating</code>.
-        Only <code>StatusIndicator.tsx:69-71</code> uses them, and only for label text. Its dots use
-        <code>bg-green-500</code>, <code>bg-red-500</code> and <code>bg-blue-500</code>, plus
-        <code>bg-orange-500</code> for Stopping, which has no token. Other surfaces re-implement
-        “running” as <code>emerald-500</code>.
+        <code>StatusIndicator.tsx</code> uses the running and error status tokens for label text.
+        Its Error dot uses <code>bg-failure</code> after
+        <a href="00002-failure-red-hardcoded.html">task 00002</a>. Running and Creating use
+        <code>bg-green-500</code> and <code>bg-blue-500</code>. Stopping uses
+        <code>bg-orange-500</code> and has no token. Other surfaces re-implement “running” as
+        <code>emerald-500</code>.
       </p>
       <div class="rule">
         <div>

@@ -1058,6 +1058,8 @@ type BackgroundTaskDetails = Pick<
   | "progressSummary"
   | "pausedMs"
   | "endReason"
+  | "workflowAgents"
+  | "workflowAgentsOmitted"
 >;
 
 const BACKGROUND_TASK_DETAIL_KEYS = [
@@ -1076,6 +1078,8 @@ const BACKGROUND_TASK_DETAIL_KEYS = [
   "progressSummary",
   "pausedMs",
   "endReason",
+  "workflowAgents",
+  "workflowAgentsOmitted",
 ] as const satisfies ReadonlyArray<keyof BackgroundTaskDetails>;
 
 /** What the task's record says beyond its lifecycle, carrying only fields it has. */
@@ -1168,6 +1172,8 @@ export interface ClaudeBackgroundTaskState {
   progressSummary?: string;
   pausedMs?: number;
   endReason?: NativeBackgroundTask["endReason"];
+  workflowAgents?: NativeBackgroundTask["workflowAgents"];
+  workflowAgentsOmitted?: number;
 }
 
 export interface ClaudeBackgroundTaskStateOptions {
@@ -1485,6 +1491,8 @@ export interface BackgroundTaskSnapshot {
   progressSummary?: string;
   pausedMs?: number;
   endReason?: NativeBackgroundTask["endReason"];
+  workflowAgents?: NativeBackgroundTask["workflowAgents"];
+  workflowAgentsOmitted?: number;
   /** Housekeeping the provider asks hosts to keep out of the transcript. */
   ambient?: boolean;
 }

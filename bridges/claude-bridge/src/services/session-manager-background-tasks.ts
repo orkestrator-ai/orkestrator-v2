@@ -17,6 +17,7 @@ import {
   backgroundTasksForSnapshot,
   LIVE_BACKGROUND_TASK_STATUSES,
 } from "./background-task-snapshot.js";
+import { isWorkflowTaskEdge } from "./background-task-workflow.js";
 
 const log = createLogger("bridge.claude");
 
@@ -271,6 +272,8 @@ type BackgroundTaskMetadata = Pick<
   | "progressSummary"
   | "pausedMs"
   | "endReason"
+  | "workflowAgents"
+  | "workflowAgentsOmitted"
 >;
 
 const BACKGROUND_TASK_METADATA_KEYS = [
@@ -285,6 +288,8 @@ const BACKGROUND_TASK_METADATA_KEYS = [
   "progressSummary",
   "pausedMs",
   "endReason",
+  "workflowAgents",
+  "workflowAgentsOmitted",
 ] as const satisfies ReadonlyArray<keyof BackgroundTaskMetadata>;
 
 /**
@@ -311,20 +316,43 @@ export const RUN_SCOPED_TASK_METADATA_RESET = {
   progressSummary: undefined,
   pausedMs: undefined,
   endReason: undefined,
+  workflowAgents: undefined,
+  workflowAgentsOmitted: undefined,
 } as const satisfies BackgroundTaskMetadata;
 
-/** The metadata one parsed task message reports, carrying only fields it has. */
-export function taskMessageMetadata(message: BackgroundTaskSystemMessage): BackgroundTaskMetadata {
+/**
+ * The metadata one parsed task message reports, carrying only fields it has.
+ *
+ * `previous` is the task's record before this message, which is what says a
+ * frame with no list of its own still belongs to a workflow: a workflow's
+ * progress frames name its latest agent where other tasks put their own name
+ * and tool, so those become its status line instead.
+ */
+export function taskMessageMetadata(
+  message: BackgroundTaskSystemMessage,
+  previous?: BackgroundTaskSnapshot,
+): BackgroundTaskMetadata {
+  const workflow = isWorkflowTaskEdge(message, previous);
+  // On every other subtype `summary` is the terminal report, not a status.
+  const progressSummary =
+    message.subtype !== "task_progress"
+      ? undefined
+      : workflow
+        ? (message.summary ?? message.description)
+        : message.summary;
   return {
     ...(message.task_type ? { taskType: message.task_type } : {}),
     ...(message.parent_task_id ? { parentTaskId: message.parent_task_id } : {}),
     ...(message.prompt ? { prompt: message.prompt } : {}),
     ...(message.workflow_name ? { workflowName: message.workflow_name } : {}),
     ...(message.ambient ? { ambient: true } : {}),
-    ...(message.last_tool_name ? { lastToolName: message.last_tool_name } : {}),
-    // On every other subtype `summary` is the terminal report, not a status.
-    ...(message.subtype === "task_progress" && message.summary
-      ? { progressSummary: message.summary }
+    ...(message.last_tool_name && !workflow ? { lastToolName: message.last_tool_name } : {}),
+    ...(progressSummary ? { progressSummary } : {}),
+    ...(message.workflow_agents
+      ? {
+          workflowAgents: message.workflow_agents,
+          workflowAgentsOmitted: message.workflow_agents_omitted || undefined,
+        }
       : {}),
     ...(message.patch?.total_paused_ms !== undefined
       ? { pausedMs: message.patch.total_paused_ms }

@@ -72,6 +72,72 @@ describe("normalizeClaudeBackgroundTasks", () => {
     expect(task?.endReason).toBe("resume-cleanup");
   });
 
+  test("carries a workflow's agents in neutral terms", () => {
+    const [task] = normalizeClaudeBackgroundTasks({
+      wf: {
+        status: "running",
+        taskType: "local_workflow",
+        workflowAgentsOmitted: 2,
+        workflowAgents: [
+          { index: 0, label: "Plan", state: "done", durationMs: 4000, tokens: 10, toolCalls: 1 },
+          { index: 1, label: "Skip", state: "done", skipped: true },
+          {
+            index: 2,
+            label: "Build: saved",
+            state: "progress",
+            phaseTitle: "Build",
+            agentId: "agent-2",
+            agentType: "workflow-subagent",
+            model: "claude-opus-5-5",
+            lastToolName: "Edit",
+            lastToolSummary: "Editing saved.tsx",
+            startedAt: 0,
+            cached: true,
+          },
+          { index: 3, label: "Build: later", state: "start", agentType: "Explore" },
+          { index: 4, label: "Fail", state: "error", error: "boom" },
+          { index: 5, label: "Cut", state: "error", error: "x", endedWithRun: "stopped" },
+          { index: 6, label: "Bad", state: "exploded" },
+          { index: -1, label: "Bad", state: "done" },
+          { index: 7, label: "   ", state: "done" },
+        ],
+      },
+    })!;
+    expect(task?.workflowAgentsOmitted).toBe(2);
+    expect(task?.workflowAgents?.map((agent) => [agent.index, agent.status])).toEqual([
+      [0, "completed"],
+      [1, "skipped"],
+      [2, "running"],
+      [3, "queued"],
+      [4, "failed"],
+      [5, "stopped"],
+    ]);
+    expect(task?.workflowAgents?.[0]).toEqual({
+      index: 0,
+      label: "Plan",
+      status: "completed",
+      totalTokens: 10,
+      toolUses: 1,
+      durationMs: 4000,
+    });
+    expect(task?.workflowAgents?.[3]?.agentRole).toBe("Explore");
+    // The provider's agent id, and its default agent type, are not part of the protocol.
+    expect(task?.workflowAgents?.[2]).toEqual({
+      index: 2,
+      label: "Build: saved",
+      status: "running",
+      phase: "Build",
+      model: "claude-opus-5-5",
+      lastToolName: "Edit",
+      activity: "Editing saved.tsx",
+      startedAt: "1970-01-01T00:00:00.000Z",
+      cached: true,
+    });
+    expect(
+      normalizeClaudeBackgroundTasks({ wf: { status: "running", workflowAgents: "nope" } }),
+    ).toEqual([{ id: "wf", status: "running" }]);
+  });
+
   test("maps every provider kind and preserves prompt and workflow name", () => {
     const kinds = {
       local_bash: "shell",

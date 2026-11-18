@@ -44,6 +44,7 @@ import {
   useDeferredToolResult,
 } from "./NativeMessage.shared";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { WorkflowAgentList, workflowAgentsStatusLine } from "./NativeMessage.workflow-agents";
 
 const NEUTRAL_STATUS_PILL = "border-border/60 bg-muted/40 text-muted-foreground";
 
@@ -615,6 +616,9 @@ function backgroundTaskOutcome(task: NativeBackgroundTask): BackgroundTaskOutcom
 function backgroundTaskLiveStatus(task: NativeBackgroundTask): string | undefined {
   if (!backgroundTaskPresentation(task).live) return undefined;
   const summary = task.progressSummary?.trim();
+  // A workflow's status names its latest agent, one of several that may be running.
+  const workflow = workflowAgentsStatusLine(task.workflowAgents, summary);
+  if (workflow) return workflow;
   if (summary) return summary;
   const tool = task.lastToolName?.trim();
   return tool ? `Using ${tool}` : undefined;
@@ -1089,7 +1093,8 @@ export function BackgroundTaskCard({
     task.outputTail ||
     task.outputFile ||
     metaEntries.length > 0 ||
-    children.length > 0,
+    children.length > 0 ||
+    (task.workflowAgents?.length ?? 0) > 0,
   );
 
   // The failure belongs to the attempt, not the task: a later status change
@@ -1184,6 +1189,7 @@ export function BackgroundTaskCard({
           ) : null}
           {prompt ? <BackgroundTaskTextBlock label="Prompt" text={prompt} /> : null}
           <BackgroundTaskDetails task={task} containerId={containerId} />
+          <WorkflowAgentList agents={task.workflowAgents} omitted={task.workflowAgentsOmitted} />
           <AgentResultBlock result={result} />
           <BackgroundTaskChildList tasks={children} containerId={containerId} />
         </div>

@@ -673,7 +673,8 @@ inlined SDK reports its version and spawns only the executable it is given.
 `bridges/claude-bridge/src/services/session-manager.ts` is only a barrel. The
 compatibility surface is `services/session-manager-prompt-handlers/*` (one
 handler per SDK frame type), `services/session-manager-messages.ts`, the
-SDK-facing types in `types/index.ts`, `services/session-manager-prompt-launch.ts`
+task-frame readers (`services/session-manager-task-records.ts`,
+`services/background-task-workflow.ts`), the SDK-facing types in `types/index.ts`, `services/session-manager-prompt-launch.ts`
 (where `query()` is called) and `sdk-compatibility.test.ts`. Together they use the Agent SDK's `query()` async iterator, session lifecycle
 helpers, supported models and agents, file rewind, background-task controls,
 partial messages, structured output, checkpoints, permission/input callbacks,
@@ -819,8 +820,12 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
 5. Refresh and verify the four Claude artifact records using the shared binary
    procedure.
 6. Review the compatibility surface above (`session-manager-prompt-handlers/*`,
-   `session-manager-messages.ts`, `session-manager-prompt-launch.ts` and
-   `types/index.ts`) for option, event, and message-union changes. Pay
+   `session-manager-messages.ts`, `session-manager-task-records.ts`,
+   `background-task-workflow.ts`, `session-manager-prompt-launch.ts` and
+   `types/index.ts`) for option, event, and message-union changes. For
+   workflows, recheck the `workflow_progress` row shape and that a workflow
+   agent's `SubagentStart` still carries the `workflow-subagent` type and its
+   row's `agentId`. Pay
    particular attention to the version-pinned `canUseTool` comment in
    `session-manager-prompt-query.ts` and re-prove that `AskUserQuestion` remains parked
    until the callback resolves. The `routes AskUserQuestion through canUseTool

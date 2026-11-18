@@ -40,7 +40,14 @@ const OUTLINE_ERROR_MAX_CHARS = 255;
 export const SNAPSHOT_BACKGROUND_TASKS_MAX_BYTES = 256 * 1024;
 
 /** The fields that make a task large; an outline omits them. */
-const DETAIL_FIELDS = ["prompt", "command", "outputTail", "summary", "progressSummary"] as const;
+const DETAIL_FIELDS = [
+  "prompt",
+  "command",
+  "outputTail",
+  "summary",
+  "progressSummary",
+  "workflowAgents",
+] as const;
 
 function headText(value: string | undefined, max: number): string | undefined {
   if (value === undefined) return undefined;

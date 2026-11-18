@@ -9,6 +9,7 @@ import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { SessionState } from "../types/index.js";
 import { recordClaudeToolDenied } from "./change-evidence.js";
 import { commandChangeHooks } from "./command-changes.js";
+import { isWorkflowAgentLaunch } from "./background-task-workflow.js";
 import { eventEmitter } from "./event-emitter.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
@@ -115,6 +116,15 @@ export async function recordBackgroundTaskHook(
       : hookInput.agent_id;
   const owner = backgroundTaskOwner(session, hookTaskId);
   if (owner && owner !== turn.runtime) return {};
+  // A workflow's agents are rows of the workflow, not tasks: no frame would
+  // ever describe or settle such a record, and the CLI starts no turn when
+  // one stops. The workflow task itself holds this process's liveness.
+  if (
+    hookInput.hook_event_name === "SubagentStart" &&
+    isWorkflowAgentLaunch(session.backgroundTasks, hookInput.agent_id, hookInput.agent_type)
+  ) {
+    return {};
+  }
   if (
     hookInput.hook_event_name === "TaskCreated" ||
     hookInput.hook_event_name === "SubagentStart"

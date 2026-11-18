@@ -385,6 +385,17 @@ describe("Claude activity in the shared native transcript", () => {
       expect(rows[0]?.createdAt).toBe("2026-08-16T10:00:00.000Z");
     });
 
+    test("carries a workflow's agents onto its card", () => {
+      const workflowAgents = [{ index: 0, label: "Plan", status: "running" as const }];
+      const rows = rowlessBackgroundTaskMessages(
+        [{ ...watchTask, kind: "workflow", workflowAgents, workflowAgentsOmitted: 3 }],
+        transcript,
+      );
+      const part = rows[0]?.parts[0];
+      if (part?.type !== "task-group") throw new Error("expected a task card");
+      expect(part.task.backgroundTask).toMatchObject({ workflowAgents, workflowAgentsOmitted: 3 });
+    });
+
     test("clocks a live task from its own launch when nothing is loaded yet", () => {
       /*
        * A tab that resumes a session with a task already running has the

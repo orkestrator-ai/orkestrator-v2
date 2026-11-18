@@ -522,7 +522,11 @@ compatibility surface is spread across the files that normalize the SDK's
 message union into Orkestrator's own `NormalizedMessage`/`NormalizedPart`
 model: `services/session-manager-prompt-handlers/*` (one handler per SDK frame
 type, dispatched in `dispatch.ts`), `services/session-manager-messages.ts`,
-the SDK-facing types and dispositions in `types/index.ts`, and
+the task-frame readers in `services/session-manager-task-records.ts` and
+`services/background-task-workflow.ts` (a workflow's `task_progress` reuses
+`description` and `last_tool_name` for its latest agent, and lists its agents
+only in `workflow_progress`), the SDK-facing types and dispositions in
+`types/index.ts`, and
 `sdk-compatibility.test.ts`, which drives the installed SDK. Review those on
 every SDK bump.
 

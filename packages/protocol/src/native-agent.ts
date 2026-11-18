@@ -2129,6 +2129,49 @@ export interface NativeAgentBackgroundTaskSummary {
    * provider settled when resuming, which this session never saw run.
    */
   endReason?: "process-restart" | "resume-cleanup";
+  /**
+   * The agents a workflow task runs, in run order, when the provider reports
+   * them. They are rows of the workflow rather than tasks of their own: they
+   * have no task id and accept no stop of their own.
+   */
+  workflowAgents?: NativeAgentWorkflowAgent[];
+  /** Agents left out of `workflowAgents` to keep it bounded. */
+  workflowAgentsOmitted?: number;
+}
+
+export type NativeAgentWorkflowAgentStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  /** Stopped because the workflow it belonged to ended first. */
+  | "stopped"
+  | "skipped";
+
+/** One agent of a workflow task; see `NativeAgentBackgroundTaskSummary.workflowAgents`. */
+export interface NativeAgentWorkflowAgent {
+  /** The agent's position in the run, unique within the workflow. */
+  index: number;
+  /** The workflow's own label for the agent. */
+  label: string;
+  status: NativeAgentWorkflowAgentStatus;
+  /** The workflow phase the agent belongs to. */
+  phase?: string;
+  /** The agent type or profile, as `agentRole` is for a task. */
+  agentRole?: string;
+  model?: string;
+  /** The tool the agent most recently ran. */
+  lastToolName?: string;
+  /** The provider's one-line description of what the agent is doing. */
+  activity?: string;
+  error?: string;
+  totalTokens?: number;
+  toolUses?: number;
+  /** When the agent started running, as an ISO timestamp; absent while queued. */
+  startedAt?: string;
+  durationMs?: number;
+  /** The result was reused from an earlier run rather than produced again. */
+  cached?: boolean;
 }
 
 export type NativeAgentBackgroundTaskKind =

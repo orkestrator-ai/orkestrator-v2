@@ -132,12 +132,13 @@ async function authenticatedInvoke(page: Page, status: Status) {
   };
 }
 
-// This host-specific notice can arrive after login, on top of any surface.
-// Dismiss it through its public Close control so local-worktree flows run even
-// on machines whose firewall blocks Docker's host connection.
+// Local-worktree scenarios can proceed through these optional startup dialogs.
+// The host reachability notice can also arrive later, on top of any surface.
 test.beforeEach(async ({ page }) => {
-  const withoutDocker = page.getByRole("button", { name: "Continue Without Docker", exact: true });
-  await page.addLocatorHandler(withoutDocker, (button) => button.click());
+  for (const name of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    const dismiss = page.getByRole("button", { name, exact: true });
+    await page.addLocatorHandler(dismiss, (button) => button.click());
+  }
   const notice = page.getByRole("dialog", {
     name: "Docker containers can't reach Orkestrator",
     exact: true,
@@ -1231,13 +1232,8 @@ test("build pipeline live steering persists while inactive and rehydrates after 
       ).toBeHidden({
         timeout: 30_000,
       });
-      const withoutGitHub = page.getByRole("button", {
-        name: "Continue Without GitHub CLI",
-        exact: true,
-      });
-      if (await withoutGitHub.isVisible()) await withoutGitHub.click();
-      // The startup handler owns the Docker prompt. Wait for the sidebar to
-      // become actionable before choosing which control to click.
+      // The startup handlers own the prompts. Wait for the sidebar to become
+      // actionable before choosing which control to click.
       await expand.or(entry).first().click({ trial: true, timeout: 30_000 });
       if (await expand.isVisible()) await expand.click();
       await page.keyboard.press("Escape");

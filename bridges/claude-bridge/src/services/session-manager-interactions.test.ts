@@ -835,9 +835,10 @@ describe("plan approval flow", () => {
 
     failedCall.fail(new Error("query failed"));
     await expect(failedPrompt).rejects.toThrow("query failed");
+    // The process ending withdraws the card before the turn's own cleanup.
     await expect(failedTool).resolves.toEqual({
       behavior: "deny",
-      message: "Session terminated",
+      message: "The plan approval was withdrawn",
     });
     expect(getPendingPlanApprovals(failedSession.id)).toEqual([]);
   });

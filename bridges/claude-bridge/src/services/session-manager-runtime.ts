@@ -33,6 +33,7 @@ import type {
 } from "../types/index.js";
 import type { HeldSdkPrompt } from "./session-manager-persistence.js";
 import type { ClaudeRuntimeMcp } from "./session-manager-prompt-mcp-sync.js";
+import type { ClaudeControlRequests } from "./claude-control-requests.js";
 import type { ToolTracker } from "./session-manager-messages.js";
 import {
   claudeAsksForApproval,
@@ -346,6 +347,16 @@ export interface ClaudeRuntime {
   mcpServers: string;
   /** The servers the CLI was given and still runs; see `session-manager-prompt-mcp-sync.ts`. */
   readonly mcp: ClaudeRuntimeMcp;
+  /**
+   * The permission and elicitation requests this process holds open on the
+   * bridge, each answered once; ended with the process (`claude-control-requests.ts`).
+   */
+  readonly requests: ClaudeControlRequests;
+  /**
+   * Inventory read attempts on warm joins (`recoverClaudeRequestsOnRejoin`).
+   * A busy join or tab remount never counts here.
+   */
+  rejoins: number;
   /** The newest turn: it owns the root conversation. */
   latestTurn: ClaudeRuntimeTurn;
   /** `draining` once input is closed: the CLI can no longer start a turn. */
@@ -393,6 +404,7 @@ export function createClaudeRuntime(input: {
   launch: ClaudeLaunchProfile;
   mcpServers: string;
   mcp: ClaudeRuntimeMcp;
+  requests: ClaudeControlRequests;
   firstTurn: ClaudeRuntimeTurn;
 }): { runtime: ClaudeRuntime; markEnded: () => void } {
   let markEnded!: () => void;
@@ -418,6 +430,8 @@ export function createClaudeRuntime(input: {
     launch: input.launch,
     mcpServers: input.mcpServers,
     mcp: input.mcp,
+    requests: input.requests,
+    rejoins: 0,
     latestTurn: input.firstTurn,
     state: "open",
     idleTimer: undefined,

@@ -63,6 +63,10 @@ import {
   sessionOperationError,
 } from "./session-manager-core.js";
 import { answerClaudeElicitation } from "./session-manager-parked-interactions.js";
+import {
+  type ClaudeControlRequestRefusal,
+  type ClaudeControlRequests,
+} from "./claude-control-requests.js";
 import { buildSdkPrompt } from "./session-manager-persistence.js";
 import {
   commandChangeHookFor,
@@ -388,6 +392,21 @@ export function recordMcpConfigRevision(
 }
 
 /**
+ * The answer to a permission request the bridge will not show: one it already
+ * answered (a redelivery crossing that answer), or one from a CLI that has
+ * ended. Always a denial, so nothing can be approved twice or after the fact.
+ */
+function refusedPermission(reason: ClaudeControlRequestRefusal) {
+  return {
+    behavior: "deny" as const,
+    message:
+      reason === "already-answered"
+        ? "This permission request was already answered."
+        : "The Claude process that asked for this permission has ended.",
+  };
+}
+
+/**
  * The SDK options for a CLI this turn launches. Hooks and callbacks reach the
  * turn `turnFor` names: the one whose row holds the tool, else the latest.
  * `mcp` is the launching runtime's MCP state, which its hooks read for life.
@@ -397,6 +416,7 @@ export function claudeQueryOptions(
   plan: QueryPlan,
   turnFor: (toolUseId?: string) => ClaudeRuntimeTurn,
   mcp: ClaudeRuntimeMcp,
+  requests: ClaudeControlRequests,
 ): Options {
   const { session, sessionId, options, abortController } = turn;
   const {
@@ -618,11 +638,20 @@ export function claudeQueryOptions(
     // `title` — the last of which is the prompt sentence the CLI already
     // composed, so reconstructing one from `toolName` and `input` produces
     // a worse question than the one the SDK offered.
+    //
+    // Each request is answered once per CLI (`claude-control-requests.ts`): a
+    // redelivery the SDK makes after a rejoin's re-read shares or refuses the
+    // first answer, and the card withdraws when the CLI does or ends.
     canUseTool: ((toolName, input, permissionContext) =>
-      turnFor(permissionContext?.toolUseID).canUseTool(
-        toolName,
-        input,
-        permissionContext,
+      requests.answerOnce(
+        permissionContext?.requestId,
+        permissionContext?.signal,
+        refusedPermission,
+        (signal) =>
+          turnFor(permissionContext?.toolUseID).canUseTool(toolName, input, {
+            ...permissionContext,
+            signal,
+          }),
       )) as CanUseTool,
     /**
      * An MCP server asking the user for input: parked as an `mcp-form` or
@@ -632,7 +661,13 @@ export function claudeQueryOptions(
      * saw as the tab freezing for minutes with nothing to explain it.
      */
     onElicitation: (request, elicitationOptions) =>
-      answerClaudeElicitation(session, sessionId, request, elicitationOptions),
+      requests.answerOnce(
+        elicitationOptions.requestId,
+        elicitationOptions.signal,
+        () => ({ action: "cancel" as const }),
+        (signal) =>
+          answerClaudeElicitation(session, sessionId, request, { ...elicitationOptions, signal }),
+      ),
     /**
      * The CLI asking the host to render a blocking dialog.
      *

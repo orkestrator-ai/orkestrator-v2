@@ -9,6 +9,8 @@ import {
   releaseClaudeRuntimeTasks,
 } from "./session-manager-background-tasks.js";
 import { readLiveCommandInventory } from "./session-manager-commands.js";
+import { ClaudeControlRequests } from "./claude-control-requests.js";
+import { recoverClaudeRequestsOnRejoin } from "./live-claude-control.js";
 import {
   createStructuredUsageRefreshCoordinator,
   sessionOperationError,
@@ -106,6 +108,9 @@ function endClaudeRuntime(
   failure: { turn: ClaudeRuntimeTurn; error: unknown } | undefined,
 ): void {
   runtime.state = "ended";
+  // Every card this process raised is withdrawn and any late delivery
+  // refused: an answer could no longer reach the CLI that asked.
+  runtime.requests.end();
   disarmClaudeRuntimeIdleDetach(runtime);
   // Nothing reads the held prompt any more; release it.
   runtime.input.close();
@@ -235,6 +240,10 @@ async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRunt
       required,
     });
     recordMcpConfigRevision(session, plan, running.mcp);
+    // Reinitializing settles outstanding CLI hooks. A retained turn can still
+    // be measuring or authorizing a background tool, so only read the
+    // inventory on a warm CLI that owes no work.
+    if (!claudeRuntimeOwesWork(running)) await recoverClaudeRequestsOnRejoin(running);
     return await sdkPromptMessages(sdkPrompt, turn.promptUuid);
   } catch (error) {
     abandonJoin(turn, running);
@@ -282,12 +291,14 @@ async function prepareLaunch(turn: TurnState): Promise<boolean> {
 }
 
 /** Launch the session's CLI with this turn as its first. */
-function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
+function launchClaudeRuntime(turn: TurnState, plan: QueryPlan, testHooks?: PromptTestHooks) {
   const { session, options, abortController, stream } = turn;
   const { plugins, sdkPrompt, queryEnvironment, mcpServers, mcpServerNames, mcpServersKey } = plan;
   const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, turn.promptUuid);
   // Created before the query so the hooks it launches with read this state.
   const mcp = createClaudeRuntimeMcp(mcpServers, mcpServerNames, plan.accountOnlyMcpServers);
+  // Request ids are per process, so each CLI gets its own ledger.
+  const requests = new ClaudeControlRequests();
   // Hooks and callbacks fire on the runtime's behalf for whichever turn
   // they concern: the one whose row holds the tool, else the latest turn.
   const turnFor = (toolUseId?: string): ClaudeRuntimeTurn =>
@@ -296,7 +307,12 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
     turn.thisTurn!;
   const queryIterator = query({
     prompt: heldSdkPrompt.prompt,
-    options: claudeQueryOptions(turn, plan, turnFor, mcp),
+    options: {
+      ...claudeQueryOptions(turn, plan, turnFor, mcp, requests),
+      ...(testHooks?.spawnClaudeCodeProcess && {
+        spawnClaudeCodeProcess: testHooks.spawnClaudeCodeProcess,
+      }),
+    },
   });
   const liveQuery = Object.assign(queryIterator, {
     pushInput: (message: SDKUserMessage) => turnFor().pushSteerInput(message),
@@ -316,6 +332,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
     },
     mcpServers: mcpServersKey,
     mcp,
+    requests,
     firstTurn: turn.thisTurn!,
   });
   const launched = created.runtime;
@@ -446,7 +463,7 @@ export async function runTurnOnRuntime(
   }
   if (!turn.runtime) {
     if (!(await prepareLaunch(turn))) return false;
-    const { launched, queryIterator, markEnded } = launchClaudeRuntime(turn, plan);
+    const { launched, queryIterator, markEnded } = launchClaudeRuntime(turn, plan, testHooks);
     // The prompt is already held in the SDK's input, so nothing here has to wait
     // for the CLI to boot. `supportedAgents()` can only be answered once it has,
     // which is seconds on a cold start: awaiting it held the dispatch (and the

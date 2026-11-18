@@ -161,6 +161,25 @@ mode is never taken as given. Under an `ask` or `deny` policy
   until the hold ceiling, and expiry still denies or cancels. A hold never
   answers anything. While any card waits, the runtime's idle window re-arms
   instead of closing the CLI: a paused card is not silence.
+- **Each request is answered once, and only while its CLI lives.** Every
+  `canUseTool` and `onElicitation` delivery goes through the runtime's
+  `ClaudeControlRequests` (`claude-control-requests.ts`): a redelivered id
+  shares the open card or is refused once answered, and when the process ends
+  every open card withdraws and later deliveries are refused. A card withdraws
+  on the signal it is handed and leaves its store in the same tick, so no
+  answer lands on a request the CLI withdrew. A new card kind must do both.
+- **A rejoin reads the inventory on an idle warm CLI.**
+  `prepareJoin` calls `recoverClaudeRequestsOnRejoin` (`live-claude-control.ts`)
+  before writing the prompt when the CLI owes no work. `reinitialize()` makes
+  the SDK redeliver the permissions and dialogs the CLI lists. A tab remount
+  only reads bridge-held cards. A busy join skips the read because
+  reinitializing settles outstanding hook callbacks. A missing or unreadable inventory is unknown and leaves
+  held cards and prompt admission intact. `reinitialize()` restates
+  the launch's initialize payload, so keep MCP servers, plugins and managed
+  settings on `argv` delivery (`claudeExecutableOptions`), or every rejoin
+  would restore the launch's MCP set over `setMcpServers`. Elicitations are not
+  recoverable at the pinned SDK (0007 task 4); rerun
+  `claude-rejoin-requests.live.test.ts` on every Claude bump.
 
 ## One row per model response
 

@@ -452,6 +452,13 @@ export interface ClaudeQueryControl {
   getSettings?: () => Promise<unknown>;
   supportedCommands?: () => Promise<import("@anthropic-ai/claude-agent-sdk").SlashCommand[]>;
   initializationResult?: () => Promise<unknown>;
+  /**
+   * Re-send `initialize` to the running CLI. Its answer lists the requests the
+   * CLI still waits on, and the SDK redelivers the permissions and dialogs
+   * among them to `canUseTool` / `onUserDialog` itself; see
+   * `reinitializeLiveClaude` in `live-claude-control.ts`.
+   */
+  reinitialize?: () => Promise<unknown>;
   reloadSkills?: () => Promise<{ skills: import("@anthropic-ai/claude-agent-sdk").SlashCommand[] }>;
   reloadPlugins?: () => Promise<unknown>;
   mcpServerStatus?: () => Promise<import("@anthropic-ai/claude-agent-sdk").McpServerStatus[]>;

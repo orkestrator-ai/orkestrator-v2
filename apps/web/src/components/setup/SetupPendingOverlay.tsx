@@ -187,7 +187,7 @@ function SetupTranscriptStatus({
   startedAt,
 }: SetupStatusProps & { startedAt?: number }) {
   const linkClassName =
-    "rounded-sm text-xs text-muted-foreground/60 underline-offset-2 transition-colors hover:text-foreground hover:underline focus-hairline focus-hairline-outset disabled:pointer-events-none disabled:opacity-50";
+    "rounded-sm text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-hairline focus-hairline-outset disabled:pointer-events-none";
   return (
     <div className="text-muted-foreground">
       <div className="chat-status-row min-w-0">
@@ -210,7 +210,11 @@ function SetupTranscriptStatus({
               {failed ? (
                 <button
                   type="button"
-                  className={cn(linkClassName, "ml-1")}
+                  className={cn(
+                    linkClassName,
+                    "ml-1",
+                    operation !== "retry" && "disabled:opacity-50",
+                  )}
                   disabled={operation !== null}
                   onClick={() => void runOperation("retry")}
                 >

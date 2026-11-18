@@ -59,7 +59,7 @@ export function TabProse({ text, lead = false }: { text: string; lead?: boolean 
       text={text}
       className={cn(
         "max-w-[75ch] text-foreground",
-        lead ? "gap-3 text-[15px] leading-7" : "text-sm leading-6 text-foreground/90",
+        lead ? "min-w-0 gap-3 text-[15px] leading-7" : "text-sm leading-6 text-foreground/90",
       )}
       renderText={(value) => <KeyInformationText text={value} />}
     />

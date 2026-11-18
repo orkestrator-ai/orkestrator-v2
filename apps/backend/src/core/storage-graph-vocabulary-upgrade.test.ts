@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { CoordinatorWorkspace } from "@orkestrator/protocol/coordinator";
-import { graphLaunchParams } from "@orkestrator/protocol/graphs/launch";
+import { graphLaunchParams, type GraphLaunchRequest } from "@orkestrator/protocol/graphs/launch";
 import { graphMockPinIssues, graphMockPinTargetFromPlan } from "@orkestrator/protocol/graphs/mock";
 import { renderGraphPromptSource } from "@orkestrator/protocol/graphs/prompts";
 import type { ScheduleFire, ScheduledJob } from "@orkestrator/protocol/scheduled-jobs";
@@ -743,7 +743,7 @@ describe("graph vocabulary upgrade", () => {
         ]),
       ),
     });
-    const request = {
+    const request: GraphLaunchRequest = {
       ref: { scope: "user", id: child.id },
       projectId: "project-1",
       environment: { kind: "existing", environmentId: "env-1" },

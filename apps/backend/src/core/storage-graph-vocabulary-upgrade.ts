@@ -13,6 +13,7 @@ import {
   type GraphRun,
 } from "@orkestrator/protocol/graphs/run";
 import { isGraphId, isGraphPlanId } from "@orkestrator/protocol/graphs/grammar";
+import { parseGraphPromptPath } from "@orkestrator/protocol/graphs/prompts";
 import { validateGraphTemplate, type GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { graphAgentResultKey, graphAgentSessionKey } from "./graph-agent-state.js";
 import type { StorageMigration } from "./storage-database.js";
@@ -505,12 +506,17 @@ function bindingRenames(roles: unknown, parameters: unknown): BindingRenames {
 function promptSource(source: string, params: BindingRenames["params"]): string {
   // Consume whole tags, including comments and unsupported tags. Edit only
   // parameter paths in variable, section, inverted-section and close tags.
-  return source.replace(/{{[\s\S]*?}}/g, (tag) =>
-    tag.replace(
-      /^({{\s*(?:[#^/]\s*)?params\.)([\w-]+)((?:\.[\w-]+)*\s*}})$/,
-      (_match, prefix: string, key: string, suffix: string) =>
-        prefix + String(renamed(params, key)) + suffix,
-    ),
+  if (Object.keys(params).length === 0) return source;
+  return source.replace(
+    /({{\s*(?:[#^/]\s*)?)([\s\S]*?)(\s*}})/g,
+    (tag, prefix: string, path: string, suffix: string) => {
+      const segments = parseGraphPromptPath(path);
+      if (segments?.[0] !== "params" || !segments[1] || !Object.hasOwn(params, segments[1])) {
+        return tag;
+      }
+      segments[1] = params[segments[1]]!;
+      return prefix + segments.join(".") + suffix;
+    },
   );
 }
 
@@ -741,12 +747,6 @@ export function upgradeGraphTemplate(
     // A record this upgrade cannot read is left exactly as it was.
     return template;
   }
-}
-
-/** The node renames a template gets (for pins naming its nodes from a parent). */
-export function graphTemplateNodeRenames(template: unknown): Map<string, string> {
-  if (!isGraphTemplate(template)) return new Map();
-  return new Map(templateRenames(template).nodes);
 }
 
 function safeDigest(template: unknown): string | undefined {

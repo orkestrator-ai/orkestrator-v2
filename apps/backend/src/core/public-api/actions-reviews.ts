@@ -4,7 +4,6 @@ import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import { resolveActionDefaults, resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import {
   isLaunchMultiReviewActionInput,
-  launchActionInputFromPublicFields,
   isMultiReviewWorkflow,
   type LaunchMultiReviewActionInput,
   type MultiReviewActionResult,
@@ -124,14 +123,8 @@ async function saveReviewOutcome(operation: OperationHandle, value: MultiReviewA
   return outcome;
 }
 
-/** The CLI's `review.launch` input: the button action with the public Address Findings names. */
-type LaunchInput = Omit<
-  LaunchMultiReviewActionInput,
-  "requestId" | "addressFindingsModel" | "autoAddressFindings"
-> & {
-  fixModel?: LaunchMultiReviewActionInput["addressFindingsModel"];
-  autoFix?: boolean;
-};
+/** The CLI's `review.launch` input: the button action without its request ID. */
+type LaunchInput = Omit<LaunchMultiReviewActionInput, "requestId">;
 
 const reviewLaunch: MutationActionHandler<LaunchInput> = {
   kind: "mutation",
@@ -142,16 +135,9 @@ const reviewLaunch: MutationActionHandler<LaunchInput> = {
     const value = { ...input, environmentId } as LaunchInput;
     // The protocol's own validator of the button's request, as the
     // coordinator tool uses it.
-    // The CLI's wire fields keep the public names (`fixModel`, `autoFix`;
-    // to-do 4740 task 3), so the intent and its replay key stay as sent.
-    if (
-      !isLaunchMultiReviewActionInput({
-        ...launchActionInputFromPublicFields(value),
-        requestId: "validate",
-      })
-    ) {
+    if (!isLaunchMultiReviewActionInput({ ...value, requestId: "validate" })) {
       throw invalid(
-        "Multi Review input is invalid: reviewers take {agent, model, reasoningEffort?, lens?: {label, instruction}} (label at most 64 characters, instruction at most 4 KiB); reviewModel and fixModel take {agent, model, reasoningEffort?}",
+        "Multi Review input is invalid: reviewers take {agent, model, reasoningEffort?, lens?: {label, instruction}} (label at most 64 characters, instruction at most 4 KiB); reviewModel and addressFindingsModel take {agent, model, reasoningEffort?}",
       );
     }
     return { value, scope: `environment:${environmentId}`, intent: value };
@@ -166,10 +152,7 @@ const reviewLaunch: MutationActionHandler<LaunchInput> = {
         const launched = await context.invoke<MultiReviewActionResult>(
           "launch_controller_multi_review",
           {
-            input: {
-              ...launchActionInputFromPublicFields(input),
-              requestId: operation.operationId,
-            },
+            input: { ...input, requestId: operation.operationId },
             reservedId,
           },
         );
@@ -215,9 +198,10 @@ const reviewGet: ReadActionHandler<{ workflowId: string }> = {
 };
 
 /** `review.open` and `review.address`: the durable surface actions of a saved review. */
-function surfaceHandler(
-  action: "review.open" | "review.address",
-): MutationActionHandler<{ workflowId: string; surface: "root" | "fix" | "address" }> {
+function surfaceHandler(action: "review.open" | "review.address"): MutationActionHandler<{
+  workflowId: string;
+  surface: "root" | "address-findings" | "address";
+}> {
   return {
     kind: "mutation",
     action,
@@ -227,7 +211,7 @@ function surfaceHandler(
       const surface =
         action === "review.address"
           ? ("address" as const)
-          : (oneOf(input, "surface", ["root", "fix"] as const) ?? "root");
+          : (oneOf(input, "surface", ["root", "address-findings"] as const) ?? "root");
       const value = { workflowId, surface };
       return { value, scope: `review:${workflowId}`, intent: value };
     },

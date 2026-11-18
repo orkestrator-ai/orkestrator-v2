@@ -12,7 +12,7 @@ describe("graph predicate shape", () => {
     [{ path: "report.issues", op: "nonEmpty" }],
     [{ path: "report.issues", op: "empty" }],
     [{ path: "report.summary", op: "exists" }],
-    [{ path: "params.autoFix", op: "eq", value: true }],
+    [{ path: "params.autoAddressFindings", op: "eq", value: true }],
     [{ path: "decision.choice", op: "neq", value: "ship" }],
     [{ path: "verdict.notes", op: "eq", value: null }],
     [{ path: "run.iteration", op: "gt", value: 1 }],

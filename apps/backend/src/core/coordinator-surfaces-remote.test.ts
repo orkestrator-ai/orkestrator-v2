@@ -615,13 +615,6 @@ test("a reviewer's transcript tab opens on the review's node", async () => {
   expect((await leafTabs())[0]).toMatchObject({
     multiReviewTabData: { workflowId: workflow.id, reviewerId: "reviewer-a" },
   });
-  // A node from before the reviewer surface says to update it.
-  commands.set("controller_multi_review_surface", async () => {
-    throw new Error("Expected surface root, fix or address.");
-  });
-  expect(
-    (await tool("open_multi_review", { workflowId: workflow.id, reviewerId: "reviewer-a" })).text,
-  ).toContain("older Orkestrator");
 });
 
 test("a custom Address Findings on another node starts once, adopts the review, and survives a lost answer", async () => {
@@ -655,10 +648,10 @@ test("a custom Address Findings on another node starts once, adopts the review, 
   leafContext.multiReviews = { customAddressFindings } as unknown as CommandContext["multiReviews"];
   const input = { requestId: "fix-1", workflowId: workflow.id, instruction: "Only the tests" };
   loseAnswer.add("controller_multi_review_surface");
-  const lost = await tool("custom_fix_multi_review", input);
+  const lost = await tool("custom_address_multi_review", input);
   expect(lost.isError).toBe(true);
   expect(lost.text).toContain("same requestId");
-  const retried = await tool("custom_fix_multi_review", input);
+  const retried = await tool("custom_address_multi_review", input);
   expect(retried.isError).toBe(false);
   // The retry reports the fix the first attempt started and opens its tab.
   expect(retried.structuredContent).toMatchObject({
@@ -673,7 +666,7 @@ test("a custom Address Findings on another node starts once, adopts the review, 
     instruction: "Only the tests",
     addressFindingsModel: { agent: "codex", model: "default" },
   });
-  expect((await tool("custom_fix_multi_review", input)).structuredContent).toMatchObject({
+  expect((await tool("custom_address_multi_review", input)).structuredContent).toMatchObject({
     replayed: true,
   });
   expect(customAddressFindings).toHaveBeenCalledTimes(1);
@@ -689,7 +682,7 @@ test("a custom Address Findings on another node starts once, adopts the review, 
     }),
   );
   expect(
-    (await tool("custom_fix_multi_review", { ...input, instruction: "Something else" })).text,
+    (await tool("custom_address_multi_review", { ...input, instruction: "Something else" })).text,
   ).toContain("different payload");
 });
 
@@ -725,23 +718,23 @@ test("a delivered custom Address Findings replays only the complete explicit mod
     requestId: "identical",
     workflowId: workflow.id,
     instruction: "Only the tests",
-    fixModel: model,
+    addressFindingsModel: model,
   };
-  expect((await tool("custom_fix_multi_review", input)).structuredContent).toMatchObject({
+  expect((await tool("custom_address_multi_review", input)).structuredContent).toMatchObject({
     outcome: "opened",
     ui: { tabId: "delivered-fix" },
   });
   const changed = {
     ...input,
     requestId: "changed",
-    fixModel: { ...model, reasoningEffort: "high" },
+    addressFindingsModel: { ...model, reasoningEffort: "high" },
   };
-  const refused = await tool("custom_fix_multi_review", changed);
+  const refused = await tool("custom_address_multi_review", changed);
   expect(refused.isError).toBe(true);
   expect(refused.text).toContain("not ready for a custom Address Findings");
   // Failed receipts remain retryable errors, never a completed replay of the old Address Findings.
-  expect((await tool("custom_fix_multi_review", changed)).isError).toBe(true);
-  expect((await tool("custom_fix_multi_review", input)).structuredContent).toMatchObject({
+  expect((await tool("custom_address_multi_review", changed)).isError).toBe(true);
+  expect((await tool("custom_address_multi_review", input)).structuredContent).toMatchObject({
     replayed: true,
   });
   expect((await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot).toMatchObject({
@@ -769,10 +762,10 @@ test("a pending remote custom Address Findings retains its handoff through a los
     requestId: "pending-fix",
     workflowId: workflow.id,
     instruction: "Only the tests",
-    fixModel: { agent: "codex", model: "default", reasoningEffort: "low" },
+    addressFindingsModel: { agent: "codex", model: "default", reasoningEffort: "low" },
   };
   loseAnswer.add("controller_multi_review_surface");
-  const lost = await tool("custom_fix_multi_review", input);
+  const lost = await tool("custom_address_multi_review", input);
   expect(lost.isError).toBe(true);
   await entered.promise;
   const pending = (await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot as MultiReviewWorkflow;
@@ -780,7 +773,7 @@ test("a pending remote custom Address Findings retains its handoff through a los
     expect(pending).toMatchObject({
       phase: "interactive",
       addressPromptPending: true,
-      customAddressFindingsModel: input.fixModel,
+      customAddressFindingsModel: input.addressFindingsModel,
     });
     // A queued handoff can be read without waiting for its blocked dispatcher.
     expect(
@@ -799,7 +792,7 @@ test("a pending remote custom Address Findings retains its handoff through a los
     addressSessionKey: pending.addressSessionKey,
     addressTabId: pending.addressTabId,
   });
-  const retried = await tool("custom_fix_multi_review", input);
+  const retried = await tool("custom_address_multi_review", input);
   expect(retried.isError).toBe(false);
   expect(retried.structuredContent).toMatchObject({
     outcome: "pending",
@@ -812,17 +805,17 @@ test("a pending remote custom Address Findings retains its handoff through a los
       addressRequestId: pending.addressRequestId,
       addressSessionKey: pending.addressSessionKey,
       addressTabId: pending.addressTabId,
-      customAddressFindingsModel: input.fixModel,
+      customAddressFindingsModel: input.addressFindingsModel,
     });
   }
   expect((await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot).toMatchObject({
-    customAddressFindingsModel: input.fixModel,
+    customAddressFindingsModel: input.addressFindingsModel,
     addressRequestId: pending.addressRequestId,
   });
-  const changed = await tool("custom_fix_multi_review", {
+  const changed = await tool("custom_address_multi_review", {
     ...input,
     requestId: "different-pending-effort",
-    fixModel: { ...input.fixModel, reasoningEffort: "high" },
+    addressFindingsModel: { ...input.addressFindingsModel, reasoningEffort: "high" },
   });
   expect(changed.isError).toBe(true);
   expect(changed.text).toContain("not ready for a custom Address Findings");
@@ -837,19 +830,19 @@ test("a remote custom Address Findings refused before handoff can retry the same
   customAddressFindings.mockRejectedValueOnce(new Error("dispatch preflight unavailable"));
   service.customAddressFindings = customAddressFindings;
   const input = { requestId: "preflight", workflowId: workflow.id, instruction: "Only the tests" };
-  const refused = await tool("custom_fix_multi_review", input);
+  const refused = await tool("custom_address_multi_review", input);
   expect(refused.isError).toBe(true);
   expect(refused.text).toContain("handoff could not be queued");
   expect((await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot).toMatchObject({
     phase: "ready",
   });
-  const retried = await tool("custom_fix_multi_review", input);
+  const retried = await tool("custom_address_multi_review", input);
   expect(retried.isError).toBe(false);
   expect(retried.structuredContent).toMatchObject({ outcome: "pending" });
   expect(customAddressFindings).toHaveBeenCalledTimes(2);
 });
 
-for (const name of ["address_multi_review", "custom_fix_multi_review"]) {
+for (const name of ["address_multi_review", "custom_address_multi_review"]) {
   test(`remote ${name} refuses a foreign environment before dispatch or adoption`, async () => {
     const workflow = await readyReview();
     await world.storage.patchRepositorySettings(scope.projectId, {}, [
@@ -895,7 +888,7 @@ for (const custom of [false, true]) {
       address: dispatch,
       customAddressFindings: dispatch,
     } as unknown as CommandContext["multiReviews"];
-    const name = custom ? "custom_fix_multi_review" : "address_multi_review";
+    const name = custom ? "custom_address_multi_review" : "address_multi_review";
     const result = await tool(name, {
       workflowId: workflow.id,
       ...(custom ? { requestId: "owned-fix", instruction: "Fix" } : {}),

@@ -169,7 +169,7 @@ export class BuildPipelineRecovery {
   /**
    * Completes an Address turn and opens Verify.
    *
-   * A session opened with a `fix-result` slot (`addressFindingsReportKind`) must
+   * A session opened with an `address-findings-result` slot (`addressFindingsReportKind`) must
    * return that result first: a missing one gets the stage's one reminder and
    * then fails the stage, exactly as for Review and Verify. The accepted
    * result is kept, bounded, on the session, where Verify and the inspector

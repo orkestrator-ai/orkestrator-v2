@@ -73,16 +73,17 @@ describe("pipelineFlowModel", () => {
     },
   );
 
-  test.each(["building", "reworking"] as const)(
-    "an idle current preparation session stays running while %s collects its result",
-    (phase) => {
+  test.each([0, 1] as const)(
+    "an idle current preparation session stays running while it collects its result in round %d",
+    (iteration) => {
       const model = pipelineFlowModel(
         build({
-          phase,
+          phase: "preparing-package",
+          iteration,
           currentSessionIndex: 1,
           sessions: [
-            session(phase === "building" ? "build" : "rework", "work", 0),
-            session("rework", "prep", 60, {
+            session(iteration === 0 ? "build" : "rework", "work", 0),
+            session("package-preparation", "prep", 60, {
               label: REVIEW_PACKAGE_SESSION_LABEL,
               status: "idle",
               completedAt: undefined,
@@ -106,7 +107,11 @@ describe("pipelineFlowModel", () => {
             sessions: [
               session("build", "work", 0),
               ...(dedicated
-                ? [session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL })]
+                ? [
+                    session("package-preparation", "prep", 60, {
+                      label: REVIEW_PACKAGE_SESSION_LABEL,
+                    }),
+                  ]
                 : []),
             ],
             validationRun: run,
@@ -556,7 +561,7 @@ describe("pipelineFlowModel", () => {
         structuredReview: clean,
         sessions: [
           session("build", "build", 0),
-          session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+          session("package-preparation", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
           reviewer(0, "rev-1", 120),
           reviewer(1, "rev-2", 120),
           session("review", "consolidation", 180, {
@@ -657,7 +662,10 @@ describe("pipelineFlowModel", () => {
         failureContext: { phase: "reworking", kind: "stage-transition", sessionId: "prep-session" },
         sessions: [
           session("build", "build", 0),
-          session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL, status: "error" }),
+          session("package-preparation", "prep", 60, {
+            label: REVIEW_PACKAGE_SESSION_LABEL,
+            status: "error",
+          }),
         ],
       }),
     );
@@ -832,7 +840,7 @@ describe("pipelineFlowModel", () => {
         reviewFanout: { reviewers },
         sessions: [
           session("build", "build", 0),
-          session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+          session("package-preparation", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
           reviewer(0, "rev-1", 120, { status: "running", completedAt: undefined }),
           reviewer(1, "rev-2", 120),
         ],
@@ -1009,7 +1017,7 @@ describe("pipelineFlowModel", () => {
           reviewers: PANEL,
           sessions: [
             session("build", "build", 0),
-            session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+            session("package-preparation", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
           ],
           validationRun: run,
         }),
@@ -1039,7 +1047,7 @@ describe("pipelineFlowModel", () => {
         currentSessionIndex: 4,
         sessions: [
           session("build", "build", 0, { completedAt: undefined }),
-          session("rework", "prep", 60, {
+          session("package-preparation", "prep", 60, {
             label: REVIEW_PACKAGE_SESSION_LABEL,
             completedAt: undefined,
           }),
@@ -1116,7 +1124,7 @@ describe("pipelineFlowModel", () => {
         phase: "complete",
         reviewers: PANEL.slice(0, 1),
         sessions: [
-          session("rework", "prep", 0, {
+          session("package-preparation", "prep", 0, {
             label: REVIEW_PACKAGE_SESSION_LABEL,
             completedAt: undefined,
           }),
@@ -1503,7 +1511,7 @@ describe("pipelineFlowModel", () => {
         reviewers: PANEL.slice(0, 2),
         sessions: [
           session("build", "build", 0),
-          session("rework", "prep", 30, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+          session("package-preparation", "prep", 30, { label: REVIEW_PACKAGE_SESSION_LABEL }),
           reviewer(0, "rev-1", 60),
           reviewer(1, "rev-2", 60),
           session("review", "consolidation", 120, { label: "Consolidation" }),
@@ -1738,7 +1746,7 @@ describe("pipelineSkipAction", () => {
       currentSessionIndex: 1,
       sessions: [
         session("build", "work", 0),
-        session("rework", "prep", 60, {
+        session("package-preparation", "prep", 60, {
           label: REVIEW_PACKAGE_SESSION_LABEL,
           status: "running",
           completedAt: undefined,
@@ -1751,7 +1759,7 @@ describe("pipelineSkipAction", () => {
   test("an unsealed validation run is the only skippable step, even while paused", () => {
     const sessions = [
       session("build", "work", 0),
-      session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+      session("package-preparation", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
     ];
     const running = build({
       phase: "reworking",
@@ -2105,11 +2113,14 @@ describe("earlier passes' validation", () => {
       currentSessionIndex: 5,
       sessions: [
         session("build", "build", 0),
-        session("rework", "prep-0", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+        session("package-preparation", "prep-0", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
         session("review", "review-0", 200),
         session("verify", "verify-0", 300),
         session("rework", "fix-1", 400, { iteration: 1 }),
-        session("rework", "prep-1", 460, { iteration: 1, label: REVIEW_PACKAGE_SESSION_LABEL }),
+        session("package-preparation", "prep-1", 460, {
+          iteration: 1,
+          label: REVIEW_PACKAGE_SESSION_LABEL,
+        }),
       ],
       validationRun: validationRun({
         id: "validation-1",

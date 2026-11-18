@@ -543,11 +543,16 @@ function pipelineLoopTemplate(): GraphTemplateV1 {
         branches: [{ to: "issues", when: { path: "report.issues", op: "nonEmpty" } }],
         otherwise: "clean",
       },
-      agent("address", "write", [REPORT, CODE], [CODE, { name: "report", type: "fix-result@1" }]),
+      agent(
+        "address",
+        "write",
+        [REPORT, CODE],
+        [CODE, { name: "report", type: "address-findings-result@1" }],
+      ),
       agent(
         "verify",
         "read",
-        [CODE, { name: "address", type: "fix-result@1", required: false }],
+        [CODE, { name: "address", type: "address-findings-result@1", required: false }],
         [VERDICT, CODE],
       ),
     ],
@@ -755,12 +760,14 @@ describe("loops (§9.2, §9.4)", () => {
       ["diagnose/panel.1/diagnosis-1", "diagnose/panel.2/diagnosis-1"],
       ["diagnose/panel.1/diagnosis-2"],
     ]);
-    expect(latest(run, "fix", 1).inputs.diagnosis).toBe(merged.id);
-    // Iteration 2 validates fix's code; with no failures the rest of the round is skipped.
-    expect(latest(run, "validate", 2).inputs.code).toBe(latest(run, "fix", 1).outputs.code);
+    expect(latest(run, "address-findings", 1).inputs.diagnosis).toBe(merged.id);
+    // Iteration 2 validates address-findings' code; with no failures the rest of the round is skipped.
+    expect(latest(run, "validate", 2).inputs.code).toBe(
+      latest(run, "address-findings", 1).outputs.code,
+    );
     expect(states(run, "diagnose")).toEqual(["1:complete", "1:complete", "2:skipped", "2:skipped"]);
     expect(states(run, "dedupe")).toEqual(["1:complete", "2:skipped"]);
-    expect(states(run, "fix")).toEqual(["1:complete", "2:skipped"]);
+    expect(states(run, "address-findings")).toEqual(["1:complete", "2:skipped"]);
   });
 });
 

@@ -31,7 +31,7 @@ describe("Multi Review built-in ↔ the protocol's Multi Review contract", () =>
     const defaults = Object.fromEntries(
       template.parameters.map((parameter) => [parameter.key, parameter.default]),
     );
-    expect(defaults).toEqual({ autoFix: saved.autoFix, autoPr: saved.autoPr });
+    expect(defaults).toEqual({ autoAddressFindings: saved.autoFix, autoPr: saved.autoPr });
   });
 
   test("the worst case runs the turns the launcher's work estimate counts", () => {

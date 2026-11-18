@@ -1,7 +1,7 @@
 /**
  * The typed Address → Verify handoff of the Build Pipeline.
  *
- * An Address turn opens a `fix-result` workflow result slot, as Multi Review's
+ * An Address turn opens an `address-findings-result` workflow result slot, as Multi Review's
  * fix step does. The accepted result is copied, bounded, onto the Address
  * session (`PipelineSession.addressFindingsResult`), where the Verify prompt reads it as an
  * evidence frame and the pipeline inspector shows it.
@@ -13,7 +13,7 @@
  */
 
 /**
- * The stored marker that an Address session was opened with a `fix-result`
+ * The stored marker that an Address session was opened with an `address-findings-result`
  * slot; the only value of the marker today.
  */
 export const PIPELINE_ADDRESS_FINDINGS_REPORT_KIND = "address-findings-result" as const;
@@ -35,7 +35,7 @@ export interface PipelineAddressFindingsResultOmissions {
 }
 
 /**
- * The accepted `fix-result` of one Address session, bounded by
+ * The accepted `address-findings-result` of one Address session, bounded by
  * {@link PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS}. The fields are the workflow result's; a
  * string over its limit ends in `…`, and a list over its limit keeps its first
  * entries (failed commands before passed ones) and counts the rest in

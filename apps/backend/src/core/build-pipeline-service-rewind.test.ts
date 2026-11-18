@@ -36,7 +36,7 @@ describe("rewinding to an earlier step", () => {
       requestId,
       value: (provider.phases.get(sessionId) === "review"
         ? cleanReview
-        : provider.phases.get(sessionId) === "build" || provider.phases.get(sessionId) === "rework"
+        : ["build", "rework", "package-preparation"].includes(provider.phases.get(sessionId) ?? "")
           ? TEST_REVIEW_PREPARATION
           : { complete: false, rationale: `Still failing (${sessionId}).` }) as T,
     });
@@ -224,7 +224,7 @@ describe("rewinding to an earlier step", () => {
       );
       expect(shape(live(refailed))).toEqual([
         "build:0",
-        "rework:0",
+        "package-preparation:0",
         "review:0",
         "verify:0",
         "rework:1",
@@ -840,7 +840,9 @@ describe("rewinding to an earlier step", () => {
         else expect(restarted.structuredReview).toBeUndefined();
         expect(restarted.verificationResult).toBeUndefined();
         expect(restarted.verificationFeedback).toBeUndefined();
-        expect(restarted.sessions.at(-1)?.phase).toBe(phase === "review" ? "rework" : phase);
+        expect(restarted.sessions.at(-1)?.phase).toBe(
+          phase === "review" ? "package-preparation" : phase,
+        );
         expect(provider.sent.at(-1)?.sessionId).toBe(restarted.sessions.at(-1)?.sdkSessionId);
         const finished = await advanceUntil(
           service,

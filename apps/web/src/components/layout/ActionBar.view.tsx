@@ -423,7 +423,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   // switching to the environment's generic agent.
   const review2LaunchDefaults = configuredLaunchDialogDefaultsFor("review2");
   const reviewPreparationLaunchDefaults = configuredLaunchDialogDefaultsFor("reviewPreparation");
-  const addressFindingsLaunchDefaults = configuredLaunchDialogDefaultsFor("fixReviewIssues");
+  const addressFindingsLaunchDefaults = configuredLaunchDialogDefaultsFor("addressFindings");
   const prLaunchDefaults = launchDialogDefaultsFor("pr");
   const prFreshnessNotice = hydrationFreshnessNotice(monitorSyncStatus, "pull request status");
   const prLastCheckedAt = formatObservedAt(lastSuccessfulCheckAt);

@@ -21,6 +21,9 @@ import {
   retireOpenCode2SessionsMigration,
 } from "./storage-retired-features.js";
 import { workflowVocabularyUpgradeMigration } from "./storage-workflow-vocabulary-upgrade.js";
+import { packagePreparationPhaseUpgradeMigration } from "./storage-package-preparation-phase-upgrade.js";
+import { graphVocabularyUpgradeMigration } from "./storage-graph-vocabulary-upgrade.js";
+import { coordinatorReceiptVocabularyUpgradeMigration } from "./storage-coordinator-receipt-vocabulary-upgrade.js";
 import {
   WEB_ANNOTATION_STORE_LAYOUT,
   WEB_ANNOTATION_STORE_PREFIX,
@@ -296,6 +299,9 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   publicOperationRowsMigration,
   kanbanTicketSectionsUpgradeMigration,
   workflowVocabularyUpgradeMigration,
+  packagePreparationPhaseUpgradeMigration,
+  graphVocabularyUpgradeMigration,
+  coordinatorReceiptVocabularyUpgradeMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {

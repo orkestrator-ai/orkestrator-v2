@@ -51,7 +51,7 @@ function startMcpServer() {
           tools: [
             { name: "echo_value", description: "Echo a value", inputSchema: schema },
             { name: "submit_review_report", description: "Submit", inputSchema: schema },
-            { name: "submit_fix_result", description: "Submit", inputSchema: schema },
+            { name: "submit_address_findings_result", description: "Submit", inputSchema: schema },
           ],
         });
       }
@@ -197,7 +197,7 @@ liveTest(
     // Another kind's tool was never offered on that turn.
     const offered = fixture!.model.calls.findLast((call) => call.lastRole === "user")!.tools;
     expect(offered).toContain(tool);
-    expect(offered).not.toContain("orkestrator_workflow_result_submit_fix_result");
+    expect(offered).not.toContain("orkestrator_workflow_result_submit_address_findings_result");
 
     // After the turn the grant is restored: the same call is refused.
     const before = mcp!.calls.length;

@@ -169,8 +169,8 @@ function delegationLines(delegation: CoordinatorContextDelegation): string {
     `${COORDINATOR_ACTION_GUIDANCE}\n` +
     `${COORDINATOR_ROUTING_RULE}\n` +
     `${COORDINATOR_ENVIRONMENT_CHOICE_RULE}\n` +
-    `Actions: launch_multi_review runs the environment's Multi Review button action; open_multi_review and open_multi_review_fix present saved work. ${COORDINATOR_REQUEST_ID_RULE} Inspect outcome, ui and recovery before reporting completion.\n` +
-    `Workers: check a worker's work with get_worker_changes (its commits, changed files, uncommitted files and diff, local or container), not only its report. To try an alternative from where a worker got to, fork_worker starts a new worker from its last commit.\n` +
+    `Actions: launch_multi_review runs the Multi Review button action; open_multi_review and open_multi_review_address_findings show saved work. ${COORDINATOR_REQUEST_ID_RULE} Inspect outcome, ui and recovery before reporting completion.\n` +
+    `Workers: check a worker's work with get_worker_changes (commits, changed and uncommitted files, diff; local or container), not only its report. To try an alternative from where a worker got to, fork_worker starts a new worker from its last commit.\n` +
     // Workers start where a normal environment would: the latest commit of the
     // configured base branch, not wherever this checkout happens to be.
     `Launch base: every launch_environment call must include baseBranch and baseCommit. By default start workers from the latest commit of the base branch ${bounded(delegation.baseBranch, MAX_PATH_LENGTH)}: call get_launch_options and pass coordinatorBase.baseBranch and coordinatorBase.baseCommit unchanged. ` +

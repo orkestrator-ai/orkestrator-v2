@@ -10,7 +10,7 @@ import { graphBuiltInTemplate } from "./builtins/index.js";
 
 /**
  * `child` (user scope): one reviewer that reads the code under a `depth`
- * parameter, a gate on its findings (reading `strict`) and a fixer.
+ * parameter, a gate on its findings (reading `strict`) and an addresser.
  */
 export function childTemplate(): GraphTemplateV1 {
   return {
@@ -25,7 +25,7 @@ export function childTemplate(): GraphTemplateV1 {
     ],
     roles: [
       { key: "checker", multiplicity: "one" },
-      { key: "fixer", multiplicity: "one" },
+      { key: "addresser", multiplicity: "one" },
     ],
     inputs: [{ name: "code", type: "workspace@1" }],
     outputs: [
@@ -72,7 +72,7 @@ export function childTemplate(): GraphTemplateV1 {
       {
         id: "fix",
         kind: "agent",
-        role: "fixer",
+        role: "addresser",
         capabilities: { profile: "builder" },
         workspaceAccess: "write",
         prompt: { template: "Fix.\n\n{{> input.report}}\n\n{{> input.code}}\n" },
@@ -114,7 +114,7 @@ export function auditNode(overrides: Partial<GraphSubgraphNode> = {}): GraphSubg
     kind: "subgraph",
     template: { scope: "user", id: "child" },
     params: { strict: { param: "flag" } },
-    roles: { checker: "worker", fixer: "worker" },
+    roles: { checker: "worker", addresser: "worker" },
     inputs: [{ name: "code", type: "workspace@1" }],
     outputs: [
       { name: "report", type: "review-report@1" },
@@ -141,7 +141,7 @@ export function parentTemplate(node: GraphSubgraphNode = auditNode()): GraphTemp
   });
   template.outputs = [
     { name: "report", type: "review-report@1", from: { node: node.id, port: "report" } },
-    { name: "changes", type: "fix-result@1", from: { node: "build", port: "report" } },
+    { name: "changes", type: "address-findings-result@1", from: { node: "build", port: "report" } },
     ...((node.outputs ?? []).some((port) => port.name === "fixed")
       ? [
           {

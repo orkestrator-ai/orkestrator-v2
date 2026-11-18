@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import {
   isActiveBuildPhase,
-  REVIEW_PACKAGE_SESSION_LABEL,
   reviewValidationStage,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
@@ -60,6 +59,7 @@ const PHASE_LABELS: Record<string, string> = {
   "addressing-findings": "Addressing findings",
   verifying: "Verifying",
   reworking: "Reworking",
+  "preparing-package": "Preparing review package",
   "creating-pr": "Creating pull request",
   "resolving-conflicts": "Resolving conflicts",
   paused: "Paused",
@@ -82,6 +82,7 @@ const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
   "addressing-findings": "Retry Address Findings Stage",
   verifying: "Retry Verification Stage",
   reworking: "Retry Rework Stage",
+  "preparing-package": "Retry Review Preparation",
   "creating-pr": "Retry PR Stage",
   "resolving-conflicts": "Retry Conflict Resolution",
 };
@@ -93,6 +94,7 @@ const RESTART_STAGE_LABELS: Partial<Record<ResumableBuildPhase, string>> = {
   "addressing-findings": "Restart Address Findings Stage",
   verifying: "Restart Verification Stage",
   reworking: "Restart Rework Stage",
+  "preparing-package": "Restart Review Preparation",
   "creating-pr": "Restart PR Stage",
   "resolving-conflicts": "Restart Conflict Resolution",
 };
@@ -167,15 +169,10 @@ export function BuildChatTab({
         ? (pipeline.phase as ResumableBuildPhase)
         : undefined;
   const validationRestartTarget = reviewValidationStage(pipeline, currentStagePhase);
-  const currentStageSession = pipeline.sessions[pipeline.currentSessionIndex];
-  const dedicatedPreparationRunning =
-    (currentStagePhase === "building" || currentStagePhase === "reworking") &&
-    currentStageSession?.phase === (currentStagePhase === "building" ? "build" : "rework") &&
-    currentStageSession.label === REVIEW_PACKAGE_SESSION_LABEL;
   const restartCurrentStageLabel =
     validationRestartTarget === "validation"
       ? "Restart Validation"
-      : validationRestartTarget === "review-package" || dedicatedPreparationRunning
+      : validationRestartTarget === "review-package"
         ? "Restart Review Preparation"
         : currentStagePhase === "creating-pr" && pushesOnly
           ? "Restart Push Stage"

@@ -404,3 +404,27 @@ finished with 38 passed, one skipped and one failed in 147.5 s.
 `mise run flaky:recurrence -- 1012 --base 259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`
 reported the case open. Design 00016 changes the quote renderer and has
 no edits to the tool group's animation or its test.
+
+## Recurrence (2026-11-18, workflow vocabulary review)
+
+The component check started at `a1289718a` on base
+`b2c91abb94de8144c119aeccf4a31cf26b655d3b`. It ran with `mise run test:logged -- --name browser -- mise run test:browser`,
+five Chromium workers and no retries. The check reported 1,773 passed, 155
+skipped and four failed in 1,772.8 s. The case
+`a live group crossing the fold threshold folds into its line with no-preference motion`
+in `e2e/ToolGroupFold.spec.ts:127` measured gaps of 4 px on mobile and 9 px on
+desktop against a 2 px limit at line 170.
+
+The complete owner ran through `mise run test:logged -- --name
+4740-tool-fold-owner -- bun scripts/loopback-network.ts --free-port
+ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts
+e2e/ToolGroupFold.spec.ts --workers=1 --output
+output/playwright/workflow-phase-tool-fold-owner`. It finished with 37 passed,
+one skipped and two failed in 158.9 s, measuring 9 px on mobile at line 170 and
+41 px on desktop at line 149. A one-worker run that also included the
+StreamingTranscript owner exited successfully in 238.4 s. The gap remains
+reproducible even with one worker. These repairs do not touch the fold or
+transcript implementation.
+
+Failure logs are `/tmp/orkestrator-test-run.dLX8UW/browser.log.gz` and
+`/tmp/orkestrator-test-run.h5NAvH/4740-tool-fold-owner.log.gz`.

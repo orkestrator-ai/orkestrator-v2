@@ -30,7 +30,7 @@ describe("CoordinatorWorkflowStoreBanner", () => {
     const banner = screen.getByRole("alert");
     expect(banner.textContent).toContain("Coordinator work records are full.");
     expect(banner.textContent).toContain("New launches are refused");
-    expect(banner.textContent).toContain("will not wake the coordinator");
+    expect(banner.textContent).toContain("will not wake the Coordinator");
     expect(banner.textContent).toContain("Delete finished worker environments");
   });
 });

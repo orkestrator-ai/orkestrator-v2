@@ -350,7 +350,7 @@ test("leaf account-switch envelopes reach one toast through the command node", a
   expect(mockToastInfo).toHaveBeenCalledTimes(1);
   expect(mockToastInfo.mock.calls[0]?.[1]).toMatchObject({
     id: "coordinator-account-switch:bk_leaf:leaf-switch",
-    description: "The Leaf coordinator switched the active Claude account on Leaf to “Spare”.",
+    description: "The Leaf Coordinator switched the active Claude account on Leaf to “Spare”.",
   });
   view.unmount();
   await settle();

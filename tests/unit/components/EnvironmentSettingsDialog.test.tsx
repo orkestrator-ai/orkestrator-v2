@@ -383,8 +383,7 @@ describe("EnvironmentSettingsDialog", () => {
     // out, so the class contract stands in for the measurement: a fixed row
     // height with no wrapping is what clipped the two agents added last.
     expect(tabList.className).toContain("flex-wrap");
-    expect(tabList.className).toContain("h-auto");
-    expect(/(^|\s)h-10(\s|$)/.test(tabList.className)).toBe(false);
+    expect(/(^|\s)h-\d+(\s|$)/.test(tabList.className)).toBe(false);
     expect(screen.getByText("claude-review")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("claude-skill").length).toBeGreaterThan(0));
     expect(screen.getByText("Project")).toBeTruthy();

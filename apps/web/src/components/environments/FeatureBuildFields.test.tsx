@@ -107,7 +107,7 @@ describe("FeatureBuildFields intent guidance", () => {
   test("says a prompt makes a prompt environment whose review and PR are started separately", () => {
     renderInAppCommandScope(<Harness intent="prompt" onModels={() => undefined} />);
     expect(screen.getByTestId("build-intent-guidance").textContent).toBe(
-      "Creates a prompt environment: the agent runs one prompt; start review and the PR by hand or from a coordinator.",
+      "Creates a prompt environment: the agent runs one prompt; start review and the PR by hand or from a Coordinator.",
     );
   });
 });

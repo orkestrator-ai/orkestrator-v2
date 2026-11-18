@@ -3072,7 +3072,7 @@ the main coordinator has four tools (capability `accounts`, plus
   permission it creates a `switch-agent-account` request the user approves
   in the same dialog as `request_environment_deletion`. With the `scheduleId`
   of a self-timer that carries the user's permission it switches at once, and
-  so it does when the user ticked "Let coordinators switch accounts without
+  so it does when the user ticked "Let Coordinators switch accounts without
   asking" for that provider in Settings on the coordinator's machine (within
   an hourly limit, never to a signed-out or used-up account; see
   [agent-accounts.md](agent-accounts.md#switching-without-asking)). The result's

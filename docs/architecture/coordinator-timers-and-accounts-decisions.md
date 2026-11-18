@@ -284,7 +284,7 @@ environments in 2 hours. See if any of them have hit usage limits, then
 switch to another account that has usage allocation left." Everything has
 deterministic evidence only.
 
-With "Let coordinators switch accounts without asking" ticked in Settings for a
+With "Let Coordinators switch accounts without asking" ticked in Settings for a
 provider, a switch runs at once instead of waiting for approval, within the
 limits in "Standing permission".
 

@@ -1224,7 +1224,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
     const title = screen.getByRole("button", { name: "Pause" }).getAttribute("title") ?? "";
-    expect(title).toContain("this project's coordinator");
+    expect(title).toContain("this project's Coordinator");
     expect(title).toContain("mail and new turns are held");
   });
 

@@ -722,10 +722,7 @@ export function SharedNativeAgentController({
     closeMenu: closeFileMentionMenu,
     serializeForLLM,
     createMention,
-  } = useComposerFileMentions(
-    canSearchFiles ? data.containerId : undefined,
-    canSearchFiles ? (envWorktreePath ?? coordinatorWorkspacePath) : undefined,
-  );
+  } = useComposerFileMentions(data.containerId, envWorktreePath ?? coordinatorWorkspacePath);
   // Bound after `submit` exists; the menu's "Send as text" only needs a stable handle.
   const sendAsTextRef = useRef<() => void>(() => {});
   const sendDraftAsText = useCallback(() => sendAsTextRef.current(), []);
@@ -4267,8 +4264,9 @@ export function SharedNativeAgentController({
           isSending={isDispatching || isSubmitting || preparingSend}
           isLoading={isTurnActive}
           menus={
-            fileMentionMenuOpen ? (
+            <>
               <FileMentionMenu
+                open={fileMentionMenuOpen}
                 files={filteredFiles}
                 loading={fileSearch.isLoading}
                 onRetry={
@@ -4283,9 +4281,8 @@ export function SharedNativeAgentController({
                 onSelect={handleFileMentionSelect}
                 onClose={closeFileMentionMenu}
               />
-            ) : (
-              commandComposer.menuElement
-            )
+              {!fileMentionMenuOpen && commandComposer.menuElement}
+            </>
           }
           primaryControls={
             composer ? (

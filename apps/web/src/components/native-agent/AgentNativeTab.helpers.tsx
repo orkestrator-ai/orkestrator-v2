@@ -1053,23 +1053,22 @@ export function UnassignedNativeAgentComposer({
           placeholder={placeholder ?? "Ask an agent anything…"}
           disabled={disabled}
           menus={
-            fileMentionMenuOpen ? (
-              <FileMentionMenu
-                files={filteredFiles}
-                loading={fileSearch.isLoading}
-                onRetry={
-                  fileSearch.error
-                    ? () => {
-                        inputRef.current?.focus();
-                        void fileSearch.refresh();
-                      }
-                    : undefined
-                }
-                selectedIndex={fileMentionSelectedIndex}
-                onSelect={handleFileMentionSelect}
-                onClose={closeFileMentionMenu}
-              />
-            ) : null
+            <FileMentionMenu
+              open={fileMentionMenuOpen}
+              files={filteredFiles}
+              loading={fileSearch.isLoading}
+              onRetry={
+                fileSearch.error
+                  ? () => {
+                      inputRef.current?.focus();
+                      void fileSearch.refresh();
+                    }
+                  : undefined
+              }
+              selectedIndex={fileMentionSelectedIndex}
+              onSelect={handleFileMentionSelect}
+              onClose={closeFileMentionMenu}
+            />
           }
           primaryControls={
             <>

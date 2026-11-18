@@ -8,6 +8,7 @@ import type { FileCandidate } from "@/types";
 
 /** Tallest the menu grows when the viewport has room (Tailwind `max-h-96`). */
 const PREFERRED_MAX_HEIGHT_PX = 384;
+const LOADING_MESSAGE = "Loading workspace files…";
 
 interface FileMentionMenuProps {
   files: FileCandidate[];
@@ -19,6 +20,21 @@ interface FileMentionMenuProps {
 }
 
 export function FileMentionMenu({
+  open = true,
+  ...props
+}: FileMentionMenuProps & { open?: boolean }) {
+  return (
+    <>
+      {/* Keep this mounted so opening a busy listbox updates an existing live region. */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {open && props.loading ? LOADING_MESSAGE : ""}
+      </div>
+      {open && <FileMentionPopup {...props} />}
+    </>
+  );
+}
+
+function FileMentionPopup({
   files,
   loading,
   onRetry,
@@ -35,7 +51,7 @@ export function FileMentionMenu({
       block: "nearest",
       behavior: "smooth",
     });
-  }, [selectedIndex]);
+  }, [loading, selectedIndex]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -91,8 +107,12 @@ export function FileMentionMenu({
 
   if (loading || files.length === 0) {
     return renderShell(
-      <div className="p-3 text-center text-sm text-muted-foreground" role="status">
-        {loading ? "Loading workspace files…" : "No files or folders found"}
+      <div
+        className="p-3 text-center text-sm text-muted-foreground"
+        aria-hidden={loading || undefined}
+        role={loading ? undefined : "status"}
+      >
+        {loading ? LOADING_MESSAGE : "No files or folders found"}
       </div>,
     );
   }

@@ -9,6 +9,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useNodeScope } from "@/lib/node-scope/providers";
+import { cn } from "@/lib/utils";
 import { useEnvironmentStore, useFilesPanelStore } from "@/stores";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import type { FilesPanelTab } from "@/stores";
@@ -82,10 +83,10 @@ export function FilesPanelHeader({
           <ContextMenu>
             <ContextMenuTrigger asChild disabled={!changeEnvironmentId || !onChooseDiffBase}>
               <span className="inline-flex">
-                <TabsTrigger value="changes" className={TAB_TRIGGER_CLASS}>
+                <TabsTrigger value="changes" className={cn(TAB_TRIGGER_CLASS, "group/changes")}>
                   Changes
                   {changesCount !== null && (changesCount === "?" || changesCount > 0) && (
-                    <span className="ml-1.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-foreground">
+                    <span className="ml-1.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-foreground group-data-[state=active]/changes:bg-black/20 group-data-[state=active]/changes:text-current">
                       {changesCount}
                     </span>
                   )}
@@ -114,10 +115,12 @@ export function FilesPanelHeader({
           </TabsTrigger>
           {pullRequestTabs.map((tab) => {
             const label = `${tab.ref.owner}/${tab.ref.repo} #${tab.ref.number}${tab.title ? ` · ${tab.title}` : ""}`;
+            const value = `pull-request:${tab.key}`;
+            const selected = shownTab === value;
             return (
-              <div key={tab.key} className="group relative flex shrink-0 items-center">
+              <div key={tab.key} className="relative flex shrink-0 items-center">
                 <TabsTrigger
-                  value={`pull-request:${tab.key}`}
+                  value={value}
                   className={`${TAB_TRIGGER_CLASS} gap-1 pr-6`}
                   title={label}
                 >
@@ -125,7 +128,7 @@ export function FilesPanelHeader({
                     <PullRequestStateIcon
                       state={tab.state}
                       isDraft={tab.isDraft ?? false}
-                      className="size-3.5"
+                      className={cn("size-3.5", selected && "text-current")}
                     />
                   ) : (
                     <GitPullRequest className="size-3.5" />
@@ -136,7 +139,12 @@ export function FilesPanelHeader({
                   type="button"
                   aria-label={`Close ${label}`}
                   onClick={() => targetId && closePullRequest(targetId, tab.key)}
-                  className="absolute right-1 rounded p-0.5 text-muted-foreground opacity-60 hover:bg-white/10 hover:text-foreground hover:opacity-100"
+                  className={cn(
+                    "focus-hairline absolute right-1 rounded p-0.5 hover:bg-white/10",
+                    selected
+                      ? "text-primary-foreground [--focus-hairline-color:currentColor]"
+                      : "text-muted-foreground opacity-60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100",
+                  )}
                 >
                   <X className="size-3" />
                 </button>

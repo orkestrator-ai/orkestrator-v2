@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -204,6 +204,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const [rightTab, setRightTab] = useState<RightPaneTab>("chat");
   const [openStoryTabs, setOpenStoryTabs] = useState<string[]>([]);
   const [buildingFeatureId, setBuildingFeatureId] = useState<string | null>(null);
+  const featureTabsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -320,6 +321,20 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       null,
     [projectFeatures, selectedFeatureId],
   );
+  const featureId = selectedFeature?.id;
+  useLayoutEffect(() => {
+    const list = featureTabsRef.current;
+    if (!list) return;
+    const revealSelectedTab = () =>
+      list
+        .querySelector('[role="tab"][aria-selected="true"]')
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    revealSelectedTab();
+    const resize = new ResizeObserver(revealSelectedTab);
+    resize.observe(list);
+    return () => resize.disconnect();
+  }, [featureId, rightTab]);
+
   /**
    * The backend-owned planning exchanges for this project.
    *
@@ -604,8 +619,13 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             onValueChange={(value) => setRightTab(value as RightPaneTab)}
             className="h-full min-h-0 gap-0"
           >
-            <div className="flex h-14 items-center gap-3 border-b border-border px-4">
-              <TabsList variant="underline" aria-label="Feature views">
+            <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-1">
+              <TabsList
+                ref={featureTabsRef}
+                variant="underline"
+                aria-label="Feature views"
+                className="min-w-[min(100%,12rem)] flex-1 overflow-x-auto"
+              >
                 <TabsTrigger value="chat" className={cn(COMPACT_TAB_TRIGGER_CLASS, "gap-1.5")}>
                   <MessageSquare className="h-3.5 w-3.5" />
                   Chat
@@ -624,41 +644,32 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   );
                   if (!story) return null;
                   return (
-                    <TabsTrigger
-                      key={storyId}
-                      value={`story:${storyId}`}
-                      aria-label={formatStoryTabTitle(story)}
-                      className={cn(COMPACT_TAB_TRIGGER_CLASS, "group gap-1.5")}
-                    >
-                      <Sparkles className="h-3.5 w-3.5" />
-                      {formatStoryTabTitle(story)}
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Close ${story.title}`}
-                        className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          closeStoryTab(storyId);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key !== "Enter" && event.key !== " ") return;
-                          event.preventDefault();
-                          event.stopPropagation();
-                          closeStoryTab(storyId);
-                        }}
+                    <div key={storyId} className="relative flex max-w-full shrink-0 items-center">
+                      <TabsTrigger
+                        value={`story:${storyId}`}
+                        aria-label={story.title}
+                        title={story.title}
+                        className={cn(COMPACT_TAB_TRIGGER_CLASS, "min-w-0 flex-auto pr-7")}
                       >
-                        <X className="h-3 w-3" />
-                      </span>
-                    </TabsTrigger>
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span className="truncate">{formatStoryTabTitle(story)}</span>
+                      </TabsTrigger>
+                      <button
+                        type="button"
+                        aria-label={`Close ${story.title}`}
+                        className="focus-hairline absolute right-1 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        onClick={() => closeStoryTab(storyId)}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
                   );
                 })}
               </TabsList>
               {selectedFeature.stories.length > 0 && (
                 <Button
                   size="sm"
-                  className="ml-auto gap-1.5"
+                  className="ml-auto shrink-0 gap-1.5"
                   disabled={
                     buildingFeatureId === selectedFeature.id ||
                     hasBlockingConversation ||

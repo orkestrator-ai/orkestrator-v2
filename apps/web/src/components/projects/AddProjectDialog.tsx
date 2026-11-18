@@ -24,7 +24,6 @@ type ProjectSource = "existing" | "scratch";
 
 const PATH_DETECTION_DEBOUNCE_MS = 2000;
 
-/** Matches the bordered option cards used on settings pages. */
 const SOURCE_SELECTOR_TRIGGER_CLASSES =
   "h-auto min-h-10 min-w-0 justify-start px-2 py-1.5 text-left whitespace-normal";
 

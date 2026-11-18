@@ -53,6 +53,7 @@ const SCOPE_LABELS: Record<AgentSkillScope, string> = {
 
 /** Matches the compact tab strip in ActionBar so the two read as one system. */
 const TAB_TRIGGER_CLASSES = "h-7 text-xs";
+const TAB_COUNT_CLASS = "tabular-nums opacity-70 group-data-[state=active]/count:opacity-100";
 
 /**
  * The two panes scroll independently, which needs a definite height. The
@@ -458,16 +459,14 @@ export function SkillsSettings({
       {showPlugins && (
         <Tabs value={view} onValueChange={(value) => setView(value as "skills" | "plugins")}>
           <TabsList variant="pill" aria-label="Skills or plugins">
-            <TabsTrigger value="skills" className={TAB_TRIGGER_CLASSES}>
+            <TabsTrigger value="skills" className={cn(TAB_TRIGGER_CLASSES, "group/count")}>
               Skills
-              {state.scan && <span className="tabular-nums opacity-70">{skills.length}</span>}
+              {state.scan && <span className={TAB_COUNT_CLASS}>{skills.length}</span>}
             </TabsTrigger>
-            <TabsTrigger value="plugins" className={TAB_TRIGGER_CLASSES}>
+            <TabsTrigger value="plugins" className={cn(TAB_TRIGGER_CLASSES, "group/count")}>
               Plugins
               {plugins.state.catalog && !plugins.state.catalog.pluginError && (
-                <span className="tabular-nums opacity-70">
-                  {plugins.state.catalog.plugins.length}
-                </span>
+                <span className={TAB_COUNT_CLASS}>{plugins.state.catalog.plugins.length}</span>
               )}
             </TabsTrigger>
           </TabsList>

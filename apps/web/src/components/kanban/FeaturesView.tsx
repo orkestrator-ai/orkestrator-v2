@@ -97,7 +97,7 @@ function FeatureListItem({
         "w-full rounded-md border px-3 py-2 text-left transition-colors",
         isSelected
           ? "border-primary/40 bg-primary/10"
-          : "border-transparent hover:border-border hover:bg-muted/35",
+          : "border-transparent hover:border-border hover:bg-hover/30",
       )}
     >
       <div className="truncate text-sm font-medium text-foreground">

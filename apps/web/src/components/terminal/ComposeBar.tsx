@@ -526,7 +526,7 @@ export function ComposeBar({
         arbitrary terminal contents, which is why this one is deliberately a
         step lighter.
       */}
-      <div className="flex items-end gap-2 rounded-lg border border-zinc-600 bg-input-surface px-3 py-2 backdrop-blur-md">
+      <div className="flex items-end gap-2 rounded-lg border border-zinc-600 bg-input-surface px-3 py-2 backdrop-blur-md has-[>textarea:focus-visible]:focus-hairline-frame">
         <textarea
           ref={textareaRef}
           value={text}

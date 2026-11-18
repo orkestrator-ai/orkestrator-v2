@@ -260,7 +260,7 @@ function ConversationRow({
       type="button"
       data-testid="agent-mail-conversation-row"
       onClick={onOpen}
-      className="block w-full border-b border-zinc-800/70 px-4 py-2.5 text-left transition-colors hover:bg-foreground/[0.03] focus-visible:bg-foreground/[0.05] focus-visible:outline-none"
+      className="block w-full border-b border-zinc-800/70 px-4 py-2.5 text-left transition-colors hover:bg-foreground/[0.03] focus-hairline"
     >
       <div className="flex items-center gap-1.5 text-xs">
         <ParticipantIcon participant={first} />

@@ -43,6 +43,15 @@
   }
 }
 
+/* Pair with a :has() variant that tracks only the framed input's focus. */
+@utility focus-hairline-frame {
+  outline: 1px solid var(--focus-hairline-color, var(--color-ring));
+  outline-offset: var(--focus-hairline-offset, -2px);
+  @media (forced-colors: active) {
+    outline-color: Highlight;
+  }
+}
+
 /* Visible labels for visually hidden radio inputs use the same indicator. */
 @utility focus-hairline-peer {
   .peer:focus-visible ~ & {

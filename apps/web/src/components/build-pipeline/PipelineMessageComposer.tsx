@@ -378,7 +378,7 @@ export function PipelineMessageComposer({ state }: { state: PipelineComposerStat
         </p>
       )}
       <QueuedPromptStack ref={queueStackRef} queue={queue} onExit={returnFromQueue} />
-      <div className="rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
+      <div className="rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20 has-[textarea:focus-visible]:focus-hairline-frame">
         <div className="flex items-end gap-2">
           <Textarea
             ref={inputRef}

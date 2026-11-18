@@ -52,7 +52,7 @@ import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { isDesignFilePath, openDesignFile } from "@/components/design/design-open-file";
 import { designApiFor } from "@/lib/design-client";
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
-import { visibleTabsOf } from "@/stores/pane-layout-embedded";
+import { visibleTabsOf } from "@/lib/pane-layout-embedded";
 import { openGraphDesignerTab } from "@/components/graph-designer/graph-designer-open-tab";
 import { openGraphRunTab } from "@/components/graph-run/graph-run-open-tab";
 import { openAutoPipelineTab } from "@/components/review/auto-pipeline-open-tab";

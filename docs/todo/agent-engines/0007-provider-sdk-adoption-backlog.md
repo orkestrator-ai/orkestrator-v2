@@ -180,13 +180,14 @@ Codex dynamic tools, checked 2026-11-18 against the `0.169.0` pin:
   served today by the backend's `orkestrator` MCP server, the same server
   every other platform reaches.
 - What that consumer needs: the call must reach the backend with the
-  attempt's own credential; the tool set changes per attempt on a thread
-  that keeps its conversation; the call must not stop at Codex's MCP
-  approval gate; and the turn must be refused before dispatch when the tool
-  is not offered. MCP already provides each of these: a per-attempt
-  credential with `reloadThread` (which keeps the rollout), the narrow
-  workflow-result server bypassing the approval gate, and the 424 refusal
-  when the thread does not list the tool.
+  attempt's own credential, the tool set must change per attempt on a thread
+  that keeps its conversation, and the call must bypass Codex's MCP approval
+  gate. The turn should also be refused before dispatch when the tool is
+  unavailable. The MCP path uses a per-attempt credential with
+  `reloadThread` (which keeps the rollout) and a narrow workflow-result
+  server that bypasses the approval gate. A confirmed missing tool returns
+  424 before dispatch. An unverified inventory, such as after a timeout or
+  RPC failure, permits dispatch.
 - What a dynamic tool would change: the call would be answered inside the
   bridge, which would then need its own backend credential and a proxy route
   to deliver the result (the same hop that kept Claude off
@@ -209,8 +210,9 @@ Codex dynamic tools, checked 2026-11-18 against the `0.169.0` pin:
 - **Codex dynamic tools: adopt one for the workflow-result submit tool, or defer?**
   - **Defer, answer every call with an explicit failure, and record what would justify adoption (recommended).**
     - Pros: no experimental opt-in; one tool path for every platform; the
-      consumer already has everything it needs over MCP; any unexpected call
-      still gets one answer that tells the model and the user why it failed.
+      shared MCP path already serves the workflow-result submit tool; any
+      unexpected call still gets one answer that tells the model and the
+      user why it failed.
     - Cons: no in-bridge tool path exists if a future consumer needs one.
   - **Register the submit tool as a dynamic tool.**
     - Pros: no MCP server, and none of its configuration, on the thread.
@@ -490,17 +492,18 @@ to ask for a specific one. Nothing in the current pins changes those reasons.
 Task 6, Codex dynamic tools. Chose to defer, the recommended option above.
 The consumer examined was the workflow-result submit tool, compared with the
 `orkestrator` MCP server that serves it today; the investigation under task 6
-has the comparison. Nothing that consumer needs is missing from MCP, and a
-dynamic tool would add an experimental opt-in, a second backend credential in
-the bridge and a Codex-only path.
+has the comparison, including the admission check for confirmed missing
+tools. A dynamic tool would add an experimental opt-in, a second backend
+credential in the bridge and a Codex-only path.
 
 The router now answers an `item/tool/call` with exactly one failure: no
 JSON-RPC error, `success: false` and one `inputText` item naming the requested
 tool and saying the session registers no dynamic tools, so the model does not
 retry an empty result. The transcript notice names the tool too; the call's
 arguments are never echoed. The tool label is single-line and capped at 120
-characters. It still counts as an invariant violation, because the bridge
-registers no dynamic tools.
+Unicode code points before the ellipsis. An unusable tool name gets a generic
+failure notice. The call still counts as an invariant violation, because
+the bridge registers no dynamic tools.
 
 What would justify adoption, all of:
 

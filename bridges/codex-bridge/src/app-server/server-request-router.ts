@@ -1054,8 +1054,14 @@ export class ServerRequestRouter {
   }
 }
 
-/** Longest tool label echoed into the transcript and back to the model. */
+/** Maximum tool label length in Unicode code points before the ellipsis. */
 const DYNAMIC_TOOL_NAME_MAX = 120;
+
+function cleanDynamicToolNamePart(value: unknown): string {
+  if (typeof value !== "string") return "";
+  // Normalize controls, format marks, separators and unpaired surrogates.
+  return value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]+/gu, " ").trim();
+}
 
 /**
  * The `namespace.tool` label of a dynamic tool call, or null when the params
@@ -1064,13 +1070,20 @@ const DYNAMIC_TOOL_NAME_MAX = 120;
 export function dynamicToolCallName(params: unknown): string | null {
   if (!params || typeof params !== "object") return null;
   const { namespace, tool } = params as { namespace?: unknown; tool?: unknown };
-  if (typeof tool !== "string") return null;
-  const label = typeof namespace === "string" && namespace ? `${namespace}.${tool}` : tool;
-  // Control characters (newlines included) would let the label break out of
-  // its sentence in the transcript notice.
-  const clean = label.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
-  if (!clean) return null;
-  return clean.length > DYNAMIC_TOOL_NAME_MAX ? `${clean.slice(0, DYNAMIC_TOOL_NAME_MAX)}…` : clean;
+  const name = cleanDynamicToolNamePart(tool);
+  if (!name) return null;
+  const prefix = cleanDynamicToolNamePart(namespace);
+  const label = prefix ? `${prefix}.${name}` : name;
+  if (label.length <= DYNAMIC_TOOL_NAME_MAX) return label;
+
+  let end = 0;
+  let length = 0;
+  for (const character of label) {
+    if (length === DYNAMIC_TOOL_NAME_MAX) return `${label.slice(0, end)}…`;
+    end += character.length;
+    length += 1;
+  }
+  return label;
 }
 
 /**
@@ -1078,7 +1091,7 @@ export function dynamicToolCallName(params: unknown): string | null {
  * with one text item, so the model learns why the call failed rather than
  * retrying an empty result.
  */
-export function unregisteredDynamicToolResponse(tool: string | null): DynamicToolCallResponse {
+function unregisteredDynamicToolResponse(tool: string | null): DynamicToolCallResponse {
   const subject = tool ? `The tool ${tool} is` : "This tool is";
   return {
     contentItems: [

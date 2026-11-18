@@ -284,7 +284,7 @@ export class WebAnnotationService {
     return {
       ...host,
       resultDiffAvailable: async ({ environmentId }) =>
-        (await this.capabilities(environmentId)).operations.resultDiffs,
+        (await this.capabilities(environmentId)).operations.resultDiffs === true,
       get resultDiff() {
         return diffs.enabled ? diffs.toolDiff.bind(diffs) : undefined;
       },

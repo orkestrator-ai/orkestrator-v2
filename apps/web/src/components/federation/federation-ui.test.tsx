@@ -328,7 +328,7 @@ describe("CL-05: machine identity visual rules", () => {
     renderInAppCommandScope(
       <MachineDot colorToken="plum-2030" machineName="Future" decorative={false} />,
     );
-    const dot = screen.getByRole("img", { name: "Future (Unknown colour)" });
+    const dot = screen.getByRole("img", { name: "Future (Unknown color)" });
     expect(dot.getAttribute("data-machine-color")).toBe("plum-2030");
     expect(dot.className).toContain("border-dashed");
     expect(dot.className).not.toContain("bg-violet-500");

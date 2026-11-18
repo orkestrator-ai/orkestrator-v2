@@ -176,6 +176,18 @@ export function sessionLines(session: PublicSessionSummary): string[] {
   ]);
 }
 
+export function humanErrorMessage(message: string, code: string, action?: string): string {
+  // Receipts may predate the copy change or come from an older backend.
+  if (
+    action === "host.update.apply" &&
+    code === "run-cancelled" &&
+    message === "The update was cancelled before the restart"
+  ) {
+    return "The update was canceled before the restart";
+  }
+  return message;
+}
+
 export function receiptLines(receipt: PublicReceipt): string[] {
   return keyValues([
     ["operation", receipt.operationId],
@@ -189,7 +201,12 @@ export function receiptLines(receipt: PublicReceipt): string[] {
     ["execution", receipt.execution?.state],
     ["evidence", receipt.execution?.evidence],
     ["exit code", receipt.execution?.exitCode],
-    ["error", receipt.error ? `${receipt.error.code}: ${receipt.error.message}` : undefined],
+    [
+      "error",
+      receipt.error
+        ? `${receipt.error.code}: ${humanErrorMessage(receipt.error.message, receipt.error.code, receipt.action)}`
+        : undefined,
+    ],
     ["updated", receipt.updatedAt],
     ["retained until", receipt.retainedUntil],
   ]);

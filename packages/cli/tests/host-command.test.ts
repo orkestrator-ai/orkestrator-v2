@@ -280,6 +280,35 @@ describe("orkestrator host maintenance commands", () => {
     expect(actions(gateway)).toContain("host.update.cancel");
   });
 
+  test("formats a saved host update cancellation for human output", async () => {
+    const savedError = {
+      code: "run-cancelled",
+      message: "The update was cancelled before the restart",
+    } as const;
+    const { box } = await fixture(
+      receipt({ state: "cancelled", stage: "cancelled", error: savedError }),
+    );
+    await box.run(["host", "update", "apply", "--yes", "--wait"]);
+
+    const observed = await box.run(["run", "wait", OPERATION]);
+    expect(observed.code).toBe(1);
+    expect(observed.err).toContain(
+      "error [run-cancelled]: The update was canceled before the restart",
+    );
+
+    const receiptView = await box.run(["run", "get", OPERATION]);
+    expect(receiptView.code).toBe(0);
+    expect(receiptView.out).toContain("run-cancelled: The update was canceled before the restart");
+
+    const json = await box.run(["run", "wait", OPERATION, "--json"]);
+    expect(json.code).toBe(1);
+    expect(JSON.parse(json.out)).toMatchObject({
+      ok: false,
+      error: { ...savedError, exitCode: 1 },
+      receipt: { state: "cancelled", stage: "cancelled", error: savedError },
+    });
+  });
+
   test("toolchain repair --wait follows the task to the end", async () => {
     const { box, gateway } = await fixture(
       receipt({ action: "host.toolchain.repair", state: "succeeded", stage: "completed" }),

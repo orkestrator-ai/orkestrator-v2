@@ -107,7 +107,7 @@ export function TodoToolPart({
             {isPartialList
               ? `${totalCount} task${totalCount === 1 ? "" : "s"} tracked`
               : `${completedCount}/${totalCount} complete`}
-            {cancelledCount > 0 ? ` (${cancelledCount} cancelled)` : ""}
+            {cancelledCount > 0 ? ` (${cancelledCount} canceled)` : ""}
             {truncatedCount > 0 ? ` +${truncatedCount} more` : ""}
           </span>
         )}
@@ -173,7 +173,7 @@ export function TodoToolPart({
                         <span className="shrink-0 text-[10px] text-yellow-500">in progress</span>
                       )}
                       {todo.status === "cancelled" && (
-                        <span className="shrink-0 text-[10px] text-red-500">cancelled</span>
+                        <span className="shrink-0 text-[10px] text-red-500">canceled</span>
                       )}
                     </div>
                   );

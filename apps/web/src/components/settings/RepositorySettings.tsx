@@ -617,7 +617,7 @@ export function RepositorySettings({
                 Any image or favicon, shown beside the project name in the sidebar whichever way it
                 is grouped. Choosing first looks for the project&apos;s own favicon or logo, then
                 browses from its folder. Without one, the sidebar shows a home in the machine&apos;s
-                colour.
+                color.
               </p>
             </div>
             <div className="grid gap-2">

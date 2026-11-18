@@ -101,6 +101,14 @@ describe("request cards", () => {
     );
   });
 
+  test("canceling a queued request confirms it was never sent", async () => {
+    seedWithRequest("queued");
+    renderInAppCommandScope(<AnnotationHarness />);
+    const article = await card();
+    fireEvent.click(within(article).getByRole("button", { name: "Cancel request" }));
+    expect(await within(article).findByText("Request canceled. It was never sent.")).toBeTruthy();
+  });
+
   test("shows American spelling for a stored canceled request", async () => {
     seedWithRequest("cancelled", {
       cancelSource: "user",

@@ -23,7 +23,7 @@ function statusLabel(command: UserCommandRecord): { text: string; className: str
     case "running":
       return { text: "Running", className: "border-sky-500/40 text-sky-300" };
     case "cancelled":
-      return { text: "Cancelled", className: "border-border text-muted-foreground" };
+      return { text: "Canceled", className: "border-border text-muted-foreground" };
     case "failed":
       return { text: "Failed to run", className: "border-destructive/50 text-destructive" };
     case "exited":

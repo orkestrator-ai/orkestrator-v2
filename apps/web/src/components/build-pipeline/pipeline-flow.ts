@@ -21,6 +21,7 @@ import {
   type DeliveryPolicy,
 } from "@orkestrator/protocol/ticket-sections";
 import {
+  BUILD_CANCELLED_ERROR,
   REVIEW_PACKAGE_SESSION_LABEL,
   isActiveBuildPhase,
   isBranchPushSession,
@@ -54,6 +55,13 @@ import {
   validationRunFromSummary,
   type ValidationSummary,
 } from "./pipeline-stage-groups";
+
+/** Format the stored cancellation prefix for display, including stop warnings. */
+export function buildErrorLabel(error: string): string {
+  return error.startsWith(BUILD_CANCELLED_ERROR)
+    ? `Build canceled${error.slice(BUILD_CANCELLED_ERROR.length)}`
+    : error;
+}
 
 export type PipelineFlowNodeKind =
   | "ticket"

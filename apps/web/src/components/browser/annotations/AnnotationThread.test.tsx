@@ -46,6 +46,35 @@ describe("annotation threads and list", () => {
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
+  test("renders saved request states with American cancellation spelling", async () => {
+    const annotationId = "annotation-history";
+    const states = ["cancelled", "cancelling", "completed"] as const;
+    backend.seed(
+      { id: annotationId, title: "Request history" },
+      states.map((state, index) =>
+        fixtureEntry({
+          id: `history-${state}`,
+          annotationId,
+          sequence: index + 1,
+          provenance: "system",
+          kind: "lifecycle",
+          body: null,
+          lifecycle: {
+            event: state === "cancelling" ? "request-sent" : "request-settled",
+            state,
+          },
+        }),
+      ),
+    );
+    openThread(annotationId);
+    renderInAppCommandScope(<AnnotationHarness />);
+
+    const discussion = within(await screen.findByRole("list", { name: "Discussion" }));
+    expect(discussion.getByText(/^Request finished \(canceled\) ·/)).toBeTruthy();
+    expect(discussion.getByText(/^Request sent \(canceling\) ·/)).toBeTruthy();
+    expect(discussion.getByText(/^Request finished \(completed\) ·/)).toBeTruthy();
+  });
+
   test("distinguishes human, agent, system, and imported page rows", async () => {
     backend.seed({ id: "annotation-a", title: "Header spacing" }, [
       fixtureEntry({

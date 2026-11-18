@@ -1328,7 +1328,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     // inspected by default.
     selectFlowNode("Review package");
     expect(screen.queryByText("Stopping") === null).toBe(true);
-    expect(inspector().getByText("cancelled")).toBeTruthy();
+    expect(inspector().getByText("canceled")).toBeTruthy();
   });
 
   test("keeps a running validation clock live while the workflow is cancelling", () => {

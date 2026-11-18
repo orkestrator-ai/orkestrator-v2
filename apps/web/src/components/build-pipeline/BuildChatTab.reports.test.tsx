@@ -283,7 +283,7 @@ describe("BuildChatTab reports and verdicts", () => {
       sessions: [pipeline.sessions[0]!, verification],
     });
     expect(screen.queryByText("Verification failed") === null).toBe(true);
-    expect(screen.getByText("Build cancelled")).toBeTruthy();
+    expect(screen.getByText("Build canceled")).toBeTruthy();
   });
 
   test("does not reveal a verdict while an idle session awaits structured output", () => {

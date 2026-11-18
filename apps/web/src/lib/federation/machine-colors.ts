@@ -74,7 +74,7 @@ const LABELS: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> 
   orange: "Orange",
   rose: "Rose",
   slate: "Slate",
-  neutral: "Unknown colour",
+  neutral: "Unknown color",
 };
 
 export function machineDotClass(token: string | undefined): string {

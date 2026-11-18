@@ -115,7 +115,7 @@ function normalizeSkillScan(value: unknown, provider: AgentSkillProvider): Agent
     !Array.isArray(candidate.skills) ||
     !Array.isArray(candidate.errors)
   ) {
-    throw new Error("The backend returned an unreadable skill catalogue");
+    throw new Error("The backend returned an unreadable skill catalog");
   }
   // The response's own `provider` is ignored: state is keyed by the tab that
   // was asked, and a mismatched echo must not file results under another tab.

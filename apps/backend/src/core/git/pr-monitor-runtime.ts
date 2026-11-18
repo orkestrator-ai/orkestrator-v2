@@ -58,7 +58,7 @@ export type PrMonitorRuntimeOptions = {
    * `scheduleMergeCleanupRecovery` from `commands-servers.ts` in the backend
    * (`index.ts`) and in command fixtures. Without it a merged observation's
    * cleanup is skipped with one warning; the cleanup intent stays durable on
-   * the environment, and `get_environments` resumes it through its own context.
+   * the environment for backend startup to recover.
    */
   scheduleMergeCleanup?: MergeCleanupScheduler;
   /** Clock and timers for deterministic runtime integration tests. */

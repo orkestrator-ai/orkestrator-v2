@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
 import { OrkestratorBackend } from "./index.js";
+import { createEnvironment } from "./storage.js";
+import { seedStore, storageDatabase } from "./storage-test-support.js";
 
 test("the production backend wires PR terminal effects to merge cleanup recovery", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "ork-backend-pr-cleanup-"));
@@ -49,9 +51,7 @@ test("the production backend wires PR terminal effects to merge cleanup recovery
   }
 });
 
-test("backend startup restores saved auto-merge and polls without any client request", async () => {
-  const { createEnvironment } = await import("./storage.js");
-  const { seedStore } = await import("./storage-test-support.js");
+test.each([false, true])("startup restores PR and diff monitors (%s)", async (autoMerge) => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "ork-auto-merge-boot-"));
   const url = "https://github.com/o/r/pull/9";
   seedStore(dataDir, "environments.json", [
@@ -67,8 +67,10 @@ test("backend startup restores saved auto-merge and polls without any client req
       prState: "open",
       hasMergeConflicts: false,
       prMergeability: "clean",
-      autoMerge: true,
+      autoMerge,
+      ...(!autoMerge ? { cleanupAfterMergeRequestedAt: new Date().toISOString() } : {}),
     },
+    { ...createEnvironment("other-project"), id: "unrelated-env" },
   ]);
   const backend = new OrkestratorBackend({
     dataDir,
@@ -126,17 +128,71 @@ test("backend startup restores saved auto-merge and polls without any client req
   const reachability = internals.containerHostReachability
     ? spyOn(internals.containerHostReachability, "check").mockResolvedValue(undefined)
     : null;
+  const scheduleCleanup = spyOn(context.runtime.environments, "scheduleMergeCleanupRecovery");
+  let unsubscribe: (() => void) | undefined;
   try {
     await backend.init();
+    if (!autoMerge) {
+      expect(scheduleCleanup).toHaveBeenCalledWith("auto-env", expect.any(Function));
+      scheduleCleanup.mockClear();
+    }
     expect(service.trackedIds()).toContain("auto-env");
+    expect(context.runtime.diffStats.service.trackedIds()).toContain("auto-env");
     expect(detections).toBe(0);
     expect(timers.length).toBeGreaterThan(0);
+    const checked = new Promise<void>((resolve) => {
+      unsubscribe = context.runtime.prMonitor.onEvent((event) => {
+        if (
+          event.environmentId === "auto-env" &&
+          "state" in event &&
+          event.state.lastSuccessfulCheckAt
+        ) {
+          resolve();
+        }
+      });
+    });
     timers.shift()!();
-    await mergeCompleted;
+    await checked;
     expect(detections).toBe(1);
-    expect((await context.storage.getEnvironment("auto-env"))?.autoMergePrUrl).toBe(url);
+    if (autoMerge) {
+      await mergeCompleted;
+      expect((await context.storage.getEnvironment("auto-env"))?.autoMergePrUrl).toBe(url);
+    } else {
+      const loadAll = spyOn(context.storage, "loadEnvironments");
+      const ownerReads = spyOn(storageDatabase(context.storage), "readStoreRowsByOwner");
+      const syncPr = spyOn(context.runtime.prMonitor, "sync");
+      const syncDiff = spyOn(context.runtime.diffStats, "sync");
+      try {
+        expect(await backend.invoke("get_environments", { projectId: "project" })).toMatchObject([
+          { id: "auto-env", prUrl: url },
+        ]);
+        expect(
+          await backend.invoke("get_environment_snapshots", {
+            projectId: "project",
+            includePrMonitorHealth: true,
+          }),
+        ).toMatchObject([{ id: "auto-env", prUrl: url, prMonitorConfirmed: true }]);
+        expect(ownerReads.mock.calls).toEqual([
+          ["environments", "project"],
+          ["environments", "project"],
+        ]);
+        // Observe the real sync entry points as well as reads, including work
+        // that could have been queued to run after the command resolves.
+        expect(syncPr).not.toHaveBeenCalled();
+        expect(syncDiff).not.toHaveBeenCalled();
+        expect(loadAll).not.toHaveBeenCalled();
+        expect(scheduleCleanup).not.toHaveBeenCalled();
+      } finally {
+        syncDiff.mockRestore();
+        syncPr.mockRestore();
+        ownerReads.mockRestore();
+        loadAll.mockRestore();
+      }
+    }
   } finally {
+    unsubscribe?.();
     await backend.shutdown();
+    scheduleCleanup.mockRestore();
     start.mockRestore();
     reachability?.mockRestore();
     await rm(dataDir, { recursive: true, force: true });

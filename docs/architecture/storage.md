@@ -242,8 +242,10 @@ caller to check.
 reader for the project list and snapshot payloads. SQLite supplies the owned
 rows in persisted order. The repository applies the same record normalization
 and stable sort by environment order as the full-store read, preserving
-persisted order on ties. The commands still trigger their existing node-wide
-monitor reconciliation where applicable.
+persisted order on ties. Backend startup and lifecycle changes reconcile the
+node's diff watchers and PR monitors. Project list and snapshot requests do
+not trigger those scans. Health-enabled snapshots join the requested
+environments with the PR monitor's announced state.
 
 To-do 8309 (retired), task 1, is done. Reusing the indexed reader keeps
 project lookups current with storage mutations and avoids maintaining an

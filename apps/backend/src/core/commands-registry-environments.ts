@@ -126,7 +126,6 @@ import {
   discardRecoveryCopyTask,
   runEnvironmentSetupNow,
   deleteEnvironmentTask,
-  scheduleMergeCleanupRecovery,
   logEnvironmentLifecycleFailure,
   enqueueEnvironmentLifecycleOperation,
 } from "./commands-helpers.js";
@@ -211,18 +210,6 @@ export function registerEnvironmentCommands(
         });
       }
     }
-    for (const environment of synced) {
-      if (environment.cleanupAfterMergeRequestedAt) {
-        scheduleMergeCleanupRecovery(environment.id, context);
-      }
-    }
-    // Same recovery argument for diff watchers: reconciling here re-arms them
-    // after a backend restart without waiting for a lifecycle command.
-    void context.runtime.diffStats.sync(context).catch(() => undefined);
-    // Cleanup-after-merge intent also makes exact-URL PR monitoring authoritative
-    // after a restart. The monitor never resubmits the merge; it only confirms a
-    // terminal state so the persisted deletion follow-up can resume safely.
-    void context.runtime.prMonitor.sync(context).catch(() => undefined);
     return synced.map(toClientEnvironment);
   });
   register(getEnvironmentSnapshotsCommand, async (args, context) => {
@@ -237,9 +224,7 @@ export function registerEnvironmentCommands(
     // A node summary read (`NODE_SUMMARY_ENVIRONMENT_READ_ARGS`). The health is
     // runtime monitor state that the environment manifest revision does not
     // cover, so this form is never answered `unchanged`.
-    // Summary-only command nodes must also re-arm polling after a leaf restart.
-    // Reconciliation schedules detection; the response need not await GitHub.
-    await runtime.prMonitor.sync(context);
+    // Startup and lifecycle handlers own monitor reconciliation.
     const environments = await load();
     const announced = runtime.prMonitor.announcedStates();
     // Match the local sidebar's pipeline.environmentId membership. Persisted

@@ -54,10 +54,6 @@ describe("environment status and settings commands", () => {
 
       const { context } = createContext([], { dataDir });
       context.storage = storage;
-      // These services independently reconcile the whole node. Measure the
-      // commands' project lookup without their background storage reads.
-      const diffSync = spyOn(context.runtime.diffStats, "sync").mockResolvedValue(undefined);
-      const prSync = spyOn(context.runtime.prMonitor, "sync").mockResolvedValue(undefined);
       const commands = createCommandRegistry();
       const database = storageDatabase(storage);
       const ownerReads = spyOn(database, "readStoreRowsByOwner");
@@ -105,8 +101,76 @@ describe("environment status and settings commands", () => {
       } finally {
         fullReads.mockRestore();
         ownerReads.mockRestore();
-        prSync.mockRestore();
-        diffSync.mockRestore();
+        context.runtime.shutdown();
+        await storage.close();
+      }
+    });
+  });
+
+  test.each(["missing", "duplicate"] as const)(
+    "preserves project lookup parity for legacy documents with %s row keys",
+    async (invalidKey) => {
+      await withTemporaryStorage(async (storage, dataDir) => {
+        const projectId = "project-1";
+        const older = createEnvironment({
+          id: "older",
+          name: "Older",
+          order: 2,
+          setupScriptsComplete: true,
+        });
+        const tied = createEnvironment({ id: "tied", name: "Tied", order: 2 });
+        const first = createEnvironment({ id: "first", name: "First", order: 0 });
+        const unrelated = createEnvironment({ id: "unrelated", projectId: "project-2" });
+        try {
+          seedStore(dataDir, "environments.json", [
+            older,
+            unrelated,
+            { ...tied, id: invalidKey === "missing" ? undefined : older.id },
+            first,
+          ]);
+          expect(storageDatabase(storage).readStoreHeader("environments")?.mode).toBe("document");
+          const expected = (await storage.loadEnvironments()).filter(
+            (environment) => environment.projectId === projectId,
+          );
+          expect(expected.map((environment) => environment.name)).toEqual([
+            first.name,
+            older.name,
+            tied.name,
+          ]);
+          expect(expected[1]).toMatchObject({ setupPhase: "ready", setupOverride: false });
+          expect(await storage.getEnvironmentsByProject(projectId)).toEqual(expected);
+          expect(await storage.getEnvironmentsByProject("empty")).toEqual([]);
+        } finally {
+          await storage.close();
+        }
+      });
+    },
+  );
+
+  test("reads environment membership from a buffered atomic write", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const kept = createEnvironment({ id: "kept", order: 2 });
+      const moved = createEnvironment({ id: "moved", order: 0, projectId: "project-2" });
+      const { context, repos } = storageInternals(storage);
+      const ownerReads = spyOn(storageDatabase(storage), "readStoreRowsByOwner");
+      try {
+        seedStore(dataDir, "environments.json", [kept, moved]);
+        expect(await storage.getEnvironmentsByProject(kept.projectId)).toMatchObject([
+          { id: kept.id },
+        ]);
+        ownerReads.mockClear();
+        await repos.projects.enqueueEnvironmentMutation(() =>
+          context.atomically(async () => {
+            repos.projects.saveEnvironment({ ...moved, projectId: kept.projectId });
+            const expected = await storage.loadEnvironments();
+            expect(expected.map((environment) => environment.id)).toEqual([moved.id, kept.id]);
+            expect(await storage.getEnvironmentsByProject(kept.projectId)).toEqual(expected);
+            expect(await storage.getEnvironmentsByProject(moved.projectId)).toEqual([]);
+            expect(ownerReads).not.toHaveBeenCalled();
+          }),
+        );
+      } finally {
+        ownerReads.mockRestore();
         await storage.close();
       }
     });

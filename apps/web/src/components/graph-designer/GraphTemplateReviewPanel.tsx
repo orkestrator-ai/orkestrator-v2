@@ -61,7 +61,7 @@ export function GraphReviewDiff({ diff }: { diff: GraphTemplateReviewDiff }) {
                   className={cn(
                     "px-2 whitespace-pre-wrap break-all",
                     line.type === "add" && "bg-success/10 text-success",
-                    line.type === "remove" && "bg-red-500/10 text-red-300",
+                    line.type === "remove" && "bg-failure/10 text-failure",
                     line.type === "no-newline" && "text-muted-foreground",
                   )}
                 >

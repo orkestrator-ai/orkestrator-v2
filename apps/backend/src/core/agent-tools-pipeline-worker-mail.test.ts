@@ -100,7 +100,7 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
     await storage.synchronizeAgentMailboxes();
     await workflowResults.prepare({
       resultKey,
-      kind: "fix-result",
+      kind: "address-findings-result",
       environmentId: "e1",
       projectId: "p1",
       provider,
@@ -118,7 +118,7 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
       (tool) => tool.name,
     );
     for (const name of AGENT_MAIL_TOOL_NAMES) expect(names).toContain(name);
-    expect(names).toContain("submit_fix_result");
+    expect(names).toContain("submit_address_findings_result");
 
     const listed = await rpc(connection.url, connection.token, "tools/call", {
       name: "list_mailboxes",
@@ -199,7 +199,7 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
     const names = (await rpc(connection.url, connection.token, "tools/list")).result?.tools?.map(
       (tool) => tool.name,
     );
-    expect(names).toContain("submit_fix_result");
+    expect(names).toContain("submit_address_findings_result");
     expect(names).not.toContain("send_message");
   });
 

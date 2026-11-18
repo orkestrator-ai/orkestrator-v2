@@ -391,7 +391,7 @@ export class FanoutProvider implements BuildPipelineProvider {
       };
     }
     const phase = this.sessionPhases.get(sessionId);
-    if (phase === "build" || phase === "rework") {
+    if (phase === "build" || phase === "rework" || phase === "package-preparation") {
       return { ...base, value: TEST_REVIEW_PREPARATION as T };
     }
     if (phase === "address-findings") return { ...base, value: TEST_ADDRESS_FINDINGS_RESULT as T };

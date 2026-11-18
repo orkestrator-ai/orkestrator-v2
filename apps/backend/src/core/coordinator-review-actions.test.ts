@@ -591,14 +591,14 @@ test("Address Findings opening is presentation-only, stable, and refuses pending
       startedAt: new Date().toISOString(),
     },
   };
-  const first = await openMultiReviewTab(storage, workflow, "fix");
-  const second = await openMultiReviewTab(storage, workflow, "fix");
+  const first = await openMultiReviewTab(storage, workflow, "address-findings");
+  const second = await openMultiReviewTab(storage, workflow, "address-findings");
   expect(second.tabId).toBe(first.tabId);
   expect(JSON.stringify((await storage.getPaneLayout(environmentId))?.root)).toContain(
     "provider-1",
   );
   await expect(
-    openMultiReviewTab(storage, { ...workflow, addressPromptPending: true }, "fix"),
+    openMultiReviewTab(storage, { ...workflow, addressPromptPending: true }, "address-findings"),
   ).rejects.toThrow("pending");
   expect(start).toHaveBeenCalledTimes(1);
 });
@@ -667,7 +667,7 @@ test("address opens the root before persisting a handoff and reports pending wit
         addressRequestId: `multi-review-address:${ready.id}`,
       },
     });
-    expect(outcome.recovery).toContain("Do not send a separate fix prompt");
+    expect(outcome.recovery).toContain("Do not send a separate Address Findings prompt");
   }
   expect(handoffs).toBe(1);
 });
@@ -782,7 +782,7 @@ test("address accepts a renderer-started review with no coordinator association"
     const result = JSON.parse(json).result;
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent.delivery).toBe("async");
-    expect(result.structuredContent.wake).toContain("fix done or failed");
+    expect(result.structuredContent.wake).toContain("Address Findings done or failed");
     const outcome = result.structuredContent as MultiReviewActionResult;
     expect(outcome).toMatchObject({ outcome: "pending", workflow: { id: ready.id } });
     expect(address).toHaveBeenCalledWith(ready.id);
@@ -1085,7 +1085,9 @@ for (const custom of [false, true]) {
 }
 
 for (const alias of [false, true]) {
-  test(`pre-upgrade public launch ${alias ? "alias" : "pending receipt"} replays after migration`, async () => {
+  // The former public names (`fixModel`, `autoFix`) retired with 4740 task 3: a
+  // receipt hashed with them is a different payload, refused rather than replayed.
+  test(`former-name launch ${alias ? "alias" : "pending receipt"} is refused after the rename`, async () => {
     const first = await launch({ autoAddressFindings: false });
     const records = await storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId);
     const requestId = alias ? "old-alias" : "button-1";
@@ -1109,11 +1111,10 @@ for (const alias of [false, true]) {
       "coordinators.json",
     )!;
     seedStore(storage.getDataDir(), "coordinators.json", { ...store, workflows: [upgraded] });
-    const replay = await launch({ requestId, autoAddressFindings: false });
-    expect(replay.workflow.id).toBe(first.workflow.id);
-    expect(start).toHaveBeenCalledTimes(1);
-    await expect(launch({ requestId, autoAddressFindings: true })).rejects.toThrow(
+    await expect(launch({ requestId, autoAddressFindings: false })).rejects.toThrow(
       "different payload",
     );
+    expect(start).toHaveBeenCalledTimes(1);
+    expect((await storage.getMultiReviewWorkflow(first.workflow.id))?.snapshot).toBeDefined();
   });
 }

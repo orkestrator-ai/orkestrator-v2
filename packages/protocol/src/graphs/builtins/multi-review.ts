@@ -27,8 +27,8 @@ export const MULTI_REVIEW_TEMPLATE_STAGES = Object.freeze({
   review: "reviewer",
   consolidate: "consolidate",
   "has-findings": "after-consolidation",
-  fix: "address-findings",
-  "fix-complete": "after-fix",
+  "address-findings": "address-findings",
+  "address-findings-complete": "after-fix",
   "describe-pr": "pr",
   pr: "pr",
 } as const);
@@ -41,11 +41,11 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
     revision: GRAPH_BUILT_IN_TEMPLATE_REVISION,
     name: "Multi Review",
     description:
-      "Prepare and seal one review package, review it with a panel of read-only reviewers, consolidate their reports citing every source finding, then optionally fix and open a pull request. Runs on the Multi Review engine.",
+      "Prepare and seal one review package, review it with a panel of read-only reviewers, consolidate their reports citing every source finding, then optionally address the findings and open a pull request. Runs on the Multi Review engine.",
     engine: "multi-review",
     parameters: [
       {
-        key: "autoFix",
+        key: "autoAddressFindings",
         label: "Address Findings automatically",
         description:
           "Open Address Findings once consolidation reports issues or test coverage gaps. Saved default: off.",
@@ -85,10 +85,10 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         defaultsFrom: ["reviewPreparation", "review"],
       },
       {
-        key: "fixer",
+        key: "addresser",
         label: "Address Findings",
         multiplicity: "one",
-        defaultsFrom: ["fixReviewIssues", "review"],
+        defaultsFrom: ["addressFindings", "review"],
       },
       { key: "describer", label: "Pull request", multiplicity: "one", defaultsFrom: ["pr"] },
     ],
@@ -131,7 +131,7 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         label: "Fixed branch",
         description: "Address Findings's commit, when an Address Findings run ran and completed.",
         required: false,
-        from: port("fix-complete", "code", "complete"),
+        from: port("address-findings-complete", "code", "complete"),
       },
     ],
     workspace: { kind: "environment" },
@@ -216,33 +216,33 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         otherwise: "clean",
       },
       {
-        id: "fix",
+        id: "address-findings",
         kind: "agent",
         label: "Address Findings",
         description:
-          "Today an ordinary interactive Address Findings tab that the user can talk to; it ends when its handoff turn finishes on its own. Here it submits a fix result.",
-        role: "fixer",
-        when: paramIsTrue("autoFix"),
+          "Today an ordinary interactive Address Findings tab that the user can talk to; it ends when its handoff turn finishes on its own. Here it submits an Address Findings result.",
+        role: "addresser",
+        when: paramIsTrue("autoAddressFindings"),
         capabilities: { profile: "builder" },
         workspaceAccess: "write",
         askHuman: true,
-        prompt: { builtIn: "fix-review-issues" },
+        prompt: { builtIn: "address-findings" },
         inputs: [
           { name: "report", type: "review-report@1", render: "json-frame" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [
-          { name: "result", type: "fix-result@1" },
+          { name: "result", type: "address-findings-result@1" },
           { name: "code", type: "workspace@1" },
         ],
       },
       {
-        id: "fix-complete",
+        id: "address-findings-complete",
         kind: "gate",
         label: "Address Findings complete?",
         description: "Only proof that Address Findings completed queues the pull request.",
         inputs: [
-          { name: "result", type: "fix-result@1" },
+          { name: "result", type: "address-findings-result@1" },
           { name: "code", type: "workspace@1" },
         ],
         branches: [
@@ -292,27 +292,39 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
       edge("consolidate-gate", port("consolidate", "report"), target("has-findings", "report")),
       edge("plan-gate", port("plan", "code"), target("has-findings", "code")),
       edge(
-        "findings-fix-report",
+        "findings-address-findings-report",
         port("has-findings", "report", "findings"),
-        target("fix", "report"),
+        target("address-findings", "report"),
       ),
-      edge("findings-fix-code", port("has-findings", "code", "findings"), target("fix", "code")),
-      edge("fix-complete-result", port("fix", "result"), target("fix-complete", "result")),
-      edge("fix-complete-code", port("fix", "code"), target("fix-complete", "code")),
+      edge(
+        "findings-address-findings-code",
+        port("has-findings", "code", "findings"),
+        target("address-findings", "code"),
+      ),
+      edge(
+        "address-findings-complete-result",
+        port("address-findings", "result"),
+        target("address-findings-complete", "result"),
+      ),
+      edge(
+        "address-findings-complete-code",
+        port("address-findings", "code"),
+        target("address-findings-complete", "code"),
+      ),
       // Two producers into each `code` port below, on exclusive outlets of
       // has-findings: a clean report ships the reviewed branch, a complete Address Findings
       // ships its own commit.
       edge("clean-describe", port("has-findings", "code", "clean"), target("describe-pr", "code")),
       edge(
         "fixed-describe",
-        port("fix-complete", "code", "complete"),
+        port("address-findings-complete", "code", "complete"),
         target("describe-pr", "code"),
       ),
       edge("clean-pr", port("has-findings", "code", "clean"), target("pr", "code")),
-      edge("fixed-pr", port("fix-complete", "code", "complete"), target("pr", "code")),
+      edge("fixed-pr", port("address-findings-complete", "code", "complete"), target("pr", "code")),
       edge("describe-pr-pr", port("describe-pr", "description"), target("pr", "description")),
     ],
-    // plan 1 + reviewers 32 + consolidate 1 + fix 1 + describe-pr 1.
+    // plan 1 + reviewers 32 + consolidate 1 + address-findings 1 + describe-pr 1.
     limits: { maxAgentSessions: 36, maxConcurrentAgents: MULTI_REVIEW_MAX_REVIEWERS },
   };
 }

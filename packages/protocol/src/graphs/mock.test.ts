@@ -305,7 +305,9 @@ describe("pins", () => {
       }),
     ).toContain("pins.verify[0]:too_large");
     // Plan ids: a pin may target a node inlined from a sub-graph (item 402).
-    expect(shapeErrors({ "review/fix": ["example"], "a/b/c": ["generated"] })).toEqual([]);
+    expect(shapeErrors({ "review/address-findings": ["example"], "a/b/c": ["generated"] })).toEqual(
+      [],
+    );
     expect(shapeErrors({ "review//fix": ["example"] })).toEqual(["pins.review//fix:pattern"]);
     expect(shapeErrors({ "/fix": ["example"] })).toEqual(["pins./fix:pattern"]);
     expect(parseGraphMockPins({ verify: ["passed"] })).toEqual({
@@ -397,7 +399,7 @@ describe("graphMockPinIssues", () => {
     const target = graphMockPinTargetFromTemplate(template);
     // The template does not know Multi Review's nodes until it is inlined.
     expect(
-      graphMockPinIssues(target, { "review/fix": fix, "review/nowhere": ["example"] }),
+      graphMockPinIssues(target, { "review/address-findings": fix, "review/nowhere": ["example"] }),
     ).toEqual([]);
     // A prefix that is not a sub-graph node names nothing.
     expect(
@@ -411,18 +413,18 @@ describe("graphMockPinIssues", () => {
     expect(
       graphMockPinIssues(planned, {
         "review/consolidate": ["generated"],
-        "review/fix": [{ fail: "provider-error" }, "example"],
+        "review/address-findings": [{ fail: "provider-error" }, "example"],
       }),
     ).toEqual([]);
     expect(
       graphMockPinIssues(planned, {
         "review/nowhere": ["example"],
-        "review/fix": fix,
+        "review/address-findings": fix,
         "review/has-findings": ["example"],
       }).map((issue) => [issue.nodeId, issue.code]),
     ).toEqual([
       ["review/nowhere", "mock-pin-unknown-node"],
-      ["review/fix", "mock-pin-required-port"],
+      ["review/address-findings", "mock-pin-required-port"],
       ["review/has-findings", "mock-pin-node-kind"],
     ]);
   });

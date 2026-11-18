@@ -182,7 +182,7 @@ export function AgentPluginsBrowser({
         </div>
 
         {state.error && state.catalog && (
-          <p role="alert" className="border-b border-zinc-800 px-3 py-2 text-xs text-destructive">
+          <p role="alert" className="border-b border-zinc-800 px-3 py-2 text-xs text-failure">
             Refresh failed: {state.error}
           </p>
         )}
@@ -193,7 +193,7 @@ export function AgentPluginsBrowser({
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : state.error && !state.catalog ? (
-            <p role="alert" className="p-3 text-xs text-destructive">
+            <p role="alert" className="p-3 text-xs text-failure">
               {state.error}
             </p>
           ) : pluginError ? (
@@ -307,7 +307,7 @@ export function AgentPluginsBrowser({
                     </p>
                   )}
                   {skillsError && (
-                    <p role="alert" className="mb-2 text-xs text-destructive">
+                    <p role="alert" className="mb-2 text-xs text-failure">
                       Skill scan failed: {skillsError}
                     </p>
                   )}

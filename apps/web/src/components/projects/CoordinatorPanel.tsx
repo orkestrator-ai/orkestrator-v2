@@ -280,7 +280,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         className="grid h-full place-items-center p-8"
       >
         <div className="max-w-lg rounded-xl border border-destructive/40 bg-card p-6 text-center">
-          <AlertCircle className="mx-auto mb-3 size-8 text-destructive" />
+          <AlertCircle className="mx-auto mb-3 size-8 text-failure" />
           <h2 className="font-semibold">Coordinator unavailable</h2>
           <p className="mt-2 text-sm text-muted-foreground">{error}</p>
           <Button className="mt-4" variant="outline" onClick={() => void load()}>

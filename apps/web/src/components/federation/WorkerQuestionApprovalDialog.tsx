@@ -172,7 +172,7 @@ export function WorkerQuestionApprovalDialog({
         </DialogHeader>
 
         {!relay ? (
-          <p className="flex shrink-0 items-center gap-2 text-sm text-destructive">
+          <p className="flex shrink-0 items-center gap-2 text-sm text-failure">
             <AlertCircle className="h-4 w-4" /> This request carries no question.
           </p>
         ) : (
@@ -249,7 +249,7 @@ export function WorkerQuestionApprovalDialog({
                                 "mt-0.5 flex size-4 shrink-0 items-center justify-center border",
                                 question.multiple ? "rounded-[4px]" : "rounded-full",
                                 selected
-                                  ? "border-primary bg-primary text-primary-foreground"
+                                  ? "border-primary bg-primary-fill text-primary-foreground"
                                   : "border-muted-foreground/40",
                               )}
                               aria-hidden

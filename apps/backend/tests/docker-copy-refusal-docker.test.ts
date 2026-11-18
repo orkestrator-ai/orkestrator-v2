@@ -7,7 +7,7 @@ import { stageConfiguredProjectFilesForContainer } from "../src/core/commands-pr
 import { copyProjectSeedFilesIntoContainer } from "../src/core/container-project-seed-files";
 import { copyOutBounded } from "../src/core/docker-copy-out";
 import { isDockerCopyRefusedError } from "../src/core/docker-copy-refusal";
-import { copyGithubRangesSeed } from "../src/core/github-ranges-cache";
+import { copyGithubRangesSeed } from "../src/core/git/github-ranges-cache";
 import { runCommand } from "../src/core/shell";
 
 // Opt-in (to-do 7549 task 1): point DOCKER_HOST at a rootless daemon

@@ -50,14 +50,14 @@
                 >Use the failure token for error text, not destructive</a
               >
               <div class="note">
-                About 305 uses of text-destructive set error text in Destructive Coral, which is
-                tuned for fills.
+                Error text, error icons, and destructive action labels use Fault Red. Destructive
+                Coral remains the fill and wash color.
               </div>
             </td>
             <td><span class="pill sev-high">High</span></td>
             <td>Color tokens</td>
             <td class="num">10</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -68,13 +68,14 @@
                 >Replace hard-coded red and rose classes with the failure token</a
               >
               <div class="note">
-                About 110 raw text-red-* and text-rose-* uses give failure several different reds.
+                Failure outcomes share one color. Risk and category markers retain their assigned
+                colors.
               </div>
             </td>
             <td><span class="pill sev-high">High</span></td>
             <td>Color tokens</td>
             <td class="num">6</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -85,13 +86,13 @@
                 >Replace hard-coded green and emerald classes with the success token</a
               >
               <div class="note">
-                About 120 raw green and emerald text uses give success several different greens.
+                Success statuses and diff additions use the shared success color.
               </div>
             </td>
             <td><span class="pill sev-high">High</span></td>
             <td>Color tokens</td>
             <td class="num">8</td>
-            <td><span class="status" data-status="in-progress">In progress</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -100,14 +101,14 @@
             <td>
               <a href="00004-status-dots.html">Drive status dots from the status tokens</a>
               <div class="note">
-                Only the label text uses status-running or status-error; the dots use raw Tailwind
-                hues and Stopping has no token.
+                Status glyphs use the status tokens, with a stopped-gray spinner for Stopping.
+                Stopped and Stopping labels use muted foreground for small-text contrast.
               </div>
             </td>
             <td><span class="pill sev-high">High</span></td>
             <td>Color tokens</td>
             <td class="num">8</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -123,7 +124,7 @@
             <td><span class="pill sev-high">High</span></td>
             <td>Color tokens</td>
             <td class="num">8</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -134,14 +135,14 @@
                 >Bring the transcript annotation layer onto tokens</a
               >
               <div class="note">
-                The annotation pill and pins use raw blue-500/600 with white text and a white
-                border.
+                The action pill and numbered pins share the primary fill. The pins retain their
+                white legibility ring.
               </div>
             </td>
             <td><span class="pill sev-medium">Medium</span></td>
             <td>Color tokens</td>
             <td class="num">4</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -150,14 +151,14 @@
             <td>
               <a href="00007-compose-bar-frames.html">Unify the compose bar frame across tabs</a>
               <div class="note">
-                Only the native tab matches the spec; three other composers use rounded-2xl on the
-                translucent input surface.
+                Pipeline, Claude tmux, Features and terminal composers share the native frame. See
+                the nine before/after pairs.
               </div>
             </td>
             <td><span class="pill sev-high">High</span></td>
             <td>Components</td>
             <td class="num">18</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -235,14 +236,14 @@
                 >Make bells and the unread-mail count match the spec</a
               >
               <div class="note">
-                Bells differ in fill and rest color, and the unread-mail count is amber where the
-                spec says blue.
+                Activity bells share an amber fill and stroke, zero uses readable muted text, and
+                the unread-mail count uses the blue fill.
               </div>
             </td>
             <td><span class="pill sev-medium">Medium</span></td>
             <td>Components</td>
             <td class="num">8</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -251,14 +252,13 @@
             <td>
               <a href="00013-focus-url-bars.html">Use the focus hairline on the browser URL bars</a>
               <div class="note">
-                The two browser URL fields swap the border color on focus instead of showing the
-                hairline.
+                Both browser URL bars show the inset focus hairline inside their existing border.
               </div>
             </td>
             <td><span class="pill sev-medium">Medium</span></td>
             <td>Focus</td>
             <td class="num">6</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -286,14 +286,13 @@
                 >Remove resting and hover shadows from cards in the work</a
               >
               <div class="note">
-                Kanban, Linear and GitHub cards and some panels cast shadows; only things that float
-                should.
+                Board cards, feature stories and load-state cards use flat surfaces.
               </div>
             </td>
             <td><span class="pill sev-medium">Medium</span></td>
             <td>Elevation</td>
             <td class="num">10</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -311,7 +310,7 @@
             <td><span class="pill sev-low">Low</span></td>
             <td>Components</td>
             <td class="num">6</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -326,7 +325,7 @@
             <td><span class="pill sev-low">Low</span></td>
             <td>Interaction</td>
             <td class="num">6</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>
@@ -335,14 +334,13 @@
             <td>
               <a href="00018-tab-styles.html">Reduce tab-like controls to the documented styles</a>
               <div class="note">
-                The shared Tabs component is a grey track; the spec names an underline, a filled
-                pill and a segmented fill.
+                Shared tab lists use a 2px underline, a filled pill or a segmented selector.
               </div>
             </td>
             <td><span class="pill sev-low">Low</span></td>
             <td>Interaction</td>
             <td class="num">6</td>
-            <td><span class="status" data-status="todo">To do</span></td>
+            <td><span class="status" data-status="done">Done</span></td>
           </tr>
           <tr>
             <td>

@@ -51,11 +51,11 @@ export function createContainerWorktreeSignalInstaller(
       containerImageCapabilitySupport(containerId, context, "container-worktree-signal", 1),
     async install(containerId, credential, context, isCurrent, signal) {
       if (!isCurrent()) return;
-      await deps.ensureHost(
-        containerId,
-        signal,
-        context.containerHostReachability?.containerHostAddress?.(),
-      );
+      if (
+        !(await deps.ensureHost(containerId, signal, context.containerHostReachability?.snapshot()))
+      ) {
+        throw new Error("The container's RootlessKit host alias is awaiting verification");
+      }
       if (!isCurrent()) return;
       await deps.ensurePorts(containerId, context.agentTools?.servicePort?.() ?? null, signal);
       if (!isCurrent()) return;

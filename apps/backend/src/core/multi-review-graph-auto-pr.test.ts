@@ -44,7 +44,7 @@ async function world(findings: boolean, addressFindingsComplete = true): Promise
       : undefined,
   );
   w.fakes.scripts.set("consolidate", ({ port }) => (port === "report" ? report : undefined));
-  w.fakes.scripts.set("fix", ({ port }) =>
+  w.fakes.scripts.set("address-findings", ({ port }) =>
     port === "result"
       ? {
           complete: addressFindingsComplete,
@@ -103,11 +103,11 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     expect(settled.autoPrLaunch?.basis).toBeUndefined();
 
     const run = await w.run(settled);
-    const fix = only(run, "fix");
+    const fix = only(run, "address-findings");
     const describe = only(run, "describe-pr");
     const pr = only(run, "pr");
     // Address Findings's own commit is what the pull request publishes.
-    expect(only(run, "fix-complete").outlet).toBe("complete");
+    expect(only(run, "address-findings-complete").outlet).toBe("complete");
     expect(describe.inputs.code).toBe(fix.outputs.code);
     expect(pr.inputs.code).toBe(fix.outputs.code);
     expect(Date.parse(pr.startedAt!)).toBeGreaterThanOrEqual(Date.parse(fix.finishedAt!));
@@ -144,7 +144,7 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     expect(settled.autoPrLaunch).toMatchObject({ basis: "clean-review", state: "launched" });
     const run = await w.run(settled);
     expect(only(run, "has-findings").outlet).toBe("clean");
-    expect(only(run, "fix").state).toBe("skipped");
+    expect(only(run, "address-findings").state).toBe("skipped");
     expect(only(run, "pr").inputs.code).toBe(only(run, "plan").outputs.code);
   });
 
@@ -157,7 +157,7 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     expect(settled.phase).toBe("ready");
     expect(prStates).toEqual(["none"]);
     const run = await w.run(settled);
-    expect(only(run, "fix").state).toBe("skipped");
+    expect(only(run, "address-findings").state).toBe("skipped");
     expect(only(run, "pr").state).toBe("skipped");
     // The settled record is an ordinary review: the user's Address Findings is the bespoke
     // interactive handoff, and its completion may still queue the PR.

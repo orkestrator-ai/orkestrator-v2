@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import type {
@@ -251,7 +251,7 @@ describe("AgentMailButton", () => {
     expect(screen.queryByRole("button", { name: /Agent mail/ }) === null).toBe(true);
   });
 
-  test("counts only mail that needs the person and opens the panel", () => {
+  test("shows mail that needs the person in a primary badge and opens the panel", () => {
     appCommandStore(agentMailStore).setState({
       summary: new Map([
         [AGENT_1, summaryEntry({ attentionCount: 2, failedInjectCount: 1 })],
@@ -260,7 +260,11 @@ describe("AgentMailButton", () => {
       ]),
     });
     renderInAppCommandScope(<AgentMailButton />);
-    fireEvent.click(screen.getByRole("button", { name: "Agent mail, 3 messages need you" }));
+    const button = screen.getByRole("button", { name: "Agent mail, 3 messages need you" });
+    const badge = within(button).getByText("3");
+    expect(badge.classList.contains("bg-primary-fill")).toBe(true);
+    expect(badge.classList.contains("text-primary-foreground")).toBe(true);
+    fireEvent.click(button);
     expect(appCommandStore(agentMailStore).getState().panel).toEqual({});
   });
 
@@ -570,7 +574,9 @@ describe("AgentMailPanel", () => {
         .getState()
         .openPanel({ conversation: [AGENT_1, AGENT_2] }),
     );
-    expect(await screen.findByText("delivery failed")).toBeTruthy();
+    const status = await screen.findByText("delivery failed");
+    expect(status.classList.contains("text-failure")).toBe(true);
+    expect(status.classList.contains("bg-failure/10")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() =>
       expect(retryAgentMailInject).toHaveBeenCalledWith("env-2", "tab-2", "failed"),

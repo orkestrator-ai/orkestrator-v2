@@ -9,7 +9,10 @@ import {
  * Each control records its intent under the pipeline lock and leaves the work to
  * the stage supervisor.
  */
-import { DEFAULT_BUILD_PIPELINE_ITERATIONS } from "./build-pipeline-stages.js";
+import {
+  DEFAULT_BUILD_PIPELINE_ITERATIONS,
+  buildPhaseForSessionPhase,
+} from "./build-pipeline-stages.js";
 import { createHash, randomUUID } from "node:crypto";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
@@ -25,7 +28,6 @@ import {
   isSupersededPipelineSession,
   pipelineReachedPullRequestStage,
   reviewValidationStage,
-  REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
   MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH,
   MAX_CODE_REWIND_PREVIEW_PATHS,
@@ -743,10 +745,14 @@ export class BuildPipelineLifecycle {
         const structuredReview =
           phase === "building" ||
           phase === "reworking" ||
+          phase === "preparing-package" ||
           phase === "reviewing" ||
           phase === "verifying" ||
           (phase === "addressing-findings" && session.addressFindingsReportKind !== undefined);
-        const resumeResultKind = this.ctx.workflowResultKind(phase);
+        // Package preparation resumes with the validation-plan contract it
+        // was opened with.
+        const validationPlan = phase === "preparing-package" && session.validationPlan === true;
+        const resumeResultKind = this.ctx.workflowResultKind(phase, validationPlan);
         const resultTransport =
           structuredReview && resumeResultKind
             ? this.ctx.workflowToolEnabled(sessionAgent(candidate, session), resumeResultKind)
@@ -765,6 +771,7 @@ export class BuildPipelineLifecycle {
           useTaskImages: false,
           structuredReview,
           resultTransport,
+          ...(validationPlan ? { validationPlan } : {}),
           startedAt,
         };
         delete session.buildOutcome;
@@ -781,6 +788,7 @@ export class BuildPipelineLifecycle {
           useTaskImages: false,
           structuredReview,
           resultTransport,
+          ...(validationPlan ? { validationPlan } : {}),
         };
         session.structuredRequestId = structuredReview ? requestId : undefined;
         session.resultTransport = resultTransport;
@@ -939,9 +947,9 @@ export class BuildPipelineLifecycle {
         const session = target.kind === "session" ? target.session : undefined;
         step = {
           phase:
-            target.kind === "session"
+            target.kind === "session" && target.phase !== "package-preparation"
               ? target.phase
-              : target.kind === "review-package"
+              : target.kind === "review-package" || target.kind === "session"
                 ? "review-preparation"
                 : target.kind === "validation"
                   ? "validation"
@@ -1308,12 +1316,18 @@ export class BuildPipelineLifecycle {
       } else if (target.kind === "review-package") {
         candidate.restartRequest = target;
       } else if (
-        !target.forceStage &&
-        isReviewPackagePreparationSession(target.session, candidate)
+        target.phase === "package-preparation" ||
+        (!target.forceStage && isReviewPackagePreparationSession(target.session, candidate))
       ) {
+        // The dedicated preparation session belongs to its round's
+        // implementation step; a build or rework turn that wrote the plan is
+        // that step itself.
         candidate.restartRequest = {
           kind: "review-package",
-          implementationPhase: target.phase === "rework" ? "rework" : "build",
+          implementationPhase:
+            target.phase === "build" || target.phase === "rework"
+              ? target.phase
+              : implementationPhase(),
         };
       } else {
         const requestedPhase = target.phase;
@@ -1417,24 +1431,10 @@ export class BuildPipelineLifecycle {
         });
       }
 
+      // Package preparation and the validation it planned run in their own
+      // phase, whichever round's implementation step they follow.
       candidate.phase =
-        restart.kind === "session"
-          ? restart.phase === "build"
-            ? "building"
-            : restart.phase === "review"
-              ? "reviewing"
-              : restart.phase === "address-findings"
-                ? "addressing-findings"
-                : restart.phase === "verify"
-                  ? "verifying"
-                  : restart.phase === "rework"
-                    ? "reworking"
-                    : restart.phase === "pr"
-                      ? "creating-pr"
-                      : "resolving-conflicts"
-          : restart.implementationPhase === "rework"
-            ? "reworking"
-            : "building";
+        restart.kind === "session" ? buildPhaseForSessionPhase(restart.phase) : "preparing-package";
       delete candidate.skipRequest;
       clearStageControlState(candidate);
       candidate.pendingKanbanReactivation = true;
@@ -1488,7 +1488,7 @@ export class BuildPipelineLifecycle {
           stageId === `validation:${run.id}` &&
           !candidate.reviewPackage &&
           !candidate.reviewRetryRequested &&
-          (phase === "building" || phase === "reworking") &&
+          phase === "preparing-package" &&
           (run.status === "planned" ||
             run.status === "running" ||
             (run.status === "cancelled" && candidate.phase === "paused"));
@@ -1527,7 +1527,7 @@ export class BuildPipelineLifecycle {
       }
       if (
         validationTarget === "review-package" ||
-        named.label === REVIEW_PACKAGE_SESSION_LABEL ||
+        stagePhase === "package-preparation" ||
         stagePhase === "pr" ||
         stagePhase === "resolve-conflicts"
       ) {

@@ -4,12 +4,12 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, and 2026-11-18 against `main` at `b2c91abb9` for the `git` slice.
 
 ### Tasks
 
 1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); and the `opencode` move is done (2026-11-16: the root `opencode-*` and `opencode2-*` files moved into `opencode2/`).
-2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14), the `previews` move is done (2026-11-16) and the `worktrees` move is done (2026-11-17), one change each (see "Assumptions and decisions"); the other seven (`coordinator`, `agent-accounts`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`) are open, one domain per change.
+2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14), the `previews` move is done (2026-11-16), the `worktrees` move is done (2026-11-17) and the `git` move is done (2026-11-18), one change each (see "Assumptions and decisions"); the other six (`coordinator`, `agent-accounts`, `workflows`, `review`, `build-pipeline`, `native-agent`) are open, one domain per change.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
@@ -50,7 +50,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** `plan-usage`, `features`, `coordinator`, `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`.
 
-**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) were the subject of the size todo 0057 (retired 2026-11-17; the resulting collaborators are listed in [`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators)). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it. Re-measured 2026-11-16 on `c1fcc573b` for the third slice: `preview-*` was 8 source (7 modules and `preview-test-support.ts`) / 12 tests, with 12 production importers outside the domain (three in `core/` and nine `apps/backend/src/preview-*.ts` and `gateway-*.ts` files) using six symbols, plus the two test-only harness entrypoints (one more symbol and the test support); no pull request was open. Re-measured 2026-11-17 on `0265e7882` for the fourth slice: `worktree-*` was 8 source / 11 tests, with 13 production importers outside the domain (all in `core/`, two of them in `change-tracking/`) using 25 symbols from seven modules, plus five repository scripts and two `apps/backend/tests` files; no pull request was open.
+**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) were the subject of the size todo 0057 (retired 2026-11-17; the resulting collaborators are listed in [`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators)). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it. Re-measured 2026-11-16 on `c1fcc573b` for the third slice: `preview-*` was 8 source (7 modules and `preview-test-support.ts`) / 12 tests, with 12 production importers outside the domain (three in `core/` and nine `apps/backend/src/preview-*.ts` and `gateway-*.ts` files) using six symbols, plus the two test-only harness entrypoints (one more symbol and the test support); no pull request was open. Re-measured 2026-11-17 on `0265e7882` for the fourth slice: `worktree-*` was 8 source / 11 tests, with 13 production importers outside the domain (all in `core/`, two of them in `change-tracking/`) using 25 symbols from seven modules, plus five repository scripts and two `apps/backend/tests` files; no pull request was open. Re-measured 2026-11-18 on `b2c91abb9` for the fifth slice: `git-*`, `github*` and `pr-*` were 31 source (two test-support files included) / 28 tests (the table's 11 / 8 was stale), with 47 production importers outside the domain (all in `core/`) using about 100 symbols from 28 modules, plus two `apps/backend/scripts` files, 22 `apps/backend/tests` files and one renderer test; PR #2394 was then open and added merge notices alongside changes to the PR monitor.
 
 **Decisions.**
 
@@ -330,6 +330,23 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   imports directly, because it imports `change-tracking/index.js` and
   re-exporting it would close a runtime cycle for `commands-files.ts` and
   `container-git-fetch.ts`. See "Assumptions and decisions".
+- Done (task 2's `git` slice, 2026-11-18, against `main` at
+  `b2c91abb9`): the 31 `git-*`, `github*` and `pr-*` source files (two
+  test-support files included) and their 28 tests are in `core/git/`. Only
+  the `git-` prefix was dropped (`git/fsmonitor.ts`,
+  `git/noninteractive-env.ts`, `git/blob-read.ts`, …); the `github*` and
+  `pr-*` files keep their names (`git/github.ts`,
+  `git/github-credentials.ts`, `git/pr-monitor.ts`, …). `index.ts`
+  re-exports 86 symbols from 21 modules, and 43 of the 47 production
+  importers outside the folder import it. Seven modules are
+  named exceptions in the `apps/backend/src/**` pattern and are not
+  re-exported, because re-exporting any of them closes a runtime cycle:
+  `github-cli-setup.js`, `github-clone-browser.js`,
+  `github-ranges-seed-delivery.js`, `pr-auto-merge.js`,
+  `pr-auto-merge-resolve-settled.js`, `pr-monitor-runtime.js` and
+  `pr-required-checks.js`, each imported directly by its one production
+  importer. The integration of #2394 also moved its merge-notice module and
+  test into `core/git/`. See "Assumptions and decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -359,7 +376,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   from 821 and 887 just before it, and after the `opencode` slice on
   2026-11-16 it holds 811 and 876, down from 822 and 885 just before it,
   and after the `worktrees` slice on 2026-11-17 it holds 803 and 866, down
-  from 811 and 877 just before it).
+  from 811 and 877 just before it, and after the `git` slice on 2026-11-18
+  it holds 789 and 851, down from 820 and 879 just before it).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
@@ -375,7 +393,7 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | agent-accounts | `agent-accounts*` | 7 | 7 |
   | worktrees | `worktree-*` | done (8 / 11 moved, 2026-11-17) | |
   | previews | `preview-*` | done (8 / 12 moved, 2026-11-16) | |
-  | git | `git-*`, `github*`, `pr-*` | 11 | 8 |
+  | git | `git-*`, `github*`, `pr-*` | done (31 / 28 moved, 2026-11-18) | |
   | workflows | `workflow-*` | 9 | 7 |
   | review | `multi-review-*`, `review-*`, `looped-review-*` | 26 | 26 |
   | build-pipeline | `build-pipeline-*` | 23 | 16 |
@@ -428,9 +446,9 @@ before the busy ones move.
    `web-annotations`, `control-mcp` and `opencode` moves;
    `keyed-record-format.ts` placed in the shared kernel.)
 2. **Wave 2 (mid-tier):** `coordinator`,
-   `agent-accounts`, `git`, `workflows`, `review`,
+   `agent-accounts`, `workflows`, `review`,
    `build-pipeline`, `native-agent`. (Done: `plan-usage`, `features`,
-   `previews`, `worktrees`.)
+   `previews`, `worktrees`, `git`.)
 3. **Wave 3 (hubs):** `terminals`, `tmux`, `recurring`, `containers`,
    `environments`, `storage`. Many files import these, and `containers` is
    also imported from outside `core/` (as `previews` was), so these slices
@@ -501,9 +519,131 @@ task 1's `web-annotations` slice with the codemod fix from todo 7490
 `keyed-record-format.ts` placement with task 2's `plan-usage` slice
 (2026-11-13), task 2's `features` slice (2026-11-14), task 2's
 `previews` slice (2026-11-16), task 1's `opencode` slice (2026-11-16),
-and task 2's `worktrees` slice (2026-11-17).
+task 2's `worktrees` slice (2026-11-17), and task 2's `git` slice
+(2026-11-18).
 The other moves in waves 2 to 4 (tasks 2 to 4) were left open on purpose:
 they move many files that other work in flight touches.
+
+### Task 2: `git` as the fifth wave 2 slice
+
+- Chosen: one domain, `git` (the `git-*`, `github*` and `pr-*` prefix
+  groups), moved with the codemod and a map file against `main` at
+  `b2c91abb9`. The ticket named it and offered `agent-accounts` only if an
+  ordering rule blocked it. None does: the only ordering rule in wave 2 is
+  that `native-agent` waits for 0057. The feature branch merged #2394 from
+  `main`, keeping the monitor and merge-notice code and tests under `core/git/`.
+  The merge-notice module is internal to the Git domain, so it needs no public
+  export or lint exception. The ticket also kept coordinator tool, CLI and graph
+  template names out of scope (to-do 4740 runs in parallel): the slice
+  changes only import specifiers and path comments in those files, never a
+  name.
+- File names: a map file, not `--prefix`, because the domain has three
+  prefixes. Only `git-` was dropped, because it repeats the folder name:
+  `git-fsmonitor.ts` → `git/fsmonitor.ts`, `git-noninteractive-env.ts` →
+  `git/noninteractive-env.ts`, `git-checkout-template-test-support.ts` →
+  `git/checkout-template-test-support.ts`, `git-remote-callers.test.ts` →
+  `git/remote-callers.test.ts`, and so on for all eighteen `git-*` files.
+  The `github*` and `pr-*` files keep their names (`git/github.ts`,
+  `git/pr-monitor.ts`). Options: (a) keep those two prefixes (chosen):
+  `github.ts` has no name left once its prefix goes, `pr-monitor.ts` would
+  become an unhelpful `monitor.ts`, and every bare name in docs and
+  comments stays a correct file name; (b) subfolders `git/github/` and
+  `git/pr/` with the prefixes dropped: shorter names, but nested domains
+  need `**` lint patterns (as `self-improvement/` has) and a second
+  `index.ts` decision, which is more than a pure move; (c) drop every
+  prefix: impossible for `github.ts` and ambiguous for the rest.
+  `project-git-*`, `local-git-scan-caches.ts`, `container-git-fetch*`,
+  `container-github-credential.ts`, `coordinator-pr-*`,
+  `commands-pr-monitor*`, `commands-registry-git*`/`-github*`,
+  `graph-system-pull-request.ts` and `storage-watched-pull-requests.ts`
+  belong to other prefix groups and stay where they are.
+- Measured before the move: 47 production importers outside the folder,
+  all in `core/` (three in `change-tracking/`, one each in `nodes/`,
+  `public-api/` and `worktrees/`), using about 100 symbols from 28 modules;
+  tests and test support outside the folder in `core/`, 22
+  `apps/backend/tests` files, `apps/web/src/types/github.test.ts`, and two
+  `apps/backend/scripts` files (`github-ranges-seed.ts`,
+  `recurring-baseline-harness.ts`). Path strings in
+  `.github/workflows/container-live-qualification.yml` (its path filter
+  names the two ranges-seed modules), architecture and development docs,
+  one unified plan, one to-do and 13 flake files. Three tests spy on a
+  moved module's namespace (`import * as remoteGit` in
+  `coordinator-service.test.ts` and `diff-stats-tracking.test.ts`,
+  `import * as credentials` in `bug-report-service.test.ts`); they keep the
+  deep import, and the spy still reaches production code that now imports
+  the symbol through `index.ts`, because a re-export is a live binding (all
+  three files pass). No worker or bundle entry point names a moved file,
+  `scripts/test-tiers.ts` names none (the two `*.integration.test.ts`
+  files stay in the slow tier through its pattern), and no
+  `<revision>:<path>` string named a moved file. The codemod moved 59 files
+  and rewrote 164.
+- `index.ts` holds 86 symbols from 21 modules: the production symbols
+  other than those of the seven exception modules, plus four
+  `github-credentials.ts` names that only `commands-helpers.ts` passes on. 43 production importers use it; their
+  separate imports from moved modules were merged into one import each
+  (`commands-files.ts`'s six became one).
+  `commands-helpers.ts` had `export * from "./github-credentials.js"`, which
+  `commands.ts` passes on through its own `export *`; it now re-exports the
+  same eleven names explicitly from `git/index.js`, so the command layer's
+  surface is unchanged. Ten `core/` tests outside the folder use only
+  `index.ts` symbols, so they import `index.js` too; the others (test
+  support, the namespace spies, `linear-merged-label.test.ts` on
+  `pr-monitor-runtime.js`, `coordinator-goals.test.ts` and
+  `index-pr-monitor.test.ts`'s `PrMonitorServiceOptions` type) keep deep
+  imports, as do the `apps/backend/tests` white-box tests, the renderer
+  test and the two scripts (procedure step 3).
+- Named exceptions: seven modules. With each re-exported, `import/no-cycle`
+  reported runtime cycles (3 to 632 each, re-checked one at a time):
+  `github-cli-setup.ts` reaches `agent-accounts-login.ts` and
+  `host-tools.ts`, `github-clone-browser.ts` reaches
+  `commands-error-text.ts`, `github-ranges-seed-delivery.ts` reaches
+  `egress-gateway.ts`, `pr-auto-merge.ts` reaches
+  `project-home-environment.ts` and `action-default-selection.ts`,
+  `pr-auto-merge-resolve-settled.ts` reaches the native agent service and
+  `public-api/`, `pr-monitor-runtime.ts` reaches `commands-pr-monitor.ts`,
+  and `pr-required-checks.ts` reaches `commands-review.ts`; each path leads
+  back to a file that imports `git/index.js`. Options: (a) leave all seven
+  out of `index.ts` and name them as exceptions (chosen), as the `opencode`
+  and `worktrees` slices did; (b) keep them in `index.ts` and give the
+  light modules (`fsmonitor.ts`, `noninteractive-env.ts`,
+  `github-credentials.ts`, …) exceptions instead: those are imported by
+  dozens of files, so most of the backend would keep deep imports; (c)
+  break the cycles by moving code, which is not a pure move. Each exception
+  has a single production importer (`commands-registry-tools.ts`,
+  `commands-registry-projects.ts`, `agent-accounts-containers.ts`, the
+  composition root `core/index.ts` for both auto-merge modules,
+  `backend-runtime.ts`, `commands-pr-monitor.ts`), and the reasons are
+  written in `index.ts`'s header. Cons: seven deep imports are allowed
+  from anywhere in `apps/backend/src`; the `tests/unit/**` pattern stays
+  strict. With them `bunx oxlint .` reports no errors.
+- Hand fixes after the codemod: the bare `git-*` names (which changed) in
+  `local-git-scan-caches.ts`, `backend-runtime.md`, `git-scan-caches.md`,
+  `local-start-git-remote-failures.md` and `recurring-work.md`; and,
+  because these docs and comments name `core/` modules by folder-relative
+  path, the bare `github*` and `pr-*` names in `AGENTS.md` (the GitHub
+  ranges seed under "Network Isolation"), the architecture docs and the
+  comments of seven root `core/` files now read `git/<name>.ts`; plus the
+  folder list and exception examples in `docs/development/linting.md`.
+  Comments inside `git/` that name a sibling keep the bare name. Flake
+  records and the dated `worktree-watcher-validation.md` report keep the
+  codemod's path rewrites and their bare names, as in the earlier slices.
+  `@orkestrator/protocol`'s own `github-*`, `git-*` and `pr-*` modules and
+  `contract/domains/git/` are other things with the same names and are
+  untouched.
+- Lint patterns: `**/git/*` with `!**/git/index.js`, the seven exceptions
+  and `!@orkestrator/protocol/contract/domains/git/*` under
+  `apps/backend/src/**` (no backend file imports that protocol path today;
+  the exclusion stops the pattern catching it later, as the
+  `change-tracking` pattern does for its protocol namesake), and the
+  `**/backend/src/core/git/*` form under `tests/unit/**`. No backend or
+  `tests/unit` import path had a `git/` segment before the move. Checked
+  with probe files (deleted): a deep import of `noninteractive-env.js` is
+  reported under both overrides, `index.js` is not reported under either,
+  and `pr-monitor-runtime.js` is reported only under `tests/unit/**`.
+- No manual checking is left: the move changes no behaviour, and what
+  remains (`mise run test`, `build:backend` and `verify:packaged-backend`)
+  is agent work for the validation stage, so nothing was added to the
+  manual-test checklist (7568).
 
 ### Task 2: `worktrees` as the fourth wave 2 slice
 

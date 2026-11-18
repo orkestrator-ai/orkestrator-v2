@@ -52,8 +52,7 @@ export function workflowSummary(
     error: workflow.error,
     presentationError: workflow.presentationError,
     addressPromptPending: workflow.addressPromptPending,
-    // Coordinator tools still name the Address Findings tab `fixTabId` (to-do 4740 task 3).
-    fixTabId: workflow.addressFindingsTabId,
+    addressFindingsTabId: workflow.addressFindingsTabId,
     // A cancelled build reads as `failed`; this says it was stopped on purpose.
     ...(typeof workflow.cancelledAt === "string" ? { cancelledAt: workflow.cancelledAt } : {}),
     ...("delivery" in workflow ? { delivery: workflow.delivery } : {}),
@@ -80,11 +79,10 @@ const MAX_AUTOMATION_MESSAGE_CHARS = 400;
 /**
  * A Multi Review's auto-address findings and auto-PR, the automatic PR launch's state, and
  * one sentence on what happens next, so a coordinator can tell whether it is
- * expected to act. Only Multi Review snapshots carry `autoAddressFindings`/`autoPr`;
- * the summary still answers them as `autoFix`/`autoPr` (to-do 4740 task 3).
+ * expected to act. Only Multi Review snapshots carry `autoAddressFindings`/`autoPr`.
  */
 export function multiReviewAutomation(workflow: Record<string, unknown>): Record<string, unknown> {
-  const autoFix = workflow.autoAddressFindings === true;
+  const autoAddressFindings = workflow.autoAddressFindings === true;
   const autoPr = workflow.autoPr === true;
   const launch = isRecord(workflow.autoPrLaunch) ? workflow.autoPrLaunch : undefined;
   const message =
@@ -99,14 +97,19 @@ export function multiReviewAutomation(workflow: Record<string, unknown>): Record
         ...(message ? { message } : {}),
       }
     : undefined;
-  return { autoFix, autoPr, ...(prLaunch ? { prLaunch } : {}), next: automationNext(workflow) };
+  return {
+    autoAddressFindings,
+    autoPr,
+    ...(prLaunch ? { prLaunch } : {}),
+    next: automationNext(workflow),
+  };
 }
 
 function automationNext(workflow: Record<string, unknown>): string {
-  const autoFix = workflow.autoAddressFindings === true;
+  const autoAddressFindings = workflow.autoAddressFindings === true;
   const autoPr = workflow.autoPr === true;
   const recordedLaunch = isRecord(workflow.autoPrLaunch) ? workflow.autoPrLaunch : undefined;
-  const fix = isRecord(workflow.addressFindingsSession)
+  const session = isRecord(workflow.addressFindingsSession)
     ? workflow.addressFindingsSession
     : undefined;
   const phase = workflow.phase;
@@ -124,7 +127,7 @@ function automationNext(workflow: Record<string, unknown>): string {
     recordedLaunch?.state === "launched" &&
     (cleanReviewPr ||
       recordedLaunch.addressFindingsIdentity === undefined ||
-      recordedLaunch.addressFindingsIdentity !== multiReviewAddressFindingsIdentity(fix));
+      recordedLaunch.addressFindingsIdentity !== multiReviewAddressFindingsIdentity(session));
   const manualPr = "; review its result and start or update the PR manually";
   const thenPr = customAddressFindings
     ? manualPr
@@ -136,12 +139,12 @@ function automationNext(workflow: Record<string, unknown>): string {
   // A new handoff or running Address Findings takes precedence over a retained PR launch.
   if (phase === "interactive" && workflow.addressPromptPending === true)
     return `The Address Findings handoff is being delivered${thenPr}.`;
-  if (phase === "interactive" && fix?.status === "running")
+  if (phase === "interactive" && session?.status === "running")
     return `Address Findings is running${thenPr}.`;
   if (phase === "failed" || phase === "cancelled") return "Nothing else runs automatically.";
   if (phase === "cancelling") return "Cancelling; nothing else runs automatically.";
   if (phase === "interactive" && customAddressFindings)
-    return `The custom Address Findings ${fix?.status === "failed" ? "failed" : fix?.status === "idle" ? "turn ended" : "is starting"}${manualPr}.`;
+    return `The custom Address Findings ${session?.status === "failed" ? "failed" : session?.status === "idle" ? "turn ended" : "is starting"}${manualPr}.`;
   // On the graph engine (item 301) a system step opens the pull request.
   const graph = workflow.engine === "graph";
   if (launch?.state === "pending")
@@ -167,18 +170,18 @@ function automationNext(workflow: Record<string, unknown>): string {
   }
   if (phase === "completed") return "Nothing else runs automatically.";
   if (phase === "ready")
-    return autoFix && !hasFindings(workflow.consolidatedReport)
+    return autoAddressFindings && !hasFindings(workflow.consolidatedReport)
       ? "Consolidation found nothing to fix, so no Address Findings or PR session starts."
       : `Waiting for address_multi_review to start Address Findings${thenPr}.`;
   if (phase === "interactive") {
-    if (fix?.status === "failed") return "Address Findings failed; no PR session starts.";
-    if (fix?.status === "idle")
+    if (session?.status === "failed") return "Address Findings failed; no PR session starts.";
+    if (session?.status === "idle")
       return autoPr
         ? "The Address Findings turn ended without proof it completed, so no PR session starts."
         : "The Address Findings turn ended. Nothing else runs automatically.";
     return `Address Findings is starting${thenPr}.`;
   }
-  return autoFix
+  return autoAddressFindings
     ? `Address Findings starts automatically if consolidation reports findings${autoPr ? ", then a PR session once Address Findings completes; a clean report starts the PR session directly" : ""}.`
     : autoPr
       ? `Stops at ready if consolidation reports findings; address_multi_review starts Address Findings${thenPr}. A clean report starts the PR session directly.`

@@ -52,7 +52,7 @@ export function AgentMailButton() {
     >
       <Inbox className="h-4 w-4" />
       {attention > 0 && (
-        <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-amber-400 px-1 font-mono text-[9px] leading-4 text-zinc-950">
+        <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary-fill px-1 font-mono text-[9px] leading-4 text-primary-foreground">
           {attention > 99 ? "99+" : attention}
         </span>
       )}

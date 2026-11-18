@@ -126,7 +126,7 @@ describe("workflow result contract validation", () => {
       ],
       ["review-report", { ...report, reviewSummary: "probe" }, "$.reviewSummary"],
       [
-        "fix-result",
+        "address-findings-result",
         {
           complete: true,
           summary: "probe",
@@ -677,8 +677,8 @@ describe("workflow result broker tools", () => {
       environmentId: "env-1",
       projectId: "project-1",
     });
-    const submitFix = handlers.get("submit_fix_result");
-    if (!submitFix) throw new Error("missing submit_fix_result");
+    const submitFix = handlers.get("submit_address_findings_result");
+    if (!submitFix) throw new Error("missing submit_address_findings_result");
     expect(
       await submitFix({
         resultKey: "known-key",
@@ -863,7 +863,7 @@ describe("broker result key correction with signed capabilities", () => {
     await service.prepare({
       ...scope,
       resultKey: addressFindingsKey,
-      kind: "fix-result",
+      kind: "address-findings-result",
       provider: "opencode",
     });
     const fixCapability = service.capabilityToken(scope, addressFindingsKey);

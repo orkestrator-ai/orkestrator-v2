@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { GitFetchScheduler } from "../src/core/git-fetch-scheduler";
+import { GitFetchScheduler } from "../src/core/git/fetch-scheduler";
 
 interface Harness {
   scheduler: GitFetchScheduler;

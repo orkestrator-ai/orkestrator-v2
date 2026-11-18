@@ -201,7 +201,7 @@ export function PermissionsSettings() {
       </div>
 
       {error ? (
-        <p className="rounded-md border border-red-500/40 p-3 text-sm text-red-300" role="alert">
+        <p className="rounded-md border border-failure/40 p-3 text-sm text-failure" role="alert">
           {error}
         </p>
       ) : null}

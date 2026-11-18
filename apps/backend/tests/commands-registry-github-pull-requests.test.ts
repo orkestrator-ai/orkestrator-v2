@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { refreshMonitoredPullRequest } from "../src/core/commands-registry-github-pull-requests";
-import { resetGitHubPullRequestCache } from "../src/core/github-pull-requests";
+import { resetGitHubPullRequestCache } from "../src/core/git/github-pull-requests";
 import { createCommandFixtures } from "./command-fixtures";
 import {
   TOKEN,

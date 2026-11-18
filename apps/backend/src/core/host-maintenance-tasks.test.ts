@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
-import { gitHubCli, GitHubCliSelection } from "./github-cli-binary.js";
+import { gitHubCli, GitHubCliSelection } from "./git/index.js";
 import { HostMaintenanceError, HostMaintenanceService } from "./host-maintenance.js";
 import {
   applyGhChannel,

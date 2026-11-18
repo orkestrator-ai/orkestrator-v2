@@ -14,7 +14,6 @@
  */
 import {
   BUILD_CANCELLED_ERROR,
-  REVIEW_PACKAGE_SESSION_LABEL,
   isSupersededPipelineSession,
   pipelineIndependentReviewSlot,
   type BuildPipeline,
@@ -68,8 +67,12 @@ export function pipelineWorkerEnded(status: PipelineWorkerStatus): boolean {
   return status === "finished" || status === "failed" || status === "cancelled";
 }
 
-/** Which part of the pipeline a worker runs. */
-export type PipelineWorkerStep = PipelineSessionPhase | "preparation" | "consolidation";
+/**
+ * Which part of the pipeline a worker runs. The package preparation session
+ * (phase `package-preparation`) reports as `preparation`.
+ */
+export type PipelineWorkerStep =
+  Exclude<PipelineSessionPhase, "package-preparation"> | "preparation" | "consolidation";
 
 export interface PipelineWorker {
   /** The mailbox tab id: `toTabId` for `send_message` and `get_tab_transcript`. */
@@ -97,7 +100,7 @@ function stepOf(session: Pick<PipelineSession, "phase" | "label" | "sessionKey">
   step: PipelineWorkerStep;
   slot?: number;
 } {
-  if (session.label === REVIEW_PACKAGE_SESSION_LABEL) return { step: "preparation" };
+  if (session.phase === "package-preparation") return { step: "preparation" };
   if (session.phase === "review") {
     if (
       session.label === CONSOLIDATION_LABEL ||

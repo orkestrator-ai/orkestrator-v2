@@ -76,7 +76,7 @@ export class NodeErrorBoundary extends Component<NodeErrorBoundaryProps, NodeErr
         data-testid="node-workspace-error"
         data-node={this.props.nodeId}
       >
-        <p className="flex items-center gap-2 text-destructive">
+        <p className="flex items-center gap-2 text-failure">
           <AlertTriangle className="h-4 w-4" aria-hidden="true" />
           {this.props.machine}&apos;s workspace stopped working.
         </p>

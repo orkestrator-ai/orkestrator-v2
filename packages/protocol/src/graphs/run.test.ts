@@ -141,9 +141,9 @@ describe("artifact identity", () => {
   test("two producers of the same content get distinct ids", () => {
     const run = graphRunFixture();
     const build = activationFixture({ nodeId: "build" });
-    const fix = activationFixture({ nodeId: "fix", iteration: 2 });
+    const rework = activationFixture({ nodeId: "rework", iteration: 2 });
     const first = artifactFixture(run.id, { activation: build });
-    const second = artifactFixture(run.id, { activation: fix });
+    const second = artifactFixture(run.id, { activation: rework });
     expect(first.digest).toBe(second.digest);
     expect(first.id).not.toBe(second.id);
   });
@@ -278,7 +278,7 @@ describe("validateGraphRun", () => {
     const run = graphRunFixture({
       activations: [
         { ...keyed, attempt: 2 },
-        activationFixture({ nodeId: "fix", iteration: 2 }, { state: "superseded" }),
+        activationFixture({ nodeId: "rework", iteration: 2 }, { state: "superseded" }),
         activationFixture({ nodeId: "review" }, { supersededBy: "rewind-9" }),
         activationFixture(
           { nodeId: "verify" },
@@ -291,7 +291,7 @@ describe("validateGraphRun", () => {
             },
           },
         ),
-        activationFixture({ nodeId: "address" }, { policy: POLICY_FIXTURE }),
+        activationFixture({ nodeId: "address-findings" }, { policy: POLICY_FIXTURE }),
       ],
     });
     expect(codes(validateGraphRun(run))).toEqual(
@@ -383,7 +383,7 @@ describe("run bounds", () => {
 
   test("appendGraphActivation refuses duplicates and both caps", () => {
     const run = graphRunFixture({ activations: activations(200) });
-    expect(appendGraphActivation(run, activationFixture({ nodeId: "fix" }))).toMatchObject({
+    expect(appendGraphActivation(run, activationFixture({ nodeId: "rework" }))).toMatchObject({
       ok: false,
       code: "activations",
     });
@@ -393,7 +393,7 @@ describe("run bounds", () => {
     });
     const full = graphRunFixture({ activations: activations(2_000, "superseded") });
     expect(
-      appendGraphActivation(full, activationFixture({ nodeId: "fix" }, { state: "waiting" })),
+      appendGraphActivation(full, activationFixture({ nodeId: "rework" }, { state: "waiting" })),
     ).toMatchObject({ ok: false, code: "activation-history" });
     const small = graphRunFixture();
     const appended = appendGraphActivation(small, activationFixture({ nodeId: "build" }));
@@ -531,16 +531,21 @@ describe("lineage and rewinds", () => {
 
   test("a rewind supersedes the descendants, rewinds the loop and is bounded", () => {
     const { run, artifacts } = chain();
-    const fix = activationFixture({ nodeId: "fix", iteration: 2 });
+    const rework = activationFixture({ nodeId: "rework", iteration: 2 });
     const looped = {
       ...run,
-      activations: [...run.activations, fix],
+      activations: [...run.activations, rework],
       loopIterations: { rounds: 3 },
     };
-    const descendants = graphLineageDescendants(looped, artifacts, fix.key)!;
+    const descendants = graphLineageDescendants(looped, artifacts, rework.key)!;
     const applied = applyGraphRewind(
       looped,
-      rewind({ nodeId: "fix", activation: fix.key, iteration: 2, superseded: { ...descendants } }),
+      rewind({
+        nodeId: "rework",
+        activation: rework.key,
+        iteration: 2,
+        superseded: { ...descendants },
+      }),
     );
     expect(applied.ok).toBe(true);
     if (!applied.ok) return;
@@ -568,7 +573,7 @@ describe("lineage and rewinds", () => {
       code: "rewinds",
     });
     expect(
-      replaceGraphActivation(applied.run, fix.key, (activation) => ({
+      replaceGraphActivation(applied.run, rework.key, (activation) => ({
         ...activation,
         state: "complete",
       })),

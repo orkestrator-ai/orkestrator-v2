@@ -314,7 +314,7 @@ function ProjectCopyDialogBody({
         </DialogHeader>
 
         {loadError ? (
-          <p role="alert" className="flex items-start gap-2 text-sm text-destructive">
+          <p role="alert" className="flex items-start gap-2 text-sm text-failure">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             {loadError}
           </p>
@@ -392,7 +392,7 @@ function ProjectCopyDialogBody({
                   placeholder="/path/on/that/machine"
                   aria-invalid={locationError ? true : undefined}
                 />
-                {locationError ? <p className="text-xs text-destructive">{locationError}</p> : null}
+                {locationError ? <p className="text-xs text-failure">{locationError}</p> : null}
               </section>
             ) : null}
 
@@ -465,7 +465,7 @@ function ProjectCopyDialogBody({
                   ? "No files picked: only the clone is made."
                   : `${chosen.length} picked · ${totals.truncated ? "at least " : ""}${totals.files.toLocaleString()} file${totals.files === 1 ? "" : "s"}, ${totals.truncated ? "at least " : ""}${formatBytes(totals.bytes)}`}
               </p>
-              {overLimit ? <p className="text-xs text-destructive">{overLimit}</p> : null}
+              {overLimit ? <p className="text-xs text-failure">{overLimit}</p> : null}
             </section>
 
             {target ? (
@@ -486,7 +486,7 @@ function ProjectCopyDialogBody({
             ) : null}
 
             {submitError ? (
-              <p role="alert" className="flex items-start gap-2 text-sm text-destructive">
+              <p role="alert" className="flex items-start gap-2 text-sm text-failure">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 {submitError}
               </p>
@@ -630,7 +630,7 @@ function CopyProgress({ record }: { record: ProjectCopyRecord | null }) {
         </p>
       ) : null}
       {record.error ? (
-        <p role="alert" className="flex items-start gap-2 text-sm text-destructive">
+        <p role="alert" className="flex items-start gap-2 text-sm text-failure">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           {record.error.message}
         </p>

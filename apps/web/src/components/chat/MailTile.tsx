@@ -109,8 +109,8 @@ const TONES: Record<
   failure: {
     icon: CircleX,
     label: "Status: failed",
-    frame: "border-red-400/30 bg-red-400/[0.05]",
-    accent: "text-red-300",
+    frame: "border-failure/30 bg-failure/[0.05]",
+    accent: "text-failure",
   },
   attention: {
     icon: CircleAlert,

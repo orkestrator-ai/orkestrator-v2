@@ -16,10 +16,14 @@ import { createEnvironmentCommandRunner, readEnvironmentWorkspaceFile } from "./
 import { dockerExec } from "./commands-container-exec.js";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
-import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
-import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
-import { sanitizeGitHubError } from "./github.js";
-import { runRemoteGit } from "./git-noninteractive-env.js";
+import {
+  gitHubCli,
+  type GitHubCliConfigSource,
+  gitHubCliEnv,
+  type GitHubCliSelection,
+  runRemoteGit,
+  sanitizeGitHubError,
+} from "./git/index.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 

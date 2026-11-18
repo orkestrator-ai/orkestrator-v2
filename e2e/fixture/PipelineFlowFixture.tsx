@@ -165,7 +165,7 @@ function fanout(): BuildPipeline {
     currentSessionIndex: 2,
     sessions: [
       stage("build", "build", 30, 600),
-      stage("rework", "prep", 640, 120, { label: "Package Preparation Session" }),
+      stage("package-preparation", "prep", 640, 120, { label: "Package Preparation Session" }),
       stage("review", "rev-1", 800, null, { label: "Review 1", tokenCount: 81_000 }),
       stage("review", "rev-2", 800, 60, {
         label: "Review 2",
@@ -339,16 +339,19 @@ function validationHistory(): BuildPipeline {
     completedAt: undefined,
   });
   return base({
-    phase: "reworking",
+    phase: "preparing-package",
     iteration: 1,
     currentSessionIndex: 5,
     sessions: [
       stage("build", "build", 0, 50),
-      stage("rework", "prep-0", 60, 50, { label: "Package Preparation Session" }),
+      stage("package-preparation", "prep-0", 60, 50, { label: "Package Preparation Session" }),
       stage("review", "review", 200, 50),
       stage("verify", "verify", 300, 50),
       stage("rework", "fix", 400, 50, { iteration: 1 }),
-      stage("rework", "prep-1", 460, 50, { iteration: 1, label: "Package Preparation Session" }),
+      stage("package-preparation", "prep-1", 460, 50, {
+        iteration: 1,
+        label: "Package Preparation Session",
+      }),
     ],
     validationRun: run,
     validationHistory: [
@@ -408,7 +411,7 @@ function reviewerRerun(): BuildPipeline {
     currentSessionIndex: 4,
     sessions: [
       stage("build", "build", 30, 600),
-      stage("rework", "prep", 640, 120, { label: "Package Preparation Session" }),
+      stage("package-preparation", "prep", 640, 120, { label: "Package Preparation Session" }),
       stage("review", "rerun-rev-1", 800, 200, {
         ...pass,
         label: "Review 1",

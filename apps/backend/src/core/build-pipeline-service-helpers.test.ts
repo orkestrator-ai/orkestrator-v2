@@ -356,7 +356,7 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "rework"
+        : phase === "build" || phase === "rework" || phase === "package-preparation"
           ? TEST_REVIEW_PREPARATION
           : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
@@ -773,7 +773,7 @@ describe("BuildPipelineService", () => {
         return {
           ok: true,
           value:
-            phase === "build" || phase === "rework"
+            phase === "build" || phase === "rework" || phase === "package-preparation"
               ? TEST_REVIEW_PREPARATION
               : phase === "address-findings"
                 ? TEST_ADDRESS_FINDINGS_RESULT
@@ -1406,8 +1406,9 @@ describe("BuildPipelineService", () => {
           const probes = invocations.filter((call) => call.args.fingerprint).length;
           await service.advanceNow(fixing.id);
           const preparing = await pipeline(storage, fixing.id);
+          expect(preparing.phase).toBe("preparing-package");
           expect(preparing.sessions.at(-1)).toMatchObject({
-            phase: "rework",
+            phase: "package-preparation",
             label: REVIEW_PACKAGE_SESSION_LABEL,
           });
           expect(preparing.sessions.at(-1)?.reworkWorktreeFingerprintAtStart).toBeUndefined();

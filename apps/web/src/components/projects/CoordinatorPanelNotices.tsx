@@ -349,7 +349,7 @@ export function CoordinatorStartupFailure({
 /** One expandable error line for the repository's retained error. */
 export function CoordinatorErrorDetails({ label, message }: { label: string; message: string }) {
   return (
-    <details className="mt-1 text-xs text-red-300">
+    <details className="mt-1 text-xs text-failure">
       <summary className="cursor-pointer">{label}</summary>
       <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap">{message}</pre>
     </details>

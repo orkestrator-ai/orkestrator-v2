@@ -17,7 +17,7 @@ export const TEST_REVIEW_PREPARATION: ReviewPreparationResult = {
   limitations: ["This test does not exercise validation artifact hydration."],
 };
 
-/** A complete Address `fix-result` for suites that only need the stage to finish. */
+/** A complete Address `address-findings-result` for suites that only need the stage to finish. */
 export const TEST_ADDRESS_FINDINGS_RESULT: ReviewAddressFindingsResult = {
   complete: true,
   summary: "Addressed every review finding.",

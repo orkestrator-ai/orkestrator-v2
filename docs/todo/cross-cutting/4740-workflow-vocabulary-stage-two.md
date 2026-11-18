@@ -5,13 +5,15 @@
 Analysed 2026-11-04 against `main` at `67db62362`.
 Updated 2026-11-14 for the user's legacy-retirement decision.
 Updated 2026-11-17 against `main` at `0265e7882`: task 1 done.
+Updated 2026-11-18 against `main` at `b2c91abb9`: tasks 3, 4 and 5 done; task 6 added.
 
 ### Tasks
 
 1. **Flip stored and transmitted values and fields to the new names**: backend writes the new vocabulary, with a one-way storage migration. Status: done (2026-11-17; storage migration version 11, see Assumptions and decisions).
-3. **Rename the public names**: coordinator tools and their fields, CLI wire fields, `submit_fix_result`, graph template names. Status: open.
-4. **Give package preparation its own phase**: stop storing the preparation session as phase `rework`. Status: open.
-5. **Retire the compatibility paths**: the former names and readers, once nothing needs them. Status: open (depends on 3).
+3. **Rename the public names**: coordinator tools and their fields, CLI wire fields, `submit_fix_result`, graph template names. Status: done (2026-11-18; storage migrations 13 and 14).
+4. **Give package preparation its own phase**: stop storing the preparation session as phase `rework`. Status: done (2026-11-18; storage migration 12).
+5. **Retire the compatibility paths**: the former names and readers, once nothing needs them. Status: done (2026-11-18; what stays reads stored user state, see Assumptions and decisions).
+6. **Rename the two coordinator backend commands**: `open_coordinator_multi_review_fix` and `custom_fix_coordinator_multi_review_action`. Status: open (waits on 8304's contract tooling decision).
 
 ### 1. Flip stored and transmitted values and fields to the new names
 
@@ -99,6 +101,24 @@ Updated 2026-11-17 against `main` at `0265e7882`: task 1 done.
     - Pros: removes it at once.
     - Cons: a stage-two client talking to a stage-one backend has no path, which breaks the hosted client's rule. Under the 2026-11-14 decision no stage-one backend or client stays in use, so this no longer applies.
 
+### 6. Rename the two coordinator backend commands
+
+**Problem.** The coordinator tools are now `open_multi_review_address_findings` and `custom_address_multi_review`, but the backend registry commands behind them keep their former names, `open_coordinator_multi_review_fix` and `custom_fix_coordinator_multi_review_action` (`packages/protocol/src/contract/domains/coordinator/commands-project.ts`). Their arguments already use the new field names (`addressFindingsModel`).
+
+**Context.** Only Orkestrator itself calls these commands: the Control MCP tools in `apps/backend/src/core/control-mcp/review-actions.ts` and node routing in `nodes/node-routing.ts`. A rename is a removal to the contract CI job (`mise run contract:ci`), which fails until the coordinator domain is bumped and a register or Retired row in `docs/architecture/version-compatibility.md` names the removed command.
+
+**Investigation.** Task 3 renamed them first, and `contract:ci` refused both as removed commands in releases v2.21.0 to v2.39.5-beta, asking for a coordinator domain bump (coordinator is version 1). The names were restored, with a comment on each definition. Whether to-do 8304's decision on how the contract tooling follows the 2026-11-14 legacy retirement makes the bump unnecessary is not settled.
+
+**Decisions.**
+
+- **How to rename them?**
+  - **Wait for 8304's tooling decision, then rename with whatever it requires (recommended).**
+    - Pros: one decision covers every command the retirement left pinned; no throwaway adapter.
+    - Cons: the old word stays in two internal command names until then.
+  - **Bump the coordinator domain now, with a version-1 adapter and a register row.**
+    - Pros: the names flip at once.
+    - Cons: an adapter and a row for two commands no user or script calls by name.
+
 ## Assumptions and decisions
 
 ### Task 1: task 2's confirmation is answered by the policy (user decision, 2026-11-14)
@@ -179,9 +199,29 @@ prefix) and the former tab title held by restored layouts
 (`MULTI_REVIEW_FORMER_FIX_TAB_TITLE`), unless the worker upgrades that stored
 state once instead.
 
+### Task 3: the new public names (2026-11-18)
+
+Chosen names, applied with no dual names or translators: the coordinator tools `open_multi_review_address_findings` (was `open_multi_review_fix`) and `custom_address_multi_review` (was `custom_fix_multi_review`, to pair with `address_multi_review`); the fields `addressFindingsModel` and `autoAddressFindings` (were `fixModel`, `autoFix`) in coordinator tools, the controller and coordinator-node surface commands, the public CLI inputs and the CLI; coordinator answers `addressFindingsTabId`, `automation.autoAddressFindings` and the same names in `reviewSelection`; the Multi Review surface `address-findings` (was `fix`) and controller surface `custom-address` (was `custom-fix`); the build step `address-findings` (was `address`) in `start_build_pipeline`, `build.launch`, `build.get` and the CLI. `launchActionInputFromPublicFields`, `buildStepKeyForPublicStep` and the older-node surface fallback are gone. Graphs and results: the result kind and graph type `address-findings-result` (was `fix-result`), the tool `submit_address_findings_result`, the Verify frame `<address-findings-result-json>`, the role `addresser` (was `fixer`), the prompts `pipeline-rework`, `address-findings` and `pipeline-address-findings` (were `pipeline-fix`, `fix-review-issues`, `address-review`), the parameter `autoAddressFindings`, the action default `addressFindings` (was `fixReviewIssues`), and node ids `rework` and `address-findings` in the built-in Build Pipeline (were `fix`, `address`) and `address-findings` in the built-in Multi Review (was `fix`). Verify's input port is `addressFindings`, because port names cannot hold a hyphen. The saved setting `multiReview.autoFix` keeps its name: it is a settings key, not a workflow name.
+
+### Task 3: stored data is migrated, not read twice (2026-11-18)
+
+Storage migration 13 (`storage-graph-vocabulary-upgrade.ts`) rewrites user graph templates, "Describe a graph" drafts, saved launch defaults, scheduled graph launches, workflow result entries and slots, and graph runs with their artifacts. Graph runs (the to-do's open question): a run freezes its plan behind `plan.digest` and its artifact ids hash type and producer, so a run is rewritten consistently, digests and ids recomputed and every reference following, with each session key pinned to the key it had so transcripts and provider sessions stay attached; a run that would not validate after the rewrite is left as it was. Project templates live in their repositories and are not rewritten. Migration 14 (`storage-coordinator-receipt-vocabulary-upgrade.ts`) renames stored coordinator receipts from `custom-fix` to `custom-address`; without it the coordinators store would drop them on read and a retried pre-rename request would run again. Launch receipts hashed with the former field names now refuse a retry as a different payload, which is the accepted cost of a request key from before the rename. A running agent that still holds `submit_fix_result` from earlier in its conversation is refused once, and the reminder names the new tool.
+
+### Task 3: two backend command names kept (2026-11-18)
+
+The backend commands behind the renamed coordinator tools were renamed too, but `contract:ci` treats a rename as a removal needing a coordinator domain bump. Chosen: keep `open_coordinator_multi_review_fix` and `custom_fix_coordinator_multi_review_action` as registered names (their arguments use the new fields) and leave the rename to task 6, rather than add a version-1 adapter for two commands only Orkestrator calls.
+
+### Task 4: preparation has its own phases (2026-11-18)
+
+The dedicated preparation session is stored as `package-preparation` and the pipeline as `preparing-package` while it or the validation run it planned is in progress, in every round; `REVIEW_PACKAGE_SESSION_LABEL` is display text only and every label check became a phase check. Round 1 did run as `reworking` before (the "Needs verification" item, answered from the code path, not a live run), and a validation restart in round 1 could leave `building`. Restarts of preparation stay `review-package` requests and skips cannot name it; `implementationPhase` now comes from the round. Without a configured preparation step, preparation keeps running under the Address Findings step's settings (`stepKeyForSessionPhase`). Migration 12 (`storage-package-preparation-phase-upgrade.ts`) moves stored sessions and pipeline phase fields, keyed on the label older builds wrote, and leaves session keys, restart and skip requests, rewinds and key information authors as written. Multi Review already had its own `preparing` phase and needed nothing.
+
+### Task 5: what retired and what stays (2026-11-18)
+
+Retired with task 3: the CLI's former flags (`--fix-model`, `--auto-fix`/`--no-auto-fix`, `review open --fix`) and the translators named above. The saved `addressFindings` action-default read is replaced by its reverse: `normalizeActionDefaults` reads a saved `fixReviewIssues` once as `addressFindings` and writes only the new key, and `normalizeWorkflowResultToolsSettings` does the same for a saved `fix-result`. These are config.json's one-way upgrade, because settings have no migration framework. Stays, because it reads stored user state rather than an older peer: those two settings reads, `MULTI_REVIEW_FORMER_FIX_TAB_TITLE` for restored layouts, and the prompt prefixes matched against stored transcripts.
+
 ## Current state
 
-Stage one is in: visible text, agent prompts, internal functions, types and files. Since 2026-11-17 (task 1) every build stores and sends only the new names in build pipeline and Multi Review records, their start requests, step controls and the Multi Review launch defaults; storage migration version 11 rewrote what older builds stored, and stage one's readers are gone. Public names (coordinator tools and their answers, CLI wire fields, graph templates, workflow result kinds such as `fix-result`, Multi Review tab surfaces such as `surface: "fix"`) still use the former words and are translated where they enter (`launchActionInputFromPublicFields` in `multi-review.ts`, the coordinator `start_build_pipeline` tool's `steps.address`). Internal stage keys (`BuildPipelineStageKey`, `MultiReviewStageKey` keyed maps) follow the session phases.
+Stage one is in: visible text, agent prompts, internal functions, types and files. Since 2026-11-17 (task 1) every build stores and sends only the new names in build pipeline and Multi Review records; since 2026-11-18 (tasks 3 to 5) the coordinator tools and answers, CLI wire fields and flags, graph templates and runs, workflow result kinds and Multi Review tab surfaces use them too, and build pipeline package preparation has its own phases. Storage migrations 11 to 14 rewrote what older builds stored. What still says Fix: the two coordinator backend command names (task 6), the `multiReview.autoFix` setting key, renderer-internal identifiers, and the readers of stored user state listed under task 5.
 
 ## Constraints and rationale
 
@@ -191,8 +231,8 @@ Stage one is in: visible text, agent prompts, internal functions, types and file
 
 ## Needs verification
 
-- Whether stored graph runs reference node ids (task 3).
-- Whether round 1 package preparation reports `reworking` in a real run (task 4).
+- A live pipeline run showing package preparation as its own phase in rounds 1 and 2 (task 4; checked in code and tests only).
+- A real data directory with saved graph templates and in-flight graph runs opening after migration 13 (task 3; checked on seeded stores only).
 
 ## Related
 
@@ -200,3 +240,4 @@ Stage one is in: visible text, agent prompts, internal functions, types and file
 - [`docs/architecture/build-pipeline-view.md`](../../architecture/build-pipeline-view.md)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, confirming every machine and client runs a stage-one build) moved there on 2026-11-10; task 2 was answered on 2026-11-14 by the user's legacy-retirement decision, so that item goes.
 - 8108 (retired): the 2026-11-14 legacy-retirement sweep.
+- [8304](8304-contract-pinned-compatibility-paths.md): how the contract tooling follows the legacy retirement (task 6 waits on it).

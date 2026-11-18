@@ -65,7 +65,7 @@
   `git init` + `git commit --allow-empty` and then the same `fs.rm(.git)` +
   `rmdir` left the folder behind in 6 of 150 runs, and in 0 of 150 with
   `-c maintenance.auto=false`. The unchanged owners failed under
-  `mise run test:logged -- --name repro-0008 -- bun scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-project-creation.test.ts ./src/core/github-project-credentials.integration.test.ts -t "definitely missing|missing PAT" --rerun-each=40`:
+  `mise run test:logged -- --name repro-0008 -- bun scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-project-creation.test.ts ./src/core/git/github-project-credentials.integration.test.ts -t "definitely missing|missing PAT" --rerun-each=40`:
   7 of 160 (two `rolls back when GitHub CLI is definitely missing`, five
   `missing PAT … not.toContain("scratch")`).
 - **Stress:** the same command with the fix (`repro-0008-fixed`) passed 160

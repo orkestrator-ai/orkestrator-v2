@@ -210,6 +210,24 @@ describe("TranscriptAnnotationLayer", () => {
     expect(screen.queryByTestId("transcript-annotation-editor") === null).toBe(true);
   });
 
+  test("uses the shared primary colors for the action pill and both pin states", () => {
+    render(<AnnotationHarness />);
+    selectMessage("message-1");
+
+    const pill = screen.getByRole("button", { name: "Add to chat" });
+    expect(pill.classList.contains("border-primary/25")).toBe(true);
+    fireEvent.click(pill);
+    const editorPin = screen.getByLabelText("Transcript reference 1");
+
+    fireEvent.keyDown(commentInput(1), { key: "Enter" });
+    const marker = screen.getByRole("button", { name: "Edit comment for transcript reference 1" });
+
+    for (const control of [pill, editorPin, marker]) {
+      expect(control.classList.contains("bg-primary-fill")).toBe(true);
+      expect(control.classList.contains("text-primary-foreground")).toBe(true);
+    }
+  });
+
   test("retains hidden markers and highlights across disable and re-enable", () => {
     const view = render(<AnnotationHarness enabled />);
     addAnnotation("message-1");

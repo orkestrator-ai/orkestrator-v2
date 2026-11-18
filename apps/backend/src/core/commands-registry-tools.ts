@@ -13,7 +13,7 @@ import {
   getGitHubCliStatus,
   gitHubCliLoginProgress,
   startGitHubCliLogin,
-} from "./github-cli-setup.js";
+} from "./git/github-cli-setup.js";
 import { checkHostTool } from "./host-tools.js";
 import { homePath, pathExists } from "./shell.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";

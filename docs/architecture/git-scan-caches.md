@@ -9,10 +9,10 @@ are relative to `apps/backend/src/core/`.
 | File | Purpose |
 | --- | --- |
 | `commands-files.ts` | `enableGitScanCaches` (new worktrees), `getLocalGitStatusDetailed` (diff stats), `buildContainerGitStatusScript` |
-| `git-diff-summary.ts` | The `git diff --raw --numstat -z` parser every scan uses |
+| `git/diff-summary.ts` | The `git diff --raw --numstat -z` parser every scan uses |
 | `local-git-scan-caches.ts` | Per-worktree untracked line counts and the exclude-file memo |
 | `worktrees/watcher.ts`, `worktrees/watch-plan.ts` | The hints that start a scan, and which subtrees they leave out |
-| `git-fsmonitor.ts` | Daemon stop, removal of the legacy setting, timeout fallback |
+| `git/fsmonitor.ts` | Daemon stop, removal of the legacy setting, timeout fallback |
 | `review-validation-worker.ts`, `review-worktree-fingerprint.ts` | Environment-side status reads with their own fallback |
 
 ## What is enabled
@@ -367,7 +367,7 @@ diff and `status`. It used to run seven or eight.
   reads them in sequence, so a path that starts with `:` or looks like a count
   stays a path. Output is unchanged, including renames, paths with spaces, tabs
   and newlines, and non-UTF-8 names, which decode lossily exactly as before.
-  `git-diff-summary.test.ts` compares both forms against real Git. Stat-only
+  `git/diff-summary.test.ts` compares both forms against real Git. Stat-only
   modifications still appear in the raw records and are still dropped by checking
   numstat (`withoutStatOnlyModifications`). Git scopes use the same run.
 - **One base resolution.** The check that finds the base already reads its commit,
@@ -458,13 +458,13 @@ a `core.fsmonitor` the user set (for example in `~/.gitconfig`) on most of its
 own reads. `change-tracking/capture.ts`, diff stats (`getLocalGitStatusDetailed`),
 the review worktree probe (see below) and the stop and migration calls pass
 `-c core.fsmonitor=false` unconditionally. Capture and diff stats also pass `-c core.hooksPath=/dev/null`
-(`HARDENED_GIT_CONFIG` in `git-fsmonitor.ts`): they scan worktrees on the host, and a worktree's own
+(`HARDENED_GIT_CONFIG` in `git/fsmonitor.ts`): they scan worktrees on the host, and a worktree's own
 config, which whatever runs in it can write, must not name a program for them
 to run (security report L9).
 
 Diff stats also read the effective filter configuration before scanning, then
 blank each configured driver's clean, smudge and process commands and set
-`required=false` for that invocation (`git-filter-config.ts`). A configuration
+`required=false` for that invocation (`git/filter-config.ts`). A configuration
 read error stops the scan; only Git's no-matching-key exit is accepted as an
 empty driver list. The diff passes `--no-ext-diff --no-textconv`. These
 counts describe the raw worktree bytes rather than an external filter's output.
@@ -663,7 +663,7 @@ they need no retry.
 `tests/isolate-git-config.ts` writes `core.fsmonitor=false` into the isolated
 global config every Node test process uses, so no fixture repository starts a
 daemon. A test that needs one sets it in its own repository and stops it.
-`git-fsmonitor.test.ts` guards the preload, `enableGitScanCaches`, the
+`git/fsmonitor.test.ts` guards the preload, `enableGitScanCaches`, the
 migration's scoping, the daemon stop and the fallback wiring. Its real-daemon
 cases run wherever `git version --build-options` reports
 `feature: fsmonitor--daemon`, Linux included, and stop every daemon they start.

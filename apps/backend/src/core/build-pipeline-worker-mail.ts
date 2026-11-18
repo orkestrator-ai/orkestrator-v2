@@ -35,7 +35,11 @@ import {
   type PipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
 import { PromptRejectedError } from "./build-pipeline-provider.js";
-import { discardPreparationResult, resumablePhase } from "./build-pipeline-service-helpers.js";
+import {
+  discardPreparationResult,
+  preparesReviewPackage,
+  resumablePhase,
+} from "./build-pipeline-service-helpers.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js";
@@ -142,8 +146,7 @@ export class BuildPipelineWorkerMail implements PipelineWorkerMailPort {
         // A steered build or fix may change the work a preparation result
         // described, exactly as a steer from the pipeline tab does. Saved
         // here, under the lock this steer already holds.
-        if (!live.session || (pipeline.phase !== "building" && pipeline.phase !== "reworking"))
-          return;
+        if (!live.session || !preparesReviewPackage(resumablePhase(pipeline.phase))) return;
         const record = await this.ctx.requireRecord(pipeline.id);
         const fresh = record.snapshot as BuildPipeline;
         fresh.backendRevision = record.revision;
@@ -267,7 +270,7 @@ export async function dispatchWorkerMailTurn(
       });
       archiveValidationRun(pipeline, run);
     }
-    if (phase === "building" || phase === "reworking") discardPreparationResult(session);
+    if (preparesReviewPackage(phase)) discardPreparationResult(session);
     const startedAt = new Date().toISOString();
     if (previousRequestId) {
       session.structuredRequestId = requestId;

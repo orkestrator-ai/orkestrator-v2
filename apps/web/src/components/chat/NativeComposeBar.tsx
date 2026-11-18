@@ -26,6 +26,12 @@ import {
   type TranscriptAnnotation,
 } from "@/lib/chat/transcript-annotations";
 
+export const COMPOSE_FRAME_CLASS_NAME =
+  "rounded-xl border border-border/70 bg-compose-surface p-3 shadow-xl shadow-black/20 transition-colors duration-150 has-[.native-compose-input:focus]:border-zinc-700 has-[textarea:focus]:border-zinc-700";
+
+export const COMPOSE_COLUMN_CLASS_NAME =
+  "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 sm:w-[min(calc(100%_-_2rem),56rem)]";
+
 export interface NativeComposeAttachment {
   id: string;
   type: "file" | "image";
@@ -179,19 +185,11 @@ export function NativeComposeBar({
   };
   return (
     <>
-      <div
-        className={cn(
-          "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 sm:w-[min(calc(100%_-_2rem),56rem)]",
-          layout === "bottom" ? "mb-4 mt-2" : "my-0",
-        )}
-      >
+      <div className={cn(COMPOSE_COLUMN_CLASS_NAME, layout === "bottom" ? "mb-4 mt-2" : "my-0")}>
         {queue ? (
           <QueuedPromptStack ref={queueStackRef} queue={queue} onExit={returnFromQueue} />
         ) : null}
-        <div
-          data-testid={testId}
-          className="rounded-xl border border-border/70 bg-compose-surface p-3 shadow-xl shadow-black/20 transition-colors duration-150 has-[.native-compose-input:focus]:border-zinc-700"
-        >
+        <div data-testid={testId} className={COMPOSE_FRAME_CLASS_NAME}>
           {attachments.length > 0 || annotations.length > 0 || migrated.length > 0 ? (
             <div className="mb-2 flex flex-wrap gap-2">
               {migrated.map((annotation) => (

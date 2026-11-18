@@ -568,7 +568,7 @@ export function RepositorySettings({
                 placeholder="Project name"
                 disabled={isSaving}
               />
-              {projectNameError && <p className="text-sm text-destructive">{projectNameError}</p>}
+              {projectNameError && <p className="text-sm text-failure">{projectNameError}</p>}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="projectIcon">Icon</Label>
@@ -669,7 +669,7 @@ export function RepositorySettings({
                 </Button>
               </div>
               {gitUrlError ? (
-                <p className="text-sm text-destructive">{gitUrlError}</p>
+                <p className="text-sm text-failure">{gitUrlError}</p>
               ) : (
                 <p className="text-xs text-muted-foreground">
                   Update this if the repository has moved. New environments clone from this URL.

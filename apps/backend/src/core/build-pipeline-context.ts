@@ -296,10 +296,12 @@ export class BuildPipelineContext {
     phase: ResumableBuildPhase,
     validationPlan = false,
   ): WorkflowResultKind | undefined {
-    // An implementation-phase turn sent the validation-plan schema: the
-    // dedicated package preparation.
-    if (validationPlan && (phase === "building" || phase === "reworking")) {
-      return buildPipelineStage("preparation").result ?? undefined;
+    // The turns that prepare the review package submit what their schema
+    // asks for: the validation plan (package preparation), or review
+    // preparation (Build, Rework, and a preparation turn sent again after a
+    // message discarded its plan).
+    if (phase === "building" || phase === "reworking" || phase === "preparing-package") {
+      return buildPipelineStage(validationPlan ? "preparation" : "rework").result ?? undefined;
     }
     const sessionPhase = sessionPhaseForBuildPhase(phase);
     return sessionPhase ? (buildPipelineSessionStage(sessionPhase).result ?? undefined) : undefined;

@@ -17,7 +17,8 @@ describe("graph grammar", () => {
   });
 
   test("keys are identifiers usable in tool names and paths", () => {
-    for (const key of ["code", "autoFix", "design_brief", "v2"]) expect(isGraphKey(key)).toBe(true);
+    for (const key of ["code", "autoAddressFindings", "design_brief", "v2"])
+      expect(isGraphKey(key)).toBe(true);
     for (const key of ["Code", "design-brief", "_x", "2v", "", "a".repeat(B.maxKeyChars + 1)]) {
       expect(isGraphKey(key)).toBe(false);
     }
@@ -26,7 +27,7 @@ describe("graph grammar", () => {
   test("field paths are dotted segments", () => {
     for (const path of [
       "report.issues",
-      "params.autoFix",
+      "params.autoAddressFindings",
       "verify.verdict.complete",
       "has-findings.x",
     ]) {

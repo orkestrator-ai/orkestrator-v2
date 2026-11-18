@@ -1237,7 +1237,9 @@ describe("node mail request collisions", () => {
 });
 
 for (const alias of [false, true]) {
-  test(`node public launch replays upgraded ${alias ? "alias" : "pending receipt"}`, async () => {
+  // The former public names (`fixModel`, `autoFix`) retired with 4740 task 3: a
+  // receipt hashed with them is a different payload, refused rather than replayed.
+  test(`node former-name launch ${alias ? "alias" : "pending receipt"} is refused`, async () => {
     const { run, scope, world, associations } = await setup({
       answers: {
         get_multi_review_workflow: { snapshot: review("active-review", "preparing"), revision: 1 },
@@ -1275,17 +1277,11 @@ for (const alias of [false, true]) {
       "coordinators.json",
     )!;
     seedStore(world.storage.getDataDir(), "coordinators.json", { ...store, workflows: [upgraded] });
-    const replay = await run("launch_coordinator_node_multi_review", {
-      scope,
-      nodeId: "bk_leaf",
-      input: { ...input, requestId },
-    });
-    expect(replay).toMatchObject({ workflow: { id: "active-review" } });
     await expect(
       run("launch_coordinator_node_multi_review", {
         scope,
         nodeId: "bk_leaf",
-        input: { ...input, requestId, autoAddressFindings: true },
+        input: { ...input, requestId },
       }),
     ).rejects.toThrow("different payload");
   });

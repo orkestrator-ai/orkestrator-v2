@@ -630,8 +630,13 @@ export const openCoordinatorMultiReviewCommand = defineCommand({
   critical: [],
 });
 
-/** Opens a review's Address Findings tab. */
-export const openCoordinatorMultiReviewFixCommand = defineCommand({
+/**
+ * Opens a review's Address Findings tab (the coordinator tool
+ * `open_multi_review_address_findings`). The backend command keeps its
+ * registered name: renaming it is a removal, which needs a coordinator domain
+ * bump, and only Orkestrator itself calls it.
+ */
+export const openCoordinatorMultiReviewAddressFindingsCommand = defineCommand({
   domain: coordinatorDomain,
   name: "open_coordinator_multi_review_fix",
   since: 1,
@@ -660,8 +665,13 @@ export const addressCoordinatorMultiReviewActionCommand = defineCommand({
   critical: [],
 });
 
-/** A custom Address Findings with the caller's instruction and model. */
-export const customFixCoordinatorMultiReviewActionCommand = defineCommand({
+/**
+ * A custom Address Findings with the caller's instruction and model (the
+ * coordinator tool `custom_address_multi_review`). The backend command keeps
+ * its registered name for the same reason as
+ * {@link openCoordinatorMultiReviewAddressFindingsCommand}.
+ */
+export const customAddressCoordinatorMultiReviewActionCommand = defineCommand({
   domain: coordinatorDomain,
   name: "custom_fix_coordinator_multi_review_action",
   since: 1,
@@ -1247,9 +1257,9 @@ export const COORDINATOR_PROJECT_COMMANDS = [
   startCoordinatorMultiReviewCommand,
   launchCoordinatorMultiReviewActionCommand,
   openCoordinatorMultiReviewCommand,
-  openCoordinatorMultiReviewFixCommand,
+  openCoordinatorMultiReviewAddressFindingsCommand,
   addressCoordinatorMultiReviewActionCommand,
-  customFixCoordinatorMultiReviewActionCommand,
+  customAddressCoordinatorMultiReviewActionCommand,
   launchCoordinatorTerminalCommand,
   openCoordinatorBrowserCommand,
   editCoordinatorWorkerTabCommand,

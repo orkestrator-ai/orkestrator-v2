@@ -128,7 +128,7 @@ export function LinearBoardPicker({
 
       {teams.state === "error" && (
         <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3">
-          <div className="flex items-start gap-2 text-sm text-destructive">
+          <div className="flex items-start gap-2 text-sm text-failure">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <span className="break-words">{teams.message}</span>
           </div>
@@ -199,7 +199,7 @@ export function LinearBoardPicker({
             </Select>
           </div>
           {error && (
-            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-failure">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span className="break-words">{error}</span>
             </div>

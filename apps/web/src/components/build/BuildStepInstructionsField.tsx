@@ -57,7 +57,7 @@ export function BuildStepInstructionsField({
         />
         {`${stepTitle} instructions`}
         {!open && hasText && (
-          <span className={cn("font-normal", tooLong ? "text-red-400" : "text-cyan-300/80")}>
+          <span className={cn("font-normal", tooLong ? "text-failure" : "text-cyan-300/80")}>
             {tooLong ? "· too long" : "· added"}
           </span>
         )}
@@ -79,7 +79,7 @@ export function BuildStepInstructionsField({
             id={countId}
             className={cn(
               "mt-1 text-[11px] leading-snug",
-              tooLong ? "text-red-400" : "text-zinc-500",
+              tooLong ? "text-failure" : "text-zinc-500",
             )}
           >
             {`${byteCount.format(bytes)} / ${byteCount.format(MAX_BUILD_STEP_INSTRUCTIONS_BYTES)} bytes`}

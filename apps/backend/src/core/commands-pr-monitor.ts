@@ -1,8 +1,27 @@
-import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
-import { gitHubCliEnv, gitHubCredentialSource } from "./github-credentials.js";
+import {
+  gitHubCli,
+  gitHubCliEnv,
+  type GitHubCliSelection,
+  gitHubCredentialSource,
+  parsePrViewerPermission,
+  PR_VIEWER_PERMISSION_TIMEOUT_MS,
+  type PrDetection,
+  type PrMonitorKanbanTask,
+  type PrMonitorTarget,
+  prViewerPermissionArgs,
+  type PrViewerPermissionCache,
+  prViewerPermissionScope,
+  prViewerRepository,
+} from "./git/index.js";
+import {
+  failingCheckNames,
+  parsePrRequiredChecks,
+  PR_REQUIRED_CHECKS_TIMEOUT_MS,
+  prRequiredChecksArgs,
+  type PrRequiredChecksCache,
+} from "./git/pr-required-checks.js";
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
-import type { PrDetection, PrMonitorKanbanTask, PrMonitorTarget } from "./pr-monitor.js";
 import type { KanbanStorage, StorageService } from "./storage.js";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
 import { quoteShell } from "./commands-agent-support.js";
@@ -16,21 +35,6 @@ import { dockerExec } from "./commands-container-exec.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import { readCheckoutBranch, reconcileProjectHomeEnvironment } from "./project-home-environment.js";
-import {
-  parsePrViewerPermission,
-  PR_VIEWER_PERMISSION_TIMEOUT_MS,
-  prViewerPermissionArgs,
-  prViewerPermissionScope,
-  prViewerRepository,
-  type PrViewerPermissionCache,
-} from "./pr-viewer-permission.js";
-import {
-  failingCheckNames,
-  parsePrRequiredChecks,
-  PR_REQUIRED_CHECKS_TIMEOUT_MS,
-  prRequiredChecksArgs,
-  type PrRequiredChecksCache,
-} from "./pr-required-checks.js";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import {
   prBatchMember,

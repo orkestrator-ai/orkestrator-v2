@@ -31,7 +31,7 @@ describe("graphRunFlowModel", () => {
     const run = runOf("multi-review");
     const model = graphRunFlowModel(run.plan, run);
     expect(model.columns[0]!.nodeIds).toEqual([GRAPH_RUN_INPUTS_NODE_ID]);
-    const order = ["plan", "package", "review", "consolidate", "has-findings", "fix"];
+    const order = ["plan", "package", "review", "consolidate", "has-findings", "address-findings"];
     const columns = order.map((id) =>
       columnIndex(model, id === "review" ? slot(id, 1, "panel.1") : slot(id)),
     );
@@ -132,16 +132,20 @@ describe("graphRunFlowModel", () => {
         act({ nodeId: "review", branchKey: "panel.2" }),
         act({ nodeId: "consolidate" }),
         act({ nodeId: "has-findings" }, { outlet: "clean" }),
-        act({ nodeId: "fix" }, { state: "skipped", startedAt: undefined }),
+        act({ nodeId: "address-findings" }, { state: "skipped", startedAt: undefined }),
       ],
     });
     const model = graphRunFlowModel(run.plan, run);
     const gate = node(model, slot("has-findings"));
     expect(gate.outlet).toBe("clean");
-    const fix = node(model, slot("fix"));
-    expect(fix).toMatchObject({ skipped: true, state: "cancelled", placeholder: false });
+    const addressFindings = node(model, slot("address-findings"));
+    expect(addressFindings).toMatchObject({
+      skipped: true,
+      state: "cancelled",
+      placeholder: false,
+    });
     const untaken = model.edges.find(
-      (edge) => edge.from === slot("has-findings") && edge.to === slot("fix"),
+      (edge) => edge.from === slot("has-findings") && edge.to === slot("address-findings"),
     )!;
     expect(untaken).toMatchObject({ untaken: true, state: "pending" });
     // describe-pr and pr were never reached in a finished run: faded.
@@ -153,22 +157,22 @@ describe("graphRunFlowModel", () => {
       loopIterations: { rounds: 2 },
       activations: [
         act({ nodeId: "build" }),
-        act({ nodeId: "fix" }, { state: "skipped", startedAt: undefined }),
+        act({ nodeId: "rework" }, { state: "skipped", startedAt: undefined }),
         act({ nodeId: "prepare" }),
         act({ nodeId: "package" }),
         act({ nodeId: "review" }),
         act({ nodeId: "has-issues" }, { outlet: "issues" }),
-        act({ nodeId: "address" }),
+        act({ nodeId: "address-findings" }),
         act({ nodeId: "verify" }),
-        act({ nodeId: "fix", iteration: 2 }, { state: "running" }),
+        act({ nodeId: "rework", iteration: 2 }, { state: "running" }),
       ],
     });
     const model = graphRunFlowModel(run.plan, run);
     const verify1 = columnIndex(model, slot("verify", 1));
-    const fix2 = columnIndex(model, slot("fix", 2));
+    const rework2 = columnIndex(model, slot("rework", 2));
     const verify2 = columnIndex(model, slot("verify", 2));
-    expect(fix2).toBeGreaterThan(verify1);
-    expect(verify2).toBeGreaterThan(fix2);
+    expect(rework2).toBeGreaterThan(verify1);
+    expect(verify2).toBeGreaterThan(rework2);
     expect(columnIndex(model, slot("review", 2))).toBeGreaterThan(
       columnIndex(model, slot("review", 1)),
     );
@@ -179,7 +183,7 @@ describe("graphRunFlowModel", () => {
     expect(node(model, slot("verify", 2)).placeholder).toBe(true);
     // The carry feeds round 2 from round 1's verify.
     expect(
-      model.edges.some((edge) => edge.from === slot("verify", 1) && edge.to === slot("fix", 2)),
+      model.edges.some((edge) => edge.from === slot("verify", 1) && edge.to === slot("rework", 2)),
     ).toBe(true);
     // A third round is not drawn before it is entered.
     expect(model.nodes.some((flow) => flow.iteration === 3)).toBe(false);

@@ -360,7 +360,7 @@ export const getMultiReviewLaunchDefaultsCommand = defineCommand({
   critical: [],
 });
 
-/** Opens a saved review's root, Fix or reviewer tab, addresses its findings, or starts a custom fix. */
+/** Opens a saved review's root, Address Findings or reviewer tab, addresses its findings, or starts a custom Address Findings. */
 export const controllerMultiReviewSurfaceCommand = defineCommand({
   domain: coordinatorDomain,
   name: "controller_multi_review_surface",
@@ -372,10 +372,10 @@ export const controllerMultiReviewSurfaceCommand = defineCommand({
     surface: arg,
     reviewerId: arg,
     instruction: arg,
-    fixModel: arg,
+    addressFindingsModel: arg,
   }),
   result: MultiReviewActionResultSchema,
-  critical: ["fixModel"],
+  critical: ["addressFindingsModel"],
 });
 
 /** The low-level Multi Review start after a successful build, under a reserved ID. */
@@ -667,10 +667,10 @@ export const coordinatorNodeMultiReviewSurfaceCommand = defineCommand({
     reviewerId: arg,
     instruction: arg,
     requestId: arg,
-    fixModel: arg,
+    addressFindingsModel: arg,
   }),
   result: MultiReviewActionResultSchema,
-  critical: ["requestId", "fixModel"],
+  critical: ["requestId", "addressFindingsModel"],
 });
 
 /** A coordinator starts a Multi Review after a build on a node it controls. */

@@ -2,7 +2,7 @@ import { CommandFailedError, GitRemoteTimeoutError } from "./shell.js";
 import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
-import { sshConnectFailure, type SshConnectFailure } from "./git-ssh-transport.js";
+import { sshConnectFailure, type SshConnectFailure } from "./git/index.js";
 import { SETUP_FAILURE_REASONS, type SetupFailureReason } from "./container-scripts.js";
 
 const log = createLogger("environment");

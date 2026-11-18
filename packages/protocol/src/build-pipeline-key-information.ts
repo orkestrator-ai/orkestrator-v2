@@ -39,6 +39,7 @@ export type KeyInformationIssueStatus = (typeof KEY_INFORMATION_ISSUE_STATUSES)[
 export const KEY_INFORMATION_AUTHORS = [
   "build",
   "rework",
+  "package-preparation",
   "review",
   "address-findings",
   "verify",

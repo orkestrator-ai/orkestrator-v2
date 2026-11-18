@@ -96,10 +96,10 @@ describe("graph designer edits", () => {
     expect(renamed.roles).toEqual([{ key: "design", multiplicity: "one" }]);
     expect(renamed.nodes[0]).toMatchObject({ id: "design", role: "design" });
     const pipelineTemplate = pipeline();
-    // build and fix share the builder role: it stays.
+    // build and rework share the builder role: it stays.
     const kept = renameGraphNode(pipelineTemplate, "build", "builder");
     expect(kept.roles.some((role) => role.key === "builder")).toBe(true);
-    expect(kept.nodes.find((node) => node.id === "fix")).toMatchObject({ role: "builder" });
+    expect(kept.nodes.find((node) => node.id === "rework")).toMatchObject({ role: "builder" });
   });
 
   test("arranging lays every node out automatically and keeps the positions", () => {

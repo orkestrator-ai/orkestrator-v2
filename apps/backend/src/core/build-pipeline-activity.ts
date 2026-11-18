@@ -8,9 +8,9 @@
  * the control tools) reads only the environment's stored aggregate. Writing it
  * here is what lights a pipe branch's marker wherever it is shown.
  *
- * Debounced observations refresh the revision-validated shared store before
- * aggregating. Periodic reconciliation catches writes by other backends, and
- * dirty environments survive failed writes, including pipeline deletion.
+ * Debounced observations refresh one pipeline and aggregate its affected
+ * environments. Full reconciliation catches missed changes, including writes
+ * by other backends, and retries failed writes.
  *
  * The `working -> idle` edge also says what the bell reads
  * (`buildPipelineCompletionOutcome`): a failure as a failure, a completion as
@@ -149,6 +149,7 @@ export class BuildPipelineActivity {
   private readonly debounceMs: number;
   private readonly changeTimers = new Map<string, unknown>();
   private readonly pipelines = new Map<string, ObservedPipeline>();
+  private readonly pipelinesByEnvironment = new Map<string, Map<string, ObservedPipeline>>();
   /** Ends not yet announced, by pipeline; cleared when their environment's edge is written. */
   private readonly endings = new Map<string, ObservedEnding>();
   private readonly dirtyEnvironments = new Set<string>();
@@ -253,13 +254,10 @@ export class BuildPipelineActivity {
   /** Observes one pipeline now, including its deletion. */
   observe(pipelineId: string): Promise<void> {
     return this.serialize(async () => {
-      const previous = this.pipelines.get(pipelineId);
       const record = await this.storage.getBuildPipeline(pipelineId);
-      const next = record ? observePipeline(record) : null;
-      if (previous) this.dirtyEnvironments.add(previous.environmentId);
-      if (next) this.dirtyEnvironments.add(next.environmentId);
-      await this.refreshPipelines();
-      await this.syncDirtyEnvironments();
+      const affected = new Set<string>();
+      this.updatePipeline(pipelineId, record ? observePipeline(record) : null, affected);
+      await this.syncEnvironments(affected);
     });
   }
 
@@ -276,24 +274,54 @@ export class BuildPipelineActivity {
         }
       }
       await this.refreshPipelines();
-      await this.syncDirtyEnvironments();
+      await this.syncEnvironments(this.dirtyEnvironments);
+      // Only a full pass can recover failed reads and reconcile every dirty
+      // environment, so an unrelated successful event cannot cancel a retry.
+      if (this.retryTimer !== null) this.timers.clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+      this.retryMs = RETRY_MS;
     });
   }
 
   private async refreshPipelines(): Promise<void> {
     const records = await this.storage.listAllBuildPipelines();
-    const previous = new Map(this.pipelines);
-    for (const pipeline of this.pipelines.values()) {
-      this.dirtyEnvironments.add(pipeline.environmentId);
-    }
-    this.pipelines.clear();
+    const missing = new Set(this.pipelines.keys());
     for (const record of records) {
-      const observed = observePipeline(record);
-      if (!observed) continue;
-      this.pipelines.set(record.id, observed);
-      this.dirtyEnvironments.add(observed.environmentId);
-      this.noteEnding(record.id, previous.get(record.id), observed);
+      missing.delete(record.id);
+      this.updatePipeline(record.id, observePipeline(record), this.dirtyEnvironments);
     }
+    for (const pipelineId of missing) {
+      this.updatePipeline(pipelineId, null, this.dirtyEnvironments);
+    }
+  }
+
+  private updatePipeline(
+    pipelineId: string,
+    next: ObservedPipeline | null,
+    affected: Set<string>,
+  ): void {
+    const previous = this.pipelines.get(pipelineId);
+    if (previous) {
+      affected.add(previous.environmentId);
+      if (previous.environmentId !== next?.environmentId) {
+        const siblings = this.pipelinesByEnvironment.get(previous.environmentId);
+        siblings?.delete(pipelineId);
+        if (siblings?.size === 0) this.pipelinesByEnvironment.delete(previous.environmentId);
+      }
+    }
+    if (!next) {
+      this.pipelines.delete(pipelineId);
+      return;
+    }
+    this.pipelines.set(pipelineId, next);
+    let siblings = this.pipelinesByEnvironment.get(next.environmentId);
+    if (!siblings) {
+      siblings = new Map();
+      this.pipelinesByEnvironment.set(next.environmentId, siblings);
+    }
+    siblings.set(pipelineId, next);
+    affected.add(next.environmentId);
+    this.noteEnding(pipelineId, previous, next);
   }
 
   /**
@@ -354,11 +382,12 @@ export class BuildPipelineActivity {
     for (const [pipelineId] of this.endingsFor(environmentId)) this.endings.delete(pipelineId);
   }
 
-  private async syncDirtyEnvironments(): Promise<void> {
+  private async syncEnvironments(affected: ReadonlySet<string>): Promise<void> {
     // Attempt every environment even if one fails; only durable successes leave
     // the set. A deleted pipeline's former environment remains here for retry.
     const failures: unknown[] = [];
-    for (const environmentId of Array.from(this.dirtyEnvironments)) {
+    for (const environmentId of Array.from(affected)) {
+      this.dirtyEnvironments.add(environmentId);
       try {
         await this.syncEnvironment(environmentId);
         this.dirtyEnvironments.delete(environmentId);
@@ -367,9 +396,6 @@ export class BuildPipelineActivity {
       }
     }
     if (failures.length) throw failures[0];
-    if (this.retryTimer !== null) this.timers.clearTimeout(this.retryTimer);
-    this.retryTimer = null;
-    this.retryMs = RETRY_MS;
   }
 
   private async syncEnvironment(environmentId: string): Promise<void> {
@@ -378,9 +404,7 @@ export class BuildPipelineActivity {
       this.clearEndings(environmentId);
       return;
     }
-    const pipelines = Array.from(this.pipelines.values()).filter(
-      (pipeline) => pipeline.environmentId === environmentId,
-    );
+    const pipelines = Array.from(this.pipelinesByEnvironment.get(environmentId)?.values() ?? []);
     const desired: AgentActivityState = pipelines.some((pipeline) => pipeline.working)
       ? "working"
       : "idle";

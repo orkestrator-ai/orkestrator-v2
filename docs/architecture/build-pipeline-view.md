@@ -50,6 +50,31 @@ the `create_feature_build` command, `featureBuildRequestHash`, the `feature-buil
 events): they are persisted or part of the backend contract, so they were not
 renamed.
 
+## Sidebar activity and completion
+
+The backend stores the pipeline activity source on each environment. The source
+is working while any of that environment's pipelines has agents in flight.
+Completion and failure can raise unread attention when work ends. A cancel,
+pause, stall, or deletion alone does not raise completion attention.
+
+On a debounced pipeline change, the backend reads the changed record and
+reconciles its previous and current environments using the observed pipelines
+indexed under each environment. Observations and activity writes are serialized,
+so a completion saved during a working write is processed afterward. Startup,
+retry after failure, and the 30-second sweep reconcile all records and repair
+activity after missed or cross-process changes.
+
+To-do 8308 task 1 is done (retired 2026-11-18). In the
+[100-environment SQLite fixture](../../apps/backend/src/core/build-pipeline-activity.test.ts),
+one pipeline change fetched one record both before and after the change.
+It went from one listing of 100 pipeline records to zero listings, and from
+100 environment reads to one. The separate recovery sweep still listed 100
+pipeline records and read 100 environments. The measurements count calls at the
+observer's storage boundary. The existing single-record lookup reuses decoded
+records on a warm revision and reloads the control store after another
+connection changes its revision, as covered by the
+[storage read accounting tests](../../apps/backend/src/core/storage-read-accounting.test.ts).
+
 ## Starting a build
 
 Every launcher sends only what the user explicitly chose, and the backend fills

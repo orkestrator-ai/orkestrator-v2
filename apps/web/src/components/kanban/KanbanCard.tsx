@@ -271,10 +271,10 @@ export function KanbanCard({
       style={style}
       data-testid="kanban-card"
       className={cn(
-        "group relative overflow-hidden rounded-lg border bg-card p-3 pl-4 shadow-sm",
+        "group relative overflow-hidden rounded-lg border bg-card p-3 pl-4",
         "cursor-grab active:cursor-grabbing",
-        "transition-[border-color,box-shadow,background-color]",
-        "border-border hover:border-primary/50 hover:bg-accent/20 hover:shadow-md",
+        "transition-[border-color,background-color]",
+        "border-border hover:border-primary/50 hover:bg-accent/20",
         isDragOverlay && "rotate-1 border-primary/60 shadow-2xl shadow-black/50",
       )}
       {...attributes}

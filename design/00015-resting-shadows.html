@@ -11,11 +11,11 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00015</p>
       <h1>00015 · Remove resting and hover shadows from cards in the work</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-medium">Medium</span>
         <span class="pill">Elevation</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 10 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 10 / 10 images</span
         >
       </div>
 
@@ -93,7 +93,7 @@
           >
           is already present on the Kanban and Linear cards).
         </li>
-        <li>Decide the full-page load-failure cards (below).</li>
+        <li>Record the treatment of full-page load failures in Notes.</li>
       </ol>
 
       <h2>Decisions</h2>
@@ -300,55 +300,55 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Before images captured on <b>unmodified</b> code for every slot below, and committed
             under <code>design/images/00015/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “10 /
             10”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Type-check and the owning tests pass (commands below);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: Record any accepted exception (design canvas
             frames) in Elevation &amp; Depth.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -356,15 +356,79 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+      <h3>Shadow classification</h3>
+      <ul>
+        <li>
+          <b>In the work.</b> Removed resting and hover shadows from the Kanban, Linear, GitHub
+          issue and feature story cards. Their existing hover borders and card tones distinguish
+          them from the board.
+        </li>
+        <li>
+          <b>Load states.</b> Flattened the inline and full-page failure cards and the dialog
+          loading indicator. The failure border and loading hairline mark the status surfaces. The
+          full-page scrims still separate those states from the underlying view.
+        </li>
+        <li>
+          <b>Floating.</b> Kept the shadows on Kanban, Linear and GitHub drag previews, the machine
+          row while dragging, the Linear board action bar, the graph palette and both live and
+          placeholder design frames. Menus, dialogs, toasts, popovers, compose docks and floating
+          notices are outside the card change.
+        </li>
+      </ul>
+
+      <h3>Decisions</h3>
+      <ul>
+        <li>
+          Kept the recommended floating-window treatment for design frames. The existing
+          <code>shadow-xl</code> separates full pages from the canvas, including when a frame shows
+          its placeholder. The exception is recorded in
+          <a href="../DESIGN.md#elevation--depth">Elevation &amp; Depth</a>.
+        </li>
+        <li>
+          Chose a flat full-page failure card. The scrim already separates the failed view from the
+          app underneath, and the destructive border gives the message a clear edge. Keeping the
+          shadow would add a second depth cue.
+        </li>
+      </ul>
+
+      <h3>Before and after</h3>
+      <p>
+        Playwright captured all five pairs in the same isolated headless
+        <code>design-00015</code> profile, with the same dark theme, fixture data and scale factor
+        of 1. The baseline used unmodified renderer code at <code>b2c91abb9</code>. Kanban and
+        feature data came from the fixture backend. Playwright supplied the external Linear and
+        GitHub read responses.
       </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <a href="#cap-kanban-card-hover-desktop">Kanban hover</a>. The hovered backlog card loses
+          its shadow and still has a blue border, a toned surface and the Open action.
+        </li>
+        <li>
+          <a href="#cap-linear-card-hover-desktop">Linear hover</a>. The Todo card keeps its blue
+          hover border and status edge. The resting card in the next lane also sits flat.
+        </li>
+        <li>
+          <a href="#cap-features-cards-desktop">Feature stories</a>. Both story cards use their
+          existing hairlines at rest. A hover check also confirmed the blue border on the first
+          card.
+        </li>
+        <li>
+          <a href="#cap-load-failure-card-desktop">Desktop load failure</a>. Blocking the lazy
+          project workspace import leaves a flat error card centered in the workspace, with the
+          destructive border and Reload application button visible.
+        </li>
+        <li>
+          <a href="#cap-load-failure-card-narrow">Narrow load failure</a>. The same error fits
+          within the 390px viewport, with the border and reload action visible.
+        </li>
       </ul>
+      <p>
+        The browser check confirmed that the GitHub hover border still appears and that the
+        full-page settings loading and failure cards are flat. Reloading recovered the project
+        workspace at both widths once the import was available and restored the seeded ticket and
+        stories on desktop.
+      </p>
 
       <footer>
         Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and

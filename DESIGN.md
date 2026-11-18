@@ -368,6 +368,7 @@ The app is flat. Depth comes from tonal layers (sidebar darkest, then background
 - **Modal** (`box-shadow: 0 28px 90px rgba(0,0,0,0.72)`): dialogs and alert dialogs, with a 16px radius and a `zinc-700` hairline at 70%.
 - **Compose dock** (`shadow-xl` at black 20%): the native tab's compose bar, which floats over the bottom of the transcript.
 - **Floating notice** (`shadow-xl` at black 40% with a small backdrop blur; its folded pill uses `shadow-lg` at black 30%): agent mail and other pane notices floating at a pane's top right.
+- **Design canvas frames** (`shadow-xl`): the canvas treats frames as floating windows, so each page stays distinct from the canvas.
 - **Control lift** (`shadow-xs` / `shadow-sm`): inputs and the selected segment only.
 - **Site window** (`box-shadow: inset 0 1px 0 #2a3446, 0 30px 80px rgb(0 0 0 / 0.45), 0 2px 6px rgb(0 0 0 / 0.4)`): illustration frames on the public site.
 - **Site primary glow** (`box-shadow: inset 0 1px 0 #86aef5, 0 10px 30px rgb(39 81 155 / 0.3)`): the site's primary button; it lifts 1px on hover.
@@ -398,7 +399,7 @@ Quiet until touched. Most app buttons are ghost or tonal; the filled blue is rar
 ### Cards / Containers
 - **Corner Style:** 12px for cards, 8px for the tool card.
 - **Background:** `card` for generic cards, `panel-surface` for informational panels, `sidebar` for tool-call groups.
-- **Shadow Strategy:** none at rest (see Elevation).
+- **Shadow Strategy:** none at rest or on hover (see Elevation).
 - **Border:** 1px `input`/`divider`; tool-call groups divide their rows with `divider`.
 - **Internal Padding:** 24px for generic cards, 12–16px for panels.
 

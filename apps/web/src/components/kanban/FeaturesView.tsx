@@ -1001,7 +1001,7 @@ function FeatureStoriesPanel({
             key={story.id}
             type="button"
             onClick={() => onOpenStory(story.id)}
-            className="rounded-md border border-border bg-card p-4 text-left shadow-sm transition-[border-color,box-shadow] hover:border-primary/50 hover:shadow-md"
+            className="rounded-md border border-border bg-card p-4 text-left transition-[border-color] hover:border-primary/50"
           >
             <div className="flex items-start gap-2">
               <h4 className="min-w-0 flex-1 text-sm font-semibold text-foreground">

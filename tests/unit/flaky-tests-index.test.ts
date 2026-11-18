@@ -8,7 +8,7 @@ const register = path.join(root, "docs/tests/flaky-tests");
 const INDEX = "0000-index.md";
 
 const STATUSES = new Set(["open", "resolved", "environmental"]);
-const CASE_FILE = /^\d{4}-.+\.md$/;
+const CASE_FILE = /^\d{4,}-.+\.md$/;
 
 function groupFolders(register: string): string[] {
   return readdirSync(register, { withFileTypes: true })
@@ -35,7 +35,7 @@ function caseRows(index: string): Array<{ id: string; status: string; file: stri
   const rows: Array<{ id: string; status: string; file: string }> = [];
   for (const line of index.split("\n")) {
     const cells = tableCells(line);
-    if (!cells || cells.length < 6 || !/^\d{4}$/.test(cells[0]!)) continue;
+    if (!cells || cells.length < 6 || !/^\d{4,}$/.test(cells[0]!)) continue;
     const link = cells.at(-1)!.match(/^\[([^\]]+\.md)\]\(\1\)$/);
     if (!link) continue;
     rows.push({ id: cells[0]!, status: cells[1]!, file: link[1]! });
@@ -56,7 +56,7 @@ function checkCaseNumbers(register: string) {
   const byNumber = new Map<string, string[]>();
   for (const group of groupFolders(register)) {
     for (const file of caseFiles(path.join(register, group))) {
-      const id = file.slice(0, 4);
+      const id = file.split("-")[0]!;
       byNumber.set(id, [...(byNumber.get(id) ?? []), `${group}/${file}`]);
     }
   }

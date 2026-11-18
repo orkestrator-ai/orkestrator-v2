@@ -382,3 +382,25 @@ ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name review-browser-to
 
 `mise run flaky:recurrence -- 1012 --base 259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`
 reported the case open. This run reproduced the gap in both configurations.
+
+## Recurrence (2026-11-18): Design 00016 review validation
+
+On Linux at `deb92c491`, based on `259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`,
+the five-worker component browser run (`ORKESTRATOR_E2E_HOST_NETWORK=1
+mise run test:logged -- --name browser -- mise run test:browser`) failed
+`a live group crossing the fold threshold folds into its line with no-preference motion`
+on mobile. The frame probe at `e2e/ToolGroupFold.spec.ts:170` measured a 6 px gap
+against the 2 px limit. The browser watchdog ended the component suite at
+30 minutes with 1,543 passed, 10 failed, 152 skipped, five interrupted and
+224 cases that had yet to run.
+
+The one-worker owner run in the loopback namespace (`mise run test:logged
+-- --name tool-group-fold-browser-isolation -- bun scripts/loopback-network.ts
+--free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config
+e2e/playwright.config.ts ToolGroupFold.spec.ts --workers=1
+--output output/playwright/tool-group-fold-review`) passed the mobile case
+and reproduced the same assertion failure at 7 px on desktop. The owner
+finished with 38 passed, one skipped and one failed in 147.5 s.
+`mise run flaky:recurrence -- 1012 --base 259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`
+reported the case open. Design 00016 changes the quote renderer and has
+no edits to the tool group's animation or its test.

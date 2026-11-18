@@ -629,7 +629,7 @@ export function RequestCard({
       )}
 
       {excerpt && (
-        <blockquote className="border-l-2 border-primary/40 pl-2" data-response-excerpt>
+        <blockquote className="border-l border-border pl-2" data-response-excerpt>
           <p className="whitespace-pre-wrap break-words">{excerpt.text}</p>
           {excerpt.truncated && <p className="text-muted-foreground">(excerpt)</p>}
         </blockquote>

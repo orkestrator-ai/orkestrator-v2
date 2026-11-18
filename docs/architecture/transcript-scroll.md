@@ -243,6 +243,42 @@ element's top relative to the viewport.
   in the Electron window (`ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron`) and
   in a container environment (`ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`).
 
+## Tool-run grouping
+
+8307 (retired), task 1 is done. Adjacent visible tool-only assistant rows with
+the same model, turn and plan-review flag form one run. The renderer collects
+the source rows and groups a fresh run's parts once. It keeps the first source
+and settle timestamp for the head, the last source for the tail, and the newest
+row timestamp for display.
+
+A weak cache keyed by the ordered source objects reuses an unchanged group's
+display row. A live append can reuse the longest cached prefix. If that prefix
+is one tool group, only the suffix needs classifying and timestamping before
+the two are joined. The display ID aliases still apply after grouping, so a
+retained card can stay mounted and open as its run grows.
+
+The pairwise cache previously reused an unchanged prefix but regrouped every
+intermediate prefix on a cold read. Caching only the displayed runs requires
+one cache entry per source position on a fresh run and avoids building those
+intermediate rows.
+
+### Chromium measurements
+
+Median milliseconds in headless Chromium 158.0.8127.18 on Linux, using the
+production grouping function bundled for the browser at baseline `8814de571`
+and after the change. After warmup, each of 21 samples per size grouped fresh
+objects with one timestamped tool call per row in the same turn. The append
+added one new row to that already grouped run with all prefix objects retained.
+The benchmark timed grouping alone, before React renders, and checked identity
+reuse on repeated reads of both the prefix and the extended run.
+
+| Initial rows | Fresh before | Fresh after | Append before | Append after |
+| ---: | ---: | ---: | ---: | ---: |
+| 128 | 2.710 | 0.125 | 0.055 | 0.020 |
+| 256 | 10.595 | 0.210 | 0.110 | 0.030 |
+| 512 | 41.495 | 0.380 | 0.200 | 0.040 |
+| 1,024 | 164.540 | 0.745 | 0.415 | 0.080 |
+
 ## Activation and persistence
 
 `activation: "respect-intent"` (agent tabs, reviewers, Claude tmux):

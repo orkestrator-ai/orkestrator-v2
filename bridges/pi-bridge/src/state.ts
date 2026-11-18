@@ -23,6 +23,7 @@ import type {
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { bridgeGeneration, MAX_STEER_JOURNAL } from "./config.js";
+import type { ResponseUsage } from "./turn-usage.js";
 
 export type JsonObject = Record<string, unknown>;
 export type SessionStatus = "idle" | "running" | "error";
@@ -525,7 +526,9 @@ export interface SessionState {
   /** Bytes appended since the transcript was last measured against its budget. */
   uncheckedTranscriptBytes: number;
   usage?: PersistedUsage;
-  currentTurnUsage?: TurnUsage;
+  /** Runtime-only accounting for completed assistant frames and their stored equivalents. */
+  currentTurnResponses?: ResponseUsage;
+  turnEntryOffset?: number;
   /**
    * Sum of `AssistantMessage.durationMs` over the current turn's model
    * responses — the provider-side share of the turn's wall clock. Runtime-only.
@@ -534,15 +537,9 @@ export interface SessionState {
   /**
    * The model of the response being written (`provider/modelId`, see
    * `responseModelId`), so a row opened lazily after Pi named it is
-   * attributed to it. Runtime-only, cleared when a turn is dispatched.
+   * attributed to it. Runtime-only.
    */
   currentResponseModelId?: string;
-  /**
-   * The distinct models of the current turn's finished responses, at most two:
-   * one is the turn's model, two means it was mixed and no single model gets
-   * its usage. Runtime-only, cleared when a turn is dispatched.
-   */
-  currentTurnModelIds?: string[];
   /**
    * Pi's own verdict on the current turn's run: `agent_settled.aborted`
    * (Pi 1.1). True whoever aborted it — this bridge, an extension's

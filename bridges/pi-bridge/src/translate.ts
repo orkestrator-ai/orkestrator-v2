@@ -24,8 +24,9 @@ import { nextPartOrdinal, toolResultImagePartId } from "@orkestrator/protocol/tr
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { rememberHistoryMessage } from "./history-target.js";
 import { noteCommandOutput } from "./commands.js";
-import { MAX_MODEL_ID_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
-import { composeModelId } from "./models.js";
+import { MAX_TOOL_TITLE_BYTES } from "./config.js";
+import { responseModelId } from "./models.js";
+import { accumulateResponseUsage } from "./turn-usage.js";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import {
   appendBounded,
@@ -49,7 +50,6 @@ import {
   type BridgeToolPart,
   type JsonObject,
   type SessionState,
-  type TurnUsage,
 } from "./state.js";
 
 /**
@@ -153,7 +153,11 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
       state.openTextParts.clear();
       if (!turnFramesWelcome(state)) break;
       applyResponseModel(state, event.message);
-      recordTurnModel(state, event.message);
+      state.currentTurnResponses = accumulateResponseUsage(
+        state.currentTurnResponses,
+        event.message,
+        state.composer.selectedModelId,
+      );
       applyResponseOutcome(state, event.message);
       rememberResponseMessage(state, event.message);
       rememberPromptMessage(state, event.message);
@@ -173,7 +177,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
       break;
     case "turn_end":
       if (!turnFramesWelcome(state)) break;
-      applyTurnUsage(state, event.message);
+      recordProviderDuration(state, event.message);
       break;
     case "agent_settled":
       // Pi 1.1: whether the run that just settled was aborted — by this
@@ -261,31 +265,6 @@ function applyResponseBoundary(state: SessionState, value: unknown): void {
 }
 
 /**
- * The model that produced an assistant message, as `provider/modelId`.
- *
- * `responseModel` is what the provider says answered: set when an alias
- * resolved to a dated model, when a fallback model answered, or (for
- * OpenAI-compatible providers) always. Absent, the response came from the
- * model Pi asked for, which is also the only answer for a session entry an
- * older Pi wrote. Neither field is ours to trust for size, so an oversized
- * value is not a model id; nor is a message with no provider, because a bare
- * model id would not match the composer's `provider/modelId` encoding.
- */
-export function responseModelId(message: unknown): string | undefined {
-  if (!isObject(message) || message.role !== "assistant") return undefined;
-  const provider = modelIdPart(message.provider);
-  if (!provider) return undefined;
-  const model = modelIdPart(message.responseModel) ?? modelIdPart(message.model);
-  if (!model) return undefined;
-  const modelId = composeModelId(provider, model);
-  return Buffer.byteLength(modelId) <= MAX_MODEL_ID_BYTES ? modelId : undefined;
-}
-
-function modelIdPart(value: unknown): string | undefined {
-  return nonBlank(value) ? value.trim() : undefined;
-}
-
-/**
  * Attribute the response being written to the model Pi reports for it.
  *
  * Pi names the requested model on `message_start`, and a provider may name the
@@ -304,31 +283,6 @@ function applyResponseModel(state: SessionState, message: unknown): void {
   last.modelId = modelId;
   chargeNewEntry(state, { modelId });
   rowChanged(state, last);
-}
-
-/**
- * Note the model of a finished response against the turn it belongs to.
- *
- * One prompt can run many responses, and a fallback (or an extension switching
- * models mid-run) can put more than one model behind them. The turn's usage is
- * attributed to a model only when every response that cost anything used it;
- * two distinct models are enough to know it did not. A response that failed or
- * was aborted before spending a token says nothing about who was billed.
- */
-function recordTurnModel(state: SessionState, message: unknown): void {
-  if (!isObject(message) || message.role !== "assistant") return;
-  if (isObject(message.usage) && !spentTokens(message.usage)) return;
-  const modelId = responseModelId(message);
-  if (!modelId) return;
-  const seen = state.currentTurnModelIds ?? [];
-  if (seen.length >= 2 || seen.includes(modelId)) return;
-  state.currentTurnModelIds = [...seen, modelId];
-}
-
-function spentTokens(usage: JsonObject): boolean {
-  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].some(
-    (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
-  );
 }
 
 /**
@@ -648,15 +602,7 @@ function appendToolResultImages(
   }
 }
 
-/**
- * Record the usage the finished turn reported.
- *
- * Accumulated rather than replaced: one prompt can run many turns, and the tab
- * shows what the *prompt* cost. `reasoning` is deliberately not added into the
- * total — Pi documents it as a subset of `output`, so counting it separately
- * would double-bill every thinking model.
- */
-function applyTurnUsage(state: SessionState, message: unknown): void {
+function recordProviderDuration(state: SessionState, message: unknown): void {
   if (!isObject(message)) return;
   // Pi 1.1 times each model response (`AssistantMessage.durationMs`); summed,
   // it is the turn's provider time, the neutral `apiDurationMs`.
@@ -664,20 +610,6 @@ function applyTurnUsage(state: SessionState, message: unknown): void {
   if (responseMs !== undefined) {
     state.currentTurnApiDurationMs = (state.currentTurnApiDurationMs ?? 0) + responseMs;
   }
-  if (!isObject(message.usage)) return;
-  const usage = message.usage;
-  const turn: TurnUsage = { ...state.currentTurnUsage };
-  add(turn, "inputTokens", usage.input);
-  add(turn, "outputTokens", usage.output);
-  add(turn, "cacheReadTokens", usage.cacheRead);
-  add(turn, "cacheWriteTokens", usage.cacheWrite);
-  add(turn, "reasoningTokens", usage.reasoning);
-  state.currentTurnUsage = turn;
-}
-
-function add(turn: TurnUsage, key: keyof TurnUsage, value: unknown): void {
-  if (typeof value !== "number" || !Number.isFinite(value)) return;
-  turn[key] = (turn[key] ?? 0) + value;
 }
 
 function applyQueueUpdate(state: SessionState, event: JsonObject): void {

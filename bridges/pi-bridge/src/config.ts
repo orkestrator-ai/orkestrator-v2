@@ -7,6 +7,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
+import { MAX_USAGE_MODEL_ID_BYTES } from "@orkestrator/protocol/model-id";
 import { loadBridgeCredential } from "@orkestrator/protocol/node/bridge-credential";
 
 export const PROVIDER = "pi" as const;
@@ -170,7 +171,7 @@ export const MAX_TOOL_RESULT_IMAGES = 4;
 export const MAX_TOOL_RESULT_IMAGE_BYTES = 4 * 1024 * 1024;
 export const MAX_TOOL_DIFF_BYTES = 1024 * 1024;
 export const MAX_TOOL_TITLE_BYTES = 4 * 1024;
-export const MAX_MODEL_ID_BYTES = 1_024;
+export const MAX_MODEL_ID_BYTES = MAX_USAGE_MODEL_ID_BYTES;
 export const MAX_MODELS = 2_000;
 export const MAX_PROMPT_JOURNAL = 256;
 /** The prompt and steer routes' bound on a request id, after trimming. */

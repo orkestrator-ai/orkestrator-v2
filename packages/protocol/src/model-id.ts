@@ -4,6 +4,9 @@ import {
   CLAUDE_FALLBACK_MODEL_CATALOG,
 } from "./claude-model-catalog.js";
 
+/** Byte limit for model IDs carried intact from a provider to usage history. */
+export const MAX_USAGE_MODEL_ID_BYTES = 1_024;
+
 /**
  * Normalize a backend-reported model identifier for user-facing attribution.
  *

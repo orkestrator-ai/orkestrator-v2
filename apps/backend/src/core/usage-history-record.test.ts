@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
+import { MAX_USAGE_MODEL_ID_BYTES } from "@orkestrator/protocol/model-id";
 import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
 import {
   UNKNOWN_USAGE_MODEL_ID,
   shiftUsageDay,
   usageDayKey,
 } from "@orkestrator/protocol/usage-history";
+import { normalizeProviderContextUsage } from "./agent-provider-runtime.js";
 import {
   MAX_RECORDED_DAYS,
   MAX_RECORDED_MODELS_PER_DAY,
@@ -30,6 +32,24 @@ function dayTotals(models: Record<string, { totalTokens: number; turns: number }
     { totalTokens: 0, turns: 0 },
   );
 }
+
+test("provider usage keeps model buckets distinct past a shared 256-character prefix", () => {
+  const record = emptyUsageSessionRecord("env-1", "pi", AT);
+  const prefix = `pi/${"x".repeat(MAX_USAGE_MODEL_ID_BYTES - 4)}`;
+  const models = [`${prefix}a`, `${prefix}b`];
+  const oversize = `${prefix}é`;
+  const usage = normalizeProviderContextUsage({
+    source: "pi",
+    usedTokens: 300,
+    modelId: models[1],
+    turns: [...models, oversize].map((modelId, index) => turn(`turn-${index}`, { modelId })),
+  });
+
+  expect(usage?.modelId).toBe(models[1]);
+  expect(usage?.turns).toHaveLength(3);
+  for (const item of usage?.turns ?? []) applyTurnToRecord(record, item, DAY, AT);
+  expect(Object.keys(record.days[DAY]!.models)).toEqual([...models, UNKNOWN_USAGE_MODEL_ID]);
+});
 
 test("folding a day's overflow models keeps the day's totals exact", () => {
   const record = emptyUsageSessionRecord("env-1", "claude", AT);

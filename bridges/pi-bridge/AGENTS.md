@@ -87,21 +87,22 @@ A row names the model that produced it, not the composer selection. Pi's
 `AssistantMessage` carries the model it asked for (`provider`, `model`) and,
 when the provider reports it, the one that answered (`responseModel`: an
 alias resolved to a dated model, or a fallback model). `responseModelId` in
-`translate.ts` encodes `provider/responseModel`, else `provider/model`, in
-the composer's `provider/modelId` form; every assistant frame updates the open
-row, and `hydrateHistory` stamps replayed rows the same way, so a reload shows
-what the live row showed. A response with no provider (an older entry, a test
-fake) keeps the selection. Never write a response's model into
+`models.ts` tries `provider/responseModel` and then `provider/model`, checking
+each against the byte limit also used by backend usage normalization. Each
+assistant frame updates the open row, and `hydrateHistory` uses the same model
+resolver. Rows with no usable ID use the selection, preferring Pi's recorded
+model changes when replaying history. Never write a response's model into
 `composer.selectedModelId`: an alias resolving is not the user choosing
 another model, and the picker would then offer an id the catalogue lacks.
 
-Usage follows the same rule (`attributedModels` in `prompt.ts`). A turn's
-`modelId` is set only when every response in it that spent tokens used one
-model (`currentTurnModelIds`); a mixed turn leaves it unset, as the Claude
-bridge does for a multi-model result, because the backend's usage history
-charges a turn's whole cost to the model it names. The session-wide
-`usage.modelId` is the model that answered last; the context-window lookup
-falls back to the selection when that model is not in the catalogue.
+`turn-usage.ts` totals the current prompt's assistant usage, including paid
+errors and aborts. A turn names a model only when its token and cost
+contributors all identify that model. The cost delta also includes cache
+warming, summaries and tool results, so a mixed or unidentified charge keeps
+the full cost with no model ID. The session-wide `usage.modelId` follows the
+latest answer. Pi's own context calculation still supplies occupancy, and the
+context-window lookup falls back to the selection when the answering model is
+absent from the catalogue.
 
 ## Fork, rewind and branch targets
 

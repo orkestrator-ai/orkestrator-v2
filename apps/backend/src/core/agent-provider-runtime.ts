@@ -1,4 +1,5 @@
 import { AGENT_ACTIVITY_STATES } from "@orkestrator/protocol/agent-activity";
+import { MAX_USAGE_MODEL_ID_BYTES } from "@orkestrator/protocol/model-id";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
@@ -107,6 +108,13 @@ export function isTransientHttpStatus(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
+function usageModelId(value: unknown): string | undefined {
+  // Model IDs are usage bucket keys. Trimming to a prefix can merge two models.
+  return typeof value === "string" && Buffer.byteLength(value) <= MAX_USAGE_MODEL_ID_BYTES
+    ? value
+    : undefined;
+}
+
 export function normalizeProviderContextUsage(value: unknown): NativeAgentContextUsage | undefined {
   const raw = asRecord(value);
   if (!raw) return undefined;
@@ -157,7 +165,8 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
   if (usage.costUsd !== undefined && isNativeAgentCostSource(raw.costSource)) {
     usage.costSource = raw.costSource;
   }
-  if (typeof raw.modelId === "string") usage.modelId = raw.modelId.slice(0, 256);
+  const modelId = usageModelId(raw.modelId);
+  if (modelId !== undefined) usage.modelId = modelId;
   if (typeof raw.updatedAt === "string" && Number.isFinite(Date.parse(raw.updatedAt))) {
     usage.updatedAt = raw.updatedAt;
   }
@@ -236,7 +245,8 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
         normalized.costSource = turn.costSource;
       }
       if (typeof turn.requestId === "string") normalized.requestId = turn.requestId.slice(0, 256);
-      if (typeof turn.modelId === "string") normalized.modelId = turn.modelId.slice(0, 256);
+      const modelId = usageModelId(turn.modelId);
+      if (modelId !== undefined) normalized.modelId = modelId;
       // Re-serialized rather than copied, so an unparseable value is dropped
       // here instead of reaching a consumer that buckets usage by it.
       if (typeof turn.at === "string") {

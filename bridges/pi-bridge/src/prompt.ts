@@ -25,17 +25,17 @@ import {
 import { isSessionClosed, runDeferredCommandReload } from "./agent-session.js";
 import { beginCommandRun, settleCommandRun } from "./commands.js";
 import { denyAllApprovals } from "./interactions.js";
-import { getLastAssistantUsage } from "./pi-sdk.js";
-import {
-  countPiCostParts,
-  piSessionCostSource,
-  piTurnCostSource,
-  piUsageCostSource,
-  type PiCostParts,
-} from "./cost-source.js";
+import { piSessionCostSource, piTurnCostSource, type PiCostParts } from "./cost-source.js";
 import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
-import { appendTurnFailure, responseModelId } from "./translate.js";
+import { appendTurnFailure } from "./translate.js";
+import {
+  latestStoredModel,
+  readEntryCount,
+  readPiCost,
+  readSessionEntries,
+  readTurnResponses,
+} from "./turn-usage.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import {
   beginEvidenceTurn,
@@ -239,9 +239,8 @@ export async function dispatchPrompt(
   state.turnAborted = undefined;
   state.turnCancelRequested = undefined;
   state.turnError = undefined;
-  state.currentTurnApiDurationMs = undefined;
-  state.currentResponseModelId = undefined;
-  state.currentTurnModelIds = undefined;
+  clearTurnUsage(state);
+  state.turnEntryOffset = readEntryCount(session);
   let run: Promise<void>;
   try {
     run = session.prompt(text, {
@@ -260,6 +259,7 @@ export async function dispatchPrompt(
       preflightResult: () => announceAccepted(true),
     });
   } catch (error) {
+    clearTurnUsage(state);
     forgetEvidenceTurn(state, evidenceTurnId);
     if (commandRun && state.commandRun === commandRun) state.commandRun = undefined;
     diagnostics?.terminalSettled("rejected");
@@ -318,6 +318,7 @@ export async function dispatchPrompt(
     // than a generic rejection: it is the only thing that says why.
     forgetEvidenceTurn(state, evidenceTurnId);
     await settled;
+    clearTurnUsage(state);
     if (commandRun && state.commandRun === commandRun) state.commandRun = undefined;
     diagnostics?.terminalSettled("rejected");
     diagnostics?.streamSettled("rejected");
@@ -481,9 +482,7 @@ function abandonStartup(
         state.turnOpenedAssistantRow = undefined;
         state.openTextParts.clear();
         state.toolInputs.clear();
-        state.currentTurnUsage = undefined;
-        state.currentTurnApiDurationMs = undefined;
-        state.currentTurnModelIds = undefined;
+        clearTurnUsage(state);
         state.turnAborted = undefined;
         state.turnError = undefined;
         state.turnStartedAt = undefined;
@@ -726,6 +725,13 @@ function settleTurn(state: SessionState, session: AgentSession): void {
   state.compacting = false;
 }
 
+function clearTurnUsage(state: SessionState): void {
+  state.currentTurnResponses = undefined;
+  state.currentResponseModelId = undefined;
+  state.currentTurnApiDurationMs = undefined;
+  state.turnEntryOffset = undefined;
+}
+
 /**
  * Record what the finished turn cost.
  *
@@ -734,74 +740,63 @@ function settleTurn(state: SessionState, session: AgentSession): void {
  * will actually send, which is the question the usage meter is asking.
  */
 function recordUsage(state: SessionState, input: DispatchInput): void {
-  const session = state.session;
-  const branch = session?.sessionManager?.getBranch() ?? [];
-  const assistantUsage = getLastAssistantUsage(branch);
-  const turn = assistantUsage
-    ? {
-        inputTokens: assistantUsage.input,
-        outputTokens: assistantUsage.output,
-        cacheReadTokens: assistantUsage.cacheRead,
-        cacheWriteTokens: assistantUsage.cacheWrite,
-        ...(assistantUsage.reasoning === undefined
-          ? {}
-          : { reasoningTokens: assistantUsage.reasoning }),
-      }
-    : state.currentTurnUsage;
+  const entries = readSessionEntries(state.session);
+  const { turnId: storedTurnId, responses } = readTurnResponses(state, entries);
+  const turn = responses?.tokens ?? {};
   const elapsed = state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined;
   const apiDurationMs = state.currentTurnApiDurationMs;
   const context = readContextUsage(state);
   const stats = readSessionStats(state);
-  const costParts = readCostParts(state);
   const sessionTokens =
     stats && typeof stats.tokens?.total === "number" && Number.isFinite(stats.tokens.total)
       ? stats.tokens.total
       : undefined;
   const previous = state.usage;
-  const lastAssistantEntry = [...branch]
-    .reverse()
-    .find(
-      (entry) =>
-        entry.type === "message" &&
-        entry.message.role === "assistant" &&
-        entry.message.usage !== undefined,
-    );
-  const lastAssistantModelId =
-    lastAssistantEntry?.type === "message"
-      ? responseModelId(lastAssistantEntry.message)
-      : undefined;
-  const models = attributedModels(state, lastAssistantModelId);
-  if (turn && Object.keys(turn).length > 0) {
-    const turnId = lastAssistantEntry?.id ?? input.requestId ?? `turn-${state.promptSequence}`;
-    const sessionCost = stats?.cost;
-    const turnCost =
-      sessionCost === undefined
-        ? assistantUsage?.cost.total
-        : Math.max(0, sessionCost - (previous?.costUsd ?? 0));
+  const previousCost = previous?.costUsd ?? 0;
+  const sessionCost = stats?.cost;
+  const baseline = previous ? previousCostParts(previous) : NO_COST_PARTS;
+  const { parts: costParts, modelId: deltaModelId } = readPiCost(
+    entries,
+    previousCost,
+    baseline?.parts,
+    sessionCost,
+  );
+  const turnCost =
+    sessionCost === undefined ? responses?.costUsd : Math.max(0, sessionCost - previousCost);
+
+  if (responses?.parts || responses?.latestModelId || (turnCost ?? 0) > 0) {
+    const turnId = storedTurnId ?? input.requestId ?? `turn-${state.promptSequence}`;
+    const latestModelId =
+      responses?.latestModelId ??
+      latestStoredModel(state) ??
+      previous?.modelId ??
+      state.composer.selectedModelId;
+    const responseModel = responses?.modelId;
+    // Every token contributor and every charge has to agree before this row
+    // can carry a single model. An unverified cost delta has no model.
+    const turnModelId =
+      sessionCost !== undefined && (turnCost ?? 0) > 0
+        ? responseModel === undefined || responseModel === deltaModelId
+          ? deltaModelId
+          : undefined
+        : responseModel;
     // Pi says per response whether its cost is billed; see `cost-source.ts`.
     // A delta of the session sum is billed only if every part it added is, so
     // without the entries to count it stays unknown rather than borrowing the
     // last response's flag.
     const turnCostSource =
       sessionCost === undefined
-        ? piUsageCostSource(assistantUsage)
+        ? responses && piSessionCostSource(responses)
         : costParts
-          ? piTurnCostSource(costParts, previous ? previousCostParts(previous) : NO_COST_PARTS)
+          ? piTurnCostSource(costParts, baseline)
           : undefined;
     const toolCalls =
       stats === undefined
         ? undefined
         : Math.max(0, stats.toolCalls - (previous?.sessionToolCalls ?? 0));
-    const totalTokens =
-      assistantUsage?.totalTokens ??
-      (turn.inputTokens ?? 0) +
-        (turn.outputTokens ?? 0) +
-        (turn.cacheReadTokens ?? 0) +
-        (turn.cacheWriteTokens ?? 0);
     const turnEntry = {
       turnId,
-      // Pi reports usage several times within a turn, so the first sighting
-      // of this turn id is what dates it.
+      // If this turn is already present, keep its original date.
       at: previous?.turns?.find((entry) => entry.turnId === turnId)?.at ?? new Date().toISOString(),
       ...(turnCost === undefined ? {} : { costUsd: turnCost }),
       ...(turnCost === undefined || turnCostSource === undefined
@@ -812,18 +807,15 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       ...(turn.cacheReadTokens === undefined ? {} : { cacheReadTokens: turn.cacheReadTokens }),
       ...(turn.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: turn.cacheWriteTokens }),
       ...(turn.reasoningTokens === undefined ? {} : { reasoningTokens: turn.reasoningTokens }),
-      totalTokens,
+      totalTokens: responses?.totalTokens ?? 0,
       ...(elapsed === undefined ? {} : { durationMs: elapsed }),
       ...(apiDurationMs === undefined ? {} : { apiDurationMs }),
       ...(toolCalls === undefined ? {} : { toolCalls }),
       ...(input.requestId ? { requestId: input.requestId } : {}),
-      ...(models.turn ? { modelId: models.turn } : {}),
+      ...(turnModelId ? { modelId: turnModelId } : {}),
     };
-    const sessionCostField = sessionCost === undefined ? readCost(state) : { costUsd: sessionCost };
     const sessionCostSource =
-      sessionCostField.costUsd !== undefined && costParts
-        ? piSessionCostSource(costParts)
-        : undefined;
+      sessionCost !== undefined && costParts ? piSessionCostSource(costParts) : undefined;
     state.usage = {
       turn,
       turns: [
@@ -834,11 +826,11 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       ...(stats && typeof stats.toolCalls === "number"
         ? { sessionToolCalls: stats.toolCalls }
         : {}),
-      ...(models.latest ? { modelId: models.latest } : {}),
+      ...(latestModelId ? { modelId: latestModelId } : {}),
       ...(elapsed !== undefined ? { durationMs: elapsed } : {}),
       ...(apiDurationMs !== undefined ? { apiDurationMs } : {}),
       ...context,
-      ...sessionCostField,
+      ...(sessionCost === undefined ? {} : { costUsd: sessionCost }),
       ...(sessionCostSource ? { costSource: sessionCostSource } : {}),
       ...(costParts
         ? {
@@ -849,39 +841,10 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       updatedAt: new Date().toISOString(),
     };
   }
-  state.currentTurnUsage = undefined;
-  state.currentTurnApiDurationMs = undefined;
-  state.currentTurnModelIds = undefined;
+  clearTurnUsage(state);
   state.turnAborted = undefined;
   state.turnError = undefined;
   state.turnStartedAt = undefined;
-}
-
-/**
- * Which model the finished turn's usage belongs to, and which answered last.
- *
- * `turn` names a model only when every response that spent tokens used it
- * (`recordTurnModel`); a turn split across models has no single model, and
- * leaving it unset is what keeps usage history from billing all of it to one,
- * as the Claude bridge does for a multi-model result. A turn whose responses
- * were never observed (a run that produced none, or frames a test does not
- * send) falls back to the response Pi stored last, then to the composer
- * selection, which is all an older session could say. `latest` is the
- * session-wide figure: the model that answered most recently.
- */
-function attributedModels(
-  state: SessionState,
-  lastAssistantModelId: string | undefined,
-): { turn?: string; latest?: string } {
-  const observed = state.currentTurnModelIds ?? [];
-  const fallback = lastAssistantModelId ?? state.composer.selectedModelId;
-  const latest = state.currentResponseModelId ?? observed.at(-1) ?? fallback;
-  if (observed.length > 1) return latest ? { latest } : {};
-  const turn = observed[0] ?? fallback;
-  return {
-    ...(turn ? { turn } : {}),
-    ...(latest ? { latest } : {}),
-  };
 }
 
 function readSessionStats(state: SessionState): SessionStats | undefined {
@@ -941,25 +904,6 @@ function previousCostParts(previous: NonNullable<SessionState["usage"]>): PiCost
   return previous.sessionCostParts === undefined || previous.sessionProviderCostParts === undefined
     ? undefined
     : { parts: previous.sessionCostParts, providerParts: previous.sessionProviderCostParts };
-}
-
-/** The same entries `getSessionStats` sums, counted; undefined when Pi cannot list them. */
-function readCostParts(state: SessionState): PiCostParts | undefined {
-  try {
-    const entries = state.session?.sessionManager?.getEntries?.();
-    return Array.isArray(entries) ? countPiCostParts(entries) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function readCost(state: SessionState): { costUsd?: number } {
-  try {
-    const cost = state.session?.getSessionStats().cost;
-    return typeof cost === "number" && Number.isFinite(cost) ? { costUsd: cost } : {};
-  } catch {
-    return {};
-  }
 }
 
 /**

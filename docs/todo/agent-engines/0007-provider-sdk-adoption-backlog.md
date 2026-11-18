@@ -585,10 +585,9 @@ Moved out of "Candidates" under the maintenance rule. Each Pi assistant row
 now names the model that answered (`provider/responseModel`, else the
 requested `provider/model`, which is all a session entry an older Pi wrote
 carries), live and when a resume replays Pi's file; the composer keeps the
-user's selection. A turn's `NativeAgentTurnUsage.modelId` is set only when
-every response that spent tokens used one model, and left unset for a mixed
-turn, as the Claude bridge does for a multi-model result, so usage history
-does not charge all of it to one model. How it works is under "Model
+user's selection. A turn's `NativeAgentTurnUsage.modelId` is set only when its
+token and cost contributors all identify the same model. Mixed and
+unidentified spend goes into usage history without a model ID. How it works is under "Model
 attribution" in [`bridges/pi-bridge/AGENTS.md`](../../../bridges/pi-bridge/AGENTS.md#model-attribution).
 
 ## Current state

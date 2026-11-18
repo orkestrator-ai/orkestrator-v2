@@ -1688,7 +1688,6 @@ async function handleAdmittedPrompt(
   state.error = undefined;
   state.promptSequence += 1;
   state.turnStartedAt = Date.now();
-  state.currentTurnUsage = {};
   state.currentAssistantMessageId = undefined;
   state.turnOpenedAssistantRow = undefined;
   state.revision += 1;
@@ -1740,7 +1739,6 @@ async function handleAdmittedPrompt(
     state.turnOpenedAssistantRow = undefined;
     state.openTextParts.clear();
     state.toolInputs.clear();
-    state.currentTurnUsage = undefined;
     state.turnStartedAt = undefined;
     // Refused in preflight: Pi started no run, so the id is still undelivered.
     withdrawPromptJournal(state, requestId);

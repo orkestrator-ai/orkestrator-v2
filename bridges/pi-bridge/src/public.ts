@@ -306,7 +306,8 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     (turn.cacheReadTokens ?? 0) +
     (turn.cacheWriteTokens ?? 0);
   const used = usage.contextTokens ?? turnTokens;
-  if (used === 0) return undefined;
+  // A provider can report a bill without reporting any tokens.
+  if (used === 0 && !usage.turns?.length) return undefined;
   // `usage.modelId` is the model that answered, which a resolved alias puts
   // outside the catalogue; the selection it resolved from has the window.
   const model =

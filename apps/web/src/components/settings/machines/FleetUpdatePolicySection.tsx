@@ -88,7 +88,7 @@ export function FleetUpdatePolicySection() {
         })}
       </div>
       {loadError ? (
-        <p className="text-xs text-red-300" role="alert">
+        <p className="text-xs text-failure" role="alert">
           Could not read the update policy: {loadError}
         </p>
       ) : null}

@@ -282,7 +282,7 @@ function ValidationOutputModal({
               Loading output…
             </div>
           ) : error ? (
-            <div role="alert" className="whitespace-pre-wrap text-red-300">
+            <div role="alert" className="whitespace-pre-wrap text-failure">
               {error}
             </div>
           ) : combinedOutput ? (

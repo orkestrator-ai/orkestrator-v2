@@ -74,7 +74,7 @@ export const GoalTurnTile = memo(function GoalTurnTile({
             <span className="flex-1" />
           )}
           {failedCheck || turn.failedVerdict ? (
-            <span className="shrink-0 rounded bg-red-400/10 px-1.5 text-[11px] leading-4 text-red-300">
+            <span className="shrink-0 rounded bg-failure/10 px-1.5 text-[11px] leading-4 text-failure">
               {failedCheck ? failedCheckLabel(failedCheck) : "Verifier failed"}
             </span>
           ) : null}
@@ -138,7 +138,7 @@ const STATUS_TONES: Record<
 > = {
   neutral: { icon: Info, className: "text-muted-foreground", label: "Goal" },
   success: { icon: CircleCheck, className: "text-success", label: "Goal passed" },
-  failure: { icon: CircleX, className: "text-red-400", label: "Goal check failed" },
+  failure: { icon: CircleX, className: "text-failure", label: "Goal check failed" },
   attention: { icon: CircleAlert, className: "text-amber-400", label: "Goal needs attention" },
 };
 

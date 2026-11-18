@@ -149,7 +149,7 @@ export function TodoToolPart({
                             todo.status === "in_progress"
                               ? "text-yellow-500"
                               : todo.status === "cancelled"
-                                ? "text-red-500"
+                                ? "text-failure"
                                 : "text-muted-foreground/50",
                           )}
                         />
@@ -173,7 +173,7 @@ export function TodoToolPart({
                         <span className="shrink-0 text-[10px] text-yellow-500">in progress</span>
                       )}
                       {todo.status === "cancelled" && (
-                        <span className="shrink-0 text-[10px] text-red-500">cancelled</span>
+                        <span className="shrink-0 text-[10px] text-failure">cancelled</span>
                       )}
                     </div>
                   );

@@ -429,12 +429,12 @@ function DockerSettingsPanel() {
                 return (
                   <div
                     key={container.id}
-                    className={`flex items-center justify-between p-3 rounded-md ${isOrphaned ? "bg-red-500/10 border border-red-500/30" : "bg-zinc-800/50 border border-zinc-700"}`}
+                    className={`flex items-center justify-between p-3 rounded-md ${isOrphaned ? "bg-failure/10 border border-failure/30" : "bg-zinc-800/50 border border-zinc-700"}`}
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span
-                          className={`font-medium text-sm truncate ${isOrphaned ? "text-red-700 dark:text-red-400" : ""}`}
+                          className={`font-medium text-sm truncate ${isOrphaned ? "text-failure" : ""}`}
                         >
                           {container.name}
                           {project && (
@@ -444,7 +444,7 @@ function DockerSettingsPanel() {
                           )}
                         </span>
                         {isOrphaned && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-red-500/20 text-red-700 dark:text-red-400">
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-failure/20 text-failure">
                             {container.cleanupExclusion === "legacy-unadopted"
                               ? "Legacy"
                               : "Orphaned"}
@@ -522,7 +522,7 @@ function DockerSettingsPanel() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-7 w-7 text-red-600 hover:text-red-700 dark:hover:bg-red-900/30"
+                            className="h-7 w-7 text-failure hover:bg-destructive/15 hover:text-failure"
                             onClick={() => handleDeleteContainer(container.id)}
                             disabled={isOperating}
                             title="Delete container"

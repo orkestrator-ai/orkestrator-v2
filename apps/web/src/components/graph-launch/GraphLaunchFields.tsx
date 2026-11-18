@@ -21,7 +21,7 @@ const SELECT_CLASS =
 function FieldError({ id, text }: { id: string; text: string | null }) {
   if (!text) return null;
   return (
-    <p id={id} className="text-[11px] leading-snug text-red-400">
+    <p id={id} className="text-[11px] leading-snug text-failure">
       {text}
     </p>
   );

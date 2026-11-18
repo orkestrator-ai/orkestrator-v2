@@ -19,7 +19,7 @@ const STATUS_DOT: Record<SuborkStatus, string> = {
   starting: "bg-blue-500",
   running: "bg-blue-500",
   finished: "bg-emerald-500",
-  failed: "bg-red-500",
+  failed: "bg-failure",
   stopped: "bg-muted-foreground",
 };
 

@@ -153,8 +153,9 @@
       <section class="capture" id="cap-browser-error-banner-desktop">
         <h3>Browser tab with a failed preview load <span class="pill">desktop 1440×900</span></h3>
         <p class="how">
-          Open a fixture environment, open the Browser tab and load an unreachable port so the red
-          banner appears.
+          Open the Browser tab in a fixture environment. Wait for the registered service to show
+          ready, then load an unregistered port so the red banner appears. Keep the pointer outside
+          the sidebar and the environment tooltip closed for both captures.
         </p>
         <div class="pair">
           <figure class="shot">
@@ -404,10 +405,12 @@ mise run lint</code></pre>
       </p>
       <h3>Capture comparisons</h3>
       <p>
-        Before captures used the unmodified <code>b2c91abb9</code> checkout. Both passes used the
-        same credential-free, headless <code>design-00001</code> profile and local fixture
-        environment in dark mode at 100% zoom and device scale 1. Desktop is 1440×900 and narrow is
-        390×844. The browser reloaded the saved tab between scenarios.
+        Before captures used the unmodified <code>b2c91abb9</code> checkout. The Browser error pair
+        used the same local fixture in the <code>design-00001-review-pair</code> profile with the
+        sidebar tooltip closed. The other pairs used the <code>design-00001</code> profile. Both
+        profiles were credential-free and headless, with dark mode at 100% zoom and device scale 1.
+        Desktop is 1440×900 and narrow is 390×844. The browser reloaded the saved tab between
+        scenarios.
       </p>
       <ul>
         <li>

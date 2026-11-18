@@ -4066,21 +4066,84 @@ describe("coalesceAdjacentToolMessages", () => {
   });
 
   test("a coalesced run keeps its id as history merges in front and calls append behind", () => {
-    const m2 = toolMessage("m2", "2026-09-03T10:43:20.000Z");
-    const m3 = toolMessage("m3", "2026-09-03T10:43:30.000Z");
-    const first = coalesceAdjacentToolMessages([m2, m3]);
-    expect(first.map((row) => row.id)).toEqual(["m2"]);
-    // A history page merges m1 in front: the row is not renamed to m1.
-    const m1 = toolMessage("m1", "2026-09-03T10:43:01.000Z");
-    const paged = coalesceAdjacentToolMessages([m1, m2, m3]);
-    expect(paged.map((row) => row.id)).toEqual(["m2"]);
-    expect(paged[0]!.earliestSourceMessageId).toBe("m1");
-    // A live call appends behind, and the tail member is a new object.
-    const m4 = toolMessage("m4", "2026-09-03T10:44:00.000Z");
-    const live = coalesceAdjacentToolMessages([m1, m2, { ...m3 }, m4]);
-    expect(live.map((row) => row.id)).toEqual(["m2"]);
-    // Unchanged inputs give the same row object (memoized rendering holds).
-    expect(coalesceAdjacentToolMessages([m1, m2, m3])[0]).toBe(paged[0]);
+    const m2 = toolMessage("m2", "2026-09-03T10:43:20.000Z", ["Read"]);
+    const m3 = toolMessage("m3", "2026-09-03T10:43:30.000Z", ["Grep"]);
+    const [first] = coalesceAdjacentToolMessages([m2, m3]);
+    expect(first?.id).toBe("m2");
+
+    const m1 = toolMessage("m1", "2026-09-03T10:43:01.000Z", ["Glob"], {
+      earliestSourceMessageId: "source-start",
+      settleAnchorCreatedAt: "2026-09-03T10:43:00.000Z",
+    });
+    const [paged] = coalesceAdjacentToolMessages([m1, m2, m3]);
+    expect(paged).toMatchObject({
+      id: "m2",
+      earliestSourceMessageId: "source-start",
+      latestSourceMessageId: "m3",
+      settleAnchorCreatedAt: "2026-09-03T10:43:00.000Z",
+    });
+
+    const m4 = toolMessage("m4", "2026-09-03T10:43:25.000Z", ["Bash"], {
+      latestSourceMessageId: "source-end",
+    });
+    const [live] = coalesceAdjacentToolMessages([m1, m2, m3, m4]);
+    expect(live).toMatchObject({
+      id: "m2",
+      createdAt: m3.createdAt,
+      earliestSourceMessageId: "source-start",
+      latestSourceMessageId: "source-end",
+      settleAnchorCreatedAt: "2026-09-03T10:43:00.000Z",
+      parts: [
+        {
+          type: "tool-group",
+          parts: ["Glob", "Read", "Grep", "Bash"].map((toolName) => ({ toolName })),
+        },
+      ],
+    });
+    expect(coalesceAdjacentToolMessages([m1, m2, m3, m4])[0]).toBe(live);
+
+    // A streaming update can replace a member while both endpoints survive.
+    const revised = toolMessage("m3", m3.createdAt, ["Edit"]);
+    const [updated] = coalesceAdjacentToolMessages([m1, m2, revised, m4]);
+    expect(updated).toMatchObject({
+      id: "m2",
+      parts: [
+        {
+          type: "tool-group",
+          parts: ["Glob", "Read", "Edit", "Bash"].map((toolName) => ({ toolName })),
+        },
+      ],
+    });
+    expect(coalesceAdjacentToolMessages([m1, m2, m3, m4])[0]).toBe(live);
+    expect(coalesceAdjacentToolMessages([m1, m2, m3])[0]).toBe(paged);
+  });
+
+  test("a cached tool group joins only the leading tool activity of an append", () => {
+    const prefix = [
+      toolMessage("read", "2026-09-03T10:43:01.000Z", ["Read"]),
+      toolMessage("grep", "2026-09-03T10:43:02.000Z", ["Grep"]),
+    ];
+    const appended = toolMessage("append", "2026-09-03T10:43:03.000Z", [], {
+      parts: [
+        { type: "thinking", content: "Before the agent", createdAt: "2026-09-03T10:43:03.000Z" },
+        { type: "subagent", content: "Agent step", agentState: "finished" },
+        { type: "tool-invocation", content: "Edit", toolName: "Edit" },
+      ],
+    });
+    coalesceAdjacentToolMessages(prefix);
+    const rows = [...prefix, appended];
+    const [warm] = coalesceAdjacentToolMessages(rows);
+    const [cold] = coalesceAdjacentToolMessages(rows.map((row) => ({ ...row })));
+    expect(warm).toEqual(cold!);
+    expect(warm?.parts).toMatchObject([
+      {
+        type: "tool-group",
+        createdAt: "2026-09-03T10:43:03.000Z",
+        parts: [{ toolName: "Read" }, { toolName: "Grep" }, { type: "thinking" }],
+      },
+      { type: "subagent" },
+      { type: "tool-group", parts: [{ toolName: "Edit" }] },
+    ]);
   });
 
   test("a run that splits never gives two rows one id", () => {

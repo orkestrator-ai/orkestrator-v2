@@ -686,16 +686,17 @@ function isToolOnlyAssistantMessage(message: NativeMessage): boolean {
   return message.parts.every(isMergeableToolPart);
 }
 
-function flattenMergeableParts(parts: readonly NativeMessagePart[]): NativeMessagePart[] {
-  const flat: NativeMessagePart[] = [];
+function appendFlattenedToolParts(
+  target: NativeMessagePart[],
+  parts: readonly NativeMessagePart[],
+): void {
   for (const part of parts) {
     if (part.type === "tool-group" || part.type === "agent-group") {
-      flat.push(...part.parts);
+      for (const child of part.parts) target.push(child);
     } else {
-      flat.push(part);
+      target.push(part);
     }
   }
-  return flat;
 }
 
 function latestMessageCreatedAt(a: string, b: string): string {
@@ -707,44 +708,80 @@ function latestMessageCreatedAt(a: string, b: string): string {
   return b || a;
 }
 
-const coalescedMessageCache = new WeakMap<NativeMessage, WeakMap<NativeMessage, NativeMessage>>();
-
-function mergeAdjacentToolMessages(previous: NativeMessage, message: NativeMessage): NativeMessage {
-  const cachedForPrevious = coalescedMessageCache.get(previous);
-  const cached = cachedForPrevious?.get(message);
-  if (cached) return cached;
-
-  const regrouped = groupNativeAgentActivity(
-    groupNativeToolActivity(
-      flattenMergeableParts(previous.parts).concat(flattenMergeableParts(message.parts)),
-    ),
-  );
-  const result: NativeMessage = {
-    ...previous,
-    parts: regrouped,
-    content: "",
-    createdAt: latestMessageCreatedAt(previous.createdAt, message.createdAt),
-    latestSourceMessageId: getNativeMessageBoundarySourceId(message),
-    earliestSourceMessageId: previous.earliestSourceMessageId ?? previous.id,
-    settleAnchorCreatedAt: previous.settleAnchorCreatedAt ?? previous.createdAt,
-  };
-  const resultCache = cachedForPrevious ?? new WeakMap<NativeMessage, NativeMessage>();
-  resultCache.set(message, result);
-  if (!cachedForPrevious) coalescedMessageCache.set(previous, resultCache);
-  return result;
+interface ToolRunCacheEntry {
+  next?: WeakMap<NativeMessage, ToolRunCacheEntry>;
+  row?: NativeMessage;
 }
 
-/**
- * Merge consecutive tool-only assistant rows into one block.
- *
- * OpenCode (and other bridges) can emit each tool call as its own backend
- * message. Within a message tools are already grouped into a single
- * `tool-group` card, but across messages each row renders its own card — so a
- * burst of Reads shows as several one-row blocks. When there is no text in
- * between, readers experience it as one block, so display it as one. Timing
- * is deliberately ignored: a slow tool must not split a collapsed tool block
- * just because the clock rolled over to the next minute.
- */
+// Weak keys track an ordered run of source objects. Only runs actually
+// rendered get a grouped row, so a fresh run never materializes its prefixes.
+const toolRunCache = new WeakMap<NativeMessage, ToolRunCacheEntry>();
+
+function coalesceToolRun(members: NativeMessage[]): NativeMessage {
+  const first = members[0]!;
+  if (members.length === 1) return first;
+
+  let cache = toolRunCache;
+  let entry: ToolRunCacheEntry | undefined;
+  let prefix = first;
+  let prefixLength = 1;
+  for (let index = 0; index < members.length; index++) {
+    const member = members[index]!;
+    if (entry) cache = entry.next ??= new WeakMap();
+    entry = cache.get(member);
+    if (!entry) {
+      entry = {};
+      cache.set(member, entry);
+    }
+    if (entry.row) {
+      prefix = entry.row;
+      prefixLength = index + 1;
+    }
+  }
+  if (prefixLength === members.length) return prefix;
+
+  const parts: NativeMessagePart[] = [];
+  // A cached run consisting of one tool group can join its new suffix
+  // without reclassifying every call or parsing its timestamps again.
+  const prefixGroup = prefixLength > 1 && prefix.parts.length === 1 ? prefix.parts[0] : undefined;
+  const groupedPrefix = prefixGroup?.type === "tool-group" ? prefixGroup : undefined;
+  if (!groupedPrefix) appendFlattenedToolParts(parts, prefix.parts);
+  let createdAt = prefix.createdAt;
+  for (let index = prefixLength; index < members.length; index++) {
+    const member = members[index]!;
+    appendFlattenedToolParts(parts, member.parts);
+    createdAt = latestMessageCreatedAt(createdAt, member.createdAt);
+  }
+
+  const groupedParts = groupNativeAgentActivity(groupNativeToolActivity(parts));
+  if (groupedPrefix) {
+    const head = groupedParts[0];
+    if (head?.type === "tool-group") {
+      const createdAt = latestMessageCreatedAt(groupedPrefix.createdAt ?? "", head.createdAt ?? "");
+      groupedParts[0] = {
+        type: "tool-group",
+        content: "",
+        parts: groupedPrefix.parts.concat(head.parts),
+        ...(createdAt ? { createdAt } : {}),
+      };
+    } else {
+      groupedParts.unshift(groupedPrefix);
+    }
+  }
+
+  const row: NativeMessage = {
+    ...first,
+    parts: groupedParts,
+    content: "",
+    createdAt,
+    latestSourceMessageId: getNativeMessageBoundarySourceId(members.at(-1)!),
+    earliestSourceMessageId: first.earliestSourceMessageId ?? first.id,
+    settleAnchorCreatedAt: first.settleAnchorCreatedAt ?? first.createdAt,
+  };
+  entry!.row = row;
+  return row;
+}
+
 /**
  * The row id each source message was last displayed under inside a coalesced
  * tool run. A run keeps that id while any member survives, so history paging
@@ -825,38 +862,42 @@ function assignCoalescedRowIds(
   }
 }
 
+/**
+ * Group consecutive tool-only steps into one display row. Timing is ignored:
+ * a slow tool must not split a collapsed block just because the clock rolled
+ * over to the next minute.
+ */
 export function coalesceAdjacentToolMessages(
   messages: readonly NativeMessage[],
   aliases?: CoalescedRowAliases,
 ): NativeMessage[] {
-  const merged: NativeMessage[] = [];
   const members: NativeMessage[][] = [];
+  let previousToolRow: NativeMessage | undefined;
   for (const message of messages) {
     if (message.role === "assistant" && !messageHasVisibleContent(message)) {
       continue;
     }
-    const previous = merged.at(-1);
+    const toolRow = isToolOnlyAssistantMessage(message) ? message : undefined;
     if (
-      previous &&
-      isToolOnlyAssistantMessage(previous) &&
-      isToolOnlyAssistantMessage(message) &&
-      previous.modelId === message.modelId &&
-      previous.turnId === message.turnId &&
+      previousToolRow &&
+      toolRow &&
+      previousToolRow.modelId === toolRow.modelId &&
+      previousToolRow.turnId === toolRow.turnId &&
       /*
        * Every step row of a plan-mode turn carries the flag, so steps of one
        * plan turn still merge. A flagged row never merges into an unflagged
        * one: the merged row keeps the first row's flag, and the plan-review
        * controls read it off the latest assistant row.
        */
-      (previous.planReview === true) === (message.planReview === true)
+      (previousToolRow.planReview === true) === (toolRow.planReview === true)
     ) {
-      merged[merged.length - 1] = mergeAdjacentToolMessages(previous, message);
-      members[members.length - 1]!.push(message);
-      continue;
+      members.at(-1)!.push(message);
+    } else {
+      members.push([message]);
     }
-    merged.push(message);
-    members.push([message]);
+    previousToolRow = toolRow;
   }
+  const merged = members.map(coalesceToolRun);
   assignCoalescedRowIds(merged, members, aliases);
   return merged;
 }

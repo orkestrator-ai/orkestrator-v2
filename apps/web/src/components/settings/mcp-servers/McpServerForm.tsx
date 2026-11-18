@@ -43,7 +43,7 @@ function FieldError({ errors, field }: { errors: McpFieldError[]; field: string 
   );
   if (!messages.length) return null;
   return (
-    <p className="text-xs text-red-300" role="alert">
+    <p className="text-xs text-failure" role="alert">
       {messages.map((error) => error.message).join(" ")}
     </p>
   );
@@ -228,7 +228,7 @@ function AdvancedTextField({
         }}
       />
       {problem ? (
-        <p id={problemId} className="text-xs text-red-300" role="alert">
+        <p id={problemId} className="text-xs text-failure" role="alert">
           {problem}
         </p>
       ) : null}

@@ -1459,7 +1459,7 @@ export function TmuxComposeBar({
             className={cn(
               "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
               queueRecovery.dispatchError
-                ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
+                ? "bg-destructive/10 text-failure hover:bg-destructive/20"
                 : "text-muted-foreground bg-muted/50 hover:bg-muted",
             )}
             aria-label={
@@ -1581,7 +1581,7 @@ export function ApprovalCard({
             type="button"
             onClick={() => void respond(onDeny)}
             disabled={submitting}
-            className="flex-1 px-3 py-1.5 rounded bg-red-800 hover:bg-red-700 text-white text-sm font-medium"
+            className="flex-1 px-3 py-1.5 rounded bg-destructive text-black hover:bg-destructive/95 active:bg-destructive/90 text-sm font-medium"
           >
             Deny
           </button>

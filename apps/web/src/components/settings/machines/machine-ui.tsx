@@ -62,7 +62,7 @@ export function errorText(error: unknown): string {
 export function FormError({ message }: { message: string }) {
   return (
     <div
-      className="rounded-md border border-red-500/25 bg-red-500/[0.07] px-3 py-2 text-sm text-red-300"
+      className="rounded-md border border-failure/25 bg-failure/[0.07] px-3 py-2 text-sm text-failure"
       role="alert"
     >
       {message}

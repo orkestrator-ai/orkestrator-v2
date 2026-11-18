@@ -136,7 +136,7 @@ export function RootChangesApprovalDialog({
         </DialogHeader>
 
         {loadError || !projectId ? (
-          <p className="flex items-center gap-2 text-sm text-destructive">
+          <p className="flex items-center gap-2 text-sm text-failure">
             <AlertCircle className="h-4 w-4" /> {loadError ?? "This request names no project."}
           </p>
         ) : !listing ? (
@@ -205,7 +205,7 @@ export function RootChangesApprovalDialog({
               </p>
             ) : null}
             {tooMany ? (
-              <p className="text-xs text-destructive">Pick at most {MAX_SELECTION} files.</p>
+              <p className="text-xs text-failure">Pick at most {MAX_SELECTION} files.</p>
             ) : null}
           </section>
         )}

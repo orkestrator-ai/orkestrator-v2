@@ -282,7 +282,7 @@ function EnvironmentUsageRow({
               aria-label="Measuring"
             />
           ) : measurement.state === "failed" ? (
-            <span className="text-xs text-destructive" title={measurement.error}>
+            <span className="text-xs text-failure" title={measurement.error}>
               Failed
             </span>
           ) : (
@@ -438,7 +438,7 @@ function EnvironmentUsage() {
         </Button>
       </div>
 
-      {loadError && <p className="text-sm text-destructive">{loadError}</p>}
+      {loadError && <p className="text-sm text-failure">{loadError}</p>}
       {environments?.length === 0 && (
         <p className="text-sm text-muted-foreground">There are no environments yet.</p>
       )}
@@ -549,7 +549,7 @@ function ProjectGitMirrors() {
         </Button>
       </div>
 
-      {loadError && <p className="text-sm text-destructive">{loadError}</p>}
+      {loadError && <p className="text-sm text-failure">{loadError}</p>}
 
       {mirrors && mirrors.length > 0 && (
         <ul className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800 overflow-hidden")}>

@@ -328,8 +328,8 @@ mise run lint</code></pre>
       <h2>Notes</h2>
       <ul>
         <li>
-          <b>Migration audit</b> (original migration: 158 raw hits in <code>.tsx</code> plus 4 files in
-          <code>.ts</code>; 118 lines in 84 <code>.tsx</code> files and 2 lines in
+          <b>Migration audit</b> (original migration: 158 raw hits in <code>.tsx</code> plus 4 files
+          in <code>.ts</code>; 118 lines in 84 <code>.tsx</code> files and 2 lines in
           <code>key-information-format.ts</code> changed):
           <ul>
             <li>
@@ -337,10 +337,10 @@ mise run lint</code></pre>
               graph template review, file diff), check icons and “passed”, “complete”, “resolved”,
               “enforced”, “in sync”, “connected”, “signed in” and “active” text, the coordinator
               model picker's enforced tier pill and positive note, chosen option frames, goal
-              complete (pill and tile), mail “finished”, bug report chip and band,
-              annotation result and resolved, review strengths, the
-              <code>bg-success/10 text-green-300</code> pairs in the flow graph, and light/dark
-              pairs such as <code>text-green-600 dark:text-green-400</code> in
+              complete (pill and tile), mail “finished”, bug report chip and band, annotation result
+              and resolved, review strengths, the <code>bg-success/10 text-green-300</code> pairs in
+              the flow graph, and light/dark pairs such as
+              <code>text-green-600 dark:text-green-400</code> in
               <code>PullRequestCheckStatus.tsx</code>.
             </li>
             <li>
@@ -419,6 +419,11 @@ mise run lint</code></pre>
               success color while preserving the pill's existing opacity levels.
             </li>
           </ul>
+        </li>
+        <li>
+          <b>Removed lines.</b> Both captures of the approval dialog and graph review show removed
+          lines in <code>text-red-300</code>. The renderer later switched those lines to
+          <code>text-failure</code> in <a href="00002-failure-red-hardcoded.html">task 00002</a>.
         </li>
         <li>
           <b>Capture setup.</b> Playwright used the real browser renderer of the isolated headless

@@ -47,7 +47,7 @@ export function AutoPipelineCriteriaField({
                     }
                   />
                   {invalid && (
-                    <p id={errorId} className="mt-1 text-xs text-destructive">
+                    <p id={errorId} className="mt-1 text-xs text-failure">
                       Enter an acceptance criterion.
                     </p>
                   )}
@@ -75,7 +75,7 @@ export function AutoPipelineCriteriaField({
                     size="icon-sm"
                     aria-label={`Remove criterion ${index + 1}`}
                     title="Remove"
-                    className="text-muted-foreground hover:text-destructive"
+                    className="text-muted-foreground hover:text-failure"
                     onClick={() => onChange(criteria.filter((_, i) => i !== index))}
                   >
                     <Trash2 />

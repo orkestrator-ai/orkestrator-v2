@@ -143,8 +143,8 @@ export function MonacoFileEditor({
   if (monacoFailed) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-        <AlertCircle className="h-7 w-7 text-red-400" />
-        <p className="text-sm text-red-400">Failed to load editor</p>
+        <AlertCircle className="h-7 w-7 text-failure" />
+        <p className="text-sm text-failure">Failed to load editor</p>
         <p className="max-w-md text-xs text-muted-foreground">
           The editor resources could not be loaded.
         </p>

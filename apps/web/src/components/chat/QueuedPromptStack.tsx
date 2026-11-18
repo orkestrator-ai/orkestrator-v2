@@ -294,7 +294,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
       >
         <div className="flex items-center gap-2 border-b border-border/40 px-3 py-0.5 text-[11px] text-muted-foreground">
           {queue.error ? (
-            <AlertCircle className="h-3 w-3 shrink-0 text-destructive" aria-hidden="true" />
+            <AlertCircle className="h-3 w-3 shrink-0 text-failure" aria-hidden="true" />
           ) : null}
           {/* The button below announces the count when there is one. */}
           <span className="min-w-0 flex-1 truncate" aria-hidden={queue.onOpen ? true : undefined}>
@@ -427,7 +427,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
                     aria-busy={pending}
                     aria-label={`Remove queued prompt ${position}`}
                     title="Remove queued prompt"
-                    className={cn(actionClass, "hover:text-destructive")}
+                    className={cn(actionClass, "hover:text-failure")}
                   >
                     <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                   </button>

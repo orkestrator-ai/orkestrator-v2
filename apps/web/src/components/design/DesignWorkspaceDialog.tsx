@@ -633,7 +633,7 @@ export function DesignWorkspaceDialog({
                 />
               </label>
               {showNameError && (
-                <p id="design-name-error" className="text-xs text-destructive">
+                <p id="design-name-error" className="text-xs text-failure">
                   {nameProblem}
                 </p>
               )}
@@ -810,7 +810,7 @@ export function DesignWorkspaceDialog({
           </p>
         )}
         {error && (
-          <div role="alert" className="grid gap-2 text-sm text-destructive">
+          <div role="alert" className="grid gap-2 text-sm text-failure">
             <p>{error}</p>
             {recovery && (
               <div className="flex flex-wrap items-center gap-2 text-foreground">

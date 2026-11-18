@@ -102,7 +102,7 @@ export function CreateFolderDialog({
               }}
             />
           </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p className="text-sm text-failure">{error}</p>}
           <DialogFooter>
             <Button type="button" variant="ghost" disabled={isPending} onClick={onCancel}>
               Cancel

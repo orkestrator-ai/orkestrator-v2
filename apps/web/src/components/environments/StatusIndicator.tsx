@@ -21,8 +21,8 @@ const statusConfig: Record<EnvironmentStatus, { color: string; label: string; bg
     label: "Stopped",
   },
   error: {
-    color: "bg-red-500",
-    bgColor: "bg-red-500/20",
+    color: "bg-failure",
+    bgColor: "bg-failure/20",
     label: "Error",
   },
   creating: {

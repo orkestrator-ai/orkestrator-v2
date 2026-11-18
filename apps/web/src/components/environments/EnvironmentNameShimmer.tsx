@@ -30,7 +30,7 @@ export const ENVIRONMENT_NAME_SIGNALS: Record<EnvironmentNameSignal, NameSignalS
     className: "text-shimmer merge-conflicts-name",
     label: "Merge conflicts to resolve",
     icon: GitMergeConflict,
-    textClassName: "text-destructive",
+    textClassName: "text-failure",
   },
   "merge-ready": {
     className: "text-shimmer merge-ready-name",

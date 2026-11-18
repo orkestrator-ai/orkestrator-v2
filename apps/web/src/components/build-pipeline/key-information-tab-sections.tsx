@@ -150,7 +150,7 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
                             <li key={`c${conIndex}`} className="flex items-start gap-1.5">
                               <Minus
                                 aria-label="Con"
-                                className="mt-0.5 size-3.5 shrink-0 text-rose-400"
+                                className="mt-0.5 size-3.5 shrink-0 text-failure"
                               />
                               <span className="min-w-0 break-words text-foreground/85">
                                 <KeyInformationText text={con} />

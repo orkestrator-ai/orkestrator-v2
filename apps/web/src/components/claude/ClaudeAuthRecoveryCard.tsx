@@ -185,7 +185,7 @@ export function ClaudeAuthRecoveryCard({
         ) : null}
 
         {reauth.error ? (
-          <p role="alert" className="mt-2 text-xs text-destructive">
+          <p role="alert" className="mt-2 text-xs text-failure">
             {reauth.error}
           </p>
         ) : null}

@@ -129,7 +129,7 @@ function getBuildPhaseDisplay(phase: BuildPhase): { label: string; className: st
     case "complete":
       return { label: "Complete", className: "bg-success/15 text-success border-success/30" };
     case "failed":
-      return { label: "Failed", className: "bg-red-500/15 text-red-400 border-red-500/30" };
+      return { label: "Failed", className: "bg-failure/15 text-failure border-failure/30" };
   }
 }
 
@@ -356,7 +356,7 @@ export function KanbanCard({
                 data-testid="kanban-card-criteria"
                 className={cn(
                   "flex shrink-0 items-center gap-1",
-                  tally.failed > 0 && "text-destructive",
+                  tally.failed > 0 && "text-failure",
                 )}
                 title={`${tally.passed} passed, ${tally.failed} failed, ${tally["not-checked"]} not checked, ${tally.unchecked} not verified yet`}
               >

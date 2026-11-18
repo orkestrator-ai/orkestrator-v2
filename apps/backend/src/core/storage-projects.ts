@@ -1026,6 +1026,7 @@ export class ProjectsRepository {
       }
 
       const previousPrUrl = environment.prUrl;
+      const previousPrState = environment.prState;
       const previousBranch = environment.branch;
       if (isNonBlankString(updates.name)) environment.name = updates.name;
       if (isNonBlankString(updates.branch)) environment.branch = updates.branch;
@@ -1203,6 +1204,26 @@ export class ProjectsRepository {
         if (updates.prState == null) environment.prState = null;
         else if (isOneOf(updates.prState, ["open", "merged", "closed"]))
           environment.prState = updates.prState;
+      }
+      // Only ever cleared from outside; the transition below is what sets it.
+      if ("prMergeNoticePendingUrl" in updates && updates.prMergeNoticePendingUrl == null) {
+        environment.prMergeNoticePendingUrl = undefined;
+      }
+      // The open tabs hear of a merge once (`pr-merge-tab-notices.ts`). Arming
+      // the notice in the write that records the merge means a crash cannot
+      // lose it, and a merge recorded before this existed is never announced.
+      if (
+        environment.prState === "merged" &&
+        environment.prUrl &&
+        (previousPrState !== "merged" || previousPrUrl !== environment.prUrl)
+      ) {
+        environment.prMergeNoticePendingUrl = environment.prUrl;
+      } else if (
+        environment.prMergeNoticePendingUrl &&
+        (environment.prState !== "merged" ||
+          environment.prUrl !== environment.prMergeNoticePendingUrl)
+      ) {
+        environment.prMergeNoticePendingUrl = undefined;
       }
       if (
         "prBaseBranch" in updates &&

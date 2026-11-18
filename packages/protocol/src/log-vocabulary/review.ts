@@ -47,6 +47,10 @@ export const REVIEW_LOG_AREAS = defineLogAreas({
       "monitor.start-failed": "Monitoring could not start for a newly opened pull request.",
       "cleanup-scheduler.missing":
         "A merged pull request was seen, but this runtime has no merge cleanup scheduler.",
+      "merge-notice.failed":
+        "Telling an environment's open agent tabs that its pull request merged failed; the monitor's next terminal follow-up retries.",
+      "merge-notice.send-failed":
+        "One open agent tab could not be sent its merged pull request notice (`code`); the notice stays pending for a retry.",
       "checkout.follow-merge-lookup-failed":
         "A merged pull request's project could not be read, so its checkout was not fast-forwarded.",
       "auto-merge.evaluation-failed": "Evaluating an environment for auto-merge failed.",

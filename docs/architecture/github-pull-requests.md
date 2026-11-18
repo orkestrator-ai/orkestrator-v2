@@ -140,6 +140,28 @@ opens is also watched for status changes until it settles, read through
 repository metadata is readable); see
 [Watched pull requests](coordinator.md#watched-pull-requests).
 
+### Telling the open tabs about a merge
+
+When an environment's pull request merges, however it was merged (the Merge PR
+button, auto-merge, or on GitHub), each of the environment's open agent tabs
+that takes injected mail is sent one workflow notice
+(`pr-merge-tab-notices.ts`). It is agent mail, not a prompt: the transcript
+draws it as the one quiet pull request line (`PR #42 updated · merged`, resource
+`watched-pull-request`, state `pr-merged`), and a busy tab gets it once its turn
+ends. The text says the branch merged and that no reply is needed: an agent
+with nothing waiting on the merge acknowledges it and says nothing, and one
+holding a step until the merge takes that step and reports it.
+
+It is sent exactly once per merge. `updateEnvironment` sets the backend-private
+`prMergeNoticePendingUrl` in the same write that records `prState: "merged"`
+(and drops it if the PR is replaced or reopened); the PR monitor's terminal
+follow-up (`resumeTerminalEffects`) sends the notices and clears it. Each tab's
+mail request id comes from the environment, tab and PR, so a retry after a
+crash replays rather than resends. A merge recorded before the marker existed
+is never announced, an environment being deleted after its merge (Merge &
+Cleanup, or a delete) is skipped, and build pipeline workers are left to their
+pipeline. Turning agent messaging off drops a pending notice.
+
 ## The Merge PR button
 
 While the pull request is open the action bar shows one **Merge PR** button

@@ -32,6 +32,7 @@ import { gitHubCliEnv } from "./github-credentials.js";
 import { runCommand } from "./shell.js";
 import { ProjectCheckoutMergeFollower } from "./project-checkout-merge-follow.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
+import { deliverPrMergeTabNotices } from "./pr-merge-tab-notices.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { LinearMergedLabels } from "./linear-merged-label.js";
 
@@ -368,6 +369,13 @@ export class PrMonitorRuntime {
     if (observer && context.storage.linear) {
       void observer.recordEnvironmentMergeById(context.storage, environmentId, observation.url);
     }
+    // Tell the environment's open agent tabs, once per merge. A cleanup
+    // deletion that follows makes it a no-op.
+    void Promise.resolve()
+      .then(() => deliverPrMergeTabNotices(context.storage, environmentId))
+      .catch((error: unknown) => {
+        log.warn("merge-notice.failed", { environmentId, error: formatLogError(error) });
+      });
     void Promise.resolve()
       .then(() => context.storage.getEnvironment(environmentId))
       .then((environment) => {

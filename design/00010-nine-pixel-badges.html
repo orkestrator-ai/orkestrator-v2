@@ -329,11 +329,12 @@ mise run lint</code></pre>
 
       <h2>Notes</h2>
       <p>
-        Captured in headless Chromium using the isolated <code>design-00010</code> profile and its
-        seeded project. Both desktop runs used dark mode, a 1440×900 viewport, and 100% zoom at 1×
-        pixel density. The baseline was captured before editing the worktree. The title-bar pair was
-        recaptured with the original and updated renderer source respectively, hiding only the
-        development profile overlay, which covered the mail button.
+        All desktop captures use headless Chromium, dark mode, a 1440×900 viewport, and 100% zoom at
+        1× pixel density. The mail, project and Build captures use the isolated
+        <code>design-00010</code> profile and its seeded project. Their baseline was captured before
+        editing the worktree. The title-bar pair was recaptured with the original and updated
+        renderer source respectively, hiding the development profile overlay that covered the mail
+        button.
       </p>
       <h3>Typography by role</h3>
       <ul>
@@ -365,9 +366,9 @@ mise run lint</code></pre>
         </li>
         <li>
           The Plugins browser shows the same selected disabled plugin in both captures. For this
-          pair, a browser fixture populated the isolated profile's catalog. The baseline restored
-          the original 9px classes in both tag locations. The after capture confirms that both
-          Disabled tags render at 11px.
+          pair, a browser fixture populated the catalog in the isolated
+          <code>design-00010-review</code> profile. The baseline restored the original 9px classes
+          in both tag locations. The after capture confirms that both Disabled tags render at 11px.
         </li>
       </ul>
       <h3>Skills detail layout</h3>

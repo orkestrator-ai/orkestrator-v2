@@ -368,6 +368,7 @@ The app is flat. Depth comes from tonal layers (sidebar darkest, then background
 - **Modal** (`box-shadow: 0 28px 90px rgba(0,0,0,0.72)`): dialogs and alert dialogs, with a 16px radius and a `zinc-700` hairline at 70%.
 - **Compose dock** (`shadow-xl` at black 20%): the native tab's compose bar, which floats over the bottom of the transcript.
 - **Floating notice** (`shadow-xl` at black 40% with a small backdrop blur; its folded pill uses `shadow-lg` at black 30%): agent mail and other pane notices floating at a pane's top right.
+- **Transcript annotation pins** (`shadow-lg`): the numbered marks float above transcript content and use a 2px white ring to stay legible over text and tinted rows.
 - **Control lift** (`shadow-xs` / `shadow-sm`): inputs and the selected segment only.
 - **Site window** (`box-shadow: inset 0 1px 0 #2a3446, 0 30px 80px rgb(0 0 0 / 0.45), 0 2px 6px rgb(0 0 0 / 0.4)`): illustration frames on the public site.
 - **Site primary glow** (`box-shadow: inset 0 1px 0 #86aef5, 0 10px 30px rgb(39 81 155 / 0.3)`): the site's primary button; it lifts 1px on hover.

@@ -22,6 +22,14 @@ import {
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  COMPOSE_FRAME_CLASS_NAME,
+  COMPOSE_COLUMN_CLASS_NAME,
+} from "@/components/chat/NativeComposeBar";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "@/components/chat/compose-metrics";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
@@ -938,13 +946,14 @@ export function NativeStyleChatPanel({
           ) : null
         }
       >
-        <div className="mx-auto mb-4 mt-2 w-[min(calc(100%_-_2rem),56rem)] shrink-0 rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
+        <div className={cn(COMPOSE_COLUMN_CLASS_NAME, COMPOSE_FRAME_CLASS_NAME, "mb-4 mt-2")}>
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder={placeholder}
             rows={1}
-            className="max-h-[160px] min-h-7 resize-none border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:outline-none"
+            style={{ minHeight: COMPOSE_MIN_INPUT_HEIGHT, maxHeight: COMPOSE_MAX_INPUT_HEIGHT }}
+            className="min-h-0 resize-none overflow-y-auto border-0 bg-transparent px-0 py-0 text-sm leading-5 shadow-none focus-visible:outline-none"
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();

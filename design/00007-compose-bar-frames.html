@@ -11,22 +11,22 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00007</p>
       <h1>00007 · Unify the compose bar frame across tabs</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-high">High</span>
         <span class="pill">Components</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 18 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 18 / 18 images</span
         >
       </div>
 
       <h2>Problem</h2>
       <p>
-        <code>NativeComposeBar.tsx:193</code> is <code>rounded-xl</code> on
-        <code>bg-compose-surface</code>. <code>PipelineMessageComposer.tsx:381</code>,
-        <code>ClaudeTmuxChatTab.parts.tsx:1204</code> and <code>FeaturesView.tsx:998</code> are
+        Before the change, <code>NativeComposeBar.tsx</code> used <code>rounded-xl</code> on
+        <code>bg-compose-surface</code>. <code>PipelineMessageComposer.tsx</code>,
+        <code>ClaudeTmuxChatTab.parts.tsx</code> and <code>FeaturesView.tsx</code> used
         <code>rounded-2xl</code> on <code>bg-input-surface</code>: a 16px modal radius on a
-        translucent surface the spec rejects for this bar. The same composer looks different in each
-        tab, and transcript text can show through the translucent ones.
+        translucent surface the spec rejects for this bar. The composers looked different across
+        tabs, and transcript text could show through the translucent frames.
       </p>
       <div class="rule">
         <div>
@@ -37,7 +37,7 @@
         <div class="src">DESIGN.md, Components → Compose Bar</div>
       </div>
 
-      <h2>Find every instance</h2>
+      <h2>Find every instance on the baseline</h2>
       <pre><code>grep -rnE --include=*.tsx "rounded-2xl[^\"]*bg-input-surface[^\"]*p-3" apps/web/src</code></pre>
 
       <h2>Scope</h2>
@@ -50,21 +50,21 @@
         </thead>
         <tbody>
           <tr>
-            <td><code>apps/web/src/components/chat/NativeComposeBar.tsx:193</code></td>
+            <td><code>apps/web/src/components/chat/NativeComposeBar.tsx</code></td>
             <td>reference implementation; do not change its look</td>
           </tr>
           <tr>
             <td>
-              <code>apps/web/src/components/build-pipeline/PipelineMessageComposer.tsx:381</code>
+              <code>apps/web/src/components/build-pipeline/PipelineMessageComposer.tsx</code>
             </td>
             <td>pipeline message composer</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/claude/ClaudeTmuxChatTab.parts.tsx:1204</code></td>
+            <td><code>apps/web/src/components/claude/ClaudeTmuxChatTab.parts.tsx</code></td>
             <td>Claude tmux composer</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/kanban/FeaturesView.tsx:998</code></td>
+            <td><code>apps/web/src/components/kanban/FeaturesView.tsx</code></td>
             <td>features composer</td>
           </tr>
           <tr>
@@ -436,54 +436,54 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00007/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “18 /
             18”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -491,15 +491,69 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
-      </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <strong>Hit classification.</strong> Pipeline, Claude tmux and Features were the three
+          hits for the rounded-2xl translucent frame. The terminal overlay used a separate 8px
+          translucent frame with blur. The native agent composer was the visual reference.
+        </li>
+        <li>
+          <strong>Decision.</strong> Export the frame and column classes from the native compose bar
+          and reuse the native dock’s fade. Shared classes align the visuals while leaving each
+          owner in control of its layout and interactions. A shared component could enforce the
+          layout at the cost of a wider refactor. Per-file styling would recreate the duplication
+          that allowed the drift. All colours use existing tokens.
+        </li>
+        <li>
+          <strong>Capture conditions.</strong> Chromium on the isolated, headless
+          <code>design-00007</code> profile, with the same local fixtures, dark theme and 1× scale
+          for both passes. Baseline captures used pristine renderer sources at
+          <code>b2c91abb9</code>. The pipeline fixture was paused and the Claude tmux session was
+          stopped. The screenshots crop the composer at the stated browser viewport.
+        </li>
       </ul>
+      <h3>What changed in each pair</h3>
+      <ul>
+        <li>
+          <a href="#cap-native-composer-reference-desktop">Native desktop</a> is pixel-identical.
+        </li>
+        <li>
+          <a href="#cap-native-composer-reference-narrow">Native narrow</a> is pixel-identical.
+        </li>
+        <li>
+          <a href="#cap-pipeline-composer-desktop">Pipeline desktop</a> uses the opaque 12px frame
+          and faded dock ground. The 56rem cap is visible in both captures.
+        </li>
+        <li>
+          <a href="#cap-pipeline-composer-narrow">Pipeline narrow</a> follows the native narrow
+          gutter and the 20px input line height.
+        </li>
+        <li>
+          <a href="#cap-tmux-composer-desktop">Claude tmux desktop</a> gets the opaque frame. The
+          empty disabled input starts at one line and the centered layout retains its width.
+        </li>
+        <li>
+          <a href="#cap-tmux-composer-narrow">Claude tmux narrow</a> matches the desktop frame and
+          one-line input, with the existing narrow toolbar.
+        </li>
+        <li>
+          <a href="#cap-features-composer-desktop">Features desktop</a> uses the opaque frame and
+          retains the native dock fade.
+        </li>
+        <li>
+          <a href="#cap-features-composer-narrow">Features narrow</a> gains 20px of usable composer
+          width with the shared gutter. The existing 280px feature list still leaves a tight chat
+          pane at 390px, so the placeholder wraps.
+        </li>
+        <li>
+          <a href="#cap-composer-focused-desktop">Focused pipeline desktop</a> steps the frame
+          border up to the same neutral shade as the native composer.
+        </li>
+      </ul>
+      <p>
+        The terminal overlay was also checked at both widths. It now uses the same opaque frame,
+        column, fade and bounded input, with the existing terminal controls.
+      </p>
 
       <footer>
         Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and

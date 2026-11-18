@@ -175,6 +175,68 @@ describe("hydrateAgentModelCatalogCache", () => {
     expect(appCommandStore(agentModelCatalogStore).getState().codexModels).toBe(existingCodex);
   });
 
+  test.each([false, true])(
+    "the freshest catalogue wins when the stale response lands first=%s",
+    async (staleFirst) => {
+      const response = (id: string, updatedAt: string) => ({
+        schemaVersion: 1,
+        codex: { updatedAt, models: [{ id, name: id }] },
+      });
+      const staleRead = deferred<ReturnType<typeof response>>();
+      const seedRead = deferred<ReturnType<typeof response>>();
+      invokeMock
+        .mockImplementationOnce(() => seedRead.promise)
+        .mockImplementationOnce(() => staleRead.promise);
+      const seed = hydrateAgentModelCatalogCache({ seed: true });
+      const stale = hydrateAgentModelCatalogCache();
+      const finishStale = async () => {
+        staleRead.resolve(response("saved", "2026-11-17T12:00:00.000Z"));
+        await stale;
+      };
+      const finishSeed = async () => {
+        seedRead.resolve(response("refreshed", "2026-11-18T12:00:00.000Z"));
+        await seed;
+      };
+
+      if (staleFirst) {
+        await finishStale();
+        expect(appCommandStore(agentModelCatalogStore).getState().codexModels[0]?.id).toBe("saved");
+        await finishSeed();
+      } else {
+        await finishSeed();
+        await finishStale();
+      }
+      expect(appCommandStore(agentModelCatalogStore).getState().codexModels[0]?.id).toBe(
+        "refreshed",
+      );
+    },
+  );
+
+  test("clears cached Codex rows after a read for a login with no saved list", async () => {
+    invokeMock.mockResolvedValueOnce({
+      schemaVersion: 1,
+      codex: {
+        updatedAt: "2026-11-18T12:00:00.000Z",
+        models: [{ id: "prior-login", name: "Prior login" }],
+      },
+    });
+    await hydrateAgentModelCatalogCache();
+    const oldRead = deferred<unknown>();
+    invokeMock.mockImplementationOnce(() => oldRead.promise);
+    const inFlight = hydrateAgentModelCatalogCache();
+    invokeMock.mockResolvedValueOnce({ schemaVersion: 1 });
+    await hydrateAgentModelCatalogCache();
+    oldRead.resolve({
+      schemaVersion: 1,
+      codex: {
+        updatedAt: "2026-11-18T12:00:00.000Z",
+        models: [{ id: "prior-login", name: "Prior login" }],
+      },
+    });
+    await inFlight;
+    expect(appCommandStore(agentModelCatalogStore).getState().codexModels).toBe(CODEX_MODELS);
+  });
+
   test("does not let a late backend read overwrite newer live catalogues", async () => {
     const cacheRead = deferred<{
       schemaVersion: 1;

@@ -197,7 +197,7 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
                 >
                   <SelectTrigger
                     aria-label="Settings section"
-                    className="h-10 min-w-0 flex-1 border-0 !bg-transparent px-0 text-foreground shadow-none focus-visible:outline-none md:hidden"
+                    className="h-10 min-w-0 flex-1 border-0 !bg-transparent px-0 text-foreground shadow-none focus-hairline-outset md:hidden"
                   >
                     <SelectValue>
                       <span className="flex min-w-0 items-center gap-2 text-sm font-medium">

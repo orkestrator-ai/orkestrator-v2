@@ -63,6 +63,14 @@ export interface AgentAccountStore {
   autoSwitch?: Partial<Record<AgentAccountPlatform, StoredAgentAccountAutoSwitch>>;
 }
 
+/** Identity of a provider login at the time a bridge or probe was launched. */
+export function agentAccountLoginKey(
+  accountId = DEFAULT_AGENT_ACCOUNT_ID,
+  loginGeneration?: string,
+): string {
+  return JSON.stringify([accountId, loginGeneration ?? null]);
+}
+
 export function emptyAgentAccountStore(): AgentAccountStore {
   return { version: 1, accounts: [], active: {} };
 }

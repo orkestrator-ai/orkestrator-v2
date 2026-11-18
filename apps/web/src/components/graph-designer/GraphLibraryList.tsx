@@ -36,7 +36,7 @@ function TrustBadge({ summary }: { summary: GraphTemplateSummary }) {
     <span
       data-graph-trust={trust}
       className={cn(
-        "inline-flex items-center gap-1 rounded border px-1 text-[10px] leading-4",
+        "inline-flex items-center gap-1 rounded border px-1 text-[11px] leading-4 font-medium",
         trust === "trusted"
           ? "border-success/40 text-success"
           : "border-amber-500/40 text-amber-300",
@@ -64,7 +64,7 @@ function EngineBadge({ summary }: { summary: GraphTemplateSummary }) {
     <span
       data-graph-engine-status={summary.engineStatus ?? "active"}
       className={cn(
-        "rounded border px-1 text-[10px] leading-4",
+        "rounded border px-1 text-[11px] leading-4 font-medium",
         retired
           ? "border-zinc-500/50 text-zinc-400 line-through"
           : "border-sky-500/40 text-sky-300",
@@ -83,10 +83,10 @@ function EngineBadge({ summary }: { summary: GraphTemplateSummary }) {
 function CompileBadge({ summary }: { summary: GraphTemplateSummary }) {
   const { errors, warnings } = summary.compile;
   if (errors === 0 && warnings === 0) {
-    return <span className="text-[10px] text-muted-foreground">compiles</span>;
+    return <span className="text-[11px] font-medium text-muted-foreground">compiles</span>;
   }
   return (
-    <span className="flex items-center gap-1 text-[10px] tabular-nums">
+    <span className="flex items-center gap-1 text-[11px] font-medium tabular-nums">
       {errors > 0 ? <span className="text-failure">{errors} err</span> : null}
       {warnings > 0 ? <span className="text-amber-300">{warnings} warn</span> : null}
     </span>
@@ -216,7 +216,9 @@ export function GraphLibraryList({
                           <EngineBadge summary={summary} />
                           <TrustBadge summary={summary} />
                           {summary.readOnly && summary.scope !== "builtin" ? (
-                            <span className="text-[10px] text-muted-foreground">read-only</span>
+                            <span className="text-[11px] font-medium text-muted-foreground">
+                              read-only
+                            </span>
                           ) : null}
                         </span>
                       </button>

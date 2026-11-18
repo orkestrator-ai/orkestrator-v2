@@ -106,6 +106,8 @@ describe("flake registry parsing", () => {
     expect(caseMatcher("0210")("1210-fake.md")).toBe(false);
     expect(caseMatcher("0147-cursor-sdk.md")("0147-cursor-sdk.md")).toBe(true);
     expect(caseMatcher("0147-cursor-sdk")("0147-other.md")).toBe(false);
+    expect(caseMatcher("10000")("10000-first.md")).toBe(true);
+    expect(caseMatcher("10000-first.md")("10000-first.md")).toBe(true);
     expect(() => caseMatcher("fake")).toThrow(/Not a case id/);
   });
 });

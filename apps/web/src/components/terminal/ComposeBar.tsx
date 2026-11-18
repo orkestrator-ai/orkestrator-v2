@@ -535,7 +535,11 @@ export function ComposeBar({
       )}
 
       <div
-        className={cn(COMPOSE_COLUMN_CLASS_NAME, COMPOSE_FRAME_CLASS_NAME, "flex items-end gap-2")}
+        className={cn(
+          COMPOSE_COLUMN_CLASS_NAME,
+          COMPOSE_FRAME_CLASS_NAME,
+          "flex items-end gap-2 has-[>textarea:focus-visible]:focus-hairline-frame",
+        )}
       >
         <textarea
           ref={textareaRef}

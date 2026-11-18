@@ -1097,29 +1097,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       appCommandStore(configStore)
         .getState()
         .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
-      const environmentId = "coordinator:coordinator-1:conversation-1";
-      const mailboxId = `${environmentId}\0coordinator-tab`;
-      appCommandStore(agentMailStore).setState({
-        summary: new Map([
-          [
-            mailboxId,
-            {
-              mailboxId,
-              projectId: "project-1",
-              environmentId,
-              tabId: "coordinator-tab",
-              unreadCount: 1,
-              userUnseenCount: 1,
-              agentUnackedCount: 1,
-              pendingInjectCount: 1,
-              failedInjectCount: 0,
-              revision: 1,
-            },
-          ],
-        ]),
-        refreshSummary: async () => undefined,
-        refreshMailbox: async () => undefined,
-      });
+      installPendingMail();
       renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       expect(
         await screen.findByText("Delivery waiting: Codex is turned off. Turn it on to send."),

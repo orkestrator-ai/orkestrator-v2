@@ -134,7 +134,8 @@ describe("AgentRuntimePanel steer history", () => {
     const card = screen.getByTestId("agent-runtime-steer-saturated");
     expect(card.textContent).toContain("Steering is full for this turn");
     expect(card.textContent).toContain("the turn keeps running");
-    expect(card.textContent).toContain("256 of 256 records, 300 KiB of 512 KiB.");
+    const capacity = screen.getByText("256 of 256 records, 300 KiB of 512 KiB.");
+    expect(capacity.classList.contains("font-medium")).toBe(true);
     expect(card.querySelector("button") === null).toBe(true);
     expect(screen.queryByText("Cursor does not report runtime details.") === null).toBe(true);
   });

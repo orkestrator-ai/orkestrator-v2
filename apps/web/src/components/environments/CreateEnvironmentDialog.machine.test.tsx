@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import * as federation from "@/components/federation/FederationProvider";
 import * as machineViews from "@/components/federation/useMachineViews";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { portalStore } from "@/lib/portal/portal-store";
+import { MODEL_CATALOG_REFRESHED_EVENT } from "@/components/settings/agent/refresh-model-catalog";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { configStore } from "@/stores/configStore";
 import { appCommandStore } from "@/test/app-command-store";
 import {
@@ -42,11 +44,11 @@ function federated() {
   );
 }
 
-function dialog() {
+function dialog(open = true) {
   return (
     <DockerAvailabilityProvider available>
       <CreateEnvironmentDialog
-        open
+        open={open}
         onOpenChange={() => undefined}
         onCreate={async () => true}
         projectId="project-1"
@@ -135,4 +137,46 @@ describe("CreateEnvironmentDialog root setup steps on another machine", () => {
     expect(reads.length > 0).toBe(true);
     expect(reads.every((call) => call.args.projectId === "project-1")).toBe(true);
   });
+});
+
+test("hydrates on open, ignores other nodes, and removes the refresh listener on close", async () => {
+  federated();
+  const leaf = new FakeNodeClient({ nodeId: LEAF });
+  leaf.respond("get_opencode_model_catalog_cache", null);
+  const read = mock(() => ({
+    schemaVersion: 1,
+    codex: {
+      updatedAt: "2026-11-18T12:00:00.000Z",
+      models: [{ id: "studio-cached", name: "Studio cached" }],
+    },
+  }));
+  leaf.respond("get_agent_model_catalog_cache", read);
+  const view = renderInNodeScope(dialog(false), { role: "leaf", client: leaf });
+  const models = view.scope.store(agentModelCatalogStore);
+  const refresh = (nodeId: string | null) =>
+    window.dispatchEvent(new CustomEvent(MODEL_CATALOG_REFRESHED_EVENT, { detail: nodeId }));
+  expect(read).not.toHaveBeenCalled();
+
+  view.rerender(dialog());
+  await waitFor(() => expect(models.getState().codexModels[0]?.id).toBe("studio-cached"));
+  read.mockImplementationOnce(() => {
+    throw new Error("fixture catalogue unavailable");
+  });
+  await act(async () => {
+    refresh("another-node");
+    refresh(null);
+  });
+  expect(read).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    refresh(LEAF);
+  });
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(models.getState().codexModels[0]?.id).toBe("studio-cached");
+  expect(screen.getByRole("dialog")).toBeTruthy();
+
+  view.rerender(dialog(false));
+  await act(async () => {
+    refresh(LEAF);
+  });
+  expect(read).toHaveBeenCalledTimes(2);
 });

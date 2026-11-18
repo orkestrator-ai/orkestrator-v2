@@ -24,7 +24,7 @@ import {
   useAnnotationUiTestBudget,
 } from "@/test/web-annotation-harness";
 import {
-  captureConditionsLabel,
+  captureConditionLabels,
   citedEvidenceLabel,
   comparisonLabels,
   hasAgentReport,
@@ -170,10 +170,11 @@ describe("result labels", () => {
   });
 
   test("capture conditions list only what the desktop reported", () => {
-    expect(captureConditionsLabel({})).toBeNull();
-    expect(captureConditionsLabel({ stability: "stable", zoomFactor: 1 })).toBe(
-      "Zoom 100% · stable",
-    );
+    expect(captureConditionLabels({})).toEqual([]);
+    expect(captureConditionLabels({ stability: "stable", zoomFactor: 1 })).toEqual([
+      { text: "Zoom 100%" },
+      { text: "stable", status: true },
+    ]);
   });
 
   test("agent report presence follows reportedRevision, with a fallback for older records", () => {

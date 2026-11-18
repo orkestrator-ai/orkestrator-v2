@@ -975,7 +975,13 @@ export function NativeStyleChatPanel({
           ) : null
         }
       >
-        <div className={cn(COMPOSE_COLUMN_CLASS_NAME, COMPOSE_FRAME_CLASS_NAME, "mb-4 mt-2")}>
+        <div
+          className={cn(
+            COMPOSE_COLUMN_CLASS_NAME,
+            COMPOSE_FRAME_CLASS_NAME,
+            "mb-4 mt-2 has-[>textarea:focus-visible]:focus-hairline-frame",
+          )}
+        >
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

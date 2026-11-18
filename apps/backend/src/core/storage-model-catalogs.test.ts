@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { StorageService } from "./storage.js";
+import { AGENT_MODEL_CATALOG_RECONFIRM_INTERVAL_MS } from "./storage-shared.js";
 import type { ClaudeModelCatalogEntry, CodexModelCatalogEntry } from "./models.js";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
@@ -417,6 +418,26 @@ describe("host agent model catalogue cache", () => {
         grok: { models: grokModels },
         pi: { models: piModels },
       });
+    });
+  });
+
+  test("re-confirms an unchanged catalogue once its time is an interval old", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const models = [{ id: "gpt-latest", name: "GPT Latest" }];
+      const confirmedAt = new Date(
+        Date.now() - AGENT_MODEL_CATALOG_RECONFIRM_INTERVAL_MS - 60_000,
+      ).toISOString();
+      seedStore(dataDir, "agent-model-catalog.json", {
+        schemaVersion: 1,
+        codex: { updatedAt: confirmedAt, models },
+      });
+      const reconfirmed = await storage.cacheAgentModelCatalog("codex", models);
+      expect(reconfirmed.codex?.models).toEqual(models);
+      // Later than the seeded time: the staleness checks read this field.
+      expect(Date.parse(reconfirmed.codex!.updatedAt)).toBeGreaterThan(Date.parse(confirmedAt));
+      expect((await storage.getAgentModelCatalogCache()).codex?.updatedAt).toBe(
+        reconfirmed.codex?.updatedAt,
+      );
     });
   });
 

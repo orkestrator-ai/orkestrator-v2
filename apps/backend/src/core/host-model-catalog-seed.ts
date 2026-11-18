@@ -1,6 +1,9 @@
 import { normalizeAgentPlatforms, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CommandContext } from "./commands-context.js";
 import { asCachedCodexModels } from "./commands-validation.js";
+import type { AgentModelCatalogCache, CodexModelCatalogEntry } from "./models.js";
+import { agentAccountLoginKey } from "./agent-accounts-store.js";
+import { AGENT_MODEL_CATALOG_MAX_AGE_MS } from "./storage-shared.js";
 import type {
   HostCatalog,
   refreshHostModelCatalog as RefreshHostModelCatalog,
@@ -20,6 +23,24 @@ export function resetHostModelCatalogSeedCooldown(
   context.runtime.localServers.catalogSeeds.resetCooldown(agent);
 }
 
+/** Account swaps and login promotion share this lock with the catalogue write. */
+export function persistCodexHostCatalog(
+  context: CommandContext,
+  models: CodexModelCatalogEntry[],
+  accountLoginKey: string,
+): Promise<AgentModelCatalogCache | undefined> {
+  const { storage } = context;
+  return context.runtime.accounts.withMutation(async () => {
+    const accounts = await storage.agentAccounts.loadAgentAccounts();
+    if (
+      agentAccountLoginKey(accounts.active.codex, accounts.loginGeneration?.codex) !==
+      accountLoginKey
+    )
+      return undefined;
+    return storage.cacheAgentModelCatalog("codex", models);
+  });
+}
+
 /** Save a freshly downloaded host catalogue where the pickers read it from. */
 export async function persistHostCatalog(
   context: CommandContext,
@@ -30,7 +51,12 @@ export async function persistHostCatalog(
   if (catalog.agent === "claude") {
     await storage.cacheAgentModelCatalog("claude", catalog.models);
   } else if (catalog.agent === "codex") {
-    await storage.cacheAgentModelCatalog("codex", asCachedCodexModels(catalog.models));
+    const saved = await persistCodexHostCatalog(
+      context,
+      asCachedCodexModels(catalog.models),
+      catalog.accountLoginKey,
+    );
+    if (!saved) throw new Error("The active Codex login changed during model discovery");
   } else if (catalog.agent === "cursor" || catalog.agent === "grok" || catalog.agent === "pi") {
     await storage.cacheAgentModelCatalog(catalog.agent, catalog.models);
   } else {
@@ -59,13 +85,45 @@ async function hasCachedModels(
   context: CommandContext,
   agent: AgentPlatform,
   projectId?: string,
+  freshness?: { maxAgeMs: number; now: () => number },
 ): Promise<boolean> {
   if (agent === "opencode") {
     projectId ??= HOST_OPENCODE_CATALOG_SCOPE;
     return ((await context.storage.getOpenCodeModelCatalog(projectId))?.models.length ?? 0) > 0;
   }
   const cache = await context.storage.getAgentModelCatalogCache();
-  return (cache[agent]?.models.length ?? 0) > 0;
+  if (!freshness) return (cache[agent]?.models.length ?? 0) > 0;
+  return !isHostModelCatalogStale(cache, agent, freshness.now(), freshness.maxAgeMs);
+}
+
+/**
+ * The host-wide catalogues a read keeps fresh in the background.
+ *
+ * Claude and Codex lists come from the host's own sign-in and are what every
+ * launch dialog offers before any environment runs. Cursor, Grok and Pi are
+ * re-read from each running bridge, and OpenCode's list is per project, so a
+ * background host probe would only add bridge starts for them.
+ */
+export const STALE_REFRESHED_HOST_CATALOGS = ["claude", "codex"] as const;
+type StaleRefreshedHostCatalog = (typeof STALE_REFRESHED_HOST_CATALOGS)[number];
+
+/**
+ * Whether `agent`'s cached catalogue exists but was last confirmed more than
+ * `maxAgeMs` ago. A missing catalogue is not stale: seeding it is first use.
+ * Neither is one with no readable time; the persisted cache always has one
+ * (an unreadable stored time is read back as the epoch, which is stale).
+ */
+export function isHostModelCatalogStale(
+  cache: AgentModelCatalogCache,
+  agent: Exclude<AgentPlatform, "opencode">,
+  now: number,
+  maxAgeMs = AGENT_MODEL_CATALOG_MAX_AGE_MS,
+): boolean {
+  const entry = cache[agent];
+  if (!entry?.models.length) return false;
+  const confirmedAt =
+    typeof entry.updatedAt === "string" ? Date.parse(entry.updatedAt) : Number.NaN;
+  return Number.isFinite(confirmedAt) && now - confirmedAt > maxAgeMs;
 }
 
 /**
@@ -80,11 +138,17 @@ export function seedHostModelCatalogIfMissing(
   context: CommandContext,
   agent: AgentPlatform,
   refresh: typeof RefreshHostModelCatalog,
-  options: { projectId?: string; now?: () => number } = {},
+  options: { projectId?: string; now?: () => number; maxAgeMs?: number } = {},
 ): Promise<boolean> {
-  const { projectId, now = Date.now } = options;
+  const { projectId, now = Date.now, maxAgeMs } = options;
   return context.runtime.localServers.catalogSeeds.seed(agent, projectId, {
-    cached: () => hasCachedModels(context, agent, projectId),
+    cached: () =>
+      hasCachedModels(
+        context,
+        agent,
+        projectId,
+        maxAgeMs === undefined ? undefined : { maxAgeMs, now },
+      ),
     download: async () => {
       const catalog = await refresh(context, agent);
       // An empty list is a failed download, not a seeded cache: keeping it
@@ -115,4 +179,60 @@ export async function seedEnabledHostModelCatalogs(
   for (const agent of enabled) {
     await seedHostModelCatalogIfMissing(context, agent, refresh, options);
   }
+}
+
+/**
+ * Re-download every enabled Claude or Codex host catalogue last confirmed more
+ * than a day ago (`AGENT_MODEL_CATALOG_MAX_AGE_MS`).
+ *
+ * The cached list keeps serving while this runs; it never throws. It shares the
+ * seed's single flight and failure cooldown, so a signed-out host costs one
+ * probe per cooldown rather than one per read, and a successful download, or
+ * an unchanged list re-confirmed, resets the age.
+ */
+export async function refreshStaleHostModelCatalogs(
+  context: CommandContext,
+  refresh: typeof RefreshHostModelCatalog,
+  options: { now?: () => number; cache?: AgentModelCatalogCache } = {},
+): Promise<void> {
+  const { now = Date.now } = options;
+  const stale = await staleHostCatalogs(context, options.cache, now());
+  for (const agent of stale) {
+    await seedHostModelCatalogIfMissing(context, agent, refresh, {
+      now,
+      maxAgeMs: AGENT_MODEL_CATALOG_MAX_AGE_MS,
+    });
+  }
+}
+
+/**
+ * Start {@link refreshStaleHostModelCatalogs} without waiting for it, when any
+ * enabled catalogue is stale. For reads that answer from the cache now and let
+ * the next read see the refreshed list.
+ */
+export function refreshStaleHostModelCatalogsInBackground(
+  context: CommandContext,
+  refresh: typeof RefreshHostModelCatalog,
+  cache: AgentModelCatalogCache,
+  now: () => number = Date.now,
+): void {
+  if (!STALE_REFRESHED_HOST_CATALOGS.some((agent) => isHostModelCatalogStale(cache, agent, now())))
+    return;
+  // A shutdown refuses the probe itself (`withShortLivedBridge`), and the seed
+  // turns that into a logged deferral rather than a rejection.
+  void refreshStaleHostModelCatalogs(context, refresh, { now, cache }).catch(() => undefined);
+}
+
+async function staleHostCatalogs(
+  context: CommandContext,
+  cache: AgentModelCatalogCache | undefined,
+  now: number,
+): Promise<StaleRefreshedHostCatalog[]> {
+  const enabled = normalizeAgentPlatforms(
+    (await context.storage.loadConfig()).global.enabledAgentPlatforms,
+  );
+  const current = cache ?? (await context.storage.getAgentModelCatalogCache());
+  return STALE_REFRESHED_HOST_CATALOGS.filter(
+    (agent) => enabled.includes(agent) && isHostModelCatalogStale(current, agent, now),
+  );
 }

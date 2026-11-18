@@ -108,7 +108,7 @@ export function CoordinatorActionSearchDialog({
           Search this conversation's topics, questions and pull requests, including older ones.
         </DialogDescription>
 
-        <div className="flex items-center gap-2 border-b border-border/70 px-4 py-3">
+        <div className="flex items-center gap-2 border-b border-border/70 px-4 py-3 has-[>input:focus-visible]:focus-hairline-frame">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <input
             ref={inputRef}

@@ -1368,7 +1368,7 @@ export function DesignCanvasTab({
                   aria-valuemax={layersMaxWidth}
                   aria-valuenow={layersWidth}
                   tabIndex={0}
-                  className="relative z-30 w-px shrink-0 cursor-col-resize touch-none bg-divider after:absolute after:inset-y-0 after:-left-1 after:w-2 hover:bg-primary/50 focus-visible:bg-primary/50 focus-visible:outline-none"
+                  className="relative z-30 w-px shrink-0 cursor-col-resize touch-none bg-divider after:absolute after:inset-y-0 after:-left-1 after:w-2 hover:bg-primary/50 focus-hairline focus-hairline-outset"
                   onPointerDown={(event) => {
                     if (event.button !== 0) return;
                     event.preventDefault();

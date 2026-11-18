@@ -76,7 +76,7 @@ const NOT_FOLLOWED_MODULES: ReadonlySet<string> = new Set([
 export const WORKSPACE_EXEMPT_MODULES: Readonly<Record<string, string>> = {
   [`${WEB_SOURCE_ROOT}/components/settings/agent/refresh-model-catalog`]:
     "Global Settings' model catalogue refresh, for the window's settings; the workspace " +
-    "imports only its MODEL_CATALOG_REFRESHED_EVENT name.",
+    "imports only its model catalogue refresh event and scope matcher.",
   [`${WEB_SOURCE_ROOT}/stores/nativeNoticeDismissalStore`]:
     "A window store (unscoped zustand): which notices this client dismissed is the client's " +
     "own state, kept with its other client state on the command node. Scoping it is a store " +

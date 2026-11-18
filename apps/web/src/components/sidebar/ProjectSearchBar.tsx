@@ -113,7 +113,7 @@ function HitMachineLabel({ hit }: { hit: ProjectSearchHit }) {
       />
       {availability !== "live" ? (
         <span
-          className="shrink-0 rounded-md border border-amber-400/30 px-1 py-px text-[10px] text-amber-400/90"
+          className="shrink-0 rounded-md border border-amber-400/30 px-1 py-px text-[11px] font-medium text-amber-400/90"
           data-testid="project-search-availability"
           title={machineStatus(machine)}
         >
@@ -132,7 +132,7 @@ function MachineFilterItem({ machine }: { machine: MachineView }) {
       <MachineDot colorToken={machine.colorToken} machineName={machine.name} />
       <span className="min-w-0 truncate">{machine.name}</span>
       {availability !== "live" ? (
-        <span className="ml-auto shrink-0 text-[10px] text-amber-400/90">
+        <span className="ml-auto shrink-0 text-[11px] font-medium text-amber-400/90">
           {AVAILABILITY_LABELS[availability]}
         </span>
       ) : null}
@@ -550,7 +550,7 @@ export function ProjectSearchBar({
         <kbd
           data-testid="project-search-shortcut"
           aria-hidden="true"
-          className="ml-auto shrink-0 rounded-[5px] border border-border/70 bg-zinc-900 px-1.5 py-px font-sans text-[10px] font-medium text-zinc-300"
+          className="ml-auto shrink-0 rounded-[5px] border border-border/70 bg-zinc-900 px-1.5 py-px font-sans text-[11px] font-medium text-zinc-300"
         >
           {shortcutLabel}
         </kbd>
@@ -569,7 +569,7 @@ export function ProjectSearchBar({
             Search projects and environments, including containerized and local environments.
           </DialogDescription>
 
-          <div className="flex items-center gap-2 border-b border-border/70 px-4 py-3">
+          <div className="flex items-center gap-2 border-b border-border/70 px-4 py-3 has-[>input:focus-visible]:focus-hairline-frame">
             <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <input
               ref={inputRef}

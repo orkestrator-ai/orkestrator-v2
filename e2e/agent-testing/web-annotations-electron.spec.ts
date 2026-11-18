@@ -3107,46 +3107,95 @@ test("native result recapture compares real screenshots and excludes editor reda
     expect(pending.result?.unstableRegions?.length).toBeGreaterThan(0);
     expect(pending.result?.originalMasks?.captureId).toBe(original.captureId);
 
-    // Run the same renderer canvas and commit code the editor uses, against
-    // the real preload, spool and backend rather than a command double.
-    const diff = await s().window.evaluate(
+    await preview("setVisible", TAB_ID, false);
+    // Mount the production redaction editor in the fixture renderer. The
+    // controlled draft holds the request while the real preload and backend
+    // accept the canvas output and the renderer's normal commit.
+    await s().window.evaluate(
       async ({ captureId, requestId, annotationId, environmentId }) => {
+        const resources = performance.getEntriesByType("resource").map((entry) => entry.name);
+        const reactPath = resources.find((url) => url.includes("/deps/react.js?"))!;
+        const rootPath = resources.find((url) => url.includes("/deps/react-dom_client.js?"))!;
+        const editorPath = "/src/components/browser/annotations/RedactionEditor.tsx";
         const redactPath = "/src/lib/web-annotations/redaction.ts";
         const commitPath = "/src/lib/web-annotations/capture-commit.ts";
+        const intentPath = "/src/lib/web-annotations/capture-intents.ts";
+        const syncPath = "/src/lib/web-annotations/sync.ts";
+        const storePath = "/src/stores/webAnnotationStore.ts";
         const desktop = (window as unknown as { orkestrator: OrkestratorElectronApi }).orkestrator;
-        const previewApi = desktop.browserPreview.capture;
-        const pending = (await previewApi.readPendingCapture(captureId))!;
-        const regions = [{ x: 16, y: 16, width: 48, height: 48 }];
+        const api = desktop.browserPreview.capture;
+        const pending = (await api.readPendingCapture(captureId))!;
+        const { default: React } = await import(reactPath);
+        const { default: ReactDOM } = await import(rootPath);
+        const { RedactionEditor } = await import(editorPath);
         const { redactPngDataUrl } = await import(redactPath);
-        const { resultCaptureMetadata } = await import(commitPath);
-        const imageDataUrl = await redactPngDataUrl(pending.imageDataUrl!, regions);
-        await previewApi.replacePendingCaptureImage(captureId, {
-          regions,
-          imageDataUrl,
-          manualRegions: regions.length,
+        const { commitPendingCapture } = await import(commitPath);
+        const { rememberCaptureIntent } = await import(intentPath);
+        const { acquireWebAnnotationSync } = await import(syncPath);
+        const { getWebAnnotationCache } = await import(storePath);
+        const sync = acquireWebAnnotationSync(environmentId, { visible: false });
+        const mount = document.createElement("div");
+        mount.dataset.resultRedactionFixture = "";
+        Object.assign(mount.style, {
+          position: "fixed",
+          top: "20px",
+          left: "20px",
+          zIndex: "10000",
+          width: "400px",
+          padding: "16px",
+          backgroundColor: "#18181b",
         });
-        const after = (await previewApi.readPendingCapture(captureId))!;
-        const { invoke } = desktop;
-        const { asset } = (await invoke("web_annotation_asset_stage", {
-          environmentId,
-          operationId: `asset-${captureId}`,
-          mediaType: "image/png",
-          data: after.imageDataUrl!.split(",")[1],
-        })) as { asset: { id: string } };
-        const stored = (await invoke("web_annotation_result_capture", {
-          environmentId,
-          operationId: `result-${captureId}`,
-          requestId,
-          annotationId,
-          ...resultCaptureMetadata(after, true),
-          capture: { ...after.capture, assetIds: [asset.id] },
-        })) as { captureId: string };
-        await previewApi.acknowledgePendingCapture({
-          captureId,
-          annotationId,
-          backendCaptureId: stored.captureId,
-        });
-        return invoke("web_annotation_result_diff", { environmentId, captureId: stored.captureId });
+        document.body.append(mount);
+        const root = ReactDOM.createRoot(mount);
+        const deadline = Date.now() + 10_000;
+        try {
+          while (!getWebAnnotationCache(environmentId).capabilities?.operations.resultDiffs) {
+            if (Date.now() > deadline) throw new Error("Result diffs were not advertised");
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          rememberCaptureIntent(captureId, {
+            kind: "result",
+            requestId,
+            annotationId,
+            createdAt: Date.now(),
+          });
+          root.render(
+            React.createElement(RedactionEditor, {
+              imageDataUrl: pending.imageDataUrl!,
+              imageSize: pending.descriptor.image!,
+              onCancel: () => undefined,
+              onApply: async (regions: WebAnnotationRect[]) => {
+                try {
+                  const imageDataUrl = await redactPngDataUrl(pending.imageDataUrl!, regions);
+                  await api.replacePendingCaptureImage(captureId, {
+                    regions,
+                    imageDataUrl,
+                    manualRegions: regions.length,
+                  });
+                  const after = (await api.readPendingCapture(captureId))!;
+                  const committed = await commitPendingCapture({
+                    api,
+                    environmentId,
+                    captureId,
+                    record: after,
+                    input: { body: "" },
+                  });
+                  mount.dataset.committedCapture = committed.backendCaptureId;
+                } catch (error) {
+                  mount.dataset.commitError = String(error);
+                } finally {
+                  sync.release();
+                  root.unmount();
+                }
+              },
+            }),
+          );
+        } catch (error) {
+          sync.release();
+          root.unmount();
+          mount.remove();
+          throw error;
+        }
       },
       {
         captureId,
@@ -3155,6 +3204,15 @@ test("native result recapture compares real screenshots and excludes editor reda
         environmentId: s().environmentId,
       },
     );
+    const editor = s().window.locator("[data-result-redaction-fixture]");
+    await editor.getByRole("button", { name: "Add box" }).click();
+    await editor.getByRole("button", { name: "Apply redaction" }).click();
+    await expect(editor).toHaveAttribute("data-committed-capture", /^capture-/);
+    const stored = await editor.getAttribute("data-committed-capture");
+    const diff = await invoke(C.resultDiff, {
+      environmentId: s().environmentId,
+      captureId: stored,
+    });
     expect(diff).toMatchObject({
       diff: {
         status: "compared",
@@ -3164,6 +3222,11 @@ test("native result recapture compares real screenshots and excludes editor reda
       },
     });
   } finally {
+    await s()
+      .window.locator("[data-result-redaction-fixture]")
+      .evaluate((element) => element.remove())
+      .catch(() => undefined);
+    await preview("setVisible", TAB_ID, true);
     await held.cleanup();
   }
 });

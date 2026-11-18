@@ -41,7 +41,7 @@ export const BROWSER_ADDRESS_FORM_CLASS =
 // Draw the address input's focus on the full frame, independently of the service picker's focus.
 export const BROWSER_ADDRESS_FRAME_CLASS =
   "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-input-surface shadow-sm transition-colors " +
-  "has-[>input:focus-visible]:[outline:1px_solid_var(--focus-hairline-color,var(--color-ring))] " +
+  "has-[>input:focus-visible]:[outline:1px_solid_var(--browser-address-outline-color,var(--color-ring))] " +
   "has-[>input:focus-visible]:-outline-offset-2 forced-colors:has-[>input:focus-visible]:outline-[Highlight]";
 export const BROWSER_ADDRESS_INPUT_CLASS =
   "h-full min-w-[min(10rem,60%)] flex-1 bg-transparent px-2.5 font-mono text-xs text-foreground outline-none placeholder:font-sans placeholder:text-muted-foreground";

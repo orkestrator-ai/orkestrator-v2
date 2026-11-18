@@ -85,6 +85,14 @@ import {
   type ClaudeOptions,
 } from "../../apps/web/src/components/environments/CreateEnvironmentDialog";
 import { BrowserTab } from "../../apps/web/src/components/browser/BrowserTab";
+import { formatPreviewServiceUri } from "@orkestrator/protocol/preview-services";
+import {
+  FIXTURE_BACKEND_INSTANCE_ID,
+  FIXTURE_ENVIRONMENT_ID,
+  FIXTURE_SERVICE_ID,
+  fixturePreviewCapabilities,
+  fixturePreviewSnapshot,
+} from "@orkestrator/protocol/testing/preview-contract-fixtures";
 import { NativeComposeBar } from "../../apps/web/src/components/chat/NativeComposeBar";
 import { QueuedPromptsDialog } from "../../apps/web/src/components/chat/QueuedPromptsDialog";
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
@@ -399,8 +407,28 @@ function DesignLaunchFixture() {
   );
 }
 
-function BrowserFixture() {
+function installBrowserServiceFixture() {
+  window.orkestrator = {
+    invoke: async <T,>(command: string) => {
+      if (command === "get_preview_capabilities") return fixturePreviewCapabilities() as T;
+      if (command === "get_preview_services") return fixturePreviewSnapshot() as T;
+      throw new Error(`Unknown backend command: ${command}`);
+    },
+  } as Window["orkestrator"];
+}
+
+function BrowserFixture({ service }: { service: boolean }) {
   const empty = new URLSearchParams(window.location.search).has("empty");
+  const url = service
+    ? formatPreviewServiceUri({
+        backendInstanceId: FIXTURE_BACKEND_INSTANCE_ID,
+        environmentId: FIXTURE_ENVIRONMENT_ID,
+        serviceId: FIXTURE_SERVICE_ID,
+        path: "/",
+      })
+    : empty
+      ? ""
+      : "http://localhost:3000/";
 
   return (
     <main className="min-h-screen bg-muted p-4 text-foreground">
@@ -411,8 +439,8 @@ function BrowserFixture() {
       >
         <BrowserTab
           tabId="browser-fixture"
-          environmentId="fixture-environment"
-          data={{ url: empty ? "" : "http://localhost:3000/" }}
+          environmentId={service ? FIXTURE_ENVIRONMENT_ID : "fixture-environment"}
+          data={{ url }}
           isActive
         />
       </section>
@@ -2112,7 +2140,11 @@ function fixtureForPath() {
     installDesignLaunchFixture();
     return <DesignLaunchFixture />;
   }
-  if (window.location.pathname === "/browser") return <BrowserFixture />;
+  if (window.location.pathname === "/browser") {
+    const service = new URLSearchParams(window.location.search).has("service");
+    if (service) installBrowserServiceFixture();
+    return <BrowserFixture service={service} />;
+  }
   if (window.location.pathname === "/sortable-project-folder") {
     return <SortableProjectFolderFixture />;
   }

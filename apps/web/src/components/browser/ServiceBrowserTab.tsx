@@ -793,7 +793,7 @@ function ServicePreview({
             className={cn(
               BROWSER_ADDRESS_FRAME_CLASS,
               attachError
-                ? "border-destructive/70 [--focus-hairline-color:var(--color-destructive)]"
+                ? "border-destructive/70 [--browser-address-outline-color:var(--color-destructive)]"
                 : "border-border",
             )}
           >

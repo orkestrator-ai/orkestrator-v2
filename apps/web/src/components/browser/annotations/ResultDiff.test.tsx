@@ -111,7 +111,10 @@ function seed() {
     currentCaptureId: "capture-element",
     requestIds: [request.id],
   });
-  backend.assets.set("after-image", "iVBORw0KGgo=");
+  backend.assets.set(
+    "after-image",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+  );
   backend.captures.set(
     "after-1",
     fixtureCapture("page", {

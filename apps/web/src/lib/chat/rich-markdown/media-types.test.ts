@@ -31,6 +31,23 @@ describe("media types", () => {
     expect(declaredMime("file.txt", "data:image/png;base64,AAAA")).toBe("image/png");
   });
 
+  test("infers media from the final extension of a literal filesystem path", () => {
+    const path = "/workspace/ shots.png/run#2?/clip.png.MP4";
+    expect(declaredMime(path)).toBe("video/mp4");
+    expect(declaredMime(path, "file:///workspace/%20shots.png/run%232%3F/clip.png.MP4")).toBe(
+      "video/mp4",
+    );
+    expect(declaredMime("clip.constructor")).toBe("application/octet-stream");
+  });
+
+  test("ignores URL query strings and fragments when inferring a remote attachment's type", () => {
+    expect(declaredMime("", "https://example.test/clip.jpg?name=clip.mp4#trailer.gif")).toBe(
+      "image/jpeg",
+    );
+    expect(declaredMime("clip.png", "https://example.test/download?id=1")).toBe("image/png");
+    expect(declaredMime("", "https://example.png")).toBe("application/octet-stream");
+  });
+
   test("sniffs leading bytes and detects mismatches", () => {
     const png = base64Prefix(PNG_1x1, 64);
     expect(sniffFamily(png)).toBe("image");

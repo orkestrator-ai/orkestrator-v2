@@ -1,7 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { InteractionUpdateSchema } from "@cursor/sdk";
 import { newSessionState } from "./agent-session.js";
-import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
+import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES, workingDirectory } from "./config.js";
 import { publicContextUsage } from "./public.js";
 import { beginAssistantTurn } from "./transcript.js";
 import compactionOrder from "../test-fixtures/compaction-order-1.2.0.json";
@@ -1262,6 +1264,65 @@ describe("screen recordings", () => {
     applyInteractionUpdate(state, save("/workspace/rec.mp4"));
 
     expect(state.messages.at(-1)!.parts.filter((part) => part.type === "file")).toHaveLength(1);
+  });
+
+  test("preserves the leading space of a reported relative recording path", () => {
+    const state = running();
+    const reported = " recordings/clip.mp4";
+    applyInteractionUpdate(state, save(reported));
+    const file = state.messages.at(-1)!.parts.find((part) => part.type === "file");
+    expect(file?.content).toBe(resolve(workingDirectory, reported));
+    expect(fileURLToPath(file!.fileUrl!)).toBe(resolve(workingDirectory, reported));
+  });
+
+  test("an inherited property name still renders the generic recording title", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "unknown-mode",
+      toolCall: { type: "recordScreen", args: { mode: "constructor" } },
+    });
+    expect(toolParts(state)[0]?.toolTitle).toBe("Screen recording");
+  });
+
+  test("appends a nested save to the row holding the sub-agent's call", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "launch",
+      modelCallId: "parent",
+      toolCall: { type: "task", args: { description: "Record", prompt: "Record the screen" } },
+    });
+    const taskUpdate = save("/workspace/sub-agent.mp4");
+    const nested = { type: "tool-call-delta", callId: "launch", modelCallId: "parent" };
+    applyInteractionUpdate(state, {
+      ...nested,
+      taskUpdate: { ...taskUpdate, type: "tool-call-started", modelCallId: "child" },
+    });
+    const row = state.messages.find((message) =>
+      message.parts.some(
+        (part) => part.type === "tool-invocation" && part.toolUseId === taskUpdate.callId,
+      ),
+    )!;
+    applyInteractionUpdate(state, {
+      ...nested,
+      taskUpdate: { ...taskUpdate, modelCallId: "child" },
+    });
+    expect(row.parts).toContainEqual(
+      expect.objectContaining({
+        type: "tool-invocation",
+        toolUseId: taskUpdate.callId,
+        parentTaskUseId: "launch",
+        toolState: "success",
+      }),
+    );
+    expect(row.parts).toContainEqual(
+      expect.objectContaining({
+        type: "file",
+        sourcePartId: "file:call-rec",
+        content: "/workspace/sub-agent.mp4",
+      }),
+    );
   });
 
   test("a running call, a save with no path and a discard offer nothing to open", () => {

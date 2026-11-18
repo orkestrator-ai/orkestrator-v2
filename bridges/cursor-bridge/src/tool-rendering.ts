@@ -592,7 +592,10 @@ function renderRecordScreen(
   result: ToolResult,
 ): void {
   const mode = readString(args.mode);
-  rendered.toolTitle = (mode && RECORD_SCREEN_TITLES[mode]) ?? "Screen recording";
+  rendered.toolTitle =
+    mode && Object.hasOwn(RECORD_SCREEN_TITLES, mode)
+      ? RECORD_SCREEN_TITLES[mode]
+      : "Screen recording";
   rendered.toolArgs = compact({
     mode: boundTextOrUndefined(mode, MAX_TOOL_TITLE_BYTES),
   });
@@ -607,7 +610,7 @@ function renderRecordScreen(
   } else if (mode === "DISCARD_RECORDING") {
     lines.push("Recording discarded. No video was kept.");
   } else {
-    const reported = readString(value.path);
+    const reported = typeof value.path === "string" && value.path.trim() ? value.path : undefined;
     const length = readDuration(value.recordingDurationMs);
     const lengthNote = length === undefined ? "" : ` (${formatRecordingLength(length)})`;
     if (!reported) {

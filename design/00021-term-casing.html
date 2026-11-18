@@ -11,7 +11,7 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00021</p>
       <h1>00021 · Use one casing for the named product terms</h1>
       <div class="meta">
-        <span class="status" data-status="in-progress">In progress</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-low">Low</span>
         <span class="pill">Copy</span>
         <span class="pill evidence-badge" data-evidence-badge data-complete="true"
@@ -19,8 +19,8 @@
         >
       </div>
       <p class="note">
-        Completion depends on <a href="00020-label-casing.html">00020</a> recording the casing rule.
-        The copy uses the sentence-case option proposed there.
+        This copy sweep uses the sentence-case option proposed in
+        <a href="00020-label-casing.html">00020</a>, which tracks the broader label casing rule.
       </p>
 
       <h2>Problem</h2>
@@ -59,7 +59,7 @@
 
       <h2>Approach</h2>
       <ol>
-        <li>Do this after task 00020 so heading and button casing is already decided.</li>
+        <li>Apply sentence case to headings and buttons in scope.</li>
         <li>
           Use the lower-case forms from PRODUCT.md mid-sentence; capitalize only at the start of a
           sentence or label, per the casing rule.
@@ -236,7 +236,7 @@ mise run lint</code></pre>
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -245,8 +245,8 @@ mise run lint</code></pre>
 
       <h2>Notes</h2>
       <p>
-        The review fix reran the exact <code>NODE_ENV=test</code> term-copy command above and
-        exited 0. The web type check and changed-file formatting and lint checks also passed.
+        The review fix reran the exact <code>NODE_ENV=test</code> term-copy command above and exited
+        0. The web type check and changed-file formatting and lint checks also passed.
       </p>
       <p>
         The baselines were captured from clean application code at <code>b2c91abb9</code>. All six
@@ -258,11 +258,10 @@ mise run lint</code></pre>
       <h3>Hit classification and decisions</h3>
       <ul>
         <li>
-          Use the proposed sentence-case option from 00020 for these terms. The built-in graph
-          is named “Build pipeline,” its badge reads “Build pipeline engine,” and the inspector
-          uses “the build pipeline engine.” The workspace wait notice uses lowercase “build
-          pipeline” in running text. “Subork” is a standalone dialog label, so its initial capital
-          is correct.
+          Use the proposed sentence-case option from 00020 for these terms. The built-in graph is
+          named “Build pipeline,” its badge reads “Build pipeline engine,” and the inspector uses
+          “the build pipeline engine.” The workspace wait notice uses lowercase “build pipeline” in
+          running text. “Subork” is a standalone dialog label, so its initial capital is correct.
         </li>
         <li>
           Keep “Coordinator” and “Multi Review” capitalized as named features. Coordinator prose,

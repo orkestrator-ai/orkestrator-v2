@@ -80,8 +80,8 @@ function PullRequestRow({
         data-number={item.number}
         aria-current={highlighted ? "true" : undefined}
         className={cn(
-          "flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted/50 focus-hairline",
-          highlighted && "bg-selected/50 ring-1 ring-selected-edge",
+          "flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors focus-hairline",
+          highlighted ? "bg-selected/50 ring-1 ring-selected-edge" : "hover:bg-hover",
         )}
       >
         <PullRequestStateIcon state={item.state} isDraft={item.isDraft} className="mt-0.5" />

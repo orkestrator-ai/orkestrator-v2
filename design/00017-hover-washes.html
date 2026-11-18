@@ -11,20 +11,21 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00017</p>
       <h1>00017 · Use the blue hover tokens beside blue selections</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-low">Low</span>
         <span class="pill">Interaction</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 6 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 6 / 6 images</span
         >
       </div>
 
       <h2>Problem</h2>
       <p>
-        <code>hover:bg-zinc-*</code> (27), <code>hover:bg-foreground/[…]</code> (10),
-        <code>hover:bg-muted</code> (63) and <code>hover:bg-accent</code> (19) outnumber the
-        documented <code>hover:bg-hover</code> (5) and <code>hover:bg-environment-hover</code> (2).
-        Menus and selects use <code>focus:bg-zinc-800/80</code>.
+        At the time of the audit, <code>hover:bg-zinc-*</code> (27),
+        <code>hover:bg-foreground/[…]</code> (10), <code>hover:bg-muted</code> (63) and
+        <code>hover:bg-accent</code> (19) outnumber the documented <code>hover:bg-hover</code> (5)
+        and <code>hover:bg-environment-hover</code> (2). Menus and selects use
+        <code>focus:bg-zinc-800/80</code>.
       </p>
       <div class="rule">
         <div>
@@ -87,7 +88,7 @@
       </ol>
 
       <h2>Decisions</h2>
-      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+      <p class="note">The chosen option is recorded in Notes.</p>
 
       <div class="decision">
         <h3>Menus and selects (no selected row inside them)</h3>
@@ -232,54 +233,54 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
-            under <code>design/images/00017/</code>.</span
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot, and committed under
+            <code>design/images/00017/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Hits were classified in Notes, and each decision below is recorded with the option
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Hits were classified in Notes, and each decision is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
-            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass. <code>mise run format:check</code> and
+            <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: Add the menu exception to Colors → Selection
             if kept.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -287,14 +288,56 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+      <h3>Hover review</h3>
+      <ul>
+        <li>
+          The mail conversation row, subork group and child rows, and GitHub repository picker
+          results use <code>hover:bg-hover</code>. The subork’s trailing action button and the
+          separate mail recipient picker use their existing neutral washes.
+        </li>
+        <li>
+          Available file and folder rows in the Files tree use <code>hover:bg-hover</code>. File
+          selection and folder drop targets keep their own fills. The Changes lists open diffs and
+          have no selected row. The row-level Move to… button is a separate action.
+        </li>
+        <li>
+          Pull request and feature list rows use <code>hover:bg-hover</code> beside their blue
+          selection. The shared sidebar already uses <code>environment-hover</code> on environment
+          rows and <code>hover</code> on project rows.
+        </li>
+        <li>
+          The remaining audited washes apply to neutral selections, transient suggestions,
+          standalone actions, or controls such as tabs, form inputs and toolbar buttons.
+        </li>
+      </ul>
+      <h3>Menu decision</h3>
+      <p>
+        Kept the neutral highlight for dropdowns, context menus and selects without a blue selected
+        row. A blue menu highlight would extend the tint to neutral popovers. Documented the
+        exception in <a href="../DESIGN.md#neutral">Colors → Neutral → Selection</a>.
+      </p>
+      <h3>Image comparisons</h3>
+      <p>
+        Captured the before images on <code>b2c91abb9</code>, then repeated the same interactions
+        after the change. Both sets use the same local fixture and synthetic mail in the isolated,
+        headless <code>design-00017</code> profile, in dark mode at 1440 × 900, 100% zoom and device
+        scale factor 1. The browser reloaded before each capture run. The profile ran with host
+        seeding, agent credentials, and host reachability checks disabled.
       </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <a href="#cap-sidebar-hover-selected-desktop">Sidebar</a>. The blue selection gradient on
+          <code>fixture-local</code> and the blue hover on <code>fixture-neighbor</code> identify
+          the two states in both images.
+        </li>
+        <li>
+          <a href="#cap-list-row-hover-desktop">Mail list</a>. The hovered Fixture handoff row
+          changes from a grey foreground wash to the blue hover token.
+        </li>
+        <li>
+          <a href="#cap-menu-open-desktop">Dropdown</a>. By activity has the same neutral highlight
+          in both images. By project remains the checked option.
+        </li>
       </ul>
 
       <footer>

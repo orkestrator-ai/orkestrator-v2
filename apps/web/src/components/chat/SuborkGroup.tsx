@@ -78,7 +78,7 @@ function SuborkRow({ subork, onOpen }: { subork: NativeAgentSuborkView; onOpen?:
         aria-label={label}
         title={line}
         data-subork-status={subork.status}
-        className="group/subork flex w-full min-w-0 items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-foreground/[0.04] focus-visible:outline-none focus-hairline"
+        className="group/subork flex w-full min-w-0 items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-hairline"
       >
         <span className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-muted/70">
           <ProviderMark agent={subork.agent} className="size-4" />
@@ -156,7 +156,7 @@ export const SuborkGroup = memo(function SuborkGroup({
             aria-expanded={!collapsed}
             aria-controls={panelId}
             onClick={() => setCollapsed(!collapsed)}
-            className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-foreground/[0.03] focus-visible:outline-none focus-hairline"
+            className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-hairline"
           >
             <span aria-hidden="true" className="flex shrink-0 items-center">
               {suborks.slice(0, 3).map((subork, index) => (

@@ -350,3 +350,19 @@ whole run at 4 workers (median load 22) passed it on both projects. So the
 suite's own worker count does not decide it: it failed alone with one worker
 at load 28 and passed with four at load 22, which points at what else the
 host is doing. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-18 (label casing review fixes)
+
+On macOS arm64, the mobile no-preference motion case at
+`e2e/ToolGroupFold.spec.ts:127` reported a 57 px gap against a 2 px limit at
+line 195 on both attempts. The three-worker suite was terminated at the
+30-minute group deadline after starting 1,000 of 1,932 cases. It produced no
+final suite counts. The complete owner passed with one worker in 181.3 s.
+
+- Branch `label-casing-dcf213648032-r1` at `a7ab819d1`, base `259e88d90c`.
+  `mise run flaky:recurrence -- 1012 --base 259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`
+  reported the case open.
+- Aggregate command `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name review-browser-rerun -- mise run test:browser`.
+  Evidence `orkestrator-test-run.1BfJdz/review-browser-rerun.log.gz` in the
+  host temporary directory.
+- Owner command `mise run test:logged -- --name label-casing-tool-fold-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --output output/playwright/label-casing-tool-fold-owner`.

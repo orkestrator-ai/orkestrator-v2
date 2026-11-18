@@ -40,6 +40,20 @@ to-do 8300 (retired 2026-11-17), which filed that run's other flakes as
 9938 to 9942 and 9949.
 Cause not established; the case stays open.
 
+## Recurrence — 2026-11-18 (label casing review fixes)
+
+On macOS arm64 at `c9dcee2d9`, base `259e88d90c`, the one-worker owner
+run repeated `No two adjacent free loopback ports` from `freePortPair` in
+`beforeAll`. The run took 2.4 s with one failure and five tests that did
+not run. The next owner run passed all six tests with the same worker count.
+
+- Commands `ORKESTRATOR_AGENT_TEST_RUN_ID=label-casing-seeded-owner mise run test:logged -- --name label-casing-seeded-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-seeded-electron.spec.ts --workers=1`,
+  then the same command with run ID `label-casing-seeded-owner-rerun`.
+- Evidence `orkestrator-test-run.zqTbRs/label-casing-seeded-owner.log.gz`
+  in the host temporary directory and `output/agent-testing/label-casing-seeded-owner-rerun/electron/results.json`.
+- `mise run flaky:recurrence -- 9902 --base 259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`
+  reported the case open. The port selection code is unchanged.
+
 ## Triage note (2026-11-15)
 
 Not changed. Recorded failure: `beforeAll` finding no adjacent ports, a host port-availability dependency. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.

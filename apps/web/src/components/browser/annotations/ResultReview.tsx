@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type {
   WebAnnotationCapture,
   WebAnnotationCheck,
@@ -13,7 +13,7 @@ import { AnnotationImage } from "./AnnotationImage";
 import { useAnnotationPanel } from "./panel-context";
 import { ResultCapture } from "./ResultCapturePrompt";
 import {
-  captureConditionsLabel,
+  captureConditionLabels,
   citedEvidenceLabel,
   comparisonLabels,
   fileCheckLabel,
@@ -68,7 +68,7 @@ function Comparison({
   const after = useCapture(environmentId, afterCaptureId);
   const labels = comparisonLabels(before, after, recorded);
   const metadata = recorded ?? after?.comparison ?? null;
-  const conditions = metadata ? captureConditionsLabel(metadata) : null;
+  const conditions = metadata ? captureConditionLabels(metadata) : [];
   return (
     <div className="space-y-1" data-comparison={afterCaptureId}>
       <div className="grid grid-cols-2 gap-1.5">
@@ -91,9 +91,14 @@ function Comparison({
           />
         </figure>
       </div>
-      {conditions && (
+      {conditions.length > 0 && (
         <p className="text-[10px] text-muted-foreground" data-capture-conditions>
-          {conditions}
+          {conditions.map(({ text, status }, index) => (
+            <Fragment key={text}>
+              {index > 0 && " · "}
+              {status ? <span className="text-[11px]">{text}</span> : text}
+            </Fragment>
+          ))}
         </p>
       )}
       {metadata && (

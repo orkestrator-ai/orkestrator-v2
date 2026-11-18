@@ -236,27 +236,29 @@
       <h2>Verification</h2>
       <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
 NODE_ENV=test mise run test:logged -- --name design-annotations -- bun test --cwd apps/web ./src/components/design ./src/components/browser/annotations --parallel=2 --only-failures
+mise run test:logged -- --name inspector-layout -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --grep 'long computed width' --workers=2
 mise run format:check
 mise run lint</code></pre>
       <p class="note">
         React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
-        check: use the <code>design-00008</code> fixture profile.
+        check: use an isolated fixture profile, such as <code>design-00008-visual</code>.
       </p>
-      <pre><code>env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile design-00008 --fixture --headless --no-host-seed --no-agent-credentials --agent-platforms codex</code></pre>
+      <pre><code>env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile design-00008-visual --fixture --headless --no-host-seed --no-agent-credentials --agent-platforms codex</code></pre>
       <p class="note">
-        The captures use the dark theme at 100% app zoom and device scale 1. Baseline revision
-        <code>b2c91abb9</code> was captured before any source edit. The isolated backend held the
-        exported design, annotation replies, and completed request fixture. A blocked reply-save
-        request produced the recoverable error. Reloading restored the saved design tab and
-        annotation threads before replaying the same actions.
+        The captures use the dark theme at 100% app zoom and device scale 1. The refreshed inspector
+        and result-review pairs use the same isolated profile and fixture data per pair. The before
+        captures loaded the affected renderer modules from baseline <code>259e88d90</code>.
+        Both inspector captures at each width select Save and show the invalid Width draft at
+        100% canvas zoom. The original annotation-thread pair uses baseline <code>b2c91abb9</code>
+        and a blocked reply-save request to show the recoverable error.
       </p>
 
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
           <input type="checkbox" aria-label="Done" checked /><span
-            >Before images captured on <b>unmodified</b> code for every slot above, and committed
-            under <code>design/images/00008/</code>.</span
+            >Before images captured with the <b>baseline</b> renderer code for every slot above,
+            and committed under <code>design/images/00008/</code>.</span
           >
         </li>
         <li>
@@ -321,10 +323,10 @@ mise run lint</code></pre>
           note (state/error, 11px).
         </li>
         <li>
-          <code>ResultReview</code> — capture captions (two), capture conditions, report and
-          observation headings (two), and reported file paths (metadata, 10px). Target match and
-          comparison warning (state/error, 11px). In each observed file-check row, the path is
-          metadata at 10px and the outcome is state at 11px.
+          <code>ResultReview</code> — capture captions, zoom, device scale, scroll, redaction count,
+          report and observation headings, and reported file paths (metadata, 10px). Capture
+          stability, target match, and comparison warnings are states at 11px. In each observed
+          file-check row, the path uses 10px and the outcome uses 11px.
         </li>
         <li>
           <code>AnnotationThread</code> — legacy reference text, captured attributes, styles, and
@@ -343,7 +345,12 @@ mise run lint</code></pre>
         <li>
           Change individual inspector and annotation states at their existing locations. A blanket
           replacement would also enlarge evidence metadata and action labels. Result-review states
-          inherit the panel’s 11px size, with an explicit 10px override on each file path.
+          use 11px, including stability within the 10px capture measurements.
+        </li>
+        <li>
+          Keep the Changed marker and computed value on a single line. Long computed values can
+          truncate within the remaining space. The complete value is available in the field’s
+          accessible description and in the status tooltip.
         </li>
         <li>
           Treat <code>New</code> as state even on a filled background because it tells readers which
@@ -356,8 +363,8 @@ mise run lint</code></pre>
       <ul>
         <li>
           <a href="#cap-design-inspector-error-desktop">Inspector, desktop</a>. The invalid width
-          message and computed value are larger. The computed value moves below the Changed marker,
-          and the error fits on one line. Apply styles stays disabled.
+          message and computed value are larger. The Changed marker and computed value share one
+          line, and the error fits on one line. Apply styles stays disabled.
         </li>
         <li>
           <a href="#cap-design-inspector-error-narrow">Inspector, narrow</a>. The 390px layout keeps
@@ -367,8 +374,8 @@ mise run lint</code></pre>
         <li>
           <a href="#cap-annotation-result-review-desktop">Annotation result review, desktop</a>. The
           missing-file outcome, target-match line, and zoom mismatch warning are larger. The warning
-          wraps within the Notes panel. Capture captions and conditions remain secondary metadata.
-          The saved result fixture contains comparison metadata without image assets.
+          wraps within the Notes panel. Stable and unstable use 11px alongside the 10px capture
+          measurements. The saved result fixture contains comparison metadata without image assets.
         </li>
         <li>
           <a href="#cap-annotation-thread-desktop">Annotation thread, desktop</a>. The unread

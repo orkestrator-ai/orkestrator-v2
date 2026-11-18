@@ -273,9 +273,13 @@ export function DesignStyleField({
         )}
       </div>
       {(changed || showComputed) && (
-        <p id={stateId} className="text-[11px] text-muted-foreground" title={computed}>
-          {changed ? <span className="text-primary">Changed · </span> : null}
-          <span className="inline-block max-w-full truncate align-bottom">
+        <p
+          id={stateId}
+          className="flex min-w-0 gap-1 text-[11px] text-muted-foreground"
+          title={computed}
+        >
+          {changed ? <span className="shrink-0 text-primary">Changed · </span> : null}
+          <span className="min-w-0 truncate">
             {computed ? `computed ${computed}` : "not applied"}
           </span>
         </p>

@@ -647,6 +647,10 @@ export function asCachedCodexModels(value: unknown): CodexModelCatalogEntry[] {
           : (() => {
               throw new Error(`Expected ${name}.reasoningEfforts to be an array`);
             })();
+    const description =
+      model.description === undefined
+        ? undefined
+        : asString(model.description, `${name}.description`).trim();
     const reasoningOptions =
       model.reasoningOptions === undefined
         ? undefined
@@ -655,17 +659,14 @@ export function asCachedCodexModels(value: unknown): CodexModelCatalogEntry[] {
               const optionName = `${name}.reasoningOptions[${optionIndex}]`;
               const option = asRecord(candidateOption, optionName);
               assertOnlyKeys(option, ["effort", "label", "description"], optionName);
+              const description =
+                option.description === undefined
+                  ? undefined
+                  : asString(option.description, `${optionName}.description`).trim();
               return {
                 effort: asCodexReasoningEffort(option.effort, `${optionName}.effort`),
                 label: asNonBlankString(option.label, `${optionName}.label`),
-                ...(option.description === undefined
-                  ? {}
-                  : {
-                      description: asNonBlankString(
-                        option.description,
-                        `${optionName}.description`,
-                      ),
-                    }),
+                ...(description ? { description } : {}),
               };
             })
           : (() => {
@@ -674,9 +675,7 @@ export function asCachedCodexModels(value: unknown): CodexModelCatalogEntry[] {
     return {
       id: asNonBlankString(model.id, `${name}.id`),
       name: asNonBlankString(model.name, `${name}.name`),
-      ...(model.description === undefined
-        ? {}
-        : { description: asNonBlankString(model.description, `${name}.description`) }),
+      ...(description ? { description } : {}),
       ...(reasoningEfforts ? { reasoningEfforts } : {}),
       ...(reasoningOptions ? { reasoningOptions } : {}),
       ...(model.defaultReasoningEffort === undefined

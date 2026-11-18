@@ -455,11 +455,14 @@ A list is kept current in three ways:
 
 - **Running bridges.** `get_native_agent_model_catalog` re-reads
   `/global/models` from every agent bridge already running in the environment
-  (never starting one) and saves what it gets: Cursor, Grok and Pi
-  (`fetchAcpNormalizedModelsResult`) and Codex (`fetchCodexBridgeModels` in
-  `codex-live-model-catalog.ts`, which accepts only an `app-server` answer,
-  never the bridge's own cached or bundled fallback). Claude's per-environment
-  discovery saves the host list the same way.
+  and publishes the results to the environment picker. Cursor, Grok and Pi
+  also save their lists (`fetchAcpNormalizedModelsResult`). Codex accepts live
+  app-server rows (`fetchCodexBridgeModels`) and tries the running bridge before
+  a cold first-use host probe. A regular local Codex bridge can update the
+  saved host list when its account and login generation match the active login.
+  Container rows serve the environment picker only. Host Codex probes use the
+  active login, and the saved list is visible only to the login that produced it.
+  Claude's per-environment discovery also saves the host list.
 - **Age.** A Claude or Codex list last confirmed more than a day ago
   (`AGENT_MODEL_CATALOG_MAX_AGE_MS`) is downloaded again through the host probe
   Settings uses. Startup's seeding read waits for it; every other read answers
@@ -764,9 +767,8 @@ picker and the run on the same model:
   never grounds for a swap.
 - **Existing sessions.** If a session holds a model the picker does not list,
   the picker shows that model, labelled "session model", instead of the first
-  catalogue row. The label makes no claim about the login, because the
-  durable catalogue does not record where it came from. Picking any listed
-  model replaces it.
+  catalogue row. The label describes the model held by the session.
+  Picking any listed model replaces it.
   The renderer keeps that row when a later discovery update replaces the
   composer's models with the bare catalogue
   (`withRetainedSelectedModelRow` in `useNativeAgentSession.ts`).

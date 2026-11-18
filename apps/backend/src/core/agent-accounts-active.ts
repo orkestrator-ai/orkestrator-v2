@@ -97,10 +97,11 @@ export async function applyActiveAgentAccountEnvironment(
   context: CommandContext,
   platform: AgentAccountPlatform,
   env: NodeJS.ProcessEnv,
+  account?: ResolvedAgentAccount,
 ): Promise<string> {
   if (platform === "codex") delete env[CODEX_BRIDGE_STATE_DIR_ENV];
   else delete env[CLAUDE_ACCOUNT_HOME_ENV];
-  const active = await resolveActiveAgentAccount(context, platform);
+  const active = account ?? (await resolveActiveAgentAccount(context, platform));
   if (!active.home) return active.accountId;
   const sources = hostAgentAccountSources();
   await prepareAgentAccountHome(platform, active.home, sources);

@@ -5,6 +5,8 @@ import { promises as fs } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { agentAccountLoginKey } from "./agent-accounts-store.js";
+import { agentAccountHome } from "./agent-accounts-homes.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { withShortLivedBridge, __testing as refreshTesting } from "./host-model-catalog-refresh.js";
@@ -196,11 +198,57 @@ describe("host model catalogue refresh", () => {
       refresh(context(), "codex"),
     ]);
 
-    expect(first).toEqual({ agent: "codex", models: [{ id: "gpt-5" }] });
+    expect(first).toEqual({
+      agent: "codex",
+      models: [{ id: "gpt-5" }],
+      accountLoginKey: agentAccountLoginKey(),
+    });
     expect(second).toEqual(first);
     expect(spawns).toHaveLength(1);
     expect(children[0]?.exited).toBe(true);
     expect(runtime.localServers.processCount()).toBe(0);
+  });
+
+  test("uses the selected Codex account's home and drops inherited API credentials", async () => {
+    const id = "532774f9-17e8-4fe3-a70a-d81809d8c339";
+    const loginGeneration = "4c455659-17bc-4e74-9dce-20a941108d98";
+    await storage.agentAccounts.mutateAgentAccounts((store) => ({
+      store: {
+        ...store,
+        accounts: [{ id, platform: "codex", label: "Second", createdAt: new Date().toISOString() }],
+        active: { codex: id },
+        loginGeneration: { codex: loginGeneration },
+      },
+      result: undefined,
+    }));
+    const previousHome = process.env.CODEX_HOME;
+    const previousKey = process.env.OPENAI_API_KEY;
+    process.env.CODEX_HOME = path.join(appRoot, "host-codex");
+    process.env.OPENAI_API_KEY = "fixture-key";
+    try {
+      stubBridgeSpawn((spawned) =>
+        listenAsBridge(Number(spawned.env.PORT), (url, response) => {
+          if (url !== "/global/models") return false;
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ source: "app-server", models: [{ id: "second-model" }] }));
+          return true;
+        }),
+      );
+      const result = await refreshTesting.createHostModelCatalogRefresher()(context(), "codex");
+      expect(result).toMatchObject({
+        agent: "codex",
+        accountLoginKey: agentAccountLoginKey(id, loginGeneration),
+      });
+      expect(spawns[0]?.env.CODEX_HOME).toBe(
+        agentAccountHome(storage.agentAccounts.agentAccountsDirectory(), "codex", id),
+      );
+      expect(spawns[0]?.env.OPENAI_API_KEY).toBeUndefined();
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousKey;
+    }
   });
 
   test("rejects a non-live Codex catalogue without leaking the probe", async () => {

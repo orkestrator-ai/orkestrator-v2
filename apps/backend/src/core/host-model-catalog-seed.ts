@@ -1,7 +1,8 @@
 import { normalizeAgentPlatforms, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CommandContext } from "./commands-context.js";
 import { asCachedCodexModels } from "./commands-validation.js";
-import type { AgentModelCatalogCache } from "./models.js";
+import type { AgentModelCatalogCache, CodexModelCatalogEntry } from "./models.js";
+import { agentAccountLoginKey } from "./agent-accounts-store.js";
 import { AGENT_MODEL_CATALOG_MAX_AGE_MS } from "./storage-shared.js";
 import type {
   HostCatalog,
@@ -22,6 +23,24 @@ export function resetHostModelCatalogSeedCooldown(
   context.runtime.localServers.catalogSeeds.resetCooldown(agent);
 }
 
+/** Account swaps and login promotion share this lock with the catalogue write. */
+export function persistCodexHostCatalog(
+  context: CommandContext,
+  models: CodexModelCatalogEntry[],
+  accountLoginKey: string,
+): Promise<AgentModelCatalogCache | undefined> {
+  const { storage } = context;
+  return context.runtime.accounts.withMutation(async () => {
+    const accounts = await storage.agentAccounts.loadAgentAccounts();
+    if (
+      agentAccountLoginKey(accounts.active.codex, accounts.loginGeneration?.codex) !==
+      accountLoginKey
+    )
+      return undefined;
+    return storage.cacheAgentModelCatalog("codex", models);
+  });
+}
+
 /** Save a freshly downloaded host catalogue where the pickers read it from. */
 export async function persistHostCatalog(
   context: CommandContext,
@@ -32,7 +51,12 @@ export async function persistHostCatalog(
   if (catalog.agent === "claude") {
     await storage.cacheAgentModelCatalog("claude", catalog.models);
   } else if (catalog.agent === "codex") {
-    await storage.cacheAgentModelCatalog("codex", asCachedCodexModels(catalog.models));
+    const saved = await persistCodexHostCatalog(
+      context,
+      asCachedCodexModels(catalog.models),
+      catalog.accountLoginKey,
+    );
+    if (!saved) throw new Error("The active Codex login changed during model discovery");
   } else if (catalog.agent === "cursor" || catalog.agent === "grok" || catalog.agent === "pi") {
     await storage.cacheAgentModelCatalog(catalog.agent, catalog.models);
   } else {

@@ -14,17 +14,15 @@ import type { CodexModelCatalogEntry, Environment } from "./models.js";
 export const CODEX_LIVE_MODEL_FETCH_TIMEOUT_MS = 8_000;
 
 export type CodexLiveModelsResult =
-  | { status: "ok"; models: CodexModelCatalogEntry[] }
+  | { status: "ok"; models: CodexModelCatalogEntry[]; accountLoginKey?: string }
   | { status: "unavailable" | "failed"; models: [] };
 
 /**
  * The live model list of an environment's *running* Codex bridge, never
  * starting one.
  *
- * Codex's catalogue is host-wide and was written only by the Settings refresh
- * and the first-use seed, so once a machine had a list it never learned of a
- * new model however many Codex sessions ran on it. Reading the running bridge
- * gives Codex the same self-correcting cache Cursor, Grok and Pi already have.
+ * Only a known local bridge generation can supply a catalogue for the
+ * host login. Container credentials belong to the environment.
  *
  * Only an `app-server` answer counts: the bridge falls back to its own cached
  * or bundled list when app-server cannot answer, and saving either would
@@ -35,15 +33,29 @@ export async function fetchCodexBridgeModels(
   context: CommandContext,
   timeoutMs = CODEX_LIVE_MODEL_FETCH_TIMEOUT_MS,
 ): Promise<CodexLiveModelsResult> {
-  const bridge =
-    environment.environmentType === "local"
-      ? await peekLocalAgentBridge(environment.id, context, "codex")
-      : environment.containerId
-        ? await peekContainerAgentBridge(environment.containerId, "codex")
-        : null;
-  if (!bridge) return { status: "unavailable", models: [] };
-  const port = "port" in bridge ? bridge.port : bridge.hostPort;
-  return fetchCodexBridgeModelsAt(port, bridge.authToken, timeoutMs);
+  try {
+    if (environment.environmentType === "local") {
+      const localServers = context.runtime.localServers;
+      const key = `codex:${environment.id}`;
+      const child = localServers.process(key);
+      const accountLoginKey = child && localServers.launchedAccountLoginKey(key);
+      const bridge = await peekLocalAgentBridge(environment.id, context, "codex");
+      if (!bridge) return { status: "unavailable", models: [] };
+      const result = await fetchCodexBridgeModelsAt(bridge.port, bridge.authToken, timeoutMs);
+      return result.status === "ok" &&
+        accountLoginKey &&
+        localServers.process(key) === child &&
+        !localServers.hasStaleLogin(key)
+        ? { ...result, accountLoginKey }
+        : result;
+    }
+    if (!environment.containerId) return { status: "unavailable", models: [] };
+    const bridge = await peekContainerAgentBridge(environment.containerId, "codex");
+    if (!bridge) return { status: "unavailable", models: [] };
+    return await fetchCodexBridgeModelsAt(bridge.hostPort, bridge.authToken, timeoutMs);
+  } catch {
+    return { status: "failed", models: [] };
+  }
 }
 
 /** {@link fetchCodexBridgeModels} against a known bridge endpoint. */

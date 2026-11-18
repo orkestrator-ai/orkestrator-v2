@@ -64,6 +64,8 @@ import {
   sanitizeReviewLensPresets,
 } from "@orkestrator/protocol/review-lens";
 import type { StorageContext } from "./storage-context.js";
+import type { AgentAccountsRepository } from "./storage-agent-accounts.js";
+import { agentAccountLoginKey } from "./agent-accounts-store.js";
 import type { StorageFiles } from "./storage-files.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -232,6 +234,7 @@ export class ConfigRepository {
   constructor(
     private readonly context: StorageContext,
     private readonly files: StorageFiles,
+    private readonly agentAccounts: AgentAccountsRepository,
   ) {}
 
   enqueueConfigMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -448,12 +451,32 @@ export class ConfigRepository {
     this.context.changes.announce("config", "app");
   }
 
-  async getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
+  private async activeCodexCatalogKey(): Promise<string> {
+    const accounts = await this.agentAccounts.loadAgentAccounts();
+    return agentAccountLoginKey(accounts.active.codex, accounts.loginGeneration?.codex);
+  }
+
+  private async readAgentModelCatalogCache() {
     const persisted = await this.context.loadJson<unknown>(
       this.files.agentModelCatalogFile(),
       () => null,
     );
-    return parsePersistedAgentModelCatalogCache(persisted);
+    return {
+      cache: parsePersistedAgentModelCatalogCache(persisted),
+      // Older host probes used the inherited host login.
+      codexAccountKey:
+        isRecord(persisted) && typeof persisted.codexAccountKey === "string"
+          ? persisted.codexAccountKey
+          : agentAccountLoginKey(),
+    };
+  }
+
+  async getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
+    const { cache, codexAccountKey } = await this.readAgentModelCatalogCache();
+    if (cache.codex && codexAccountKey !== (await this.activeCodexCatalogKey())) {
+      delete cache.codex;
+    }
+    return cache;
   }
 
   /** `StorageService`'s overloads pair each agent with its model type. */
@@ -475,8 +498,11 @@ export class ConfigRepository {
       this.files.agentModelCatalogFile(),
       "Agent model catalogue storage",
       async () => {
-        const current = await this.getAgentModelCatalogCache();
-        const existing = current[agent];
+        const { cache: current, codexAccountKey } = await this.readAgentModelCatalogCache();
+        const activeCodexKey =
+          agent === "codex" || current.codex ? await this.activeCodexCatalogKey() : undefined;
+        const codexVisible = activeCodexKey === codexAccountKey;
+        const existing = agent === "codex" && !codexVisible ? undefined : current[agent];
         // `updatedAt` is when the provider last confirmed this list, which is
         // what the staleness checks read. An unchanged list re-confirms it,
         // but at most once per interval, so a picker read is not a write.
@@ -485,6 +511,7 @@ export class ConfigRepository {
           JSON.stringify(existing.models) === JSON.stringify(normalizedModels) &&
           Date.now() - Date.parse(existing.updatedAt) < AGENT_MODEL_CATALOG_RECONFIRM_INTERVAL_MS
         ) {
+          if (!codexVisible) delete current.codex;
           return current;
         }
         const next: AgentModelCatalogCache = {
@@ -494,7 +521,13 @@ export class ConfigRepository {
             models: normalizedModels,
           },
         };
-        await this.context.saveJson(this.files.agentModelCatalogFile(), next);
+        await this.context.saveJson(this.files.agentModelCatalogFile(), {
+          ...next,
+          ...(next.codex
+            ? { codexAccountKey: agent === "codex" ? activeCodexKey : codexAccountKey }
+            : {}),
+        });
+        if (agent !== "codex" && !codexVisible) delete next.codex;
         return next;
       },
     );

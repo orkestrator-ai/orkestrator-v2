@@ -118,7 +118,11 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { hydrateAgentModelCatalogCache } from "@/lib/agent-model-catalog-cache";
-import { MODEL_CATALOG_REFRESHED_EVENT } from "@/components/settings/agent/refresh-model-catalog";
+import {
+  MODEL_CATALOG_REFRESHED_EVENT,
+  modelCatalogRefreshTargetsScope,
+} from "@/components/settings/agent/refresh-model-catalog";
+import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
@@ -340,21 +344,24 @@ export function CreateEnvironmentDialog({
   const [catalogRefreshRevision, setCatalogRefreshRevision] = useState(0);
   useEffect(() => {
     if (!open) return;
-    const refresh = () => setCatalogRefreshRevision((revision) => revision + 1);
+    const refresh = (event: Event) => {
+      if (modelCatalogRefreshTargetsScope(event, catalogScope)) {
+        setCatalogRefreshRevision((revision) => revision + 1);
+      }
+    };
     window.addEventListener(MODEL_CATALOG_REFRESHED_EVENT, refresh);
     return () => window.removeEventListener(MODEL_CATALOG_REFRESHED_EVENT, refresh);
-  }, [open]);
-  // The dialog's node scope starts on the bundled catalogues and is otherwise
-  // updated only by a native tab or by Settings on the window's own machine,
-  // so a dialog for another machine's project listed whatever that scope last
-  // held. Load the node's saved catalogue on every open and after a refresh;
-  // the read also lets that node refresh a stale list in the background.
-  useEffect(() => {
-    if (!open) return;
+  }, [catalogScope, open]);
+  // Load the target node's saved catalogue on open and after Settings refreshes it.
+  const hydrateCatalog = useCallback(() => {
     void hydrateAgentModelCatalogCache({ scope: catalogScope }).catch((error: unknown) => {
       log.debug("models.hydrate-failed", { error: formatLogError(error) });
     });
-  }, [catalogRefreshRevision, catalogScope, open]);
+  }, [catalogScope]);
+  useEffect(() => {
+    if (open) hydrateCatalog();
+  }, [catalogRefreshRevision, hydrateCatalog, open]);
+  useAgentAccountsChanged(open ? "codex" : null, hydrateCatalog, catalogScope);
   const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<CachedOpenCodeModel[]>([]);
   useEffect(() => {
     if (!open) {
@@ -741,7 +748,7 @@ export function CreateEnvironmentDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, projectId, nodeBackend]);
+  }, [catalogRefreshRevision, open, projectId, nodeBackend]);
 
   // Restore drafts only for a new dialog/project, never for navigation changes.
   useEffect(() => {

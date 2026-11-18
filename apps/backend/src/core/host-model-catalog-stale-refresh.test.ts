@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { agentAccountLoginKey } from "./agent-accounts-store.js";
 import type { CommandContext } from "./commands-context.js";
 import { HostCatalogSeeds } from "./host-catalog-seeds.js";
 import {
@@ -27,8 +28,12 @@ function fakeContext(
     return cache;
   });
   const context = {
-    runtime: { localServers: { catalogSeeds: new HostCatalogSeeds() } },
+    runtime: {
+      localServers: { catalogSeeds: new HostCatalogSeeds() },
+      accounts: { withMutation: (run: () => Promise<unknown>) => run() },
+    },
     storage: {
+      agentAccounts: { loadAgentAccounts: async () => ({ active: {} }) },
       getAgentModelCatalogCache: async () => cache,
       cacheAgentModelCatalog,
       loadConfig: async () => ({ global: { enabledAgentPlatforms } }),
@@ -74,6 +79,7 @@ describe("refreshStaleHostModelCatalogs", () => {
     });
     const refresh = mock(async (_context: unknown, agent: string) => ({
       agent,
+      accountLoginKey: agentAccountLoginKey(),
       models: [newCodex, oldCodex],
     }));
     await refreshStaleHostModelCatalogs(context, refresh as never, { now: () => NOW });
@@ -122,7 +128,7 @@ describe("refreshStaleHostModelCatalogs", () => {
     const settled = Promise.withResolvers<void>();
     const refresh = mock(async () => {
       settled.resolve();
-      return { agent: "codex", models: [newCodex] };
+      return { agent: "codex", accountLoginKey: agentAccountLoginKey(), models: [newCodex] };
     });
     refreshStaleHostModelCatalogsInBackground(context, refresh as never, cache, () => NOW);
     await settled.promise;

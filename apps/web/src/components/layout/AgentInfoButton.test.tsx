@@ -73,6 +73,7 @@ const {
   labelWindowMinutes,
   limitWindowPosition,
   summarizeRewindPreview,
+  summarizeRewindResult,
   windowDurationMinutes,
 } = await import("./AgentInfoButton");
 
@@ -4014,10 +4015,18 @@ describe("AgentInfoButton rewind confirmation", () => {
     });
   }
 
-  /** The backend's dry run answers with `preview`; the real rewind with none. */
-  function rewindPreview(preview: unknown) {
+  /**
+   * The backend answers both calls with the bridge's payload in `preview`: the
+   * dry run's forecast, then what the real rewind did (`result`; omitted means
+   * the real call returned no payload).
+   */
+  function rewindPreview(preview: unknown, result?: unknown) {
     mockNativeAction.mockImplementation(async (action) =>
-      action.dryRun ? { outcome: "applied", preview } : { outcome: "applied" },
+      action.dryRun
+        ? { outcome: "applied", preview }
+        : result === undefined
+          ? { outcome: "applied" }
+          : { outcome: "applied", preview: result },
     );
   }
 
@@ -4027,15 +4036,20 @@ describe("AgentInfoButton rewind confirmation", () => {
       .filter((action) => action.kind === "rewind-files");
   }
 
+  const threeFiles = ["src/auth/middleware.ts", "src/auth/session.ts", "src/auth/index.ts"];
+
   test("names the target message and lists the files instead of dumping JSON", async () => {
     seedClaudeWithMessages();
-    rewindPreview({
-      files: [
-        "src/auth/middleware.ts",
-        { path: "src/auth/session.ts" },
-        { file: "src/auth/index.ts" },
-      ],
-    });
+    rewindPreview(
+      {
+        files: [
+          "src/auth/middleware.ts",
+          { path: "src/auth/session.ts" },
+          { file: "src/auth/index.ts" },
+        ],
+      },
+      { canRewind: true, filesChanged: threeFiles, insertions: 4, deletions: 2 },
+    );
     renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
@@ -4058,6 +4072,40 @@ describe("AgentInfoButton rewind confirmation", () => {
       { kind: "rewind-files", messageId: "u2" },
     ]);
     expect(mockToastSuccess).toHaveBeenCalledWith("Claude restored 3 files");
+    expect(mockToastWarning).not.toHaveBeenCalled();
+  });
+
+  test("discloses a file the real rewind skipped instead of the preview's count", async () => {
+    seedClaudeWithMessages();
+    rewindPreview(
+      { canRewind: true, filesChanged: threeFiles },
+      { canRewind: true, filesChanged: threeFiles, skippedLinks: 1 },
+    );
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
+
+    await waitFor(() => expect(confirmMessages).toHaveLength(1));
+    expect(confirmMessages[0]).toContain("3 files will be restored:");
+    await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
+    const warning = String(mockToastWarning.mock.calls[0]?.[0]);
+    expect(warning).toContain("skipped 1 file");
+    expect(warning).toContain("it was not restored");
+    // Neither the preview's three nor the result's list is claimed as restored.
+    expect(warning).not.toMatch(/restored \d/);
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
+
+  test("claims no restored count when the real rewind reports none", async () => {
+    seedClaudeWithMessages();
+    rewindPreview({ files: threeFiles });
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
+
+    await waitFor(() => expect(confirmMessages).toHaveLength(1));
+    expect(confirmMessages[0]).toContain("3 files will be restored:");
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Claude files rewound"));
   });
 
   test("cancelling the confirm issues no second call", async () => {
@@ -4187,6 +4235,30 @@ describe("AgentInfoButton rewind confirmation", () => {
       files: ["listed.ts"],
       fileCount: 1,
     });
+  });
+
+  test("summarizeRewindResult claims a count only from an unskipped real result", () => {
+    expect(summarizeRewindResult({ canRewind: true, filesChanged: ["a.ts", "b.ts"] })).toEqual({
+      tone: "success",
+      message: "Claude restored 2 files",
+    });
+    expect(
+      summarizeRewindResult({ canRewind: true, filesChanged: ["a.ts"], skippedLinks: 0 }),
+    ).toEqual({ tone: "success", message: "Claude restored 1 file" });
+    for (const result of [undefined, null, { canRewind: true }, { filesChanged: [] }]) {
+      expect(summarizeRewindResult(result)).toEqual({
+        tone: "success",
+        message: "Claude files rewound",
+      });
+    }
+    const plural = summarizeRewindResult({ filesChanged: ["a.ts", "b.ts"], skippedLinks: 2 });
+    expect(plural.tone).toBe("warning");
+    expect(plural.message).toContain("skipped 2 files");
+    expect(plural.message).toContain("they were not restored");
+    // Only a positive whole count is a skip; anything else reads as none reported.
+    for (const skippedLinks of [-1, 1.5, Number.NaN, "1"]) {
+      expect(summarizeRewindResult({ filesChanged: ["a.ts"], skippedLinks }).tone).toBe("success");
+    }
   });
 
   test("describeRewindTarget collapses whitespace and truncates", () => {

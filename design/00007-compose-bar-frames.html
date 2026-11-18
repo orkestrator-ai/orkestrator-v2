@@ -502,14 +502,15 @@ mise run lint</code></pre>
           and reuse the native dock’s fade. Shared classes align the visuals while leaving each
           owner in control of its layout and interactions. A shared component could enforce the
           layout at the cost of a wider refactor. Per-file styling would recreate the duplication
-          that allowed the drift. All colours use existing tokens.
+          that allowed the drift. All colors use existing tokens.
         </li>
         <li>
           <strong>Capture conditions.</strong> Chromium on the isolated, headless
-          <code>design-00007</code> profile, with the same local fixtures, dark theme and 1× scale
-          for both passes. Baseline captures used pristine renderer sources at
-          <code>b2c91abb9</code>. The pipeline fixture was paused and the Claude tmux session was
-          stopped. The screenshots crop the composer at the stated browser viewport.
+          <code>design-00007</code> profile, with the host reachability check disabled and the same
+          local fixtures, dark theme and 1× scale for both passes. Baseline captures used pristine
+          renderer sources at <code>259e88d90</code>. The pipeline fixture was paused and the Claude
+          tmux session was stopped. The screenshots crop the composer at the stated browser
+          viewport.
         </li>
       </ul>
       <h3>What changed in each pair</h3>

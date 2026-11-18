@@ -1578,14 +1578,16 @@ export function ApprovalCard({
           >
             Allow
           </Button>
-          <button
+          <Button
             type="button"
+            variant="destructive"
+            size="sm"
             onClick={() => void respond(onDeny)}
             disabled={submitting}
-            className="flex-1 px-3 py-1.5 rounded bg-red-800 hover:bg-red-700 text-white text-sm font-medium"
+            className="flex-1 bg-red-800 hover:bg-red-700 active:bg-red-900"
           >
             Deny
-          </button>
+          </Button>
         </div>
       </div>
     </BlockingPromptCard>

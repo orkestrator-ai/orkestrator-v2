@@ -26,7 +26,7 @@ const LONG_DESCRIPTION = [
   "Restore the selected workspace after a reload, so the picker opens where the user left it.",
   "## Problem",
   ...Array.from(
-    { length: 8 },
+    { length: 16 },
     (_, index) =>
       `Paragraph ${index + 1}: reloading the window drops the selected workspace and falls back to the first one in the list, so anyone who works in a later workspace has to pick it again after every reload, every restart and every update of the application.`,
   ),

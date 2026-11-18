@@ -55,6 +55,7 @@ import { DesignAgentLinksFixture, installDesignAgentLinksFixture } from "./Desig
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
+import { FeaturesComposeFixture, TerminalComposeFixture } from "./ComposeFramesFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
@@ -2135,6 +2136,8 @@ function fixtureForPath() {
       </Suspense>
     );
   if (window.location.pathname === "/composer-icon-pickers") return <ComposerIconPickersFixture />;
+  if (window.location.pathname === "/features-compose") return <FeaturesComposeFixture />;
+  if (window.location.pathname === "/terminal-compose") return <TerminalComposeFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") {
     installMobileAppShellFixture();

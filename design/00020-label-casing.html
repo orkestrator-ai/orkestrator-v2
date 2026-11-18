@@ -143,9 +143,10 @@
       </section>
 
       <section class="capture" id="cap-new-tab-menu-desktop">
-        <h3>New tab menu <span class="pill">desktop 1440×900</span></h3>
+        <h3>New tab toolbar tooltips <span class="pill">desktop sources 1440×900</span></h3>
         <p class="how">
-          Open the menu with New Terminal Tab, New Root Terminal and New Browser Tab.
+          Hover the terminal, root terminal and browser buttons in that order. Each image stacks
+          three matching toolbar crops because the live toolbar shows one tooltip at a time.
         </p>
         <div class="pair">
           <figure class="shot">
@@ -155,7 +156,7 @@
             <div class="frame">
               <img
                 src="images/00020/before-new-tab-menu-desktop.png"
-                alt="Before: New tab menu (desktop)"
+                alt="Before: New Terminal Tab, New Root Terminal and New Browser Tab tooltips"
                 loading="lazy"
               />
             </div>
@@ -167,7 +168,7 @@
             <div class="frame">
               <img
                 src="images/00020/after-new-tab-menu-desktop.png"
-                alt="After: New tab menu (desktop)"
+                alt="After: New terminal tab, New root terminal and New browser tab tooltips"
                 loading="lazy"
               />
             </div>
@@ -177,9 +178,17 @@
 
       <section class="capture" id="cap-settings-global-defaults-desktop">
         <h3>
-          A settings page with “Use Global Defaults” <span class="pill">desktop 1440×900</span>
+          Network settings with “Use global defaults” <span class="pill">desktop 1440×900</span>
         </h3>
-        <p class="how">Open an environment’s agent settings.</p>
+        <p class="how">
+          Open a container environment’s settings, select Network, and turn off “Use global
+          defaults” so the allowed-domains field is editable.
+        </p>
+        <p>
+          <b>Coverage exception.</b> This Network pair replaces the requested Agent settings pair
+          for the shared-defaults switch. Agent settings inherit defaults per field and have no
+          equivalent switch. The evidence badge counts the two Network images in this slot.
+        </p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -190,7 +199,7 @@
             <div class="frame">
               <img
                 src="images/00020/before-settings-global-defaults-desktop.png"
-                alt="Before: A settings page with “Use Global Defaults” (desktop)"
+                alt="Before: Network settings with “Use Global Defaults” off (desktop)"
                 loading="lazy"
               />
             </div>
@@ -202,7 +211,7 @@
             <div class="frame">
               <img
                 src="images/00020/after-settings-global-defaults-desktop.png"
-                alt="After: A settings page with “Use global defaults” (desktop)"
+                alt="After: Network settings with “Use global defaults” off (desktop)"
                 loading="lazy"
               />
             </div>
@@ -319,18 +328,17 @@ mise run lint</code></pre>
           </ul>
         </li>
         <li>
-          <b>New tab menu.</b> The terminal trigger's tooltip now reads “New terminal tab”. The root
-          and browser tooltips were checked separately. The live toolbar shows one tooltip at a
-          time, and the terminal context menu lists agent CLIs.
+          <b>New tab toolbar.</b> The screenshots show “New terminal tab”, “New root terminal” and
+          “New browser tab”. Each column uses the same crop and order across three real hover
+          captures from that revision. Terminal output is masked in the source captures.
           <ul>
             <li><code>design/images/00020/before-new-tab-menu-desktop.png</code></li>
             <li><code>design/images/00020/after-new-tab-menu-desktop.png</code></li>
           </ul>
         </li>
         <li>
-          <b>Use global defaults.</b> The label now reads “Use global defaults”. The capture shows
-          the switch off and the allowed-domains field enabled. This setting lives under Network in
-          the current renderer. The agent settings use per-field inheritance.
+          <b>Use global defaults.</b> The Network capture shows the sentence-case label with the
+          switch off and the allowed-domains field enabled.
           <ul>
             <li><code>design/images/00020/before-settings-global-defaults-desktop.png</code></li>
             <li><code>design/images/00020/after-settings-global-defaults-desktop.png</code></li>

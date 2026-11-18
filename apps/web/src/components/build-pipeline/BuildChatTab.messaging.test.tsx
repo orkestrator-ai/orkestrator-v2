@@ -903,16 +903,16 @@ describe("BuildChatTab agent messaging", () => {
     expect(screen.queryByLabelText("Send a message to the agent") === null).toBe(true);
   });
 
-  test("restarts the current stage through the backend", async () => {
+  test("restarts the current stage and capitalizes its name in the success toast", async () => {
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Restart build stage" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Restart build stage$/ }));
 
     await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(running.id));
     await waitFor(() =>
       expect(pipelineStore().getState().pipelines.get(running.id)?.backendRevision).toBe(13),
     );
-    expect(mockToastSuccess).toHaveBeenCalledWith("Build stage restarted");
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Build stage restarted"));
   });
 
   test("names the stage the pipeline is on rather than the review", async () => {
@@ -929,6 +929,9 @@ describe("BuildChatTab agent messaging", () => {
     fireEvent.click(screen.getByRole("button", { name: "Restart verification stage" }));
 
     await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(running.id));
+    await waitFor(() =>
+      expect(mockToastSuccess).toHaveBeenCalledWith("Verification stage restarted"),
+    );
   });
 
   test("restarts the stage a paused pipeline paused in", () => {

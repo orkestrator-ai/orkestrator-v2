@@ -1232,10 +1232,11 @@ test("build pipeline live steering persists while inactive and rehydrates after 
       await expect(page.getByText("Checking Docker availability...", { exact: true })).toBeHidden({
         timeout: 30_000,
       });
-      for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
-        const continueButton = page.getByRole("button", { name: label, exact: true });
-        if (await continueButton.isVisible()) await continueButton.click();
-      }
+      const continueWithoutGitHub = page.getByRole("button", {
+        name: "Continue without GitHub CLI",
+        exact: true,
+      });
+      if (await continueWithoutGitHub.isVisible()) await continueWithoutGitHub.click();
       await expect(
         page.getByText("Checking CLI tools installation...", { exact: true }),
       ).toBeHidden({

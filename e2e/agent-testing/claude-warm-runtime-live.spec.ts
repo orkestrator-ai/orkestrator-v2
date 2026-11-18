@@ -685,7 +685,7 @@ test.describe("warm Claude CLI app path", () => {
         // without Docker access says so too; each dialog offers to carry on.
         await page.waitForTimeout(4_000);
         for (let attempt = 0; attempt < 4; attempt += 1) {
-          const carryOn = page.getByRole("button", { name: /^Continue Without/ }).first();
+          const carryOn = page.getByRole("button", { name: /^Continue without / }).first();
           if (!(await carryOn.isVisible().catch(() => false))) break;
           await carryOn.click();
           await page.waitForTimeout(1_000);

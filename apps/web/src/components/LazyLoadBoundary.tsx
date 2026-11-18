@@ -143,7 +143,7 @@ export function LazyLoadOverlayErrorFallback({
         role="alert"
         className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-destructive/40 bg-card p-6 text-center shadow-xl"
       >
-        <AlertTriangle className="h-7 w-7 text-destructive" />
+        <AlertTriangle className="h-7 w-7 text-failure" />
         <div>
           <p className="font-medium">{title}</p>
           <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
@@ -182,7 +182,7 @@ export function LazyLoadInlineErrorFallback({
         role="alert"
         className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-destructive/40 bg-card p-6 text-center shadow-lg"
       >
-        <AlertTriangle className="h-7 w-7 text-destructive" />
+        <AlertTriangle className="h-7 w-7 text-failure" />
         <div>
           <p className="font-medium">{title}</p>
           <p className="mt-1 text-sm text-muted-foreground">{detail}</p>

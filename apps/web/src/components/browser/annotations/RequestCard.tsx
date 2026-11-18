@@ -354,7 +354,7 @@ export function RequestCard({
         <span
           className={cn(
             "shrink-0 rounded px-1.5 py-0.5",
-            (request.state === "failed" || failedStop) && "bg-destructive/15 text-destructive",
+            (request.state === "failed" || failedStop) && "bg-destructive/15 text-failure",
             request.state === "unconfirmed" && "bg-amber-500/15 text-amber-200",
             reviewable && "bg-primary/15 text-foreground",
           )}
@@ -400,7 +400,7 @@ export function RequestCard({
           key={note.key}
           data-request-note={note.key}
           className={cn(
-            note.tone === "error" && "text-destructive",
+            note.tone === "error" && "text-failure",
             note.tone === "warning" && "text-amber-200",
             note.tone === "muted" && "text-muted-foreground",
           )}
@@ -616,7 +616,7 @@ export function RequestCard({
             type="button"
             size="sm"
             variant="ghost"
-            className="h-6 px-2 text-[11px] text-destructive"
+            className="h-6 px-2 text-[11px] text-failure"
             disabled={busy !== null || !features.recover || request.state === "cancelling"}
             onClick={() => void stop()}
           >

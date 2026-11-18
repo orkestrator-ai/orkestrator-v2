@@ -302,7 +302,7 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
           </Select>
         </div>
 
-        {loadError && <p className="text-sm text-destructive">{loadError}</p>}
+        {loadError && <p className="text-sm text-failure">{loadError}</p>}
       </div>
 
       <DialogFooter>

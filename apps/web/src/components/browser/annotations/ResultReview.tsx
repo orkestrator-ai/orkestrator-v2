@@ -157,7 +157,7 @@ function AgentReport({
         <ul aria-label="Checks" className="space-y-0.5">
           {result.checks.map((check, index) => (
             <li key={`${check.description}-${index}`}>
-              <span className={check.outcome === "failed" ? "text-destructive" : undefined}>
+              <span className={check.outcome === "failed" ? "text-failure" : undefined}>
                 {check.description}: {CHECK_OUTCOME[check.outcome]}
               </span>{" "}
               <span className="text-muted-foreground">

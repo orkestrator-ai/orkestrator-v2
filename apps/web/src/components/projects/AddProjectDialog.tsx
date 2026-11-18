@@ -416,7 +416,7 @@ export function AddProjectDialog({
                     disabled={isLoading}
                   />
                   {isValidUrl === false && (
-                    <p className="text-xs text-destructive">
+                    <p className="text-xs text-failure">
                       Enter a valid Git URL (SSH or HTTPS format)
                     </p>
                   )}
@@ -518,7 +518,7 @@ export function AddProjectDialog({
             </Tabs>
 
             {error && (
-              <p className="text-sm text-destructive" role="alert">
+              <p className="text-sm text-failure" role="alert">
                 {error}
               </p>
             )}

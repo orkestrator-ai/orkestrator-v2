@@ -564,7 +564,7 @@ export function AnnotationThread({
           </Button>
         )}
         {history.error && (
-          <p role="alert" className="text-[11px] text-destructive">
+          <p role="alert" className="text-[11px] text-failure">
             {history.error}
           </p>
         )}
@@ -739,7 +739,7 @@ export function AnnotationThread({
         </div>
       )}
       {message && (
-        <p role="alert" className="text-[11px] text-destructive">
+        <p role="alert" className="text-[11px] text-failure">
           {message}
         </p>
       )}

@@ -1459,7 +1459,7 @@ export function TmuxComposeBar({
             className={cn(
               "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
               queueRecovery.dispatchError
-                ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
+                ? "bg-destructive/10 text-failure hover:bg-destructive/20"
                 : "text-muted-foreground bg-muted/50 hover:bg-muted",
             )}
             aria-label={

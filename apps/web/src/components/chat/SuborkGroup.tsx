@@ -223,7 +223,7 @@ export const SuborkGroup = memo(function SuborkGroup({
           </ul>
         )}
         {stopError ? (
-          <p role="alert" className="mt-1 px-1 text-xs text-destructive">
+          <p role="alert" className="mt-1 px-1 text-xs text-failure">
             {stopError}
           </p>
         ) : null}

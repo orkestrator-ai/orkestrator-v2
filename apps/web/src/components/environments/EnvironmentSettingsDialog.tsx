@@ -213,7 +213,7 @@ function ExtensionCollection({
         </span>
       </div>
       {error ? (
-        <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+        <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-failure">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>{error}</span>
         </div>
@@ -864,7 +864,7 @@ export function EnvironmentSettingsDialog({
                 onChange={handleNameChange}
                 placeholder="Environment name"
               />
-              {nameError && <p className="text-sm text-destructive">{nameError}</p>}
+              {nameError && <p className="text-sm text-failure">{nameError}</p>}
             </div>
             {isLocalEnvironment && (
               <div className="space-y-4">
@@ -1306,7 +1306,7 @@ export function EnvironmentSettingsDialog({
               </div>
             )}
             {portError && (
-              <div className="flex items-center gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-sm">
+              <div className="flex items-center gap-2 p-2 rounded-md bg-destructive/10 text-failure text-sm">
                 <XCircle className="h-4 w-4 shrink-0" />
                 <span>{portError}</span>
               </div>
@@ -1481,7 +1481,7 @@ export function EnvironmentSettingsDialog({
               </Button>
             </div>
             {extensionsError && (
-              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-failure">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{extensionsError}</span>
               </div>

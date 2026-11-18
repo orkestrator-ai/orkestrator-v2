@@ -143,7 +143,7 @@ function LoadingRow({ label }: { label: string }) {
 function ErrorRow({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="space-y-3 rounded-lg border border-destructive/40 px-3 py-4 text-sm">
-      <p className="text-destructive" role="alert">
+      <p className="text-failure" role="alert">
         {message}
       </p>
       <Button type="button" variant="outline" size="sm" onClick={onRetry}>
@@ -502,7 +502,7 @@ export function GitHubRepositoryPicker({
                   search the rest.
                 </p>
                 {activeRepositories.pageError && (
-                  <p role="alert" className="text-sm text-destructive">
+                  <p role="alert" className="text-sm text-failure">
                     {activeRepositories.pageError}
                   </p>
                 )}
@@ -593,7 +593,7 @@ export function GitHubRepositoryPicker({
       </div>
 
       {cloneError && (
-        <p className="text-sm text-destructive" role="alert">
+        <p className="text-sm text-failure" role="alert">
           {cloneError}
         </p>
       )}

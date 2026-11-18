@@ -166,14 +166,14 @@ export function DockerImageStatusPanel() {
           Checking image…
         </div>
       ) : error && !image ? (
-        <p className="text-sm text-destructive">{error}</p>
+        <p className="text-sm text-failure">{error}</p>
       ) : image && topology ? (
         <div className="space-y-3 rounded-md border border-zinc-700 bg-zinc-800/50 p-3 text-sm">
           <div className="flex items-center gap-2">
             {dockerReachable ? (
               <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
             ) : (
-              <XCircle className="h-4 w-4 text-destructive" aria-hidden="true" />
+              <XCircle className="h-4 w-4 text-failure" aria-hidden="true" />
             )}
             <span className="w-14 shrink-0 text-muted-foreground">Docker</span>
             <span className="font-medium">
@@ -192,7 +192,7 @@ export function DockerImageStatusPanel() {
                 ) : image.state === "legacy" || image.state === "missing" ? (
                   <AlertCircle className="h-4 w-4 text-yellow-500" aria-hidden="true" />
                 ) : (
-                  <XCircle className="h-4 w-4 text-destructive" aria-hidden="true" />
+                  <XCircle className="h-4 w-4 text-failure" aria-hidden="true" />
                 )}
                 <span className="w-14 shrink-0 text-muted-foreground">Image</span>
                 <span className="font-medium">{STATE_LABEL[image.state]}</span>
@@ -250,9 +250,9 @@ export function DockerImageStatusPanel() {
                 )
               )}
               {download?.state === "failed" && download.error && !healthy && (
-                <p className="text-xs text-destructive">Download failed: {download.error}</p>
+                <p className="text-xs text-failure">Download failed: {download.error}</p>
               )}
-              {error && <p className="text-xs text-destructive">{error}</p>}
+              {error && <p className="text-xs text-failure">{error}</p>}
             </>
           )}
         </div>

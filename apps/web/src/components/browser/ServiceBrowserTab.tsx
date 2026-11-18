@@ -974,7 +974,7 @@ function ServicePreview({
       {(attachError || nativeState?.error) && (
         <div
           role="alert"
-          className="min-w-0 shrink-0 border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-destructive break-words [overflow-wrap:anywhere]"
+          className="min-w-0 shrink-0 border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-failure break-words [overflow-wrap:anywhere]"
         >
           {attachError ?? nativeState?.error}
         </div>
@@ -1195,7 +1195,7 @@ function PreviewIntentChooser({
           </p>
         ) : null}
         {error && (
-          <p role="alert" className="text-destructive">
+          <p role="alert" className="text-failure">
             {error}
           </p>
         )}

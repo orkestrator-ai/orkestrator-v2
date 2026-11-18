@@ -956,20 +956,29 @@ session.post("/:id/prompt", async (c) => {
     if (sandboxRefusal) {
       return c.json({ error: sandboxRefusal, kind: "sandbox-unavailable" }, 422);
     }
-    // Refused before anything is journaled: a prompt the session's running CLI
-    // cannot take must not be accepted and then dropped by a background send.
-    await assertClaudeRuntimeAccepts(sessionData, {
+    const launchOptions = {
       ...(typeof readOnly === "boolean" ? { readOnly } : {}),
       agent,
       includeLocalSettings,
-      outputSchema,
+      ...(outputSchema !== undefined ? { outputSchema } : {}),
       model,
       permissionMode,
       ...(approvalMode ? { approvalMode } : {}),
       promptSuggestions,
       parameterValues,
       ...(agentMcp ? { agentMcp } : {}),
-    });
+      ...(workflowResultTurn ? { workflowResultTurn } : {}),
+    };
+    // Refused before anything is journaled: a prompt the session's running CLI
+    // cannot take must not be accepted and then dropped by a background send.
+    await assertClaudeRuntimeAccepts(sessionData, launchOptions);
+    const promptOptions = {
+      ...launchOptions,
+      attachments,
+      effort,
+      fastMode,
+      ...(providerPrompt !== undefined ? { providerPrompt } : {}),
+    };
     // Structured turns take the same durable claim: Build Pipeline re-sends a
     // stage prompt under its id, and without the journal a restarted bridge
     // would run it again.
@@ -985,21 +994,7 @@ session.post("/:id/prompt", async (c) => {
           id,
           prompt,
           {
-            model,
-            attachments,
-            effort,
-            permissionMode,
-            ...(approvalMode ? { approvalMode } : {}),
-            ...(typeof readOnly === "boolean" ? { readOnly } : {}),
-            fastMode,
-            agent,
-            includeLocalSettings,
-            promptSuggestions,
-            parameterValues,
-            ...(agentMcp ? { agentMcp } : {}),
-            ...(workflowResultTurn ? { workflowResultTurn } : {}),
-            ...(providerPrompt !== undefined ? { providerPrompt } : {}),
-            ...(outputSchema !== undefined ? { outputSchema } : {}),
+            ...promptOptions,
             requestId,
           },
           {
@@ -1061,22 +1056,7 @@ session.post("/:id/prompt", async (c) => {
 
     // Start processing in background (don't await). Only a plain prompt with
     // no request id gets here; every other one took the claim above.
-    sendPrompt(id, prompt, {
-      model,
-      attachments,
-      effort,
-      permissionMode,
-      ...(approvalMode ? { approvalMode } : {}),
-      ...(typeof readOnly === "boolean" ? { readOnly } : {}),
-      fastMode,
-      agent,
-      includeLocalSettings,
-      promptSuggestions,
-      parameterValues,
-      ...(agentMcp ? { agentMcp } : {}),
-      ...(workflowResultTurn ? { workflowResultTurn } : {}),
-      ...(providerPrompt !== undefined ? { providerPrompt } : {}),
-    }).catch((error) => {
+    sendPrompt(id, prompt, promptOptions).catch((error) => {
       logPromptProcessingFailure(error);
     });
 

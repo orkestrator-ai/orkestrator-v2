@@ -34,9 +34,9 @@ export interface WorkflowResultToolScope extends WorkflowResultCallerScope {
   workflowResultKey: string;
   kind: WorkflowResultKind;
   /**
-   * A graph output slot's own contract (`WorkflowResultService.binding().slot`):
-   * its port schema, `submit_<port>` tool and port context. Built-in kinds
-   * leave it out.
+   * The slot-specific contract (`WorkflowResultService.binding().slot`).
+   * Graph outputs carry their port schema, tool name and context. Scoped
+   * consolidations carry the backend-filled lists in their context.
    */
   slot?: WorkflowResultSlotView;
 }

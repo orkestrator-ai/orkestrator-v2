@@ -1785,13 +1785,16 @@ the first submission the normal path:
 - A consolidation over the result tool does not retype the reviewers' scope
   lists. Its slot context carries `scope`, the union of the reviewers'
   `filesReviewed`, `filesSkipped`, `filesLeftUncommitted`, `commandsRun` and
-  `commandsNotRun` (`review-consolidation-scope.ts`, up to 32 KiB; a larger
-  merge is left to the model as before). The submission tool's schema leaves
-  those fields out, the prompt's template says so, and the kind's `complete`
-  hook fills them in before the report is validated and stored, so every
-  consumer still reads a complete report. Judgement about the scope
+  `commandsNotRun` (`review-consolidation-scope.ts`). The model writes the full
+  scope when the union exceeds a report list limit or 32 KiB, or contains text
+  the result tool would reject. Otherwise initial and repair prompts let the
+  model omit the five lists, and the submission tool accepts them as optional
+  for compatibility with saved prompts. The kind's `complete` hook fills them
+  in before validation and storage, so every consumer reads a complete report.
+  Judgement about the scope
   (`limitations`, `outcome`, the commit range) stays with the model. A slot an
-  older backend prepared takes the lists when it is prepared again while open.
+  older backend prepared takes the lists when the same attempt is prepared again
+  while open. A held validation must be refreshed after that scope change.
   The OpenCode broker publishes one tool per kind for every slot, so its
   consolidated-review tool takes the report with or without the lists
   (`anySlotSchema`); the service still requires them where a slot does not

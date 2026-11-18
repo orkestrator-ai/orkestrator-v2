@@ -8,7 +8,7 @@
  * most often fails to parse (52 of 185 Haiku consolidations on one host in a
  * week, every failure above 15 KB). So when a consolidation runs over the
  * result tool, the slot carries the merged lists in its context, the tool's
- * schema leaves them out, and the backend fills them in before it validates
+ * schema makes them optional, and the backend fills them in before it validates
  * and stores the report. Every consumer still reads a complete
  * `StructuredReviewReport`.
  *
@@ -26,7 +26,11 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
-import type { ConsolidationScopeLists } from "@orkestrator/protocol/workflow-results";
+import type {
+  ConsolidationScopeLists,
+  WorkflowResultValidationIssue,
+} from "@orkestrator/protocol/workflow-results";
+import { inspectFinalText } from "./workflow-result-final-text.js";
 
 /** The `reviewScope` fields the backend fills in, in schema order. */
 export const CONSOLIDATION_SCOPE_LIST_FIELDS = [
@@ -54,13 +58,13 @@ const LIST_LIMITS: Readonly<Record<keyof ConsolidationScopeLists, number>> = {
 export const CONSOLIDATION_SCOPE_MAX_BYTES = 32 * 1024;
 
 /** First occurrence of each key wins; order is the reviewers' order. */
-function uniqueBy<T>(items: Iterable<T>, key: (item: T) => string, limit: number): T[] {
+function uniqueBy<T>(items: Iterable<T>, key: (item: T) => string, limit: number): T[] | undefined {
   const seen = new Set<string>();
   const kept: T[] = [];
   for (const item of items) {
-    if (kept.length >= limit) break;
     const id = key(item);
     if (seen.has(id)) continue;
+    if (kept.length === limit) return undefined;
     seen.add(id);
     kept.push(item);
   }
@@ -69,8 +73,7 @@ function uniqueBy<T>(items: Iterable<T>, key: (item: T) => string, limit: number
 
 /**
  * The union of the reviewers' scope lists, deterministic in the reviewers'
- * order and capped at the report budgets (`structured-review/budgets.ts`), so
- * a filled-in report never fails a budget the model cannot fix.
+ * order. An overflowing list makes the union unavailable for automatic completion.
  *
  * - A file one reviewer skipped and another reviewed counts as reviewed.
  * - A command one reviewer ran is not also listed as not run.
@@ -80,50 +83,52 @@ function uniqueBy<T>(items: Iterable<T>, key: (item: T) => string, limit: number
  */
 export function mergeConsolidationScopeLists(
   reports: readonly Pick<StructuredReviewReport, "reviewScope">[],
-): ConsolidationScopeLists {
+): ConsolidationScopeLists | undefined {
   const scopes = reports.map((report) => report.reviewScope);
   const filesReviewed = uniqueBy(
     scopes.flatMap((scope) => scope.filesReviewed),
     (file) => file,
     LIST_LIMITS.filesReviewed,
   );
-  const reviewed = new Set(scopes.flatMap((scope) => scope.filesReviewed));
+  if (!filesReviewed) return undefined;
+  const reviewed = new Set(filesReviewed);
   const commandsRun = uniqueBy(
     scopes.flatMap((scope) => scope.commandsRun),
     (command) => JSON.stringify([command.command, command.result]),
     LIST_LIMITS.commandsRun,
   );
-  const ran = new Set(scopes.flatMap((scope) => scope.commandsRun.map((entry) => entry.command)));
-  return {
-    filesReviewed,
-    filesSkipped: uniqueBy(
-      scopes.flatMap((scope) => scope.filesSkipped).filter((entry) => !reviewed.has(entry.file)),
-      (entry) => entry.file,
-      LIST_LIMITS.filesSkipped,
-    ),
-    filesLeftUncommitted: uniqueBy(
-      scopes.flatMap((scope) => scope.filesLeftUncommitted),
-      (entry) => entry.file,
-      LIST_LIMITS.filesLeftUncommitted,
-    ),
-    commandsRun,
-    commandsNotRun: uniqueBy(
-      scopes.flatMap((scope) => scope.commandsNotRun).filter((entry) => !ran.has(entry.command)),
-      (entry) => entry.command,
-      LIST_LIMITS.commandsNotRun,
-    ),
-  };
+  if (!commandsRun) return undefined;
+  const ran = new Set(commandsRun.map((entry) => entry.command));
+  const filesSkipped = uniqueBy(
+    scopes.flatMap((scope) => scope.filesSkipped).filter((entry) => !reviewed.has(entry.file)),
+    (entry) => entry.file,
+    LIST_LIMITS.filesSkipped,
+  );
+  const filesLeftUncommitted = uniqueBy(
+    scopes.flatMap((scope) => scope.filesLeftUncommitted),
+    (entry) => entry.file,
+    LIST_LIMITS.filesLeftUncommitted,
+  );
+  const commandsNotRun = uniqueBy(
+    scopes.flatMap((scope) => scope.commandsNotRun).filter((entry) => !ran.has(entry.command)),
+    (entry) => entry.command,
+    LIST_LIMITS.commandsNotRun,
+  );
+  if (!filesSkipped || !filesLeftUncommitted || !commandsNotRun) return undefined;
+  return { filesReviewed, filesSkipped, filesLeftUncommitted, commandsRun, commandsNotRun };
 }
 
 /**
- * The merged lists for a slot's context, or undefined when they exceed
- * {@link CONSOLIDATION_SCOPE_MAX_BYTES} and the model should write them.
+ * A complete union that fits the slot and passes the result tool's scope checks.
  */
 export function consolidationScopeLists(
   reports: readonly Pick<StructuredReviewReport, "reviewScope">[],
 ): ConsolidationScopeLists | undefined {
   const scope = mergeConsolidationScopeLists(reports);
-  return utf8Bytes(JSON.stringify(scope)) <= CONSOLIDATION_SCOPE_MAX_BYTES ? scope : undefined;
+  if (!scope || utf8Bytes(JSON.stringify(scope)) > CONSOLIDATION_SCOPE_MAX_BYTES) return undefined;
+  const issues: WorkflowResultValidationIssue[] = [];
+  inspectScopeListText(issues, scope);
+  return issues.length === 0 ? scope : undefined;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -166,12 +171,28 @@ export function isConsolidationScopeLists(value: unknown): value is Consolidatio
   );
 }
 
-/**
- * The review report schema with the scope lists no longer required in
- * `reviewScope`; `listed` keeps them as optional properties, otherwise they
- * are removed.
- */
-function reportSchemaWithoutRequiredLists(listed: boolean, note: string): JsonSchema {
+/** Checks the inherited scope text with the same rules as the final result. */
+export function inspectScopeListText(
+  issues: WorkflowResultValidationIssue[],
+  reviewScope: Record<string, unknown>,
+): void {
+  for (const field of ["filesSkipped", "filesLeftUncommitted", "commandsNotRun"]) {
+    if (!Array.isArray(reviewScope[field])) continue;
+    reviewScope[field].forEach((entry, index) => {
+      if (record(entry))
+        inspectFinalText(issues, entry.reason, `$.reviewScope.${field}[${index}].reason`);
+    });
+  }
+  if (Array.isArray(reviewScope.commandsRun)) {
+    reviewScope.commandsRun.forEach((entry, index) => {
+      if (record(entry))
+        inspectFinalText(issues, entry.summary, `$.reviewScope.commandsRun[${index}].summary`);
+    });
+  }
+}
+
+/** The optional lists also allow full reports from prompts saved before the upgrade. */
+function reportSchemaWithOptionalLists(note: string) {
   const full = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA;
   const filled = new Set<string>(CONSOLIDATION_SCOPE_LIST_FIELDS);
   const scope = full.properties.reviewScope;
@@ -183,37 +204,22 @@ function reportSchemaWithoutRequiredLists(listed: boolean, note: string): JsonSc
         ...scope,
         description: `${scope.description} ${note}`,
         required: scope.required.filter((key) => !filled.has(key)),
-        properties: listed
-          ? scope.properties
-          : Object.fromEntries(
-              Object.entries(scope.properties).filter(([key]) => !filled.has(key)),
-            ),
       },
     },
-  } as unknown as JsonSchema;
+  } satisfies JsonSchema;
 }
 
-/**
- * The consolidated report as a slot's submission tool takes it: the review
- * report schema with the backend's scope lists removed from `reviewScope`.
- */
-export const CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA: JsonSchema =
-  reportSchemaWithoutRequiredLists(
-    false,
-    `The backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")} from the reviewer reports; do not send them.`,
-  );
+export const CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA = reportSchemaWithOptionalLists(
+  `The backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")} from the reviewer reports. Omit them from new submissions.`,
+);
 
 /**
- * The consolidated report as a surface that serves every slot of the kind
- * takes it (the OpenCode broker publishes one tool per kind): the lists are
- * allowed but not required. The service still requires them for a slot that
- * does not fill them in.
+ * The OpenCode broker publishes one tool per kind. The service still requires
+ * the lists if the slot has no merged scope.
  */
-export const CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA: JsonSchema =
-  reportSchemaWithoutRequiredLists(
-    true,
-    `When your instructions say the backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")}, leave them out; otherwise send them.`,
-  );
+export const CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA = reportSchemaWithOptionalLists(
+  `When your instructions say the backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")}, leave them out; otherwise send them.`,
+);
 
 /**
  * The submitted report with the merged lists in `reviewScope`. The backend's
@@ -226,16 +232,16 @@ export function completeConsolidatedReview(
   scope: ConsolidationScopeLists,
 ): unknown {
   if (!record(value) || !record(value.reviewScope)) return value;
-  const reviewScope: Record<string, unknown> = {};
+  const reviewScope: Record<string, unknown> = Object.create(null);
   const filled = new Set<string>(CONSOLIDATION_SCOPE_LIST_FIELDS);
   // Rebuilt in schema order, so a stored report reads the same as one the
   // model wrote in full.
   for (const key of STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.reviewScope.required) {
     if (filled.has(key)) reviewScope[key] = scope[key as keyof ConsolidationScopeLists];
-    else if (key in value.reviewScope) reviewScope[key] = value.reviewScope[key];
+    else if (Object.hasOwn(value.reviewScope, key)) reviewScope[key] = value.reviewScope[key];
   }
   for (const [key, entry] of Object.entries(value.reviewScope)) {
-    if (!(key in reviewScope)) reviewScope[key] = entry;
+    if (!Object.hasOwn(reviewScope, key)) reviewScope[key] = entry;
   }
   return { ...value, reviewScope };
 }

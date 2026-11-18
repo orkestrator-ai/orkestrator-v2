@@ -148,8 +148,9 @@ export interface WorkflowResultSlotInput {
   projectId: string;
   provider: StructuredOutputProvider;
   /**
-   * The contract schema. Built-in kinds own theirs and ignore this; a
-   * `graph-output` slot takes its port type's schema from here.
+   * The contract schema. Built-in kinds own theirs; an existing consolidation
+   * rejects a supplied schema that differs from its built-in contract.
+   * A `graph-output` slot takes its port type's schema from here.
    */
   schema?: JsonSchema;
   /**
@@ -171,10 +172,9 @@ export interface WorkflowResultSlotInput {
         type: "consolidated-review";
         sources: Record<string, "issue" | "coverage-gap">;
         /**
-         * The merged scope lists. When present, the submission tool's schema
-         * leaves these fields out and the backend fills them in before it
-         * validates and stores the report. Slots prepared before this field
-         * existed carry none and take the full report.
+         * The merged scope lists. The submission tool makes these fields
+         * optional and the backend fills them in before validation and storage.
+         * A slot without merged scope takes the full report.
          */
         scope?: ConsolidationScopeLists;
       }

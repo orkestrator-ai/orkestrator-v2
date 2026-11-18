@@ -9,7 +9,13 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import { promptCarrierJson } from "@orkestrator/protocol/review-evidence-frames";
+import {
+  STRUCTURED_REVIEW_MAX_TEXT_BYTES,
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  type StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
+import { workflowResultProviderSchema } from "./workflow-result-registry.js";
 import {
   REVIEW_RESULT_COMMIT_NUDGE_MS,
   deriveConsolidatedProvenance,
@@ -1138,7 +1144,58 @@ describe("build pipeline multi-model review", () => {
       expect(
         provider.sent.filter((entry) => entry.sessionId.includes("consolidation")),
       ).toHaveLength(3);
+      const repair = provider.sent.find((entry) => entry.prompt.includes("repair attempt 1 of 3"));
+      expect(repair?.prompt).toContain(promptCarrierJson(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA));
     });
+  });
+
+  test("repairs a budget-rejected tool consolidation with the new slot's scope schema", async () => {
+    await withPipeline(
+      async ({ service, read, provider, workflowResults }) => {
+        provider.runningConsolidation = true;
+        const started = await service.start(startInput(fourReviewers().slice(0, 2)));
+        await advanceUntil(service, read, started.id, "reviewing");
+        for (let pass = 0; pass < 10; pass += 1) {
+          if ((await read(started.id)).reviewFanout?.consolidation?.state === "sent") break;
+          await service.advanceNow(started.id);
+        }
+        const first = (await read(started.id)).reviewFanout!.consolidation!;
+        expect(first.resultTransport).toBe("tool-v1");
+        const candidate = await provider.structured<StructuredReviewReport>(
+          first.providerSessionId,
+          first.requestId,
+        );
+        if (!candidate?.ok) throw new Error("expected a consolidated report");
+        const report = {
+          ...candidate.value,
+          issues: candidate.value.issues.map((issue) => ({ ...issue, alternativeFixes: [] })),
+        };
+        const scope = { environmentId: "env-1", projectId: "project-1" };
+        expect(
+          await workflowResults!.submit(scope, first.requestId, {
+            ...report,
+            reviewSummary: "a".repeat(STRUCTURED_REVIEW_MAX_TEXT_BYTES + 1),
+          }),
+        ).toMatchObject({ ok: true });
+        provider.runningConsolidation = false;
+        await service.advanceNow(started.id);
+        const replacement = (await read(started.id)).reviewFanout!.consolidation!;
+        expect(replacement.requestId).not.toBe(first.requestId);
+        await service.advanceNow(started.id);
+        const binding = await workflowResults!.binding(scope, replacement.requestId);
+        expect(binding?.slot?.context).toHaveProperty("scope");
+        const schema = workflowResultProviderSchema("consolidated-review", binding?.slot);
+        const repair = provider.sent.find((entry) => entry.requestId === replacement.requestId);
+        expect(repair?.workflowResultTool).toBe("submit_consolidated_review");
+        expect(repair?.prompt).toContain(promptCarrierJson(schema));
+        expect(repair?.prompt).toContain("$.reviewSummary");
+        expect(await workflowResults!.submit(scope, replacement.requestId, report)).toMatchObject({
+          ok: true,
+        });
+        await advanceUntil(service, read, started.id, "addressing-findings", 5);
+      },
+      { toolMode: true },
+    );
   });
 
   test("fails after the consolidation repair budget is exhausted", async () => {

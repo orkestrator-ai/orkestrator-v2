@@ -9,7 +9,11 @@ import { multiReviewStatus } from "./coordinator-status-wakes.js";
 import { multiReviewAutomation } from "./control-workflow-summary.js";
 import { TEST_REVIEW_PREPARATION } from "./build-pipeline-test-fixtures.js";
 import { expect, jest, test } from "bun:test";
-import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import {
+  STRUCTURED_REVIEW_MAX_TEXT_BYTES,
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+} from "@orkestrator/protocol/structured-review";
+import { promptCarrierJson } from "@orkestrator/protocol/review-evidence-frames";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
   MULTI_REVIEW_MAX_SNAPSHOT_PATHS,
@@ -28,6 +32,7 @@ import {
 import { StorageService } from "./storage.js";
 import { MultiReviewService } from "./multi-review-service.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
+import { workflowResultProviderSchema } from "./workflow-result-registry.js";
 import {
   Provider,
   REVIEW_FINGERPRINT,
@@ -3209,7 +3214,65 @@ test("MultiReviewService asks the Address Findings model to correct an invalid c
     );
     expect(repair?.prompt).toContain("$.ready");
     expect(repair?.prompt).toContain("<structured-review-expected-schema-json>");
+    expect(repair?.prompt).toContain(promptCarrierJson(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA));
   });
+});
+
+test("MultiReviewService repairs a budget-rejected tool consolidation using the replacement slot's schema", async () => {
+  const provider = new Provider(false);
+  const environmentId = "env-tool-consolidation-budget-repair";
+  const scope = { environmentId, projectId: "project-1" };
+  await withService(
+    environmentId,
+    provider,
+    async ({ service, start, snapshot, workflowResults }) => {
+      const selection = { agent: "codex" as const, model: "default" };
+      const started = await start([selection], selection);
+      const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+        Boolean(
+          workflow.reviewers[0]?.requestId && provider.sends.has(workflow.reviewers[0].requestId),
+        ),
+      );
+      await workflowResults!.submit(scope, reviewing.reviewers[0]!.requestId!, cleanReport);
+      const consolidating = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) =>
+          workflow.activeRequest?.kind === "consolidate" &&
+          provider.sends.has(workflow.activeRequest.requestId),
+      );
+      const first = consolidating.activeRequest!.requestId;
+      expect(
+        await workflowResults!.submit(scope, first, {
+          ...cleanReport,
+          reviewSummary: "a".repeat(STRUCTURED_REVIEW_MAX_TEXT_BYTES + 1),
+        }),
+      ).toMatchObject({ ok: true });
+      const repairing = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) =>
+          workflow.activeRequest?.kind === "consolidate" &&
+          workflow.activeRequest.requestId !== first &&
+          provider.sends.has(workflow.activeRequest.requestId),
+      );
+      const replacement = repairing.activeRequest!.requestId;
+      const binding = await workflowResults!.binding(scope, replacement);
+      expect(binding?.slot?.context).toHaveProperty("scope");
+      const schema = workflowResultProviderSchema("consolidated-review", binding?.slot);
+      const repair = provider.sends.get(replacement);
+      expect(repair?.options.workflowResultTool).toBe("submit_consolidated_review");
+      expect(repair?.prompt).toContain(promptCarrierJson(schema));
+      expect(repair?.prompt).toContain("$.reviewSummary");
+      expect(await workflowResults!.submit(scope, replacement, cleanReport)).toMatchObject({
+        ok: true,
+      });
+      await advanceUntil(service, snapshot, started.id, (workflow) => workflow.phase === "ready");
+    },
+    { toolMode: true },
+  );
 });
 
 test("MultiReviewService stamps reviewer findings with the configured model", async () => {

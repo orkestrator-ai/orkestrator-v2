@@ -97,12 +97,10 @@ function Comparison({
         </p>
       )}
       {metadata && (
-        <p className="text-[10px] text-muted-foreground">
-          {targetMatchLabel(metadata.targetMatch)}
-        </p>
+        <p className="text-muted-foreground">{targetMatchLabel(metadata.targetMatch)}</p>
       )}
       {labels.map((label) => (
-        <p key={label} className="text-[10px] text-amber-200">
+        <p key={label} className="text-amber-200">
           {label}. Compare with care: these images are not directly comparable.
         </p>
       ))}
@@ -211,14 +209,14 @@ function ObservedByOrkestrator({
       {fileChecks.length > 0 && (
         <div>
           <p className="text-muted-foreground">Reported files, checked by Orkestrator:</p>
-          <ul className="space-y-0.5 font-mono text-[10px]" aria-label="File checks">
+          <ul className="space-y-0.5 font-mono" aria-label="File checks">
             {fileChecks.slice(0, 20).map((check) => (
               <li
                 key={check.path}
                 className={check.status === "exists" ? undefined : "text-amber-200"}
                 data-file-check={check.status}
               >
-                <span className="truncate">{check.path}</span>
+                <span className="truncate text-[10px]">{check.path}</span>
                 <span className="font-sans text-muted-foreground">
                   {" "}
                   — {fileCheckLabel(check.status)}

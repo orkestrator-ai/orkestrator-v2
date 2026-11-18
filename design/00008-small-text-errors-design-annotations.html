@@ -13,21 +13,21 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00008</p>
       <h1>00008 · Raise error and state text to 11px in the design inspector and annotations</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-medium">Medium</span>
         <span class="pill">Typography</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 8 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 8 / 8 images</span
         >
       </div>
 
       <h2>Problem</h2>
       <p>
-        There are 165 uses of <code>text-[10px]</code>. Many are legitimate metadata or counts
-        inside filled pills, but error lines and state text are not:
+        The baseline had 165 uses of <code>text-[10px]</code>. Many are legitimate metadata or
+        counts inside filled pills, but error lines and state text are not:
         <code>DesignFrameInspector.tsx:202</code>, <code>DesignInspector.tsx:622</code> and
-        <code>DesignStyleField.tsx:282</code> set errors at 10px in the destructive red; the
-        annotation panels use the same size for result and state lines.
+        <code>DesignStyleField.tsx:282</code> set errors at 10px in the destructive red. The
+        annotation panels used the same size for result and state lines.
       </p>
       <div class="rule">
         <div>
@@ -55,12 +55,12 @@
             <td>error line</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/design/DesignInspector.tsx:622</code></td>
-            <td>error line</td>
+            <td><code>apps/web/src/components/design/DesignInspector.tsx</code></td>
+            <td>new-property error and truncation notices</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/design/DesignStyleField.tsx:276,282</code></td>
-            <td>computed-value and error lines</td>
+            <td><code>apps/web/src/components/design/DesignStyleField.tsx</code></td>
+            <td>computed value, property error, and field note</td>
           </tr>
           <tr>
             <td><code>apps/web/src/components/browser/annotations/ResultReview.tsx</code></td>
@@ -235,66 +235,73 @@
 
       <h2>Verification</h2>
       <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
-NODE_ENV=test mise run test:logged -- --name design-annotations -- bun --cwd=apps/web test src/components/design src/components/browser/annotations --parallel=2 --only-failures
+NODE_ENV=test mise run test:logged -- --name design-annotations -- bun test --cwd apps/web ./src/components/design ./src/components/browser/annotations --parallel=2 --only-failures
 mise run format:check
 mise run lint</code></pre>
       <p class="note">
         React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
-        check: use a throwaway <code>dev:test</code> profile named <code>design-00008</code>, never
-        a production instance.
+        check: use the <code>design-00008</code> fixture profile.
+      </p>
+      <pre><code>env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile design-00008 --fixture --headless --no-host-seed --no-agent-credentials --agent-platforms codex</code></pre>
+      <p class="note">
+        The captures use the dark theme at 100% app zoom and device scale 1. Baseline revision
+        <code>b2c91abb9</code> was captured before any source edit. The isolated backend held the
+        exported design, annotation replies, and completed request fixture. A blocked reply-save
+        request produced the recoverable error. Reloading restored the saved design tab and
+        annotation threads before replaying the same actions.
       </p>
 
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00008/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: If a new exception is accepted (for example
             a count in an outlined pill), add it to Typography.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -302,14 +309,72 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
-      </p>
+      <h3>Hit classification</h3>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li><code>DesignFrameInspector</code> — geometry validation error (state/error, 11px).</li>
+        <li>
+          <code>DesignInspector</code> — new-property validation error, truncated-text notice, and
+          truncated-attributes notice (state/error, 11px).
+        </li>
+        <li>
+          <code>DesignStyleField</code> — computed and changed value, validation error, and field
+          note (state/error, 11px).
+        </li>
+        <li>
+          <code>ResultReview</code> — capture captions (two), capture conditions, report and
+          observation headings (two), and reported file paths (metadata, 10px). Target match and
+          comparison warning (state/error, 11px). In each observed file-check row, the path is
+          metadata at 10px and the outcome is state at 11px.
+        </li>
+        <li>
+          <code>AnnotationThread</code> — legacy reference text, captured attributes, styles, and
+          HTML, and source candidate location (evidence metadata, 10px). The status alongside a
+          source location already uses 11px.
+        </li>
+        <li>
+          <code>AnnotationEntries</code> — both <code>New</code> markers are unread state (11px).
+          The <code>Edit</code> and <code>Open conversation</code> labels identify actions (10px,
+          outside the state and error change).
+        </li>
+      </ul>
+
+      <h3>Decisions</h3>
+      <ul>
+        <li>
+          Change individual inspector and annotation states at their existing locations. A blanket
+          replacement would also enlarge evidence metadata and action labels. Result-review states
+          inherit the panel’s 11px size, with an explicit 10px override on each file path.
+        </li>
+        <li>
+          Treat <code>New</code> as state even on a filled background because it tells readers which
+          entries are unread. No numeric filled-pill counts were found among the hits. Existing
+          semantic colors are used at the same opacity, and no palette values changed.
+        </li>
+      </ul>
+
+      <h3>Image pairs</h3>
+      <ul>
+        <li>
+          <a href="#cap-design-inspector-error-desktop">Inspector, desktop</a>. The invalid width
+          message and computed value are larger. The computed value moves below the Changed marker,
+          and the error fits on one line. Apply styles stays disabled.
+        </li>
+        <li>
+          <a href="#cap-design-inspector-error-narrow">Inspector, narrow</a>. The 390px layout keeps
+          the same grouping of the Changed marker, computed value, and single-line error. The
+          two-column grid retains its 8px gap at both widths.
+        </li>
+        <li>
+          <a href="#cap-annotation-result-review-desktop">Annotation result review, desktop</a>. The
+          missing-file outcome, target-match line, and zoom mismatch warning are larger. The warning
+          wraps within the Notes panel. Capture captions and conditions remain secondary metadata.
+          The saved result fixture contains comparison metadata without image assets.
+        </li>
+        <li>
+          <a href="#cap-annotation-thread-desktop">Annotation thread, desktop</a>. The unread
+          reply’s <code>New</code> badge is larger. The reply-save failure was already 11px and
+          stays readable below the retained draft.
+        </li>
       </ul>
 
       <footer>

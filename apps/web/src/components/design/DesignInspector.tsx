@@ -619,7 +619,7 @@ function InspectorBody({
                   </Button>
                 </div>
                 {newPropertyError && (
-                  <p id={newPropertyErrorId} className="text-[10px] text-destructive">
+                  <p id={newPropertyErrorId} className="text-[11px] text-destructive">
                     {newPropertyError}
                   </p>
                 )}
@@ -653,7 +653,7 @@ function InspectorBody({
                   <dt className="font-medium">Text</dt>
                   <dd className="whitespace-pre-wrap text-muted-foreground">{element.text}</dd>
                   {element.textTruncated && (
-                    <dd className="text-[10px] text-muted-foreground italic">Text truncated</dd>
+                    <dd className="text-[11px] text-muted-foreground italic">Text truncated</dd>
                   )}
                 </div>
               )}
@@ -665,7 +665,7 @@ function InspectorBody({
               ))}
             </dl>
             {element.attributesTruncated && (
-              <p className="mt-2 text-[10px] text-muted-foreground italic">
+              <p className="mt-2 text-[11px] text-muted-foreground italic">
                 Some attributes are not shown.
               </p>
             )}

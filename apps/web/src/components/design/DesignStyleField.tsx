@@ -273,18 +273,20 @@ export function DesignStyleField({
         )}
       </div>
       {(changed || showComputed) && (
-        <p id={stateId} className="truncate text-[10px] text-muted-foreground" title={computed}>
+        <p id={stateId} className="text-[11px] text-muted-foreground" title={computed}>
           {changed ? <span className="text-primary">Changed · </span> : null}
-          {computed ? `computed ${computed}` : "not applied"}
+          <span className="inline-block max-w-full truncate align-bottom">
+            {computed ? `computed ${computed}` : "not applied"}
+          </span>
         </p>
       )}
       {error && (
-        <p id={errorId} className="text-[10px] break-words text-destructive">
+        <p id={errorId} className="text-[11px] break-words text-destructive">
           {error}
         </p>
       )}
       {note && !error && (
-        <p id={noteId} className="text-[10px] break-words text-muted-foreground">
+        <p id={noteId} className="text-[11px] break-words text-muted-foreground">
           {note}
         </p>
       )}

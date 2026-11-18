@@ -302,19 +302,23 @@ mise run lint</code></pre>
           The condition fields and group controls remain in the same order.
         </li>
         <li>
-          <strong>Transcript file part pair.</strong> The Reference header and surrounding card stay
-          in place. The blue quote bar becomes a neutral hairline. The annotation response excerpt
-          uses the same neutral rule.
+          <strong>Transcript file part pair.</strong> Both images show the same saved Claude fixture
+          conversation with an attached <code>fixture-notes.txt</code> and a quote from the previous
+          reply. The blue quote bar becomes a neutral hairline. The annotation response excerpt uses
+          the same neutral rule.
         </li>
         <li>
-          <strong>Capture conditions.</strong> All three pairs use headless Chromium in the isolated
-          <code>design-00016</code> profile at 1440×900, dark theme and 100% zoom, with host
-          seeding, agent credentials and the host reachability probe disabled. The before images use
-          unmodified app code at <code>b2c91abb9</code>. The pipeline tab reads a seeded finished
-          pipeline from the profile backend. The predicate is opened in the graph designer. The
-          transcript reference and annotation response were rendered with synthetic text in the real
-          components through a temporary fixture page, without an end-to-end agent turn. Browser
-          checks also covered reload and the 390×844 viewport.
+          <strong>Capture conditions.</strong> All pairs use headless Chromium at 1440×900, dark
+          theme and 100% zoom, with host seeding, agent credentials and the host reachability probe
+          disabled. The pipeline and predicate pairs use the isolated
+          <code>design-00016</code> profile and a <code>b2c91abb9</code> baseline. The pipeline tab
+          reads a seeded finished pipeline from the backend. The predicate is opened in the graph
+          designer. The transcript pair uses the isolated
+          <code>design-00016-review-quote</code> profile, with the original quote renderer from
+          <code>b2c91abb9</code> for the before image. A scripted loopback model seeded the
+          conversation through the normal composer. Both captures reopened the saved session and
+          checked the quote at desktop and 390×844 widths. The annotation response excerpt was
+          checked separately in a component fixture.
         </li>
       </ul>
 

@@ -76,6 +76,33 @@ test("project navigation matches the search row and contains the Notes tab", asy
   );
 });
 
+for (const width of [1280, 900]) {
+  test(`project tabs show no scrollbar of their own at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 600 });
+    await page.goto("/project-navigation");
+    const row = page.getByTestId("project-navigation-bar");
+    const tabs = row.getByRole("tablist", { name: "Project navigation" });
+    await expect(tabs).toBeVisible();
+    // The tab list once capped itself at 48rem and scrolled within it, so nine
+    // tabs a few pixels wider than the cap drew a scrollbar beneath the row.
+    // The row alone scrolls, with its scrollbar hidden.
+    const geometry = await tabs.evaluate((element) => ({
+      overflowX: getComputedStyle(element).overflowX,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      rowScrollbarWidth: getComputedStyle(element.parentElement!).scrollbarWidth,
+    }));
+    expect(geometry.overflowX).toBe("visible");
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+    expect(geometry.rowScrollbarWidth).toBe("none");
+    const last = tabs.getByRole("tab", { name: "Pull requests", exact: true });
+    await last.scrollIntoViewIfNeeded();
+    const rowBox = (await row.boundingBox())!;
+    const lastBox = (await last.boundingBox())!;
+    expect(lastBox.x + lastBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
+  });
+}
+
 for (const presentation of ["bar", "grid"]) {
   test(`project tabs retain keyboard focus rings in ${presentation} presentation`, async ({
     page,

@@ -41,7 +41,7 @@ import { useFileDirtyStore } from "@/stores";
 import { agentMailCapabilities, resolveTabDisplayName } from "@orkestrator/protocol/agent-mail";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { visibleTabsOf } from "@/stores/pane-layout-embedded";
+import { visibleTabsOf } from "@/lib/pane-layout-embedded";
 import { designCanvasName, useDesignStore } from "@/stores/designStore";
 import type { TabType } from "@/contexts";
 import { getWorkflowTabTitle } from "./workflow-tab-title";

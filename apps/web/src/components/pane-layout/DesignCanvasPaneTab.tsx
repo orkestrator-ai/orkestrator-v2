@@ -5,7 +5,7 @@ import { LazyLoadBoundary, type LazyLoadErrorDetails } from "@/components/LazyLo
 import { DesignAgentDock, DesignAgentPanelEmpty } from "@/components/design/DesignAgentDock";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { useDesignStore } from "@/stores/designStore";
-import { DEFAULT_DESIGN_AGENT_PANEL, findEmbeddedTab } from "@/stores/pane-layout-embedded";
+import { DEFAULT_DESIGN_AGENT_PANEL, findEmbeddedTab } from "@/lib/pane-layout-embedded";
 import { getAllLeaves, paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   getNativeAgentData,

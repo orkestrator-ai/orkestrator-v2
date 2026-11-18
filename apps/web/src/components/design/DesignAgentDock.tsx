@@ -26,7 +26,7 @@ import {
   designAgentPanelSize,
   isDesignAgentDock,
   isHorizontalDock,
-} from "@/stores/pane-layout-embedded";
+} from "@/lib/pane-layout-embedded";
 import {
   DESIGN_AGENT_DOCKS,
   type DesignAgentDock,

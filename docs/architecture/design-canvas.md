@@ -63,7 +63,7 @@ design tab.
   pane, marked `embeddedIn: <design tab id>`, so the backend, agent mail, tab
   teardown and every tab lookup still find it. The tab strip and Ctrl+1–9
   skip it and its host renders it. After every pane-store change
-  `normalizeEmbeddedTabs` (`apps/web/src/stores/pane-layout-embedded.ts`)
+  `normalizeEmbeddedTabs` (`apps/web/src/lib/pane-layout-embedded.ts`)
   keeps three facts true: the agent follows its design to another pane (a
   pane left with nothing else closes), a pane never selects an embedded tab
   (it selects the design), and a design shows at most one agent; an agent

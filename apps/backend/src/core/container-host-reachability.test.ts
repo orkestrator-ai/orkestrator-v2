@@ -1,3 +1,8 @@
+import {
+  AGENT_TOOLS_LOOPBACK_PROBE_PATH,
+  AGENT_TOOLS_LOOPBACK_PROOF_HEADER,
+  createAgentToolsLoopbackSigner,
+} from "./agent-tools-loopback-proof.js";
 import { eventSink } from "./backend-emit.js";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { resetLogger } from "@orkestrator/protocol/logger";
@@ -835,6 +840,25 @@ describe("environment container probes and workflow preflight", () => {
     expect(prepared).toEqual([environment.containerId]);
   });
 
+  test("preflight still requires alias preparation when an older transport probe is cached", async () => {
+    const runner = fakeRunner({});
+    const { svc } = service({
+      runner,
+      loadEnvironment: async () => environment,
+      prepareContainer: async () => {
+        throw new Error("host alias is awaiting verification");
+      },
+    });
+    expect(
+      (await svc.checkEnvironmentContainer(environment.containerId, { reason: "bridge-start" }))
+        ?.outcome,
+    ).toBe("reachable");
+    await expect(svc.assertEnvironmentReachable("env-1", "review")).rejects.toThrow(
+      "the container's agent tools route could not be prepared",
+    );
+    expect(runner.calls.filter((args) => args[1] === "exec")).toHaveLength(1);
+  });
+
   test("a container blocked while the host is fine blames the container, not the firewall", async () => {
     const runner = fakeRunner({ execOutput: () => CURL_TIMEOUT, probeOutput: () => CURL_HTTP_405 });
     const { svc } = service({ runner, loadEnvironment: async () => environment });
@@ -928,13 +952,23 @@ const BUSYBOX_HTTP_404 =
   "ORK_PROBE_TOOL=wget\nConnecting to host.docker.internal:38179 (192.168.65.2:38179)\nwget: server returned error: HTTP/1.1 404 Not Found\nORK_PROBE_RC=1\n";
 
 describe("rootless Docker", () => {
+  const signLoopbackProbe = createAgentToolsLoopbackSigner();
+  function signedLoopbackResponse(args: string[]): string {
+    const probeUrl = args.find((arg) =>
+      arg.includes(`${AGENT_TOOLS_LOOPBACK_PROBE_PATH}?challenge=`),
+    );
+    const challenge = new URL(probeUrl!).searchParams.get("challenge")!;
+    return `ORK_PROBE_TOOL=wget\n  HTTP/1.1 200 OK\n  ${AGENT_TOOLS_LOOPBACK_PROOF_HEADER}: ${signLoopbackProbe(challenge)}\nORK_PROBE_RC=0\n`;
+  }
+
   const rootless = async () => ({ kind: "local-engine" as const, rootless: true });
 
   test("RootlessKit's host loopback is chosen for host.docker.internal once it answers", async () => {
     const runner = fakeRunner({
-      probeOutput: (args) => (viaLoopback(args) ? BUSYBOX_HTTP_405 : ROOTLESS_GATEWAY_REFUSED),
+      probeOutput: (args) =>
+        viaLoopback(args) ? signedLoopbackResponse(args) : ROOTLESS_GATEWAY_REFUSED,
     });
-    const { svc } = service({ runner, detectTopology: rootless });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
     const result = await svc.check("boot");
     expect(result).toMatchObject({
       status: "reachable",
@@ -954,12 +988,12 @@ describe("rootless Docker", () => {
     const runner = fakeRunner({
       probeOutput: (args) =>
         viaGvisorLoopback(args)
-          ? BUSYBOX_HTTP_405
+          ? signedLoopbackResponse(args)
           : viaLoopback(args)
             ? GVISOR_SLIRP_ADDRESS_UNREACHABLE
             : ROOTLESS_GATEWAY_REFUSED,
     });
-    const { svc } = service({ runner, detectTopology: rootless });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
     const result = await svc.check("boot");
     expect(result).toMatchObject({
       status: "reachable",
@@ -985,12 +1019,12 @@ describe("rootless Docker", () => {
     const runner = fakeRunner({
       probeOutput: (args) =>
         viaVpnkitLoopback(args)
-          ? BUSYBOX_HTTP_405
+          ? signedLoopbackResponse(args)
           : viaLoopback(args) || viaGvisorLoopback(args)
             ? VPNKIT_OTHER_ADDRESS_TIMEOUT
             : ROOTLESS_GATEWAY_REFUSED,
     });
-    const { svc } = service({ runner, detectTopology: rootless });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
     const result = await svc.check("boot");
     expect(result).toMatchObject({
       status: "reachable",
@@ -1010,22 +1044,31 @@ describe("rootless Docker", () => {
       "192.168.65.2",
       "192.168.65.2",
     ]);
+    const attempts = runner.calls.filter(viaVpnkitLoopback);
+    const challenges = attempts.map((args) =>
+      new URL(args.find((arg) => arg.includes("?challenge="))!).searchParams.get("challenge"),
+    );
+    expect(new Set(challenges).size).toBe(2);
     expect(svc.containerHostAddress()).toBe("192.168.65.2");
     expect(await svc.resolveContainerHostAddress()).toBe("192.168.65.2");
   });
 
-  test("an address answered by another HTTP server is not taken for the host", async () => {
+  test.each([
+    ["a 404", BUSYBOX_HTTP_404, 404],
+    ["an unsigned 405", BUSYBOX_HTTP_405, 405],
+    ["a status-less success", "ORK_PROBE_TOOL=wget\nORK_PROBE_RC=0\n", null],
+  ] as const)("rejects %s from a foreign responder", async (_name, response, status) => {
     // Off its own driver, 192.168.65.2 leaves the namespace through the
-    // driver's NAT; a LAN server there answers, but not with the agent tools 405.
+    // driver's NAT; a foreign response has no valid instance proof.
     const runner = fakeRunner({
       probeOutput: (args) =>
         viaVpnkitLoopback(args)
-          ? BUSYBOX_HTTP_404
+          ? response
           : viaLoopback(args)
             ? ROOTLESS_LOOPBACK_DISABLED
             : ROOTLESS_GATEWAY_REFUSED,
     });
-    const { svc } = service({ runner, detectTopology: rootless });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
     const result = await svc.check("boot");
     expect(result.status).toBe("blocked");
     expect(result.hostAddress ?? null).toBeNull();
@@ -1033,9 +1076,42 @@ describe("rootless Docker", () => {
     const foreign = result.probes.filter((probe) => probe.hostAddress === "192.168.65.2");
     expect(foreign).toHaveLength(2);
     for (const probe of foreign) {
-      expect(probe).toMatchObject({ outcome: "reachable", httpStatus: 404 });
-      expect(probe.detail).toContain("is not Orkestrator's agent tools server");
+      expect(probe).toMatchObject({ outcome: "reachable", httpStatus: status });
+      expect(probe.detail).toContain("did not authenticate as Orkestrator's agent tools server");
     }
+    expect(svc.containerHostAddress()).toBeNull();
+  });
+
+  test("rejects replayed or redirected loopback proofs", async () => {
+    let response: string | undefined;
+    const runner = fakeRunner({
+      probeOutput: (args) => {
+        if (!viaVpnkitLoopback(args)) return ROOTLESS_GATEWAY_REFUSED;
+        if (response) return response;
+        response = signedLoopbackResponse(args);
+        return response.replace("  HTTP/1.1 200", "  HTTP/1.1 302 Found\n  HTTP/1.1 200");
+      },
+    });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
+    const result = await svc.check("boot");
+    expect(result.status).toBe("blocked");
+    expect(svc.containerHostAddress()).toBeNull();
+    const candidates = result.probes.filter(({ hostAddress }) => hostAddress === "192.168.65.2");
+    expect(candidates).toHaveLength(2);
+    for (const probe of candidates) {
+      expect(probe.detail).toContain("did not authenticate");
+      expect(probe.detail).not.toContain(AGENT_TOOLS_LOOPBACK_PROOF_HEADER);
+    }
+  });
+
+  test("does not publish a loopback alias without the environment network", async () => {
+    const runner = fakeRunner({
+      networkCreate: "fail",
+      probeOutput: (args) =>
+        viaVpnkitLoopback(args) ? signedLoopbackResponse(args) : ROOTLESS_GATEWAY_REFUSED,
+    });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
+    expect((await svc.check("boot")).status).toBe("blocked");
     expect(svc.containerHostAddress()).toBeNull();
   });
 
@@ -1046,7 +1122,7 @@ describe("rootless Docker", () => {
           ? BUSYBOX_HTTP_404
           : ROOTLESS_GATEWAY_REFUSED,
     });
-    const { svc } = service({ runner, detectTopology: rootless });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
     const result = await svc.check("boot");
     expect(result).toMatchObject({ status: "blocked", reason: null });
     expect(result.hostAddress ?? null).toBeNull();
@@ -1054,9 +1130,10 @@ describe("rootless Docker", () => {
 
   test("slirp4netns's address answering skips the gvisor-tap-vsock probe", async () => {
     const runner = fakeRunner({
-      probeOutput: (args) => (viaLoopback(args) ? BUSYBOX_HTTP_405 : ROOTLESS_GATEWAY_REFUSED),
+      probeOutput: (args) =>
+        viaLoopback(args) ? signedLoopbackResponse(args) : ROOTLESS_GATEWAY_REFUSED,
     });
-    const { svc } = service({ runner, detectTopology: rootless });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
     expect((await svc.check("boot")).hostAddress).toBe("10.0.2.2");
     expect(runner.calls.some(viaGvisorLoopback)).toBe(false);
   });
@@ -1068,10 +1145,10 @@ describe("rootless Docker", () => {
         if (!viaGvisorLoopback(args)) return ROOTLESS_GATEWAY_REFUSED;
         // The first 10.0.2.1 probe (either network) answers, the other refuses.
         defaultBridge += 1;
-        return defaultBridge === 1 ? BUSYBOX_HTTP_405 : ROOTLESS_LOOPBACK_DISABLED;
+        return defaultBridge === 1 ? signedLoopbackResponse(args) : ROOTLESS_LOOPBACK_DISABLED;
       },
     });
-    const { svc } = service({ runner, detectTopology: rootless });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
     const result = await svc.check("boot");
     expect(result.status).toBe("blocked");
     expect(result.hostAddress ?? null).toBeNull();
@@ -1083,7 +1160,7 @@ describe("rootless Docker", () => {
       probeOutput: (args) =>
         viaLoopback(args) ? ROOTLESS_LOOPBACK_DISABLED : ROOTLESS_GATEWAY_REFUSED,
     });
-    const { svc } = service({ runner, detectTopology: rootless });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
     const result = await svc.check("boot");
     expect(result.status).toBe("blocked");
     expect(result.hostAddress ?? null).toBeNull();
@@ -1124,9 +1201,10 @@ describe("rootless Docker", () => {
 
   test("container creation waits for the first check, bounded", async () => {
     const runner = fakeRunner({
-      probeOutput: (args) => (viaLoopback(args) ? BUSYBOX_HTTP_405 : ROOTLESS_GATEWAY_REFUSED),
+      probeOutput: (args) =>
+        viaLoopback(args) ? signedLoopbackResponse(args) : ROOTLESS_GATEWAY_REFUSED,
     });
-    const { svc } = service({ runner, detectTopology: rootless });
+    const { svc } = service({ runner, detectTopology: rootless, signLoopbackProbe });
     // No check has run yet: the call starts one and waits for its verdict.
     expect(await svc.resolveContainerHostAddress()).toBe("10.0.2.2");
     const stalled = service({

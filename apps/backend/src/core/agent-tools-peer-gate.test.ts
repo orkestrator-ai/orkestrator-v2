@@ -4,6 +4,10 @@ import { connect } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer } from "./agent-tools.js";
+import {
+  AGENT_TOOLS_LOOPBACK_PROBE_PATH,
+  AGENT_TOOLS_LOOPBACK_PROOF_HEADER,
+} from "./agent-tools-loopback-proof.js";
 import { AGENT_TOOLS_PROBE_HTTP_STATUS } from "./container-host-reachability.js";
 import { startEvidenceListener } from "../../scripts/agent-tools-peer-evidence-support.js";
 import {
@@ -19,6 +23,9 @@ import { StorageService } from "./storage.js";
  * the connection closed. A refused peer must get nothing at all: no 405, no
  * 404, no 401, so it cannot tell a route from a closed door.
  */
+const challenge = "a".repeat(32);
+const GET_LOOPBACK_PROOF = `GET ${AGENT_TOOLS_LOOPBACK_PROBE_PATH}?challenge=${challenge} HTTP/1.1\r\nHost: agent-tools\r\nConnection: close\r\n\r\n`;
+
 function exchange(host: string, port: number, request: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const socket = connect({ host, port });
@@ -220,10 +227,21 @@ describe("agent-tools peer gate", () => {
 
   test("the default filter admits loopback, so the credential-free reachability probe still gets its 405", async () => {
     const port = await startWith(undefined);
-    // The status a RootlessKit host loopback candidate must return to be taken for the host.
     expect(await exchange("127.0.0.1", port, GET_MCP)).toStartWith(
       `HTTP/1.1 ${AGENT_TOOLS_PROBE_HTTP_STATUS}`,
     );
+  });
+
+  test("a loopback probe gets this listener's proof without a bearer credential", async () => {
+    const port = await startWith(undefined);
+    const reply = await exchange("127.0.0.1", port, GET_LOOPBACK_PROOF);
+    expect(reply).toStartWith("HTTP/1.1 200");
+    expect(reply.toLowerCase()).toContain(
+      `${AGENT_TOOLS_LOOPBACK_PROOF_HEADER}: ${server!.signLoopbackProbe(challenge)}`,
+    );
+    expect(
+      await exchange("127.0.0.1", port, GET_LOOPBACK_PROOF.replace(challenge, "invalid")),
+    ).toStartWith("HTTP/1.1 404");
   });
 
   const interfaceAddress = hostInterfaceAddress();
@@ -245,6 +263,9 @@ describe("agent-tools peer gate", () => {
       subnets = [`${address}/32`];
       reportDockerNetworkChange();
       expect(await exchange(address, port, GET_MCP)).toStartWith("HTTP/1.1 405");
+      const noProof = await exchange(address, port, GET_LOOPBACK_PROOF);
+      expect(noProof).toStartWith("HTTP/1.1 404");
+      expect(noProof.toLowerCase()).not.toContain(AGENT_TOOLS_LOOPBACK_PROOF_HEADER);
       // And its removal refuses it again.
       subnets = [];
       reportDockerNetworkChange();

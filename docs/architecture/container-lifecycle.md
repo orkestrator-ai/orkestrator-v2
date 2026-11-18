@@ -1731,7 +1731,7 @@ name proves it broken. Three checks share one probe script and parser:
 | --- | --- | --- |
 | Backend startup (Linux, desktop and backend-only runs) | Throwaway containers of a pinned ~1 MB `busybox` image on the default bridge and on a temporary per-environment style network (both in parallel) | Publishes `container-host-reachability-changed`; the app shows a banner and a fix dialog |
 | Bridge start (`resolveContainerAgentToolConnection`, Cursor/Grok/Pi starts) | `docker exec` in the environment container, after the host alias and network-policy repair | Logged; a result that contradicts the host verdict re-runs the host check (at most once a minute) |
-| Before a tool-mode workflow stage dispatches (Multi Review, build pipeline, feature planning), and before every Claude Multi Review step or reviewer turn in a container on either result transport | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
+| Before a tool-mode workflow stage dispatches (Multi Review, build pipeline, feature planning), and before every Claude Multi Review step or reviewer turn in a container on either result transport | Same, cached 60 s for success and 10 s for failure | Route preparation must succeed before using a cached probe. A proven block fails the stage at once with the cause and the fix; an inconclusive transport probe passes |
 
 A Claude Multi Review turn on the structured-output transport needs no result tool,
 but it is preflighted on both the bespoke and graph engines: a container's
@@ -1783,17 +1783,19 @@ The daemon refuses each unless it runs with
 `DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`. Off its own driver
 an address can leave RootlessKit's namespace through that driver's NAT (on
 slirp4netns a probe to `192.168.65.2` goes out to the host's network), so a
-candidate counts only when the agent tools server's own reply, 405 to the
-credential-free GET of `/mcp` (`AGENT_TOOLS_PROBE_HTTP_STATUS`), comes back
-through it; another HTTP server answering there is recorded in the probe's
-detail and not taken for the host. The first address that answers that way
-on every probe network becomes the snapshot's `hostAddress`, and
-new containers and gateways get `--add-host host.docker.internal:<address>`
-(creation waits up to 45 s for the
-first check, `resolveContainerHostAddress`), so the firewall's host-service
-rule names it; the in-container alias repair before a bridge start uses it
-too; an existing container whose alias already names any of these addresses keeps it
-while no check has answered. If none answers, the verdict is `blocked` with a
+candidate counts only when both probe networks receive a valid signature for
+their own fresh challenge. The agent tools server signs challenges only for
+loopback peers and keeps its signing key in memory. These requests carry no
+agent credential. An HTTP response without the expected proof is recorded in
+the probe detail. The first address that proves its identity on both networks
+becomes the snapshot's `hostAddress`. New containers and gateways get
+`--add-host host.docker.internal:<address>` (creation waits up to 45 s for
+the first check via `resolveContainerHostAddress`), so the firewall's
+host-service rule names it. Alias repair uses the selected address, or
+rewrites an old explicit loopback alias to the network gateway after a
+completed blocked verdict. During inconclusive discovery the alias is
+preserved and credential-bearing callers wait for verification or fail the
+preparation. If none answers, the verdict is `blocked` with a
 rootless remediation instead of firewall rules, which cannot help: a systemd
 drop-in for the user's Docker service and its cost (a Docker restart, and
 every container of that daemon reaching the host's loopback services). It

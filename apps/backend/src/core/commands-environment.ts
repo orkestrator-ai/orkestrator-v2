@@ -2,7 +2,10 @@ import {
   environmentSetupCompleteEvent,
   environmentSetupStartedEvent,
 } from "@orkestrator/protocol/contract/domains/events";
-import { isRootlessKitHostLoopbackAddress } from "@orkestrator/protocol/container-host-reachability";
+import {
+  isRootlessKitHostLoopbackAddress,
+  type ContainerHostReachability,
+} from "@orkestrator/protocol/container-host-reachability";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import {
   assertWorktreePathUnlinked,
@@ -2558,13 +2561,14 @@ export function parseIpTokens(output: string): string[] {
  * Repair persisted container host routing before handing an agent a backend
  * tools URL. Linux Engine needs a host-gateway alias, while Docker Desktop must
  * use its built-in DNS rather than an explicit Linux bridge-gateway override.
+ * Returns false when an inconclusive check leaves a loopback alias in place.
  */
 export async function ensureContainerAgentToolsHost(
   containerId: string,
   signal?: AbortSignal,
-  /** RootlessKit's host address when the reachability check chose it; else the network gateway. */
-  hostAddress?: string | null,
-): Promise<void> {
+  reachability?: Pick<ContainerHostReachability, "status" | "hostAddress">,
+): Promise<boolean> {
+  const hostAddress = reachability?.status === "reachable" ? reachability.hostAddress : null;
   let existing = await dockerExec(
     containerId,
     `getent hosts ${CONTAINER_AGENT_TOOLS_HOST} 2>/dev/null || true`,
@@ -2598,7 +2602,7 @@ export async function ensureContainerAgentToolsHost(
         set -eu
         hosts_tmp="/tmp/orkestrator-hosts.$$"
         trap 'rm -f "$hosts_tmp"' EXIT
-        awk '$2 != "${CONTAINER_AGENT_TOOLS_HOST}"' /etc/hosts > "$hosts_tmp"
+        awk '{ for (i = 2; i <= NF && $i !~ /^#/; i++) if ($i == "${CONTAINER_AGENT_TOOLS_HOST}") next; print }' /etc/hosts > "$hosts_tmp"
         cat "$hosts_tmp" > /etc/hosts
       `;
       await runCommand(
@@ -2619,15 +2623,17 @@ export async function ensureContainerAgentToolsHost(
         `Docker Desktop did not resolve ${CONTAINER_AGENT_TOOLS_HOST} for container ${containerId}`,
       );
     }
-    return;
+    return true;
   }
 
-  // An absent discovery result is not evidence that RootlessKit's working
-  // alias is stale. Boot probes run in the background and later checks can
-  // fail transiently; preserve this concrete alias until a target is known.
-  if (!hostAddress && parseIpTokens(existing).some(isRootlessKitHostLoopbackAddress)) {
+  const existingAddresses = parseIpTokens(existing);
+  const inconclusive =
+    !reachability || reachability.status === "checking" || reachability.status === "unverified";
+  // Preserve an explicit RootlessKit alias during inconclusive discovery.
+  // The caller must wait for a known destination before handing out credentials.
+  if (!hostAddress && inconclusive && existingAddresses.some(isRootlessKitHostLoopbackAddress)) {
     const topology = await detectDockerTopology();
-    if (topology.rootless || topology.kind === "unavailable") return;
+    if (topology.rootless || topology.kind === "unavailable") return false;
   }
 
   let gateway = hostAddress;
@@ -2649,14 +2655,16 @@ export async function ensureContainerAgentToolsHost(
   if (!gateway) {
     throw new Error(`Could not determine the Docker host gateway for container ${containerId}`);
   }
-  if (parseIpTokens(existing).includes(gateway)) return;
+  if (existingAddresses.length > 0 && existingAddresses.every((address) => address === gateway)) {
+    return true;
+  }
 
   const repairHosts = `
     set -eu
     gateway="$1"
     hosts_tmp="/tmp/orkestrator-hosts.$$"
     trap 'rm -f "$hosts_tmp"' EXIT
-    awk '$2 != "${CONTAINER_AGENT_TOOLS_HOST}"' /etc/hosts > "$hosts_tmp"
+    awk '{ for (i = 2; i <= NF && $i !~ /^#/; i++) if ($i == "${CONTAINER_AGENT_TOOLS_HOST}") next; print }' /etc/hosts > "$hosts_tmp"
     printf '%s\\t%s\\n' "$gateway" "${CONTAINER_AGENT_TOOLS_HOST}" >> "$hosts_tmp"
     cat "$hosts_tmp" > /etc/hosts
   `;
@@ -2674,6 +2682,20 @@ export async function ensureContainerAgentToolsHost(
     ],
     { timeoutMs: 10_000, signal },
   );
+  return true;
+}
+
+export async function prepareContainerAgentToolsRoute(
+  containerId: string,
+  reachability: CommandContext["containerHostReachability"],
+): Promise<void> {
+  if (await ensureContainerAgentToolsHost(containerId, undefined, reachability?.snapshot())) return;
+  if (reachability) {
+    await reachability.resolveContainerHostAddress();
+    if (await ensureContainerAgentToolsHost(containerId, undefined, reachability.snapshot()))
+      return;
+  }
+  throw new Error("The container's RootlessKit host alias is awaiting verification");
 }
 
 export async function resolveContainerAgentToolConnection(
@@ -2686,11 +2708,7 @@ export async function resolveContainerAgentToolConnection(
     containerId,
   );
   if (!environment) return undefined;
-  await ensureContainerAgentToolsHost(
-    containerId,
-    undefined,
-    context.containerHostReachability?.containerHostAddress?.(),
-  );
+  await prepareContainerAgentToolsRoute(containerId, context.containerHostReachability);
   await ensureContainerHostServicePorts(containerId, context.agentTools.servicePort?.() ?? null);
   // Evidence, not a gate: an interactive agent can still work without its
   // Orkestrator tools, so a blocked path is logged and raised in the app

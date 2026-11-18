@@ -229,6 +229,7 @@ try {
   // bridge start and the workflow preflight run it.
   const reachability = new ContainerHostReachabilityService({
     servicePort: () => server.servicePort(),
+    signLoopbackProbe: server.signLoopbackProbe,
     ownerNamespace: owner,
     fallbackImage: () => CONTAINER_HOST_PROBE_IMAGE,
     platform: process.argv.includes("--platform-linux") ? "linux" : process.platform,

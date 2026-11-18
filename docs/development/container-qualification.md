@@ -324,9 +324,10 @@ the backend's container host reachability check never probed VPNKit's host
 loopback address, `192.168.65.2`
 ([found on 2026-11-17](#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17)),
 so a rootless daemon on RootlessKit's VPNKit driver with host loopback
-enabled was reported `blocked`. The change adds it as the third candidate
-(after `10.0.2.2` and `10.0.2.1`) and accepts a candidate only when the
-agent tools server's own 405 comes back through it
+enabled was reported `blocked`. The initial implementation added it as the
+third candidate (after `10.0.2.2` and `10.0.2.1`) and used HTTP 405 for
+candidate selection. The subsequent review fix requires a signed challenge
+from the backend on both probe networks before selecting a candidate
 ([container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)).
 Run in worktree `orkestrator-v2-20261118-010826-536a339f5f4d` from `main` at
 `b2c91abb9` with the change applied.
@@ -392,9 +393,10 @@ Run in worktree `orkestrator-v2-20261118-010826-536a339f5f4d` from `main` at
   runtime reached every loopback listener (the gateway answering 401, or 421
   to the `host.docker.internal` Host header); both listeners saw only
   `127.0.0.1`; runtime root could rewrite the in-container firewall (401
-  afterwards) but not the gateway's (curl 7). The live suites' stand-in
-  listeners now answer a non-POST `/mcp` with 405, as the real server does,
-  so the check accepts them.
+  afterwards) but not the gateway's (curl 7). This initial run used stand-ins
+  that answered a non-POST `/mcp` with 405. The live network suite's stand-in
+  now also signs challenges, and the host-loopback suite uses the production
+  agent tools listener.
 - **An existing container's alias.** On `v8305`, a container created with
   `--add-host host.docker.internal:192.168.65.2`, restarted with `docker
   restart`, then passed to `ensureContainerAgentToolsHost` with no host
@@ -411,6 +413,17 @@ Run in worktree `orkestrator-v2-20261118-010826-536a339f5f4d` from `main` at
   restarted the container, not the daemon); and a LAN host at
   `192.168.65.2` answering on the agent tools port, which only the unit tests
   cover.
+
+**Review follow-up (2026-11-18).** On disposable VPNKit and slirp4netns
+daemons on beelink with the same environment image, the production agent tools
+listener and the pinned BusyBox probe selected VPNKit's `192.168.65.2` with
+signed replies on both networks. The VPNKit host-loopback and live network
+suites passed. A restricted workload used a throwaway bearer over
+`host.docker.internal` to complete `tools/list` against the production listener.
+With slirp4netns host loopback refused, discovery reported `blocked` with no
+explicit host address, the live loopback-refused suite passed, and a disposable
+container with a stale `192.168.65.2` mapping resolved the namespace gateway
+after alias repair.
 
 ## Rootless name checks and restarts on pasta and VPNKit (2026-11-17)
 

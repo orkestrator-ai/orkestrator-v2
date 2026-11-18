@@ -3,19 +3,36 @@
  * agent tools server answers on `servicePort`, the one host port a restricted
  * runtime's firewall admits, and a project with no reachable remote.
  */
+import {
+  AGENT_TOOLS_LOOPBACK_PROBE_PATH,
+  AGENT_TOOLS_LOOPBACK_PROOF_HEADER,
+  agentToolsLoopbackProof,
+} from "../src/core/agent-tools-loopback-proof";
 import type { Environment } from "../src/core/models";
 import { AGENT_TOOLS_PROBE_HTTP_STATUS } from "../src/core/container-host-reachability";
 import { memoryLifecycleContext } from "./container-lifecycle-fixtures";
 
 /**
  * What a stand-in for the agent tools server answers on its service port: the
- * real server's 405 to a non-POST `/mcp`, which the reachability check needs
- * before it takes a RootlessKit host loopback address for the host, and
- * `answer` (200) to anything else, so the suites' curl probes of `/` still
- * see a plain success.
+ * real server's 405 to a non-POST `/mcp`, an optional signed loopback proof,
+ * and `answer` (200) for the suites' curl probes of `/`.
  */
-export function agentToolsStandIn(request: Request, answer: string): Response {
-  if (new URL(request.url).pathname === "/mcp" && request.method !== "POST") {
+export function agentToolsStandIn(
+  request: Request,
+  answer: string,
+  signLoopbackProbe?: (challenge: string) => string,
+): Response {
+  const url = new URL(request.url);
+  if (url.pathname === AGENT_TOOLS_LOOPBACK_PROBE_PATH) {
+    const proof =
+      request.method === "GET" && signLoopbackProbe
+        ? agentToolsLoopbackProof(url, signLoopbackProbe)
+        : null;
+    return proof
+      ? new Response(null, { headers: { [AGENT_TOOLS_LOOPBACK_PROOF_HEADER]: proof } })
+      : new Response(null, { status: 404 });
+  }
+  if (url.pathname === "/mcp" && request.method !== "POST") {
     return new Response(null, {
       status: AGENT_TOOLS_PROBE_HTTP_STATUS,
       headers: { allow: "POST" },

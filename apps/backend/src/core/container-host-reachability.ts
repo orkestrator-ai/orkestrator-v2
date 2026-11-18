@@ -1,3 +1,7 @@
+import {
+  AGENT_TOOLS_LOOPBACK_PROBE_PATH,
+  AGENT_TOOLS_LOOPBACK_PROOF_HEADER,
+} from "./agent-tools-loopback-proof.js";
 import { containerHostReachabilityChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { Cause, Effect, Exit, Fiber } from "effect";
 import type { BackendEmit } from "./backend-emit.js";
@@ -37,9 +41,9 @@ const probeFailures = new WeakMap<ContainerHostProbe, CommandFailureFields>();
  *
  * Agents in containers reach Orkestrator's agent tools server through
  * `http://host.docker.internal:<port>/mcp`. The server answers any non-POST
- * request with 405 before authenticating, so a credential-free GET that gets
- * *any* HTTP status proves the path; a timeout, refusal or unresolvable host
- * name proves it broken. A host firewall that drops Docker traffic (ufw's
+ * request with 405 before authenticating. An HTTP response confirms transport
+ * reachability; a timeout, refusal or unresolvable host name proves the path
+ * broken. A host firewall that drops Docker traffic (ufw's
  * default on many Linux desktops) otherwise only surfaces when a workflow
  * agent silently fails to submit its result many minutes later.
  *
@@ -48,9 +52,9 @@ const probeFailures = new WeakMap<ContainerHostProbe, CommandFailureFields>();
  * the host is RootlessKit's host loopback address, which the daemon refuses
  * unless it runs with host loopback enabled. On a rootless daemon the check
  * therefore also probes through each driver's address; when one answers with
- * the agent tools server's own 405, new containers' `host.docker.internal`
- * names it (`hostAddress`), and when none does, the remediation is the daemon
- * setting, not a host firewall rule.
+ * a fresh proof signed by this agent tools server on both probe networks,
+ * new containers' `host.docker.internal` names it (`hostAddress`). When none
+ * does, the remediation is the daemon's host loopback setting.
  *
  * Three checks share one parser:
  * - at startup (Linux), from a throwaway ~1 MB busybox container on the
@@ -84,56 +88,43 @@ const DISPOSE_WAIT_MS = 3_000;
 const DISPOSE_REMOVE_TIMEOUT_MS = 5_000;
 const PROBE_NETWORK_COMMAND_TIMEOUT_MS = 20_000;
 
-/**
- * The agent tools server's answer to the probe's credential-free GET of
- * `/mcp` (`agent-tools.ts`). A RootlessKit host loopback candidate counts
- * only when this status comes back through it: outside its own network
- * driver an address leaves the namespace through that driver's NAT, and any
- * other HTTP server answering there is not this backend.
- */
+/** The ordinary, credential-free GET /mcp response, used for transport checks. */
 export const AGENT_TOOLS_PROBE_HTTP_STATUS = 405;
 
-/** Whether a probe through a host loopback candidate got the agent tools server's answer. */
-export function answeredAsAgentTools(probe: ContainerHostProbe): boolean {
-  return probe.outcome === "reachable" && probe.httpStatus === AGENT_TOOLS_PROBE_HTTP_STATUS;
-}
-
-/**
- * A loopback probe that some HTTP server answered, but not with the agent
- * tools server's 405: it says so in its detail, so the verdict does not
- * read as the host.
- */
-function markForeignAnswer(probe: ContainerHostProbe): ContainerHostProbe {
-  if (probe.outcome !== "reachable" || answeredAsAgentTools(probe)) return probe;
-  const note = `HTTP ${probe.httpStatus ?? "2xx"} is not Orkestrator's agent tools server (it answers ${AGENT_TOOLS_PROBE_HTTP_STATUS})`;
-  const joined = probe.detail ? `${note} | ${probe.detail}` : note;
-  const detail =
-    joined.length > MAX_DETAIL_CHARS ? `${joined.slice(0, MAX_DETAIL_CHARS)}…` : joined;
-  const marked = { ...probe, detail };
-  const failure = probeFailures.get(probe);
-  if (failure) probeFailures.set(marked, failure);
-  return marked;
+function hasLoopbackProof(output: string, expected: string): boolean {
+  const lines = output.split(/\r?\n/).map((line) => line.trim());
+  // wget can follow redirects. Accept only a single HTTP response from the
+  // original target, with exactly one proof header.
+  const statuses = lines.filter((line) => /^HTTP\/\d/.test(line));
+  if (statuses.length !== 1 || !/^HTTP\/\d(?:\.\d)? 200(?: |$)/.test(statuses[0]!)) {
+    return false;
+  }
+  const prefix = `${AGENT_TOOLS_LOOPBACK_PROOF_HEADER}:`;
+  const headers = lines.filter((line) => line.toLowerCase().startsWith(prefix));
+  return headers.length === 1 && headers[0]!.slice(prefix.length).trim() === expected;
 }
 
 /** Longest network command, plus time for runCommand to reap its timed-out child. */
 const DISPOSE_PREPARATION_WAIT_MS = PROBE_NETWORK_COMMAND_TIMEOUT_MS + 1_000;
 
 /**
- * POSIX-sh probe: `$1` URL, `$2` connect timeout in seconds. Prefers curl
- * (environment images), then wget (busybox or GNU). Always exits 0 and
+ * POSIX-sh probe: `$1` URL, `$2` connect timeout in seconds, `$3` enables
+ * response headers. Prefers curl (environment images), then wget (busybox
+ * or GNU). Always exits 0 and
  * reports through `ORK_PROBE_*` markers so a failed connection is data, not a
  * failed `docker` invocation.
  */
 export const CONTAINER_HOST_PROBE_SCRIPT = [
-  'url="$1"; t="$2"',
+  'url="$1"; t="$2"; headers="$3"',
+  "unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY",
   "if command -v curl >/dev/null 2>&1; then",
-  '  out=$(curl -sS -o /dev/null -w \'ORK_PROBE_HTTP=%{http_code}\' --connect-timeout "$t" -m "$((t + 3))" "$url" 2>&1); rc=$?',
+  '  out=$(curl -q -sS -D "${headers:-/dev/null}" -o /dev/null -w \'ORK_PROBE_HTTP=%{http_code}\' --connect-timeout "$t" -m "$((t + 3))" "$url" 2>&1); rc=$?',
   '  printf \'ORK_PROBE_TOOL=curl\\n%s\\nORK_PROBE_RC=%s\\n\' "$out" "$rc"',
   "elif command -v wget >/dev/null 2>&1; then",
   "  if wget --help 2>&1 | grep -qi busybox; then",
-  '    out=$(wget -T "$t" -O /dev/null "$url" 2>&1); rc=$?',
+  '    out=$(wget ${headers:+-S} -T "$t" -O /dev/null "$url" 2>&1); rc=$?',
   "  else",
-  '    out=$(wget -t 1 -T "$t" -O /dev/null "$url" 2>&1); rc=$?',
+  '    out=$(wget ${headers:+-S} -t 1 -T "$t" -O /dev/null "$url" 2>&1); rc=$?',
   "  fi",
   '  printf \'ORK_PROBE_TOOL=wget\\n%s\\nORK_PROBE_RC=%s\\n\' "$out" "$rc"',
   "else",
@@ -523,6 +514,8 @@ export type ReachabilityEnvironment = {
 export type ContainerHostReachabilityDependencies = {
   /** Port the agent tools server listens on; null before it starts. */
   servicePort: () => number | null;
+  /** Signs a challenge using the same instance that serves the loopback probe. */
+  signLoopbackProbe?: (challenge: string) => string | undefined;
   /** Docker owner namespace of this data directory, for probe labels. */
   ownerNamespace: string;
   /**
@@ -605,7 +598,7 @@ export class ContainerHostReachabilityService {
    * check. Null means `host-gateway`.
    */
   containerHostAddress(): string | null {
-    return this.state.hostAddress ?? null;
+    return this.state.status === "reachable" ? (this.state.hostAddress ?? null) : null;
   }
 
   /**
@@ -744,6 +737,7 @@ export class ContainerHostReachabilityService {
       });
       return null;
     }
+    if (options.prepare) await this.deps.prepareContainer?.(containerId);
     const cached = this.containerCache.get(containerId);
     if (cached && cached.port === port) {
       const ttl =
@@ -772,10 +766,22 @@ export class ContainerHostReachabilityService {
     if (!environment || environment.environmentType === "local" || !environment.containerId) {
       return;
     }
-    const probe = await this.checkEnvironmentContainer(environment.containerId, {
+    const containerId = environment.containerId;
+    const probe = await this.checkEnvironmentContainer(containerId, {
       prepare: true,
       reason: `preflight:${stage}`,
       environmentName: environment.name ?? null,
+    }).catch((error: unknown) => {
+      log.warn("probe.prepare-failed", {
+        container: shortId(containerId),
+        ...classifyCommandFailure(error, { tools: ["docker"] }),
+        error: formatLogError(error),
+      });
+      throw new ContainerAgentToolsUnreachableError(
+        `Orkestrator did not start the ${stage} because the container's agent tools route could not be prepared.`,
+        "unreachable",
+        containerId,
+      );
     });
     if (!probe || !isBlockingOutcome(probe.outcome)) return;
     // Refresh the host verdict so the message names the right cause and fix.
@@ -806,18 +812,9 @@ export class ContainerHostReachabilityService {
   private async probeEnvironmentContainer(
     containerId: string,
     port: number,
-    options: { prepare?: boolean; reason: string; environmentName?: string | null },
+    options: { reason: string; environmentName?: string | null },
   ): Promise<ContainerHostProbe> {
     const url = containerAgentToolsUrl(port);
-    if (options.prepare && this.deps.prepareContainer) {
-      await this.deps.prepareContainer(containerId).catch((error: unknown) => {
-        log.warn("probe.prepare-failed", {
-          container: shortId(containerId),
-          ...classifyCommandFailure(error, { tools: ["docker"] }),
-          error: formatLogError(error),
-        });
-      });
-    }
     const started = this.now();
     let classification: ProbeClassification;
     let failure: CommandFailureFields | undefined;
@@ -1047,7 +1044,7 @@ export class ContainerHostReachabilityService {
           ],
           { concurrency: "unbounded" },
         );
-      const probes = yield* probeBoth(hostGateway);
+      const probes = (yield* probeBoth(hostGateway)).map(({ probe }) => probe);
       const loopbackProbes: ContainerHostProbe[] = [];
       let loopbackAddress: string | null = null;
       // Rootless: host-gateway is inside RootlessKit's namespace; try its
@@ -1057,9 +1054,9 @@ export class ContainerHostReachabilityService {
       if (rootless && !probes.every((probe) => probe.outcome === "reachable")) {
         for (const address of ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES) {
           yield* this.stopIfClosing;
-          const attempt = (yield* probeBoth(address)).map(markForeignAnswer);
-          loopbackProbes.push(...attempt);
-          if (attempt.length > 0 && attempt.every(answeredAsAgentTools)) {
+          const attempt = yield* probeBoth(address);
+          loopbackProbes.push(...attempt.map(({ probe }) => probe));
+          if (attempt.length === 2 && attempt.every(({ verified }) => verified)) {
             loopbackAddress = address;
             break;
           }
@@ -1310,9 +1307,14 @@ export class ContainerHostReachabilityService {
     hostTarget: string | null,
     subnets: readonly string[],
     cleanup: ProbeCleanup,
-  ): Effect.Effect<ContainerHostProbe> {
+  ): Effect.Effect<{ probe: ContainerHostProbe; verified: boolean }> {
     return Effect.gen({ self: this }, function* () {
-      const url = containerAgentToolsUrl(port);
+      const loopback = hostTarget !== null && hostTarget !== "host-gateway";
+      const challenge = loopback ? randomBytes(16).toString("hex") : null;
+      const expected = challenge ? this.deps.signLoopbackProbe?.(challenge) : undefined;
+      const url = challenge
+        ? `http://${CONTAINER_AGENT_TOOLS_PROBE_HOST}:${port}${AGENT_TOOLS_LOOPBACK_PROBE_PATH}?challenge=${challenge}`
+        : containerAgentToolsUrl(port);
       const name = `ork-${this.deps.ownerNamespace}-reach-${randomBytes(4).toString("hex")}`;
       const started = this.now();
       const args = [
@@ -1336,6 +1338,7 @@ export class ContainerHostReachabilityService {
         "orkestrator-probe",
         url,
         String(PROBE_CONNECT_TIMEOUT_SECONDS),
+        ...(challenge ? ["-"] : []),
       ];
       const run = yield* Effect.scoped(
         Effect.flatMap(
@@ -1350,11 +1353,25 @@ export class ContainerHostReachabilityService {
       );
       let classification: ProbeClassification;
       let failure: CommandFailureFields | undefined;
+      let verified = false;
       if ("error" in run) {
-        classification = { outcome: "error", httpStatus: null, detail: boundedError(run.error) };
+        classification = {
+          outcome: "error",
+          httpStatus: null,
+          detail: challenge ? "The loopback probe command failed" : boundedError(run.error),
+        };
         failure = classifyCommandFailure(run.error, { tools: ["docker"] });
       } else {
-        classification = classifyProbeOutput(`${run.output.stdout}\n${run.output.stderr}`);
+        const output = `${run.output.stdout}\n${run.output.stderr}`;
+        classification = classifyProbeOutput(output);
+        if (challenge) {
+          verified = expected !== undefined && hasLoopbackProof(output, expected);
+          // Response headers and challenges are private to the probe.
+          classification.detail =
+            classification.outcome === "reachable" && !verified
+              ? "HTTP response did not authenticate as Orkestrator's agent tools server"
+              : null;
+        }
       }
       const subnet =
         scope === "default-bridge"
@@ -1374,14 +1391,18 @@ export class ContainerHostReachabilityService {
         ...(hostTarget && hostTarget !== "host-gateway" ? { hostAddress: hostTarget } : {}),
       };
       if (failure) probeFailures.set(probe, failure);
-      return probe;
+      return { probe, verified };
     });
   }
 
   /** Starts `docker run`; from here on the daemon may create the container. Never rejects. */
   private startProbeRun(args: string[]): Promise<ProbeRun> {
     // Async, so a runner that throws synchronously still yields a failed run.
-    return (async () => this.run("docker", args, { timeoutMs: PROBE_COMMAND_TIMEOUT_MS }))().then(
+    return (async () =>
+      this.run("docker", args, {
+        timeoutMs: PROBE_COMMAND_TIMEOUT_MS,
+        maxOutputBytes: 16_384,
+      }))().then(
       (output) => ({ output }),
       (error: unknown) => ({ error }),
     );

@@ -60,6 +60,41 @@ import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 const log = createLogger("web.chat");
 
+const IMAGE_NAME_MARKERS = [
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".avif",
+  ".svg",
+  ".bmp",
+  ".ico",
+  ".tif",
+  ".tiff",
+];
+
+function namesAnImage(reference?: string): boolean {
+  if (!reference) return false;
+  const lower = reference.toLowerCase();
+  return IMAGE_NAME_MARKERS.some((marker) => lower.includes(marker));
+}
+
+/**
+ * Whether a file part opens in the image viewer. A declared type decides when
+ * there is one, so a recording (`.mp4`) is never sent to the image viewer.
+ * When the type is unknown (a query string or fragment after the extension, a
+ * trailing `.bak`, a path with no extension but an image `fileUrl`), an image
+ * name in either reference still makes it an image, as it did before MIME
+ * classification; the viewer then refuses whatever the reader cannot reach.
+ */
+function isImageFilePart(path: string, fileUrl?: string): boolean {
+  const mime = declaredMime(path, fileUrl);
+  if (mime.startsWith("image/")) return true;
+  if (mime !== "application/octet-stream") return false;
+  return namesAnImage(fileUrl) || namesAnImage(path);
+}
+
 /** The decoded image would exceed the viewer's pixel ceiling. */
 class ImageTooLargeError extends Error {
   constructor(
@@ -216,7 +251,7 @@ export function FilePart({
   const ownerDropsUnreadable = Boolean(onLoadUnavailable);
 
   const displayName = filename || path.split(/[\\/]/).pop() || path || "file";
-  const isImage = alwaysImage || declaredMime(path, fileUrl).startsWith("image/");
+  const isImage = alwaysImage || isImageFilePart(path, fileUrl);
   // Only the thumbnail-bearing surface gets the tile chrome. A part that is
   // never eagerly loaded would otherwise sit as an empty card until clicked.
   const showThumbnailTile = isImage && eagerPreview;

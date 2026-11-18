@@ -138,6 +138,12 @@ import {
 } from "./agent-accounts-active.js";
 
 import { agentAccountLoginKey } from "./agent-accounts-store.js";
+import {
+  LOCAL_SERVER_PORT_ATTEMPTS,
+  LocalServerPortTakenError,
+  refusesOwnToken,
+  watchForPortInUse,
+} from "./local-server-port-taken.js";
 
 /**
  * How long an unresponsive bridge with a turn or background work in progress is
@@ -288,13 +294,24 @@ export async function waitForLocalServerStartup(
   port: number,
   kind: LocalServerKind,
   headers?: Record<string, string>,
-  options: { health?: Parameters<typeof waitForLocalServerHealth>[3] } = {},
+  options: {
+    health?: Parameters<typeof waitForLocalServerHealth>[3];
+    /**
+     * This start's own token. A healthy answer is confirmed against it, so a
+     * different server that took the port is not mistaken for this one.
+     */
+    identityHeaders?: Record<string, string>;
+  } = {},
 ): Promise<void> {
   let settled = false;
   let exited = false;
 
   await new Promise<void>((resolve, reject) => {
+    const portInUse = watchForPortInUse([child.stdout, child.stderr], () =>
+      complete(new LocalServerPortTakenError(port, "bind-failed")),
+    );
     const cleanup = () => {
+      portInUse.stop();
       child.off("error", onError);
       child.off("exit", onExit);
     };
@@ -308,24 +325,37 @@ export async function waitForLocalServerStartup(
     const onError = (error: Error) => complete(error);
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       exited = true;
-      complete(
-        new Error(
-          `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`,
-        ),
-      );
+      // The bind failure is printed just before the exit; let it arrive.
+      void portInUse
+        .drained()
+        .then(() =>
+          complete(
+            portInUse.seen()
+              ? new LocalServerPortTakenError(port, "bind-failed")
+              : new Error(
+                  `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`,
+                ),
+          ),
+        );
     };
 
     child.once("error", onError);
     child.once("exit", onExit);
-    waitForLocalServerHealth(port, kind, headers, options.health).then(
-      () => {
-        // A server that has already exited is not healthy, whatever answers.
-        if (!exited) complete();
-      },
-      (error: unknown) => {
-        if (!exited) complete(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
+    waitForLocalServerHealth(port, kind, headers, options.health)
+      .then(async () => {
+        if (exited || !options.identityHeaders) return true;
+        return !(await refusesOwnToken(port, options.identityHeaders));
+      })
+      .then(
+        (ours) => {
+          // A server that has already exited is not healthy, whatever answers.
+          if (exited) return;
+          complete(ours ? undefined : new LocalServerPortTakenError(port, "foreign-server"));
+        },
+        (error: unknown) => {
+          if (!exited) complete(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
   });
 }
 
@@ -663,7 +693,24 @@ export async function startLocalServerUnlocked(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
-  const started = await startLocalServerAttempt(environmentId, context, kind);
+  let started: Awaited<ReturnType<typeof startLocalServerAttempt>>;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      started = await startLocalServerAttempt(environmentId, context, kind);
+      break;
+    } catch (error) {
+      // The failed attempt has already stopped its child and cleared its
+      // records, so a fresh attempt allocates a fresh port.
+      if (
+        !(error instanceof LocalServerPortTakenError) ||
+        attempt >= LOCAL_SERVER_PORT_ATTEMPTS ||
+        context.runtime.localServers.isShuttingDown()
+      ) {
+        throw error;
+      }
+      log.warn("bridge.port-taken", { key: `${kind}:${environmentId}`, attempt });
+    }
+  }
   // OpenCode's server is not one of our bridges and takes no log policy.
   if (kind !== "opencode" && started.authToken) {
     context.runtime.logPolicy?.bridgeStarted({
@@ -1290,6 +1337,8 @@ async function startLocalServerAttempt(
               ? bearerBridgeHeaders(authToken)
               : undefined
           : undefined,
+        // OpenCode's own health check already requires its password.
+        authToken && kind !== "opencode" ? { identityHeaders: bearerBridgeHeaders(authToken) } : {},
       );
     } finally {
       releaseOpenCodeHostStart();

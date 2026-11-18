@@ -369,10 +369,17 @@ async function readPinned(
   };
 }
 
-/** An image part with an unrecognised extension is still served as an image. */
+/**
+ * An image part with an unrecognised extension is still served as an image.
+ * `declaredMime` reads a local path literally, so `photo.webp?v=2` has no
+ * known extension; for an image part, the name before a query or fragment
+ * is the better guess before falling back to PNG.
+ */
 function mimeFor(path: string, asImage: boolean | undefined): string {
   const mime = declaredMime(path);
-  return asImage && !mime.startsWith("image/") ? "image/png" : mime;
+  if (!asImage || mime.startsWith("image/")) return mime;
+  const unsuffixed = declaredMime(path.split(/[?#]/, 1)[0] ?? "");
+  return unsuffixed.startsWith("image/") ? unsuffixed : "image/png";
 }
 
 /** Supersede the in-flight reads `matches` selects (all of them by default). */

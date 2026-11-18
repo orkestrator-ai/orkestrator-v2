@@ -349,6 +349,7 @@ describe("orkestrator CLI package", () => {
       "resources/pi-bridge/runtime/bun.lock",
       "resources/pi-bridge/runtime/install.json",
       "resources/pi-bridge/runtime/package.json",
+      "resources/pi-bridge/runtime/patches/@earendil-works%2Fpi-coding-agent@1.5.2.patch",
       "resources/release-runtime/bun.lock",
       "resources/release-runtime/package.json",
     ]);

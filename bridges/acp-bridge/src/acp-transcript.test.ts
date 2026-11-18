@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 import {
   BRIDGE_STARTUP_TIMEOUT_MS,
+  GROK_CONTENT_REVISION,
   nativeFetch,
   sharedBridge,
   spawnBridge,
@@ -1984,7 +1985,7 @@ describe("ACP bridge", () => {
       await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
         response.json(),
       ),
-    ).toEqual({ activity: "working" });
+    ).toEqual({ activity: "working", contentRevision: GROK_CONTENT_REVISION });
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2003,7 +2004,7 @@ describe("ACP bridge", () => {
       await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
         response.json(),
       ),
-    ).toEqual({ activity: "idle" });
+    ).toEqual({ activity: "idle", contentRevision: GROK_CONTENT_REVISION });
   });
 
   test("keeps Grok child activity authoritative across transcript eviction and a late finish", async () => {
@@ -2041,7 +2042,7 @@ describe("ACP bridge", () => {
       await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
         response.json(),
       ),
-    ).toEqual({ activity: "working" });
+    ).toEqual({ activity: "working", contentRevision: GROK_CONTENT_REVISION });
 
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
@@ -2053,7 +2054,7 @@ describe("ACP bridge", () => {
       await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
         response.json(),
       ),
-    ).toEqual({ activity: "idle" });
+    ).toEqual({ activity: "idle", contentRevision: GROK_CONTENT_REVISION });
     const after = await read();
     expect(after.baseIndex).toBeGreaterThan(0);
     expect(

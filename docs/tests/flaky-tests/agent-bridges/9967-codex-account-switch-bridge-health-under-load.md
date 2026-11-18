@@ -2,7 +2,7 @@
 
 - **ID:** 9967
 - **Status:** open
-- **Date observed:** 2026-11-16; recurred 2026-11-17
+- **Date observed:** 2026-11-16; recurred 2026-11-17 and twice on 2026-11-18
 - **Test:** `automatic switching on the pinned codex > a planning turn stays a planning turn when it is resent`;
   `automatic switching on the pinned codex > two reviewers on one bridge each continue once, still read-only`;
   `automatic switching on the pinned codex > another limit moves nothing and resends nothing`
@@ -59,6 +59,47 @@ classified as a load flake.
   several local servers at once could hit it too, so the fix belongs in the
   product: retry the bridge start once on a fresh port when it exits with the
   port-in-use line, before the health wait.
+
+### Recurrences: 2026-11-18, the port race twice on `main`
+
+- CI push run 44389506740 (`main` at `d7a4bddbc`, PR run 44388794647 on
+  #2443 the same way), job "Tests (backend)" 135100499368:
+  `a planning turn stays a planning turn when it is resent` failed after
+  18,482.73 ms. The codex bridge printed `error: Failed to start server. Is
+  port 41103 in use?`, yet the next request failed with `codex session
+  creation failed (HTTP 401): Unauthorized`: the backend's unauthenticated
+  `/global/health` probe had reached *another process's* bridge on that port
+  and reported ours healthy, and the other bridge refused our token.
+- CI push run 44397068885 (`main` at `fcfe663f0`), job "Tests (backend)"
+  135129703836: `two reviewers on one bridge each continue once, still
+  read-only` failed after 135,486.52 ms with `Timed out waiting for both
+  reviewers' resends: []`, after the replacement codex bridge printed `Is port
+  46777 in use?` and exited (code 1, unrequested).
+- `mise run flaky:recurrence -- 9967 --base fcfe663f0` answered "open. Record
+  the failure as a recurrence".
+
+### Fix for the port race (branch `fix-ci-failures-96c9e88bb5cb-r1`)
+
+The product fix the recurrence above proposed, in
+`apps/backend/src/core/local-server-port-taken.ts` and
+`waitForLocalServerStartup`/`startLocalServerUnlocked`
+(`apps/backend/src/core/commands-servers.ts`):
+
+- A bridge that prints Bun's `Is port N in use?` (or `EADDRINUSE`) fails its
+  start with `LocalServerPortTakenError` at once, including when the exit is
+  observed before the line (its output drains for up to 250 ms first).
+- A healthy answer is confirmed against the start's own token with
+  `/global/auth-check`; an explicit 401 means another server holds the port
+  (also a `LocalServerPortTakenError`). Any other answer, including a 404
+  from a fake without the route, is accepted as before.
+- `startLocalServerUnlocked` retries that error on a freshly allocated port,
+  up to three attempts, logging `local-server bridge.port-taken`. Any other
+  failure, and any failure during shutdown, is not retried.
+- Covered by `apps/backend/src/core/local-server-port-taken.test.ts`. The
+  owning file `apps/backend/tests/account-switch-codex-live.test.ts` passed
+  alone after the change (28.4 s). Not yet proven under the CI load that
+  produced the race; the health-timeout mode from 2026-11-16 is not addressed
+  by this fix, so the case stays open.
 
 ## Investigation so far
 

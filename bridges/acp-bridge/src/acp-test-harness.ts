@@ -22,7 +22,7 @@
  */
 import { parseLogRecordLine } from "@orkestrator/protocol/logger";
 import { PARENT_PID_ENV } from "@orkestrator/protocol/parent-watchdog";
-import { afterAll, afterEach, beforeAll, jest } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, jest } from "bun:test";
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
@@ -84,6 +84,13 @@ if (!nativeWebPlatform && "happyDOM" in globalThis) {
       "before it is sent.",
   );
 }
+
+/**
+ * A Grok bridge's activity answer carries `contentRevision`
+ * (`<process generation>:<session revision>`) so the backend can tell new
+ * content from a repeated read; other ACP providers omit it.
+ */
+export const GROK_CONTENT_REVISION = expect.stringMatching(/^[0-9a-f-]{36}:\d+$/);
 
 export const nativeFetch = nativeWebPlatform?.fetch ?? Bun.fetch;
 export const NativeAbortController = nativeWebPlatform?.AbortController ?? AbortController;

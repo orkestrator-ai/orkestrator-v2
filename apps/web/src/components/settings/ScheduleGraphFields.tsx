@@ -194,7 +194,7 @@ export function ScheduleGraphFields({
             Template
           </label>
           {templatesError ? (
-            <p className="text-xs text-red-400">Could not list templates: {templatesError}</p>
+            <p className="text-xs text-failure">Could not list templates: {templatesError}</p>
           ) : (
             <select
               id="schedule-graph-template"
@@ -248,14 +248,14 @@ export function ScheduleGraphFields({
           Compiling the template for launch…
         </p>
       ) : null}
-      {optionsError ? <p className="text-xs text-red-400">{optionsError}</p> : null}
+      {optionsError ? <p className="text-xs text-failure">{optionsError}</p> : null}
 
       {options && draft ? (
         <>
           {!options.launchable ? (
             <p
               role="alert"
-              className="rounded-md border border-red-500/40 p-2 text-xs text-red-300"
+              className="rounded-md border border-failure/40 p-2 text-xs text-failure"
             >
               {options.blockedReason ?? "This template cannot be launched."}
             </p>

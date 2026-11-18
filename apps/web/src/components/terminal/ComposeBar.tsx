@@ -1,5 +1,15 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent } from "react";
 import { X, Send } from "lucide-react";
+import {
+  COMPOSE_FRAME_CLASS_NAME,
+  COMPOSE_COLUMN_CLASS_NAME,
+} from "@/components/chat/NativeComposeBar";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MAX_LINES,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "@/components/chat/compose-metrics";
+import { COMPOSE_DOCK_GROUND_CLASS_NAME } from "@/components/chat/NativeComposeDock";
 import { Button } from "@/components/ui/button";
 import { MODAL_OVERLAY_CLASS_NAME } from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
@@ -47,8 +57,6 @@ interface ComposeBarProps {
 
 const log = createLogger("terminal");
 
-const MAX_LINES = 10;
-const LINE_HEIGHT = 20; // approximate line height in pixels
 const EMPTY_IMAGES: ImageAttachment[] = [];
 
 /** Maximum image size in bytes (8MB) */
@@ -483,16 +491,23 @@ export function ComposeBar({
     }
   };
 
-  // Calculate textarea height based on content
-  const textareaRows = Math.min(MAX_LINES, Math.max(1, text.split("\n").length));
-
   if (!isOpen) return null;
 
+  // Browsers without field-sizing still grow with explicit line breaks.
+  const textareaRows = Math.min(COMPOSE_MAX_LINES, text.split("\n").length);
+
   return (
-    <div className={cn("absolute bottom-2 left-2 right-2 z-50", className)} data-compose-bar>
+    <div
+      className={cn(
+        "absolute inset-x-0 bottom-0 isolate z-50 px-2 pb-4 sm:px-4",
+        COMPOSE_DOCK_GROUND_CLASS_NAME,
+        className,
+      )}
+      data-compose-bar
+    >
       {/* Image previews - floating above the input */}
       {images.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-2 pl-1">
+        <div className={cn(COMPOSE_COLUMN_CLASS_NAME, "mb-2 flex flex-wrap gap-2 pl-1")}>
           {images.map((img) => (
             <div
               key={img.id}
@@ -519,14 +534,13 @@ export function ComposeBar({
         </div>
       )}
 
-      {/*
-        Text input bar - a translucent control surface with a lighter border,
-        floating over terminal output. `border-zinc-600` rather than
-        `border-border` on purpose: the panel hairline disappears against
-        arbitrary terminal contents, which is why this one is deliberately a
-        step lighter.
-      */}
-      <div className="flex items-end gap-2 rounded-lg border border-zinc-600 bg-input-surface px-3 py-2 backdrop-blur-md">
+      <div
+        className={cn(
+          COMPOSE_COLUMN_CLASS_NAME,
+          COMPOSE_FRAME_CLASS_NAME,
+          "flex items-end gap-2 has-[>textarea:focus-visible]:focus-hairline-frame",
+        )}
+      >
         <textarea
           ref={textareaRef}
           value={text}
@@ -534,16 +548,8 @@ export function ComposeBar({
           onKeyDown={handleKeyDown}
           placeholder="Type a message (newlines become spaces)..."
           rows={textareaRows}
-          className={cn(
-            "flex-1 bg-transparent border-none rounded px-2 py-1",
-            "text-sm text-foreground placeholder:text-muted-foreground",
-            "resize-none outline-none",
-            "transition-colors",
-          )}
-          style={{
-            minHeight: LINE_HEIGHT,
-            maxHeight: MAX_LINES * LINE_HEIGHT,
-          }}
+          className="field-sizing-content min-w-0 flex-1 resize-none overflow-y-auto border-none bg-transparent px-2 py-1 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
+          style={{ minHeight: COMPOSE_MIN_INPUT_HEIGHT, maxHeight: COMPOSE_MAX_INPUT_HEIGHT }}
           disabled={isSending}
         />
         {showAddressAll && (

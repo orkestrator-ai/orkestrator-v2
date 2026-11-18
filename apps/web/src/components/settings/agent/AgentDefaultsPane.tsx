@@ -72,13 +72,13 @@ const ACTION_DEFINITIONS: Record<
   },
   createScript: {
     label: "Create run script",
-    description: "Preselected when you configure a script from the Run Commands button.",
+    description: "Preselected when you configure a script from the Run commands button.",
     icon: <FilePlus2 className="h-4 w-4" />,
   },
   review: {
     label: "Review",
     description:
-      "Used by the Code Review button, as the first model in Multi Review, and as Reviewer 1 in build pipelines.",
+      "Used by the Code review button, as the first model in Multi Review, and as Reviewer 1 in build pipelines.",
     icon: <Eye className="h-4 w-4" />,
   },
   review2: {
@@ -93,7 +93,7 @@ const ACTION_DEFINITIONS: Record<
       "Prepares the shared review package and consolidates findings for Multi Review and for build pipelines.",
     icon: <ScanSearch className="h-4 w-4" />,
   },
-  fixReviewIssues: {
+  addressFindings: {
     label: "Address review findings",
     description:
       "Addresses the consolidated findings after Multi Review and in every build pipeline.",
@@ -116,7 +116,7 @@ const ACTION_DEFINITIONS: Record<
   },
   push: {
     label: "Push",
-    description: "Used by the Push Changes button.",
+    description: "Used by the Push changes button.",
     icon: <Upload className="h-4 w-4" />,
   },
 };

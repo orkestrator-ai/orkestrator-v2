@@ -94,7 +94,7 @@ describe("OpenFileDialog", () => {
     render(<OpenFileDialog />);
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
 
-    const dialog = await screen.findByRole("dialog", { name: "Open File" });
+    const dialog = await screen.findByRole("dialog", { name: "Open file" });
     expect(dialog.classList.contains("max-w-(--modal-limit)")).toBe(true);
     expect(dialog.classList.contains("[--modal-max-width:42rem]")).toBe(true);
     expect(

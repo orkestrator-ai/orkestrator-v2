@@ -247,7 +247,7 @@ export function NativeResumeSessionDialog({
     >
       <DialogContent size="md">
         <DialogHeader>
-          <DialogTitle>Resume Session</DialogTitle>
+          <DialogTitle>Resume session</DialogTitle>
           <DialogDescription>
             Select a previous {agentLabel} session to continue the conversation.
           </DialogDescription>
@@ -272,7 +272,7 @@ export function NativeResumeSessionDialog({
             </div>
           ) : error ? (
             <div className="py-8 text-center text-sm">
-              <p className="text-destructive">Failed to load sessions</p>
+              <p className="text-failure">Failed to load sessions</p>
               {error.detail && (
                 <p className="mt-1 break-words text-xs text-muted-foreground">{error.detail}</p>
               )}
@@ -323,7 +323,7 @@ export function NativeResumeSessionDialog({
                               <span className="ml-2 text-yellow-500">• Running</span>
                             )}
                             {session.status === "error" && (
-                              <span className="ml-2 text-destructive">• Error</span>
+                              <span className="ml-2 text-failure">• Error</span>
                             )}
                             {session.archived && <span className="ml-2">• Archived</span>}
                           </div>

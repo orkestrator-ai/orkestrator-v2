@@ -13,9 +13,9 @@ import { useUIChromeStore } from "@/stores/uiChromeStore";
  * platform is fixed per conversation.
  */
 export const COORDINATOR_INTRO_LINES: readonly string[] = [
-  "The coordinator reads and searches this checkout but never changes it.",
+  "The Coordinator reads and searches this checkout but never changes it.",
   "It hands changes to build pipelines and prompt environments, and is woken when they finish. You don't need to wait.",
-  "Side agents are extra read-only chats that can talk to the main coordinator.",
+  "Side agents are extra read-only chats that can talk to the main Coordinator.",
   "To switch AI provider, use Change agent. Your workers carry over.",
 ];
 
@@ -40,18 +40,18 @@ export function CoordinatorIntroCard() {
   if (dismissed) return null;
   return (
     <section
-      aria-label="How the coordinator works"
+      aria-label="How the Coordinator works"
       data-coordinator-intro-card
       className="relative w-full rounded-lg border border-border/70 bg-elevated px-4 py-3 pr-10 text-xs leading-relaxed text-muted-foreground"
     >
-      <h3 className="mb-1.5 text-sm font-medium text-foreground">How the coordinator works</h3>
+      <h3 className="mb-1.5 text-sm font-medium text-foreground">How the Coordinator works</h3>
       <CoordinatorIntroLines />
       <Button
         type="button"
         size="icon"
         variant="ghost"
         className="absolute top-1.5 right-1.5 size-7"
-        aria-label="Dismiss how the coordinator works"
+        aria-label="Dismiss how the Coordinator works"
         title="Dismiss. The ? in the toolbar shows this again."
         onClick={() => dismiss(true)}
       >
@@ -72,8 +72,8 @@ export function CoordinatorIntroButton() {
         <Button
           size="icon"
           variant="ghost"
-          aria-label="How the coordinator works"
-          title="How the coordinator works"
+          aria-label="How the Coordinator works"
+          title="How the Coordinator works"
         >
           <CircleHelp className="size-4" />
         </Button>
@@ -83,7 +83,7 @@ export function CoordinatorIntroButton() {
         className="max-w-sm p-3 text-xs leading-relaxed"
         data-coordinator-intro-menu
       >
-        <p className="mb-1.5 text-sm font-medium text-foreground">How the coordinator works</p>
+        <p className="mb-1.5 text-sm font-medium text-foreground">How the Coordinator works</p>
         <CoordinatorIntroLines />
       </DropdownMenuContent>
     </DropdownMenu>

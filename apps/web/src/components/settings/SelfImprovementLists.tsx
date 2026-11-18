@@ -29,7 +29,7 @@ const STATUS_TEXT: Record<SelfImprovementTrackedItem["status"], string> = {
 const FIX_WHERE_TEXT: Record<SelfImprovementTheme["fixWhere"], string> = {
   orkestrator: "Fix in Orkestrator",
   instructions: "Fix in instructions",
-  provider: "Model behaviour",
+  provider: "Model behavior",
   unclear: "Unclear",
 };
 
@@ -143,7 +143,7 @@ export function LastRunDetails({
   return (
     <div className="space-y-3">
       {run.outcome === "failed" ? (
-        <p className="text-xs text-red-400">{run.error ?? "The run stopped before it finished."}</p>
+        <p className="text-xs text-failure">{run.error ?? "The run stopped before it finished."}</p>
       ) : null}
       <TicketList
         onOpenTicket={onOpenTicket}

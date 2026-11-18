@@ -166,7 +166,7 @@ function AgentMailConversationList({ focus }: { focus?: string }) {
           )}
           <div className="min-w-0 flex-1">
             <SheetTitle>
-              {focus ? (focusedMailbox?.displayName ?? "Agent") : "Agent messages"}
+              {focus ? (focusedMailbox?.displayName ?? "Agent") : "Agent mail"}
             </SheetTitle>
             <SheetDescription>
               {focus
@@ -199,7 +199,7 @@ function AgentMailConversationList({ focus }: { focus?: string }) {
         )}
       </div>
       {mailboxError && (
-        <div role="alert" className="border-b border-red-400/20 px-3 py-2 text-xs text-red-300">
+        <div role="alert" className="border-b border-failure/20 px-3 py-2 text-xs text-failure">
           Could not load this agent: {mailboxError}
           <Button size="sm" variant="ghost" onClick={() => setMailboxReload((value) => value + 1)}>
             Retry mailbox
@@ -209,7 +209,7 @@ function AgentMailConversationList({ focus }: { focus?: string }) {
       {error && (
         <div
           role="alert"
-          className="border-b border-red-400/20 bg-red-400/10 px-3 py-2 text-xs text-red-300"
+          className="border-b border-failure/20 bg-failure/10 px-3 py-2 text-xs text-failure"
         >
           {error}
         </div>
@@ -260,7 +260,7 @@ function ConversationRow({
       type="button"
       data-testid="agent-mail-conversation-row"
       onClick={onOpen}
-      className="block w-full border-b border-zinc-800/70 px-4 py-2.5 text-left transition-colors hover:bg-foreground/[0.03] focus-visible:bg-foreground/[0.05] focus-visible:outline-none"
+      className="block w-full border-b border-zinc-800/70 px-4 py-2.5 text-left transition-colors hover:bg-hover focus-hairline"
     >
       <div className="flex items-center gap-1.5 text-xs">
         <ParticipantIcon participant={first} />
@@ -288,7 +288,7 @@ function ConversationRow({
             {attentionCount} need{attentionCount === 1 ? "s" : ""} you
           </span>
         ) : (
-          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-[11px] font-medium tabular-nums text-muted-foreground">
             {conversation.messageCount}
           </span>
         )}
@@ -370,7 +370,7 @@ function RecipientPicker({
         />
       </div>
       {error && (
-        <div role="alert" className="px-4 py-2 text-xs text-red-300">
+        <div role="alert" className="px-4 py-2 text-xs text-failure">
           {error}
         </div>
       )}
@@ -398,7 +398,7 @@ function RecipientPicker({
                   {mailbox.environmentName} · {mailbox.projectName}
                 </span>
               </span>
-              <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px]">
+              <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] tracking-wide">
                 {mailbox.presence.replaceAll("_", " ")}
               </span>
             </button>

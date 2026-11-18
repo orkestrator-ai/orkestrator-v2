@@ -10,8 +10,13 @@ import {
   resolveCursorCredential,
   type CursorApiKeySource,
 } from "./agent-test-cursor-credential.js";
-import { resolveGitHubRepository } from "./github.js";
-import { gitHubCredentialSource, resolveGitHubToken } from "./github-credentials.js";
+import {
+  gitHubCredentialSource,
+  type GitHubIssueStatus,
+  type GitHubRepositoryRef,
+  resolveGitHubRepository,
+  resolveGitHubToken,
+} from "./git/index.js";
 import { isStartFeaturePlanningInput } from "@orkestrator/protocol/feature-planning";
 import { COMPACT_INSTRUCTIONS_MAX_LENGTH } from "@orkestrator/protocol/native-agent";
 import { assertValidPromptAttachments, assertValidPromptImages } from "./prompt-attachments.js";
@@ -28,7 +33,6 @@ import type {
 } from "./models.js";
 import type { AgentSkillProvider } from "./agent-skills.js";
 import type { JsonRecord, KanbanStorage } from "./storage.js";
-import type { GitHubIssueStatus, GitHubRepositoryRef } from "./github.js";
 import type {
   NativeAgentControlUpdate,
   NativeAgentSessionAction,
@@ -647,6 +651,10 @@ export function asCachedCodexModels(value: unknown): CodexModelCatalogEntry[] {
           : (() => {
               throw new Error(`Expected ${name}.reasoningEfforts to be an array`);
             })();
+    const description =
+      model.description === undefined
+        ? undefined
+        : asString(model.description, `${name}.description`).trim();
     const reasoningOptions =
       model.reasoningOptions === undefined
         ? undefined
@@ -655,17 +663,14 @@ export function asCachedCodexModels(value: unknown): CodexModelCatalogEntry[] {
               const optionName = `${name}.reasoningOptions[${optionIndex}]`;
               const option = asRecord(candidateOption, optionName);
               assertOnlyKeys(option, ["effort", "label", "description"], optionName);
+              const description =
+                option.description === undefined
+                  ? undefined
+                  : asString(option.description, `${optionName}.description`).trim();
               return {
                 effort: asCodexReasoningEffort(option.effort, `${optionName}.effort`),
                 label: asNonBlankString(option.label, `${optionName}.label`),
-                ...(option.description === undefined
-                  ? {}
-                  : {
-                      description: asNonBlankString(
-                        option.description,
-                        `${optionName}.description`,
-                      ),
-                    }),
+                ...(description ? { description } : {}),
               };
             })
           : (() => {
@@ -674,9 +679,7 @@ export function asCachedCodexModels(value: unknown): CodexModelCatalogEntry[] {
     return {
       id: asNonBlankString(model.id, `${name}.id`),
       name: asNonBlankString(model.name, `${name}.name`),
-      ...(model.description === undefined
-        ? {}
-        : { description: asNonBlankString(model.description, `${name}.description`) }),
+      ...(description ? { description } : {}),
       ...(reasoningEfforts ? { reasoningEfforts } : {}),
       ...(reasoningOptions ? { reasoningOptions } : {}),
       ...(model.defaultReasoningEffort === undefined

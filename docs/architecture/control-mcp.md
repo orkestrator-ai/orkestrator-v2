@@ -305,9 +305,9 @@ Operator credentials also get, under the names a coordinator already uses:
   [coordinator.md](coordinator.md#choosing-a-machine).
 - `launch_multi_review` (and `start_multi_review`, the same action for an
   operator), `list_multi_reviews`, `get_multi_review`, `open_multi_review`,
-  `open_multi_review_fix`, `address_multi_review`, `cancel_multi_review`
+  `open_multi_review_address_findings`, `address_multi_review`, `cancel_multi_review`
   (`review.*`): the Multi Review button and its follow-up actions. A launch
-  uses the saved reviewers, models, branch, instruction, Auto-fix and Auto-PR
+  uses the saved reviewers, models, branch, instruction, Auto-address findings and Auto-PR
   for whatever is omitted, reuses an active review, and creates its root tab.
   A review whose tab could not open is a `partial` operation with its
   recovery text.
@@ -623,7 +623,7 @@ list and run a native tab's slash commands with `session.command`'s
 restrictions (`list_worker_commands`, `run_worker_command`; capability
 `jobs`, so main only), open
 a reviewer's subtab (`open_multi_review` with `reviewerId`), start a custom
-fix (`custom_fix_multi_review`), raise a reviewed worker's pull request
+Address Findings (`custom_address_multi_review`), raise a reviewed worker's pull request
 (`create_pr`, the PR tab) and resolve its conflicts (`resolve_conflicts`, the
 Resolve tab, refused as the button is when the worker has no open,
 conflicting PR), launch feature planning, fork a worker from
@@ -663,11 +663,11 @@ that owns the project copy. The backend command that opens it
 (`open_project_agents_md_pr`) is refused by name to coordinator credentials;
 see [`coordinator.md`](coordinator.md#saving-decisions-to-agentsmd).
 `launch_multi_review` (and an operator's `start_multi_review`; coordinators
-are offered only `launch_multi_review`) take optional `autoFix` and `autoPr`
-booleans. Omitted, they use the user's saved Multi Review settings, as
+are offered only `launch_multi_review`) take optional `autoAddressFindings`
+and `autoPr` booleans. Omitted, they use the user's saved Multi Review settings, as
 the button does; a coordinator sets them only when the user asks. With both on
-the review runs consolidation, then Fix, then a PR session, and the PR never
-precedes a completed Fix. With `autoPr` on, a consolidation with nothing to fix
+the review runs consolidation, then Address Findings, then a PR session, and the
+PR never precedes a completed Address Findings run. With `autoPr` on, a consolidation with nothing to fix
 starts the PR session directly. No coordinator tool merges. The launch result's `selection` and
 `get_multi_review`'s `automation` report the effective settings and the next
 step; see [`coordinator.md`](coordinator.md#complete-application-actions).

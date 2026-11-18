@@ -188,7 +188,7 @@ function ProfileSection({ machine, onChanged }: { machine: MachineEntry; onChang
       setProfile(parseBackendProfile(next));
       setDraft(null);
       toast.success("Saved on the machine", {
-        description: "Every client connected to it uses this name and colour.",
+        description: "Every client connected to it uses this name and color.",
       });
       onChanged();
     } catch (error) {
@@ -197,7 +197,7 @@ function ProfileSection({ machine, onChanged }: { machine: MachineEntry; onChang
         // Someone else changed it first: show theirs instead of overwriting.
         setDraft(null);
         await load();
-        toast.warning("This machine's name or colour changed on another client", {
+        toast.warning("This machine's name or color changed on another client", {
           description: "The current values are shown; apply your change again if needed.",
         });
       } else {
@@ -212,8 +212,8 @@ function ProfileSection({ machine, onChanged }: { machine: MachineEntry; onChang
   const editable = profile !== null && !saving;
   return (
     <MachineSection
-      title="Name and colour"
-      description="Stored on the machine itself, so every client shows the same name and dot colour."
+      title="Name and color"
+      description="Stored on the machine itself, so every client shows the same name and dot color."
       testId="machine-profile"
     >
       <form
@@ -255,11 +255,11 @@ function ProfileSection({ machine, onChanged }: { machine: MachineEntry; onChang
         </Button>
       </form>
       <div className="space-y-1.5">
-        <span className="text-sm font-medium text-zinc-200">Dot colour</span>
+        <span className="text-sm font-medium text-zinc-200">Dot color</span>
         <div
           className="flex flex-wrap items-center gap-1.5"
           role="radiogroup"
-          aria-label="Dot colour"
+          aria-label="Dot color"
         >
           {MACHINE_COLOR_CHOICES.map((choice) => (
             <button
@@ -286,12 +286,12 @@ function ProfileSection({ machine, onChanged }: { machine: MachineEntry; onChang
       {!reachable ? (
         <p className="text-xs text-zinc-500">
           {machine.role === "device"
-            ? "Add this machine to the command node to change its shared name and colour."
-            : "Connect to this machine to change its name or colour."}
+            ? "Add this machine to the command node to change its shared name and color."
+            : "Connect to this machine to change its name or color."}
         </p>
       ) : loadFailed ? (
         <p className="text-xs text-zinc-500">
-          This machine does not publish a shared profile. Update it to choose its name and colour.
+          This machine does not publish a shared profile. Update it to choose its name and color.
         </p>
       ) : null}
     </MachineSection>
@@ -412,7 +412,7 @@ function StatusSection({
             <dt className="text-zinc-500">Ping</dt>
             <dd
               data-testid="machine-ping"
-              className={"error" in ping ? "text-red-300" : "font-mono text-zinc-200"}
+              className={"error" in ping ? "text-failure" : "font-mono text-zinc-200"}
             >
               {"error" in ping ? `No answer: ${ping.error}` : `${ping.ms} ms`}
             </dd>
@@ -488,7 +488,7 @@ function ForgetNodeSection({
   };
 
   return (
-    <section className="flex items-center justify-between gap-3 rounded-md border border-red-500/20 px-3 py-3">
+    <section className="flex items-center justify-between gap-3 rounded-md border border-destructive/20 px-3 py-3">
       <div>
         <p className="text-sm text-zinc-200">Remove machine</p>
         <p className="text-xs text-zinc-500">
@@ -500,7 +500,7 @@ function ForgetNodeSection({
         type="button"
         size="sm"
         variant="ghost"
-        className="shrink-0 text-red-300 hover:bg-red-500/10 hover:text-red-200"
+        className="shrink-0 text-failure hover:bg-destructive/15 hover:text-failure"
         onClick={() => setOpen(true)}
         aria-label={`Remove ${name}`}
       >
@@ -524,7 +524,7 @@ function ForgetNodeSection({
                 void forget();
               }}
               disabled={busy}
-              className="bg-red-600 text-white hover:bg-red-500"
+              className="bg-destructive text-black hover:bg-destructive/95 active:bg-destructive/90"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Remove

@@ -1230,7 +1230,7 @@ export function HierarchicalSidebar() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                className="h-7 w-7 text-muted-foreground hover:text-failure"
                 onClick={() => setShowBulkDeleteDialog(true)}
                 title="Delete selected"
                 disabled={!selection.canDelete}
@@ -1460,7 +1460,7 @@ export function HierarchicalSidebar() {
               onClick={handleDeleteSelected}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete All
+              Delete all
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

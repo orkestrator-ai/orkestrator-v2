@@ -81,9 +81,11 @@ test("details, acceptance criteria and confirm are steps of the same tab", async
       return original(command, args);
     };
   });
-  await page.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
+  await page.getByRole("button", { name: "Confirm auto-pipeline" }).click();
   await expect(page.getByText(/Promoting environment/)).toBeVisible();
-  await expect(page.getByText(/Auto-pipeline started/)).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Auto-pipeline 2" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /^Build:/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("Pipeline running from Review.")).toBeVisible();
   const ticket = parseAutoPipelineTicket(
     await page.evaluate(() => (window as ProbeWindow).confirmedTicket),
   );
@@ -141,7 +143,7 @@ test("a blank criterion blocks confirmation and says why", async ({ page }, test
   await expect(criterion).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByText("Enter an acceptance criterion.")).toBeVisible();
   await page.getByRole("button", { name: "Next", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Confirm Auto-pipeline" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Confirm auto-pipeline" })).toBeDisabled();
   await expect(page.getByRole("list", { name: "Before confirming" })).toContainText(
     "empty acceptance criterion",
   );
@@ -189,7 +191,7 @@ test("adopted Build inspector keeps its original notes and criteria", async ({
     .getByRole("tab", { name: /^Build,/ })
     .first()
     .click();
-  await page.getByText("Original Build notes and acceptance criteria", { exact: true }).click();
+  await page.getByText("Original build notes and acceptance criteria", { exact: true }).click();
   await expect(page.getByText("Finished interactive feature work.", { exact: true })).toBeVisible();
   await page.screenshot({
     path: path.resolve(`output/visual-previews/auto-pipeline-build-${testInfo.project.name}.png`),
@@ -224,7 +226,7 @@ test("a refused confirmation keeps the draft and shows its reason beside Confirm
   await body.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
-  const confirm = page.getByRole("button", { name: "Confirm Auto-pipeline" });
+  const confirm = page.getByRole("button", { name: "Confirm auto-pipeline" });
   await expect(confirm).toBeInViewport();
   await confirm.click();
   const alert = page.getByRole("alert");
@@ -254,10 +256,10 @@ test("a ticket whose confirmation began is read-only and can be confirmed again"
   await steps(page)
     .getByRole("button", { name: /Confirm/ })
     .click();
-  await page.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
+  await page.getByRole("button", { name: "Confirm auto-pipeline" }).click();
   await expect(page.getByRole("alert")).toContainText("did not close");
   await expect(page.getByText(/can no longer change/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Confirm Auto-pipeline" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Confirm auto-pipeline" })).toBeEnabled();
   await steps(page)
     .getByRole("button", { name: /Details/ })
     .click();
@@ -273,4 +275,25 @@ test("a drafting request the backend never recorded says why", async ({ page }, 
   await expect(page.getByRole("alert")).toContainText("Drafting did not start");
   await expect(page.getByRole("button", { name: "Draft ticket" })).toBeVisible();
   await shot(page, "tab-draft-refused", testInfo.project.name);
+});
+
+test("confirmation finishes after leaving the tab without taking its selection", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/auto-pipeline");
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).waitFor();
+  await steps(page)
+    .getByRole("button", { name: /Confirm/ })
+    .click();
+  await page.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
+  await expect(page.getByText(/Promoting environment/)).toBeVisible();
+  await shot(page, "handoff-before", testInfo.project.name);
+  await page.getByRole("tab", { name: "Codex 1" }).click();
+  await expect(page.getByRole("tab", { name: "Auto-pipeline 2" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /^Build:/ })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Codex 1" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: /^Build:/ }).click();
+  await expect(page.getByText("Pipeline running from Review.")).toBeVisible();
+  await shot(page, "handoff-after", testInfo.project.name);
 });

@@ -21,7 +21,7 @@ import {
   type DeliveryPolicy,
 } from "@orkestrator/protocol/ticket-sections";
 import {
-  REVIEW_PACKAGE_SESSION_LABEL,
+  BUILD_CANCELLED_ERROR,
   isActiveBuildPhase,
   isBranchPushSession,
   isCancelledBuildPipeline,
@@ -54,6 +54,13 @@ import {
   validationRunFromSummary,
   type ValidationSummary,
 } from "./pipeline-stage-groups";
+
+/** Format the stored cancellation prefix for display, including stop warnings. */
+export function buildErrorLabel(error: string): string {
+  return error.startsWith(BUILD_CANCELLED_ERROR)
+    ? `Build canceled${error.slice(BUILD_CANCELLED_ERROR.length)}`
+    : error;
+}
 
 export type PipelineFlowNodeKind =
   | "ticket"
@@ -253,12 +260,13 @@ function stepFields(
 
 /** What kind of step a session ran. */
 export function pipelineSessionKind(session: PipelineSession): PipelineFlowNodeKind {
-  if (session.label === REVIEW_PACKAGE_SESSION_LABEL) return "prepare";
   switch (session.phase) {
     case "build":
       return "build";
     case "rework":
       return "fix";
+    case "package-preparation":
+      return "prepare";
     case "review":
       if (session.label === CONSOLIDATION_LABEL) return "consolidation";
       return pipelineIndependentReviewSlot(session.label) !== null ? "reviewer" : "review";
@@ -388,7 +396,6 @@ export function pipelinePackageRestartStageId(
   if (node.placeholder || node.superseded) return null;
   const writesPlan = (session: PipelineSession) =>
     (session.phase === "build" || session.phase === "rework") &&
-    session.label !== REVIEW_PACKAGE_SESSION_LABEL &&
     !isSupersededPipelineSession(session) &&
     isReviewPackagePreparationSession(session, pipeline);
   if (node.session) {
@@ -420,6 +427,7 @@ const PHASE_KIND: Partial<Record<ResumableBuildPhase, PipelineFlowNodeKind>> = {
   "addressing-findings": "address",
   verifying: "verify",
   reworking: "fix",
+  "preparing-package": "prepare",
   "creating-pr": "ship",
   "resolving-conflicts": "conflicts",
 };
@@ -470,14 +478,7 @@ function sessionState(
     if (isActiveBuildPhase(pipeline.phase)) {
       const kind = PHASE_KIND[pipeline.phase as ResumableBuildPhase];
       const sessionKind = pipelineSessionKind(session);
-      if (
-        session.status === "running" ||
-        kind === sessionKind ||
-        (sessionKind === "prepare" &&
-          !session.completedAt &&
-          (pipeline.phase === "building" || pipeline.phase === "reworking"))
-      )
-        return "running";
+      if (session.status === "running" || kind === sessionKind) return "running";
     }
   }
   if (session.status === "running") {

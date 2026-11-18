@@ -327,7 +327,7 @@ export function AgentChatFindBar({
       <div
         role="search"
         aria-label="Find in agent chat"
-        className="absolute top-2 right-2 z-30 flex h-10 w-[min(22rem,calc(100%-1rem))] items-center gap-1 rounded-lg border border-border bg-popover/95 p-1 shadow-xl backdrop-blur-sm"
+        className="absolute top-2 right-2 z-30 flex h-10 w-[min(22rem,calc(100%-1rem))] items-center gap-1 rounded-lg border border-border bg-popover/95 p-1 shadow-xl backdrop-blur-sm has-[>input:focus-visible]:focus-hairline-frame"
       >
         <Search className="ml-1.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <Input

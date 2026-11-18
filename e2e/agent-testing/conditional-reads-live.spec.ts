@@ -330,7 +330,7 @@ async function openViewer(page: Page, status: Status, fixture: Project, environm
   // Startup notices arrive late: the profile has no Claude login (the CLI's
   // key is in its own settings) and no Docker for this run.
   const dismiss = page.getByRole("button", {
-    name: /^Continue Without (Docker|GitHub CLI|Claude|Codex)$/,
+    name: /^Continue without (Docker|GitHub CLI|Claude|Codex)$/,
   });
   const dockerNotice = page.getByRole("dialog").filter({
     has: page.getByRole("heading", {

@@ -1,6 +1,12 @@
 import { EnvironmentUnavailableError, type EnvironmentGit } from "./workspace-code-rewind.js";
-import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
-import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
+import {
+  gitHubCli,
+  type GitHubCliConfigSource,
+  gitHubCliEnv,
+  type GitHubCliSelection,
+  isMergePermissionError,
+  retryGitWithoutFsmonitorOnTimeout,
+} from "./git/index.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import {
   reconcileProjectHomeEnvironment,
@@ -23,7 +29,6 @@ import {
   reviewValidationArtifactPaths,
 } from "@orkestrator/protocol/review-artifacts";
 import { CommandFailedError, runCommand } from "./shell.js";
-import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import { writeConfinedFile, workspaceFilePath } from "./path-safety.js";
 import { DOCKER_LABEL_OWNER } from "./constants.js";
 import type { Environment, PrState } from "./models.js";
@@ -50,7 +55,6 @@ import {
 } from "./commands-files.js";
 import type { CommandContext } from "./commands-context.js";
 import { gitExcludeSetupScript } from "./tmux-hooks.js";
-import { isMergePermissionError } from "./pr-viewer-permission.js";
 import {
   MAX_PERSISTED_REVIEW_PACKAGE_BYTES,
   normalizeGeneratedReviewPackage,

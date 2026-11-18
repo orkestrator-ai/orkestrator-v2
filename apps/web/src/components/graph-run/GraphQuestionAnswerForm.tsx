@@ -133,7 +133,7 @@ export function GraphQuestionAnswerForm({
           {answered.kind === "declined"
             ? "Declined"
             : [answered.choice, answered.text].filter(Boolean).join(" — ")}
-          {answered.by === "coordinator" ? " (answered by the coordinator)" : ""}
+          {answered.by === "coordinator" ? " (answered by the Coordinator)" : ""}
         </p>
       ) : (
         <>

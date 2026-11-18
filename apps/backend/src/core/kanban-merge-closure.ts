@@ -4,12 +4,12 @@
  * `KanbanRepository.closeKanbanTasksForMergedPullRequests`:
  *
  * - the PR monitor, the moment it sees the environment's pull request merge
- *   (`pr-monitor.ts`, the `status` reconciliation step);
+ *   (`git/pr-monitor.ts`, the `status` reconciliation step);
  * - a build pipeline that ends after its pull request merged, which would
  *   otherwise move the ticket back to review or backlog
  *   (`build-pipeline-service-recovery.ts`, `updateKanbanLifecycle`);
  * - a startup sweep for tickets whose merge was recorded but never applied,
- *   including every ticket an older build left behind (`pr-monitor-runtime.ts`).
+ *   including every ticket an older build left behind (`git/pr-monitor-runtime.ts`).
  *
  * The closure happens once per pull request. The ticket remembers the merged
  * pull request that closed it (`prMergeDoneUrl`), so a ticket the user moves

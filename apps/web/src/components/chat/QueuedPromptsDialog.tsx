@@ -150,7 +150,7 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="xl">
         <DialogHeader>
-          <DialogTitle>Queued Prompts</DialogTitle>
+          <DialogTitle>Queued prompts</DialogTitle>
           <DialogDescription>
             {onSteer
               ? "Review pending prompts. Click a message to edit it, reorder and remove items, or steer one into the running turn."
@@ -164,13 +164,13 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
             className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm"
           >
             <div className="flex items-start gap-2">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-failure" />
               <div className="min-w-0 flex-1">
                 <p className="font-medium">Queued prompt was not sent</p>
                 <p className="mt-1 text-muted-foreground">
                   {dispatchError.message} Edit or remove the prompt, or retry it.
                 </p>
-                {retryFailure ? <p className="mt-1 text-destructive">{retryFailure}</p> : null}
+                {retryFailure ? <p className="mt-1 text-failure">{retryFailure}</p> : null}
               </div>
               {onRetryDispatch ? (
                 <button
@@ -189,7 +189,7 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
         {actionError && (
           <div
             role="alert"
-            className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-failure"
           >
             {actionError}
           </div>
@@ -328,7 +328,7 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
                           disabled={pendingAction !== null}
                           aria-busy={pendingAction === `remove:${message.id}`}
                           aria-expanded={annotationOrigin ? confirmingRemove : undefined}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive disabled:cursor-wait disabled:opacity-60"
+                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-failure disabled:cursor-wait disabled:opacity-60"
                           title={
                             annotationOrigin
                               ? "Remove and cancel the web annotation request"
@@ -347,7 +347,7 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
                     {confirmingRemove ? (
                       <div
                         role="group"
-                        aria-label="Confirm cancelling the web annotation request"
+                        aria-label="Confirm canceling the web annotation request"
                         className="mt-2 flex flex-wrap items-center gap-2 rounded border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs"
                       >
                         <span className="min-w-0 flex-1">
@@ -360,7 +360,7 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
                             void runAction(`remove:${message.id}`, () => onRemove(message.id));
                           }}
                           disabled={pendingAction !== null}
-                          className="rounded border border-destructive/50 bg-background px-2 py-0.5 font-medium text-destructive hover:bg-destructive/10 disabled:opacity-60"
+                          className="rounded border border-destructive/50 bg-background px-2 py-0.5 font-medium text-failure hover:bg-destructive/10 disabled:opacity-60"
                         >
                           Cancel request
                         </button>

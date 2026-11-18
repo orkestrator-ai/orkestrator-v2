@@ -301,7 +301,7 @@ for (const dialog of WORKSPACE_DIALOGS) {
   });
 }
 
-test("select: Add Project and New Environment open in the node's workspace once its stores have hydrated", async () => {
+test("select: Add Project and New environment open in the node's workspace once its stores have hydrated", async () => {
   renderRegion();
   // The machine's "Add project" entry: an empty project.
   act(() => openMachineWorkspace({ connectionId: LEAF, projectId: "", title: "Machine A" }));
@@ -356,7 +356,7 @@ test("selection: navigating inside the in-tree workspace is the window's one sel
 test("open: a cross-node open from inside the in-tree workspace is the window's direct open", async () => {
   await openLeaf({ projectId: project.id });
   await settle();
-  // "Open the coordinator on <command node>" inside the node's workspace
+  // "Open the Coordinator on <command node>" inside the node's workspace
   // (`LeafModeCoordinatorGate`) runs in the window's document.
   act(() =>
     openMachineWorkspace({

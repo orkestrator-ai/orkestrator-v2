@@ -111,7 +111,7 @@ export function describeHostUpdateJob(
     case "postponed":
       return `Postponed on ${on}. ${target} installs the next time Orkestrator quits there.`;
     case "cancelled":
-      return "The update was cancelled.";
+      return "The update was canceled.";
     case "failed":
       return `The update failed: ${job.error ? summarizeUpdateError(job.error) : "unknown error"}`;
   }
@@ -132,7 +132,7 @@ function UpdateError({ prefix, error }: { prefix: string; error: string }) {
   };
   return (
     <span className="block">
-      <span className="text-destructive">
+      <span className="text-failure">
         {prefix}
         {summary}
       </span>
@@ -186,7 +186,7 @@ function JobStatus({ job, onCancel }: { job: HostUpdateJob; onCancel: () => void
         <p
           role="status"
           className={
-            job.state === "failed" ? "text-sm text-destructive" : "text-sm text-muted-foreground"
+            job.state === "failed" ? "text-sm text-failure" : "text-sm text-muted-foreground"
           }
         >
           {active && (
@@ -310,7 +310,7 @@ export function HostUpdatesPanel({
 
   if (!snapshot) {
     return error ? (
-      <p className="text-sm text-destructive">{error}</p>
+      <p className="text-sm text-failure">{error}</p>
     ) : (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-label="Loading" />

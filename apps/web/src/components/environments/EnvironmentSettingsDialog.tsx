@@ -173,7 +173,7 @@ function ExtensionStatusIcon({ status }: { status: backend.AgentExtensionItem["s
     return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />;
   }
   if (status === "failed") {
-    return <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />;
+    return <XCircle className="h-3.5 w-3.5 shrink-0 text-failure" />;
   }
   if (status === "pending") {
     return <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />;
@@ -213,7 +213,7 @@ function ExtensionCollection({
         </span>
       </div>
       {error ? (
-        <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+        <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-failure">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>{error}</span>
         </div>
@@ -864,15 +864,15 @@ export function EnvironmentSettingsDialog({
                 onChange={handleNameChange}
                 placeholder="Environment name"
               />
-              {nameError && <p className="text-sm text-destructive">{nameError}</p>}
+              {nameError && <p className="text-sm text-failure">{nameError}</p>}
             </div>
             {isLocalEnvironment && (
               <div className="space-y-4">
-                <Label>Environment Type</Label>
+                <Label>Environment type</Label>
                 <div className="flex items-center gap-2 p-3 rounded-md bg-zinc-900">
                   <Laptop className="h-4 w-4 text-blue-500 shrink-0" />
                   <div>
-                    <div className="font-medium text-sm">Local Environment</div>
+                    <div className="font-medium text-sm">Local environment</div>
                     <div className="text-xs text-muted-foreground">
                       Uses a git worktree on your machine (no Docker container)
                     </div>
@@ -880,7 +880,7 @@ export function EnvironmentSettingsDialog({
                 </div>
                 {environment.worktreePath && (
                   <div className="space-y-2">
-                    <Label>Worktree Location</Label>
+                    <Label>Worktree location</Label>
                     <div className="flex items-center gap-2 p-2 rounded-md bg-zinc-900">
                       <FolderOpen className="h-4 w-4 text-muted-foreground shrink-0" />
                       <span className="text-sm font-mono truncate">{environment.worktreePath}</span>
@@ -893,7 +893,7 @@ export function EnvironmentSettingsDialog({
               </div>
             )}
             <div className="space-y-2">
-              <Label>Disk Usage</Label>
+              <Label>Disk usage</Label>
               <EnvironmentDiskUsageBreakdown environmentId={environment.id} />
             </div>
           </div>
@@ -1077,7 +1077,7 @@ export function EnvironmentSettingsDialog({
                 <>
                   <Globe className="h-4 w-4 text-blue-500 shrink-0" />
                   <div>
-                    <div className="font-medium text-sm">Full Network Access</div>
+                    <div className="font-medium text-sm">Full network access</div>
                     <div className="text-xs text-muted-foreground">
                       Unrestricted internet access. Whitelist does not apply.
                     </div>
@@ -1087,7 +1087,7 @@ export function EnvironmentSettingsDialog({
                 <>
                   <Shield className="h-4 w-4 text-success shrink-0" />
                   <div>
-                    <div className="font-medium text-sm">Restricted Network Access</div>
+                    <div className="font-medium text-sm">Restricted network access</div>
                     <div className="text-xs text-muted-foreground">
                       Only whitelisted domains are accessible.
                     </div>
@@ -1099,13 +1099,13 @@ export function EnvironmentSettingsDialog({
               <>
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Use Global Defaults</Label>
+                    <Label>Use global defaults</Label>
                     <p className="text-xs text-muted-foreground">Use default allowed domains</p>
                   </div>
                   <Switch checked={useGlobalDefaults} onCheckedChange={setUseGlobalDefaults} />
                 </div>
                 <div className="space-y-2">
-                  <Label>Allowed Domains</Label>
+                  <Label>Allowed domains</Label>
                   <p className="text-xs text-muted-foreground">{ALLOWLIST_ENTRY_HINT}</p>
                   <p className="text-xs text-muted-foreground">{ALLOWLIST_RESIDUAL_RISK}</p>
                   <Textarea
@@ -1114,11 +1114,11 @@ export function EnvironmentSettingsDialog({
                     disabled={useGlobalDefaults}
                     placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"}
                     rows={8}
-                    className={`font-mono text-sm ${domainErrors.length > 0 ? "border-red-500" : ""} ${useGlobalDefaults ? "opacity-50" : ""}`}
+                    className={`font-mono text-sm ${domainErrors.length > 0 ? "border-failure/60" : ""} ${useGlobalDefaults ? "opacity-50" : ""}`}
                   />
                 </div>
                 {domainErrors.length > 0 && (
-                  <div className="text-sm text-red-500 space-y-1">
+                  <div className="text-sm text-failure space-y-1">
                     {domainErrors.map((error, i) => (
                       <div key={i} className="flex items-center gap-1">
                         <XCircle className="h-3 w-3" />
@@ -1140,12 +1140,12 @@ export function EnvironmentSettingsDialog({
                       Testing...
                     </>
                   ) : (
-                    "Test DNS Resolution"
+                    "Test DNS resolution"
                   )}
                 </Button>
                 {testResults && (
                   <div className="border border-zinc-700 rounded-md p-3 space-y-2 text-sm max-h-32 overflow-y-auto">
-                    <div className="font-medium">DNS Test Results:</div>
+                    <div className="font-medium">DNS test results:</div>
                     {testResults.map((result, i) => (
                       <div key={i} className="flex items-start gap-2">
                         {result.resolvable ? (
@@ -1153,12 +1153,12 @@ export function EnvironmentSettingsDialog({
                         ) : result.valid ? (
                           <AlertCircle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
                         ) : (
-                          <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                          <XCircle className="h-4 w-4 text-failure mt-0.5 shrink-0" />
                         )}
                         <div className="min-w-0">
                           <span className="font-mono text-xs break-all">{result.domain}</span>
                           {result.error && (
-                            <span className="text-red-500 text-xs block">{result.error}</span>
+                            <span className="text-failure text-xs block">{result.error}</span>
                           )}
                         </div>
                       </div>
@@ -1275,7 +1275,7 @@ export function EnvironmentSettingsDialog({
                   onClick={() => setShowAddPortForm(true)}
                 >
                   <Plus className="h-4 w-4 mr-1" />
-                  Add Port
+                  Add port
                 </Button>
               )}
             </div>
@@ -1306,14 +1306,14 @@ export function EnvironmentSettingsDialog({
               </div>
             )}
             {portError && (
-              <div className="flex items-center gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-sm">
+              <div className="flex items-center gap-2 p-2 rounded-md bg-destructive/10 text-failure text-sm">
                 <XCircle className="h-4 w-4 shrink-0" />
                 <span>{portError}</span>
               </div>
             )}
             {portMappings.length === 0 && !showAddPortForm && (
               <p className="text-sm text-muted-foreground">
-                No port mappings configured. Click "Add Port" to expose a container port.
+                No port mappings configured. Click "Add port" to expose a container port.
               </p>
             )}
             {portMappingsChanged && environment.containerId && (
@@ -1327,7 +1327,7 @@ export function EnvironmentSettingsDialog({
             )}
             {showAddPortForm && (
               <div className="space-y-3 p-3 rounded-md border border-zinc-700">
-                <p className="text-sm font-medium">Add Port Mapping</p>
+                <p className="text-sm font-medium">Add port mapping</p>
                 <div className="space-y-2">
                   <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
                     <Input
@@ -1481,7 +1481,7 @@ export function EnvironmentSettingsDialog({
               </Button>
             </div>
             {extensionsError && (
-              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-failure">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{extensionsError}</span>
               </div>
@@ -1491,14 +1491,15 @@ export function EnvironmentSettingsDialog({
               onValueChange={(value) => setActiveExtensionAgent(value as backend.AgentExtensionId)}
             >
               <TabsList
+                variant="pill"
                 aria-label="Agent extensions"
-                className="h-auto min-h-10 w-full flex-wrap justify-start rounded-xl border border-border/70 bg-muted/30 p-1 sm:w-fit"
+                className="w-full flex-wrap sm:w-fit"
               >
                 {AGENT_ORDER.map((agent) => (
                   <TabsTrigger
                     key={agent}
                     value={agent}
-                    className="h-8 min-w-0 flex-1 gap-2 px-4 text-xs data-[state=active]:bg-background data-[state=active]:text-foreground sm:min-w-32"
+                    className="min-w-0 gap-2 px-4 text-xs sm:min-w-32"
                   >
                     <AgentExtensionIcon agent={agent} className="h-4 w-4" />
                     {AGENT_EXTENSION_COPY[agent].label}
@@ -1539,7 +1540,7 @@ export function EnvironmentSettingsDialog({
       <FullscreenSettingsLayout
         open={open}
         onOpenChange={onOpenChange}
-        title="Environment Settings"
+        title="Environment settings"
         menuItems={menuItems}
         defaultSection={initialSection}
         sectionRequest={sectionRequest}
@@ -1555,7 +1556,7 @@ export function EnvironmentSettingsDialog({
                   Saving...
                 </>
               ) : (
-                "Save Changes"
+                "Save changes"
               )}
             </Button>
           </>

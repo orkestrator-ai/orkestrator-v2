@@ -15,11 +15,11 @@ async function expectNoHorizontalOverflow(page: Page) {
 async function expectPromptFieldLayout(page: Page, layout: "stacked" | "grid") {
   const field = page.locator('[data-slot="initial-prompt-field"]');
   const label = page.locator('label[for="initial-prompt"]');
-  const prompt = page.getByLabel("Initial Prompt (optional)");
+  const prompt = page.getByLabel("Initial prompt (optional)");
   const optional = label.locator(".sr-only");
 
   await expect(field).toBeVisible();
-  await expect(label).toHaveText(/Initial Prompt/);
+  await expect(label).toHaveText(/Initial prompt/);
   await expect(optional).toHaveText("(optional)");
   await expect(optional).toHaveCSS("position", "absolute");
   await expect(optional).toHaveCSS("width", "1px");
@@ -96,14 +96,38 @@ test("mobile sections have one visible panel, preserve values, and stay within t
   const tabList = page.getByRole("tablist", {
     name: "Environment configuration sections",
   });
-  const prompt = page.getByLabel("Initial Prompt (optional)");
-  const environmentName = page.getByLabel("Environment Name (optional)");
+  const prompt = page.getByLabel("Initial prompt (optional)");
+  const environmentName = page.getByLabel("Environment name (optional)");
   const promptPanel = panelContaining(page, prompt);
   const setupPanel = panelContaining(page, environmentName);
   const accessPanel = panelContaining(page, page.getByRole("button", { name: "Restricted" }));
 
   await expect(dialog).toBeVisible();
   await expect(tabList).toBeVisible();
+  const tabs = tabList.getByRole("tab");
+  await expect(tabs).toHaveText(["Prompt", "Setup", "Agent", "Access", "Ports"]);
+  const tabListBox = await tabList.boundingBox();
+  expect(tabListBox).not.toBeNull();
+  for (const tab of await tabs.all()) {
+    await expect(tab).toHaveCSS("font-size", "11px");
+    const labelFits = await tab.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element.querySelector("span")!);
+      const text = range.getClientRects();
+      const bounds = element.getBoundingClientRect();
+      return (
+        text.length === 1 &&
+        text[0].left >= bounds.left &&
+        text[0].right <= bounds.right &&
+        text[0].top >= bounds.top &&
+        text[0].bottom <= bounds.bottom
+      );
+    });
+    expect(labelFits, await tab.innerText()).toBe(true);
+    const bounds = (await tab.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(tabListBox!.x);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(tabListBox!.x + tabListBox!.width);
+  }
   await expect(promptPanel).toBeVisible();
   await expect(setupPanel).toBeHidden();
   await expect(accessPanel).toBeHidden();
@@ -156,7 +180,7 @@ test("mobile sections have one visible panel, preserve values, and stay within t
   );
   await protocol.click();
   await page.getByRole("option", { name: "UDP" }).click();
-  const createButton = page.getByRole("button", { name: "Create Environment" });
+  const createButton = page.getByRole("button", { name: "Create environment" });
   await expect(createButton).toBeVisible();
   await createButton.click();
   await expect
@@ -173,10 +197,10 @@ test("desktop hides the mobile tablist while exposing every configuration sectio
   const tabList = page.getByRole("tablist", {
     name: "Environment configuration sections",
   });
-  const environmentName = page.getByLabel("Environment Name (optional)");
+  const environmentName = page.getByLabel("Environment name (optional)");
   const restrictedAccess = page.getByRole("button", { name: "Restricted" });
-  const launchAgent = page.getByRole("checkbox", { name: "Launch Agent" });
-  const prompt = page.getByLabel("Initial Prompt (optional)");
+  const launchAgent = page.getByRole("checkbox", { name: "Launch agent" });
+  const prompt = page.getByLabel("Initial prompt (optional)");
   const containerPort = page.getByPlaceholder("Container");
 
   await expect(tabList).toBeHidden();
@@ -288,7 +312,7 @@ test("native Enter inserts a newline and never implicitly submits name or ports"
   await page.goto("/");
   await trackCreations(page);
   await showSection(page, "Prompt");
-  const prompt = page.getByLabel("Initial Prompt (optional)");
+  const prompt = page.getByLabel("Initial prompt (optional)");
   await prompt.fill("first line");
   await prompt.press("End");
   await prompt.press("Enter");
@@ -298,10 +322,10 @@ test("native Enter inserts a newline and never implicitly submits name or ports"
     path: `output/visual-previews/shortcut-newline-${testInfo.project.name}.png`,
   });
   await showSection(page, "Setup");
-  await page.getByLabel("Environment Name (optional)").press("Enter");
+  await page.getByLabel("Environment name (optional)").press("Enter");
   await showSection(page, "Ports");
   if (!(await page.getByPlaceholder("Host", { exact: true }).isVisible())) {
-    await page.getByRole("button", { name: /Port Configuration/ }).click();
+    await page.getByRole("button", { name: /Port configuration/ }).click();
   }
   await page.getByPlaceholder("Container", { exact: true }).press("Enter");
   await page.getByPlaceholder("Host", { exact: true }).press("Enter");
@@ -328,14 +352,14 @@ for (const chord of ["Meta+Enter", "Control+Enter"]) {
       let control: Locator;
       if (target === "prompt") {
         await showSection(page, "Prompt");
-        control = page.getByLabel("Initial Prompt (optional)");
+        control = page.getByLabel("Initial prompt (optional)");
       } else if (target === "name") {
         await showSection(page, "Setup");
-        control = page.getByLabel("Environment Name (optional)");
+        control = page.getByLabel("Environment name (optional)");
       } else if (target === "port" || target === "protocol") {
         await showSection(page, "Ports");
         if (!(await page.getByPlaceholder("Host", { exact: true }).isVisible())) {
-          await page.getByRole("button", { name: /Port Configuration/ }).click();
+          await page.getByRole("button", { name: /Port configuration/ }).click();
         }
         control =
           target === "port"
@@ -347,11 +371,11 @@ for (const chord of ["Meta+Enter", "Control+Enter"]) {
           await page.locator("#agent-model").click();
           control = page.getByPlaceholder("Search models...");
         } else {
-          control = page.getByRole("checkbox", { name: "Launch Agent" });
+          control = page.getByRole("checkbox", { name: "Launch agent" });
         }
       } else {
         control = page.getByRole("button", {
-          name: target === "cancel" ? "Cancel" : "Create Environment",
+          name: target === "cancel" ? "Cancel" : "Create environment",
           exact: true,
         });
       }
@@ -400,7 +424,7 @@ for (const intent of ["prompt", "feature"] as const) {
     const prompt =
       intent === "feature"
         ? page.getByLabel("Description", { exact: true })
-        : page.getByLabel("Initial Prompt (optional)");
+        : page.getByLabel("Initial prompt (optional)");
     await prompt.fill("Keep this staged brief");
 
     await dropImages(page, [

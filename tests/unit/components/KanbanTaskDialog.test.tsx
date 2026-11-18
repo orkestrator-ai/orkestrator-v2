@@ -618,7 +618,7 @@ describe("KanbanTaskDialog", () => {
     taskBody.scrollTop = 180;
     fireEvent.scroll(taskBody);
     expect(taskBody.scrollTop).toBe(180);
-    expect(taskBody.contains(screen.getByRole("button", { name: "Create Task" }))).toBe(false);
+    expect(taskBody.contains(screen.getByRole("button", { name: "Create task" }))).toBe(false);
   });
 
   test("restores a persisted create-task draft", async () => {
@@ -854,7 +854,7 @@ describe("KanbanTaskDialog", () => {
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
       target: { value: "Task worth recovering" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
 
     await waitFor(() => {
       expect(addTaskMock).toHaveBeenCalledTimes(1);
@@ -894,7 +894,7 @@ describe("KanbanTaskDialog", () => {
     fireEvent.change(screen.getByPlaceholderText("Define what 'done' looks like..."), {
       target: { value: "  Done means shipped  " },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
     await waitFor(() => {
@@ -1542,7 +1542,7 @@ describe("KanbanTaskDialog", () => {
       expect(screen.getByAltText("attached.png")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
 
     await waitFor(() => {
       expect(addTaskMock).toHaveBeenCalledWith("project-1", "Task with image", "");
@@ -1640,7 +1640,7 @@ describe("KanbanTaskDialog", () => {
       },
     });
     await screen.findByAltText("failure.png");
-    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Failed to save 1 image"));
   });
 
@@ -1663,7 +1663,7 @@ describe("KanbanTaskDialog", () => {
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
       target: { value: "No image task" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
     await waitFor(() => expect(addTaskMock).toHaveBeenCalled());
     expect(addImageMock).not.toHaveBeenCalled();
   });
@@ -1922,7 +1922,7 @@ describe("KanbanTaskDialog", () => {
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
       target: { value: "Pasted image task" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
 
     await waitFor(() => {
       expect(addImageMock).toHaveBeenCalledWith(
@@ -2097,7 +2097,7 @@ describe("KanbanTaskDialog", () => {
     launchBuild("Container");
     expect(startBuildMock).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Start Build" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 
     await waitFor(() => {
       expect(startBuildMock).toHaveBeenCalledWith(
@@ -2115,7 +2115,7 @@ describe("KanbanTaskDialog", () => {
     startBuildMock.mockClear();
     launchBuild("Local");
     expect(startBuildMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Start Build" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start build" }));
     await waitFor(() => {
       expect(startBuildMock).toHaveBeenCalledWith(
         task,
@@ -2136,15 +2136,15 @@ describe("KanbanTaskDialog", () => {
     renderInAppCommandScope(<KanbanTaskDialog task={task} open onOpenChange={() => {}} />);
 
     launchBuild("Container");
-    expect(screen.getByText("Environment Already Exists")).toBeTruthy();
+    expect(screen.getByText("Environment already exists")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     await waitFor(() =>
-      expect(screen.queryByText("Environment Already Exists") === null).toBe(true),
+      expect(screen.queryByText("Environment already exists") === null).toBe(true),
     );
     // The held selection is dropped, so there is nothing left to confirm.
-    expect(screen.queryByRole("button", { name: "Start Build" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Start build" }) === null).toBe(true);
     expect(startBuildMock).not.toHaveBeenCalled();
   });
 
@@ -2359,7 +2359,7 @@ describe("KanbanTaskDialog", () => {
     expect(startBuildMock).not.toHaveBeenCalled();
     await waitFor(() => expect(buildButton().disabled).toBe(false));
     expect(
-      (screen.getByRole("button", { name: "Create Task" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Create task" }) as HTMLButtonElement).disabled,
     ).toBe(false);
   });
 
@@ -2368,7 +2368,7 @@ describe("KanbanTaskDialog", () => {
     const task = makeTask({ environmentId: "env-1" });
     renderInAppCommandScope(<KanbanTaskDialog task={task} open onOpenChange={onOpenChange} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /View Build/ }));
+    fireEvent.click(screen.getByRole("button", { name: /View build/ }));
 
     expect(navigateToBuildMock).toHaveBeenCalledWith(task);
     expect(onOpenChange).toHaveBeenCalledWith(false);

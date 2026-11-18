@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -22,6 +22,14 @@ import {
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  COMPOSE_FRAME_CLASS_NAME,
+  COMPOSE_COLUMN_CLASS_NAME,
+} from "@/components/chat/NativeComposeBar";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "@/components/chat/compose-metrics";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
@@ -64,8 +72,7 @@ type RightPaneTab = "chat" | "stories" | `story:${string}`;
 
 const RIGHT_PANE_CONTENT_CLASS =
   "h-full min-h-0 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col";
-const COMPACT_TAB_LIST_CLASS = "h-8 bg-zinc-900/80";
-const COMPACT_TAB_TRIGGER_CLASS = "px-2 text-xs data-[state=active]:!bg-zinc-800";
+const COMPACT_TAB_TRIGGER_CLASS = "flex-none px-2 text-xs";
 
 /** How long feature chat drafts settle before the project's draft record is written. */
 export const FEATURE_CHAT_DRAFT_SAVE_DELAY_MS = 400;
@@ -97,7 +104,7 @@ function FeatureListItem({
         "w-full rounded-md border px-3 py-2 text-left transition-colors",
         isSelected
           ? "border-primary/40 bg-primary/10"
-          : "border-transparent hover:border-border hover:bg-muted/35",
+          : "border-transparent hover:border-border hover:bg-hover/30",
       )}
     >
       <div className="truncate text-sm font-medium text-foreground">
@@ -205,6 +212,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const [rightTab, setRightTab] = useState<RightPaneTab>("chat");
   const [openStoryTabs, setOpenStoryTabs] = useState<string[]>([]);
   const [buildingFeatureId, setBuildingFeatureId] = useState<string | null>(null);
+  const featureTabsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -321,6 +329,20 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       null,
     [projectFeatures, selectedFeatureId],
   );
+  const featureId = selectedFeature?.id;
+  useLayoutEffect(() => {
+    const list = featureTabsRef.current;
+    if (!list) return;
+    const revealSelectedTab = () =>
+      list
+        .querySelector('[role="tab"][aria-selected="true"]')
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    revealSelectedTab();
+    const resize = new ResizeObserver(revealSelectedTab);
+    resize.observe(list);
+    return () => resize.disconnect();
+  }, [featureId, rightTab]);
+
   /**
    * The backend-owned planning exchanges for this project.
    *
@@ -605,8 +627,13 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             onValueChange={(value) => setRightTab(value as RightPaneTab)}
             className="h-full min-h-0 gap-0"
           >
-            <div className="flex h-14 items-center gap-3 border-b border-border px-4">
-              <TabsList className={COMPACT_TAB_LIST_CLASS}>
+            <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-1">
+              <TabsList
+                ref={featureTabsRef}
+                variant="underline"
+                aria-label="Feature views"
+                className="min-w-[min(100%,12rem)] flex-1 overflow-x-auto"
+              >
                 <TabsTrigger value="chat" className={cn(COMPACT_TAB_TRIGGER_CLASS, "gap-1.5")}>
                   <MessageSquare className="h-3.5 w-3.5" />
                   Chat
@@ -625,41 +652,32 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   );
                   if (!story) return null;
                   return (
-                    <TabsTrigger
-                      key={storyId}
-                      value={`story:${storyId}`}
-                      aria-label={formatStoryTabTitle(story)}
-                      className={cn(COMPACT_TAB_TRIGGER_CLASS, "group gap-1.5")}
-                    >
-                      <Sparkles className="h-3.5 w-3.5" />
-                      {formatStoryTabTitle(story)}
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Close ${story.title}`}
-                        className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          closeStoryTab(storyId);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key !== "Enter" && event.key !== " ") return;
-                          event.preventDefault();
-                          event.stopPropagation();
-                          closeStoryTab(storyId);
-                        }}
+                    <div key={storyId} className="relative flex max-w-full shrink-0 items-center">
+                      <TabsTrigger
+                        value={`story:${storyId}`}
+                        aria-label={story.title}
+                        title={story.title}
+                        className={cn(COMPACT_TAB_TRIGGER_CLASS, "min-w-0 flex-auto pr-7")}
                       >
-                        <X className="h-3 w-3" />
-                      </span>
-                    </TabsTrigger>
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span className="truncate">{formatStoryTabTitle(story)}</span>
+                      </TabsTrigger>
+                      <button
+                        type="button"
+                        aria-label={`Close ${story.title}`}
+                        className="focus-hairline absolute right-1 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        onClick={() => closeStoryTab(storyId)}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
                   );
                 })}
               </TabsList>
               {selectedFeature.stories.length > 0 && (
                 <Button
                   size="sm"
-                  className="ml-auto gap-1.5"
+                  className="ml-auto shrink-0 gap-1.5"
                   disabled={
                     buildingFeatureId === selectedFeature.id ||
                     hasBlockingConversation ||
@@ -850,6 +868,23 @@ export function NativeStyleChatPanel({
     // latest exchange.
     activation: "latest",
   });
+  const dockRef = useRef<HTMLDivElement>(null);
+  const [dockHeight, setDockHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const dock = dockRef.current;
+    if (!dock) return;
+
+    const measure = () => setDockHeight(dock.offsetHeight);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(dock);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
 
   const handleSend = useCallback(() => {
     const trimmed = draft.trim();
@@ -913,7 +948,8 @@ export function NativeStyleChatPanel({
                     </div>
                   </div>
                 )}
-                <div className="h-32" aria-hidden="true" />
+                {/* The dock's fade extends 2rem above its measured box. */}
+                <div style={{ height: `calc(${dockHeight}px + 2rem)` }} aria-hidden="true" />
               </>
             }
             scrollProps={scrollProps}
@@ -923,6 +959,7 @@ export function NativeStyleChatPanel({
       </div>
 
       <NativeComposeDock
+        rootRef={dockRef}
         centered={false}
         topAccessory={
           !isAtBottom ? (
@@ -938,13 +975,20 @@ export function NativeStyleChatPanel({
           ) : null
         }
       >
-        <div className="mx-auto mb-4 mt-2 w-[min(calc(100%_-_2rem),56rem)] shrink-0 rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
+        <div
+          className={cn(
+            COMPOSE_COLUMN_CLASS_NAME,
+            COMPOSE_FRAME_CLASS_NAME,
+            "mb-4 mt-2 has-[>textarea:focus-visible]:focus-hairline-frame",
+          )}
+        >
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder={placeholder}
             rows={1}
-            className="max-h-[160px] min-h-7 resize-none border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:outline-none"
+            style={{ minHeight: COMPOSE_MIN_INPUT_HEIGHT, maxHeight: COMPOSE_MAX_INPUT_HEIGHT }}
+            className="min-h-0 resize-none overflow-y-auto border-0 bg-transparent px-0 py-0 text-sm leading-5 shadow-none focus-visible:outline-none"
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -1001,7 +1045,7 @@ function FeatureStoriesPanel({
             key={story.id}
             type="button"
             onClick={() => onOpenStory(story.id)}
-            className="rounded-md border border-border bg-card p-4 text-left shadow-sm transition-[border-color,box-shadow] hover:border-primary/50 hover:shadow-md"
+            className="rounded-md border border-border bg-card p-4 text-left transition-[border-color] hover:border-primary/50"
           >
             <div className="flex items-start gap-2">
               <h4 className="min-w-0 flex-1 text-sm font-semibold text-foreground">

@@ -50,7 +50,10 @@ import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { hydrateAgentModelCatalogCache } from "@/lib/agent-model-catalog-cache";
-import { MODEL_CATALOG_REFRESHED_EVENT } from "@/components/settings/agent/refresh-model-catalog";
+import {
+  MODEL_CATALOG_REFRESHED_EVENT,
+  modelCatalogRefreshTargetsScope,
+} from "@/components/settings/agent/refresh-model-catalog";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import {
@@ -715,14 +718,16 @@ export function UnassignedNativeAgentComposer({
       setModelCatalogRetryRevision((revision) => revision + 1);
     };
     const retryHostOnFocus = () => retryEmptyPlatform(false);
-    const retryAfterRefresh = () => retryEmptyPlatform(true);
+    const retryAfterRefresh = (event: Event) => {
+      if (modelCatalogRefreshTargetsScope(event, modelCatalogScope)) retryEmptyPlatform(true);
+    };
     window.addEventListener("focus", retryHostOnFocus);
     window.addEventListener(MODEL_CATALOG_REFRESHED_EVENT, retryAfterRefresh);
     return () => {
       window.removeEventListener("focus", retryHostOnFocus);
       window.removeEventListener(MODEL_CATALOG_REFRESHED_EVENT, retryAfterRefresh);
     };
-  }, [environmentId, models, platform]);
+  }, [environmentId, modelCatalogScope, models, platform]);
   const fileSearch = useFileSearch(containerId, worktreePath);
   const {
     isMenuOpen: fileMentionMenuOpen,
@@ -992,7 +997,7 @@ export function UnassignedNativeAgentComposer({
               className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
             >
               <History className="mr-2 h-4 w-4" />
-              Resume Session
+              Resume session
             </Button>
           ) : null
         }

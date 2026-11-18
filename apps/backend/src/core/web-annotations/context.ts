@@ -29,6 +29,7 @@ import type {
   ComposeDispatchText,
   WebAnnotationDispatchPort,
 } from "./contracts.js";
+import type { WebAnnotationResultDiffOptions } from "./result-diff.js";
 import { environmentImageUsage } from "./assets.js";
 import { WebAnnotationMetrics } from "./metrics.js";
 import { WebAnnotationServiceError, capacityError, conflictError } from "./service-errors.js";
@@ -121,6 +122,13 @@ export interface WebAnnotationServiceOptions {
   metrics?: WebAnnotationMetrics;
   /** Retention of materialized evidence after a request settles. */
   materializedRetentionMs?: number;
+  /**
+   * Advisory result diffs (`operations.resultDiffs`, `result-diff.ts`). On
+   * unless set to false.
+   */
+  resultDiffs?: boolean;
+  /** Decoder and limit overrides for result diffs (tests use fakes). */
+  resultDiffOptions?: WebAnnotationResultDiffOptions;
 }
 
 /** Deterministic JSON for body hashes: object keys sorted, undefined dropped. */

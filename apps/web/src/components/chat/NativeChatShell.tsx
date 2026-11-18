@@ -458,7 +458,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           {onResumeClick && (
             <Button variant="outline" size="sm" onClick={onResumeClick}>
               <History className="mr-2 h-4 w-4" />
-              Resume Session
+              Resume session
             </Button>
           )}
         </div>
@@ -575,9 +575,9 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   if (connectionState === "error" && !displayAvailable) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground">
-        <AlertCircle className="h-10 w-10 text-destructive" />
+        <AlertCircle className="h-10 w-10 text-failure" />
         <div className="text-center">
-          <p className="text-sm font-medium text-foreground">Connection Failed</p>
+          <p className="text-sm font-medium text-foreground">Connection failed</p>
           <p className="mt-1 max-w-lg text-left text-xs break-words whitespace-pre-wrap">
             {errorMessage || `Unable to connect to ${agentLabel}`}
           </p>
@@ -589,7 +589,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           </Button>
           {serverLog && (
             <Button variant="ghost" size="sm" onClick={() => setShowLog((value) => !value)}>
-              {showLog ? "Hide Log" : "Show Log"}
+              {showLog ? "Hide log" : "Show log"}
             </Button>
           )}
         </div>
@@ -616,7 +616,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     dockNoticeKind === "connection" ? (
       <div
         role="alert"
-        className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+        className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-failure"
       >
         <div className="flex items-center gap-2">
           <AlertCircle className="h-4 w-4 shrink-0" />
@@ -635,7 +635,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               onClick={() => setShowLog((value) => !value)}
               className="h-7"
             >
-              {showLog ? "Hide Log" : "Show Log"}
+              {showLog ? "Hide log" : "Show log"}
             </Button>
           ) : null}
         </div>
@@ -815,7 +815,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               tabIndex={composerCentered ? 0 : -1}
             >
               <History className="mr-2 h-4 w-4" />
-              Resume Session
+              Resume session
             </Button>
           ) : null
         }

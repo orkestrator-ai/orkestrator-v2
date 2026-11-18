@@ -620,27 +620,6 @@ export interface MultiReviewActionResult {
   replayed?: true;
 }
 
-/**
- * A launch request whose Address Findings fields carry the public names the
- * coordinator tools and the CLI still use (`fixModel`, `autoFix`), in the
- * button action's names. The public names change with to-do 4740 task 3.
- */
-export function launchActionInputFromPublicFields<
-  T extends { fixModel?: unknown; autoFix?: unknown },
->(
-  input: T,
-): Omit<T, "fixModel" | "autoFix"> & {
-  addressFindingsModel?: unknown;
-  autoAddressFindings?: unknown;
-} {
-  const { fixModel, autoFix, ...rest } = input;
-  return {
-    ...rest,
-    ...(fixModel === undefined ? {} : { addressFindingsModel: fixModel }),
-    ...(autoFix === undefined ? {} : { autoAddressFindings: autoFix }),
-  };
-}
-
 export function isLaunchMultiReviewActionInput(
   value: unknown,
 ): value is LaunchMultiReviewActionInput {

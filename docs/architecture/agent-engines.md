@@ -149,7 +149,7 @@ the old per-provider semantics for *new* closes (an old Claude bridge's DELETE
 deletes history), and history that pre-retention builds already deleted cannot
 be recovered.
 
-A tab opened from **Resume Session** (an unassigned tab, then a platform)
+A tab opened from **Resume session** (an unassigned tab, then a platform)
 creates no provider session while its picker is open: the backend resumes into
 a tab with no mapping, and the tab starts its own session only if the picker is
 dismissed or the resume fails. The resume then sends no composer controls, so
@@ -443,6 +443,39 @@ a link that leaves the working directory is not followed) and sends it as a
 | Grok | The session trusts the checkout (`GROK_FOLDER_TRUST=0`) | Added to `_meta.rules` on `session/new`. A checkout the user trusted in Grok itself may load it twice |
 | Cursor | The `project` setting source is on | Added to the prompt frame once per Cursor agent (`repositoryInstructionsFor`), and again after a replacement agent or a compaction. It is too large to repeat on every prompt |
 
+## Host model catalogues
+
+Each machine keeps its own saved model list per platform (the
+`agent-model-catalog` store; OpenCode's is per project in
+`opencode-model-catalog`). Launch dialogs and the native composer read the
+list of the machine that will run the agent, so a list refreshed on one machine
+says nothing about another's.
+
+A list is kept current in three ways:
+
+- **Running bridges.** `get_native_agent_model_catalog` re-reads
+  `/global/models` from every agent bridge already running in the environment
+  and publishes the results to the environment picker. Cursor, Grok and Pi
+  also save their lists (`fetchAcpNormalizedModelsResult`). Codex accepts live
+  app-server rows (`fetchCodexBridgeModels`) and tries the running bridge before
+  a cold first-use host probe. A regular local Codex bridge can update the
+  saved host list when its account and login generation match the active login.
+  Container rows serve the environment picker only. Host Codex probes use the
+  active login, and the saved list is visible only to the login that produced it.
+  Claude's per-environment discovery also saves the host list.
+- **Age.** A Claude or Codex list last confirmed more than a day ago
+  (`AGENT_MODEL_CATALOG_MAX_AGE_MS`) is downloaded again through the host probe
+  Settings uses. Startup's seeding read waits for it; every other read answers
+  from the cache and refreshes behind it
+  (`refreshStaleHostModelCatalogs*` in `host-model-catalog-seed.ts`). It shares
+  the first-use seed's single flight and 15-minute failure cooldown.
+  `updatedAt` is the time the provider last confirmed the list: saving an
+  unchanged list moves it forward, at most hourly.
+- **Settings Refresh**, for the machine chosen in Settings' machine strip.
+
+The create dialog reloads its machine's saved lists each time it opens and
+after a Settings refresh.
+
 ## Activity observation
 
 The backend's activity sweep (every 2 s) is the one observer of whether a
@@ -734,9 +767,8 @@ picker and the run on the same model:
   never grounds for a swap.
 - **Existing sessions.** If a session holds a model the picker does not list,
   the picker shows that model, labelled "session model", instead of the first
-  catalogue row. The label makes no claim about the login, because the
-  durable catalogue does not record where it came from. Picking any listed
-  model replaces it.
+  catalogue row. The label describes the model held by the session.
+  Picking any listed model replaces it.
   The renderer keeps that row when a later discovery update replaces the
   composer's models with the bare catalogue
   (`withRetainedSelectedModelRow` in `useNativeAgentSession.ts`).

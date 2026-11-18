@@ -518,43 +518,65 @@ describe("CoordinatorPanel", () => {
       };
       const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
       const mailboxId = `${environmentId}\0${conversation.tabId}`;
+      const mailboxIdentity = {
+        mailboxId,
+        projectId: snapshot.workspace.projectId,
+        environmentId,
+        tabId: conversation.tabId,
+      };
+      const counts = {
+        unreadCount: 2,
+        userUnseenCount: 2,
+        agentUnackedCount: 2,
+        pendingInjectCount: 0,
+        failedInjectCount: 0,
+      };
+      const mailbox: AgentMailMailboxSnapshot = {
+        descriptor: {
+          ...mailboxIdentity,
+          ...counts,
+          incarnationId: conversation.mailboxIncarnationId,
+          projectName: "Project",
+          environmentName: "Coordinator",
+          environmentStatus: "running",
+          tabType: "agent-native",
+          title: conversation.title,
+          displayName: conversation.title,
+          tabOrdinal: 1,
+          agent: null,
+          kind: "native",
+          capabilities: { canPull: false, canSend: false, canInject: false },
+          injectPolicy: "off",
+          presence: "unknown",
+          mutedInbound: false,
+          mutedOutbound: false,
+        },
+        messages: ["first", "second"].map((id) => ({
+          version: 1,
+          id,
+          threadId: `thread-${id}`,
+          requestId: `request-${id}`,
+          createdAt: "2026-11-05T12:00:00.000Z",
+          from: { kind: "user" },
+          toEnvironmentId: environmentId,
+          toTabId: conversation.tabId,
+          toIncarnationId: conversation.mailboxIncarnationId,
+          bodyBytes: 5,
+          trust: "user",
+          injectDepth: 0,
+          threadDepth: 0,
+          placement: "stored",
+          placementReason: "recipient-cannot-inject",
+          revision: 1,
+        })),
+        total: counts.unreadCount,
+        offset: 0,
+        limit: 100,
+        revision: 1,
+      };
       appCommandStore(agentMailStore).setState({
-        summary: new Map([
-          [
-            mailboxId,
-            {
-              mailboxId,
-              projectId: "project-1",
-              environmentId,
-              tabId: conversation.tabId,
-              unreadCount: 2,
-              userUnseenCount: 2,
-              agentUnackedCount: 2,
-              pendingInjectCount: 0,
-              failedInjectCount: 0,
-              revision: 1,
-            },
-          ],
-        ]),
-        mailboxes: new Map([
-          [
-            mailboxId,
-            {
-              descriptor: {
-                capabilities: { canPull: false, canSend: false, canInject: false },
-                injectPolicy: "off",
-                presence: "unknown",
-              },
-              messages: ["first", "second"].map((id) => ({
-                id,
-                from: { kind: "user" },
-                createdAt: "2026-11-05T12:00:00.000Z",
-                placement: "stored",
-                placementReason: "recipient-cannot-inject",
-              })),
-            } as unknown as AgentMailMailboxSnapshot,
-          ],
-        ]),
+        summary: new Map([[mailboxId, { ...mailboxIdentity, ...counts, revision: 1 }]]),
+        mailboxes: new Map([[mailboxId, mailbox]]),
         refreshSummary: async () => undefined,
         refreshMailbox: async () => undefined,
       });
@@ -1609,7 +1631,7 @@ describe("CoordinatorPanel", () => {
     };
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     // With no main open, the action starts the main coordinator.
-    const newConversation = await screen.findAllByRole("button", { name: "Start coordinator" });
+    const newConversation = await screen.findAllByRole("button", { name: "Start Coordinator" });
     fireEvent.click(newConversation.at(-1)!);
     expect(await screen.findByText("create failed")).toBeTruthy();
   });
@@ -1638,7 +1660,7 @@ describe("CoordinatorPanel", () => {
     const side = screen.getByRole("tab", { name: "Side 1, Codex" });
     expect(main.compareDocumentPosition(side) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "New side agent" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Start coordinator" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Start Coordinator" }) === null).toBe(true);
   });
 
   test("selects a conversation from the full tab shell and shows its agent brand", async () => {
@@ -2008,7 +2030,7 @@ describe("CoordinatorPanel", () => {
       },
     };
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
-    await screen.findByText(/No coordinator is open/);
+    await screen.findByText(/No Coordinator is open/);
     expectNoContextNotice();
   });
 

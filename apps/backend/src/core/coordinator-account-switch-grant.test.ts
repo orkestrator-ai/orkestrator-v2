@@ -29,7 +29,7 @@ import { StorageService, createProject } from "./storage.js";
 
 /**
  * `switch_provider_account` under the user's standing permission (Settings →
- * "Let coordinators switch accounts without asking"), over the real Control
+ * "Let Coordinators switch accounts without asking"), over the real Control
  * MCP endpoint, the real grant commands, the real config store and the real
  * approval-request store. Accounts and usage readings are fakes: nothing
  * reads or writes a real provider login, and nothing runs a model turn.
@@ -522,7 +522,7 @@ describe("standing permission to switch accounts", () => {
     });
     const { body } = await rpc(issued.url, issued.token, "tools/list");
     const tool = body.result!.tools!.find((entry) => entry.name === "switch_provider_account");
-    expect(tool?.description).toContain("Let coordinators switch accounts without asking");
+    expect(tool?.description).toContain("Let Coordinators switch accounts without asking");
     expect(tool?.description).toContain("never ask the user to approve a switch that already ran");
   });
 });

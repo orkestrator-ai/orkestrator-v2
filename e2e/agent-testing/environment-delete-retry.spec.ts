@@ -18,9 +18,9 @@ test.use({ trace: "off", screenshot: "off", video: "off" });
 // reaches the workspace through the ordinary optional-tool dialogs.
 test.beforeEach(async ({ page }) => {
   for (const name of [
-    "Continue Without Claude",
-    "Continue Without Docker",
-    "Continue Without GitHub CLI",
+    "Continue without Claude",
+    "Continue without Docker",
+    "Continue without GitHub CLI",
   ]) {
     await page.addLocatorHandler(page.getByRole("button", { name, exact: true }), (button) =>
       button.click(),

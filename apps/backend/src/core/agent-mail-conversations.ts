@@ -6,6 +6,7 @@ import {
   agentMailConversationKey,
   agentMailNeedsAttention,
   agentMailParticipantKey,
+  formatCoordinatorMailTitle,
   type AgentMailConversation,
   type AgentMailConversationSummary,
   type AgentMailMessage,
@@ -72,7 +73,9 @@ function actorParticipant(actor: MailActor): AgentMailParticipant {
         key,
         kind: actor.kind === "coordinator" ? "coordinator" : "agent",
         displayName:
-          actor.title || (actor.kind === "coordinator" ? "Project coordinator" : "Closed tab"),
+          actor.kind === "coordinator"
+            ? formatCoordinatorMailTitle(actor.title)
+            : actor.title || "Closed tab",
         agent: actor.agent,
         environmentId: actor.environmentId,
         tabId: actor.tabId,
@@ -103,7 +106,7 @@ function actorParticipant(actor: MailActor): AgentMailParticipant {
       return {
         key,
         kind: actor.role === "coordinator" ? "coordinator" : "agent",
-        displayName: `${actor.title || (actor.role === "coordinator" ? "Project coordinator" : actor.tabId)} on ${actor.nodeName}`,
+        displayName: `${actor.role === "coordinator" ? formatCoordinatorMailTitle(actor.title) : actor.title || actor.tabId} on ${actor.nodeName}`,
         agent: null,
         // Older leaves use the environment name as the title fallback. The
         // display name already includes that name and the node suffix.

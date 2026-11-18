@@ -1209,7 +1209,7 @@ export class ProjectsRepository {
       if ("prMergeNoticePendingUrl" in updates && updates.prMergeNoticePendingUrl == null) {
         environment.prMergeNoticePendingUrl = undefined;
       }
-      // The open tabs hear of a merge once (`pr-merge-tab-notices.ts`). Arming
+      // The open tabs hear of a merge once (`git/pr-merge-tab-notices.ts`). Arming
       // the notice in the write that records the merge means a crash cannot
       // lose it, and a merge recorded before this existed is never announced.
       if (

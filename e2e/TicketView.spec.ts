@@ -70,7 +70,7 @@ test.describe("the ticket view", () => {
     // Cleanup is offered.
     await bar.getByRole("button", { name: "Merge", exact: true }).click();
     const options = page
-      .getByRole("alertdialog", { name: "Merge Pull Request" })
+      .getByRole("alertdialog", { name: "Merge pull request" })
       .getByRole("group", { name: "Merge options" });
     await expect(options.getByRole("button", { name: "Merge PR" })).toBeDisabled();
     await expect(options.getByRole("button", { name: "Auto-merge & Cleanup" })).toBeEnabled();
@@ -87,7 +87,7 @@ test.describe("the ticket view", () => {
     await expect(bar.getByRole("button", { name: "Merge", exact: true })).toBeEnabled();
     await preview(page, testInfo, "notes-tab-ready");
     await bar.getByRole("button", { name: "Merge", exact: true }).click();
-    const dialog = page.getByRole("alertdialog", { name: "Merge Pull Request" });
+    const dialog = page.getByRole("alertdialog", { name: "Merge pull request" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Merge PR" })).toBeEnabled();
   });

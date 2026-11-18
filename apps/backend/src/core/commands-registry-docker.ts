@@ -86,7 +86,7 @@ import {
 import { syncRuntimeGitHubCredential } from "./container-github-credential.js";
 import { isDockerDaemonUnreachable } from "./docker-cli-errors.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
-import { resolveContainerGitHubToken } from "./github-credentials.js";
+import { resolveContainerGitHubToken } from "./git/index.js";
 import { createEnvironment } from "./storage.js";
 import {
   asString,

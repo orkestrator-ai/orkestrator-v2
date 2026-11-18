@@ -89,7 +89,7 @@ const FIX_RESULT = {
 /** Every result the fake submits, by submission tool. Verify's is built per request. */
 export const FAKE_RESULTS: Readonly<Record<string, unknown>> = {
   ...FAKE_WORKFLOW_RESULTS,
-  submit_fix_result: FIX_RESULT,
+  submit_address_findings_result: FIX_RESULT,
 };
 
 export const VERIFY_TOOL = "submit_verification_result";

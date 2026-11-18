@@ -129,7 +129,7 @@ export function ArchiveAndContinue({
         Archive and continue
       </Button>
       {error && (
-        <p role="alert" className="text-destructive">
+        <p role="alert" className="text-failure">
           {error}
         </p>
       )}
@@ -344,7 +344,7 @@ export function ReplyEditor({
       {error &&
         !(capacityFull && showArchive) &&
         !(failure?.code === "archived" && failure.continuationId) && (
-          <p role="alert" className="text-[11px] text-destructive">
+          <p role="alert" className="text-[11px] text-failure">
             {error}
           </p>
         )}

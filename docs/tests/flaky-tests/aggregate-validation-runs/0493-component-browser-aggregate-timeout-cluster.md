@@ -804,3 +804,29 @@ Evidence below the host temporary directory:
 `orkestrator-test-run.5678za/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`,
 `orkestrator-test-run.r3JTBn/merge-portable-inputs-rerun.log.gz`,
 and `orkestrator-test-run.TaUoiD/merge-check.log.gz`.
+
+## Status token review — 2026-11-18
+
+- **Base:** `b2c91abb94de8144c119aeccf4a31cf26b655d3b`. The
+  recurrence check for 0493 against `origin/main` reported open.
+- **Aggregate:** `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name browser -- mise run test:browser`
+  used a runner-assigned fixture port and six Chromium workers. The
+  30-minute watchdog interrupted the component suite after 731 of 1,932
+  cases had started. The run produced no final pass counts and did not
+  reach the public-site suite.
+- **Assertion:** Mobile `design service host lifecycle › kills a host that
+  replies but never exits` (`e2e/design-service-client.spec.ts:28`) measured
+  3,215 ms for host shutdown against a limit of 2,000 ms. The retry ran
+  before the watchdog interrupted the suite. The interruption reports
+  for the later Sidebar specs occurred during runner shutdown.
+- **Isolated result:** The complete mobile owning file passed in 5.0 s with
+  one worker and retries disabled. The branch diff has no changes to the
+  host lifecycle spec, client or fixture. The timing failure did not recur
+  in isolation. Its root cause has not been established.
+- **Evidence:** `orkestrator-test-run.zv5tC4/browser.log.gz` under the host's
+  temporary directory. The four-digit case numbers are exhausted, so the
+  timing observation is recorded with this aggregate case.
+
+```sh
+ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name design-service-client-isolated -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts --project mobile-chromium --workers=1 --retries=0 --output output/agent-testing/design-00004-review-design-service design-service-client.spec.ts
+```

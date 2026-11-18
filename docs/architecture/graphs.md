@@ -77,7 +77,7 @@ two pieces of designer data the compiler and digest ignore: `layout?` (node id
   `params.<key>`.
 - **Roles**: `{key, multiplicity: "one" | "panel", maxPanel?, defaultsFrom?}`.
   A role is what a launch binds to models. `defaultsFrom` lists saved action
-  defaults (`review`, `review2`, `reviewPreparation`, `fixReviewIssues`,
+  defaults (`review`, `review2`, `reviewPreparation`, `addressFindings`,
   `verify`, `pr`, `resolve`, and last, on a panel, `additionalReviewers`).
 - **Run inputs** `{name, type, required?}` and **run outputs** `{name, type,
   from: {node, port, outlet?}}`.
@@ -254,7 +254,7 @@ anonymous shapes transforms produce.
 | `validation-plan@2`, `validation-results@1` | report | validation commands for one commit; the outcome of running them |
 | `review-package@2` | package | sealed review package (a reference artifact) |
 | `review-report@1`, `finding@1` | report | structured review report (items `issues` of `finding@1`); one issue |
-| `verification-verdict@1`, `fix-result@1` | report | per-criterion verdict; what a fix changed |
+| `verification-verdict@1`, `address-findings-result@1` | report | per-criterion verdict; what Address Findings (or a build) changed and validated |
 | `pr-description@1`, `pr-result@1` | text, report | title and body for a system-opened PR; the PR a run opened |
 | `check-summary@1` | report | rolled-up CI state |
 | `decision@1` | decision | `{choice, rationale}`; `choice` narrowed by the port's `choices` |
@@ -291,7 +291,7 @@ edge) or refused (`cardinality`, `version_mismatch`, `nominal_target`: a
 built-in with a validator accepts only itself, `storage_mismatch`,
 `schema_mismatch`). Adapters (`graphTypeAdapters`):
 `review-report-to-finding-list`, `review-report-to-markdown`,
-`ticket-to-markdown`, `fix-result-to-file-list`, `text-to-markdown`,
+`ticket-to-markdown`, `address-findings-result-to-file-list`, `text-to-markdown`,
 `markdown-to-text`. `graphTypeFamily` colours ports (`text`, `ticket`,
 `report`, `workspace`, `decision`, `package`, `error`, `list`, `unknown`).
 
@@ -355,8 +355,10 @@ rendering are bounded and never throw.
   templates and summaries render inside their input's block frame, so they
   add no inline frames.
 - **Built-in prompts** (`GRAPH_BUILT_IN_PROMPT_IDS`): `review-package-preparation`,
-  `discovery-review`, `consolidation`, `fix-review-issues`, `address-review`,
-  `build`, `pipeline-fix`, `verify`, `pull-request-description` and
+  `discovery-review`, `consolidation`, `address-findings`,
+  `pipeline-address-findings` (the Build Pipeline's Address Findings stage,
+  with its recorded validation), `build`, `pipeline-rework`, `verify`,
+  `pull-request-description` and
   `resolve-conflicts`; the backend binds them to today's builders
   (`graph-agent-builtins.ts`; the last two are push-free).
 - **The locked system contract** (`graphSystemContract`, `system-contract.ts`)
@@ -562,7 +564,16 @@ compile cache keyed by template digest, context and the sub-graph resolution.
 
 `builtins/` describes `multi-review`, `build-pipeline` (engines `active`) and
 `looped-review` (`retired`), each with a `stages` map from node to engine
-stage. Pinning tests (`graph-builtin-templates.test.ts`,
+stage. Node ids and roles use the Rework and Address Findings names: the
+Build Pipeline's loop runs `rework` → `prepare` → … → `address-findings` →
+`verify`, Verify reads the Address Findings result on its `addressFindings`
+input, and Multi Review's `address-findings` step (role `addresser`, run when
+the `autoAddressFindings` parameter is true) feeds the
+`address-findings-complete` gate. Saved user templates, graph runs and their
+artifacts written under the former names (`fix`, `address`, `fixer`,
+`autoFix`, `fix-result@1`, `pipeline-fix`, `fix-review-issues`,
+`address-review`) were rewritten once by storage migration 13
+(`storage-graph-vocabulary-upgrade.ts`). Pinning tests (`graph-builtin-templates.test.ts`,
 `builtins/*.test.ts`) fail when either the engine or the template changes
 alone. A built-in cannot be saved, launched or mock-run as a graph
 (`engine-template`); duplicating it drops `engine`, and the copy runs on the
@@ -1513,7 +1524,7 @@ only in the store.
 template form (`GraphTemplateEditor`: id for new drafts, name, workspace,
 limits, parameters, roles, run inputs and outputs, custom types,
 acknowledgements on record); agent nodes (`GraphNodeEditor`: Prompt,
-Inputs/Outputs, Capabilities with the MCP servers editor, Isolation and
+Inputs/outputs, Capabilities with the MCP servers editor, Isolation and
 `GraphEnforcementMatrix`, Execution with replication, session, `ask_human`,
 retry, timeout, on-failure and `when`, and a Mock run tab); system nodes (the
 action spec and a typed params form, `GraphSystemParamsEditor`); gates with

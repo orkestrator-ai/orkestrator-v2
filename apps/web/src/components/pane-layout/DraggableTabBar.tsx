@@ -496,7 +496,7 @@ export function DraggableTabBar({
           }}
         >
           <AlertDialogHeader>
-            <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
+            <AlertDialogTitle>Unsaved changes</AlertDialogTitle>
             <AlertDialogDescription>
               You have unsaved changes in {pendingCloseTabLabel}. Are you sure you want to close
               these tabs without saving? Your changes will be lost.
@@ -511,7 +511,7 @@ export function DraggableTabBar({
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Close Without Saving
+              Close without saving
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

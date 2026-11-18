@@ -1571,7 +1571,7 @@ export function PersistentTerminal({
         return false;
       }
 
-      // Select All: Cmd+A (Mac only)
+      // Select all: Cmd+A (Mac only)
       // Avoid overriding Ctrl+A which is "go to beginning of line" in shells
       if (isMeta && key === "a" && !isAlt) {
         handleSelectAll();
@@ -2043,7 +2043,7 @@ export function PersistentTerminal({
   const [disconnectedNoticeVisible, setDisconnectedNoticeVisible] = useState(false);
   const [disconnectedNoticeDismissed, setDisconnectedNoticeDismissed] = useState(false);
 
-  // A launched tab (Run Commands, an agent CLI tab) may not create its own
+  // A launched tab (Run commands, an agent CLI tab) may not create its own
   // shell, so one whose shell went away, most often with a backend restart that
   // cleared the tab's session id, stayed dead until the user asked. Ordinary
   // tabs replace a missing shell silently whenever they connect; this does the
@@ -2351,7 +2351,7 @@ export function PersistentTerminal({
           </ContextMenuItem>
           <ContextMenuItem onClick={() => void handlePaste()}>Paste</ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleSelectAll}>Select All</ContextMenuItem>
+          <ContextMenuItem onClick={handleSelectAll}>Select all</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
       {isMobile && isActive && (

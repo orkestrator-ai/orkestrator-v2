@@ -182,7 +182,7 @@ export function AgentPluginsBrowser({
         </div>
 
         {state.error && state.catalog && (
-          <p role="alert" className="border-b border-zinc-800 px-3 py-2 text-xs text-destructive">
+          <p role="alert" className="border-b border-zinc-800 px-3 py-2 text-xs text-failure">
             Refresh failed: {state.error}
           </p>
         )}
@@ -193,7 +193,7 @@ export function AgentPluginsBrowser({
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : state.error && !state.catalog ? (
-            <p role="alert" className="p-3 text-xs text-destructive">
+            <p role="alert" className="p-3 text-xs text-failure">
               {state.error}
             </p>
           ) : pluginError ? (
@@ -236,7 +236,7 @@ export function AgentPluginsBrowser({
                           {item.name}
                         </span>
                         {item.status === "disabled" && (
-                          <span className="shrink-0 rounded bg-zinc-800 px-1 text-[9px] uppercase tracking-wide text-muted-foreground">
+                          <span className="shrink-0 rounded bg-zinc-800 px-1 text-[11px] uppercase tracking-wide text-muted-foreground">
                             Disabled
                           </span>
                         )}
@@ -278,7 +278,7 @@ export function AgentPluginsBrowser({
             <div className="border-b border-zinc-800 p-3">
               <div className="flex items-center gap-2">
                 <h4 className="truncate text-sm font-medium text-foreground">{selected.name}</h4>
-                <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+                <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
                   {STATUS_LABELS[selected.status]}
                 </span>
               </div>
@@ -307,7 +307,7 @@ export function AgentPluginsBrowser({
                     </p>
                   )}
                   {skillsError && (
-                    <p role="alert" className="mb-2 text-xs text-destructive">
+                    <p role="alert" className="mb-2 text-xs text-failure">
                       Skill scan failed: {skillsError}
                     </p>
                   )}

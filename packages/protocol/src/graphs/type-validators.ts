@@ -34,7 +34,7 @@ export const GRAPH_BUILT_IN_VALIDATOR_IDS = [
   "structured-review-report",
   "review-finding",
   "verification-verdict",
-  "fix-result",
+  "address-findings-result",
   "pr-result",
   "pr-description",
   "check-summary",
@@ -466,11 +466,14 @@ const VALIDATORS: readonly GraphBuiltInValidator[] = [
     },
   },
   {
-    id: "fix-result",
+    id: "address-findings-result",
     summary: "Complete only without failed commands or limitations; incomplete only with one.",
     wraps: "review-results.ts#parseAddressFindingsResult",
     check: (value) => parses(parseAddressFindingsResult, value),
-    backend: { checks: PLACEHOLDER_CHECKS, existing: `${CONTRACTS_MODULE} (kind fix-result)` },
+    backend: {
+      checks: PLACEHOLDER_CHECKS,
+      existing: `${CONTRACTS_MODULE} (kind address-findings-result)`,
+    },
   },
   {
     id: "pr-result",

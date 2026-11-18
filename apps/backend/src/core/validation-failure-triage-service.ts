@@ -23,8 +23,7 @@ import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentCommandRunner } from "./commands-review.js";
 import { quoteShell, resolveBunBinary } from "./commands-agent-support.js";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
-import { gitHubCli } from "./github-cli-binary.js";
-import { gitHubCliEnv } from "./github-credentials.js";
+import { gitHubCli, gitHubCliEnv } from "./git/index.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import {

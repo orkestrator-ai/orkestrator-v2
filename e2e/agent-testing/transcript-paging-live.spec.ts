@@ -569,7 +569,7 @@ async function layoutAtTop(list: Locator, trail: Trail) {
  * Waits for the list through an auto-waiting assertion, which is what runs
  * the page's locator handlers: raw mouse and wheel input, `isVisible()` and
  * `boundingBox()` do not. On a host whose user cannot reach the Docker daemon
- * the "Docker Permission Required" dialog opens after the probe answers, often
+ * the "Docker permission required" dialog opens after the probe answers, often
  * after a reload has already rendered the list, and its overlay then takes the
  * wheel gestures meant for the list.
  */
@@ -1078,7 +1078,7 @@ const dismissingOptionalToolDialogs = new WeakSet<Page>();
 async function dismissOptionalToolDialogs(page: Page): Promise<void> {
   if (dismissingOptionalToolDialogs.has(page)) return;
   dismissingOptionalToolDialogs.add(page);
-  for (const name of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+  for (const name of ["Continue without Docker", "Continue without GitHub CLI"]) {
     await page.addLocatorHandler(page.getByRole("button", { name, exact: true }), (button) =>
       button.click(),
     );

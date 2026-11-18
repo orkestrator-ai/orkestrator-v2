@@ -176,12 +176,12 @@ test.describe("Codex typed prompts through the real composer", () => {
       await page.getByRole("button", { name: /^Close Codex\b/ }).click();
       await expect(input).toHaveCount(0);
       await page.getByRole("button", { name: "New native agent tab" }).click();
-      await page.getByRole("button", { name: "Resume Session" }).click();
+      await page.getByRole("button", { name: "Resume session" }).click();
       await page
         .getByRole("dialog", { name: "Resume a session" })
         .getByRole("button", { name: /^Codex\b.*Choose a previous session/ })
         .click();
-      const picker = page.getByRole("dialog", { name: "Resume Session" });
+      const picker = page.getByRole("dialog", { name: "Resume session" });
       await picker
         .getByRole("button")
         .filter({ hasNot: page.getByText("Close") })

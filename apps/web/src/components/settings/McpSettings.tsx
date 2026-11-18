@@ -60,7 +60,7 @@ const PROFILE_TEXT: Record<ControlMcpProfile, { label: string; description: stri
   voice: {
     label: "Voice",
     description:
-      "Sixteen tools shaped for spoken requests: short answers, agent voice chat with a project that can interrupt its coordinator, and a spoken confirmation before risky actions. No project, settings, destructive or command-running actions.",
+      "Sixteen tools shaped for spoken requests: short answers, agent voice chat with a project that can interrupt its Coordinator, and a spoken confirmation before risky actions. No project, settings, destructive or command-running actions.",
   },
   full: {
     label: "Full",
@@ -368,9 +368,9 @@ export function McpSettings() {
   if (loadError || !settings) {
     return (
       <SettingsPageLayout title="Control Orkestrator from another agent">
-        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-5">
+        <div className="rounded-lg border border-failure/20 bg-failure/5 p-5">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-400" />
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-failure" />
             <div className="space-y-3">
               <div>
                 <h3 className="text-sm font-medium text-foreground">
@@ -518,7 +518,7 @@ export function McpSettings() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-7 gap-1.5 px-2 text-xs text-red-300 hover:text-red-200"
+                            className="h-7 gap-1.5 px-2 text-xs text-failure hover:bg-destructive/15 hover:text-failure"
                             disabled={busy}
                             aria-label={`Revoke ${credential.label}`}
                           >

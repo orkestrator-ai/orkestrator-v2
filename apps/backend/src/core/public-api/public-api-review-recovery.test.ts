@@ -65,11 +65,11 @@ test("review list/get return saved summaries and root/fix/address map surface re
   const calls: unknown[] = [];
   harness.commands.set("controller_multi_review_surface", async (args) => {
     calls.push(args);
-    return result(saved, args.surface === "fix");
+    return result(saved, args.surface === "address-findings");
   });
   for (const [action, surface] of [
     ["review.open", "root"],
-    ["review.open", "fix"],
+    ["review.open", "address-findings"],
     ["review.address", "address"],
   ] as const) {
     const opened = await harness.call(
@@ -77,16 +77,17 @@ test("review list/get return saved summaries and root/fix/address map surface re
       { workflowId: saved.id, ...(action === "review.open" ? { surface } : {}) },
       { requestId: surface },
     );
-    expect(opened.receipt?.state).toBe(surface === "fix" ? "partial" : "succeeded");
+    expect(opened.receipt?.state).toBe(surface === "address-findings" ? "partial" : "succeeded");
     expect(opened.receipt?.result).toMatchObject({
       workflowId: saved.id,
       reused: true,
-      ui: surface === "fix" ? "unavailable" : "opened",
+      ui: surface === "address-findings" ? "unavailable" : "opened",
     });
-    if (surface === "fix") expect(!opened.ok && opened.error.code).toBe("partial-failure");
+    if (surface === "address-findings")
+      expect(!opened.ok && opened.error.code).toBe("partial-failure");
   }
   expect(calls).toEqual(
-    ["root", "fix", "address"].map((surface) => ({ workflowId: saved.id, surface })),
+    ["root", "address-findings", "address"].map((surface) => ({ workflowId: saved.id, surface })),
   );
 });
 

@@ -74,7 +74,7 @@ async function openDockerTab(page: Page) {
 }
 
 async function reviewDockerCleanup(page: Page) {
-  await expect(page.getByText("System Resources", { exact: true })).toBeVisible();
+  await expect(page.getByText("System resources", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /Review cleanup/ }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await expect(page.getByRole("heading", { name: /^Can be removed/ })).toBeVisible({
@@ -105,7 +105,7 @@ test("Global settings opens the Docker tab and reviewed cleanup", async ({ page 
     const unavailable = page.getByText(
       "Docker is not running. Start Docker to see its resources and containers.",
     );
-    await expect(page.getByText("System Resources", { exact: true }).or(unavailable)).toBeVisible({
+    await expect(page.getByText("System resources", { exact: true }).or(unavailable)).toBeVisible({
       timeout: DOCKER_STATS_LOAD_MS,
     });
     if (await unavailable.isVisible()) {
@@ -119,7 +119,7 @@ test("Global settings opens the Docker tab and reviewed cleanup", async ({ page 
       .getByRole("button", { name: "Cancel", exact: true })
       .click();
     await expect(page.getByRole("alertdialog")).toBeHidden();
-    await expect(page.getByText("System Resources", { exact: true })).toBeVisible();
+    await expect(page.getByText("System resources", { exact: true })).toBeVisible();
   }
 });
 

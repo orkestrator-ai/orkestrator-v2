@@ -151,7 +151,7 @@ describe("GlobalSettings defaults section", () => {
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
         review2: { platform: "codex", model: "gpt-6.1-sol" },
-        fixReviewIssues: { platform: "claude", model: "haiku" },
+        addressFindings: { platform: "claude", model: "haiku" },
       }),
     );
 
@@ -164,7 +164,7 @@ describe("GlobalSettings defaults section", () => {
 
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
-        fixReviewIssues: { platform: "claude", model: "haiku" },
+        addressFindings: { platform: "claude", model: "haiku" },
       }),
     );
   });
@@ -537,7 +537,7 @@ describe("GlobalSettings defaults section", () => {
       const label = screen.getByRole("combobox", {
         name: `Reviewer ${reviewer} default agent, model and reasoning`,
       }).textContent;
-      expect(label).toContain("Follows Review — Claude");
+      expect(label).toContain("Follows review — Claude");
       expect(label).toContain("Haiku");
       expect(label).toContain("High");
     }

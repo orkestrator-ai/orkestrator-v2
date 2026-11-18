@@ -122,7 +122,7 @@ const RUN_STATUS_LABEL: Record<GraphRun["status"], string> = {
   complete: "Complete",
   failed: "Failed",
   cancelling: "Stopping",
-  cancelled: "Cancelled",
+  cancelled: "Canceled",
 };
 
 const RUN_STATUS_CLASS: Record<GraphRun["status"], string> = {

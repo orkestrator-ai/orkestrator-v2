@@ -5,6 +5,7 @@ import {
   agentMailKind,
   agentMailParticipantKey,
   formatAgentMailAddressLabel,
+  formatCoordinatorMailTitle,
   isPeerMailCarrierContent,
   normalizeAgentMailNotice,
   readAgentMailCarriers,
@@ -205,9 +206,9 @@ export function agentMailSenderLabel(from: MailActor, environmentName?: string):
     case "system":
       return from.source === "self-reminder" ? "Reminder you set" : "Orkestrator workflow";
     case "coordinator":
-      return from.title || "Project coordinator";
+      return formatCoordinatorMailTitle(from.title);
     case "node":
-      return `${from.title || "Project coordinator"} on ${from.nodeName}`;
+      return `${formatCoordinatorMailTitle(from.title)} on ${from.nodeName}`;
     case "tab":
       return from.title || from.tabId;
   }

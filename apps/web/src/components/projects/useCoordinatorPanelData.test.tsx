@@ -222,7 +222,7 @@ describe("useCoordinatorPanelData", () => {
       await failReads("get_project_coordinator_view", 2);
       expect(latest.freshness?.kind).toMatch(/stale|degraded/);
       expect(latest.freshness?.label).toMatch(/out of date/i);
-      expect(latest.freshness?.detail).toContain("the coordinator");
+      expect(latest.freshness?.detail).toContain("the Coordinator");
       expect(latest.snapshot).toBe(held);
 
       recoverReads();
@@ -258,7 +258,7 @@ describe("useCoordinatorPanelData", () => {
         await announce("p1");
         await settle(GIT_STATUS_PROBE_INTERVAL_MS);
         await settle(READ_RETRY_MAX_MS);
-        expect(latest.freshness?.detail).toContain("the coordinator and repository status");
+        expect(latest.freshness?.detail).toContain("the Coordinator and repository status");
         recoverReads();
         await settle(READ_RETRY_MAX_MS + GIT_STATUS_PROBE_INTERVAL_MS);
         await announce("p1");

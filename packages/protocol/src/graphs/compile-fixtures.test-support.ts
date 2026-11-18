@@ -24,7 +24,11 @@ export function baseTemplate(): GraphTemplateV1 {
     inputs: [{ name: "target", type: "workspace@1" }],
     outputs: [
       { name: "report", type: "review-report@1", from: { node: "review", port: "report" } },
-      { name: "changes", type: "fix-result@1", from: { node: "build", port: "report" } },
+      {
+        name: "changes",
+        type: "address-findings-result@1",
+        from: { node: "build", port: "report" },
+      },
     ],
     workspace: { kind: "environment" },
     nodes: [
@@ -38,7 +42,7 @@ export function baseTemplate(): GraphTemplateV1 {
         inputs: [{ name: "code", type: "workspace@1" }],
         outputs: [
           { name: "code", type: "workspace@1" },
-          { name: "report", type: "fix-result@1" },
+          { name: "report", type: "address-findings-result@1" },
         ],
       },
       {

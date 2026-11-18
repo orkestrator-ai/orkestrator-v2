@@ -397,11 +397,11 @@ every writer applies it through one storage method,
 
 | Writer | When |
 | --- | --- |
-| PR monitor (`pr-monitor.ts`, the `status` reconciliation step) | It sees the environment's pull request merge, or repairs a merge it recorded before a restart. |
+| PR monitor (`git/pr-monitor.ts`, the `status` reconciliation step) | It sees the environment's pull request merge, or repairs a merge it recorded before a restart. |
 | Build pipeline (`updateKanbanLifecycle`, terminal events) | The build completes, fails, is cancelled or deleted after its Ship opened a pull request that has since merged. Without this the `complete` and `failed` events would move the ticket back to review or backlog. |
 | Build pipeline (`persistPullRequest`) | Ship or conflict resolution finds the pull request already merged. |
 | Environment deletion (`build-pipeline-kanban-environment-deleted.ts`) | The environment being deleted records its pull request as merged. |
-| Startup sweep (`pr-monitor-runtime.ts`, the first sync of each backend process) | A merge recorded on a ticket that never closed it: one an older build left in backlog or review, or one whose environment was deleted before the monitor applied the merge. |
+| Startup sweep (`git/pr-monitor-runtime.ts`, the first sync of each backend process) | A merge recorded on a ticket that never closed it: one an older build left in backlog or review, or one whose environment was deleted before the monitor applied the merge. |
 
 A merge is recorded when the ticket links a pull request in state `merged`;
 for a ticket with no linked pull request, when its work location on another
@@ -451,7 +451,7 @@ width) and one wide content column on the right; sections never sit side by
 side.
 
 - **Ticket**: the bar has Build… (the build launcher, disabled while a build
-  of the ticket runs), Edit (the markdown editor, in place) and View Build.
+  of the ticket runs), Edit (the markdown editor, in place) and View build.
   The index lists the ticket's sections (summary, criteria, the other
   structured sections, Delivery), Images, Comments and activity (the
   lifecycle's comments are the activity) and Pull request. Index entries are

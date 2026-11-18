@@ -20,7 +20,7 @@ function fakeApp() {
 test("a startup button that leaves the page under the click does not fail the action that found it", async () => {
   const { app, handlers } = fakeApp();
   dismissStartupDialogs(app);
-  const handler = handlers.get("Continue Without GitHub CLI")!;
+  const handler = handlers.get("Continue without GitHub CLI")!;
   expect(handler).toBeDefined();
   const timeouts: Array<number | undefined> = [];
   // As Playwright's click does when its target is gone: it waits out its timeout and throws.
@@ -38,7 +38,7 @@ test("a startup button that is still there is clicked", async () => {
   const { app, handlers } = fakeApp();
   dismissStartupDialogs(app);
   let clicks = 0;
-  await handlers.get("Continue Without Docker")!({
+  await handlers.get("Continue without Docker")!({
     click: async () => {
       clicks += 1;
     },

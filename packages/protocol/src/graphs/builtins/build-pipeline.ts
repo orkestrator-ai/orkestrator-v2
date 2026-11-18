@@ -35,13 +35,13 @@ export const BUILD_PIPELINE_TEMPLATE_ROUNDS = 3;
 export const BUILD_PIPELINE_TEMPLATE_STAGES = Object.freeze({
   setup: "setup",
   build: "build",
-  fix: "rework",
+  rework: "rework",
   prepare: "preparation",
   package: "validation",
   review: "review",
   consolidate: "consolidation",
   "has-issues": "after-review",
-  address: "address-findings",
+  "address-findings": "address-findings",
   verify: "verify",
   criteria: "verify",
   verified: "after-verify",
@@ -117,9 +117,9 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
     formatVersion: 1,
     id: "build-pipeline",
     revision: GRAPH_BUILT_IN_TEMPLATE_REVISION,
-    name: "Build Pipeline",
+    name: "Build pipeline",
     description:
-      "Build a ticket, then prepare, seal, review with a read-only panel, address and verify in rounds until Verify passes; then open the pull request and resolve merge conflicts. Runs on the Build Pipeline engine.",
+      "Build a ticket, then prepare, seal, review with a read-only panel, address and verify in rounds until Verify passes; then open the pull request and resolve merge conflicts. Runs on the build pipeline engine.",
     engine: "build-pipeline",
     parameters: [],
     roles: [
@@ -146,16 +146,16 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         defaultsFrom: ["review", "review2", "additionalReviewers"],
       },
       {
-        key: "fixer",
+        key: "addresser",
         label: "Address Findings",
         multiplicity: "one",
-        defaultsFrom: ["fixReviewIssues"],
+        defaultsFrom: ["addressFindings"],
       },
       {
         key: "verifier",
         label: "Verify",
         multiplicity: "one",
-        defaultsFrom: ["verify", "fixReviewIssues"],
+        defaultsFrom: ["verify", "addressFindings"],
       },
       { key: "describer", label: "Ship", multiplicity: "one", defaultsFrom: ["pr"] },
       {
@@ -216,7 +216,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         outputs: [{ name: "code", type: "workspace@1" }],
       },
       {
-        id: "fix",
+        id: "rework",
         kind: "agent",
         label: "Rework",
         description:
@@ -225,7 +225,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         when: { path: "run.iteration", op: "gt", value: 1 },
         capabilities: { profile: "builder" },
         workspaceAccess: "write",
-        prompt: { builtIn: "pipeline-fix" },
+        prompt: { builtIn: "pipeline-rework" },
         inputs: [
           { name: "ticket", type: "ticket@1", render: "markdown" },
           { name: "feedback", type: "verification-verdict@1", render: "json-frame" },
@@ -247,7 +247,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
           {
             name: "code",
             type: "workspace@1",
-            // Build's commit in round 1, Fix's afterwards (report §9.2).
+            // Build's commit in round 1, Rework's afterwards (report §9.2).
             firstIterationFrom: { node: "build", port: "code" },
           },
         ],
@@ -261,7 +261,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         kind: "system",
         label: "Validate and seal",
         description:
-          "The environment runs the plan's commands once and seals one immutable review package; Review, Address and Verify re-verify its hash.",
+          "The environment runs the plan's commands once and seals one immutable review package; Review, Address Findings and Verify re-verify its hash.",
         action: "run-validation-and-seal",
         inputs: [
           { name: "plan", type: "validation-plan@2" },
@@ -325,15 +325,15 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         otherwise: "clean",
       },
       {
-        id: "address",
+        id: "address-findings",
         kind: "agent",
         label: "Address Findings",
         description:
-          "Fixes the review's findings, validates the fix and submits a typed fix result for Verify. Today it also receives the end of the review session's transcript.",
-        role: "fixer",
+          "Fixes the review's findings, validates the fix and submits a typed Address Findings result for Verify. Today it also receives the end of the review session's transcript.",
+        role: "addresser",
         capabilities: { profile: "builder" },
         workspaceAccess: "write",
-        prompt: { builtIn: "address-review" },
+        prompt: { builtIn: "pipeline-address-findings" },
         inputs: [
           { name: "report", type: "review-report@1", render: "json-frame" },
           { name: "code", type: "workspace@1" },
@@ -341,7 +341,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         ],
         outputs: [
           { name: "code", type: "workspace@1" },
-          { name: "report", type: "fix-result@1" },
+          { name: "report", type: "address-findings-result@1" },
         ],
       },
       {
@@ -357,7 +357,12 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         inputs: [
           { name: "ticket", type: "ticket@1", render: "markdown" },
           { name: "code", type: "workspace@1" },
-          { name: "address", type: "fix-result@1", required: false, render: "json-frame" },
+          {
+            name: "addressFindings",
+            type: "address-findings-result@1",
+            required: false,
+            render: "json-frame",
+          },
           { name: "package", type: "review-package@2", render: "file" },
         ],
         outputs: [
@@ -472,9 +477,9 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
       edge("ticket-setup", { input: "ticket" }, target("setup", "ticket")),
       edge("ticket-build", { input: "ticket" }, target("build", "ticket")),
       edge("setup-build", port("setup", "code"), target("build", "code")),
-      edge("ticket-fix", { input: "ticket" }, target("fix", "ticket")),
+      edge("ticket-rework", { input: "ticket" }, target("rework", "ticket")),
       edge("build-prepare", port("build", "code"), target("prepare", "code")),
-      edge("fix-prepare", port("fix", "code"), target("prepare", "code")),
+      edge("rework-prepare", port("rework", "code"), target("prepare", "code")),
       edge("prepare-package-plan", port("prepare", "plan"), target("package", "plan")),
       edge("prepare-package-code", port("prepare", "code"), target("package", "code")),
       edge("package-review", port("package", "package"), target("review", "package")),
@@ -484,16 +489,32 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
       edge("consolidate-gate", port("consolidate", "report"), target("has-issues", "report")),
       edge("prepare-gate", port("prepare", "code"), target("has-issues", "code")),
       edge(
-        "issues-address-report",
+        "issues-address-findings-report",
         port("has-issues", "report", "issues"),
-        target("address", "report"),
+        target("address-findings", "report"),
       ),
-      edge("issues-address-code", port("has-issues", "code", "issues"), target("address", "code")),
-      edge("package-address", port("package", "package"), target("address", "package")),
+      edge(
+        "issues-address-findings-code",
+        port("has-issues", "code", "issues"),
+        target("address-findings", "code"),
+      ),
+      edge(
+        "package-address-findings",
+        port("package", "package"),
+        target("address-findings", "package"),
+      ),
       // Two producers into verify.code, on exclusive outlets of has-issues.
-      edge("address-verify-code", port("address", "code"), target("verify", "code")),
+      edge(
+        "address-findings-verify-code",
+        port("address-findings", "code"),
+        target("verify", "code"),
+      ),
       edge("clean-verify-code", port("has-issues", "code", "clean"), target("verify", "code")),
-      edge("address-verify-report", port("address", "report"), target("verify", "address")),
+      edge(
+        "address-findings-verify-report",
+        port("address-findings", "report"),
+        target("verify", "addressFindings"),
+      ),
       edge("package-verify", port("package", "package"), target("verify", "package")),
       edge("ticket-verify", { input: "ticket" }, target("verify", "ticket")),
       edge("verify-criteria", port("verify", "verdict"), target("criteria", "verdict")),
@@ -529,25 +550,25 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         id: "rounds",
         label: "Rounds",
         nodes: [
-          "fix",
+          "rework",
           "prepare",
           "package",
           "review",
           "consolidate",
           "has-issues",
-          "address",
+          "address-findings",
           "verify",
           "criteria",
         ],
         until: { path: "verify.verdict.complete", op: "eq", value: true },
         maxIterations: BUILD_PIPELINE_TEMPLATE_ROUNDS,
         carry: [
-          { from: port("verify", "verdict"), to: target("fix", "feedback") },
-          { from: port("verify", "code"), to: target("fix", "code") },
+          { from: port("verify", "verdict"), to: target("rework", "feedback") },
+          { from: port("verify", "code"), to: target("rework", "code") },
         ],
       },
     ],
-    // build 1 + (fix, prepare, 32 reviewers, consolidate, address, verify) × 3
+    // build 1 + (rework, prepare, 32 reviewers, consolidate, address-findings, verify) × 3
     // + describe-pr 1 + resolve 1.
     limits: { maxAgentSessions: 114, maxConcurrentAgents: MAX_BUILD_PIPELINE_REVIEWERS },
   };

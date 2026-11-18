@@ -23,9 +23,9 @@ function statusLabel(command: UserCommandRecord): { text: string; className: str
     case "running":
       return { text: "Running", className: "border-sky-500/40 text-sky-300" };
     case "cancelled":
-      return { text: "Cancelled", className: "border-border text-muted-foreground" };
+      return { text: "Canceled", className: "border-border text-muted-foreground" };
     case "failed":
-      return { text: "Failed to run", className: "border-destructive/50 text-destructive" };
+      return { text: "Failed to run", className: "border-destructive/50 text-failure" };
     case "exited":
       return command.exitCode === 0
         ? { text: "Exit 0", className: "border-success/40 text-success" }
@@ -143,7 +143,7 @@ export function UserCommandCard({ command }: { command: UserCommandRecord }) {
             <span className="text-muted-foreground">[earlier output omitted]{"\n"}</span>
           ) : null}
           {command.output}
-          {command.error ? <span className="text-destructive">{command.error}</span> : null}
+          {command.error ? <span className="text-failure">{command.error}</span> : null}
         </pre>
       ) : null}
 

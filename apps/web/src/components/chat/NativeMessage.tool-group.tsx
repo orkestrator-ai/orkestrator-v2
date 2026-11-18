@@ -667,7 +667,7 @@ function ToolGroupHeadLine({
         </span>
         {spanLabel ? (
           <span
-            className="shrink-0 tabular-nums text-[10px] text-muted-foreground/60"
+            className="shrink-0 tabular-nums text-[11px] text-muted-foreground"
             title={`First call started to last call finished: ${spanLabel}`}
           >
             {spanLabel}

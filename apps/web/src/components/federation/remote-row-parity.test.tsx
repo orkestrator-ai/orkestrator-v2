@@ -208,7 +208,11 @@ test("another machine's project header sums its mail and shows its home's activi
   expect(within(header).getAllByLabelText("3 unread agent messages")).toHaveLength(1);
   expect(within(header).getByLabelText("Agent message delivery failed")).toBeTruthy();
 
-  fireEvent.click(within(header).getByRole("button", { name: "app Home needs attention" }));
+  const homeActivity = within(header).getByRole("button", { name: "app home needs attention" });
+  const bell = homeActivity.querySelector("svg");
+  expect(bell?.classList.contains("fill-amber-400/20")).toBe(true);
+  expect(bell?.classList.contains("text-amber-400")).toBe(true);
+  fireEvent.click(homeActivity);
   await waitFor(() =>
     expect(useRemoteWorkspaceStore.getState().requests.a?.request).toMatchObject({
       projectId: "project-1",
@@ -241,7 +245,7 @@ test("a failed tombstoned remote home cannot be selected", async () => {
     />,
   );
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-  expect(screen.queryByRole("button", { name: /Home (working|needs attention)/ }) === null).toBe(
+  expect(screen.queryByRole("button", { name: /home (working|needs attention)/i }) === null).toBe(
     true,
   );
 });
@@ -261,7 +265,7 @@ test("a quiet home shows nothing in its project header", async () => {
     />,
   );
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-  expect(screen.queryByRole("button", { name: /Home (working|needs attention)/ }) === null).toBe(
+  expect(screen.queryByRole("button", { name: /home (working|needs attention)/i }) === null).toBe(
     true,
   );
 });
@@ -279,7 +283,7 @@ test("the cross-machine activity list has the controls bar and home rows this wi
   expect(within(list).getByLabelText("2 environments")).toBeTruthy();
   expect(within(list).getByLabelText("1 waiting environment")).toBeTruthy();
   // A working build pipeline on the home reads as working, as on its own machine.
-  expect(within(list).getByRole("button", { name: "app Home working" })).toBeTruthy();
+  expect(within(list).getByRole("button", { name: "app home working" })).toBeTruthy();
   expect(within(list).getAllByTestId("federated-environment-row")).toHaveLength(2);
 });
 
@@ -369,7 +373,7 @@ test("another machine's row copies the environment's ID, not its machine-qualifi
   const row = environment("feature");
   renderInAppCommandScope(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
   fireEvent.contextMenu(screen.getByRole("button", { name: "feature, on Machine A, Idle" }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy Environment ID" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy environment ID" }));
   expect(mockWriteText).toHaveBeenCalledWith("feature");
 });
 
@@ -483,7 +487,7 @@ test("a remote row disarms when focus leaves the shell for a child frame", () =>
     expect(screen.queryByRole("alertdialog") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /frame-target/ }));
     fireEvent.keyDown(window, { key: "Backspace", metaKey: true });
-    expect(screen.getByRole("alertdialog", { name: "Delete Environment" })).toBeTruthy();
+    expect(screen.getByRole("alertdialog", { name: "Delete environment" })).toBeTruthy();
   } finally {
     frameDocument.body.replaceChildren();
   }

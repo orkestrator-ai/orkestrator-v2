@@ -25,7 +25,7 @@ export interface LogAreaSpec {
 export type EssentialFieldKind = "number" | "boolean" | "label";
 
 /**
- * An event kept in the always-on essential log, whatever "Save Logs to Disk" and
+ * An event kept in the always-on essential log, whatever "Save logs to disk" and
  * the levels say (docs/architecture/logging.md, "The essential event log"). Only
  * the fields declared here reach that file, so reviewing this list is reviewing
  * what the app keeps by default.

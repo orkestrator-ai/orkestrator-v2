@@ -223,7 +223,7 @@ export function CoordinatorToolbar({
               variant="outline"
               disabled={conversationBusy}
               onClick={onPause}
-              title="Pause this project's coordinator: mail and new turns are held until you resume. Conversations stay readable."
+              title="Pause this project's Coordinator: mail and new turns are held until you resume. Conversations stay readable."
             >
               <Pause className="size-3.5" />
               <span className="max-sm:sr-only">Pause</span>

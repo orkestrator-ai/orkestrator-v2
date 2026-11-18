@@ -202,7 +202,7 @@ describe("InitializationLogs", () => {
   test("flags the tail as stale after repeated polling failures", async () => {
     /*
      * A dropped poll used to be swallowed forever: the last snapshot stayed on
-     * screen under the "Initializing Container" spinner with nothing to say it
+     * screen under the "Initializing container" spinner with nothing to say it
      * had stopped tracking the container.
      */
     const logs = captureLogs();

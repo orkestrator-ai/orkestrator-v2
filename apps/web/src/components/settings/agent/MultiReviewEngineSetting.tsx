@@ -35,7 +35,7 @@ export function MultiReviewEngineSetting({
         Multi Review runtime
       </h3>
       <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-        Applies to Multi Reviews started from now on, from the button, the coordinator and the CLI
+        Applies to Multi Reviews started from now on, from the button, the Coordinator and the CLI
         alike.
       </p>
       <div

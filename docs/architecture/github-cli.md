@@ -1,9 +1,9 @@
 # GitHub CLI
 
-Status: Living — `apps/backend/src/core/github-cli-binary.ts`,
-`apps/backend/src/core/github-cli-setup.ts`,
-`apps/backend/src/core/github-credentials.ts`,
-`apps/backend/src/core/github-git-credentials.ts`,
+Status: Living — `apps/backend/src/core/git/github-cli-binary.ts`,
+`apps/backend/src/core/git/github-cli-setup.ts`,
+`apps/backend/src/core/git/github-credentials.ts`,
+`apps/backend/src/core/git/github-git-credentials.ts`,
 `apps/web/src/components/github/GitHubCliSetup.tsx`.
 
 PR detection, reviews, project creation from GitHub, the clone browser and
@@ -75,10 +75,10 @@ On startup the renderer reads the status. When `gh` is missing, or signed out
 and `canSignIn`, and the reminder is not dismissed, it shows a non-blocking
 dialog (`App.tsx`):
 
-- **Sign In to GitHub** hosts `GitHubCliSetup`: the code with a copy button,
+- **Sign in to GitHub** hosts `GitHubCliSetup`: the code with a copy button,
   **Open sign-in page**, and a waiting state until `gh` exits. The close
-  button reads **Not Now** until sign-in succeeds, then **Done**.
-- **GitHub CLI Not Found** (no managed copy and nothing on `PATH`) shows
+  button reads **Not now** until sign-in succeeds, then **Done**.
+- **GitHub CLI not found** (no managed copy and nothing on `PATH`) shows
   install commands, **Install instructions** and **Check again**.
 - Closing the dialog dismisses it for the session. Ticking **Don't remind me
   again** first turns the reminder off for good, for both variants.
@@ -122,8 +122,8 @@ reviews, merges and branch deletion). Containers have their own setting; see
   credential stores are not modified. Host mode keeps normal host Git credentials;
   non-GitHub transfers keep their existing authentication.
 
-`github-credentials.ts` owns credential selection, host token lookup and the
-host `gh` environment. `github-git-credentials.ts` adapts the PAT for project
+`git/github-credentials.ts` owns credential selection, host token lookup and the
+host `gh` environment. `git/github-git-credentials.ts` adapts the PAT for project
 Git transfers. `get_container_github_credential_status` reports the containers'
 source and whether it has a token. The in-app sign-in only writes the host `gh`
 login; signing in does not replace a PAT or change the selected mode.
@@ -171,23 +171,23 @@ read the file.
 
 ## Tests
 
-- `apps/backend/src/core/github-credentials.test.ts` — inherited-token isolation,
+- `apps/backend/src/core/git/github-credentials.test.ts` — inherited-token isolation,
   fail-closed missing PATs, host token lookup, selected-token resolution, the
   independent container credential and its status.
 - `apps/backend/tests/commands-container-exec.test.ts` — the credential helper
   through real `git credential fill`: token out of the config, rotation, other
   hosts, setup ordering, a copied host helper, withheld sessions and old `origin`s.
-- `apps/backend/src/core/github-cli-operations.test.ts` — selected credentials
+- `apps/backend/src/core/git/github-cli-operations.test.ts` — selected credentials
   through PR detection/check queries and local review, merge and branch-delete
   runners, including caller-provided environments.
-- `apps/backend/src/core/github-project-credentials.integration.test.ts` — project
+- `apps/backend/src/core/git/github-project-credentials.integration.test.ts` — project
   registry creation and discovery followed by private clone/push with distinct
   host/PAT identities, real Git pack transfers through an isolated fake HTTPS
   transport, helper scoping and token-free saved remotes.
-- `apps/backend/src/core/github-clone-browser.test.ts` — selected PAT discovery
+- `apps/backend/src/core/git/github-clone-browser.test.ts` — selected PAT discovery
   and missing-PAT refusal before invoking `gh`.
 
-- `apps/backend/src/core/github-cli-setup.test.ts` — status, the login
+- `apps/backend/src/core/git/github-cli-setup.test.ts` — status, the login
   environment, the device flow, cancellation and the agent-test refusal.
 - `apps/web/src/components/github/GitHubCliSetup.test.tsx` and
   `e2e/GitHubCliSetup.spec.ts` (fixture route `/github-cli-setup`).

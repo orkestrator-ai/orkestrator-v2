@@ -184,7 +184,7 @@ export function OpenFileDialog({ enabled = true }: { enabled?: boolean } = {}) {
         <DialogHeader className="m-0 border-b border-divider bg-background px-5 py-4 sm:m-0">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Search className="h-4 w-4 text-muted-foreground" />
-            Open File
+            Open file
           </DialogTitle>
           <DialogDescription>
             Search the selected environment and open a file in a new tab.
@@ -228,7 +228,7 @@ export function OpenFileDialog({ enabled = true }: { enabled?: boolean } = {}) {
           )}
 
           {canOpenFiles && !isLoading && error && (
-            <div className="px-3 py-10 text-center text-sm text-destructive">{error}</div>
+            <div className="px-3 py-10 text-center text-sm text-failure">{error}</div>
           )}
 
           {canOpenFiles && !isLoading && !error && results.length === 0 && (

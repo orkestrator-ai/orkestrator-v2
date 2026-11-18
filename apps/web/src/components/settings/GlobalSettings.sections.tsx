@@ -593,7 +593,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         )}
 
         {reviewInstructionValidationError && (
-          <p className="flex items-start gap-1.5 text-xs text-destructive">
+          <p className="flex items-start gap-1.5 text-xs text-failure">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {reviewInstructionValidationError}
           </p>
@@ -940,7 +940,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </Button>
         </div>
         {sshAgentSocketPathValidationError && (
-          <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
+          <p role="alert" className="flex items-start gap-1.5 text-xs text-failure">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {sshAgentSocketPathValidationError}
           </p>
@@ -980,9 +980,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <DataSavingSetting />
       <AutoSteerSetting checked={autoSteer} onCheckedChange={setAutoSteer} />
 
-      {/* Preferred Editor */}
+      {/* Preferred editor */}
       <div className="space-y-3">
-        <SettingsSectionHeader icon={<Code2 className="h-4 w-4" />} title="Preferred Editor">
+        <SettingsSectionHeader icon={<Code2 className="h-4 w-4" />} title="Preferred editor">
           Editor for "Open in Editor" (Cmd+O)
         </SettingsSectionHeader>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -1017,7 +1017,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </div>
           </button>
         </div>
-        <span className="block text-xs text-muted-foreground/60">
+        <span className="block text-xs text-muted-foreground">
           *Requires the Dev Containers extension
         </span>
       </div>
@@ -1065,7 +1065,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </Button>
         </div>
         {defaultProjectsDirectoryValidationError && (
-          <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
+          <p role="alert" className="flex items-start gap-1.5 text-xs text-failure">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {defaultProjectsDirectoryValidationError}
           </p>
@@ -1074,7 +1074,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
       {/* Claude Code credentials */}
       <div className="space-y-3">
-        <SettingsSectionHeader title="Claude Code Credentials">
+        <SettingsSectionHeader title="Claude Code credentials">
           Controls whether containerized environments start signed in to Claude Code.
         </SettingsSectionHeader>
         <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
@@ -1120,9 +1120,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         </div>
       </div>
 
-      {/* Environment Files */}
+      {/* Environment files */}
       <div className="space-y-3">
-        <SettingsSectionHeader title="Environment Files">
+        <SettingsSectionHeader title="Environment files">
           Project files to copy into each new container and local worktree (comma-separated)
         </SettingsSectionHeader>
         <Input
@@ -1264,7 +1264,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   const renderCoordinator = () => (
     <SettingsPageLayout
       title="Coordinator"
-      description="How this machine's project coordinators are held to read-only and what they may look up."
+      description="How this machine's project Coordinators are held to read-only and what they may look up."
     >
       <div>
         <h3 className="text-sm font-medium text-foreground">Coordinator safety level</h3>
@@ -1313,7 +1313,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <div>
         <h3 className="text-sm font-medium text-foreground">Messaging</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          Workers report back to a coordinator through agent messaging, so delegation needs it on.
+          Workers report back to a Coordinator through agent messaging, so delegation needs it on.
           Coordinator status updates are set there too, with the rest of messaging.
         </p>
         <Button
@@ -1333,9 +1333,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     renderPlatform(
       "claude",
       <>
-        {/* Anthropic API Key */}
+        {/* Anthropic API key */}
         <div className="space-y-3">
-          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Anthropic API Key">
+          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Anthropic API key">
             Optional API-key override for Claude Code in containers
           </SettingsSectionHeader>
           <div className="relative">
@@ -1424,10 +1424,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               )}
             </SelectContent>
           </Select>
-          <p
-            id="claude-background-command-limit-restart"
-            className="text-xs text-muted-foreground/60"
-          >
+          <p id="claude-background-command-limit-restart" className="text-xs text-muted-foreground">
             Applies when an environment&apos;s Claude bridge next starts, for example after the
             environment restarts. Interactive Claude terminals have no limit.
           </p>
@@ -1458,7 +1455,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       "opencode",
       <>
         <div className="space-y-3">
-          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="OpenCode Zen API Key">
+          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="OpenCode Zen API key">
             Used to read your OpenCode Zen (Go) plan usage. Stored by Orkestrator and never sent to
             an agent environment.
           </SettingsSectionHeader>
@@ -1507,7 +1504,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         </div>
 
         <div className="space-y-3 border-t border-border/60 pt-5">
-          <SettingsSectionHeader icon={<Boxes className="h-4 w-4" />} title="Model Providers">
+          <SettingsSectionHeader icon={<Boxes className="h-4 w-4" />} title="Model providers">
             Only models from these OpenCode providers appear in model pickers. Filtering happens
             before the catalog reaches the app, so excluded providers are never loaded.
           </SettingsSectionHeader>
@@ -1530,7 +1527,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                         current.filter((candidate) => candidate !== provider),
                       )
                     }
-                    className="h-7 px-2 text-muted-foreground hover:text-destructive"
+                    className="h-7 px-2 text-muted-foreground hover:text-failure"
                   >
                     <X className="h-4 w-4" />
                   </Button>
@@ -1582,7 +1579,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               </Button>
             </div>
             {openCodeProviderDraftError && (
-              <p id="opencode-provider-error" className="text-xs text-destructive">
+              <p id="opencode-provider-error" className="text-xs text-failure">
                 {openCodeProviderDraftError}
               </p>
             )}
@@ -1612,7 +1609,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       "cursor",
       <>
         <div className="space-y-3">
-          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Cursor API Key">
+          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Cursor API key">
             Required for Cursor Agent inside Linux containers. A macOS Cursor login is stored in
             Keychain and cannot be mounted into a container.
           </SettingsSectionHeader>
@@ -1708,7 +1705,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             aria-describedby="codex-max-concurrent-threads-description codex-max-concurrent-threads-restart"
             className="max-w-32"
           />
-          <p id="codex-max-concurrent-threads-restart" className="text-xs text-muted-foreground/60">
+          <p id="codex-max-concurrent-threads-restart" className="text-xs text-muted-foreground">
             Applies when a native Codex bridge next starts.
           </p>
         </div>
@@ -1719,9 +1716,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     const previewColors = getPreviewColors(terminalBackgroundColor);
     return (
       <SettingsPageLayout title="Terminal">
-        {/* Font Family */}
+        {/* Font family */}
         <div className="space-y-3">
-          <Label>Font Family</Label>
+          <Label>Font family</Label>
           <Select value={terminalFontFamily} onValueChange={setTerminalFontFamily}>
             <SelectTrigger className="w-full max-w-xs">
               <SelectValue placeholder="Select font" />
@@ -1740,10 +1737,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </p>
         </div>
 
-        {/* Font Size */}
+        {/* Font size */}
         <div className="space-y-3">
           <div className="flex justify-between max-w-xs">
-            <Label>Font Size</Label>
+            <Label>Font size</Label>
             <span className="text-sm font-medium">{terminalFontSize}px</span>
           </div>
           <Slider
@@ -1756,10 +1753,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           />
         </div>
 
-        {/* Scrollback Buffer */}
+        {/* Scrollback buffer */}
         <div className="space-y-3">
           <div className="flex justify-between max-w-xs">
-            <Label>Scrollback Buffer</Label>
+            <Label>Scrollback buffer</Label>
             <span className="text-sm font-medium">{terminalScrollback.toLocaleString()} lines</span>
           </div>
           <Slider
@@ -1843,9 +1840,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           )}
         </div>
 
-        {/* Background Color */}
+        {/* Background color */}
         <div className="space-y-3">
-          <Label>Background Color</Label>
+          <Label>Background color</Label>
           <div className="flex gap-3 items-center">
             <Input
               type="color"
@@ -1862,7 +1859,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               value={terminalBackgroundColor}
               onChange={(e) => handleBackgroundColorChange(e.target.value)}
               placeholder={DEFAULT_TERMINAL_APPEARANCE.backgroundColor}
-              className={cn("font-mono w-32", colorError && "border-red-500")}
+              className={cn("font-mono w-32", colorError && "border-failure/60")}
             />
             <Button
               type="button"
@@ -1876,7 +1873,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </Button>
           </div>
           {colorError && (
-            <div className="text-sm text-red-500 flex items-center gap-1">
+            <div className="text-sm text-failure flex items-center gap-1">
               <XCircle className="h-3 w-3" />
               {colorError}
             </div>
@@ -1910,7 +1907,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderNetwork = () => (
     <SettingsPageLayout
-      title="Network Whitelist"
+      title="Network whitelist"
       description={<>Domains allowed in "Restricted" mode. {ALLOWLIST_ENTRY_HINT}</>}
     >
       <div className="space-y-4">
@@ -1922,11 +1919,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           onChange={handleDomainsChange}
           placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"}
           rows={8}
-          className={cn("font-mono text-sm", domainErrors.length > 0 && "border-red-500")}
+          className={cn("font-mono text-sm", domainErrors.length > 0 && "border-failure/60")}
         />
 
         {domainErrors.length > 0 && (
-          <div className="text-sm text-red-500 space-y-1">
+          <div className="text-sm text-failure space-y-1">
             {domainErrors.map((error, i) => (
               <div key={i} className="flex items-center gap-1">
                 <XCircle className="h-3 w-3" />
@@ -1964,10 +1961,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 ) : result.valid ? (
                   <AlertCircle className="h-3 w-3 text-yellow-500" />
                 ) : (
-                  <XCircle className="h-3 w-3 text-red-500" />
+                  <XCircle className="h-3 w-3 text-failure" />
                 )}
                 <span className="font-mono">{result.domain}</span>
-                {result.error && <span className="text-red-500 ml-1">{result.error}</span>}
+                {result.error && <span className="text-failure ml-1">{result.error}</span>}
               </div>
             ))}
           </div>
@@ -2132,7 +2129,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </div>
 
             {gatewayTokenValidationError && (
-              <p className="text-xs text-destructive">{gatewayTokenValidationError}</p>
+              <p className="text-xs text-failure">{gatewayTokenValidationError}</p>
             )}
             {gatewayTokenLoadError && (
               <p className="flex items-start gap-1.5 text-xs text-amber-400/90">
@@ -2321,7 +2318,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         ) : null}
       </div>
       <div className="space-y-3">
-        <SettingsSectionHeader title="Save Logs to Disk">
+        <SettingsSectionHeader title="Save logs to disk">
           Write application logs to disk for troubleshooting
         </SettingsSectionHeader>
         <button
@@ -2374,7 +2371,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             <span className="text-sm text-muted-foreground">days</span>
           </div>
           {!isValidDebugLogRetentionDays(debugLogRetentionDays) && (
-            <p className="text-xs text-destructive">
+            <p className="text-xs text-failure">
               Enter a whole number from {MIN_DEBUG_LOG_RETENTION_DAYS} to{" "}
               {MAX_DEBUG_LOG_RETENTION_DAYS}.
             </p>
@@ -2467,7 +2464,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         </div>
         <DatabaseStorageCard />
         <DiagnosticsExportCard />
-        <p className="text-xs text-muted-foreground/60">
+        <p className="text-xs text-muted-foreground">
           Changes apply straight away, with no restart and without interrupting running agents.
         </p>
       </div>
@@ -2513,7 +2510,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 Schedules run an action, a prompt to an agent tab or an environment launch at a set
                 time, once or on a cron or interval. Turning this on adds Settings → Schedules, the{" "}
                 <code>orkestrator schedule</code> commands and the agents&apos; and
-                coordinators&apos; schedule tools. While it is off, saved schedules are kept but do
+                Coordinators&apos; schedule tools. While it is off, saved schedules are kept but do
                 not fire.
               </>
             }
@@ -2551,7 +2548,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               <>
                 Runs Claude&apos;s native chat by driving the Claude CLI under tmux instead of the
                 Agent SDK. Turning this on adds the Native backend choice to Settings → Claude and
-                Claude Tmux Tab to the new-agent-tab menu. While it is off every new Claude session
+                Claude Tmux tab to the new-agent-tab menu. While it is off every new Claude session
                 uses the Agent SDK; tmux tabs that are already open keep running.
               </>
             }

@@ -44,7 +44,7 @@ function planFor(archive: Buffer): DiagnosticsBundlePlan {
       entries: [
         { path: "metrics.json", bytes: 10, sha256: "a", description: "Metrics.", redactions: 2 },
       ],
-      absent: [{ name: "logs/debug", reason: "Save Logs to Disk is off." }],
+      absent: [{ name: "logs/debug", reason: "Save logs to disk is off." }],
     },
   };
 }
@@ -96,7 +96,7 @@ describe("orkestrator diagnostics", () => {
     expect(run.code).toBe(0);
     expect(run.out).toContain("Plan plan-1");
     expect(run.out).toContain("metrics.json");
-    expect(run.out).toContain("logs/debug: Save Logs to Disk is off.");
+    expect(run.out).toContain("logs/debug: Save logs to disk is off.");
     expect(run.out).toContain("not a proof");
     expect(actionsOf(gateway)).toEqual(["diagnostics.plan"]);
   });

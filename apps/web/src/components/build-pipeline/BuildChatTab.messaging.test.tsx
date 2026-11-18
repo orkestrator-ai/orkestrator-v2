@@ -903,16 +903,16 @@ describe("BuildChatTab agent messaging", () => {
     expect(screen.queryByLabelText("Send a message to the agent") === null).toBe(true);
   });
 
-  test("restarts the current stage through the backend", async () => {
+  test("restarts the current stage and capitalizes its name in the success toast", async () => {
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Restart Build Stage" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Restart build stage$/ }));
 
     await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(running.id));
     await waitFor(() =>
       expect(pipelineStore().getState().pipelines.get(running.id)?.backendRevision).toBe(13),
     );
-    expect(mockToastSuccess).toHaveBeenCalledWith("Build Stage restarted");
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Build stage restarted"));
   });
 
   test("names the stage the pipeline is on rather than the review", async () => {
@@ -925,10 +925,13 @@ describe("BuildChatTab agent messaging", () => {
       });
     renderTab();
 
-    expect(screen.queryByRole("button", { name: /^(Retry|Restart) Review/ }) === null).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Restart Verification Stage" }));
+    expect(screen.queryByRole("button", { name: /^(Retry|Restart) review/ }) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Restart verification stage" }));
 
     await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(running.id));
+    await waitFor(() =>
+      expect(mockToastSuccess).toHaveBeenCalledWith("Verification stage restarted"),
+    );
   });
 
   test("restarts the stage a paused pipeline paused in", () => {
@@ -942,15 +945,15 @@ describe("BuildChatTab agent messaging", () => {
       });
     renderTab();
 
-    expect(screen.getByRole("button", { name: "Restart Verification Stage" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restart verification stage" })).toBeTruthy();
   });
 
   test.each([
-    ["reviewing", "Restart Review Stage"],
-    ["addressing-findings", "Restart Address Findings Stage"],
-    ["reworking", "Restart Rework Stage"],
-    ["creating-pr", "Restart PR Stage"],
-    ["resolving-conflicts", "Restart Conflict Resolution"],
+    ["reviewing", "Restart review stage"],
+    ["addressing-findings", "Restart address findings stage"],
+    ["reworking", "Restart rework stage"],
+    ["creating-pr", "Restart PR stage"],
+    ["resolving-conflicts", "Restart conflict resolution"],
   ] as const)("names the %s header restart", (phase, label) => {
     pipelineStore()
       .getState()
@@ -960,22 +963,21 @@ describe("BuildChatTab agent messaging", () => {
     expect(screen.getByRole("button", { name: label })).toBeTruthy();
   });
 
-  test.each(["building", "reworking"] as const)("names validation during the %s phase", (phase) => {
+  test("names validation during package preparation", () => {
     pipelineStore()
       .getState()
       .replacePipeline({
         ...running,
-        phase,
+        phase: "preparing-package",
         validationRun: validationRun({ status: "running" }),
       });
     renderTab();
 
-    expect(screen.getByRole("button", { name: "Restart Validation" })).toBeTruthy();
-    expect(
-      screen.queryByRole("button", {
-        name: `Restart ${phase === "building" ? "Build" : "Rework"} Stage`,
-      }) === null,
-    ).toBe(true);
+    const header = within(screen.getByTestId("build-pipeline-header"));
+    expect(header.getByRole("button", { name: "Restart validation" })).toBeTruthy();
+    expect(header.queryByRole("button", { name: "Restart review preparation" }) === null).toBe(
+      true,
+    );
   });
 
   test.each(["cancelled", "retry"] as const)(
@@ -985,7 +987,7 @@ describe("BuildChatTab agent messaging", () => {
         .getState()
         .replacePipeline({
           ...running,
-          phase: "reworking",
+          phase: "preparing-package",
           validationRun: validationRun({
             status: reason === "cancelled" ? "cancelled" : "running",
           }),
@@ -993,21 +995,21 @@ describe("BuildChatTab agent messaging", () => {
         });
       renderTab();
 
-      expect(screen.getByRole("button", { name: "Restart Review Preparation" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Restart review preparation" })).toBeTruthy();
     },
   );
 
-  test("names the dedicated preparation session during a fix", () => {
+  test("names the dedicated preparation session", () => {
     pipelineStore()
       .getState()
       .replacePipeline({
         ...running,
-        phase: "reworking",
+        phase: "preparing-package",
         sessions: [
           ...running.sessions,
           {
             ...running.sessions[0]!,
-            phase: "rework",
+            phase: "package-preparation",
             sessionKey: "preparation-key",
             sdkSessionId: "preparation-session",
             status: "running",
@@ -1018,7 +1020,7 @@ describe("BuildChatTab agent messaging", () => {
       });
     renderTab();
 
-    expect(screen.getByRole("button", { name: "Restart Review Preparation" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restart review preparation" })).toBeTruthy();
   });
 
   test("offers review restart when a multi-review pipeline is paused", () => {
@@ -1032,7 +1034,7 @@ describe("BuildChatTab agent messaging", () => {
       });
     renderTab();
 
-    expect(screen.getByRole("button", { name: "Restart Review Stage" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restart review stage" })).toBeTruthy();
   });
 
   test("explains a background refusal beside the queued messages and clears it from snapshots", () => {
@@ -1121,7 +1123,7 @@ describe("BuildChatTab agent messaging", () => {
     renderTab();
 
     const retry = screen.getByRole("button", {
-      name: "Restart Build Stage",
+      name: "Restart build stage",
     }) as HTMLButtonElement;
     fireEvent.click(retry);
 
@@ -1137,7 +1139,7 @@ describe("BuildChatTab agent messaging", () => {
     restartCurrentStepMock.mockRejectedValueOnce("provider offline");
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Restart Build Stage" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart build stage" }));
 
     await waitFor(() => {
       expect(mockToastError).toHaveBeenCalledWith("Failed to restart the stage", {
@@ -1183,7 +1185,7 @@ describe("BuildChatTab agent messaging", () => {
       };
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Restart Build Stage" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart build stage" }));
 
     await waitFor(() => expect(screen.getByText("Reviewing again")).toBeTruthy());
   });

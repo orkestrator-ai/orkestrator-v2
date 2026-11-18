@@ -90,7 +90,7 @@ export function OpenCodeAuthRecoveryAction({
           Sign in to {label} again
         </Button>
       )}
-      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {error ? <p className="text-xs text-failure">{error}</p> : null}
     </div>
   );
 }

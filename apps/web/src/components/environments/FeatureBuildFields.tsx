@@ -80,7 +80,7 @@ const BUILD_INTENT_GUIDANCE: Record<BuildIntent, { kind: string; detail: string 
   },
   prompt: {
     kind: "prompt environment",
-    detail: "the agent runs one prompt; start review and the PR by hand or from a coordinator.",
+    detail: "the agent runs one prompt; start review and the PR by hand or from a Coordinator.",
   },
 };
 
@@ -438,7 +438,7 @@ function FeatureBuildModelPickers({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-failure"
                 aria-label={`Remove review ${index + 1}`}
                 disabled={disabled || !canRemoveReviewer}
                 onClick={() =>

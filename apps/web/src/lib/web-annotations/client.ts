@@ -370,6 +370,11 @@ export interface WebAnnotationFeatureFlags {
   recover: boolean;
   /** Archive a full thread and continue in a linked new one. */
   archive: boolean;
+  /**
+   * Advisory region diffs of result captures (`operations.resultDiffs`). Read
+   * only, so every client that can read a result can ask for one.
+   */
+  resultDiffs: boolean;
   maxRequestAnnotations: number;
 }
 
@@ -385,6 +390,7 @@ export const NO_WEB_ANNOTATION_FEATURES: WebAnnotationFeatureFlags = Object.free
   resolve: false,
   recover: false,
   archive: false,
+  resultDiffs: false,
   maxRequestAnnotations: 1,
 });
 
@@ -415,6 +421,7 @@ export function webAnnotationFeatures(
     resolve: writable && (operations.resolve ?? author),
     recover: operations.read && (operations.recover ?? dispatch),
     archive: author && operations.archive === true,
+    resultDiffs: operations.read && operations.resultDiffs === true,
     maxRequestAnnotations: Math.max(
       1,
       Math.min(

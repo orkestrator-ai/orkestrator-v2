@@ -183,7 +183,7 @@ function GitHubComment({
               disabled={saving}
             />
             {error && (
-              <div className="flex items-start gap-2 text-xs text-destructive">
+              <div className="flex items-start gap-2 text-xs text-failure">
                 <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span>{error}</span>
               </div>
@@ -499,7 +499,7 @@ export function GitHubIssueDetailContent({
 
           {loadError && !detail && (
             <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4">
-              <div className="flex items-start gap-2 text-sm text-destructive">
+              <div className="flex items-start gap-2 text-sm text-failure">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{loadError}</span>
               </div>
@@ -519,7 +519,7 @@ export function GitHubIssueDetailContent({
           {detail && (
             <>
               {statusError && (
-                <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-failure">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>{statusError}</span>
                 </div>
@@ -626,7 +626,7 @@ export function GitHubIssueDetailContent({
                         placeholder="Add a Markdown description"
                       />
                       {editError && (
-                        <div className="flex items-start gap-2 text-sm text-destructive">
+                        <div className="flex items-start gap-2 text-sm text-failure">
                           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                           <span>{editError}</span>
                         </div>
@@ -717,7 +717,7 @@ export function GitHubIssueDetailContent({
                     disabled={postingComment}
                   />
                   {commentError && (
-                    <div className="flex items-start gap-2 text-sm text-destructive">
+                    <div className="flex items-start gap-2 text-sm text-failure">
                       <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                       <span>{commentError}</span>
                     </div>
@@ -763,7 +763,7 @@ export function GitHubIssueDetailContent({
                     ) : (
                       <Container className="h-3.5 w-3.5" />
                     )}
-                    Build Container
+                    Build container
                   </Button>
                   <Button
                     type="button"
@@ -782,7 +782,7 @@ export function GitHubIssueDetailContent({
                     ) : (
                       <FolderGit2 className="h-3.5 w-3.5" />
                     )}
-                    Build Local
+                    Build local
                   </Button>
                   {selectedPipeline?.environmentId && (
                     <Button
@@ -792,7 +792,7 @@ export function GitHubIssueDetailContent({
                       onClick={() => void navigateToPipeline(selectedPipeline)}
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
-                      View Build
+                      View build
                     </Button>
                   )}
                   {selectedPipeline && (
@@ -807,7 +807,7 @@ export function GitHubIssueDetailContent({
                   )}
                 </div>
                 {buildError && (
-                  <div className="flex items-start gap-2 text-sm text-destructive">
+                  <div className="flex items-start gap-2 text-sm text-failure">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span>{buildError}</span>
                   </div>
@@ -817,7 +817,7 @@ export function GitHubIssueDetailContent({
                     key={pipeline.id}
                     className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3"
                   >
-                    <span className="min-w-0 flex-1 text-xs text-destructive">
+                    <span className="min-w-0 flex-1 text-xs text-failure">
                       GitHub completion comment failed for build{" "}
                       {formatGitHubDate(pipeline.createdAt)}: {pipeline.completionCommentError}
                     </span>
@@ -897,7 +897,7 @@ export function GitHubIssueDetailContent({
                   ) : (
                     <Trash2 className="h-3.5 w-3.5" />
                   )}
-                  Close Issue
+                  Close issue
                 </Button>
               </section>
             </>
@@ -915,7 +915,7 @@ export function GitHubIssueDetailContent({
             </AlertDialogDescription>
           </AlertDialogHeader>
           {closeError && (
-            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-failure">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{closeError}</span>
             </div>
@@ -931,7 +931,7 @@ export function GitHubIssueDetailContent({
               }}
             >
               {closing && <Loader2 className="h-4 w-4 animate-spin" />}
-              Close Issue
+              Close issue
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

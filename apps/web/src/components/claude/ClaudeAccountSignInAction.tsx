@@ -82,7 +82,7 @@ export function ClaudeAccountSignInAction({
         Sign in to Claude
       </Button>
       {reauth.error ? (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-xs text-failure">
           {reauth.error}
         </p>
       ) : null}

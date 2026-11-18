@@ -1135,7 +1135,7 @@ against a full-network container start the profile with
 fixture has: uid 0 through **New root terminal**, and a host outside the
 allowlist refused (restricted) or reached (full). A credential-free Docker
 profile (`--no-agent-credentials`) should leave Claude out of
-`--agent-platforms`; otherwise the blocking "Claude Code Is Not Logged In"
+`--agent-platforms`; otherwise the blocking "Claude Code is not logged in"
 dialog stops the UI specs.
 
 ```bash
@@ -2846,7 +2846,7 @@ It writes the suite's summary shape to
 `e2e/agent-testing/diagnostics-across-nodes-live.spec.ts` exports a leaf's
 diagnostics bundle from a command node, between two running `dev:test` profiles
 (to-do 6141 (retired) task 4, [logging.md](../architecture/logging.md#the-diagnostics-bundle)).
-It turns on Save Logs to Disk on the leaf and writes a synthetic debug log of plain
+It turns on Save logs to disk on the leaf and writes a synthetic debug log of plain
 words there, so the bundle spans several 256 KiB pieces. Through Settings (the leaf's
 machine chip, Debug, Export diagnostics, Save bundle) and through
 `orkestrator --profile <command> --node <leaf> diagnostics export`, it checks that the
@@ -4317,7 +4317,7 @@ mise run test:agent:coordinator --credential-source codex --scenario routing
    chooses by the change's size (the user's decision of 2026-11-14), so
    `review-handled` passes on either path and names it. `multi-review`: one
    Multi Review of that environment, and `review-auto-actions-off` then also
-   requires that the call does not set `autoFix` or `autoPr` to true and the
+   requires that the call does not set `autoAddressFindings` or `autoPr` to true and the
    workflow record has both off (the run's saved Multi Review defaults are off,
    so the record shows what the coordinator asked for); the harness cancels the
    review. `own-review`: no Multi Review, a successful `get_worker_changes` on

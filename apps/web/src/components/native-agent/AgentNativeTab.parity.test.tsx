@@ -105,9 +105,9 @@ describe("AgentNativeTab", () => {
 
     // Retry starts adoption immediately, but transcript loading has not begun
     // yet. Clear the stale failure without claiming that history is loading.
-    await waitFor(() => expect(screen.queryByText("Connection Failed") === null).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Connection failed") === null).toBe(true));
     expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
-    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByText("Connection failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     await act(async () => {
       settleRetry!();
@@ -140,9 +140,9 @@ describe("AgentNativeTab", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    await waitFor(() => expect(screen.queryByText("Connection Failed") === null).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Connection failed") === null).toBe(true));
     expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
-    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByText("Connection failed") === null).toBe(true);
     expect(screen.queryByText("bridge refused the session") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     await act(async () => {
@@ -155,7 +155,7 @@ describe("AgentNativeTab", () => {
     const { rerender } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-identity-swap" data={identity("cursor")} isActive />,
     );
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Connection failed")).toBeTruthy());
 
     let settleOpenCode: (() => void) | undefined;
     adoptNativeAgentSessionMock.mockImplementation((input) => {
@@ -170,9 +170,9 @@ describe("AgentNativeTab", () => {
 
     // The cursor read answered "no session". That must not keep vouching for
     // OpenCode, which has not been asked yet.
-    await waitFor(() => expect(screen.queryByText("Connection Failed") === null).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Connection failed") === null).toBe(true));
     expect(screen.queryByText("Refreshing OpenCode session…") === null).toBe(true);
-    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByText("Connection failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     await act(async () => {
       settleOpenCode!();
@@ -4380,8 +4380,8 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId="tab-resume-detail" data={identity("claude")} isActive />,
       );
 
-      fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
-      const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+      fireEvent.click((await screen.findAllByRole("button", { name: /Resume session/ }))[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "Resume session" });
       expect(within(dialog).getByText("Earlier work")).toBeTruthy();
       expect(within(dialog).getByText("12 messages")).toBeTruthy();
       expect(within(dialog).getByText(/Running/)).toBeTruthy();
@@ -4414,8 +4414,8 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId="tab-resume-controls" data={identity("claude")} isActive />,
       );
 
-      fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
-      const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+      fireEvent.click((await screen.findAllByRole("button", { name: /Resume session/ }))[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "Resume session" });
       fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
       await waitFor(() =>
         expect(resumeNativeAgentSessionMock).toHaveBeenCalledWith(
@@ -4464,8 +4464,8 @@ describe("AgentNativeTab", () => {
       });
 
       renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
-      fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
-      const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+      fireEvent.click((await screen.findAllByRole("button", { name: /Resume session/ }))[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "Resume session" });
       fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
 
       await waitFor(() =>
@@ -4512,8 +4512,8 @@ describe("AgentNativeTab", () => {
       });
 
       renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
-      fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
-      const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+      fireEvent.click((await screen.findAllByRole("button", { name: /Resume session/ }))[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "Resume session" });
       expect(within(dialog).queryByRole("button", { name: /Current destination/ }) === null).toBe(
         true,
       );
@@ -4554,8 +4554,8 @@ describe("AgentNativeTab", () => {
       });
 
       renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
-      fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
-      const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+      fireEvent.click((await screen.findAllByRole("button", { name: /Resume session/ }))[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "Resume session" });
       fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
 
       await waitFor(() => expect(mockToastError).toHaveBeenCalled());
@@ -4704,8 +4704,8 @@ describe("AgentNativeTab", () => {
           <AgentNativeTab tabId={`tab-plan-${platform}`} data={identity(platform)} isActive />,
         );
 
-        expect(await screen.findByRole("button", { name: "Approve Plan" })).toBeTruthy();
-        expect(screen.getByRole("button", { name: "Switch To Build" })).toBeTruthy();
+        expect(await screen.findByRole("button", { name: "Approve plan" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Switch to Build" })).toBeTruthy();
         expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
       },
     );
@@ -4736,13 +4736,13 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId="tab-cursor-create-plan" data={identity("cursor")} isActive />,
       );
 
-      expect(await screen.findByRole("button", { name: "Approve Plan" })).toBeTruthy();
+      expect(await screen.findByRole("button", { name: "Approve plan" })).toBeTruthy();
       expect(screen.getByRole("heading", { name: "Split discovery" })).toBeTruthy();
       expect(screen.getByText("Do the work.")).toBeTruthy();
 
       fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
       await waitFor(() =>
-        expect(screen.queryByRole("button", { name: "Approve Plan" }) === null).toBe(true),
+        expect(screen.queryByRole("button", { name: "Approve plan" }) === null).toBe(true),
       );
       expect(screen.getByRole("heading", { name: "Split discovery" })).toBeTruthy();
     });
@@ -4765,7 +4765,7 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId="tab-cursor-approve" data={identity("cursor")} isActive />,
       );
 
-      fireEvent.click(await screen.findByRole("button", { name: "Approve Plan" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Approve plan" }));
 
       await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
       expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -4802,7 +4802,7 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId="tab-cursor-rejected" data={identity("cursor")} isActive />,
       );
 
-      fireEvent.click(await screen.findByRole("button", { name: "Approve Plan" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Approve plan" }));
 
       await waitFor(() =>
         expect(mockToastError).toHaveBeenCalledWith("Cursor rejected the implementation prompt"),
@@ -4810,7 +4810,7 @@ describe("AgentNativeTab", () => {
       expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
         update: { mode: "build" },
       });
-      expect(screen.queryByRole("button", { name: "Approve Plan" }) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Approve plan" }) === null).toBe(true);
     });
   });
 });

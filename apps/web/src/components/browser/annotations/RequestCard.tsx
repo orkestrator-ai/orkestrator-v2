@@ -236,7 +236,7 @@ export function RequestCard({
         annotationScope,
       );
       if (result.outcome === "cancelled")
-        return queued ? "Request cancelled. It was never sent." : "Request stopped.";
+        return queued ? "Request canceled. It was never sent." : "Request stopped.";
       if (result.outcome === "cancelling")
         return "Stopping. The current turn may still finish before it stops.";
       return cancelRefusalText(result.refusal ?? result.request.cancelRefusal?.code);
@@ -303,6 +303,11 @@ export function RequestCard({
     : request.state === "queued" && request.blockedReason
       ? WEB_ANNOTATION_BLOCKED_REASON_LABELS[request.blockedReason]
       : WEB_ANNOTATION_REQUEST_STATE_LABELS[request.state];
+  // The backend stores this reason as display text. Match the spelling on the card.
+  const stateReason =
+    request.state === "cancelled"
+      ? request.stateReason?.replace(/^Cancelled\b/, "Canceled")
+      : request.stateReason;
   const missingDestination = active && destinationMissing(request);
   const rejected = request.state === "queued" && request.blockedReason === "dispatch-rejected";
   const notes = requestOutcomeNotes(request);
@@ -354,7 +359,7 @@ export function RequestCard({
         <span
           className={cn(
             "shrink-0 rounded px-1.5 py-0.5",
-            (request.state === "failed" || failedStop) && "bg-destructive/15 text-destructive",
+            (request.state === "failed" || failedStop) && "bg-destructive/15 text-failure",
             request.state === "unconfirmed" && "bg-amber-500/15 text-amber-200",
             reviewable && "bg-primary/15 text-foreground",
           )}
@@ -394,13 +399,13 @@ export function RequestCard({
           )}
         </p>
       )}
-      {request.stateReason && <p className="text-muted-foreground">{request.stateReason}</p>}
+      {stateReason && <p className="text-muted-foreground">{stateReason}</p>}
       {notes.map((note) => (
         <p
           key={note.key}
           data-request-note={note.key}
           className={cn(
-            note.tone === "error" && "text-destructive",
+            note.tone === "error" && "text-failure",
             note.tone === "warning" && "text-amber-200",
             note.tone === "muted" && "text-muted-foreground",
           )}
@@ -616,7 +621,7 @@ export function RequestCard({
             type="button"
             size="sm"
             variant="ghost"
-            className="h-6 px-2 text-[11px] text-destructive"
+            className="h-6 px-2 text-[11px] text-failure"
             disabled={busy !== null || !features.recover || request.state === "cancelling"}
             onClick={() => void stop()}
           >
@@ -629,7 +634,7 @@ export function RequestCard({
       )}
 
       {excerpt && (
-        <blockquote className="border-l-2 border-primary/40 pl-2" data-response-excerpt>
+        <blockquote className="border-l border-border pl-2" data-response-excerpt>
           <p className="whitespace-pre-wrap break-words">{excerpt.text}</p>
           {excerpt.truncated && <p className="text-muted-foreground">(excerpt)</p>}
         </blockquote>

@@ -70,6 +70,7 @@ import { ReviewerStartFailureNotice } from "@/components/review/ReviewerStartFai
 import { reviewerProvisionalSummary } from "@/components/review/multi-review-steps";
 import { WorkflowResultStatus } from "@/components/review/WorkflowResultStatus";
 import {
+  buildErrorLabel,
   pipelineFlowModel,
   pipelinePackageRestartStageId,
   pipelineReviewPassNodes,
@@ -411,7 +412,7 @@ export function PipelineFlowView({
     if (node.session && createTab) {
       actions.push({
         key: "open",
-        label: node.kind === "fix" ? "Open Rework session" : "Open session",
+        label: node.kind === "fix" ? "Open rework session" : "Open session",
         icon: ExternalLink,
         onSelect: () => openSession(node),
       });
@@ -803,7 +804,7 @@ export function PipelineFlowView({
               />
               {selected.session?.adoptedFromTabId && (
                 <details className="mb-3 rounded border border-divider p-3">
-                  <summary>Original Build notes and acceptance criteria</summary>
+                  <summary>Original build notes and acceptance criteria</summary>
                   {selected.session.adoptedBuildNotes && (
                     <AutoPipelineBuildNotes notes={selected.session.adoptedBuildNotes} />
                   )}
@@ -835,7 +836,7 @@ export function PipelineFlowView({
                   }
                   className="mb-1 shrink-0"
                 >
-                  <TabsList aria-label="Inspector views" className="h-7 rounded-md p-0.5">
+                  <TabsList variant="segmented" aria-label="Inspector views">
                     <TabsTrigger className="h-6 px-2 text-xs" value="transcript">
                       Transcript
                     </TabsTrigger>
@@ -963,7 +964,7 @@ function InspectorNotes({
   if (node.state === "failed" && node.error && node.error !== visibleError) {
     notes.push(
       <p key="error" className="break-words whitespace-pre-wrap text-failure">
-        {node.error}
+        {buildErrorLabel(node.error)}
       </p>,
     );
   }
@@ -993,7 +994,7 @@ function InspectorNotes({
             : session.phase === "verify"
               ? "verification-result"
               : session.phase === "address-findings"
-                ? "fix-result"
+                ? "address-findings-result"
                 : "review-preparation"
         }
       />,

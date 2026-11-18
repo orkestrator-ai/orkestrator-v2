@@ -145,7 +145,7 @@ export function SoundsSettings() {
         />
         <SoundRow
           label="Coordinator report"
-          description="Play a cue when a coordinator is woken by a worker it was waiting on, unless that coordinator is on screen."
+          description="Play a cue when a Coordinator is woken by a worker it was waiting on, unless that Coordinator is on screen."
           enabled={settings.coordinatorReport}
           onEnabledChange={(coordinatorReport) => updateSettings({ coordinatorReport })}
           onPreview={() => void preview("coordinator-report")}

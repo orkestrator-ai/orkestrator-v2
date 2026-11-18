@@ -353,7 +353,7 @@ describe("BuildChatTab backend projection", () => {
   test("shows backend tests on the package preparation between build and the reviews", () => {
     const packageSession: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      phase: "rework",
+      phase: "package-preparation",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,
@@ -491,7 +491,9 @@ describe("BuildChatTab backend projection", () => {
       });
     renderInBuildChat(<BuildChatTab data={tabData} />);
 
-    expect(graphNode("Prepare").getAttribute("data-flow-state")).toBe("cancelled");
+    const node = graphNode("Prepare");
+    expect(node.getAttribute("data-flow-state")).toBe("cancelled");
+    expect(node.querySelector("[data-flow-node-detail]")?.textContent).toBe("Validation canceled");
   });
 
   test("puts the Prepare node before the first review when no preparation session exists", () => {
@@ -547,7 +549,7 @@ describe("BuildChatTab backend projection", () => {
   test("follows the package preparation, with its tests beside its transcript", () => {
     const packageSession: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      phase: "rework",
+      phase: "package-preparation",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,
@@ -601,7 +603,7 @@ describe("BuildChatTab backend projection", () => {
   test("keeps the Prepare node and its tests selected when the run is replaced", async () => {
     const packageSession: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      phase: "rework",
+      phase: "package-preparation",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,
@@ -704,7 +706,7 @@ describe("BuildChatTab backend projection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(cancelBuildPipelineMock).toHaveBeenCalledWith(pipeline.id));
-    await waitFor(() => expect(screen.getByText("Build cancelled")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Build canceled")).toBeTruthy());
   });
 
   test("routes the mobile icon controls through their backend actions", async () => {
@@ -741,7 +743,7 @@ describe("BuildChatTab backend projection", () => {
       };
       renderInBuildChat(<BuildChatTab data={data} />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Restart Build Stage" }));
+      fireEvent.click(screen.getByRole("button", { name: "Restart build stage" }));
       await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(pipeline.id));
       await waitFor(() =>
         expect((screen.getByRole("button", { name: "Pause" }) as HTMLButtonElement).disabled).toBe(
@@ -791,7 +793,7 @@ describe("BuildChatTab backend projection", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: "Retry Verification Stage" }));
+      fireEvent.click(screen.getByRole("button", { name: "Retry verification stage" }));
       await waitFor(() => expect(retryStageMock).toHaveBeenCalledWith(pipeline.id));
     } finally {
       setMobileViewport(false);

@@ -433,6 +433,9 @@ async function switchActiveAccount(
     if (previous && outgoing) {
       await accounts.lastUsage.remember(accountsRoot(context), platform, previous, outgoing);
     }
+    if (previous !== undefined && platform === "codex") {
+      resetHostModelCatalogSeedCooldown(context, platform);
+    }
     return previous !== undefined;
   });
 }
@@ -823,8 +826,8 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
       entry.completedAt = new Date().toISOString();
       // A first-run user who was never signed in has no model list yet; fetch it
       // now rather than waiting for the picker to be reopened.
+      resetHostModelCatalogSeedCooldown(context, platform);
       if (platform === "claude") {
-        resetHostModelCatalogSeedCooldown(context, platform);
         void seedHostModelCatalogIfMissing(context, platform, refreshHostModelCatalog).catch(
           () => undefined,
         );

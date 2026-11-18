@@ -24,7 +24,7 @@ web counterpart of `orkestrator --fix AGENT`
 
 The shared prompt section sends the agent to the
 [essential event log](logging.md#the-essential-event-log) first, because it is written
-even with **Save Logs to Disk** off, and asks the user to turn saving on and reproduce the
+even with **Save logs to disk** off, and asks the user to turn saving on and reproduce the
 problem only if that log does not explain it. `orkestrator --fix` also mentions the
 [diagnostics bundle](logging.md#the-diagnostics-bundle) as something the user can attach.
 It never runs it: what goes into a public issue stays the user's decision.

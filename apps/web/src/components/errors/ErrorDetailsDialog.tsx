@@ -52,9 +52,7 @@ export function ErrorDetailsDialog() {
     <AlertDialog open={error !== null} onOpenChange={(open) => !open && closeError()}>
       <AlertDialogContent className="max-h-[85vh] flex flex-col">
         <AlertDialogHeader className="flex-shrink-0">
-          <AlertDialogTitle className="text-destructive">
-            {error?.title ?? "Error"}
-          </AlertDialogTitle>
+          <AlertDialogTitle className="text-failure">{error?.title ?? "Error"}</AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="space-y-3">
               {context && <p className="text-sm font-medium text-foreground">{context}</p>}
@@ -64,7 +62,7 @@ export function ErrorDetailsDialog() {
               {error?.initialPrompt && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium text-foreground">Initial Prompt</p>
+                    <p className="text-sm font-medium text-foreground">Initial prompt</p>
                     <Button
                       variant="ghost"
                       size="sm"

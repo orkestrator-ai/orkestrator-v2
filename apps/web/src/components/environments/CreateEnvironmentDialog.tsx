@@ -117,6 +117,12 @@ import {
   openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
 import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { hydrateAgentModelCatalogCache } from "@/lib/agent-model-catalog-cache";
+import {
+  MODEL_CATALOG_REFRESHED_EVENT,
+  modelCatalogRefreshTargetsScope,
+} from "@/components/settings/agent/refresh-model-catalog";
+import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
@@ -169,8 +175,7 @@ export function resolveAgentDefaults(
   } as const;
 }
 
-const MOBILE_TAB_TRIGGER_CLASSES =
-  "h-11 min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-1 py-1 text-[10px] leading-none data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none";
+const MOBILE_TAB_TRIGGER_CLASSES = "h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px]";
 const MOBILE_TAB_CONTENT_CLASSES =
   "create-environment-mobile-tab-panel mt-0 data-[state=inactive]:hidden";
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
@@ -335,6 +340,27 @@ export function CreateEnvironmentDialog({
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
   const piCatalogSeedAttemptedRef = useRef(false);
+  const [catalogRefreshRevision, setCatalogRefreshRevision] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    const refresh = (event: Event) => {
+      if (modelCatalogRefreshTargetsScope(event, catalogScope)) {
+        setCatalogRefreshRevision((revision) => revision + 1);
+      }
+    };
+    window.addEventListener(MODEL_CATALOG_REFRESHED_EVENT, refresh);
+    return () => window.removeEventListener(MODEL_CATALOG_REFRESHED_EVENT, refresh);
+  }, [catalogScope, open]);
+  // Load the target node's saved catalogue on open and after Settings refreshes it.
+  const hydrateCatalog = useCallback(() => {
+    void hydrateAgentModelCatalogCache({ scope: catalogScope }).catch((error: unknown) => {
+      log.debug("models.hydrate-failed", { error: formatLogError(error) });
+    });
+  }, [catalogScope]);
+  useEffect(() => {
+    if (open) hydrateCatalog();
+  }, [catalogRefreshRevision, hydrateCatalog, open]);
+  useAgentAccountsChanged(open ? "codex" : null, hydrateCatalog, catalogScope);
   const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<CachedOpenCodeModel[]>([]);
   useEffect(() => {
     if (!open) {
@@ -641,7 +667,7 @@ export function CreateEnvironmentDialog({
   // whatever was known on first render.
   const effectiveFeatureModels = featureModels ?? defaultFeatureModels;
   /**
-   * The task text, shared by both intents: it is the prompt's "Initial Prompt"
+   * The task text, shared by both intents: it is the prompt's "Initial prompt"
    * and the feature's "Description". Switching intent keeps what was typed, so
    * the two fields always show the same text.
    */
@@ -721,7 +747,7 @@ export function CreateEnvironmentDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, projectId, nodeBackend]);
+  }, [catalogRefreshRevision, open, projectId, nodeBackend]);
 
   // Restore drafts only for a new dialog/project, never for navigation changes.
   useEffect(() => {
@@ -1206,7 +1232,7 @@ export function CreateEnvironmentDialog({
    * Terminal-versus-native is no longer a per-environment choice in this
    * dialog: it comes from each platform's own Settings column, which is where
    * every other launcher reads it from. The checkbox that used to override it
-   * here is now Launch Agent.
+   * here is now Launch agent.
    */
   const availableModels = modelsForAgent(modelCatalog, agentType);
   const pickerModels = enabledAgentPlatforms.flatMap((platform) =>
@@ -1555,7 +1581,7 @@ export function CreateEnvironmentDialog({
   };
 
   // Cmd+Enter (Ctrl+Enter off macOS) from anywhere in the dialog does what the
-  // Create Environment button does, including staying inert while it is disabled.
+  // Create environment button does, including staying inert while it is disabled.
   // Capture before Radix consumes Enter on checkbox and select triggers. Stop
   // propagation so the chord cannot also toggle, open, or activate a control.
   const handleDialogKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -1612,12 +1638,12 @@ export function CreateEnvironmentDialog({
             <DialogTitle
               aria-label={
                 projectName
-                  ? `Create Ork (Environment) - ${projectName}`
-                  : "Create Ork (Environment)"
+                  ? `Create Ork (environment) - ${projectName}`
+                  : "Create Ork (environment)"
               }
               className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-xl leading-tight"
             >
-              <span className="shrink-0">Create Ork (Environment)</span>
+              <span className="shrink-0">Create Ork (environment)</span>
               {projectName && (
                 <span className="max-w-full truncate font-mono text-sm text-muted-foreground">
                   {projectName}
@@ -1656,8 +1682,9 @@ export function CreateEnvironmentDialog({
             className="min-h-0 gap-0"
           >
             <TabsList
+              variant="underline"
               aria-label="Environment configuration sections"
-              className="sticky top-0 z-10 m-2 flex h-auto w-[calc(100%-1rem)] shrink-0 rounded-xl border border-border/80 bg-zinc-950/95 p-1 shadow-lg shadow-black/15 backdrop-blur sm:hidden"
+              className="sticky top-0 z-10 mx-2 w-auto shrink-0 gap-1 border-b border-divider bg-background sm:hidden"
             >
               <TabsTrigger
                 value="prompt"
@@ -1769,7 +1796,7 @@ export function CreateEnvironmentDialog({
                 </div>
               </div>
 
-              {/* Environment Name */}
+              {/* Environment name */}
               <div className="border-b border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6">
                 <Label
                   htmlFor="environment-name"
@@ -1780,7 +1807,7 @@ export function CreateEnvironmentDialog({
                 <div className="grid min-w-0 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7rem] sm:gap-4">
                   <Input
                     id="environment-name"
-                    aria-label="Environment Name (optional)"
+                    aria-label="Environment name (optional)"
                     placeholder="e.g., feature-dark-mode"
                     value={environmentName}
                     onChange={(e) => setEnvironmentName(e.target.value)}
@@ -1960,7 +1987,7 @@ export function CreateEnvironmentDialog({
                   <div className="flex items-center gap-2 sm:px-1">
                     <Checkbox
                       id="launch-agent"
-                      aria-label="Launch Agent"
+                      aria-label="Launch agent"
                       checked={launchAgent}
                       onCheckedChange={(checked) => setLaunchAgent(checked === true)}
                       disabled={isLoading}
@@ -1976,7 +2003,7 @@ export function CreateEnvironmentDialog({
               </div>
             </TabsContent>
 
-            {/* Port Configuration - only for containerized environments */}
+            {/* Port configuration - only for containerized environments */}
             {environmentType === "containerized" && (
               <TabsContent
                 value="ports"
@@ -1998,7 +2025,7 @@ export function CreateEnvironmentDialog({
                       >
                         <div className="flex items-center gap-2">
                           <Network className="h-4 w-4" />
-                          <span className="text-sm font-medium">Port Configuration</span>
+                          <span className="text-sm font-medium">Port configuration</span>
                           {portMappings.length > 0 && (
                             <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                               {portMappings.length} port{portMappings.length !== 1 ? "s" : ""}
@@ -2102,7 +2129,7 @@ export function CreateEnvironmentDialog({
                         className="w-full"
                       >
                         <Plus className="h-4 w-4 mr-2" />
-                        Add Port Mapping
+                        Add port mapping
                       </Button>
                     </CollapsibleContent>
                   </Collapsible>
@@ -2166,7 +2193,7 @@ export function CreateEnvironmentDialog({
                         htmlFor="initial-prompt"
                         className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0 sm:pt-2"
                       >
-                        Initial Prompt <span className="sr-only">(optional)</span>
+                        Initial prompt <span className="sr-only">(optional)</span>
                       </Label>
                       <div className="space-y-2">
                         <Textarea
@@ -2221,7 +2248,7 @@ export function CreateEnvironmentDialog({
             className="h-9 px-5 font-bold shadow-[0_8px_24px_rgba(59,130,246,0.22)]"
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {isLoading && loadingLabel ? loadingLabel : "Create Environment"}
+            {isLoading && loadingLabel ? loadingLabel : "Create environment"}
           </Button>
         </DialogFooter>
       </DialogContent>

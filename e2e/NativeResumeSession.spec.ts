@@ -3,7 +3,7 @@ import path from "node:path";
 
 test("resume picker shows fork lineage and resumes the selected branch", async ({ page }) => {
   await page.goto("/native-resume-session");
-  const dialog = page.getByRole("dialog", { name: "Resume Session" });
+  const dialog = page.getByRole("dialog", { name: "Resume session" });
   await expect(dialog.getByText("Alternative implementation", { exact: true })).toBeVisible();
   const row = dialog.getByRole("button", { name: /Compare implementations/ });
   await expect(row).toContainText("Alternative implementation");
@@ -14,7 +14,7 @@ test("resume picker shows fork lineage and resumes the selected branch", async (
 
 test("archived conversations stay reachable and restore before resuming", async ({ page }) => {
   await page.goto("/native-resume-session");
-  const dialog = page.getByRole("dialog", { name: "Resume Session" });
+  const dialog = page.getByRole("dialog", { name: "Resume session" });
   const archived = dialog.getByRole("button", { name: /A finished conversation/ });
 
   await expect(dialog.getByText("Original implementation")).toBeVisible();
@@ -37,7 +37,7 @@ for (const failure of ["timeout", "long", "blank"] as const) {
     const narrow = testInfo.project.name === "mobile-chromium";
     await page.setViewportSize({ width: narrow ? 390 : 1280, height: narrow ? 844 : 800 });
     await page.goto(`/native-resume-session?failure=${failure}`);
-    const dialog = page.getByRole("dialog", { name: "Resume Session" });
+    const dialog = page.getByRole("dialog", { name: "Resume session" });
     const heading = dialog.getByText("Failed to load sessions", { exact: true });
     const message =
       failure === "long" ? "x".repeat(500) : "Pi took too long to read its session history";

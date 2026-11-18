@@ -52,8 +52,8 @@ const SCOPE_LABELS: Record<AgentSkillScope, string> = {
 };
 
 /** Matches the compact tab strip in ActionBar so the two read as one system. */
-const TAB_TRIGGER_CLASSES =
-  "h-7 gap-1.5 px-3 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-primary/50";
+const TAB_TRIGGER_CLASSES = "h-7 text-xs";
+const TAB_COUNT_CLASS = "tabular-nums opacity-70 group-data-[state=active]/count:opacity-100";
 
 /**
  * The two panes scroll independently, which needs a definite height. The
@@ -115,7 +115,7 @@ function normalizeSkillScan(value: unknown, provider: AgentSkillProvider): Agent
     !Array.isArray(candidate.skills) ||
     !Array.isArray(candidate.errors)
   ) {
-    throw new Error("The backend returned an unreadable skill catalogue");
+    throw new Error("The backend returned an unreadable skill catalog");
   }
   // The response's own `provider` is ignored: state is keyed by the tab that
   // was asked, and a mismatched echo must not file results under another tab.
@@ -423,7 +423,7 @@ export function SkillsSettings({
       value={provider}
       onValueChange={(value) => setInternalProvider(value as AgentSkillProvider)}
     >
-      <TabsList aria-label="Agent" className="h-auto min-h-8 flex-wrap bg-zinc-900/80">
+      <TabsList variant="pill" aria-label="Agent" className="h-auto flex-wrap">
         {PROVIDERS.map((entry) => (
           <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
             <AgentPlatformIcon platform={entry.id} accent className="h-3.5 w-3.5" />
@@ -458,17 +458,15 @@ export function SkillsSettings({
 
       {showPlugins && (
         <Tabs value={view} onValueChange={(value) => setView(value as "skills" | "plugins")}>
-          <TabsList aria-label="Skills or plugins" className="h-8 bg-zinc-900/80">
-            <TabsTrigger value="skills" className={TAB_TRIGGER_CLASSES}>
+          <TabsList variant="pill" aria-label="Skills or plugins">
+            <TabsTrigger value="skills" className={cn(TAB_TRIGGER_CLASSES, "group/count")}>
               Skills
-              {state.scan && <span className="tabular-nums opacity-70">{skills.length}</span>}
+              {state.scan && <span className={TAB_COUNT_CLASS}>{skills.length}</span>}
             </TabsTrigger>
-            <TabsTrigger value="plugins" className={TAB_TRIGGER_CLASSES}>
+            <TabsTrigger value="plugins" className={cn(TAB_TRIGGER_CLASSES, "group/count")}>
               Plugins
               {plugins.state.catalog && !plugins.state.catalog.pluginError && (
-                <span className="tabular-nums opacity-70">
-                  {plugins.state.catalog.plugins.length}
-                </span>
+                <span className={TAB_COUNT_CLASS}>{plugins.state.catalog.plugins.length}</span>
               )}
             </TabsTrigger>
           </TabsList>
@@ -524,10 +522,7 @@ export function SkillsSettings({
             </div>
 
             {state.error && state.scan && (
-              <p
-                role="alert"
-                className="border-b border-zinc-800 px-3 py-2 text-xs text-destructive"
-              >
+              <p role="alert" className="border-b border-zinc-800 px-3 py-2 text-xs text-failure">
                 Refresh failed: {state.error}
               </p>
             )}
@@ -538,7 +533,7 @@ export function SkillsSettings({
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
               ) : state.error && !state.scan ? (
-                <p className="p-3 text-xs text-destructive">{state.error}</p>
+                <p className="p-3 text-xs text-failure">{state.error}</p>
               ) : filtered.length === 0 ? (
                 <p className="p-3 text-xs text-muted-foreground">
                   {skills.length === 0
@@ -576,7 +571,7 @@ export function SkillsSettings({
                             {skill.shadowed && (
                               <span
                                 title="A higher-precedence directory provides a skill with this name, so this copy is not loaded"
-                                className="shrink-0 rounded bg-zinc-800 px-1 text-[9px] uppercase tracking-wide text-muted-foreground"
+                                className="shrink-0 rounded bg-zinc-800 px-1 text-[11px] uppercase tracking-wide text-muted-foreground"
                               >
                                 Shadowed
                               </span>
@@ -599,7 +594,7 @@ export function SkillsSettings({
             {/* Gated on a completed scan: before one lands the counts are all
               zero, which reads as a definitive "no skills, no directories"
               rather than "not looked yet". */}
-            <div className="border-t border-zinc-800 px-3 py-1.5 text-[10px] text-muted-foreground">
+            <div className="border-t border-zinc-800 px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
               {state.scan ? (
                 <>
                   {needle && `${filtered.length} of `}
@@ -624,11 +619,14 @@ export function SkillsSettings({
               <>
                 <div className="flex items-start justify-between gap-3 border-b border-zinc-800 p-3">
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <h4 className="truncate text-sm font-medium text-foreground">
                         {selected.name}
                       </h4>
-                      <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+                      <span
+                        className="max-w-full truncate rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground"
+                        title={selected.plugin}
+                      >
                         {selected.plugin
                           ? `Plugin · ${selected.plugin}`
                           : SCOPE_LABELS[selected.scope]}
@@ -654,7 +652,7 @@ export function SkillsSettings({
                       value={rawMode ? "raw" : "rendered"}
                       onValueChange={(v) => setRawMode(v === "raw")}
                     >
-                      <TabsList className="h-7 bg-zinc-900/80">
+                      <TabsList variant="segmented" aria-label="Skill preview">
                         <TabsTrigger value="rendered" className={TAB_TRIGGER_CLASSES}>
                           Rendered
                         </TabsTrigger>
@@ -701,7 +699,7 @@ export function SkillsSettings({
                     /* Nothing else re-reads the same path, so without this the
                      obvious recovery — clicking the skill again — is a no-op. */
                     <div className="flex items-center gap-2">
-                      <p className="text-xs text-destructive">{fileError}</p>
+                      <p className="text-xs text-failure">{fileError}</p>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -747,7 +745,7 @@ export function SkillsSettings({
           </p>
           <ul className="mt-1 space-y-0.5">
             {state.scan.errors.map((entry) => (
-              <li key={entry.path} className="font-mono text-[10px] text-muted-foreground">
+              <li key={entry.path} className="font-mono text-[11px] text-muted-foreground">
                 {entry.path}: {entry.message}
               </li>
             ))}

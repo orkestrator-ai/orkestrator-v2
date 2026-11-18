@@ -265,13 +265,13 @@ export function graphActivationSkipRefusal(
 }
 
 const GRAPH_WORKSPACE_HOLDER_LABELS = {
-  "build-pipeline": "Build Pipeline",
+  "build-pipeline": "build pipeline",
   "multi-review": "Multi Review",
 } as const;
 
 /**
  * What a `ready` activation's recorded block reads as in the run view and
- * the CLI: "Waiting: Build Pipeline is writing this environment".
+ * the CLI: "Waiting: build pipeline is writing this environment".
  * Content-free (engine names and limits only).
  */
 export function graphActivationBlockText(block: GraphActivationBlock): string {

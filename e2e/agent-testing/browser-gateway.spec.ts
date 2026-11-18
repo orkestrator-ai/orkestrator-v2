@@ -132,10 +132,13 @@ async function authenticatedInvoke(page: Page, status: Status) {
   };
 }
 
-// This host-specific notice can arrive after login, on top of any surface.
-// Dismiss it through its public Close control so local-worktree flows run even
-// on machines whose firewall blocks Docker's host connection.
+// Local-worktree scenarios can proceed through these optional startup dialogs.
+// The host reachability notice can also arrive later, on top of any surface.
 test.beforeEach(async ({ page }) => {
+  for (const name of ["Continue without Docker", "Continue without GitHub CLI"]) {
+    const dismiss = page.getByRole("button", { name, exact: true });
+    await page.addLocatorHandler(dismiss, (button) => button.click());
+  }
   const notice = page.getByRole("dialog", {
     name: "Docker containers can't reach Orkestrator",
     exact: true,
@@ -251,7 +254,9 @@ test.describe("host path browsing", () => {
             const closeDrawer = page
               .getByRole("button", { name: "Close projects and environments" })
               .first();
-            await expect(openDrawer.or(closeDrawer).first()).toBeVisible();
+            // Settle startup overlays before reading the drawer state. The locator
+            // handler dismisses any Docker warning during this actionability check.
+            await openDrawer.or(closeDrawer).first().click({ trial: true });
             if (await openDrawer.isVisible()) await openDrawer.click();
             await expect(drawer).toBeVisible();
           }
@@ -266,7 +271,7 @@ test.describe("host path browsing", () => {
             // the complete user action with bounded clicks while it settles.
             await expect(async () => {
               const repository = page.getByRole("dialog", {
-                name: "Repository Settings",
+                name: "Repository settings",
                 exact: true,
               });
               if (!(await repository.isVisible())) {
@@ -283,13 +288,13 @@ test.describe("host path browsing", () => {
             }).toPass({ timeout: 15_000 });
           } else {
             await page.getByText(fixture.name, { exact: true }).first().click({ button: "right" });
-            await page.getByRole("menuitem", { name: "Repository Settings", exact: true }).click();
+            await page.getByRole("menuitem", { name: "Repository settings", exact: true }).click();
           }
-          const repository = page.getByRole("dialog", { name: "Repository Settings", exact: true });
+          const repository = page.getByRole("dialog", { name: "Repository settings", exact: true });
           await repository.getByRole("button", { name: "Browse for local path" }).click();
           const picker = await assertPickerLayers(
-            "Select Repository Directory",
-            "Repository Settings",
+            "Select repository directory",
+            "Repository settings",
           );
           await expect(picker.getByRole("button", { name: "Select this folder" })).toBeEnabled();
           await picker.getByLabel("Path", { exact: true }).fill(directory);
@@ -316,7 +321,7 @@ test.describe("host path browsing", () => {
           }
           await expect(picker.getByRole("button", { name: "Select this folder" })).toBeEnabled();
           await picker.getByRole("button", { name: "Select this folder" }).click();
-          await expect(repository.getByLabel("Local Path", { exact: true })).toHaveValue(
+          await expect(repository.getByLabel("Local path", { exact: true })).toHaveValue(
             createdDirectory,
           );
           // Reopen immediately, then revisit after reload to prove host filesystem persistence.
@@ -516,7 +521,7 @@ test("project Home retains background work and unread attention beneath the boar
       })
       .toBe(true);
     await invoke("set_environment_unread", { environmentId: home.id, unread: true });
-    const attention = page.getByRole("button", { name: `${fixture.name} Home needs attention` });
+    const attention = page.getByRole("button", { name: `${fixture.name} home needs attention` });
     await expect(attention).toBeVisible();
     await expect
       .poll(
@@ -1222,19 +1227,14 @@ test("build pipeline live steering persists while inactive and rehydrates after 
     const openEnvironment = async (name: string) => {
       const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
       const entry = page.getByText(name, { exact: true }).first();
-      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
-      await expect(page.getByText("Checking Docker availability...", { exact: true })).toBeHidden({
-        timeout: 30_000,
-      });
-      for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
-        const continueButton = page.getByRole("button", { name: label, exact: true });
-        if (await continueButton.isVisible()) await continueButton.click();
-      }
       await expect(
-        page.getByText("Checking CLI tools installation...", { exact: true }),
+        page.getByText(/^(Checking Docker availability|Checking CLI tools installation)\.\.\.$/),
       ).toBeHidden({
         timeout: 30_000,
       });
+      // The startup handlers own the prompts. Wait for the sidebar to become
+      // actionable before choosing which control to click.
+      await expand.or(entry).first().click({ trial: true, timeout: 30_000 });
       if (await expand.isVisible()) await expand.click();
       await page.keyboard.press("Escape");
       await entry.click();
@@ -1594,7 +1594,7 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.goto(status.browserUrl!);
     await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
+    await page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }).click();
     await page.getByTestId("agent-mail-conversation-row").first().click();
     const panel = page.getByTestId("agent-mail-panel");
     await panel.getByRole("button", { name: "Deliver now", exact: true }).click();
@@ -1630,7 +1630,7 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.reload();
     await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
+    await page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }).click();
     await page.getByTestId("agent-mail-conversation-row").first().click();
     await expect(panel.getByText(/^(delivered|handled)$/)).toBeVisible();
     await expect(panel.getByRole("button", { name: "Deliver now", exact: true })).toHaveCount(0);
@@ -1747,7 +1747,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       "Inactive recipient",
     );
     await expect(
-      page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }),
+      page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }),
     ).toBeVisible();
 
     await page.reload();
@@ -1760,12 +1760,14 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       "Inactive recipient",
     );
     await expect(
-      page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }),
+      page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }),
     ).toBeVisible();
     // A committed send whose response is lost must retain its draft and retry
     // key across both list navigation and closing the panel.
     const openConversation = async () => {
-      await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
+      await page
+        .getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ })
+        .click();
       await page.getByTestId("agent-mail-conversation-row").first().click();
     };
     await openConversation();
@@ -1978,14 +1980,14 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
       timeout: 30_000,
     });
-    await expect(page.getByText(/^Multi Review cancelled\b/).first()).toBeVisible();
+    await expect(page.getByText(/^Multi Review canceled\b/).first()).toBeVisible();
     await page.reload();
     await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
       timeout: 30_000,
     });
-    await expect(page.getByText(/^Multi Review cancelled\b/).first()).toBeVisible();
+    await expect(page.getByText(/^Multi Review canceled\b/).first()).toBeVisible();
     const opened = await invoke<MultiReviewActionResult>("open_coordinator_multi_review", {
       scope,
       workflowId: launched.workflow.id,

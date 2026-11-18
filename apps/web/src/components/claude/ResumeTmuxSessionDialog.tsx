@@ -80,7 +80,7 @@ export function ResumeTmuxSessionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="md">
         <DialogHeader>
-          <DialogTitle>Resume Session</DialogTitle>
+          <DialogTitle>Resume session</DialogTitle>
           <DialogDescription>
             Pick a previous Claude session recorded for this workspace. Selecting one will reload
             its full transcript and continue the conversation in this tab.
@@ -93,7 +93,7 @@ export function ResumeTmuxSessionDialog({
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
             </div>
           ) : error ? (
-            <div className="text-center py-8 text-sm text-destructive">{error}</div>
+            <div className="text-center py-8 text-sm text-failure">{error}</div>
           ) : sessions.length === 0 ? (
             <div className="text-center py-8 text-sm text-muted-foreground">
               No previous sessions recorded for this workspace yet.

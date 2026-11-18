@@ -181,6 +181,7 @@ test("command validation advances without a provider when no worker mail is queu
     async (service, storage, _provider, invocations) => {
       const { started } = await startBuilding(service, storage);
       await mutateStored(storage, started.id, (snapshot) => {
+        snapshot.phase = "preparing-package";
         snapshot.validationRun = newReviewValidationRun("command-only", {
           headRef: "1".repeat(40),
           commands: [],

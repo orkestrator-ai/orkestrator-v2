@@ -228,7 +228,7 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
 - **Done 2026-10-23** (this change). Each is covered by tests that fail
   without it:
   - **A tab opened only to resume creates no session.** While the picker of
-    a tab opened from **Resume Session** is open, the controller keeps the
+    a tab opened from **Resume session** is open, the controller keeps the
     session hook disabled (`awaitingResumeChoice`,
     `AgentNativeTab.controller.tsx`) and shows the picker alone. Picking a
     row resumes straight into the unmapped tab with no composer controls;
@@ -471,7 +471,7 @@ the history it starts from.
   a session's created title as OpenCode does.
 - **The resume close is in the backend, after the resume is adopted.** A
   renderer-only fix (create no session for a tab opened to resume) would miss
-  a user who opens a plain new tab and then clicks Resume Session, and every
+  a user who opens a plain new tab and then clicks Resume session, and every
   non-UI caller of `resume_native_agent_session`. The backend knows which
   session the tab showed (`existing.providerSessionId`, which is also the
   adoption's `expectedProviderSessionId`), so the close takes no id from the
@@ -532,7 +532,7 @@ bounded-state occupancy in `/runtime-health`) are decided below.
 ### Lazy session only for tabs opened from the resume flow (Code item 2)
 
 - **Options.** (a) Create the session on first prompt for every new tab.
-  (b) Defer only while a tab opened from **Resume Session** shows its picker;
+  (b) Defer only while a tab opened from **Resume session** shows its picker;
   create it when the picker is dismissed or the resume fails. (c) Keep
   creating on mount and rely on the backend close.
 - **Choice: (b).**

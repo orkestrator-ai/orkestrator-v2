@@ -234,15 +234,15 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
       );
     case "consolidation":
       return consolidationText(inputs, target);
-    case "fix-review-issues":
+    case "address-findings":
       inputs.optional("code");
       return addressFindingsText(inputs, instruction);
-    case "address-review": {
+    case "pipeline-address-findings": {
       inputs.optional("code");
       const report = inputs.reviewReport(inputs.required("report"));
       // addressFindingsValidationGuidance is addressFindingsValidationInstruction without
-      // ADDRESS_FINDINGS_OUTPUT_CONTRACT (the fix result as the final JSON response):
-      // the node submits it through its `fix-result` port tool instead.
+      // ADDRESS_FINDINGS_OUTPUT_CONTRACT (the Address Findings result as the final JSON
+      // response): the node submits it through its `address-findings-result` port tool instead.
       return addressFindingsReportPrompt(
         report,
         addressFindingsValidationGuidance(inputs.reviewPackage("package"), target),
@@ -259,7 +259,7 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
         notes,
         IMPLEMENTATION_VALIDATION_HANDOFF,
       );
-    case "pipeline-fix": {
+    case "pipeline-rework": {
       inputs.optional("code");
       const task = inputs.ticket(inputs.required("ticket"));
       const criteria = taskSnapshotCriteria(task);
@@ -421,7 +421,7 @@ function addressFindingsText(inputs: BuiltInInputs, instruction: string | undefi
     findings = inputs.reportValue(entry);
     framed = findings;
   }
-  // Without an instruction this is addressFindingsReportPrompt as the Multi Review fix sends
+  // Without an instruction this is addressFindingsReportPrompt as Multi Review's Address Findings sends
   // it (no validation instruction: no verifier follows).
   return instruction
     ? customAddressFindingsText(framed, instruction)
@@ -432,7 +432,7 @@ function addressFindingsText(inputs: BuiltInInputs, instruction: string | undefi
  * multiReviewCustomAddressFindingsPrompt with one section swapped. Its
  * MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION turns the session into a
  * manual, interactive conversation answered in prose, which contradicts an
- * unattended node that submits a fix result; the implementation-mode
+ * unattended node that submits an Address Findings result; the implementation-mode
  * instruction it ends with is kept on its own. Built here from the same
  * protocol constants, so a finding or a custom report frames like a report.
  */
@@ -454,12 +454,12 @@ ${wrapSystemInstructions(MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATIO
 function verifyText(inputs: BuiltInInputs, notes: string, target: string): string {
   inputs.optional("code");
   const task = inputs.ticket(inputs.required("ticket"));
-  const address = inputs.optional("address");
+  const address = inputs.optional("addressFindings");
   // The bounded copy the Build Pipeline keeps on its Address session and
   // renders into Verify's prompt.
   const addressFindingsReport = address
     ? {
-        kind: "fix-result" as const,
+        kind: "address-findings-result" as const,
         result: boundPipelineAddressFindingsResult(
           inputs.builtInValue<ReviewAddressFindingsResult>(address),
         ),

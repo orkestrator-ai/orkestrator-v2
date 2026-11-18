@@ -60,13 +60,13 @@ test("project header highlights Home selection, counts worker rows, and opens th
   // The chevron sits last even without a machine icon, as on folder headings.
   const expand = screen.getByRole("button", { name: "Expand project Checkout" });
   expect(expand.parentElement!.lastElementChild === expand).toBe(true);
-  expect(screen.getByRole("button", { name: "Checkout Home needs attention" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Checkout home needs attention" })).toBeTruthy();
   expect(screen.queryByText("project-home") === null).toBe(true);
   fireEvent.click(row);
   expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
   appCommandStore(uiStore).setState({ projectBoardTab: "home" });
   fireEvent.contextMenu(row);
-  fireEvent.click(screen.getByText("Open Board"));
+  fireEvent.click(screen.getByText("Open board"));
   expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
   view.rerender(
     <SortableProjectGroup

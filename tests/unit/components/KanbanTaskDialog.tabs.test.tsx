@@ -135,7 +135,7 @@ function withPullRequest(ready: boolean) {
 /** The ticket bar's Merge options, opened from its Merge button. */
 function openMergeOptions(bar: HTMLElement) {
   fireEvent.click(within(bar).getByRole("button", { name: "Merge" }));
-  const dialog = screen.getByRole("alertdialog", { name: "Merge Pull Request" });
+  const dialog = screen.getByRole("alertdialog", { name: "Merge pull request" });
   return { dialog, options: within(within(dialog).getByRole("group", { name: "Merge options" })) };
 }
 
@@ -381,7 +381,7 @@ describe("the ticket view's tabs", () => {
     await act(async () => {
       fireEvent.click(options.getByRole("button", { name: "Auto-merge & Cleanup" }));
     });
-    expect(screen.queryByRole("alertdialog", { name: "Merge Pull Request" }) === null).toBe(true);
+    expect(screen.queryByRole("alertdialog", { name: "Merge pull request" }) === null).toBe(true);
     await waitFor(() =>
       expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith("env-1", true, true),
     );

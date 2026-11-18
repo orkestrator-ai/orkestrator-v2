@@ -71,7 +71,7 @@ describe("pipeline inspector controls", () => {
         sessions: [
           session("build", "work", 0),
           ...(dedicated
-            ? [session("rework", "prep", 60, { label: "Package Preparation Session" })]
+            ? [session("package-preparation", "prep", 60, { label: "Package Preparation Session" })]
             : []),
         ],
         validationRun: run,
@@ -360,7 +360,11 @@ describe("pipeline inspector controls", () => {
             sessions: [
               session("build", "work", 0),
               ...(dedicated
-                ? [session("rework", "prep", 60, { label: "Package Preparation Session" })]
+                ? [
+                    session("package-preparation", "prep", 60, {
+                      label: "Package Preparation Session",
+                    }),
+                  ]
                 : []),
             ],
             validationRun: run,
@@ -584,7 +588,7 @@ describe("pipeline inspector controls", () => {
       phase: "reviewing",
       sessions: [
         session("build", "build", 0),
-        session("rework", "prep", 60, { label: "Package Preparation Session" }),
+        session("package-preparation", "prep", 60, { label: "Package Preparation Session" }),
       ],
       validationRun: validationRun({ status: "running", completedAt: undefined }),
     });

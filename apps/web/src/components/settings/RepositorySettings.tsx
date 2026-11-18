@@ -269,7 +269,7 @@ export function RepositorySettings({
           if (await tryIconFile(fileFromHostImage(image), generation, false)) {
             if (generation === iconConversionGeneration.current) {
               toast.success("Found the project's icon", {
-                description: `${relativeToRoot(image.path, root)}. Use Change Image to browse for another.`,
+                description: `${relativeToRoot(image.path, root)}. Use Change image to browse for another.`,
               });
             }
             return;
@@ -280,7 +280,7 @@ export function RepositorySettings({
       setIsConvertingIcon(false);
       const selected = await pickHostPath({
         mode: "file",
-        title: "Select Icon Image",
+        title: "Select icon image",
         defaultPath: root || undefined,
       });
       if (!selected || generation !== iconConversionGeneration.current) return;
@@ -302,7 +302,7 @@ export function RepositorySettings({
     try {
       const selected = await pickHostPath({
         mode: "directory",
-        title: "Select Repository Directory",
+        title: "Select repository directory",
         defaultPath: localPath || undefined,
       });
 
@@ -354,7 +354,7 @@ export function RepositorySettings({
     try {
       const selected = await pickHostPath({
         mode: "file",
-        title: "Select File to Copy",
+        title: "Select file to copy",
         defaultPath: localPath,
       });
 
@@ -568,7 +568,7 @@ export function RepositorySettings({
                 placeholder="Project name"
                 disabled={isSaving}
               />
-              {projectNameError && <p className="text-sm text-destructive">{projectNameError}</p>}
+              {projectNameError && <p className="text-sm text-failure">{projectNameError}</p>}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="projectIcon">Icon</Label>
@@ -596,7 +596,7 @@ export function RepositorySettings({
                   ) : (
                     <ImageUp className="mr-2 h-4 w-4" />
                   )}
-                  {icon ? "Change Image…" : "Choose Image…"}
+                  {icon ? "Change image…" : "Choose image…"}
                 </Button>
                 {(icon || isConvertingIcon) && (
                   <Button
@@ -617,7 +617,7 @@ export function RepositorySettings({
                 Any image or favicon, shown beside the project name in the sidebar whichever way it
                 is grouped. Choosing first looks for the project&apos;s own favicon or logo, then
                 browses from its folder. Without one, the sidebar shows a home in the machine&apos;s
-                colour.
+                color.
               </p>
             </div>
             <div className="grid gap-2">
@@ -669,7 +669,7 @@ export function RepositorySettings({
                 </Button>
               </div>
               {gitUrlError ? (
-                <p className="text-sm text-destructive">{gitUrlError}</p>
+                <p className="text-sm text-failure">{gitUrlError}</p>
               ) : (
                 <p className="text-xs text-muted-foreground">
                   Update this if the repository has moved. New environments clone from this URL.
@@ -677,7 +677,7 @@ export function RepositorySettings({
               )}
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="localPath">Local Path</Label>
+              <Label htmlFor="localPath">Local path</Label>
               <div className="flex gap-2">
                 <Input
                   id="localPath"
@@ -709,7 +709,7 @@ export function RepositorySettings({
         return (
           <div className="space-y-6">
             <div className="grid gap-2">
-              <Label htmlFor="defaultBranch">Default Branch</Label>
+              <Label htmlFor="defaultBranch">Default branch</Label>
               <Input
                 id="defaultBranch"
                 value={defaultBranch}
@@ -721,7 +721,7 @@ export function RepositorySettings({
               </p>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="prBaseBranch">PR Base Branch</Label>
+              <Label htmlFor="prBaseBranch">PR base branch</Label>
               <Input
                 id="prBaseBranch"
                 value={prBaseBranch}
@@ -771,7 +771,7 @@ export function RepositorySettings({
                   {COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL}
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  Off: this project&apos;s coordinator sends work only to environments it launched,
+                  Off: this project&apos;s Coordinator sends work only to environments it launched,
                   so a compromised worker cannot use it to reach an environment you made by hand.
                   On: it can also message, prompt, start and stop your other environments here,
                   which then run that work under their own permissions.
@@ -790,7 +790,7 @@ export function RepositorySettings({
         return (
           <div className="space-y-6">
             <div className="space-y-2">
-              <Label htmlFor="entryPort">Container Entry Port</Label>
+              <Label htmlFor="entryPort">Container entry port</Label>
               <Input
                 id="entryPort"
                 type="number"
@@ -810,7 +810,7 @@ export function RepositorySettings({
             </div>
 
             <div className="border-t border-border pt-4 space-y-4">
-              <Label>Additional Port Mappings</Label>
+              <Label>Additional port mappings</Label>
               <p className="text-xs text-muted-foreground">
                 These port mappings will be pre-filled when creating new environments for this
                 repository.
@@ -881,7 +881,7 @@ export function RepositorySettings({
                 className="w-full"
               >
                 <Plus className="h-4 w-4 mr-2" />
-                Add Port Mapping
+                Add port mapping
               </Button>
             </div>
           </div>
@@ -935,7 +935,7 @@ export function RepositorySettings({
               className="w-full"
             >
               <Plus className="h-4 w-4 mr-2" />
-              Add File
+              Add file
             </Button>
           </div>
         );
@@ -951,7 +951,7 @@ export function RepositorySettings({
         if (!nextOpen) abandonIconConversion();
         onOpenChange(nextOpen);
       }}
-      title="Repository Settings"
+      title="Repository settings"
       menuItems={repoMenuItems}
       headerActions={
         <>

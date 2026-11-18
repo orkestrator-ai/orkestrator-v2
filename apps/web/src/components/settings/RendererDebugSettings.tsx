@@ -12,7 +12,7 @@ import {
 import { SettingsSectionHeader } from "./SettingsPageLayout";
 
 /**
- * "Renderer Debug Logging": the `orkestrator:debug` preference for this window
+ * "Renderer debug logging": the `orkestrator:debug` preference for this window
  * only. It lives in the window's own storage, not the host's settings, so a
  * browser tab or another machine's window sets its own. Changing it reloads,
  * because the renderer reads its level once at start.
@@ -31,7 +31,7 @@ export function RendererDebugSettings({
   const [reloading, setReloading] = useState(false);
   return (
     <div className="space-y-3">
-      <SettingsSectionHeader title="Renderer Debug Logging">
+      <SettingsSectionHeader title="Renderer debug logging">
         Debug lines from this window&apos;s interface, written to its developer console. Applies to
         this window only, and reloads it.
         {desktop

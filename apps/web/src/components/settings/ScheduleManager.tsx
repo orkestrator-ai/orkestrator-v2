@@ -68,7 +68,7 @@ const OUTCOME_STYLES: Record<ScheduleFire["state"], string> = {
   pending: "border-amber-500/40 text-amber-300",
   running: "border-cyan-500/40 text-cyan-300",
   succeeded: "border-success/40 text-success",
-  failed: "border-red-500/40 text-red-300",
+  failed: "border-failure/40 text-failure",
   skipped: "border-zinc-600 text-zinc-400",
 };
 
@@ -136,7 +136,7 @@ export function AccountSwitchPermissionBadge({
           : "border-amber-500/40 text-amber-300",
       )}
       data-testid="schedule-account-switch-permission"
-      title={`You asked: “${grant.userInstruction}”. The coordinator may switch the active ${providers} account on ${machines} without asking, for ${hours} hours after this timer fires. Cancel the timer to withdraw it.`}
+      title={`You asked: “${grant.userInstruction}”. The Coordinator may switch the active ${providers} account on ${machines} without asking, for ${hours} hours after this timer fires. Cancel the timer to withdraw it.`}
     >
       {status === "lapsed"
         ? `${providers} switch permission lapsed`
@@ -269,7 +269,7 @@ export function ScheduleManager({ api, projectId, scope, emptyText, frame }: Sch
   const children = (
     <>
       {error ? (
-        <p className="rounded-md border border-red-500/40 p-3 text-sm text-red-300" role="alert">
+        <p className="rounded-md border border-failure/40 p-3 text-sm text-failure" role="alert">
           {error}
         </p>
       ) : null}
@@ -492,7 +492,7 @@ function HistoryDialog({ job, onClose }: { job: ScheduledJob; onClose: () => voi
                     ? ` · ${fire.missed} earlier slot${fire.missed === 1 ? "" : "s"} missed`
                     : ""}
                 </div>
-                {fire.error ? <div className="mt-1 text-red-300">{fire.error.message}</div> : null}
+                {fire.error ? <div className="mt-1 text-failure">{fire.error.message}</div> : null}
                 {fire.outcome?.summary ? <div className="mt-1">{fire.outcome.summary}</div> : null}
               </li>
             ))}

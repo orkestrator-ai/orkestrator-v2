@@ -110,16 +110,19 @@ test("the account-switch log opens in a dialog, newest first, and closes on Esca
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Codex account switches" });
   await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAccessibleDescription(
+    "Switches Coordinators made without asking, newest first.",
+  );
   const rows = dialog.getByRole("listitem");
   await expect(rows).toHaveCount(13);
   await expect(rows.first()).toHaveAttribute("aria-label", "Switch on omarchy-hp");
   await expect(rows.last()).toHaveAttribute("aria-label", "Switch on rkmbp");
   await expect(rows.last()).toContainText("618BTrading → arkaydeusdev");
   await expect(rows.last()).toContainText(
-    "Asked by orkestrator-v2 coordinator: “User asked to move off the limited account”",
+    "Asked by orkestrator-v2 Coordinator: “User asked to move off the limited account”",
   );
   await page.screenshot({
-    path: `output/visual-previews/switch-log-dialog-${testInfo.project.name}.png`,
+    path: `output/visual-previews/switch-log-casing-${testInfo.project.name}.png`,
   });
 
   // The list scrolls inside the dialog.

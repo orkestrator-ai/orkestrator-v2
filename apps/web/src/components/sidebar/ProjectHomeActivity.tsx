@@ -1,4 +1,5 @@
-import { Bell, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useNodeScope } from "@/lib/node-scope/providers";
@@ -46,8 +47,8 @@ export function ProjectHomeActivityButton({
   return (
     <button
       type="button"
-      aria-label={`${projectName} Home ${status.label}`}
-      title={`Open Home — ${status.label}`}
+      aria-label={`${projectName} home ${status.label}`}
+      title={`Open project home — ${status.label}`}
       className={
         compact
           ? "shrink-0 rounded-md p-1 text-amber-400 hover:bg-hover"
@@ -58,11 +59,11 @@ export function ProjectHomeActivityButton({
       {status.working ? (
         <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
       ) : (
-        <Bell aria-hidden="true" className="h-3.5 w-3.5" />
+        <UnreadBellIcon aria-hidden="true" className="h-3.5 w-3.5" />
       )}
       {!compact && (
         <span>
-          {projectName} Home — {status.label}
+          {projectName} home — {status.label}
         </span>
       )}
     </button>

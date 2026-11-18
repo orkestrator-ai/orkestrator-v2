@@ -801,8 +801,8 @@ with `MachinesFilter`:
   machine has one), else, when the command node has no copy, the first icon in
   machine order. Right-clicking the heading opens its menu, which acts on the
   member the heading opens and names its machine: Open Coordinator (absent where
-  the coordinator is gated), Open Board, Open Repo on GitHub, Repository
-  Settings, New Environment and Expand/Collapse. Settings and New Environment
+  the coordinator is gated), Open board, Open repo on GitHub, Repository
+  settings, New environment and Expand/Collapse. Settings and New environment
   are disabled while that machine is not writable, as on a project header.
 - A project's page reopens on the tab it was last left on (Home, Coordinator,
   Kanban, Linear and so on). Each node's `uiStore` keeps the last tab per
@@ -814,7 +814,7 @@ with `MachinesFilter`:
   repository heading, a compact icon and a project search hit therefore send
   only a `landingTab` (`WorkspaceRequest.landingTab`): the tab for a project
   with none remembered. Explicit navigation still sends `boardTab`, which
-  always wins: Open Coordinator, Open Board, a ticket opened on its board, a
+  always wins: Open Coordinator, Open board, a ticket opened on its board, a
   project home opened on Home.
 - Activity order offers **Priority order** (the default for both local and
   federated lists), **Newest first**, and **Oldest first**. Every order keeps
@@ -980,7 +980,7 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   clicking opens that machine's workspace, "Open workspace" and "Copy link"
   exist, writes are disabled while it is unavailable, and items that need this
   window's own host ("Copy
-  Address", "Copy Initial Prompt", "Merge PR", the clickable port, the
+  address", "Copy initial prompt", "Merge PR", the clickable port, the
   design-canvas deletion notice) are absent. "Merge PR" opens this window's
   action-bar merge dialog for the environment (`mergePrRequestStore`), so it
   exists only where that dialog can act. A section of a machine that has never been

@@ -57,7 +57,7 @@ describe("BuildChatTab header", () => {
       within(header()).getByTestId("build-pipeline-header-actions"),
     ).getAllByRole("button");
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Restart Build Stage",
+      "Restart build stage",
       "Pause",
       "Cancel",
       "Key information",

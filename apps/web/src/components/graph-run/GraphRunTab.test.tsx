@@ -170,7 +170,7 @@ describe("GraphRunTab faces", () => {
         act({ nodeId: "consolidate" }),
         act({ nodeId: "has-findings" }, { outlet: "findings" }),
         act(
-          { nodeId: "fix" },
+          { nodeId: "address-findings" },
           {
             state: "awaiting-human",
             policy: POLICY,
@@ -189,13 +189,16 @@ describe("GraphRunTab faces", () => {
       ],
       {
         status: "waiting",
-        bindings: { ...runOf("multi-review").bindings, params: { autoFix: true, autoPr: false } },
+        bindings: {
+          ...runOf("multi-review").bindings,
+          params: { autoAddressFindings: true, autoPr: false },
+        },
       },
     );
     renderTab();
     await screen.findByTestId("graph-run-waiting-banner");
     expect(faceOf("has-findings").textContent).toContain("→ findings");
-    const fix = faceOf("fix");
+    const fix = faceOf("address-findings");
     expect(fix.textContent).toContain("waiting for you");
     expect(fix.querySelector("[data-graph-run-waiting]")).not.toBeNull();
     // The waiting node is selected by default, with the question to answer.
@@ -263,14 +266,14 @@ describe("GraphRunTab inspector", () => {
     await screen.findByTestId("graph-run-title");
     fireEvent.click(faceOf("plan"));
     expect(screen.getByTestId("graph-run-inspector-status").textContent).toBe(
-      "Waiting: Build Pipeline is writing this environment",
+      "Waiting: build pipeline is writing this environment",
     );
     const panel = inspector();
     await waitFor(() =>
       expect(panel.querySelector("[data-graph-activation-blocked]")).not.toBeNull(),
     );
     expect(panel.querySelector("[data-graph-activation-blocked]")!.textContent).toBe(
-      "Waiting: Build Pipeline is writing this environment",
+      "Waiting: build pipeline is writing this environment",
     );
   });
 

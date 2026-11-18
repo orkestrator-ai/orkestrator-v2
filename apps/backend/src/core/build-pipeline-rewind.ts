@@ -1,8 +1,8 @@
 /**
  * Where a restart rewinds a build pipeline to, and what it supersedes.
  *
- * The pipeline's loop is a sequence of rounds (`iteration`): Build or Fix, the
- * review package and its validation, Review, Address, Verify, and in the last
+ * The pipeline's loop is a sequence of rounds (`iteration`): Build or Rework,
+ * the review package and its validation, Review, Address, Verify, and in the last
  * round Ship and conflict resolution. Restarting a step returns the pipeline
  * to that step's round and position; every session at or after that point is
  * superseded. The code is not rewound: the new run starts on the current
@@ -12,7 +12,6 @@ import {
   MAX_PIPELINE_REWINDS,
   MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES,
   MAX_PIPELINE_ROUND_REVIEW_REPORTS,
-  REVIEW_PACKAGE_SESSION_LABEL,
   isSupersededPipelineSession,
   type BuildPipeline,
   type PipelineRestartRequest,
@@ -22,29 +21,29 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
+const PACKAGE_ORDER = 1;
+
 /** Position of a step within one round, in the order the loop runs them. */
 export const PHASE_ORDER: Readonly<Record<PipelineSessionPhase, number>> = {
   build: 0,
   rework: 0,
+  "package-preparation": PACKAGE_ORDER,
   review: 2,
   "address-findings": 3,
   verify: 4,
   pr: 5,
   "resolve-conflicts": 6,
 };
-const PACKAGE_ORDER = 1;
 /** Validation runs after the preparation that planned it, before review. */
 const VALIDATION_ORDER = 1.5;
 
 /**
- * A session's position within its round. A build or fix turn that also wrote
- * the package plan is still the implementation step: a package restart keeps
- * it and prepares again from its result.
+ * A session's position within its round. A build or rework turn that also
+ * wrote the package plan is still the implementation step: a package restart
+ * keeps it and prepares again from its result.
  */
-export function sessionStepOrder(session: Pick<PipelineSession, "phase" | "label">): number {
-  return session.label === REVIEW_PACKAGE_SESSION_LABEL
-    ? PACKAGE_ORDER
-    : PHASE_ORDER[session.phase];
+export function sessionStepOrder(session: Pick<PipelineSession, "phase">): number {
+  return PHASE_ORDER[session.phase];
 }
 
 /** The position a restart request runs from. */

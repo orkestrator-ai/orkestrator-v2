@@ -390,7 +390,7 @@ describe("public backend connection check", () => {
       signal: controller.signal,
     });
     controller.abort();
-    await expect(pending).rejects.toThrow("cancelled");
+    await expect(pending).rejects.toThrow("canceled");
   });
 
   test("keeps the timeout active while reading the status response body", async () => {

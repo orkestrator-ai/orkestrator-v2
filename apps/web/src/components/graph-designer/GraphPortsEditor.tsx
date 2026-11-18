@@ -44,7 +44,7 @@ import {
 } from "./graph-form-controls";
 
 /**
- * Port forms (report §7.2 "Inputs/Outputs"): names, types from the template's
+ * Port forms (report §7.2 "Inputs/outputs"): names, types from the template's
  * type library (built-in and custom), render modes, collect policies on list
  * inputs, `firstIterationFrom` inside loops, and provenance and choices on
  * outputs. Renaming a port rewrites the edges, carries and conditions that

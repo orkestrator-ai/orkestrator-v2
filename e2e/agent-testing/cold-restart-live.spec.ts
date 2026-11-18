@@ -440,7 +440,7 @@ async function openApp(page: Page, status: Status, fixture: Project, environment
   });
   const entry = page.getByText(environmentName, { exact: true }).first();
   await expect(expand.or(entry)).toBeVisible({ timeout: 60_000 });
-  for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+  for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
     const button = page.getByRole("button", { name: label, exact: true });
     if (await button.isVisible()) await button.click();
   }

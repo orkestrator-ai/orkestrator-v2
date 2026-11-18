@@ -3,7 +3,23 @@ import { backendApiForScope } from "@/lib/backend/client";
 import { createConfigIntegrationsApi } from "@/lib/backend/config-integrations";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope } from "@/lib/node-scope-slots";
-import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import type { StoreApi } from "zustand";
+import { CODEX_MODELS } from "@/lib/codex-models";
+import {
+  agentModelCatalogStore,
+  type AgentModelCatalogState,
+} from "@/stores/agentModelCatalogStore";
+
+type ModelField = "claudeModels" | "codexModels" | "cursorModels" | "grokModels" | "piModels";
+type AppliedRead = {
+  models: AgentModelCatalogState[ModelField];
+  request: number;
+  confirmedAt: number | null;
+};
+const cacheReads = new WeakMap<
+  StoreApi<AgentModelCatalogState>,
+  { request: number; applied: Partial<Record<ModelField, AppliedRead>> }
+>();
 
 /**
  * Rehydrate model pickers from disk before React mounts. When Pi has no durable
@@ -21,30 +37,65 @@ export async function hydrateAgentModelCatalogCache(
   // Held across the await: the scope may be disposed by the time it answers.
   const store = scope.store(agentModelCatalogStore);
   const before = store.getState();
-  const claudeModelsBeforeRead = before.claudeModels;
-  const codexModelsBeforeRead = before.codexModels;
-  const cursorModelsBeforeRead = before.cursorModels;
-  const grokModelsBeforeRead = before.grokModels;
-  const piModelsBeforeRead = before.piModels;
+  let reads = cacheReads.get(store);
+  if (!reads) {
+    reads = { request: 0, applied: {} };
+    cacheReads.set(store, reads);
+  }
+  const { applied } = reads;
+  const request = ++reads.request;
   const cache = await backendApiForScope(scope, createConfigIntegrationsApi, {
     getAgentModelCatalogCache,
   }).getAgentModelCatalogCache(undefined, readOptions);
-  if (cache.claude?.models.length && store.getState().claudeModels === claudeModelsBeforeRead) {
-    store.getState().setClaudeModels(cache.claude.models);
+  if (scope.disposed) return;
+
+  const current = store.getState();
+  function modelsFromCache<K extends ModelField>(
+    field: K,
+    entry: { models: AgentModelCatalogState[K]; updatedAt: string } | undefined,
+  ): AgentModelCatalogState[K] {
+    const models = current[field];
+    const previous = applied[field];
+    const lastRead = previous?.models === models ? previous : undefined;
+    // A live publication during this read wins. Concurrent cache reads can
+    // still advance the same platform, using the backend's confirmation time.
+    if (models !== before[field] && !lastRead) return models;
+    if (!entry?.models.length) return models;
+    const confirmedAt = Date.parse(entry.updatedAt) || 0;
+    if (lastRead) {
+      if (lastRead.confirmedAt === null) {
+        if (request < lastRead.request) return models;
+      } else if (
+        confirmedAt < lastRead.confirmedAt ||
+        (confirmedAt === lastRead.confirmedAt && request < lastRead.request)
+      ) {
+        return models;
+      }
+    }
+    applied[field] = { models: entry.models, confirmedAt, request };
+    return entry.models;
   }
-  if (cache.codex?.models.length && store.getState().codexModels === codexModelsBeforeRead) {
-    store.getState().setCodexModels(cache.codex.models);
+
+  let codexModels = modelsFromCache("codexModels", cache.codex);
+  const lastCodexRead = applied.codexModels;
+  // A new login may have no saved Codex catalogue yet. Clear the old cached
+  // rows if this read has not been overtaken by another publication.
+  if (
+    !cache.codex?.models.length &&
+    lastCodexRead?.confirmedAt != null &&
+    lastCodexRead.models === current.codexModels &&
+    current.codexModels === before.codexModels &&
+    request > lastCodexRead.request
+  ) {
+    codexModels = CODEX_MODELS;
+    applied.codexModels = { models: codexModels, confirmedAt: null, request };
   }
-  const currentAcpModels = store.getState();
+
   store.setState({
-    ...(cache.cursor?.models.length && currentAcpModels.cursorModels === cursorModelsBeforeRead
-      ? { cursorModels: cache.cursor.models }
-      : {}),
-    ...(cache.grok?.models.length && currentAcpModels.grokModels === grokModelsBeforeRead
-      ? { grokModels: cache.grok.models }
-      : {}),
-    ...(cache.pi?.models.length && currentAcpModels.piModels === piModelsBeforeRead
-      ? { piModels: cache.pi.models }
-      : {}),
+    claudeModels: modelsFromCache("claudeModels", cache.claude),
+    codexModels,
+    cursorModels: modelsFromCache("cursorModels", cache.cursor),
+    grokModels: modelsFromCache("grokModels", cache.grok),
+    piModels: modelsFromCache("piModels", cache.pi),
   });
 }

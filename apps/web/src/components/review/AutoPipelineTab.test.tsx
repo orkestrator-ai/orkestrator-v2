@@ -4,7 +4,10 @@ import {
   parseAutoPipelineTicket,
   type AutoPipelineState,
 } from "@orkestrator/protocol/build-pipeline";
+import { getAllLeaves, paneLayoutStore } from "@/stores/paneLayoutStore";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
+import type { TabInfo } from "@/types/paneLayout";
+import { disposeAutoPipelineHandoffs } from "./auto-pipeline-handoff";
 import {
   AutoPipelineTab,
   autoPipelineProblems,
@@ -12,6 +15,7 @@ import {
 } from "./AutoPipelineTab";
 
 afterEach(() => {
+  disposeAutoPipelineHandoffs();
   cleanupNodeScopes();
   resetAutoPipelineUnsavedEditsForTests();
 });
@@ -46,6 +50,7 @@ function client(initial: AutoPipelineState) {
 function render(node: FakeNodeClient, isActive = true) {
   return renderInNodeScope(
     <AutoPipelineTab
+      tabId="auto"
       environmentId="env"
       data={{ sourceTabId: "original", sourceLabel: "Original work" }}
       isActive={isActive}
@@ -107,7 +112,7 @@ test("the draft walks through details, acceptance criteria and confirm in one ta
   expect(screen.getByText(/closes this environment's terminal shells/)).toBeTruthy();
   expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
   holder.state = { phase: "promoted", pipelineId: "pipeline-1" };
-  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm auto-pipeline" }));
   await waitFor(() => expect(node.calls("confirm_auto_pipeline")).toHaveLength(1));
   const ticket = parseAutoPipelineTicket(node.calls("confirm_auto_pipeline")[0]!.args.ticket);
   expect(ticket.title).toBe("Reviewed feature");
@@ -117,6 +122,119 @@ test("the draft walks through details, acceptance criteria and confirm in one ta
   expect(saves.length).toBeGreaterThan(0);
   expect((saves.at(-1)!.args.edits as { title: string }).title).toBe("Reviewed feature");
   expect(await screen.findByText(/Auto-pipeline started/)).toBeTruthy();
+});
+
+test("a started pipeline's tab is selected and the Auto-pipeline tab closes", async () => {
+  const { node, holder } = client({ phase: "ready", draft });
+  const view = render(node);
+  const auto: TabInfo = {
+    id: "auto",
+    type: "auto-pipeline",
+    autoPipelineData: { sourceTabId: "original" },
+  };
+  const layouts = view.scope.store(paneLayoutStore);
+  const panes = () => getAllLeaves(layouts.getState().environments.get("env")!.root);
+  layouts.getState().finishHydration("env", {
+    containerId: null,
+    activePaneId: "pane",
+    root: {
+      kind: "leaf",
+      id: "pane",
+      tabs: [{ id: "original", type: "plain" }, auto],
+      activeTabId: "auto",
+    },
+  });
+  await screen.findByLabelText("Title");
+  goTo(/Confirm/);
+  holder.state = { phase: "promoted", pipelineId: "pipeline-1" };
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm auto-pipeline" }));
+  expect(await screen.findByText(/Auto-pipeline started/)).toBeTruthy();
+  // Nothing closes until the backend's pipeline tab reaches this window.
+  expect(panes()[0]!.tabs.map((tab) => tab.id)).toEqual(["original", "auto"]);
+  layouts.getState().applyAuthoritativeLayout("env", {
+    containerId: null,
+    activePaneId: "pane",
+    root: {
+      kind: "leaf",
+      id: "pane",
+      tabs: [
+        { id: "original", type: "plain" },
+        auto,
+        {
+          id: "build-pipeline-1",
+          type: "claude-build",
+          buildTabData: { environmentId: "env", pipelineId: "pipeline-1", taskId: "task-1" },
+        },
+      ],
+      activeTabId: "auto",
+    },
+  });
+  await waitFor(() =>
+    expect(panes()[0]!.tabs.map((tab) => tab.id)).toEqual(["original", "build-pipeline-1"]),
+  );
+  expect(panes()[0]!.activeTabId).toBe("build-pipeline-1");
+});
+
+test("confirmation resolving after unmount still closes Auto-pipeline on delayed layout", async () => {
+  const { node, holder } = client({ phase: "ready", draft });
+  const view = render(node);
+  const auto: TabInfo = {
+    id: "auto",
+    type: "auto-pipeline",
+    autoPipelineData: { sourceTabId: "original" },
+  };
+  const layouts = view.scope.store(paneLayoutStore);
+  const panes = () => getAllLeaves(layouts.getState().environments.get("env")!.root);
+  layouts.getState().finishHydration("env", {
+    containerId: null,
+    activePaneId: "pane",
+    root: {
+      kind: "leaf",
+      id: "pane",
+      tabs: [{ id: "original", type: "plain" }, auto],
+      activeTabId: "auto",
+    },
+  });
+  await screen.findByLabelText("Title");
+  goTo(/Confirm/);
+  let finish!: () => void;
+  node.respond(
+    "confirm_auto_pipeline",
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm auto-pipeline" }));
+  await waitFor(() => expect(node.calls("confirm_auto_pipeline")).toHaveLength(1));
+  view.unmount();
+  holder.state = { phase: "promoted", pipelineId: "pipeline-1" };
+  finish();
+  await waitFor(() => expect(node.calls("get_auto_pipeline_state").length).toBeGreaterThan(1));
+  // Nothing closes until the backend's pipeline tab reaches this window.
+  expect(panes()[0]!.tabs.map((tab) => tab.id)).toEqual(["original", "auto"]);
+  layouts.getState().applyAuthoritativeLayout("env", {
+    containerId: null,
+    activePaneId: "pane",
+    root: {
+      kind: "leaf",
+      id: "pane",
+      tabs: [
+        { id: "original", type: "plain" },
+        auto,
+        {
+          id: "build-pipeline-1",
+          type: "claude-build",
+          buildTabData: { environmentId: "env", pipelineId: "pipeline-1", taskId: "task-1" },
+        },
+      ],
+      activeTabId: "auto",
+    },
+  });
+  await waitFor(() =>
+    expect(panes()[0]!.tabs.map((tab) => tab.id)).toEqual(["original", "build-pipeline-1"]),
+  );
+  expect(panes()[0]!.activeTabId).toBe("build-pipeline-1");
 });
 
 test("saved edits come back from the backend when the tab is shown again", async () => {
@@ -154,7 +272,7 @@ test("criterion line breaks normalize and blank criteria block confirmation with
   fireEvent.change(criterion, { target: { value: "\n\r\n" } });
   expect(criterion.getAttribute("aria-invalid")).toBe("true");
   goTo(/^4?\s*Confirm$/);
-  const confirm = screen.getByRole("button", { name: "Confirm Auto-pipeline" });
+  const confirm = screen.getByRole("button", { name: "Confirm auto-pipeline" });
   expect(confirm.hasAttribute("disabled")).toBe(true);
   expect(screen.getByRole("list", { name: "Before confirming" }).textContent).toContain(
     "empty acceptance criterion",
@@ -180,7 +298,7 @@ test("a promotion in progress shows its status and locks the draft", async () =>
   expect(await screen.findByText(/Promoting environment/)).toBeTruthy();
   expect(screen.getByText("Files to commit")).toBeTruthy();
   expect(
-    screen.getByRole("button", { name: "Confirm Auto-pipeline" }).hasAttribute("disabled"),
+    screen.getByRole("button", { name: "Confirm auto-pipeline" }).hasAttribute("disabled"),
   ).toBe(true);
 });
 
@@ -199,6 +317,7 @@ test("an idle tab offers drafting, and a hidden tab does not poll", async () => 
   expect(node.calls("get_auto_pipeline_state")).toHaveLength(0);
   view.rerender(
     <AutoPipelineTab
+      tabId="auto"
       environmentId="env"
       data={{ sourceTabId: "original", sourceLabel: "Original work" }}
       isActive
@@ -325,7 +444,7 @@ test("a draft whose confirmation already began is read-only and confirms the sub
   goTo(/^4?\s*Confirm$/);
   expect(screen.getByRole("alert").textContent).toContain("admission rejected");
   holder.state = { phase: "promoted", pipelineId: "pipeline-1" };
-  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm auto-pipeline" }));
   await waitFor(() => expect(node.calls("confirm_auto_pipeline")).toHaveLength(1));
   expect(node.calls("confirm_auto_pipeline")[0]!.args.ticket).toEqual(reviewed);
   expect(node.calls("save_auto_pipeline_edits")).toHaveLength(0);

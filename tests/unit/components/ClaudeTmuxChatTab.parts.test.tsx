@@ -1694,7 +1694,7 @@ describe("ClaudeTmuxChatTab", () => {
         const draft = menu === "slash" ? "/com" : "Review @";
         input.focus();
         fireEvent.change(input, { target: { value: draft, selectionStart: draft.length } });
-        await screen.findByText(menu === "slash" ? "Slash Commands" : "Button.tsx");
+        await screen.findByText(menu === "slash" ? "Slash commands" : "Button.tsx");
         if (lock === "settings") {
           rerender(<TmuxComposeBar {...props} settingsSwitching />);
           expect(input.disabled).toBe(true);
@@ -1711,7 +1711,7 @@ describe("ClaudeTmuxChatTab", () => {
         expect(input.value).toBe(draft);
         expect(appCommandStore(claudeTmuxStore).getState().getDraftMentions("tab-1")).toEqual([]);
         expect(
-          screen.queryByText(menu === "slash" ? "Slash Commands" : "Button.tsx") === null,
+          screen.queryByText(menu === "slash" ? "Slash commands" : "Button.tsx") === null,
         ).toBe(true);
         expect(submit).toHaveBeenCalledTimes(lock === "send" ? 1 : 0);
         expect(queue).toHaveBeenCalledTimes(lock === "queue" ? 1 : 0);
@@ -1776,7 +1776,7 @@ describe("ClaudeTmuxChatTab", () => {
     fireEvent.change(textarea, { target: { value: "/" } });
 
     // Menu opens with the builtin list visible.
-    const slashHeader = await screen.findByText("Slash Commands");
+    const slashHeader = await screen.findByText("Slash commands");
     expect(slashHeader).toBeTruthy();
     expect(screen.getByText("/clear")).toBeTruthy();
     expect(screen.getByText("/model")).toBeTruthy();
@@ -1810,14 +1810,14 @@ describe("ClaudeTmuxChatTab", () => {
     const textarea = screen.getByPlaceholderText(/Ask Claude anything/) as HTMLTextAreaElement;
 
     fireEvent.change(textarea, { target: { value: "/" } });
-    await screen.findByText("Slash Commands");
+    await screen.findByText("Slash commands");
     fireEvent.keyDown(textarea, { key: "ArrowDown" });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(textarea.value).toBe("/bug ");
 
     fireEvent.change(textarea, { target: { value: "/" } });
-    await screen.findByText("Slash Commands");
+    await screen.findByText("Slash commands");
     fireEvent.keyDown(textarea, { key: "ArrowDown" });
     await waitFor(() => {
       expect(
@@ -1835,9 +1835,9 @@ describe("ClaudeTmuxChatTab", () => {
     expect(textarea.value).toBe("/bug ");
 
     fireEvent.change(textarea, { target: { value: "/" } });
-    await screen.findByText("Slash Commands");
+    await screen.findByText("Slash commands");
     fireEvent.keyDown(textarea, { key: "Escape" });
-    expect(screen.queryByText("Slash Commands") === null).toBe(true);
+    expect(screen.queryByText("Slash commands") === null).toBe(true);
   });
 
   test("inserts a selected @ file mention into the tmux compose input", async () => {
@@ -3492,12 +3492,12 @@ describe("ClaudeTmuxChatTab", () => {
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /· High/ }));
-    const xhighOption = await screen.findByText("Extra High");
+    const xhighOption = await screen.findByText("Extra high");
     await act(async () => {
       fireEvent.click(xhighOption);
       fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
-    expect(screen.getByRole("button", { name: /· Extra High/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /· Extra high/ })).toBeTruthy();
 
     // This SDK-provided Sonnet entry has no xhigh level, so the preference
     // snaps back to the default.
@@ -3675,7 +3675,7 @@ describe("ClaudeTmuxChatTab", () => {
     expect(await screen.findByText("Low")).toBeTruthy();
     expect(screen.getByText("Medium")).toBeTruthy();
     expect(screen.getAllByText("High").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Extra High") === null).toBe(true);
+    expect(screen.queryByText("Extra high") === null).toBe(true);
     expect(screen.queryByText("Max") === null).toBe(true);
   });
 
@@ -5081,44 +5081,62 @@ Enter to confirm · Esc to cancel
     expect(screen.getByText("Requests 2 plan-scoped permission prompt(s).")).toBeTruthy();
   });
 
-  test("answers legacy PreToolUse approval cards", async () => {
-    appCommandStore(claudeTmuxStore).getState().setRunning(TMUX_STATE_KEY, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    appCommandStore(claudeTmuxStore)
-      .getState()
-      .addPendingApproval("tab-1", {
-        eventId: "approval-hook",
-        toolName: "Bash",
-        toolInput: { command: "bun test" },
-        payload: {},
-        receivedAt: new Date().toISOString(),
+  test.each([
+    ["Allow", "Deny", "approve"],
+    ["Deny", "Allow", "block"],
+  ])(
+    "answers legacy PreToolUse cards with %s and disables both actions during delivery",
+    async (action, otherAction, decision) => {
+      const delivery = Promise.withResolvers<void>();
+      answerPreToolUseMock.mockImplementationOnce(() => delivery.promise);
+      appCommandStore(claudeTmuxStore).getState().setRunning(TMUX_STATE_KEY, true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
       });
+      appCommandStore(claudeTmuxStore)
+        .getState()
+        .addPendingApproval("tab-1", {
+          eventId: "approval-hook",
+          toolName: "Bash",
+          toolInput: { command: "bun test" },
+          payload: {},
+          receivedAt: new Date().toISOString(),
+        });
 
-    renderInAppCommandScope(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
-
-    await waitFor(() => {
-      expect(answerPreToolUseMock).toHaveBeenCalledWith(
-        "tab-1",
-        "approval-hook",
-        "approve",
-        undefined,
-        "env-1",
+      renderInAppCommandScope(
+        <ClaudeTmuxChatTab
+          tabId="tab-1"
+          data={{ environmentId: "env-1", containerId: "container-1" }}
+          isActive
+        />,
       );
-    });
-    expect(
-      appCommandStore(claudeTmuxStore).getState().getTab(TMUX_STATE_KEY).pendingApprovals,
-    ).toEqual([]);
-  });
+
+      const selected = screen.getByRole<HTMLButtonElement>("button", { name: action });
+      const other = screen.getByRole<HTMLButtonElement>("button", { name: otherAction });
+      expect(selected.disabled).toBe(false);
+      expect(other.disabled).toBe(false);
+      try {
+        fireEvent.click(selected);
+        expect(answerPreToolUseMock).toHaveBeenCalledWith(
+          "tab-1",
+          "approval-hook",
+          decision,
+          undefined,
+          "env-1",
+        );
+        expect(selected.disabled).toBe(true);
+        expect(other.disabled).toBe(true);
+        fireEvent.click(other);
+        expect(answerPreToolUseMock).toHaveBeenCalledTimes(1);
+      } finally {
+        await act(async () => delivery.resolve());
+      }
+
+      expect(
+        appCommandStore(claudeTmuxStore).getState().getTab(TMUX_STATE_KEY).pendingApprovals,
+      ).toEqual([]);
+    },
+  );
 
   test("renders file-oriented approval paths and content previews", async () => {
     appCommandStore(claudeTmuxStore).getState().setRunning(TMUX_STATE_KEY, true, {

@@ -342,6 +342,7 @@ export const BUILD_PIPELINE_STATUS: Record<string, WorkflowStatusV1> = {
   "addressing-findings": "running",
   verifying: "running",
   reworking: "running",
+  "preparing-package": "running",
   "creating-pr": "running",
   "resolving-conflicts": "running",
   paused: "blocked",
@@ -352,6 +353,7 @@ export const BUILD_PIPELINE_STATUS: Record<string, WorkflowStatusV1> = {
 const PIPELINE_SESSION_ROLE: Record<string, WorkflowSnapshotNodeV1["role"]> = {
   build: "agent",
   rework: "agent",
+  "package-preparation": "agent",
   "address-findings": "agent",
   "resolve-conflicts": "agent",
   review: "review",

@@ -214,7 +214,7 @@ test("an update in progress can be cancelled", async () => {
   expect(await screen.findByText(/Downloading 2\.22\.0 \(30%\)/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Cancel update" }));
   await waitFor(() => expect(cancel).toHaveBeenCalledWith("job-1"));
-  expect(await screen.findByText("The update was cancelled.")).toBeTruthy();
+  expect(await screen.findByText("The update was canceled.")).toBeTruthy();
 });
 
 test("restart confirmation identifies running agents with unknown activity", () => {

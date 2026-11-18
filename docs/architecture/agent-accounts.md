@@ -485,14 +485,14 @@ hand to bridges:
   OpenCode's `auth.json` (ids and credential kinds only; a key-shaped id is
   dropped). An empty store reads `unknown`, never `signed-out`, because an
   environment variable or configuration may still hold a key. OpenCode's
-  logins are managed under Provider Sign-in below the card.
+  logins are managed under Provider sign-in below the card.
 
 ## OpenCode provider sign-in
 
 OpenCode has no accounts. It keeps one login per model provider (OpenCode Go,
 OpenAI, …) in the host OpenCode database under Orkestrator's data directory
 (`<data>/opencode2/`, `openCode2HostPaths`), which every local environment's
-server shares and reads per use. Settings → OpenCode → Provider Sign-in lists
+server shares and reads per use. Settings → OpenCode → Provider sign-in lists
 the providers and signs each in, replaces its login or signs it out
 (`OpenCodeProvidersSection`).
 
@@ -941,7 +941,7 @@ Grok, Pi, OpenCode and Cursor have no accounts to switch; the tools say so.
 An approval only helps while someone is there to give it. On 2026-11-04 two
 requests waited about four and a half hours overnight while seven build
 pipelines failed on the 5-hour limit they were meant to avoid. So each
-provider's accounts in Settings have a second tick, **Let coordinators switch
+provider's accounts in Settings have a second tick, **Let Coordinators switch
 accounts without asking**, off by default
 (`@orkestrator/protocol/coordinator-account-switch-grant`).
 

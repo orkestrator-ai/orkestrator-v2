@@ -16,7 +16,7 @@ import { GraphTypeLibrary, type GraphValueType } from "./types";
 
 const library = new GraphTypeLibrary();
 const parameters: GraphParameter[] = [
-  { key: "autoFix", type: "boolean", default: true },
+  { key: "autoAddressFindings", type: "boolean", default: true },
   { key: "maxFindings", type: "integer", min: 0, max: 50 },
   { key: "threshold", type: "number" },
   { key: "mode", type: "enum", options: ["fast", "thorough"] },
@@ -59,7 +59,7 @@ describe("predicate type checker", () => {
     { path: "verdict", op: "exists" },
     { path: "judgement.choice", op: "eq", value: "security" },
     { path: "free.choice", op: "eq", value: "anything" },
-    { path: "params.autoFix", op: "eq", value: true },
+    { path: "params.autoAddressFindings", op: "eq", value: true },
     { path: "params.maxFindings", op: "lte", value: 2.5 },
     { path: "params.maxFindings", op: "in", value: [1, 2, 3] },
     { path: "params.threshold", op: "eq", value: 0.75 },
@@ -116,7 +116,12 @@ describe("predicate type checker", () => {
     ],
     ["gte on a boolean", { path: "verdict.complete", op: "gte", value: 1 }, "op", "operator_type"],
     ["nonEmpty on a number", { path: "params.threshold", op: "nonEmpty" }, "op", "operator_type"],
-    ["empty on a boolean", { path: "params.autoFix", op: "empty" }, "op", "operator_type"],
+    [
+      "empty on a boolean",
+      { path: "params.autoAddressFindings", op: "empty" },
+      "op",
+      "operator_type",
+    ],
     [
       "count on a string",
       { path: "report.summaryOfChange", op: "count", compare: "gt", value: 0 },
@@ -198,7 +203,7 @@ describe("predicate type checker", () => {
           {
             any: [
               { not: { path: "report.nope", op: "exists" } },
-              { path: "params.autoFix", op: "lt", value: 1 },
+              { path: "params.autoAddressFindings", op: "lt", value: 1 },
             ],
           },
         ],
@@ -236,7 +241,7 @@ describe("predicate type checker", () => {
       expect.objectContaining({ path: "value[1]", code: "enum_value" }),
     );
     // Element paths have no roots: `params` is a field name here.
-    expect(errorsOf({ path: "params.autoFix", op: "exists" }, scope)).toContainEqual(
+    expect(errorsOf({ path: "params.autoAddressFindings", op: "exists" }, scope)).toContainEqual(
       expect.objectContaining({ path: "path", code: "unknown_path" }),
     );
     const single = graphFilterPredicateScope(listOf("finding@1").element);
@@ -276,9 +281,9 @@ describe("predicate type checker", () => {
       parameters,
       library,
     );
-    expect(errorsOf({ path: "params.autoFix", op: "eq", value: true }, scope)).toContainEqual(
-      expect.objectContaining({ path: "path", code: "shadowed_root" }),
-    );
+    expect(
+      errorsOf({ path: "params.autoAddressFindings", op: "eq", value: true }, scope),
+    ).toContainEqual(expect.objectContaining({ path: "path", code: "shadowed_root" }));
     expect(errorsOf({ path: "params.text", op: "exists" }, scope)).toContainEqual(
       expect.objectContaining({ code: "unknown_path" }),
     );
@@ -316,7 +321,7 @@ describe("predicate type checker: one case per code", () => {
     errorsOf(predicate, scope).map((error) => error.code);
   const CODE_CASES: Record<GraphPredicateTypeCode, () => string[]> = {
     unknown_root: () => codesOf({ path: "plan.commands", op: "nonEmpty" }),
-    shadowed_root: () => codesOf({ path: "params.autoFix", op: "exists" }, shadowing),
+    shadowed_root: () => codesOf({ path: "params.autoAddressFindings", op: "exists" }, shadowing),
     unknown_path: () => codesOf({ path: "report.findings", op: "nonEmpty" }),
     through_list: () => codesOf({ path: "report.issues.severity", op: "eq", value: "P0" }),
     operator_type: () => codesOf({ path: "report.summaryOfChange", op: "lt", value: 3 }),

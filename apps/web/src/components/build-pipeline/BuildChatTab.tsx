@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import {
   isActiveBuildPhase,
-  REVIEW_PACKAGE_SESSION_LABEL,
   reviewValidationStage,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
@@ -30,6 +29,7 @@ import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { PipelineFlowView } from "./PipelineFlowView";
+import { buildErrorLabel } from "./pipeline-flow";
 import { PipelineKeyInformationButton } from "./PipelineKeyInformation";
 import { usePipelineControls } from "./usePipelineControls";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -60,6 +60,7 @@ const PHASE_LABELS: Record<string, string> = {
   "addressing-findings": "Addressing findings",
   verifying: "Verifying",
   reworking: "Reworking",
+  "preparing-package": "Preparing review package",
   "creating-pr": "Creating pull request",
   "resolving-conflicts": "Resolving conflicts",
   paused: "Paused",
@@ -74,27 +75,29 @@ const COMPLETE_DELIVERY_LABELS: Partial<Record<DeliveryPolicy, string>> = {
 };
 
 const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
-  "creating-environment": "Retry Environment Creation",
-  "starting-environment": "Retry Environment Start",
-  "waiting-for-setup": "Retry Setup",
-  building: "Retry Build Stage",
-  reviewing: "Retry Review Stage",
-  "addressing-findings": "Retry Address Findings Stage",
-  verifying: "Retry Verification Stage",
-  reworking: "Retry Rework Stage",
-  "creating-pr": "Retry PR Stage",
-  "resolving-conflicts": "Retry Conflict Resolution",
+  "creating-environment": "Retry environment creation",
+  "starting-environment": "Retry environment start",
+  "waiting-for-setup": "Retry setup",
+  building: "Retry build stage",
+  reviewing: "Retry review stage",
+  "addressing-findings": "Retry address findings stage",
+  verifying: "Retry verification stage",
+  reworking: "Retry rework stage",
+  "preparing-package": "Retry review preparation",
+  "creating-pr": "Retry PR stage",
+  "resolving-conflicts": "Retry conflict resolution",
 };
 
 /** Phases that run an agent stage, which is what the header's restart replaces. */
 const RESTART_STAGE_LABELS: Partial<Record<ResumableBuildPhase, string>> = {
-  building: "Restart Build Stage",
-  reviewing: "Restart Review Stage",
-  "addressing-findings": "Restart Address Findings Stage",
-  verifying: "Restart Verification Stage",
-  reworking: "Restart Rework Stage",
-  "creating-pr": "Restart PR Stage",
-  "resolving-conflicts": "Restart Conflict Resolution",
+  building: "Restart build stage",
+  reviewing: "Restart review stage",
+  "addressing-findings": "Restart address findings stage",
+  verifying: "Restart verification stage",
+  reworking: "Restart rework stage",
+  "preparing-package": "Restart review preparation",
+  "creating-pr": "Restart PR stage",
+  "resolving-conflicts": "Restart conflict resolution",
 };
 
 /** Viewports narrower than this get the compact header. */
@@ -167,18 +170,13 @@ export function BuildChatTab({
         ? (pipeline.phase as ResumableBuildPhase)
         : undefined;
   const validationRestartTarget = reviewValidationStage(pipeline, currentStagePhase);
-  const currentStageSession = pipeline.sessions[pipeline.currentSessionIndex];
-  const dedicatedPreparationRunning =
-    (currentStagePhase === "building" || currentStagePhase === "reworking") &&
-    currentStageSession?.phase === (currentStagePhase === "building" ? "build" : "rework") &&
-    currentStageSession.label === REVIEW_PACKAGE_SESSION_LABEL;
   const restartCurrentStageLabel =
     validationRestartTarget === "validation"
-      ? "Restart Validation"
-      : validationRestartTarget === "review-package" || dedicatedPreparationRunning
-        ? "Restart Review Preparation"
+      ? "Restart validation"
+      : validationRestartTarget === "review-package"
+        ? "Restart review preparation"
         : currentStagePhase === "creating-pr" && pushesOnly
-          ? "Restart Push Stage"
+          ? "Restart push stage"
           : currentStagePhase
             ? RESTART_STAGE_LABELS[currentStagePhase]
             : undefined;
@@ -212,7 +210,7 @@ export function BuildChatTab({
       key: "retry-stage",
       label:
         pipeline.failureContext!.phase === "creating-pr" && pushesOnly
-          ? "Retry Push Stage"
+          ? "Retry push stage"
           : RETRY_STAGE_LABELS[pipeline.failureContext!.phase],
       icon: RefreshCw,
       onClick: controls.retryStage,
@@ -257,7 +255,7 @@ export function BuildChatTab({
               ) : pipeline.phase === "complete" ? (
                 <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />
               ) : pipeline.phase === "failed" ? (
-                <AlertCircle className="h-3 w-3 shrink-0 text-destructive" />
+                <AlertCircle className="h-3 w-3 shrink-0 text-failure" />
               ) : (
                 <Circle className="h-3 w-3 shrink-0" />
               )}
@@ -351,8 +349,8 @@ export function BuildChatTab({
         notices={
           <>
             {pipeline.error && !interactionFailure && (
-              <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
-                {pipeline.error}
+              <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-failure">
+                {buildErrorLabel(pipeline.error)}
               </div>
             )}
             {showStallWarning && (

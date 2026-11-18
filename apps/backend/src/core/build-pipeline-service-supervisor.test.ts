@@ -194,7 +194,7 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? this.reviewReport
-        : phase === "build" || phase === "rework"
+        : phase === "build" || phase === "rework" || phase === "package-preparation"
           ? this.preparationResult
           : phase === "address-findings"
             ? this.addressFindingsResult
@@ -1558,13 +1558,13 @@ describe("BuildPipelineService", () => {
       {
         name: "build with review preparation",
         phase: "building",
-        nextPhase: "reworking",
+        nextPhase: "preparing-package",
         overrides: { reviewPreparation: { agent: "claude" } },
       },
       {
         name: "build with review fan-out",
         phase: "building",
-        nextPhase: "reworking",
+        nextPhase: "preparing-package",
         overrides: { reviewers: [{ agent: "claude" }, { agent: "claude" }] },
       },
     ];
@@ -1626,7 +1626,7 @@ describe("BuildPipelineService", () => {
             expect(advanced.failureContext).toBeUndefined();
             if (overrides) {
               expect(advanced.sessions[advanced.currentSessionIndex]).toMatchObject({
-                phase: "rework",
+                phase: "package-preparation",
                 label: REVIEW_PACKAGE_SESSION_LABEL,
                 status: "running",
               });
@@ -1714,7 +1714,7 @@ describe("BuildPipelineService", () => {
             expect(resumed.error).toBeUndefined();
             expect(resumed.failureContext).toBeUndefined();
             expect(provider.sent).toHaveLength(sentCount + 1);
-            expect(resumed.phase).toBe("reworking");
+            expect(resumed.phase).toBe("preparing-package");
             expect(resumed.reviewRetryRequested).toBeUndefined();
             expect(resumed.pendingUserMessages).toEqual(queued.pendingUserMessages);
             expect(resumed.sessions[resumed.currentSessionIndex]?.label).toBe(

@@ -28,7 +28,7 @@ import {
   githubRangesSeedDirectory,
   githubRangesSeedFile,
   readGithubRangesSeed,
-} from "../src/core/github-ranges-cache";
+} from "../src/core/git/github-ranges-cache";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
 

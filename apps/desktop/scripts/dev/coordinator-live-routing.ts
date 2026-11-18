@@ -27,8 +27,8 @@ import { carrierRowIndex, statusReviewAgentSettings } from "./coordinator-live-s
  *    report is let through, so its wake cannot land in a later case.
  * 3. `review`: "review the work on this branch". The coordinator chooses by
  *    the change's size (the user's decision of 2026-11-14), so either path
- *    passes: `launch_multi_review` on that environment with `autoFix` and
- *    `autoPr` absent or false, which the backend's workflow record must
+ *    passes: `launch_multi_review` on that environment with
+ *    `autoAddressFindings` and `autoPr` absent or false, which the backend's workflow record must
  *    confirm (the harness cancels the review), or its own review, a
  *    successful `get_worker_changes` on that environment with diff output enabled,
  *    followed by a written answer. Doing neither fails, and the path taken is recorded.
@@ -624,7 +624,7 @@ export function evaluateRoutingReview(input: RoutingReviewInput): CoordinatorLiv
     (call) => call.args?.environmentId === input.target.environmentId,
   );
   const askedAutomation = launches.flatMap((call) =>
-    (["autoFix", "autoPr"] as const).filter((field) => call.args?.[field] === true),
+    (["autoAddressFindings", "autoPr"] as const).filter((field) => call.args?.[field] === true),
   );
   const others = named(calls, [
     ...TICKET_TOOLS,

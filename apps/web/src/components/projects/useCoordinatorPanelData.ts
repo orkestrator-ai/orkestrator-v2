@@ -347,9 +347,9 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
   const freshness = readFailuresFreshnessNotice(
     Math.max(viewFailures, gitFailures),
     viewFailures > 1 && gitFailures > 1
-      ? "the coordinator and repository status"
+      ? "the Coordinator and repository status"
       : viewFailures > 1
-        ? "the coordinator"
+        ? "the Coordinator"
         : "the repository status",
   );
 

@@ -143,7 +143,7 @@ function show(machine: string | null | undefined = undefined) {
 }
 
 const tick = () =>
-  screen.findByRole("checkbox", { name: "Let coordinators switch accounts without asking" });
+  screen.findByRole("checkbox", { name: "Let Coordinators switch accounts without asking" });
 
 /** Opens the switch log and answers its dialog. */
 async function openLog(entries = 1) {
@@ -160,7 +160,7 @@ describe("coordinator account-switch permission in Settings", () => {
     show();
     const box = await tick();
     expect(box.getAttribute("aria-checked")).toBe("false");
-    const hint = screen.getByRole("button", { name: "About coordinator account switching" });
+    const hint = screen.getByRole("button", { name: "About Coordinator account switching" });
     fireEvent.click(hint);
     const tip = await screen.findByRole("tooltip");
     expect(
@@ -197,7 +197,7 @@ describe("coordinator account-switch permission in Settings", () => {
     expect(row.textContent).toContain("beelink");
     expect(row.textContent).toContain("Host login");
     expect(row.textContent).toContain("Work (work@example.com)");
-    expect(row.textContent).toContain("orkestrator-v2 coordinator");
+    expect(row.textContent).toContain("orkestrator-v2 Coordinator");
     expect(row.textContent).toContain("Workers are about to hit the 5-hour limit");
     expect(row.textContent).toContain("5m ago");
     // The local date and time, not only the age.
@@ -216,6 +216,7 @@ describe("coordinator account-switch permission in Settings", () => {
       nodeName: "rkmbp",
       fromAccountLabel: "618BTrading",
       toAccountLabel: "arkaydeusdev",
+      coordinatorName: "Project coordinator",
       reason: "User asked to move off the limited account",
     };
     const middle = {
@@ -232,6 +233,9 @@ describe("coordinator account-switch permission in Settings", () => {
     expect(screen.queryByText(/Workers are about to hit/) === null).toBe(true);
 
     const { button, dialog } = await openLog(3);
+    expect(
+      within(dialog).getByText("Switches Coordinators made without asking, newest first."),
+    ).toBeTruthy();
     const rows = within(dialog).getAllByRole("listitem");
     expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual([
       "Switch on beelink",
@@ -240,7 +244,7 @@ describe("coordinator account-switch permission in Settings", () => {
     ]);
     expect(rows[2]!.textContent).toContain("618BTrading → arkaydeusdev");
     expect(rows[2]!.textContent).toContain(
-      "Asked by orkestrator-v2 coordinator: “User asked to move off the limited account”",
+      "Asked by Project Coordinator: “User asked to move off the limited account”",
     );
     // The list scrolls inside the dialog rather than growing past the viewport.
     expect(within(dialog).getByTestId("coordinator-switch-log").className).toContain(
@@ -339,7 +343,7 @@ describe("coordinator account-switch permission in Settings", () => {
     (state) => {
       render(<CoordinatorAccountSwitchNotices />);
       notice!({ payload: { ...record, state, message: "Check target" } });
-      const description = `The orkestrator-v2 coordinator tried to switch the active Claude account on beelink from “Host login” to “Work (work@example.com)”: “Workers are about to hit the 5-hour limit”${state === "outcome-unknown" ? " The outcome is unknown. Check the active account on the target machine." : ""} Check target`;
+      const description = `The orkestrator-v2 Coordinator tried to switch the active Claude account on beelink from “Host login” to “Work (work@example.com)”: “Workers are about to hit the 5-hour limit”${state === "outcome-unknown" ? " The outcome is unknown. Check the active account on the target machine." : ""} Check target`;
       expect(mockToastWarning).toHaveBeenCalledWith(
         "Account switch did not complete",
         expect.objectContaining({ description }),
@@ -358,6 +362,9 @@ describe("coordinator account-switch permission in Settings", () => {
     notice!({ payload: record });
     notice!({ payload: { ...record, state: "outcome-unknown", message: "Check target" } });
     expect(mockToastInfo).toHaveBeenCalledTimes(1);
+    expect(mockToastInfo.mock.calls[0]?.[1]).toMatchObject({
+      description: expect.stringContaining("The orkestrator-v2 Coordinator switched"),
+    });
     expect(mockToastWarning).toHaveBeenCalledTimes(1);
     await Promise.resolve();
     view.unmount();
@@ -366,7 +373,7 @@ describe("coordinator account-switch permission in Settings", () => {
 
   test("the notice names the machine, both accounts, the coordinator and the reason", () => {
     expect(describeCoordinatorAccountSwitch(record)).toBe(
-      "The orkestrator-v2 coordinator switched the active Claude account on beelink from “Host login” to “Work (work@example.com)”: “Workers are about to hit the 5-hour limit”",
+      "The orkestrator-v2 Coordinator switched the active Claude account on beelink from “Host login” to “Work (work@example.com)”: “Workers are about to hit the 5-hour limit”",
     );
   });
 });

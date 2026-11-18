@@ -143,14 +143,24 @@ describe("Auto-pipeline fake model script", () => {
   });
 
   test("offered names match bare and MCP-namespaced spellings only", () => {
-    expect(offeredName(["submit_fix_result"], "submit_fix_result")).toBe("submit_fix_result");
-    expect(offeredName(["mcp__orkestrator__submit_fix_result"], "submit_fix_result")).toBe(
-      "mcp__orkestrator__submit_fix_result",
+    expect(offeredName(["submit_address_findings_result"], "submit_address_findings_result")).toBe(
+      "submit_address_findings_result",
     );
-    expect(offeredName(["mcp_orkestrator_submit_fix_result"], "submit_fix_result")).toBe(
-      "mcp_orkestrator_submit_fix_result",
-    );
-    expect(offeredName(["submit_fix_result_v2"], "submit_fix_result")).toBeUndefined();
+    expect(
+      offeredName(
+        ["mcp__orkestrator__submit_address_findings_result"],
+        "submit_address_findings_result",
+      ),
+    ).toBe("mcp__orkestrator__submit_address_findings_result");
+    expect(
+      offeredName(
+        ["mcp_orkestrator_submit_address_findings_result"],
+        "submit_address_findings_result",
+      ),
+    ).toBe("mcp_orkestrator_submit_address_findings_result");
+    expect(
+      offeredName(["submit_address_findings_result_v2"], "submit_address_findings_result"),
+    ).toBeUndefined();
   });
 });
 

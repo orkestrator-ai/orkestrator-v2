@@ -17,7 +17,7 @@ describe("pipelineStageItems", () => {
       ],
       sessions: [
         session("build", "build", 0),
-        session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+        session("package-preparation", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
         session("review", "review-1", 240, { label: "Review 1" }),
       ],
       validationRun: validationRun(),
@@ -52,7 +52,12 @@ describe("validationOutcome", () => {
     expect(validationOutcome(failed)).toBe("failed");
     expect(validationStageSummary(failed)).toBe("1 of 2 checks failed");
     expect(validationOutcome(validationRun({ status: "running" }))).toBe("running");
-    expect(validationOutcome(validationRun({ status: "cancelled" }))).toBe("cancelled");
+    const canceled = validationRun({ status: "cancelled" });
+    expect(validationOutcome(canceled)).toBe("cancelled");
+    expect(validationStageSummary(canceled)).toBe("Validation canceled");
+    expect(validationStageSummary({ ...canceled, error: "Validation cancelled by user" })).toBe(
+      "Validation canceled by user",
+    );
     const incomplete = validationRun();
     incomplete.results[1]!.status = "incomplete";
     expect(validationOutcome(incomplete)).toBe("incomplete");

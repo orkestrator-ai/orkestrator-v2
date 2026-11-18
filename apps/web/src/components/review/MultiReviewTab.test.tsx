@@ -1328,7 +1328,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     // inspected by default.
     selectFlowNode("Review package");
     expect(screen.queryByText("Stopping") === null).toBe(true);
-    expect(inspector().getByText("cancelled")).toBeTruthy();
+    expect(inspector().getByText("canceled")).toBeTruthy();
   });
 
   test("keeps a running validation clock live while the workflow is cancelling", () => {
@@ -1800,14 +1800,14 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
     showInspectorTab("Report");
     const consolidated = screen.getByRole("article", { name: "Consolidated Multi Review" });
-    expect(screen.getByRole("button", { name: "Review Scope" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review scope" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Issues · 1" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Test Coverage Gaps · 1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Test coverage gaps · 1" })).toBeTruthy();
     expect(consolidated.textContent).not.toContain("Shared finding");
     expect(consolidated.textContent).not.toContain("The failure branch");
 
     fireEvent.click(screen.getByRole("button", { name: "Issues · 1" }));
-    fireEvent.click(screen.getByRole("button", { name: "Test Coverage Gaps · 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test coverage gaps · 1" }));
     expect(consolidated.textContent).toContain("Shared finding");
     expect(consolidated.textContent).toContain("The failure branch");
     fireEvent.click(
@@ -3964,7 +3964,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       }),
     ).toEqual({ label: "Failed", state: "failed" });
     expect(reviewPackageGenerationStep({ ...preparing, phase: "cancelling" })).toEqual({
-      label: "Cancelling",
+      label: "Canceling",
       state: "cancelling",
     });
     // Cancelling retires every pending reviewer, which must not be mistaken for
@@ -3978,7 +3978,7 @@ describe("MultiReviewTab pipeline step cards", () => {
           status: "cancelled" as const,
         })),
       }),
-    ).toEqual({ label: "Cancelled", state: "cancelled" });
+    ).toEqual({ label: "Canceled", state: "cancelled" });
   });
 
   test("tracks consolidation from waiting through to its own outcome", () => {
@@ -4011,11 +4011,11 @@ describe("MultiReviewTab pipeline step cards", () => {
       }),
     ).toEqual({ label: "Failed", state: "failed" });
     expect(consolidationStep({ ...unconsolidated, phase: "cancelling" })).toEqual({
-      label: "Cancelling",
+      label: "Canceling",
       state: "cancelling",
     });
     expect(consolidationStep({ ...unconsolidated, phase: "cancelled" })).toEqual({
-      label: "Cancelled",
+      label: "Canceled",
       state: "cancelled",
     });
   });
@@ -4152,7 +4152,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       state: "not-started",
     });
     expect(addressFindingsStep({ ...ready, phase: "cancelled" })).toEqual({
-      label: "Cancelled",
+      label: "Canceled",
       state: "cancelled",
     });
   });
@@ -4435,7 +4435,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
   test.each([
     ["failed" as const, "Provider turn failed", "Failed"],
-    ["cancelled" as const, undefined, "Cancelled"],
+    ["cancelled" as const, undefined, "Canceled"],
   ])("renders a %s interactive Address Findings outcome on the card", (status, error, label) => {
     const ready = readyWorkflow();
     const workflow: MultiReviewWorkflow = {

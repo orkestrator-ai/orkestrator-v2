@@ -391,7 +391,7 @@ for (const [grouping, board] of [
   ["project", false],
 ] as const) {
   const coordinator = board || grouping !== "repository";
-  test(`grouped by ${grouping}, remote project ${board ? "Open Board" : "name"} opens ${coordinator ? "Coordinator" : "Home"} on the leaf`, async () => {
+  test(`grouped by ${grouping}, remote project ${board ? "Open board" : "name"} opens ${coordinator ? "Coordinator" : "Home"} on the leaf`, async () => {
     const summary = toNodeProjectSummary(leafId, { ...project }, 0)!;
     const machine = {
       connectionId: leafId,
@@ -420,7 +420,7 @@ for (const [grouping, board] of [
     const row = screen.getByRole("button", { name: `Open ${project.name} on Leaf` });
     if (board) {
       fireEvent.contextMenu(row);
-      fireEvent.click(screen.getByText("Open Board"));
+      fireEvent.click(screen.getByText("Open board"));
     } else fireEvent.click(row);
     const request = useRemoteWorkspaceStore.getState().requests[leafId]!.request;
     expect(request).toEqual({

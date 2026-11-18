@@ -8,9 +8,12 @@
 > `address-findings`, `addressing-findings`). Records older builds wrote with
 > `fix` and `address` are rewritten once by a storage migration
 > (`storage-workflow-vocabulary-upgrade.ts`), where "fix" meant Rework in a
-> pipeline but Address Findings in a Multi Review. Public names (coordinator
-> tools, CLI wire fields, graph templates) still say Fix until task 3 of
-> [4740](../todo/cross-cutting/4740-workflow-vocabulary-stage-two.md).
+> pipeline but Address Findings in a Multi Review. Package preparation is not
+> Rework: it has its own `package-preparation` and `preparing-package` values
+> (see [Stage table and the built-in template](#stage-table-and-the-built-in-template)).
+> Public names (coordinator
+> tools, CLI wire fields, graph templates) use the same words since task 3 of
+> [4740](../todo/cross-cutting/4740-workflow-vocabulary-stage-two.md) (2026-11-18).
 
 Status: Living. Checked against the branch that introduced the pipeline flow
 graph (2026-10-26), the branch that made restarts rewind (2026-10-27), the
@@ -33,14 +36,14 @@ tab. The old PIPELINE stage list (`PipelineStageRail`) is gone.
   conflict resolution) this tab shows.
 - **Pipeline environment**: an environment a build pipeline created and runs
   in. A ticket's Build button, the Features view, `start_build_pipeline`, the
-  CLI's `build launch` and the New Environment dialog's "A feature" option all
+  CLI's `build launch` and the New environment dialog's "A feature" option all
   make one. The sidebar marks it with the pipe icon (`PipeIcon.tsx`).
 - **Prompt environment**: an environment that runs one prompt, from the New
   Environment dialog's "With a prompt" option or a coordinator's
   `launch_environment`. Review and the PR are started by hand or by a
   coordinator.
 
-The New Environment dialog keeps the "A feature" / "With a prompt" wording and
+The New environment dialog keeps the "A feature" / "With a prompt" wording and
 says under it which of the two each choice creates. Internal names still say
 "feature build" (`BuildIntent = "feature" | "prompt"`, `createFeatureBuild`,
 the `create_feature_build` command, `featureBuildRequestHash`, the `feature-build.*` log
@@ -213,7 +216,7 @@ a transcript.
   a clean pass is followed by Verify on the line, with no Address Findings node. The
   fan-out opens the next stage before it drops `reviewFanout`, so a crash in
   between never leaves `reviewing` with nothing to drive it.
-- **Address Findings → Verify.** Address Findings submits a typed `fix-result` and Verify reads
+- **Address Findings → Verify.** Address Findings submits a typed `address-findings-result` and Verify reads
   it as an evidence frame, not the Address Findings session's last assistant text
   ([review preparation](review-preparation.md#the-address-findings--verify-handoff)). The
   accepted result is kept, bounded, on the Address Findings session (`addressFindingsResult`, marked
@@ -357,7 +360,7 @@ renderer and stage mapping live in
 `packages/protocol/src/build-pipeline-stage-instructions.ts`
 (`@orkestrator/protocol/build-pipeline-stage-instructions`); `isBuildStepConfig`
 rejects a longer text, so every launch input that carries steps (the launcher,
-the New Environment dialog's feature option, the coordinator, the public
+the New environment dialog's feature option, the coordinator, the public
 `build.launch` action) is bounded by
 the same check.
 
@@ -386,7 +389,7 @@ the same check.
   rewind, a retried stage, a fresh review panel and a backend restart all read
   the same text. Resume, reminders and repairs continue a session that already
   has the opening prompt and do not repeat it. A pipeline environment from the
-  New Environment dialog's feature option that pins Address Findings but not Verify copies the Address Findings model to Verify, not its
+  New environment dialog's feature option that pins Address Findings but not Verify copies the Address Findings model to Verify, not its
   instructions.
 - **Launcher.** Each step card in `BuildLaunchDialog.tsx` has a collapsed
   "*Step* instructions" field (`BuildStepInstructionsField.tsx`) with a byte
@@ -421,7 +424,7 @@ other step and `normalizeReviewPreparation` from the preparation step.
   reviewer's label as `focus`.
 - **Defaults.** `buildPipelineConfiguredDefaults` gives each reviewer row the
   saved focus of its Multi Review position (`multiReview.reviewerLenses`), so
-  the Build button, the New Environment dialog's feature option, the coordinator
+  the Build button, the New environment dialog's feature option, the coordinator
   and the CLI's `build launch` start build pipelines with the same focus as the
   Multi Review button;
   `build launch --reviewer … --focus N=TEXT` replaces it per row.
@@ -620,7 +623,7 @@ work is live), the message returns to the queue, nothing about the stage changes
 and it is tried again a minute later; the stage is never failed for it.
 
 Actions sit in each node's context menu and in the inspector: open the session
-(Open Rework session on a Rework node), open the review pass as a Multi Review tab,
+(Open rework session on a Rework node), open the review pass as a Multi Review tab,
 retry a failed reviewer (`retry_build_pipeline_reviewer`), stop one reviewer
 (`stop_build_pipeline_reviewer`), restart one reviewer
 (`restart_build_pipeline_reviewer`), retry the failed
@@ -908,8 +911,8 @@ Resuming a paused push-only Ship explicitly forbids opening or editing a PR.
   can judge which are part of the work. It cannot be skipped. When the turn ends,
   the backend asks origin (`branchPushState`, `git ls-remote`) whether the branch
   has HEAD; if not, the stage fails and can be retried, so the run cannot claim a
-  push that did not happen. The labels read "Pushing branch", "Retry Push Stage"
-  and "Restart Push Stage", and the board card "Pushing".
+  push that did not happen. The labels read "Pushing branch", "Retry push stage"
+  and "Restart push stage", and the board card "Pushing".
 - **`commit-only`** starts nothing. The pipeline completes at once, recording
   how many uncommitted paths remain.
 
@@ -1063,6 +1066,19 @@ rules (`stageAfterReview`, `verificationPassed`,
 `pullRequestNeedsConflictResolution`), the default and maximum iterations,
 the reviewer cap and the saved step defaults. Change a stage, a rule or a
 bound and that test fails until the template says the same.
+
+Package preparation has phases of its own. Its session is
+`package-preparation` (labelled "Package Preparation Session"), and the
+pipeline is `preparing-package` while that session and the validation run it
+plans are in progress, in the first round as in later ones; the header shows
+"Preparing review package". The label is display text only: code tells
+preparation apart by the phase. Retry, restart, resume and recovery of the
+phase open a fresh preparation session (`startReviewPackagePreparation`);
+restarting it records a `review-package` request, and it cannot be skipped. A
+single-review Build or Rework turn that prepares the package inline keeps its
+own phase. Builds before storage version 12 stored preparation as a `rework`
+session while the pipeline was `reworking`;
+`storage-package-preparation-phase-upgrade.ts` moved those records once.
 
 ## Constraints
 

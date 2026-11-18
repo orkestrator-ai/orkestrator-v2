@@ -314,6 +314,11 @@ export interface NodeMailActor {
   turnOrigin?: "mail";
 }
 
+/** Canonical display title for both new and retained Coordinator mail. */
+export function formatCoordinatorMailTitle(title: string | null): string {
+  return !title || title === "Project coordinator" ? "Project Coordinator" : title;
+}
+
 /** Who node mail is budgeted as: one remote sender, like a mailbox. */
 export function nodeMailSenderKey(
   actor: Pick<NodeMailActor, "nodeId" | "environmentId" | "tabId">,
@@ -494,7 +499,7 @@ export const AGENT_MAIL_NOTICE_RESOURCES = [
    * conversation and is watched for status changes; `id` is
    * `owner/repo#number` and `label` its title. Drawn as a one-line notice.
    * Also the notice an environment's open agent tabs get when its own pull
-   * request merges (`pr-merge-tab-notices.ts` in the backend).
+   * request merges (`git/pr-merge-tab-notices.ts` in the backend).
    */
   "watched-pull-request",
   /** One `ask_agents` call's answers; `id` is its batch id. */

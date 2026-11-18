@@ -170,7 +170,7 @@ function sidebarNavigator(page: Page, projectName: string) {
     await expect(page.getByText("Checking Docker availability...", { exact: true })).toBeHidden({
       timeout: 30_000,
     });
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
       const continueButton = page.getByRole("button", { name: label, exact: true });
       if (await continueButton.isVisible()) await continueButton.click();
     }

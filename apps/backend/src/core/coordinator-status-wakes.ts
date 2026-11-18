@@ -313,7 +313,7 @@ export function multiReviewStatus(
         details: prLaunchMessage ? [`Error: ${prLaunchMessage}`] : [],
         tools: cleanReviewPr
           ? [read]
-          : [read, `open_multi_review_fix { "workflowId": "${workflowId}" }`],
+          : [read, `open_multi_review_address_findings { "workflowId": "${workflowId}" }`],
         mode: "settled",
       };
     return null;
@@ -471,7 +471,7 @@ export function multiReviewStatus(
             ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]
             : []),
         ],
-        tools: [read, `open_multi_review_fix { "workflowId": "${workflowId}" }`],
+        tools: [read, `open_multi_review_address_findings { "workflowId": "${workflowId}" }`],
         mode: "settled",
       };
     }
@@ -486,7 +486,7 @@ export function multiReviewStatus(
           ...(text(fixSession.error) ? [`Error: ${boundedLine(fixSession.error as string)}`] : []),
           ...(autoPr ? ["No PR session will start."] : []),
         ],
-        tools: [read, `open_multi_review_fix { "workflowId": "${workflowId}" }`],
+        tools: [read, `open_multi_review_address_findings { "workflowId": "${workflowId}" }`],
         mode: "settled",
       };
     }

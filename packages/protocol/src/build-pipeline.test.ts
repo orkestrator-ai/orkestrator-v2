@@ -1607,15 +1607,17 @@ describe("build pipeline protocol", () => {
     }
   });
 
-  test("maps every phase to its own step, except the fix stage", () => {
+  test("maps every phase to its own step, except Rework and package preparation", () => {
     expect(stepKeyForSessionPhase("build")).toBe("build");
     expect(stepKeyForSessionPhase("review")).toBe("review");
     expect(stepKeyForSessionPhase("address-findings")).toBe("address-findings");
     expect(stepKeyForSessionPhase("verify")).toBe("verify");
     expect(stepKeyForSessionPhase("pr")).toBe("pr");
     expect(stepKeyForSessionPhase("resolve-conflicts")).toBe("resolve-conflicts");
-    // The fix stage has no launcher control of its own; it is build work.
+    // Rework has no launcher control of its own; it is build work.
     expect(stepKeyForSessionPhase("rework")).toBe("build");
+    // Package preparation without its own step runs under Address Findings.
+    expect(stepKeyForSessionPhase("package-preparation")).toBe("address-findings");
   });
 
   test("maps every member of the phase union to a configurable step", () => {
@@ -1629,6 +1631,7 @@ describe("build pipeline protocol", () => {
       "address-findings": "address-findings",
       verify: "verify",
       rework: "build",
+      "package-preparation": "address-findings",
       pr: "pr",
       "resolve-conflicts": "resolve-conflicts",
     };
@@ -2411,14 +2414,20 @@ describe("review package preparation session", () => {
       plan: { headRef: "a".repeat(40), commands: [], limitations: ["No commands"] },
       results: [],
     };
-    expect(reviewValidationStage({ validationRun }, "reworking")).toBe("validation");
+    expect(reviewValidationStage({ validationRun }, "preparing-package")).toBe("validation");
     expect(
       reviewValidationStage(
         { validationRun: { ...validationRun, status: "cancelled" } },
-        "reworking",
+        "preparing-package",
       ),
     ).toBe("review-package");
+    // Validation belongs to package preparation; a held run does not take
+    // over Build or Rework.
     for (const phase of ["building", "reworking"] as const) {
+      expect(reviewValidationStage({ validationRun }, phase)).toBeNull();
+    }
+    {
+      const phase = "preparing-package" as const;
       const cancelled = { ...validationRun, status: "cancelled" as const };
       expect(
         reviewValidationStage(
@@ -2453,13 +2462,13 @@ describe("review package preparation session", () => {
         ),
       ).toBeNull();
     }
-    expect(reviewValidationStage({ validationRun, reviewRetryRequested: true }, "building")).toBe(
-      "review-package",
-    );
+    expect(
+      reviewValidationStage({ validationRun, reviewRetryRequested: true }, "preparing-package"),
+    ).toBe("review-package");
     expect(
       reviewValidationStage(
         { validationRun, reviewPackage: {} as BuildPipeline["reviewPackage"] },
-        "reworking",
+        "preparing-package",
       ),
     ).toBeNull();
     expect(reviewValidationStage({ validationRun }, "reviewing")).toBeNull();
@@ -2473,9 +2482,13 @@ describe("review package preparation session", () => {
     expect(
       isReviewPackagePreparationSession({
         label: REVIEW_PACKAGE_SESSION_LABEL,
-        phase: "rework",
+        phase: "package-preparation",
       }),
     ).toBe(true);
+    // The phase, not the display label, marks the preparation session.
+    expect(
+      isReviewPackagePreparationSession({ label: REVIEW_PACKAGE_SESSION_LABEL, phase: "rework" }),
+    ).toBe(false);
     expect(
       isReviewPackagePreparationSession({
         label: "Build Session",

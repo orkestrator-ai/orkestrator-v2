@@ -64,11 +64,11 @@ ORKESTRATOR_LOG_LEVEL=info,bridge=debug,updater=trace orkestrator serve --port 4
 
 It takes a default level, areas, or both, in the syntax
 [logging.md](logging.md#live-settings) describes, sits on top of the stored
-**Log Detail** setting, and reaches every bridge the backend launches. Logging is
+**Log detail** setting, and reaches every bridge the backend launches. Logging is
 configured before flags are parsed, so a flag would have to be read twice for no
 new ability; one syntax serves the desktop, `serve` and the bridges alike. A
 launcher that cannot set an environment (a service manager does: systemd's
-`Environment=`, launchd's `EnvironmentVariables`) can use **Log Detail** in
+`Environment=`, launchd's `EnvironmentVariables`) can use **Log detail** in
 Settings instead, which applies live.
 
 ## Selecting a backend
@@ -295,7 +295,7 @@ not advertise at its version before sending it.
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
 | `review launch ENV [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--review-model] [--address-findings-model] [--[no-]auto-address-findings] [--[no-]auto-pr]` | `review.launch` | `launch_controller_multi_review`: the Multi Review button (saved defaults for what is omitted; an active review is reused) under an ID reserved from the operation. `--focus`/`--focus-file` set `--reviewer` row N's `lens` ([reviewer lenses](review-preparation.md#reviewer-lenses)): the first line is the label (at most 64 characters), the rest the instruction (at most 4 KiB), one line is both; the receipt carries no lens text | provider |
 | `review list ENV` / `review get REVIEW` | `review.list/get` | Multi Review storage, bounded summary | read |
-| `review open REVIEW [--address-findings]` / `review address REVIEW` | `review.open/address` | `controller_multi_review_surface` (root or Address Findings tab; Address findings). The former flags `--fix-model`, `--auto-fix` and `--fix` still work | metadata / provider |
+| `review open REVIEW [--address-findings]` / `review address REVIEW` | `review.open/address` | `controller_multi_review_surface` (root or Address Findings tab, surface `root` or `address-findings`; Address findings). The wire fields are `addressFindingsModel` and `autoAddressFindings` | metadata / provider |
 | `review cancel REVIEW` | `review.cancel` | Multi Review supervisor `cancel` | process |
 | `review start ENV [--target-branch B]` | `review.start` | the single-agent Review button: `session.start`'s job path with the shared review prompt (`@orkestrator/protocol/git-workflow-prompts`), the target branch (else the project's PR base branch, else `main`) and the saved review instruction resolved by the backend, the `Review` title, the `review` action default, and a review tab (it offers Address all) | provider |
 | `build launch TICKET --project P (--type local\|container [--base-branch B --base-commit SHA] \| --environment ENV) [--agent A] [--step STAGE=A[/M[@E]]]… [--instructions STAGE=TEXT]… [--instructions-file STAGE=PATH]… [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--max-iterations N]` | `build.launch` | the Build button on a Kanban ticket, through the coordinator's path: `buildPipelineInputWithDefaults` over the saved Build defaults, `isStartBuildPipelineInput`, `BuildPipelineService.start` (whose admission key returns the ticket's active build: `reused`). See [Build Pipelines](#build-pipelines) | metadata, filesystem, provider, external |
@@ -307,7 +307,7 @@ not advertise at its version before sending it.
 | `graph status RUN` / `graph cancel RUN` | `graph.status` / `graph.cancel` | the graph run record (states and counts) / `GraphRunService.cancel` (refused once the run ended) | read / process |
 | `pr create ENV [--target-branch B]` | `pr.create` | the Create PR button: `session.start`'s job path with the shared PR prompt, the `PR` tab title and the `pr` action default, then PR monitoring; refused when the environment has a PR | provider, external |
 | `pr resolve ENV [--target-branch B]` | `pr.resolve` | the Resolve Conflicts button: the same path with the shared resolve prompt, the `Resolve` title, the `resolve` action default and the PR refresh on completion. Always a new tab with its own receipt; the button can reuse this tab, but this action never resends to one | provider, external |
-| `pr push ENV` | `pr.push` | the Push Changes button: the same path with the shared push prompt, the `Git Push` title and the `push` action default; refused unless the environment has an open PR | provider, external |
+| `pr push ENV` | `pr.push` | the Push changes button: the same path with the shared push prompt, the `Git Push` title and the `push` action default; refused unless the environment has an open PR | provider, external |
 | `pr get ENV` / `pr timeline ENV` / `pr files ENV [--path P]` / `pr options ENV` | `pr.get` / `pr.timeline` / `pr.files` / `pr.options` | the environment's pull request, read live through the viewer's commands; `pr get` reports `attachment` (`stored`, `detected`, `none`, `unknown`) | read |
 | `pr list PROJECT [--filter F] [--query Q]` | `pr.list` | the viewer's pull request list | read |
 | `pr merge ENV --yes [--method M] [--keep-branch] [--cleanup] [--expected-head-sha S]` | `pr.merge` | the Merge and Merge and Cleanup buttons: `merge_environment_pr`, settled from GitHub | external, filesystem, process |
@@ -411,7 +411,7 @@ answered.
   [control-mcp.md](control-mcp.md#leaf-nodes)).
 - **Not copied for a leaf launch:** files a leaf project lacks are not seeded
   from the command node's project root for `environment launch --node`, as the
-  portal's New Environment does; the leaf's own project files apply.
+  portal's New environment does; the leaf's own project files apply.
 
 Paths passed to project commands are on the **backend** host. Prompt, patch,
 stdin, attachment and credential files are read on the machine running the
@@ -877,8 +877,8 @@ as for the coordinator's `start_build_pipeline`
 and the app agree.
 
 - `--step STAGE=AGENT[/MODEL[@EFFORT]]` picks one step's agent and model;
-  STAGE is `build`, `review`, `address`, `verify`, `pr`, `resolve-conflicts`
-  or `preparation` (the review panel's preparation and consolidation). A model
+  STAGE is `build`, `review`, `address-findings`, `verify`, `pr`,
+  `resolve-conflicts` or `preparation` (the review panel's preparation and consolidation). A model
   ID may contain `/`; the effort follows the last `@`.
 - `--instructions STAGE=TEXT` and `--instructions-file STAGE=PATH` (`-` reads
   stdin) add the user's own instructions to a step

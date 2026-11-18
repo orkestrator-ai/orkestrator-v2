@@ -18,7 +18,7 @@ function Notice({ open, returnFocus }: { open: boolean; returnFocus: boolean }) 
       <button type="button">Annotations</button>
       <AlertDialog open={open}>
         <AlertDialogContent {...(returnFocus ? focusReturn : {})}>
-          <AlertDialogTitle>GitHub CLI Not Found</AlertDialogTitle>
+          <AlertDialogTitle>GitHub CLI not found</AlertDialogTitle>
           <AlertDialogDescription>Some features need it.</AlertDialogDescription>
           <AlertDialogFooter>
             <AlertDialogAction>Continue</AlertDialogAction>
@@ -70,13 +70,13 @@ function NoticeSequence({ first, second }: { first: boolean; second: boolean }) 
           open: first,
           focus: firstFocus,
           title: "Claude login",
-          action: "Continue Without Claude",
+          action: "Continue without Claude",
         },
         {
           open: second,
           focus: secondFocus,
           title: "GitHub setup",
-          action: "Continue Without GitHub CLI",
+          action: "Continue without GitHub CLI",
         },
       ].map(({ open, focus, title, action }) => (
         <AlertDialog key={title} open={open}>
@@ -97,7 +97,7 @@ for (const order of ["chain", "overlap-close-first", "overlap-close-second"] as 
     const control = screen.getByRole("button", { name: "Original control" });
     control.focus();
     rerender(<NoticeSequence first second={false} />);
-    const claude = await screen.findByRole("button", { name: "Continue Without Claude" });
+    const claude = await screen.findByRole("button", { name: "Continue without Claude" });
     claude.focus();
     if (order === "chain") {
       fireEvent.click(claude);
@@ -105,7 +105,7 @@ for (const order of ["chain", "overlap-close-first", "overlap-close-second"] as 
     } else {
       rerender(<NoticeSequence first second />);
     }
-    const github = await screen.findByRole("button", { name: "Continue Without GitHub CLI" });
+    const github = await screen.findByRole("button", { name: "Continue without GitHub CLI" });
     github.focus();
     if (order === "overlap-close-first") {
       rerender(<NoticeSequence first={false} second />);

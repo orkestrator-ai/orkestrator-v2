@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import type { PublicActionName } from "@orkestrator/protocol/public-api";
-import { resetGitHubPullRequestCache } from "../src/core/github-pull-requests.js";
+import { resetGitHubPullRequestCache } from "../src/core/git/github-pull-requests.js";
 import {
   getPrMonitorDetectionRequest,
   parsePrMonitorDetectionResponse,

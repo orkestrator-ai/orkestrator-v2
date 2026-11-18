@@ -82,7 +82,7 @@ const reviewAndFailEveryRound = (provider: FakeProvider) => {
       requestId,
       value: (phase === "review"
         ? reviewNaming(sessionId)
-        : phase === "build" || phase === "rework"
+        : phase === "build" || phase === "rework" || phase === "package-preparation"
           ? TEST_REVIEW_PREPARATION
           : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
@@ -226,7 +226,7 @@ describe("package-only restart on the single-review path", () => {
 
       const restarted = await service.restartStep(started.id, `review-package:${build.sessionKey}`);
 
-      expect(restarted.phase).toBe("reworking");
+      expect(restarted.phase).toBe("preparing-package");
       expect(restarted.sessions.find((s) => s.sessionKey === build.sessionKey)?.supersededBy).toBe(
         undefined,
       );
@@ -238,15 +238,18 @@ describe("package-only restart on the single-review path", () => {
         REVIEW_PACKAGE_SESSION_LABEL,
       ]);
       // Every step after the plan is history: review, verify and Ship.
-      expect(live(restarted).map((session) => session.phase)).toEqual(["build", "rework"]);
+      expect(live(restarted).map((session) => session.phase)).toEqual([
+        "build",
+        "package-preparation",
+      ]);
 
       // A repeat of the same request while preparation runs is a no-op.
-      provider.runningPhases.add("rework");
+      provider.runningPhases.add("package-preparation");
       await service.advanceNow(started.id);
       const repeated = await service.restartStep(started.id, `review-package:${build.sessionKey}`);
       expect(repeated.rewinds).toHaveLength(restarted.rewinds!.length);
       expect(provider.created.length).toBe(created + 1);
-      provider.runningPhases.delete("rework");
+      provider.runningPhases.delete("package-preparation");
 
       const finished = await advanceUntil(
         service,
@@ -256,7 +259,7 @@ describe("package-only restart on the single-review path", () => {
       );
       expect(live(finished).map((session) => session.phase)).toEqual([
         "build",
-        "rework",
+        "package-preparation",
         "review",
         "verify",
         "pr",

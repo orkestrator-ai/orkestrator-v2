@@ -162,7 +162,7 @@ export function sidebarNavigator(page: Page, projectName: string) {
     // The mobile shell keeps the project list in a drawer.
     const openDrawer = page.getByRole("button", { name: "Open projects and environments" });
     await expect(expand.or(entry).or(openDrawer).first()).toBeVisible({ timeout: 30_000 });
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
       const continueButton = page.getByRole("button", { name: label, exact: true });
       if (await continueButton.isVisible()) await continueButton.click();
     }

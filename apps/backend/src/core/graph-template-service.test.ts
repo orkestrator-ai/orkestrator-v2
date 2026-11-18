@@ -365,14 +365,14 @@ describe("capability ceiling", () => {
     await service.save(sampleGraphTemplate("mine"));
     const ref = { scope: "user" as const, id: "mine" };
     const open = await service.compile({ ref }, { projectId, includePlan: true });
-    const openFix = open.plan?.nodes.find((node) => node.id === "fix");
+    const openFix = open.plan?.nodes.find((node) => node.id === "address-findings");
     expect(openFix?.kind === "agent" && openFix.capabilities.removedByCeiling).toEqual([]);
 
     await service.setCeiling(projectId, { deny: ["network"] });
     const narrowed = await service.compile({ ref }, { projectId, includePlan: true });
     expect(narrowed.ceiling).toEqual({ deny: ["network"] });
     expect(narrowed.planDigest).not.toBe(open.planDigest);
-    const fix = narrowed.plan?.nodes.find((node) => node.id === "fix");
+    const fix = narrowed.plan?.nodes.find((node) => node.id === "address-findings");
     expect(fix?.kind === "agent" && fix.capabilities.removedByCeiling).toContain("network");
     expect(fix?.kind === "agent" && fix.capabilities.policy.capabilityPolicy?.deny).toContain(
       "network",
@@ -390,7 +390,7 @@ describe("capability ceiling", () => {
     expect(pushing.diagnostics).toContainEqual(
       expect.objectContaining({
         code: "capability-remote-write",
-        nodeId: "fix",
+        nodeId: "address-findings",
         severity: "error",
       }),
     );

@@ -4,7 +4,7 @@ import { spawnCommand } from "./shell.js";
 import { reapProcessGroup, terminateProcessTree } from "./process-tree.js";
 import { forgetBridgeAuthorityKey, retainHostBridgeAuthorityKey } from "./bridge-authority-keys.js";
 import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
-import { GitHubCliLoginSlot } from "./github-cli-login.js";
+import { GitHubCliLoginSlot } from "./git/index.js";
 import { HostCatalogSeeds } from "./host-catalog-seeds.js";
 import { OpenCodeProviderLoginSlot, OpenCode2HostServerState } from "./opencode2/index.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
@@ -91,6 +91,8 @@ export type LocalServerLaunch = {
   workingDirectory: string;
   /** Account bound to a Claude or Codex bridge. */
   accountId?: string;
+  /** Credential generation captured with the account used for model discovery. */
+  accountLoginKey?: string;
   /** Expiry of a short-lived token handed to a coordinator Claude or Codex bridge. */
   tokenExpiresAt?: number;
   /**
@@ -138,7 +140,7 @@ export class LocalServerRuntime {
   readonly catalogSeeds = new HostCatalogSeeds();
   /** The single in-flight Cursor SDK sign-in (`cursor-sdk-bridge.ts`). */
   readonly cursorSdkLogin = new CursorSdkLoginSlot();
-  /** The single in-flight GitHub CLI sign-in (`github-cli-setup.ts`). */
+  /** The single in-flight GitHub CLI sign-in (`git/github-cli-setup.ts`). */
   readonly gitHubCliLogin = new GitHubCliLoginSlot();
   /** The OpenCode provider sign-in, login change reservation and list flight. */
   readonly openCodeProviderLogin = new OpenCodeProviderLoginSlot();
@@ -169,6 +171,7 @@ export class LocalServerRuntime {
    * may be holding the old (or missing) login, so each is replaced once idle.
    * Cleared when the bridge is launched.
    */
+  private readonly accountLoginKeys = new Map<string, string>();
   private readonly staleLoginBridges = new Set<string>();
   /**
    * Container environments whose Claude login was renewed on the host. An
@@ -235,6 +238,8 @@ export class LocalServerRuntime {
     this.workingDirectories.set(key, launch.workingDirectory);
     if (launch.accountId) this.accountIds.set(key, launch.accountId);
     else this.accountIds.delete(key);
+    if (launch.accountLoginKey) this.accountLoginKeys.set(key, launch.accountLoginKey);
+    else this.accountLoginKeys.delete(key);
     this.staleLoginBridges.delete(key);
     if (launch.tokenExpiresAt) this.tokenExpiry.set(key, launch.tokenExpiresAt);
     else this.tokenExpiry.delete(key);
@@ -254,6 +259,7 @@ export class LocalServerRuntime {
     this.unresponsiveMarkers.delete(key);
     this.healthyAnswers.delete(key);
     this.accountIds.delete(key);
+    this.accountLoginKeys.delete(key);
     this.tokenExpiry.delete(key);
     this.loginlessBridges.delete(key);
     const separator = key.indexOf(":");
@@ -430,6 +436,10 @@ export class LocalServerRuntime {
 
   launchedAccountId(key: string): string | undefined {
     return this.accountIds.get(key);
+  }
+
+  launchedAccountLoginKey(key: string): string | undefined {
+    return this.accountLoginKeys.get(key);
   }
 
   launchedTokenExpiry(key: string): number | undefined {

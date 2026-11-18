@@ -460,12 +460,12 @@ export const ticketCommands: CommandSpec[] = [
   {
     path: ["ticket", "label-create"],
     action: "ticket.label.create",
-    summary: "Create a ticket label in a project's catalogue.",
+    summary: "Create a ticket label in a project's catalog.",
     positionals: [],
     options: [
       PROJECT_OPTION,
       { name: "name", kind: "string", valueName: "LABEL", description: "Label name." },
-      { name: "color", kind: "string", valueName: "#RRGGBB", description: "Label colour." },
+      { name: "color", kind: "string", valueName: "#RRGGBB", description: "Label color." },
       {
         name: "description",
         kind: "string",

@@ -68,7 +68,8 @@ files.
   whose failures span several groups goes in
   [Aggregate and merge validation runs](aggregate-validation-runs/0000-index.md);
   a recurrence of a known case updates that case instead.
-- Name the file `NNNN-short-slug.md`. Its body carries `- **ID:** NNNN` and
+- Name the file `<id>-short-slug.md`. Use at least four digits, for example
+  `0147` or `10000`. Its body carries `- **ID:** <id>` and
   `- **Status:** <status>` lines that match its index row.
 - A new case takes the next number after the highest one in use in any group
   (or one from a range reserved for the branch), and a number is never

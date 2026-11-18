@@ -2,6 +2,25 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 
+test("the Linear drag preview casts a shadow while the board card stays flat", async ({ page }) => {
+  await page.goto("/linear-board-drag");
+  const source = page.getByTestId("linear-board-card").filter({ hasText: "ENG-0" });
+  const preview = page.getByTestId("linear-board-card-overlay");
+  await expect(source).toHaveCSS("box-shadow", "none");
+  await source.hover();
+  await expect(source).toHaveCSS("box-shadow", "none");
+
+  const start = (await source.boundingBox())!;
+  await page.mouse.down();
+  await page.mouse.move(start.x + start.width / 2 + 16, start.y + start.height / 2);
+  await expect(preview).toBeVisible();
+  await expect(preview).not.toHaveCSS("box-shadow", "none");
+  await expect(source).toHaveCSS("box-shadow", "none");
+  await page.mouse.up();
+
+  await expect(preview).toHaveCount(0);
+});
+
 for (const placement of ["before", "after"] as const) {
   test(`scrolling during drag keeps the pointer's ${placement} placement`, async ({
     page,

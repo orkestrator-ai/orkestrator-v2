@@ -433,7 +433,7 @@ describe("EnvironmentItem delete shortcut", () => {
     row.focus();
 
     expect(fireEvent.keyDown(row, { key: "Backspace", metaKey: true })).toBe(false);
-    expect(screen.getByRole("alertdialog", { name: "Delete Environment" })).toBeTruthy();
+    expect(screen.getByRole("alertdialog", { name: "Delete environment" })).toBeTruthy();
     expect(callbacks.onDelete).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
@@ -460,7 +460,7 @@ describe("EnvironmentItem delete shortcut", () => {
     fireEvent.click(screen.getByRole("button", { name: /Pulsing icon/ }));
     field.focus();
     expect(fireEvent.keyDown(field, { key: "Backspace", metaKey: true })).toBe(false);
-    expect(screen.getByRole("alertdialog", { name: "Delete Environment" })).toBeTruthy();
+    expect(screen.getByRole("alertdialog", { name: "Delete environment" })).toBeTruthy();
     expect(callbacks.onDelete).not.toHaveBeenCalled();
     field.remove();
   });

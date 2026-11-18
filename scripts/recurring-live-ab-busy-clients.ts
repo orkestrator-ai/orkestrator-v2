@@ -28,9 +28,9 @@ import { FAKE_REPLY } from "./recurring-live-ab-fake-model";
 export type BusyClientStatus = { browserUrl?: string; rendererUrl?: string };
 
 const STARTUP_NOTICES = [
-  "Continue Without Docker",
-  "Continue Without GitHub CLI",
-  "Continue Without Claude",
+  "Continue without Docker",
+  "Continue without GitHub CLI",
+  "Continue without Claude",
 ] as const;
 
 function loginPath(profile: string): string {

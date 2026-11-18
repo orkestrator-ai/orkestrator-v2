@@ -117,7 +117,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
         them before they run.
       </p>
       {loadError ? (
-        <p role="alert" className="max-w-sm text-center text-xs text-destructive">
+        <p role="alert" className="max-w-sm text-center text-xs text-failure">
           {loadError}
         </p>
       ) : !approval ? (
@@ -228,7 +228,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
         </ul>
       ) : null}
       {error ? (
-        <p role="alert" className="max-w-sm text-center text-xs text-destructive">
+        <p role="alert" className="max-w-sm text-center text-xs text-failure">
           {error}
         </p>
       ) : null}

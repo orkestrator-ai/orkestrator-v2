@@ -706,7 +706,7 @@ function BuildStepCard({
           {icon}
           <span
             data-build-step-number={number}
-            className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full bg-zinc-800 text-[9px] font-semibold text-zinc-300 ring-1 ring-zinc-600"
+            className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full bg-zinc-800 text-[10px] font-semibold text-zinc-300 ring-1 ring-zinc-600"
           >
             {number}
           </span>
@@ -1337,7 +1337,7 @@ export function BuildLaunchDialog({
                     </p>
                   )}
                   {networkPreference.error && (
-                    <p role="alert" className="mt-2 text-xs text-destructive">
+                    <p role="alert" className="mt-2 text-xs text-failure">
                       Could not load this machine's saved network access. Reopen the launcher to
                       retry.
                     </p>

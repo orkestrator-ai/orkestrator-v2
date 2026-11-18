@@ -11,7 +11,7 @@
  * - Codex: the accounts list below adds and switches logins; this card only
  *   says whether the active one is signed in.
  * - Cursor: the card wraps `CursorSdkSignIn`, passed as children.
- * - OpenCode: provider logins are listed under Provider Sign-in below.
+ * - OpenCode: provider logins are listed under Provider sign-in below.
  * - Grok and Pi: the terminal command is named; their logins are interactive
  *   CLI flows Orkestrator does not drive.
  */
@@ -143,7 +143,7 @@ export function AgentSignInCard({
       </div>
 
       {error ? (
-        <p role="alert" className="mt-3 flex items-start gap-2 text-xs text-destructive">
+        <p role="alert" className="mt-3 flex items-start gap-2 text-xs text-failure">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           {error}
         </p>

@@ -187,13 +187,13 @@ function SetupTranscriptStatus({
   startedAt,
 }: SetupStatusProps & { startedAt?: number }) {
   const linkClassName =
-    "rounded-sm text-xs text-muted-foreground/60 underline-offset-2 transition-colors hover:text-foreground hover:underline focus-hairline focus-hairline-outset disabled:pointer-events-none disabled:opacity-50";
+    "rounded-sm text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-hairline focus-hairline-outset disabled:pointer-events-none";
   return (
     <div className="text-muted-foreground">
       <div className="chat-status-row min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           {failed ? (
-            <span role="status" className="flex items-center gap-1.5 text-xs text-destructive">
+            <span role="status" className="flex items-center gap-1.5 text-xs text-failure">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               Environment setup failed.
             </span>
@@ -210,7 +210,11 @@ function SetupTranscriptStatus({
               {failed ? (
                 <button
                   type="button"
-                  className={cn(linkClassName, "ml-1")}
+                  className={cn(
+                    linkClassName,
+                    "ml-1",
+                    operation !== "retry" && "disabled:opacity-50",
+                  )}
                   disabled={operation !== null}
                   onClick={() => void runOperation("retry")}
                 >
@@ -263,7 +267,7 @@ function SetupTranscriptStatus({
         </div>
       ) : null}
       {error && (
-        <p role="alert" className="pb-2 text-xs text-destructive">
+        <p role="alert" className="pb-2 text-xs text-failure">
           {error}
         </p>
       )}
@@ -284,7 +288,7 @@ function SetupStatus({
   return (
     <>
       {failed ? (
-        <AlertTriangle className="h-8 w-8 text-destructive" />
+        <AlertTriangle className="h-8 w-8 text-failure" />
       ) : (
         <Loader2 className="h-8 w-8 animate-spin text-yellow-400" />
       )}
@@ -351,7 +355,7 @@ function SetupStatus({
         </Button>
       )}
       {error && (
-        <p role="alert" className="max-w-sm text-center text-xs text-destructive">
+        <p role="alert" className="max-w-sm text-center text-xs text-failure">
           {error}
         </p>
       )}

@@ -101,7 +101,7 @@ export function TodoToolPart({
         <ListTodo className="h-3.5 w-3.5 shrink-0" />
         <span className="shrink-0 font-medium leading-none">{toolLabel}</span>
         {totalCount > 0 && (
-          <span className="flex-1 text-left text-muted-foreground/80 leading-none">
+          <span className="flex-1 text-left text-muted-foreground leading-none">
             {/* A partial list has no denominator worth quoting: the total is
                 whatever this backend happened to see, not the real one. */}
             {isPartialList
@@ -112,7 +112,7 @@ export function TodoToolPart({
           </span>
         )}
         {totalCount === 0 && hasSnapshot && (
-          <span className="flex-1 text-left text-muted-foreground/80 leading-none">
+          <span className="flex-1 text-left text-muted-foreground leading-none">
             {isPartialList ? "no tasks tracked" : "no tasks"}
           </span>
         )}
@@ -163,17 +163,17 @@ export function TodoToolPart({
                         className={cn(
                           "flex-1",
                           todo.status === "completed" && "line-through",
-                          todo.status === "cancelled" && "line-through text-muted-foreground/70",
+                          todo.status === "cancelled" && "line-through text-muted-foreground",
                           todo.status === "in_progress" && "font-medium text-foreground",
                         )}
                       >
                         {todo.content}
                       </span>
                       {todo.status === "in_progress" && (
-                        <span className="shrink-0 text-[10px] text-yellow-500">in progress</span>
+                        <span className="shrink-0 text-[11px] text-yellow-500">in progress</span>
                       )}
                       {todo.status === "cancelled" && (
-                        <span className="shrink-0 text-[10px] text-red-500">cancelled</span>
+                        <span className="shrink-0 text-[11px] text-red-500">cancelled</span>
                       )}
                     </div>
                   );
@@ -194,7 +194,7 @@ export function TodoToolPart({
             )}
 
             {totalCount === 0 && hasSnapshot && (
-              <div className="px-3 py-2 text-xs text-muted-foreground/70">
+              <div className="px-3 py-2 text-xs text-muted-foreground">
                 {isPartialList ? "No tasks tracked yet for this session." : "Task list is empty."}
               </div>
             )}

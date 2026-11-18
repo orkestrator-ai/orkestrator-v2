@@ -152,11 +152,13 @@
       <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
 NODE_ENV=test mise run test:logged -- --name todo -- bun --cwd=apps/web test src/components/todo --parallel=2 --only-failures
 mise run format:check
-mise run lint</code></pre>
+mise run lint
+NODE_ENV=test mise run test:logged -- --name status-readability-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/StatusReadability.spec.ts --workers=2</code></pre>
       <p class="note">
         React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
         check: use a throwaway <code>dev:test</code> profile named <code>design-00011</code>, never
-        a production instance.
+        a production instance. The status readability browser test checks full muted color, the
+        11px badge and duration floor, and the setup retry state at desktop and narrow widths.
       </p>
 
       <h2>Acceptance checklist</h2>
@@ -289,10 +291,19 @@ mise run lint</code></pre>
           </tr>
           <tr>
             <td><code>SetupPendingOverlay.tsx:190</code></td>
-            <td>The class styles setup action buttons. The row reports setup status separately.</td>
+            <td>
+              The retry button reports progress while disabled. Use plain
+              <code>text-muted-foreground</code> for the setup actions and omit the disabled fade
+              while the button displays “Retrying setup...”.
+            </td>
           </tr>
         </tbody>
       </table>
+      <p>
+        Review also found todo status text outside the baseline search. Completion and tracked-count
+        summaries, cancelled items, and empty-list notices use the full muted color.
+        The in-progress and cancelled labels use 11px with their existing state colors.
+      </p>
       <p>
         Using the existing muted token gives status copy the documented contrast across themes.
         Changing the palette would affect every consumer of that token.

@@ -261,16 +261,16 @@ components:
 
 **Creative North Star: "The Control Room"**
 
-Orkestrator is a dark, calm room full of live instruments. Many systems run at once (agents, containers, pipelines, reviews), and the user is rarely watching the one that matters next. The interface stays quiet so that state can speak: the ground is a cool near-black, text is set small and dense, and colour is held back for meaning (blue for where you are and what you will do, green for passed and running, red for failed, yellow for an agent waiting on you). A screen at rest should look almost monochrome; a glance should find the one row that changed.
+Orkestrator is a dark, calm room full of live instruments. Many systems run at once (agents, containers, pipelines, reviews), and the user is rarely watching the one that matters next. The interface stays quiet so that state can speak: the ground is a cool near-black, text is set small and dense, and color is held back for meaning (blue for where you are and what you will do, green for passed and running, red for failed, yellow for an agent waiting on you). A screen at rest should look almost monochrome; a glance should find the one row that changed.
 
 The product has two registers on one brand. **The app** (desktop, browser, iOS shell) is the operating floor: 11–14px type, 1px hairlines, flat tonal layers, controls that stay quiet until touched. **The public site** is the same room seen through the window: the brand palette at full strength, a 76px tight-tracked headline, a blue-to-green gradient across the claim, mono eyebrows and product illustrations drawn as real UI. The site's palette is the brand; the app is its quieter use. Where the two disagree today, the site's values are where the app is heading (see Colors, "Known drift").
 
-Motion reports, it does not decorate. Shimmer sweeps across a name only when its environment needs an answer or its pull request is ready or conflicted; a ring turns only around an environment that is working; transcript rows grow in by their real height so the reader never loses their place. Every one of these stops under reduced motion and forced colours.
+Motion reports, it does not decorate. Shimmer sweeps across a name only when its environment needs an answer or its pull request is ready or conflicted; a ring turns only around an environment that is working; transcript rows grow in by their real height so the reader never loses their place. Every one of these stops under reduced motion and forced colors.
 
 **Key Characteristics:**
-- Cool near-black ground with a blue cast (hue 264), never neutral grey.
+- Cool near-black ground with a blue cast (hue 264), never neutral gray.
 - Dense: most UI text is 12px; 14px is the reading size; display sizes live only on the public site.
-- Colour encodes state, not decoration; one blue, one green, one red across the whole product.
+- Color encodes state, not decoration; one blue, one green, one red across the whole product.
 - Flat tonal layers separated by 1px hairlines; shadow only for things that float.
 - One 1px focus line everywhere.
 - Motion is a signal with an off switch.
@@ -286,7 +286,7 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 
 ### Secondary
 - **All-Clear Green** (`brand-green`): the brand green. Site security eyebrows, "allowed" rows, and the end of the headline gradient.
-- **App All-Clear Green** (`success`): the app's one success colour. Diff additions, successful tool calls, running status (`--color-status-running`) and the merge-ready shimmer.
+- **App All-Clear Green** (`success`): the app's one success color. Diff additions, successful tool calls, running status (`--color-status-running`) and the merge-ready shimmer.
 
 ### Tertiary
 - **Approval Amber** (`brand-amber`): the site's "approval needed" and fix-stage accent. In the app, waiting-on-you and new-activity states are yellow: the needs-answer shimmer uses Tailwind's `yellow-400`, and every bell uses `amber-400` with a `fill-amber-400/20` body (the unread bell on an environment row and in its toast, the sidebar's waiting-environments counter, the project-home activity icon). A bell is how a glance finds the row that changed, so it keeps its yellow at rest rather than taking Signal Blue.
@@ -299,8 +299,8 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 - **Card / Popover** (`card`, `popover`): resting containers and floating menus.
 - **Panel Surface** (`panel-surface`): raised informational panels (for example the coordinator's "How it works" box).
 - **Elevated** (`elevated`, `elevated-hover`): the resting fill of a control sitting on chrome or sidebar. Controls use `elevated`, never `accent`/`secondary`, because those are rebound inside the central panel and would vanish.
-- **Ink** (`foreground`, `muted-foreground`): primary and secondary text. **Hairlines** (`border`, `divider`): `divider` separates shell panels, tool-card rows and modal header/footer; it is a flat colour so it renders identically over any layer.
-- **Selection** (`selected` → `selected-edge`, `selected-foreground`): a left-to-right blue-tinted gradient for the selected row. **Hover** (`hover`, `environment-hover`) is a weaker shade of the same blue, never a grey wash.
+- **Ink** (`foreground`, `muted-foreground`): primary and secondary text. **Hairlines** (`border`, `divider`): `divider` separates shell panels, tool-card rows and modal header/footer; it is a flat color so it renders identically over any layer.
+- **Selection** (`selected` → `selected-edge`, `selected-foreground`): a left-to-right blue-tinted gradient for the selected row. **Hover** (`hover`, `environment-hover`) is a weaker shade of the same blue, never a gray wash.
 - **The cool zinc ramp** (`--color-zinc-50`…`950`, OKLCH at hue 264): Tailwind's `zinc` retinted so the ~200 call sites that name it share the cool cast. Use the semantic tokens above first; the ramp is for steps they don't name.
 - **Site neutrals** (`site-night`, `site-surface`, `site-surface-raised`, `site-ink*`, `site-line*`): the public site's own deeper night and three-step ink scale.
 - **Flow graph** (`flow-canvas`, `flow-node`, `flow-edge`): Multi Review, build pipeline and Graphs canvases. The canvas sits below the panel, nodes above it; `flow-edge` is the dashed line of an unreached step.
@@ -311,13 +311,13 @@ The brand palette lives on the site; the app still ships older values: blue `#3b
 ### Named Rules
 **The Fill Rule.** White text sits only on `primary-fill`, never on `primary`. `primary` is for lines, text and marks on the dark ground, where the deeper blue would lose contrast.
 
-**The Quiet Floor Rule.** A screen at rest is near-monochrome. Colour appears only to mark selection, an outcome, or a state that needs the user.
+**The Quiet Floor Rule.** A screen at rest is near-monochrome. Color appears only to mark selection, an outcome, or a state that needs the user.
 
-**The One Pair Rule.** Success and failure have exactly one colour each, everywhere: diff counts, tool outcomes, run status. Never pick a different green or red step for the same meaning.
+**The One Pair Rule.** Success and failure have exactly one color each, everywhere: diff counts, tool outcomes, run status. Never pick a different green or red step for the same meaning.
 
-**The Mode Colour Exception.** Mode and approval icons keep a colour each as identity, by choice: Build `yellow-500`, Plan `green-500`; approvals Ask `sky-500`, Accept edits `violet-500`, Auto `teal-500`, Bypass `red-500`. Bypass, the one mode in which commands run without asking, is red and also named in words beside its icon; it is the one place red marks a risk rather than a failed outcome.
+**The Mode Color Exception.** Mode and approval icons keep a color each as identity, by choice: Build `yellow-500`, Plan `green-500`; approvals Ask `sky-500`, Accept edits `violet-500`, Auto `teal-500`, Bypass `red-500`. Bypass, the one mode in which commands run without asking, is red and also named in words beside its icon; it is the one place red marks a risk rather than a failed outcome.
 
-**The Outcome Colour Rule.** Results always keep their colour: a tool row's "success" is green, "failure" red and "running..." yellow, so a run of results can be read at a glance.
+**The Outcome Color Rule.** Results always keep their color: a tool row's "success" is green, "failure" red and "running..." yellow, so a run of results can be read at a glance.
 
 **The Platform Hue Exception.** `emerald` and other accent hues that distinguish agent platforms in the model picker are identity, not status. Never use them to mean success.
 
@@ -404,7 +404,7 @@ Quiet until touched. Most app buttons are ghost or tonal; the filled blue is rar
 
 ### Inputs / Fields
 - **Style:** `input-surface` fill (a translucent `zinc-900`), 1px `border` at 70%, 6px radius, 36px tall, 14px text (16px on touch).
-- **Focus:** the 1px focus hairline, inset 2px. No glow, no border-colour shift.
+- **Focus:** the 1px focus hairline, inset 2px. No glow, no border-color shift.
 - **Error / Disabled:** `aria-invalid` turns the border and focus line Destructive Coral; disabled drops to 50% opacity.
 
 ### Navigation
@@ -414,21 +414,21 @@ Quiet until touched. Most app buttons are ghost or tonal; the filled blue is rar
 - **Mobile:** hamburger to a slide-over sidebar; touch targets at least 40–44px.
 
 ### Live Signals (signature)
-The Control Room's instruments. **Name shimmer:** a light band sweeps across an environment's name: yellow-tinted when an agent needs an answer, green when its PR is ready to merge, coral when it has conflicts (1.9s, calm). **Thinking shimmer:** the transcript's "is thinking" status sweeps faster (1.2s) in muted text. **Working ring:** a conic sweep from a light head through grey to nothing, masked to a 1.5px ring around a working environment's marker (it rotates for a circle and sweeps its angle for a square). **Arrivals:** live transcript rows grow in by their real height over 300ms; tool groups fold over 500ms. All of these stop under `prefers-reduced-motion` (shimmers hold the band's colour still) and fall back to system colours under forced colours.
+The Control Room's instruments. **Name shimmer:** a light band sweeps across an environment's name: yellow-tinted when an agent needs an answer, green when its PR is ready to merge, coral when it has conflicts (1.9s, calm). **Thinking shimmer:** the transcript's "is thinking" status sweeps faster (1.2s) in muted text. **Working ring:** a conic sweep from a light head through gray to nothing, masked to a 1.5px ring around a working environment's marker (it rotates for a circle and sweeps its angle for a square). **Arrivals:** live transcript rows grow in by their real height over 300ms; tool groups fold over 500ms. All of these stop under `prefers-reduced-motion` (shimmers hold the band's color still) and fall back to system colors under forced colors.
 
 ### Focus Hairline (signature)
-One keyboard-focus indicator for the whole product: a single 1px outline in `--color-ring`, inset 2px so it never touches selection, outset 2px on solid fills and bare text. It needs no border, leaves shadows alone, and becomes `Highlight` under forced colours.
+One keyboard-focus indicator for the whole product: a single 1px outline in `--color-ring`, inset 2px so it never touches selection, outset 2px on solid fills and bare text. It needs no border, leaves shadows alone, and becomes `Highlight` under forced colors.
 
 ### Compose Bar (native tab, signature)
 The input bar at the bottom of every native agent tab (Claude, Codex, OpenCode, Cursor, Grok, Pi) and the Coordinator. It is the one control that floats in the work, so it is the one place outside overlays that casts a shadow.
-- **Frame:** a 12px-radius card on the opaque `compose-surface` (not the translucent `input-surface`), 1px `border` at 70%, 12px padding, compose-dock shadow. It centres in the transcript's 56rem column (full width less 0.75rem on phones) and sits 16px above the pane's bottom edge. When the prompt input is focused, the card's border steps up one neutral shade (`zinc-700`, 150ms). It is never blue and never an outline: the input is focused almost all the time, and a standing blue frame around the composer was rejected.
-- **Ground:** docked, the dock lays the background colour behind itself, fading in over its top 2rem, so transcript text scrolling beneath never shows through the composer, the goal pill or the scroll-down control.
+- **Frame:** a 12px-radius card on the opaque `compose-surface` (not the translucent `input-surface`), 1px `border` at 70%, 12px padding, compose-dock shadow. It centers in the transcript's 56rem column (full width less 0.75rem on phones) and sits 16px above the pane's bottom edge. When the prompt input is focused, the card's border steps up one neutral shade (`zinc-700`, 150ms). It is never blue and never an outline: the input is focused almost all the time, and a standing blue frame around the composer was rejected.
+- **Ground:** docked, the dock lays the background color behind itself, fading in over its top 2rem, so transcript text scrolling beneath never shows through the composer, the goal pill or the scroll-down control.
 - **Input:** borderless, 14px with a fixed 20px line height (16px on touch). It grows from one line (28px) to twelve lines (256px), then scrolls. These limits are shared by every agent so one prompt wraps the same everywhere. The placeholder is muted text ("What would you like to get done?").
 - **Attachments row (above the input):** image thumbnails as 48px squares with a 6px radius and a corner remove button; files as small 4px-radius chips on `muted`; browser annotations as a blue-tinted pill (`blue-500` at 10%, `blue-400` border at 30%).
 - **Toolbar (below the input, 12px gap):** a single row that scrolls sideways without a scrollbar. On the left are the primary controls (attach `+`, the model and reasoning picker, the mode and approvals pickers), all 28px tall (40px on touch) with an 8px radius on `elevated`, hovering to `elevated-hover`, with 12px text. On the right are the secondary controls.
 - **Model chip:** the model name, then the reasoning level after a middle dot in muted text ("Default (recommended) · High"); the name truncates first.
-- **Mode and approvals:** icons in their own colours (see the Mode Colour Exception). Auto-approve adds its name ("Bypass") beside the icon from the @md container width up. The mode control's tooltip names its Shift+Tab shortcut.
-- **Send:** a 28px square on Deep Signal Fill with an up arrow and an accessible name. While a turn runs the same button queues instead: same shape, stepped back to the fill at 30% with `blue-100` glyphs, because a different colour would read as a different action. Clicking it never takes focus from the input.
+- **Mode and approvals:** icons in their own colors (see the Mode Color Exception). Auto-approve adds its name ("Bypass") beside the icon from the @md container width up. The mode control's tooltip names its Shift+Tab shortcut.
+- **Send:** a 28px square on Deep Signal Fill with an up arrow and an accessible name. While a turn runs the same button queues instead: same shape, stepped back to the fill at 30% with `blue-100` glyphs, because a different color would read as a different action. Clicking it never takes focus from the input.
 - **Stop:** a 28px Destructive Coral square with a filled stop glyph, shown beside Send while a turn runs. It stays enabled while a prompt is being submitted, because that is exactly when the user may need it.
 - **Disabled / sending:** the input dims to 60%; controls drop to 50%.
 
@@ -438,19 +438,19 @@ The environment's containment, stated where the work happens. It sits in the cha
 The same row leads with the system's own account of the turn: "Thread changes", the line counts or "No file changes", then the Final or Live state tag. An agent saying "I didn't change any files" is never the only evidence.
 
 ### Tool Group
-Three or more calls fold to one line: the newest call, then a wrench icon with the call count and the span, both small and muted (10px). Opened, each row's icon says what the call did: a terminal for commands, a file for reads, a file-pen for edits, a magnifier for searches and a wrench for anything else. Each row's result keeps its outcome colour: "success" in All-Clear Green, "failure" in Fault Red, "running..." pulsing in `yellow-600`.
+Three or more calls fold to one line: the newest call, then a wrench icon with the call count and the span, both small and muted (10px). Opened, each row's icon says what the call did: a terminal for commands, a file for reads, a file-pen for edits, a magnifier for searches and a wrench for anything else. Each row's result keeps its outcome color: "success" in All-Clear Green, "failure" in Fault Red, "running..." pulsing in `yellow-600`.
 
 ### Agent Mail Notice (floating notice)
 Agent mail announces itself in a floating notice at the top right of the agent pane rather than a strip that pushes the transcript down. It uses the shared floating-notice card, so mail, pull-request updates and other pane notices stack in one corner with errors first, then warnings, then information.
 - **Card:** 18rem wide (14rem minimum), a 12px radius on `panel-surface` at 95% with a small backdrop blur, 1px `border`, 12px padding, 12px text at a 20px line height, and the floating-notice shadow. It scrolls past 28rem tall.
-- **Header:** an 11px uppercase muted label ("AGENT MAIL") led by an 8px tone dot, with 24px icon buttons to minimise and dismiss.
+- **Header:** an 11px uppercase muted label ("AGENT MAIL") led by an 8px tone dot, with 24px icon buttons to minimize and dismiss.
 - **Tone is a dot, not a tint:** Signal Blue for information, `yellow-300` for a warning (delivery paused, waiting for an agent, undeliverable), `failure` for an error (delivery failed). The card itself stays neutral.
 - **Body:** the status sentence wraps rather than truncates, because it is the reason the user acts on. Below a `border` hairline sit the newest message's sender and time in muted text, and its subject clamped to two lines. Action errors appear in `failure` text.
 - **Actions:** 28px buttons with 12px text, 6px apart: secondary for the act (Retry, Resume, Deliver now), ghost for the alternatives (Discard, View).
-- **Placement:** beside the centred 56rem column when the pane has room (covering nothing), over the content when it does not, and folded into a 28px pill (icon, count, tone dot) on narrow panes. In an agent tab it sits 40px from the top to clear the thread-changes row.
+- **Placement:** beside the centered 56rem column when the pane has room (covering nothing), over the content when it does not, and folded into a 28px pill (icon, count, tone dot) on narrow panes. In an agent tab it sits 40px from the top to clear the thread-changes row.
 
 ### Modal
-A 16px-radius panel on the ground colour, with header and footer bands separated by `divider` hairlines, centred on a blurred 75% black scrim. Fields inside use `input-surface`, so every control in a dialog reads as one raised surface. The footer stacks buttons in reverse on phones and right-aligns them from `sm`.
+A 16px-radius panel on the ground color, with header and footer bands separated by `divider` hairlines, centered on a blurred 75% black scrim. Fields inside use `input-surface`, so every control in a dialog reads as one raised surface. The footer stacks buttons in reverse on phones and right-aligns them from `sm`.
 
 ## Do's and Don'ts
 
@@ -460,7 +460,7 @@ A 16px-radius panel on the ground colour, with header and footer bands separated
 - **Do** use `elevated` for controls on chrome or sidebar; `accent`, `secondary`, `muted`, `card` and `popover` are rebound inside the central panel.
 - **Do** set machine output (paths, branches, hosts, commands, counts) in mono.
 - **Do** use the 1px focus hairline (`focus-hairline`, with `focus-hairline-outset` on solid fills) for every focusable control.
-- **Do** give every animation a `prefers-reduced-motion` stop and a forced-colours fallback.
+- **Do** give every animation a `prefers-reduced-motion` stop and a forced-colors fallback.
 - **Do** animate real layout height (grid rows, Radix content height) for anything inside the bottom-anchored transcript, so the reader's place holds.
 - **Do** keep touch targets at 40–44px below 640px and gate hover-only controls behind `hover-fine`.
 - **Do** match a status row's height across its states, so the transcript does not jump at the end of a turn.
@@ -472,14 +472,14 @@ A 16px-radius panel on the ground colour, with header and footer bands separated
 - **Do** state containment and change evidence in system text, not only in the agent's words.
 
 ### Don't:
-- **Don't** introduce a second green or red for success or failure, or use a platform accent hue as a status colour.
-- **Don't** use `failure` as a button fill or `destructive` as text colour; they are tuned for different jobs.
+- **Don't** introduce a second green or red for success or failure, or use a platform accent hue as a status color.
+- **Don't** use `failure` as a button fill or `destructive` as text color; they are tuned for different jobs.
 - **Don't** add shadows to things that sit in the work: rows, cards, panels and the tool card stay flat.
-- **Don't** use a grey hover beside a blue selection; hover is a weaker shade of the selection blue.
+- **Don't** use a gray hover beside a blue selection; hover is a weaker shade of the selection blue.
 - **Don't** use `vh`/`dvh` for the app's root height; it overflows under CSS zoom.
 - **Don't** bring the site's display sizes, gradient text or glow shadows into the app's operating surfaces.
 - **Don't** add a second focus style (rings, glows, border swaps) alongside the hairline.
 - **Don't** outline the compose card in blue on focus; the composer is almost always focused, so its focus cue is a one-shade lighter neutral border.
 - **Don't** animate anything that is not reporting a state change.
 - **Don't** give a destructive action a standing red fill in a toolbar; it is a ghost that turns coral on hover, behind its confirmation.
-- **Don't** use a coloured side bar thicker than 1px; callouts carry their kind in a 1px frame (solid, dotted for Tip, dashed for Warning; Caution 2px), an icon, a label and a hue.
+- **Don't** use a colored side bar thicker than 1px; callouts carry their kind in a 1px frame (solid, dotted for Tip, dashed for Warning; Caution 2px), an icon, a label and a hue.

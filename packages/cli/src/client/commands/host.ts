@@ -427,7 +427,7 @@ export const hostCommands: CommandSpec[] = [
         receipt,
         warnings,
         connection: session.identity,
-        human: [`Cancelled update ${result.jobId}.`],
+        human: [`Canceled update ${result.jobId}.`],
       };
     },
   },

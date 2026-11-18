@@ -276,7 +276,7 @@ describe("orkestrator host maintenance commands", () => {
     const { box, gateway } = await fixture(receipt({}));
     const result = await box.run(["host", "update", "cancel"]);
     expect(result.code).toBe(0);
-    expect(result.out).toContain("Cancelled update hostupd-1");
+    expect(result.out).toContain("Canceled update hostupd-1");
     expect(actions(gateway)).toContain("host.update.cancel");
   });
 

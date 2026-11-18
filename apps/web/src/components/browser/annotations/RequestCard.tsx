@@ -236,7 +236,7 @@ export function RequestCard({
         annotationScope,
       );
       if (result.outcome === "cancelled")
-        return queued ? "Request cancelled. It was never sent." : "Request stopped.";
+        return queued ? "Request canceled. It was never sent." : "Request stopped.";
       if (result.outcome === "cancelling")
         return "Stopping. The current turn may still finish before it stops.";
       return cancelRefusalText(result.refusal ?? result.request.cancelRefusal?.code);
@@ -303,6 +303,11 @@ export function RequestCard({
     : request.state === "queued" && request.blockedReason
       ? WEB_ANNOTATION_BLOCKED_REASON_LABELS[request.blockedReason]
       : WEB_ANNOTATION_REQUEST_STATE_LABELS[request.state];
+  // The backend stores this reason as display text. Match the spelling on the card.
+  const stateReason =
+    request.state === "cancelled"
+      ? request.stateReason?.replace(/^Cancelled\b/, "Canceled")
+      : request.stateReason;
   const missingDestination = active && destinationMissing(request);
   const rejected = request.state === "queued" && request.blockedReason === "dispatch-rejected";
   const notes = requestOutcomeNotes(request);
@@ -394,7 +399,7 @@ export function RequestCard({
           )}
         </p>
       )}
-      {request.stateReason && <p className="text-muted-foreground">{request.stateReason}</p>}
+      {stateReason && <p className="text-muted-foreground">{stateReason}</p>}
       {notes.map((note) => (
         <p
           key={note.key}

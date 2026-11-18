@@ -341,7 +341,7 @@ export async function checkBackendConnection(
       payload = {};
     }
   } catch {
-    if (options.signal?.aborted) throw new Error("Connection check cancelled.");
+    if (options.signal?.aborted) throw new Error("Connection check canceled.");
     if (controller.signal.aborted) {
       const seconds = timeoutMs / 1_000;
       throw new Error(

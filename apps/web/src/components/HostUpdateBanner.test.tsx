@@ -235,7 +235,7 @@ test.each([
     state: "cancelled" as const,
     toastMock: mockToastInfo,
     title: "The update on mini (command node) stopped",
-    description: "The update was cancelled.",
+    description: "The update was canceled.",
   },
   {
     state: "postponed" as const,

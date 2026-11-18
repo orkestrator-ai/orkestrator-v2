@@ -101,6 +101,18 @@ describe("request cards", () => {
     );
   });
 
+  test("shows American spelling for a stored canceled request", async () => {
+    seedWithRequest("cancelled", {
+      cancelSource: "user",
+      stateReason: "Cancelled by the user",
+    });
+    renderInAppCommandScope(<AnnotationHarness />);
+    const article = within(await card());
+    expect(article.getByText("Canceled", { exact: true })).toBeTruthy();
+    expect(article.getByText("Canceled by the user")).toBeTruthy();
+    expect(article.getByText("Canceled from the note")).toBeTruthy();
+  });
+
   test("discarding unconfirmed delivery requires acknowledging that work may have run", async () => {
     seedWithRequest("unconfirmed");
     renderInAppCommandScope(<AnnotationHarness />);

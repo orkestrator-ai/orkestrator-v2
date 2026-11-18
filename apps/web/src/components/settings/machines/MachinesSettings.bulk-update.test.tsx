@@ -459,7 +459,7 @@ for (const prior of ["failed", "current", "busy", "skipped", "requested"] as con
             ? /Updated/
             : state === "failed"
               ? /later download failed/
-              : /cancelled/i,
+              : /canceled/i,
         ),
       );
       expectDomAbsent(

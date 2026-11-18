@@ -546,7 +546,7 @@
       },
       "status-stopped": {
         "role": "neutral",
-        "displayName": "Stopped Grey",
+        "displayName": "Stopped Gray",
         "canonical": "oklch(55.2% 0.014 285.9)",
         "tonalRamp": [
           "oklch(15.0% 0.005 285.9)",
@@ -875,11 +875,11 @@
   ],
   "narrative": {
     "northStar": "The Control Room",
-    "overview": "Orkestrator is a dark, calm room full of live instruments. Many systems run at once (agents, containers, pipelines, reviews), and the user is rarely watching the one that matters next. The interface stays quiet so that state can speak: the ground is a cool near-black, text is set small and dense, and colour is held back for meaning (blue for where you are and what you will do, green for passed and running, red for failed, yellow for an agent waiting on you). A screen at rest should look almost monochrome; a glance should find the one row that changed.\n\nThe product has two registers on one brand. **The app** (desktop, browser, iOS shell) is the operating floor: 11\u201314px type, 1px hairlines, flat tonal layers, controls that stay quiet until touched. **The public site** is the same room seen through the window: the brand palette at full strength, a 76px tight-tracked headline, a blue-to-green gradient across the claim, mono eyebrows and product illustrations drawn as real UI. The site's palette is the brand; the app is its quieter use. Where the two disagree today, the site's values are where the app is heading (see Colors, \"Known drift\").\n\nMotion reports, it does not decorate. Shimmer sweeps across a name only when its environment needs an answer or its pull request is ready or conflicted; a ring turns only around an environment that is working; transcript rows grow in by their real height so the reader never loses their place. Every one of these stops under reduced motion and forced colours.",
+    "overview": "Orkestrator is a dark, calm room full of live instruments. Many systems run at once (agents, containers, pipelines, reviews), and the user is rarely watching the one that matters next. The interface stays quiet so that state can speak: the ground is a cool near-black, text is set small and dense, and color is held back for meaning (blue for where you are and what you will do, green for passed and running, red for failed, yellow for an agent waiting on you). A screen at rest should look almost monochrome; a glance should find the one row that changed.\n\nThe product has two registers on one brand. **The app** (desktop, browser, iOS shell) is the operating floor: 11\u201314px type, 1px hairlines, flat tonal layers, controls that stay quiet until touched. **The public site** is the same room seen through the window: the brand palette at full strength, a 76px tight-tracked headline, a blue-to-green gradient across the claim, mono eyebrows and product illustrations drawn as real UI. The site's palette is the brand; the app is its quieter use. Where the two disagree today, the site's values are where the app is heading (see Colors, \"Known drift\").\n\nMotion reports, it does not decorate. Shimmer sweeps across a name only when its environment needs an answer or its pull request is ready or conflicted; a ring turns only around an environment that is working; transcript rows grow in by their real height so the reader never loses their place. Every one of these stops under reduced motion and forced colors.",
     "keyCharacteristics": [
-      "Cool near-black ground with a blue cast (hue 264), never neutral grey.",
+      "Cool near-black ground with a blue cast (hue 264), never neutral gray.",
       "Dense: most UI text is 12px; 14px is the reading size; display sizes live only on the public site.",
-      "Colour encodes state, not decoration; one blue, one green, one red across the whole product.",
+      "Color encodes state, not decoration; one blue, one green, one red across the whole product.",
       "Flat tonal layers separated by 1px hairlines; shadow only for things that float.",
       "One 1px focus line everywhere.",
       "Motion is a signal with an off switch."
@@ -892,22 +892,22 @@
       },
       {
         "name": "The Quiet Floor Rule",
-        "body": "A screen at rest is near-monochrome. Colour appears only to mark selection, an outcome, or a state that needs the user.",
+        "body": "A screen at rest is near-monochrome. Color appears only to mark selection, an outcome, or a state that needs the user.",
         "section": "colors"
       },
       {
         "name": "The One Pair Rule",
-        "body": "Success and failure have exactly one colour each, everywhere: diff counts, tool outcomes, run status. Never pick a different green or red step for the same meaning.",
+        "body": "Success and failure have exactly one color each, everywhere: diff counts, tool outcomes, run status. Never pick a different green or red step for the same meaning.",
         "section": "colors"
       },
       {
-        "name": "The Mode Colour Exception",
-        "body": "Mode and approval icons keep a colour each as identity, by choice: Build `yellow-500`, Plan `green-500`; approvals Ask `sky-500`, Accept edits `violet-500`, Auto `teal-500`, Bypass `red-500`. Bypass, the one mode in which commands run without asking, is red and also named in words beside its icon; it is the one place red marks a risk rather than a failed outcome.",
+        "name": "The Mode Color Exception",
+        "body": "Mode and approval icons keep a color each as identity, by choice: Build `yellow-500`, Plan `green-500`; approvals Ask `sky-500`, Accept edits `violet-500`, Auto `teal-500`, Bypass `red-500`. Bypass, the one mode in which commands run without asking, is red and also named in words beside its icon; it is the one place red marks a risk rather than a failed outcome.",
         "section": "colors"
       },
       {
-        "name": "The Outcome Colour Rule",
-        "body": "Results always keep their colour: a tool row's \"success\" is green, \"failure\" red and \"running...\" yellow, so a run of results can be read at a glance.",
+        "name": "The Outcome Color Rule",
+        "body": "Results always keep their color: a tool row's \"success\" is green, \"failure\" red and \"running...\" yellow, so a run of results can be read at a glance.",
         "section": "colors"
       },
       {
@@ -947,7 +947,7 @@
       "Do use `elevated` for controls on chrome or sidebar; `accent`, `secondary`, `muted`, `card` and `popover` are rebound inside the central panel.",
       "Do set machine output (paths, branches, hosts, commands, counts) in mono.",
       "Do use the 1px focus hairline (`focus-hairline`, with `focus-hairline-outset` on solid fills) for every focusable control.",
-      "Do give every animation a `prefers-reduced-motion` stop and a forced-colours fallback.",
+      "Do give every animation a `prefers-reduced-motion` stop and a forced-colors fallback.",
       "Do animate real layout height (grid rows, Radix content height) for anything inside the bottom-anchored transcript, so the reader's place holds.",
       "Do keep touch targets at 40\u201344px below 640px and gate hover-only controls behind `hover-fine`.",
       "Do match a status row's height across its states, so the transcript does not jump at the end of a turn.",
@@ -958,17 +958,17 @@
       "Do state containment and change evidence in system text, not only in the agent's words."
     ],
     "donts": [
-      "Don't introduce a second green or red for success or failure, or use a platform accent hue as a status colour.",
-      "Don't use `failure` as a button fill or `destructive` as text colour; they are tuned for different jobs.",
+      "Don't introduce a second green or red for success or failure, or use a platform accent hue as a status color.",
+      "Don't use `failure` as a button fill or `destructive` as text color; they are tuned for different jobs.",
       "Don't add shadows to things that sit in the work: rows, cards, panels and the tool card stay flat.",
-      "Don't use a grey hover beside a blue selection; hover is a weaker shade of the selection blue.",
+      "Don't use a gray hover beside a blue selection; hover is a weaker shade of the selection blue.",
       "Don't use `vh`/`dvh` for the app's root height; it overflows under CSS zoom.",
       "Don't bring the site's display sizes, gradient text or glow shadows into the app's operating surfaces.",
       "Don't add a second focus style (rings, glows, border swaps) alongside the hairline.",
       "Don't outline the compose card in blue on focus; the composer is almost always focused, so its focus cue is a one-shade lighter neutral border.",
       "Don't animate anything that is not reporting a state change.",
       "Don't give a destructive action a standing red fill in a toolbar; it is a ghost that turns coral on hover, behind its confirmation.",
-      "Don't use a coloured side bar thicker than 1px; callouts carry their kind in a 1px frame (solid, dotted for Tip, dashed for Warning; Caution 2px), an icon, a label and a hue."
+      "Don't use a colored side bar thicker than 1px; callouts carry their kind in a 1px frame (solid, dotted for Tip, dashed for Warning; Caution 2px), an icon, a label and a hue."
     ]
   }
 }

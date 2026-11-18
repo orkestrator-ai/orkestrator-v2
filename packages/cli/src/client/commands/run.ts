@@ -89,7 +89,7 @@ export const runCommands: CommandSpec[] = [
     action: "run.get",
     summary: "Observe an operation until it finishes (exit 0 only on success).",
     description:
-      "Exit codes: 0 succeeded, 1 failed/cancelled/interrupted, 5 --timeout passed (still running), 6 waiting for an interaction answer, 7 dispatch or outcome unknown. Ctrl+C stops observing only.",
+      "Exit codes: 0 succeeded, 1 failed/canceled/interrupted, 5 --timeout passed (still running), 6 waiting for an interaction answer, 7 dispatch or outcome unknown. Ctrl+C stops observing only.",
     positionals: [{ name: "operation", required: true }],
     options: [
       TIMEOUT_OPTION,

@@ -492,7 +492,7 @@ describe("QueuedPromptsDialog web annotation requests", () => {
     fireEvent.click(remove);
     expect(props.onRemove).not.toHaveBeenCalled();
     expect(
-      screen.getByRole("group", { name: "Confirm cancelling the web annotation request" })
+      screen.getByRole("group", { name: "Confirm canceling the web annotation request" })
         .textContent,
     ).toContain(WEB_ANNOTATION_QUEUE_REMOVE_WARNING);
 

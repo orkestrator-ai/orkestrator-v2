@@ -210,6 +210,9 @@ export function AnnotationEntries({
         const unread = entry.sequence > seenSequence;
         const time = lastActivity(entry.createdAt);
         if (entry.kind === "lifecycle" || entry.provenance === "system") {
+          const state = entry.lifecycle?.state;
+          const stateLabel =
+            state === "cancelled" ? "canceled" : state === "cancelling" ? "canceling" : state;
           return (
             <li
               key={entry.id}
@@ -219,7 +222,7 @@ export function AnnotationEntries({
               <Info className="h-3 w-3" aria-hidden />
               <span>
                 {LIFECYCLE_LABELS[entry.lifecycle?.event ?? ""] ?? entry.body ?? "Update"}
-                {entry.lifecycle?.state ? ` (${entry.lifecycle.state})` : ""} · {time}
+                {stateLabel ? ` (${stateLabel})` : ""} · {time}
               </span>
               {unread && (
                 <span className="rounded bg-primary/20 px-1 text-[11px] text-foreground">New</span>

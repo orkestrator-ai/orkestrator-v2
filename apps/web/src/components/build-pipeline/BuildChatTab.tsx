@@ -29,6 +29,7 @@ import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { PipelineFlowView } from "./PipelineFlowView";
+import { buildErrorLabel } from "./pipeline-flow";
 import { PipelineKeyInformationButton } from "./PipelineKeyInformation";
 import { usePipelineControls } from "./usePipelineControls";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -349,7 +350,7 @@ export function BuildChatTab({
           <>
             {pipeline.error && !interactionFailure && (
               <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-failure">
-                {pipeline.error}
+                {buildErrorLabel(pipeline.error)}
               </div>
             )}
             {showStallWarning && (

@@ -199,7 +199,7 @@ describe("service setup questions", () => {
       const { io } = scripted(answers);
       await expect(
         askServeArguments(io, { installCommand, probe: tailscaleReady }),
-      ).rejects.toThrow("Setup cancelled");
+      ).rejects.toThrow("Setup canceled");
     }
   });
 });

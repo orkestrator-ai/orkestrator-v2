@@ -39,13 +39,15 @@ import { runtimeParts } from "@/lib/review/runtime-summary";
 import { formatObservedAt } from "@/lib/view-freshness";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { PIPELINE_FLOW_MIN_HEIGHT, pipelineFlowLayout } from "./pipeline-flow-layout";
-import type {
-  PipelineFlowModel,
-  PipelineFlowNode,
-  PipelineFlowNodeKind,
-  PipelinePullRequest,
+import {
+  buildErrorLabel,
+  type PipelineFlowModel,
+  type PipelineFlowNode,
+  type PipelineFlowNodeKind,
+  type PipelinePullRequest,
 } from "./pipeline-flow";
 import { PipelinePullRequestChecks } from "./PipelinePullRequestView";
+import { validationStageSummary } from "./pipeline-stage-groups";
 
 /** The PR node's detail when the run ends without a pull request. */
 const NO_PULL_REQUEST_DETAIL: Record<DeliveryPolicy, string> = {
@@ -176,6 +178,9 @@ function nodeDetail(
   }
   if (node.kind === "prepare" && !node.agent) {
     const run = node.validationRun ?? pipeline.validationRun;
+    if (run?.status === "cancelled" && !isSkipped(node, pipeline)) {
+      return validationStageSummary(run);
+    }
     return run ? plural(run.plan.commands.length, "check") : "Validation";
   }
   if (!node.agent) return "";
@@ -300,7 +305,7 @@ export function pipelineNodeView({
     error:
       (node.state === "failed"
         ? reviewerBlockedReason({ status: "failed", error: node.error })
-        : null) ?? node.error,
+        : null) ?? (node.error === undefined ? undefined : buildErrorLabel(node.error)),
     idleIcon: PIPELINE_IDLE_ICON[node.kind],
     placeholder: node.placeholder,
     superseded: node.superseded,

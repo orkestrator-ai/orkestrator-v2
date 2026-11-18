@@ -8,6 +8,7 @@ import {
   type PublicSuccessEnvelope,
 } from "@orkestrator/protocol/public-api";
 import { CliError } from "./errors.js";
+import { humanErrorMessage } from "./format.js";
 import type { ClientIo } from "./io.js";
 import type { CommandOutcome, GlobalOptions } from "./spec.js";
 
@@ -125,7 +126,8 @@ export class OutputWriter {
       this.io.stdout(`${JSON.stringify(envelope)}\n`);
       return exitCode;
     }
-    this.io.stderr(`error [${cliError.code}]: ${cliError.message}\n`);
+    const message = humanErrorMessage(cliError.message, cliError.code, receipt?.action);
+    this.io.stderr(`error [${cliError.code}]: ${message}\n`);
     if (typeof cliError.details?.recovery === "string")
       this.io.stderr(`recover with \`${cliError.details.recovery}\`\n`);
     if (receipt) this.io.stderr(`${receiptHint(receipt, node)}\n`);

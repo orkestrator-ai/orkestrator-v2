@@ -28,7 +28,7 @@ const STATE_TEXT: Record<McpApplyState, string> = {
   "blocked-policy": "Saved; this session's policy excludes it",
   failed: "Saved, but applying failed",
   reconciling: "Saved; checking state after an interruption",
-  cancelled: "Saved; applying was cancelled",
+  cancelled: "Saved; applying was canceled",
 };
 
 const TONE: Partial<Record<McpApplyState, string>> = {

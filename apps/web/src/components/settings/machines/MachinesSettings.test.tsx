@@ -652,7 +652,7 @@ describe("Machine settings", () => {
     });
 
     fireEvent.click(
-      within(settings.getByRole("radiogroup", { name: "Dot colour" })).getByRole("radio", {
+      within(settings.getByRole("radiogroup", { name: "Dot color" })).getByRole("radio", {
         name: "Blue",
       }),
     );

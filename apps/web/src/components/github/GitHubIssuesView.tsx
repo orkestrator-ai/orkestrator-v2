@@ -43,7 +43,7 @@ const ISSUE_ANNOUNCEMENTS: Announcements = {
       : `Stopped moving issue ${issueNumber ?? ""}`;
   },
   onDragCancel({ active }) {
-    return `Cancelled moving issue ${active.data.current?.issueNumber ?? ""}`;
+    return `Canceled moving issue ${active.data.current?.issueNumber ?? ""}`;
   },
 };
 

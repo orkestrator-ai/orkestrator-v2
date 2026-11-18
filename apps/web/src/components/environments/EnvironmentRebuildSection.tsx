@@ -207,7 +207,7 @@ export function EnvironmentRebuildSection({
         environment.id,
         running.operationId,
       );
-      if (!result.cancelled) toast.info("The rebuild can no longer be cancelled.");
+      if (!result.cancelled) toast.info("The rebuild can no longer be canceled.");
     } catch (err) {
       toast.error("Could not cancel the rebuild", {
         description:

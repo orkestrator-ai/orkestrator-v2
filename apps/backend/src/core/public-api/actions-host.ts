@@ -321,7 +321,7 @@ registerReconciler("host.update.apply", async (record, context) => {
       state: "cancelled",
       stage: "cancelled",
       result,
-      error: { code: "run-cancelled", message: "The update was cancelled before the restart" },
+      error: { code: "run-cancelled", message: "The update was canceled before the restart" },
     };
   }
   if (record.stage === job.state && (record.result?.version ?? null) === job.targetVersion) {

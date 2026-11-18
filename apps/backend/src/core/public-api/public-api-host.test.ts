@@ -192,7 +192,11 @@ describe("host.* public actions", () => {
     const cancelled = await harness.call("host.update.cancel", {}, { requestId: "cancel-1" });
     expect(cancelled.ok).toBe(true);
     const receipt = await runGet(harness, accepted.receipt!.operationId);
-    expect(receipt).toMatchObject({ state: "cancelled", stage: "cancelled" });
+    expect(receipt).toMatchObject({
+      state: "cancelled",
+      stage: "cancelled",
+      error: { code: "run-cancelled", message: "The update was canceled before the restart" },
+    });
 
     const nothing = await harness.call("host.update.cancel", {}, { requestId: "cancel-2" });
     expect(nothing.ok).toBe(false);

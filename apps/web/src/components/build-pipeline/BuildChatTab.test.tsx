@@ -491,7 +491,9 @@ describe("BuildChatTab backend projection", () => {
       });
     renderInBuildChat(<BuildChatTab data={tabData} />);
 
-    expect(graphNode("Prepare").getAttribute("data-flow-state")).toBe("cancelled");
+    const node = graphNode("Prepare");
+    expect(node.getAttribute("data-flow-state")).toBe("cancelled");
+    expect(node.querySelector("[data-flow-node-detail]")?.textContent).toBe("Validation canceled");
   });
 
   test("puts the Prepare node before the first review when no preparation session exists", () => {
@@ -704,7 +706,7 @@ describe("BuildChatTab backend projection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(cancelBuildPipelineMock).toHaveBeenCalledWith(pipeline.id));
-    await waitFor(() => expect(screen.getByText("Build cancelled")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Build canceled")).toBeTruthy());
   });
 
   test("routes the mobile icon controls through their backend actions", async () => {

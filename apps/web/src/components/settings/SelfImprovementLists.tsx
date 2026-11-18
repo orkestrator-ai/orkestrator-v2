@@ -29,7 +29,7 @@ const STATUS_TEXT: Record<SelfImprovementTrackedItem["status"], string> = {
 const FIX_WHERE_TEXT: Record<SelfImprovementTheme["fixWhere"], string> = {
   orkestrator: "Fix in Orkestrator",
   instructions: "Fix in instructions",
-  provider: "Model behaviour",
+  provider: "Model behavior",
   unclear: "Unclear",
 };
 

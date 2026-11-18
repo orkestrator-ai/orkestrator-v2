@@ -1985,14 +1985,14 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
       timeout: 30_000,
     });
-    await expect(page.getByText(/^Multi Review cancelled\b/).first()).toBeVisible();
+    await expect(page.getByText(/^Multi Review canceled\b/).first()).toBeVisible();
     await page.reload();
     await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
       timeout: 30_000,
     });
-    await expect(page.getByText(/^Multi Review cancelled\b/).first()).toBeVisible();
+    await expect(page.getByText(/^Multi Review canceled\b/).first()).toBeVisible();
     const opened = await invoke<MultiReviewActionResult>("open_coordinator_multi_review", {
       scope,
       workflowId: launched.workflow.id,

@@ -347,7 +347,7 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
                     {confirmingRemove ? (
                       <div
                         role="group"
-                        aria-label="Confirm cancelling the web annotation request"
+                        aria-label="Confirm canceling the web annotation request"
                         className="mt-2 flex flex-wrap items-center gap-2 rounded border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs"
                       >
                         <span className="min-w-0 flex-1">

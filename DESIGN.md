@@ -281,8 +281,8 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 
 ### Primary
 - **Signal Blue** (`brand-blue`): the brand blue. On the site it carries the primary button, links and the start of the headline gradient; its brighter partner **Signal Blue Bright** (`brand-blue-bright`) carries eyebrows, focus outlines and the gradient's first stop.
-- **App Signal Blue** (`primary`): the app's current blue for lines, text and marks: links, the selected row's 2px accent bar, the focus hairline (`--color-ring`), the active tab underline, the unread-mail count, and the "creating" status. Bells are not blue; see Approval Amber.
-- **Deep Signal Fill** (`primary-fill`): the same blue one step deeper, for any fill that carries white text or glyphs: primary buttons (Create PR), the selected segment, the compose bar's Send. White on `primary` is 3.7:1, below AA for 14px text; white on `primary-fill` is 5.2:1.
+- **App Signal Blue** (`primary`): the app's current blue for lines, text and marks: links, the selected row's 2px accent bar, the focus hairline (`--color-ring`), the active tab underline, and the "creating" status. Bells are not blue; see Approval Amber.
+- **Deep Signal Fill** (`primary-fill`): the same blue one step deeper, for any fill that carries white text or glyphs: primary buttons (Create PR), the selected segment, the compose bar's Send, and the unread-mail count pill. White on `primary` is 3.7:1, below AA for 14px text; white on `primary-fill` is 5.2:1.
 
 ### Secondary
 - **All-Clear Green** (`brand-green`): the brand green. Site security eyebrows, "allowed" rows, and the end of the headline gradient.
@@ -368,6 +368,7 @@ The app is flat. Depth comes from tonal layers (sidebar darkest, then background
 - **Modal** (`box-shadow: 0 28px 90px rgba(0,0,0,0.72)`): dialogs and alert dialogs, with a 16px radius and a `zinc-700` hairline at 70%.
 - **Compose dock** (`shadow-xl` at black 20%): the native tab's compose bar, which floats over the bottom of the transcript.
 - **Floating notice** (`shadow-xl` at black 40% with a small backdrop blur; its folded pill uses `shadow-lg` at black 30%): agent mail and other pane notices floating at a pane's top right.
+- **Transcript annotation pins** (`shadow-lg`): the numbered marks float above transcript content and use a 2px white ring to stay legible over text and tinted rows.
 - **Control lift** (`shadow-xs` / `shadow-sm`): inputs and the selected segment only.
 - **Site window** (`box-shadow: inset 0 1px 0 #2a3446, 0 30px 80px rgb(0 0 0 / 0.45), 0 2px 6px rgb(0 0 0 / 0.4)`): illustration frames on the public site.
 - **Site primary glow** (`box-shadow: inset 0 1px 0 #86aef5, 0 10px 30px rgb(39 81 155 / 0.3)`): the site's primary button; it lifts 1px on hover.

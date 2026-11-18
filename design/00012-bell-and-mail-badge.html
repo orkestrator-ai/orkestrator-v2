@@ -11,28 +11,28 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00012</p>
       <h1>00012 · Make bells and the unread-mail count match the spec</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-medium">Medium</span>
         <span class="pill">Components</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 8 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 8 / 8 images</span
         >
       </div>
 
       <h2>Problem</h2>
       <p>
-        <code>UnreadBellIcon</code> is <code>fill-amber-400/20 text-amber-400</code>.
-        <code>ProjectHomeActivity.tsx:61</code> draws an unfilled bell and relies on the button’s
-        <code>text-amber-400</code>. The sidebar’s waiting counter
-        (<code>ActivityEnvironmentList.tsx:213-220</code>) goes <code>text-zinc-600</code> at zero.
-        <code>AgentMailButton.tsx:55</code> draws the unread-mail count as an amber pill, while
-        DESIGN.md lists the unread-mail count under App Signal Blue.
+        Before this change, <code>UnreadBellIcon</code> used
+        <code>fill-amber-400/20 text-amber-400</code>. <code>ProjectHomeActivity.tsx</code> drew an
+        unfilled bell and relied on the compact button’s <code>text-amber-400</code>. The sidebar’s
+        waiting counter used <code>text-zinc-600</code> at zero.
+        <code>AgentMailButton.tsx</code> drew an amber unread-mail pill where the spec called for
+        blue.
       </p>
       <div class="rule">
         <div>
           Do draw every bell (unread activity, waiting environments, project-home activity) in
-          <code>amber-400</code>, never in Signal Blue. … App Signal Blue (<code>primary</code>) …
-          the unread-mail count.
+          <code>amber-400</code>, never in Signal Blue. … Deep Signal Fill
+          (<code>primary-fill</code>) … the unread-mail count pill.
         </div>
         <div class="src">DESIGN.md, Do’s and Colors → Primary / Tertiary</div>
       </div>
@@ -50,21 +50,21 @@
         </thead>
         <tbody>
           <tr>
-            <td><code>apps/web/src/components/environments/UnreadBellIcon.tsx:6</code></td>
+            <td><code>apps/web/src/components/environments/UnreadBellIcon.tsx</code></td>
             <td>the shared bell</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/sidebar/ProjectHomeActivity.tsx:61</code></td>
-            <td>unfilled bell</td>
+            <td><code>apps/web/src/components/sidebar/ProjectHomeActivity.tsx</code></td>
+            <td>project-home bell</td>
           </tr>
           <tr>
             <td>
-              <code>apps/web/src/components/sidebar/ActivityEnvironmentList.tsx:213-220</code>
+              <code>apps/web/src/components/sidebar/ActivityEnvironmentList.tsx</code>
             </td>
             <td>waiting counter, zero state</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/agent-mail/AgentMailButton.tsx:55</code></td>
+            <td><code>apps/web/src/components/agent-mail/AgentMailButton.tsx</code></td>
             <td>unread-mail count</td>
           </tr>
         </tbody>
@@ -271,54 +271,54 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
-            under <code>design/images/00012/</code>.</span
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot, and committed under
+            <code>design/images/00012/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: Update DESIGN.md if the amber mail count is
             kept.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -326,15 +326,44 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
-      </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <strong>Hit classification.</strong> The environment row and its completion toast already
+          used the shared amber bell. Project Home and the waiting counter had separate bell
+          implementations. The zero numeral used a raw zinc step, and the toolbar mail pill used
+          amber. The sound-settings bell represents a preference and sits outside these activity
+          indicators.
+        </li>
+        <li>
+          <strong>Decisions.</strong> Use <code>primary-fill</code> with
+          <code>primary-foreground</code> for a readable white mail count. Use
+          <code>muted-foreground</code> for the zero numeral and the shared amber fill and stroke
+          for its bell. Both choices use the existing palette.
+        </li>
+        <li>
+          <strong>Sidebar bells, desktop.</strong> The Project Home bell gains an amber stroke and
+          translucent amber fill. The waiting row and the nonzero counter already show amber.
+        </li>
+        <li>
+          <strong>Sidebar bells, narrow.</strong> The open drawer shows the same filled Project Home
+          bell beside the waiting row and the nonzero counter.
+        </li>
+        <li>
+          <strong>Waiting counter at zero, desktop.</strong> The zero numeral uses the more readable
+          muted foreground. The bell keeps its shared amber stroke and fill at rest.
+        </li>
+        <li>
+          <strong>Mail button, desktop.</strong> One unread fixture message shows a blue pill with a
+          white numeral. The count reappears after reload, and Enter opens Agent messages.
+        </li>
       </ul>
+      <p class="note">
+        Captured the before views from clean revision <code>b2c91abb9</code> and the after views
+        from the changed renderer in the same headless <code>design-00012</code> profile. Both
+        passes used the same fixture, dark theme, 100% zoom, and one pixel per CSS pixel. The mail
+        crop hides the development profile watermark, which overlaps the button. The test profile
+        used neither host seeding nor agent credentials and was reset after capture.
+      </p>
 
       <footer>
         Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and

@@ -351,6 +351,14 @@ suite's own worker count does not decide it: it failed alone with one worker
 at load 28 and passed with four at load 22, which points at what else the
 host is doing. No assertion, timeout or skip changed.
 
+## Fold gap during fill-rule validation (2026-11-18)
+
+Mobile Chromium failed `a live group crossing the fold threshold folds into its line with no-preference motion` (`e2e/ToolGroupFold.spec.ts:127`). The last fold-gap assertion at line 195 measured 57 px against a 2 px limit. It passed on the runner retry.
+
+The aggregate command was `ORKESTRATOR_REVIEW_VALIDATION=1 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=9 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7200000 mise run test:logged -- --name browser -- mise run test:browser`. The nine-worker component suite completed with 1,783 passed, 155 skipped, and two retry passes among 1,940 cases. All 20 public-site cases passed. The branch base was `259e88d90c9cb3e6e24de95d8333dbc5a12cbef2` and the tested fix was `eac72b3b7`.
+
+The isolated owning spec command `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name address-fill-rule-tool-fold-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx --no-install playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --retries=0 --output output/address-findings-00005/tool-fold-owner` passed in 184.4 s. `mise run flaky:recurrence` confirmed case 1012 is open on the observing base. The tested fix affects the design evidence page and the Claude tmux approval card. The failure occurred in the streaming transcript fixture. The cause remains open.
+
 ## Fold gap during failure-colour validation (2026-11-18)
 
 On `replace-failure-token-cb2bfc48b3c1-r1` at `5f24ec961`, based on

@@ -341,7 +341,7 @@ export function AutoPipelineTab({
                       className={cn(
                         "grid size-4 place-items-center rounded-full text-[10px] tabular-nums",
                         done && !problem
-                          ? "bg-primary text-primary-foreground"
+                          ? "bg-primary-fill text-primary-foreground"
                           : problem && draft
                             ? "bg-destructive/80 text-white"
                             : "bg-muted text-muted-foreground",

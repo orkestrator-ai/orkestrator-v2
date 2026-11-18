@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { WorkflowSnapshotGraph } from "../../apps/web/src/components/chat/rich/WorkflowSnapshotCardGraph";
+import { ApprovalCard } from "../../apps/web/src/components/claude/ClaudeTmuxChatTab.parts";
 import { OptionCards } from "../../apps/web/src/components/settings/agent/InheritedValue";
 import { Button } from "../../apps/web/src/components/ui/button";
+import { Checkbox } from "../../apps/web/src/components/ui/checkbox";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -14,6 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../../apps/web/src/components/ui/dropdown-menu";
+import { Input } from "../../apps/web/src/components/ui/input";
 
 function MenuIcon() {
   return (
@@ -70,6 +73,17 @@ export function FocusVisibilityFixture() {
       <button className="rounded-full bg-blue-600 px-3 py-2 text-white focus-hairline focus-hairline-outset">
         Annotation fill
       </button>
+      <div className="flex gap-4">
+        <Checkbox aria-label="Unchecked" checked={false} />
+        <Checkbox aria-label="Checked" checked />
+        <Checkbox aria-label="Mixed" checked="indeterminate" />
+      </div>
+      <Input aria-label="Selection sample" defaultValue="Selected text" />
+      <ApprovalCard
+        approval={{ eventId: "approval-focus", toolName: "Read", toolInput: {} }}
+        onApprove={() => {}}
+        onDeny={() => {}}
+      />
       <div className="flex gap-2">
         <ContextMenu>
           <ContextMenuTrigger asChild>

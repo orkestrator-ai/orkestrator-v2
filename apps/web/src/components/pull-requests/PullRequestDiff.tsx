@@ -173,7 +173,7 @@ export function PullRequestDiff({
                         type="button"
                         aria-label={`Comment on ${anchor.side === "LEFT" ? "old" : "new"} line ${anchor.line}`}
                         onClick={() => setComposerAt({ key, commitId, path: file.path, ...anchor })}
-                        className="absolute top-0.5 left-0 flex size-4 items-center justify-center rounded bg-primary text-primary-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                        className="absolute top-0.5 left-0 flex size-4 items-center justify-center rounded bg-primary-fill text-primary-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                       >
                         <Plus className="size-3" />
                       </button>

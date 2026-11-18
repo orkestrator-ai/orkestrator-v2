@@ -1288,7 +1288,7 @@ export function ClaudeTmuxChatTab({
           <span
             className={cn(
               "inline-block h-2 w-2 rounded-full",
-              running ? "bg-emerald-500" : "bg-zinc-500",
+              running ? "bg-status-running" : "bg-zinc-500",
             )}
           />
           <span>Claude (tmux)</span>

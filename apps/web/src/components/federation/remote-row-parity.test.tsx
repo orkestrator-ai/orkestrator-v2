@@ -173,14 +173,15 @@ test("a slow delete says which step it is on, when its machine reports one this 
   expect(screen.queryByText(/Still deleting/) === null).toBe(true);
 });
 
-test("another machine's row shows its unread agent mail and a failed delivery", () => {
+test("another machine's row shows no agent mail count or failed-delivery dot", () => {
   const row = environment("feature", { agentMailUnread: 120, agentMailFailed: true });
   renderInAppCommandScope(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
-  expect(screen.getByLabelText("120 unread agent messages").textContent).toBe("99+");
-  expect(screen.getByLabelText("Agent message delivery failed")).toBeTruthy();
+  // Mail is read inline in the transcript.
+  expect(screen.queryByLabelText("120 unread agent messages") === null).toBe(true);
+  expect(screen.queryByLabelText("Agent message delivery failed") === null).toBe(true);
 });
 
-test("another machine's project header sums its mail and shows its home's activity", async () => {
+test("another machine's project header shows its home's activity and no mail count", async () => {
   const home = environment("home", {
     isProjectHome: true,
     name: "project-home",
@@ -204,9 +205,8 @@ test("another machine's project header sums its mail and shows its home's activi
   const header = screen.getByRole("button", {
     name: "New environment in app on Machine A",
   }).parentElement!;
-  // The home's mail counts toward its project, as this window's mailboxes do.
-  expect(within(header).getAllByLabelText("3 unread agent messages")).toHaveLength(1);
-  expect(within(header).getByLabelText("Agent message delivery failed")).toBeTruthy();
+  expect(within(header).queryByLabelText("3 unread agent messages") === null).toBe(true);
+  expect(within(header).queryByLabelText("Agent message delivery failed") === null).toBe(true);
 
   const homeActivity = within(header).getByRole("button", { name: "app home needs attention" });
   const bell = homeActivity.querySelector("svg");
@@ -306,7 +306,7 @@ for (const scope of ["remote", "bound", "mixed"] as const) {
   });
 }
 
-test("the row's computed description retains work, mail, PR and activity subtitle", () => {
+test("the row's computed description retains work, PR and activity subtitle", () => {
   const row = environment("feature", {
     hasUnreadWork: true,
     agentMailUnread: 2,
@@ -326,15 +326,10 @@ test("the row's computed description retains work, mail, PR and activity subtitl
     .split(" ")
     .map((id) => document.getElementById(id)!.textContent)
     .join(" ");
-  for (const state of [
-    "New completed activity",
-    "2 unread agent messages",
-    "Agent message delivery failed",
-    "Pull request open",
-    "app activity",
-  ]) {
+  for (const state of ["New completed activity", "Pull request open", "app activity"]) {
     expect(description).toContain(state);
   }
+  expect(description).not.toContain("agent message");
 });
 
 test("deleting without hovering reads remote details and warns about the open PR", async () => {
@@ -419,8 +414,7 @@ test("a machine-qualified row describes change counts along with unread work and
   expect(
     screen.getByRole("button", {
       name: "feature, on Machine A, Idle",
-      description:
-        /New completed activity.*2 unread agent messages.*Pull request open.*app activity.*\+7.*-3/,
+      description: /New completed activity.*Pull request open.*app activity.*\+7.*-3/,
     }),
   ).toBeTruthy();
 });

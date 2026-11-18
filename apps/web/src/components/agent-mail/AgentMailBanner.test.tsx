@@ -137,7 +137,6 @@ describe("AgentMailBanner", () => {
         expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(
           true,
         );
-      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
       view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
       expect(screen.queryByText(/Delivery waiting: Codex/) === null).toBe(true);
       expect(
@@ -169,8 +168,6 @@ describe("AgentMailBanner", () => {
     fireEvent.click(resume);
     expect(retry).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "View" }));
-    expect(appCommandStore(agentMailStore).getState().panel).toEqual({ focus: mailboxId });
 
     view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("Delivery paused: loop budget")).toBeTruthy();
@@ -243,8 +240,8 @@ describe("AgentMailBanner", () => {
     renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message in inbox · pull only")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deliver now" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "View" }));
-    expect(appCommandStore(agentMailStore).getState().panel).toEqual({ focus: mailboxId });
+    // Mail is read inline in the transcript; the banner links to no panel.
+    expect(screen.queryByRole("button", { name: "View" }) === null).toBe(true);
   });
 
   test("releases newest-first snapshots oldest first, preserving send order for timestamp ties", async () => {
@@ -320,7 +317,6 @@ describe("AgentMailBanner", () => {
       const view = renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
       expect(screen.getByText("1 message in inbox · waiting for an agent")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
-      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
       view.unmount();
     }
   });
@@ -358,7 +354,6 @@ describe("AgentMailBanner", () => {
     const text = screen.getByText(/^2 messages in inbox · Mail from another project/);
     expect(text.classList.contains("truncate")).toBe(false);
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
-    expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
   });
 
   test("a muted tab's inbox mail offers no Deliver now", () => {
@@ -560,6 +555,57 @@ describe("AgentMailBanner", () => {
     view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("Delivery paused: loop budget")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+  });
+
+  test.each([
+    ["pending-inject", undefined],
+    ["inject-held", "loop-budget-exhausted"],
+    ["inject-held", "hourly-limit"],
+  ] as const)(
+    "discards the displayed %s delivery (%s) and refreshes the banner",
+    async (placement, placementReason) => {
+      install(placement, { placementReason });
+      const store = appCommandStore(agentMailStore);
+      const snapshot = store.getState().mailboxes.get(mailboxId)!;
+      const discarded = { ...snapshot.messages[0]!, discardedAt: new Date(1).toISOString() };
+      const discard = spyOn(backend, "discardAgentMailInject").mockResolvedValue({
+        ...discarded,
+        body: "hello",
+      });
+      const refreshSummary = mock(async () => undefined);
+      store.setState({
+        refreshSummary,
+        refreshMailbox: async () => {
+          if (discard.mock.calls.length > 0) {
+            store.setState({
+              mailboxes: new Map([[mailboxId, { ...snapshot, messages: [discarded] }]]),
+            });
+          }
+        },
+      });
+      renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      await waitFor(() => expect(refreshSummary).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+
+      await waitFor(() => expect(screen.queryByRole("region", { name: "Agent mail" })).toBeNull());
+      expect(discard).toHaveBeenCalledWith("env-1", "tab-1", discarded.id);
+      expect(refreshSummary).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  test.each(["Retry", "Discard"])("shows the error when %s is refused", async (action) => {
+    install("inject_failed", { placementReason: "rejected" });
+    const command = spyOn(
+      backend,
+      action === "Retry" ? "retryAgentMailInject" : "discardAgentMailInject",
+    ).mockRejectedValue(new Error("Delivery changed. Try again."));
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: action }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe("Delivery changed. Try again.");
+    expect(command).toHaveBeenCalledWith("env-1", "tab-1", "message-inject_failed");
+    expect(screen.getByRole("button", { name: action })).toBeTruthy();
   });
 
   for (const [placement, placementReason, text] of [

@@ -344,8 +344,7 @@ tabs restore and follow the leaf's queues.
 - The `workspace-command-bound-call` source guard (plan item 4007,
   `tests/source-guards/workspace-command-bound-call.ts`) follows the value
   imports (static, re-exports, `import()`) from the workspace roots
-  (`WorkspaceContent`, `NodeWorkspaceLayout`, `OpenFileDialog`,
-  `AgentMailPanel`) and counts, in every module it reaches, each use of a
+  (`WorkspaceContent`, `NodeWorkspaceLayout`, `OpenFileDialog`) and counts, in every module it reaches, each use of a
   command-bound export: a `lib/backend` named export, or any renderer
   module's export bound to `commandBackendClient`/`portalBackendClient`
   (`lib/claude-tmux-client`'s shim). Keys are `[subject] file`. It does not

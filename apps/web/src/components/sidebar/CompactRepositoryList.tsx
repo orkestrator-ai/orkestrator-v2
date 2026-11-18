@@ -11,9 +11,7 @@ import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activit
 import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { cn } from "@/lib/utils";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
-import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useConfigStore } from "@/stores/configStore";
 import { useCoordinatorActivityStore } from "@/stores/coordinatorActivityStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
@@ -46,10 +44,6 @@ function useCompactStatuses(
   const activeBuilds = useBuildPipelineStore((state) => state.activeBuildEnvironmentIds);
   const deletingEnvironments = useEnvironmentStore((state) => state.deletingEnvironments);
   const deletingProjects = useProjectStore((state) => state.deletingProjects);
-  const messagingEnabled = useConfigStore(
-    (state) => state.config.global.agentMessaging?.enabled === true,
-  );
-  const mailboxes = useAgentMailStore((state) => state.summary);
 
   return useMemo(() => {
     const gone = (environment: Environment) =>
@@ -60,15 +54,6 @@ function useCompactStatuses(
     const boundFacts = (projectId: string): CompactMemberFacts => {
       const own = environments.filter((environment) => environment.projectId === projectId);
       const home = own.find((environment) => environment.projectHome && !gone(environment));
-      let unreadMail = 0;
-      let failedMail = false;
-      if (messagingEnabled) {
-        for (const mailbox of mailboxes.values()) {
-          if (mailbox.projectId !== projectId) continue;
-          unreadMail += mailbox.userUnseenCount ?? mailbox.unreadCount;
-          failedMail ||= mailbox.failedInjectCount > 0;
-        }
-      }
       return {
         coordinator: coordinators.get(projectId) ?? null,
         working: own.some(
@@ -108,8 +93,6 @@ function useCompactStatuses(
           (environment) =>
             !environment.projectHome && !gone(environment) && environment.hasUnreadWork === true,
         ),
-        unreadMail,
-        failedMail,
       };
     };
 
@@ -133,8 +116,6 @@ function useCompactStatuses(
     deletingEnvironments,
     deletingProjects,
     environments,
-    mailboxes,
-    messagingEnabled,
     repositories,
   ]);
 }
@@ -188,8 +169,7 @@ function CompactRepositoryIcon({
                   aria-hidden="true"
                   className={cn(
                     "absolute -top-1 -right-1 z-20 size-2.5 rounded-full ring-2 ring-sidebar",
-                    "forced-colors:bg-[CanvasText]",
-                    status.badge === "attention" ? "bg-amber-400" : "bg-cyan-400",
+                    "forced-colors:bg-[CanvasText] bg-amber-400",
                   )}
                 />
               ) : null}

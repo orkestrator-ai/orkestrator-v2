@@ -737,7 +737,6 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     const remounted = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText(`Delivery waiting: ${reason}`)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
-    expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
 
     remounted.unmount();
     ensuredSnapshot = baseSnapshot;
@@ -1103,7 +1102,6 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         await screen.findByText("Delivery waiting: Codex is turned off. Turn it on to send."),
       ).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
-      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
     });
 
     test.each(["running", "blocked"] as const)(

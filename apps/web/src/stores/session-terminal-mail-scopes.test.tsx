@@ -83,8 +83,8 @@ const CASES: ReadonlyArray<Case<unknown>> = [
   scopedCase({
     def: agentMailStore,
     hook: useAgentMailStore,
-    write: (store) => store.getState().openPanel({ focus: "env-1\0tab-1" }),
-    read: (state) => state.panel?.focus ?? "none",
+    write: (store) => store.getState().setSummary({ revision: 5, mailboxes: [] }),
+    read: (state) => (state.revision ? String(state.revision) : "none"),
   }),
 ];
 

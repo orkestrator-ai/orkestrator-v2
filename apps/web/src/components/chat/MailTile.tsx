@@ -8,7 +8,6 @@ import {
   useState,
   type ComponentType,
 } from "react";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useStore } from "zustand";
 import {
   Bell,
@@ -19,7 +18,6 @@ import {
   Image as ImageIcon,
   Info,
   Mail,
-  MessagesSquare,
   Network,
   Send,
   SquareArrowOutUpRight,
@@ -36,7 +34,6 @@ import {
 import { mailMarkdownComponents } from "@/components/agent-mail/mail-markdown-components";
 import {
   AGENT_MAIL_STATUS_TONE_CLASS,
-  openAgentMailConversation,
   useAgentMailEnvironmentName,
 } from "@/components/agent-mail/agent-mail-ui";
 import { agentMailAddressText } from "@/lib/chat/client-only-messages";
@@ -282,8 +279,6 @@ export const MailTile = memo(function MailTile({
   expansionKey,
   timestampLabel,
 }: MailTileProps) {
-  // This node's messages panel (plan item 4001); the command node outside a node scope.
-  const mailScope = useScopesWithCommandFallback().scope;
   const [preferredOpen, setOpen] = useMessagePartExpansion(expansionKey);
   const findActive = useContext(ChatFindActiveContext);
   const open = preferredOpen || findActive;
@@ -295,7 +290,6 @@ export const MailTile = memo(function MailTile({
   // A notice that predates structured facts keeps a neutral bell rather than
   // claiming an outcome it cannot know.
   const Icon = mail.kind === "notice" && !mail.notice ? Bell : style.icon;
-  const participants = mail.participants;
   const workerTarget = useNoticeWorkerTarget(mail.kind === "notice" ? mail.notice : undefined);
 
   // Fade the clipped edge only when the clamp actually hides something; a
@@ -375,17 +369,6 @@ export const MailTile = memo(function MailTile({
             >
               <SquareArrowOutUpRight className="size-3.5" aria-hidden="true" />
               <span className="hidden @sm:inline">Open</span>
-            </button>
-          ) : null}
-          {participants ? (
-            <button
-              type="button"
-              aria-label="Open conversation"
-              title="Open conversation"
-              onClick={() => openAgentMailConversation(participants[0], participants[1], mailScope)}
-              className="mt-1 mr-1.5 shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground focus-hairline"
-            >
-              <MessagesSquare className="size-3.5" aria-hidden="true" />
             </button>
           ) : null}
         </div>

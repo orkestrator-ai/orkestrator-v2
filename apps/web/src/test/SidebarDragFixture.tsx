@@ -401,8 +401,6 @@ function HouseRepositoryGroup() {
                 label="Self"
                 icon={<MachineHomeIcon colorToken="teal" machineName="Self" />}
                 card={{ environmentCount: 0, runningCount: 0, openHint: "" }}
-                unreadMail={0}
-                failedMail={false}
                 highlighted={false}
                 ariaCurrent={undefined}
                 sortable={false}

@@ -153,8 +153,6 @@ function facts(overrides: Partial<CompactMemberFacts> = {}): CompactMemberFacts 
     coordinator: null,
     home: null,
     unreadWork: false,
-    unreadMail: 0,
-    failedMail: false,
     ...overrides,
   };
 }
@@ -197,22 +195,8 @@ describe("an icon's status", () => {
     ).toEqual({ ring: null, badge: null, labels: [] });
   });
 
-  test("unread mail is a dot, with its count in words", () => {
-    const status = compactRepositoryStatus([facts({ unreadMail: 3 })]);
-    expect(status.badge).toBe("unread");
-    expect(status.labels).toEqual(["3 unread agent messages"]);
-    expect(compactRepositoryStatus([facts({ unreadMail: 1 })]).labels).toEqual([
-      "1 unread agent message",
-    ]);
-  });
-
-  test("attention outranks unread mail", () => {
-    expect(compactRepositoryStatus([facts({ unreadWork: true, unreadMail: 2 })]).badge).toBe(
-      "attention",
-    );
-    expect(compactRepositoryStatus([facts({ failedMail: true, unreadMail: 2 })]).badge).toBe(
-      "attention",
-    );
+  test("unread work is an attention dot", () => {
+    expect(compactRepositoryStatus([facts({ unreadWork: true })]).badge).toBe("attention");
     expect(
       compactRepositoryStatus([facts({ home: { ...IDLE_HOME, hasUnreadWork: true } })]).badge,
     ).toBe("attention");
@@ -227,12 +211,6 @@ describe("an icon's status", () => {
     expect(status.badge).toBe("attention");
     expect(status.labels).toEqual(["Working", "Waiting for you"]);
   });
-
-  test("mail adds up across machines", () => {
-    expect(
-      compactRepositoryStatus([facts({ unreadMail: 1 }), facts({ unreadMail: 2 })]).labels,
-    ).toEqual(["3 unread agent messages"]);
-  });
 });
 
 describe("another machine's facts", () => {
@@ -245,11 +223,12 @@ describe("another machine's facts", () => {
       ...overrides,
     }) as FederatedEnvironment;
 
-  test("reads its home, unread work and mail from the summaries", () => {
+  test("reads its home and unread work from the summaries", () => {
     expect(
       remoteMemberFacts([
         environment({ isProjectHome: true, activity: "working", buildActive: true }),
-        environment({ hasUnreadWork: true, agentMailUnread: 2 }),
+        environment({ hasUnreadWork: true }),
+        // Agent mail is read in the transcript; it adds nothing to the sidebar.
         environment({ agentMailUnread: 1, agentMailFailed: true }),
       ]),
     ).toEqual({
@@ -258,8 +237,6 @@ describe("another machine's facts", () => {
       coordinator: null,
       home: { deleting: false, buildActive: true, activity: "working", hasUnreadWork: false },
       unreadWork: true,
-      unreadMail: 3,
-      failedMail: true,
     });
   });
 
@@ -275,8 +252,6 @@ describe("another machine's facts", () => {
       coordinator: null,
       home: null,
       unreadWork: false,
-      unreadMail: 0,
-      failedMail: false,
     });
   });
 });

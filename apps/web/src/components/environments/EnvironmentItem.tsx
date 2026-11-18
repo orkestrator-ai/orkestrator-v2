@@ -15,9 +15,7 @@ import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
 import { hydrationFreshnessNotice } from "@/lib/view-freshness";
 import { useBuildPipelineStore, useEnvironmentDiffStore, useEnvironmentStore } from "@/stores";
-import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
-import { useConfigStore } from "@/stores/configStore";
 import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import type { Environment, EnvironmentType } from "@/types";
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
@@ -45,30 +43,6 @@ interface EnvironmentItemProps {
   isChecked?: boolean;
   /** Optional secondary label used by the flat activity view. */
   subtitle?: string;
-}
-
-/** Unread agent mail for one environment, as this machine's mailboxes count it. */
-function useEnvironmentMail(environmentId: string): { unread: number; failed: boolean } {
-  const messagingEnabled = useConfigStore(
-    (state) => state.config.global.agentMessaging?.enabled === true,
-  );
-  const unread = useAgentMailStore((state) => {
-    if (!messagingEnabled) return 0;
-    let count = 0;
-    for (const mailbox of state.summary.values()) {
-      if (mailbox.environmentId === environmentId)
-        count += mailbox.userUnseenCount ?? mailbox.unreadCount;
-    }
-    return count;
-  });
-  const failed = useAgentMailStore(
-    (state) =>
-      messagingEnabled &&
-      Array.from(state.summary.values()).some(
-        (mailbox) => mailbox.environmentId === environmentId && mailbox.failedInjectCount > 0,
-      ),
-  );
-  return { unread, failed };
 }
 
 function copyToClipboard(text: string, success: () => void, failure: string) {
@@ -113,7 +87,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   // Its pull request is ready to merge or blocked by conflicts (pr-merge-readiness).
   const prMergeState = useEnvironmentPrMergeState(environment.id, environment);
   const buildPipeline = useBuildPipelineStore((s) => s.buildEnvironmentIds.has(environment.id));
-  const mail = useEnvironmentMail(environment.id);
 
   // The badge is the backend's `environment-net` projection — the same
   // measurement the Files → Changes rows page through. An older backend
@@ -142,8 +115,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
     activity: displayedActivityState,
     running: isRunning,
     buildPipeline,
-    unreadMail: mail.unread,
-    failedMail: mail.failed,
     prMergeState,
     machine: boundMachine,
     dockerAvailable,

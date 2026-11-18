@@ -310,7 +310,7 @@ describe("sortable sidebar items", () => {
     ).toBe(true);
   });
 
-  test("SortableProjectGroup aggregates unseen and failed agent mail", () => {
+  test("SortableProjectGroup shows no agent-mail badges", () => {
     const config = structuredClone(appCommandStore(configStore).getInitialState().config);
     config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
     appCommandStore(configStore).setState({ config });
@@ -355,8 +355,8 @@ describe("sortable sidebar items", () => {
       />,
     );
 
-    expect(screen.getByLabelText("3 unread agent messages")).toBeTruthy();
-    expect(screen.getByLabelText("Agent message delivery failed")).toBeTruthy();
+    expect(screen.queryByLabelText("3 unread agent messages") === null).toBe(true);
+    expect(screen.queryByLabelText("Agent message delivery failed") === null).toBe(true);
   });
 
   test("SortableProjectGroup highlights the header only when isSelected is true", () => {

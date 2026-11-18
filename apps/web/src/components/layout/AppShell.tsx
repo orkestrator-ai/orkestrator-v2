@@ -25,8 +25,6 @@ import {
 import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
 import { useRemoteMachineView } from "@/components/federation/useMachineViews";
 import { AgentInfoButton } from "./AgentInfoButton";
-import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
-import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
 import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
@@ -200,7 +198,6 @@ export function AppShell({ children }: AppShellProps) {
       <BugReportSheetHost />
       {/* The debug button's dialog, on the scope of the environment's node. */}
       <DebugBuildDialogHost />
-      <AgentMailPanel />
       <HostPark parkRef={contentParkRef} />
       {isMobile ? (
         <MobileAppShellLayout
@@ -216,7 +213,6 @@ export function AppShell({ children }: AppShellProps) {
           actionBar={<ActionBar presentation="grid" />}
           agentInfoButton={
             <div className="flex items-center gap-1">
-              <AgentMailButton />
               {shownInTree ? (
                 <NodeTitleBarAgentInfo scope={shownInTree.scope} mobile />
               ) : (
@@ -289,7 +285,6 @@ export function AppShell({ children }: AppShellProps) {
                 className="mx-2 h-3 w-px self-center bg-border/50"
               />
               <div className="flex items-center gap-1">
-                <AgentMailButton />
                 {shownInTree ? (
                   <NodeTitleBarAgentInfo scope={shownInTree.scope} />
                 ) : (

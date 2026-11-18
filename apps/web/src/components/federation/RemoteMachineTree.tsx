@@ -470,13 +470,6 @@ export function RemoteProjectGroup({
           hasUnreadWork: home.hasUnreadWork,
         })
       : null;
-  // Mail is counted per environment on the machine; the project sums them,
-  // home included, as this window's project header sums its mailboxes.
-  const unreadMail = everyEnvironment.reduce(
-    (total, environment) => total + (environment.agentMailUnread ?? 0),
-    0,
-  );
-  const failedMail = everyEnvironment.some((environment) => environment.agentMailFailed);
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (revealRevision === null) return;
@@ -538,8 +531,6 @@ export function RemoteProjectGroup({
               .length,
             openHint: `Click to open on ${machine.name}`,
           }}
-          unreadMail={unreadMail}
-          failedMail={failedMail}
           highlighted={shown || revealed}
           ariaCurrent={shown ? "page" : revealed ? "true" : undefined}
           sortable={sortable}

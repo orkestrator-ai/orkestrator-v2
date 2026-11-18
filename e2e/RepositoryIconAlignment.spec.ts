@@ -107,13 +107,13 @@ test("a member's label keeps the 8 px gap after its icon", async ({ page }) => {
   }
 });
 
-test("long names and badges truncate without overflow at the minimum width", async ({ page }) => {
+test("long names truncate without overflow at the minimum width", async ({ page }) => {
   await openRepositoryGrouping(page);
   await page.addStyleTag({ content: "main { width: 280px; max-width: 280px; }" });
   const main = await box(page.locator("main"));
   const longMember = group(page, "source").locator("[data-project-folder-content]");
   const rows = [
-    member(page, "source", /^a-machine-or-checkout.*120|^a-machine-or-checkout.*99\+/),
+    member(page, "source", /^a-machine-or-checkout/),
     member(page, "source", /^Self · a-machine-or-checkout/),
   ];
   await expect(longMember).toBeVisible();
@@ -136,7 +136,7 @@ test("long names and badges truncate without overflow at the minimum width", asy
       ).toBeLessThanOrEqual(1);
     }
   }
-  await expect(rows[0]!.getByText("99+", { exact: true })).toBeVisible();
+  await expect(longMember.getByText(/^(99\+|120)$/)).toHaveCount(0);
   await expectCentred(page, "source", [/^a-machine-or-checkout/]);
   const pageFits = await page.evaluate(
     () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,

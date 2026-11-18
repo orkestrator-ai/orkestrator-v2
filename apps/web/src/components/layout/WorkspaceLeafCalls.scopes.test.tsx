@@ -13,7 +13,6 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import type { MailboxDescriptor } from "@orkestrator/protocol/agent-mail";
 import { invoke } from "@/lib/native/backend";
 import { claudeTmuxClientFor } from "@/lib/claude-tmux-scope";
 import { requestGraphRunView, onGraphRunViewRequested } from "@/lib/graph-run-navigation";
@@ -26,7 +25,6 @@ import { ContainerLogViewer } from "@/components/environments/ContainerLogViewer
 import { PreviewFrameworkHints } from "@/components/browser/PreviewFrameworkHints";
 import { DesignEnvironmentDeletionNotice } from "@/components/design/DesignEnvironmentDeletionNotice";
 import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDialog";
-import { MailboxDeliverySettings } from "@/components/agent-mail/MailboxDeliverySettings";
 import { useTicketSyncStatus } from "@/components/kanban/TicketSyncStrip";
 import { usePullRequest } from "@/hooks/usePullRequest";
 import { useFileSave } from "@/hooks/useFileSave";
@@ -185,24 +183,6 @@ describe("a leaf's workspace calls the leaf (plan item 4007)", () => {
     } finally {
       unlisten();
     }
-    expectNothingOnTheCommandNode();
-  });
-
-  test("mail: muting a mailbox goes to the leaf", async () => {
-    const mailbox = {
-      environmentId: "env-1",
-      tabId: "tab-1",
-      address: "env-1/tab-1",
-      injectPolicy: "idle",
-      injectOverride: null,
-      mutedInbound: false,
-      mutedOutbound: false,
-      capabilities: { canInject: true },
-    } as unknown as MailboxDescriptor;
-    openLeaf({ mute_agent_mail: null, get_agent_mail_mailbox: null });
-    renderInLeaf(<MailboxDeliverySettings mailbox={mailbox} />);
-    fireEvent.click(screen.getByRole("button", { name: "Mute inbound" }));
-    await waitFor(() => expect(leafCommands()).toContain("mute_agent_mail"));
     expectNothingOnTheCommandNode();
   });
 

@@ -118,17 +118,6 @@ for (const composer of [
   });
 }
 
-test("an agent mail row has an inset keyboard focus outline", async ({ page }) => {
-  await page.goto("/focus-hairline");
-  await page.getByRole("button", { name: "Open agent mail" }).press("Enter");
-  const row = page.getByTestId("agent-mail-conversation-row");
-  await expect(row).toContainText("Fixture agent");
-  await page.keyboard.press("Tab");
-  await row.focus();
-  await expect(row).toBeFocused();
-  await expectHairline(row);
-});
-
 test("a GitHub repository row has an inset keyboard focus outline", async ({ page }) => {
   await page.goto("/add-project");
   await page.getByRole("button", { name: "From GitHub" }).click();

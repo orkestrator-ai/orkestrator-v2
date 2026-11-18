@@ -362,7 +362,7 @@ describe("status on an icon", () => {
     expect(within(icon!).getByTestId("coordinator-activity-icon").className).toContain("-m-[3px]");
   });
 
-  test("unread agent mail is a dot, never a count", async () => {
+  test("unread agent mail adds no badge: it is read in the transcript", async () => {
     appCommandStore(configStore).setState({
       config: {
         ...appCommandStore(configStore).getState().config,
@@ -379,9 +379,9 @@ describe("status on an icon", () => {
     });
     renderSidebar();
     const [icon] = await findCompactIcons(1);
-    expect(within(icon!).getByTestId("compact-repository-badge").dataset.badge).toBe("unread");
+    expect(within(icon!).queryByTestId("compact-repository-badge") === null).toBe(true);
     expect(icon!.textContent).toBe("");
-    expect(icon!.getAttribute("aria-label")).toBe("app, 12 unread agent messages");
+    expect(icon!.getAttribute("aria-label")).toBe("app");
   });
 });
 

@@ -12,8 +12,6 @@ import { openInBrowser } from "@/lib/backend";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { SortableEnvironmentItem } from "./SortableEnvironmentItem";
 import { ProjectGroupHeader } from "./ProjectGroupHeader";
-import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useConfigStore } from "@/stores/configStore";
 import { useCoordinatorActivity } from "@/stores/coordinatorActivityStore";
 
 interface SortableProjectGroupProps {
@@ -107,24 +105,6 @@ export function SortableProjectGroup({
   // Count running environments
   const runningCount = environments.filter((e) => e.status === "running").length;
   const coordinatorActivity = useCoordinatorActivity(project.id);
-  const messagingEnabled = useConfigStore(
-    (state) => state.config.global.agentMessaging?.enabled === true,
-  );
-  const unreadMail = useAgentMailStore((state) => {
-    if (!messagingEnabled) return 0;
-    let count = 0;
-    for (const mailbox of state.summary.values()) {
-      if (mailbox.projectId === project.id) count += mailbox.userUnseenCount ?? mailbox.unreadCount;
-    }
-    return count;
-  });
-  const hasFailedMail = useAgentMailStore(
-    (state) =>
-      messagingEnabled &&
-      Array.from(state.summary.values()).some(
-        (mailbox) => mailbox.projectId === project.id && mailbox.failedInjectCount > 0,
-      ),
-  );
 
   return (
     <>
@@ -142,8 +122,6 @@ export function SortableProjectGroup({
               runningCount,
               openHint: "Click to open board",
             }}
-            unreadMail={unreadMail}
-            failedMail={hasFailedMail}
             highlighted={isSelected}
             ariaCurrent={isSelected ? "page" : undefined}
             sortable

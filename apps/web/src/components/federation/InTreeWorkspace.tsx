@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
 import { NodeWorkspaceLayout } from "@/components/layout/NodeWorkspaceLayout";
 import { OpenFileDialog } from "@/components/layout/OpenFileDialog";
 import {
@@ -55,8 +54,6 @@ function InTreeNodeWorkspace({ shown }: { shown: boolean }) {
         <NodeWorkspaceHost />
         {/* The window's ⌘⇧P steps aside while this node is shown (`AppShell`). */}
         <OpenFileDialog enabled={shown} />
-        {/* This node's tabs and their mail live here; the messages panel opens over it. */}
-        <AgentMailPanel />
         <NodeWorkspaceLayout
           main={
             <WorkspaceContent

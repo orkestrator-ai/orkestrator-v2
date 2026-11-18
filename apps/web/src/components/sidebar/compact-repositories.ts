@@ -116,13 +116,11 @@ export interface CompactMemberFacts {
   waiting?: boolean;
   /** An environment other than its home has work the user has not seen. */
   unreadWork: boolean;
-  unreadMail: number;
-  failedMail: boolean;
 }
 
 export interface CompactRepositoryStatus {
   ring: CoordinatorActivityState | null;
-  badge: "attention" | "unread" | null;
+  badge: "attention" | null;
   /** The status in words, for the tooltip and the accessible name. */
   labels: readonly string[];
 }
@@ -158,11 +156,6 @@ export function remoteMemberFacts(
       (environment) =>
         !environment.isProjectHome && !environment.deleting && environment.hasUnreadWork,
     ),
-    unreadMail: environments.reduce(
-      (total, environment) => total + (environment.agentMailUnread ?? 0),
-      0,
-    ),
-    failedMail: environments.some((environment) => environment.agentMailFailed),
   };
 }
 
@@ -177,8 +170,6 @@ export function compactRepositoryStatus(
   let working = false;
   let waiting = false;
   let unreadWork = false;
-  let unreadMail = 0;
-  let failedMail = false;
   for (const member of members) {
     const home = member.home ? projectHomeStatus(member.home) : null;
     working ||=
@@ -188,21 +179,15 @@ export function compactRepositoryStatus(
       member.coordinator === "waiting" ||
       (member.home !== null && !member.home.deleting && member.home.activity === "waiting");
     unreadWork ||= member.unreadWork || (home !== null && member.home?.hasUnreadWork === true);
-    unreadMail += member.unreadMail;
-    failedMail ||= member.failedMail;
   }
-  const attention = unreadWork || failedMail || (working && waiting);
+  const attention = unreadWork || (working && waiting);
   const labels: string[] = [];
   if (working) labels.push("Working");
   if (waiting) labels.push("Waiting for you");
   if (unreadWork) labels.push("Needs attention");
-  if (unreadMail > 0) {
-    labels.push(`${unreadMail} unread agent message${unreadMail === 1 ? "" : "s"}`);
-  }
-  if (failedMail) labels.push("Agent message delivery failed");
   return {
     ring: working ? "working" : waiting ? "waiting" : null,
-    badge: attention ? "attention" : unreadMail > 0 ? "unread" : null,
+    badge: attention ? "attention" : null,
     labels,
   };
 }

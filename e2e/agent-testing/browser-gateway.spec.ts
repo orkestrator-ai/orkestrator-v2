@@ -1486,6 +1486,10 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
 }) => {
   test.skip(process.env.ORKESTRATOR_AGENT_TEST_REVIEW !== "1", "opt-in isolated Codex turn");
   test.setTimeout(240_000);
+  await page.addLocatorHandler(
+    page.getByRole("button", { name: "Continue without Claude" }),
+    (button) => button.click(),
+  );
   const status = await profileStatus();
   expect(status.flavor).toBe("agent-test");
   const invoke = await authenticatedInvoke(page, status);
@@ -1594,10 +1598,12 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.goto(status.browserUrl!);
     await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }).click();
-    await page.getByTestId("agent-mail-conversation-row").first().click();
-    const panel = page.getByTestId("agent-mail-panel");
-    await panel.getByRole("button", { name: "Deliver now", exact: true }).click();
+    // The recipient tab's mail banner releases it; there is no messages panel.
+    const mailPill = page.getByRole("button", { name: /^Agent mail: / });
+    const deliverNow = page.getByRole("button", { name: "Deliver now", exact: true });
+    await expect(mailPill.or(deliverNow).first()).toBeVisible({ timeout: 15_000 });
+    if (await mailPill.isVisible()) await mailPill.click();
+    await deliverNow.click();
     await expect
       .poll(
         async () => (await readMail()).messages.find(({ id }) => id === message.id)?.placement,
@@ -1615,7 +1621,6 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     expect(newIds[0]).toMatch(/^[0-9a-f-]{36}$/);
     expect(after.pendingSteer).toBeUndefined();
     expect(after.pendingDispatch).toBeUndefined();
-    await panel.getByRole("button", { name: "Close", exact: true }).click();
     await page.getByText(other!.name, { exact: true }).first().click();
     await expect
       .poll(
@@ -1630,10 +1635,13 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.reload();
     await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }).click();
-    await page.getByTestId("agent-mail-conversation-row").first().click();
-    await expect(panel.getByText(/^(delivered|handled)$/)).toBeVisible();
-    await expect(panel.getByRole("button", { name: "Deliver now", exact: true })).toHaveCount(0);
+    expect((await readMail()).messages.find(({ id }) => id === message.id)?.placement).toBe(
+      "injected",
+    );
+    await expect(
+      page.locator("[data-mail-tile]").filter({ hasText: `QA receipt notification: ${marker}.` }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(deliverNow).toHaveCount(0);
     expect((await readSession()).dispatchedRequestIds).toEqual(after.dispatchedRequestIds);
     expect((await fs.readFile(receivedFile, "utf8")).trim()).toBe(marker);
   } finally {
@@ -1651,6 +1659,11 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
 test("agent mail rehydrates after an inactive recipient is opened and the page reloads", async ({
   page,
 }) => {
+  // Pull-only mail does not need a signed-in agent.
+  await page.addLocatorHandler(
+    page.getByRole("button", { name: "Continue without Claude" }),
+    (button) => button.click(),
+  );
   const status = await profileStatus();
   expect(status.status).toBe("ready");
   expect(status.browserUrl).toBeTruthy();
@@ -1746,9 +1759,6 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await expect(page.getByRole("region", { name: "Agent mail", exact: true })).toContainText(
       "Inactive recipient",
     );
-    await expect(
-      page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }),
-    ).toBeVisible();
 
     await page.reload();
     await ensureProjectExpanded(page, fixture!.name);
@@ -1759,77 +1769,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await expect(page.getByRole("region", { name: "Agent mail", exact: true })).toContainText(
       "Inactive recipient",
     );
-    await expect(
-      page.getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ }),
-    ).toBeVisible();
-    // A committed send whose response is lost must retain its draft and retry
-    // key across both list navigation and closing the panel.
-    const openConversation = async () => {
-      await page
-        .getByRole("button", { name: /^Agent mail(?:, \d+ messages? needs? you)?$/ })
-        .click();
-      await page.getByTestId("agent-mail-conversation-row").first().click();
-    };
-    await openConversation();
-    const panel = page.getByTestId("agent-mail-panel");
-    await panel.getByPlaceholder("Subject (optional)").fill("Retry receipt");
-    await panel.locator("textarea").fill("A draft retained across panel navigation.");
-    await panel.getByRole("button", { name: "Back to conversations" }).click();
-    await panel.getByRole("button", { name: "Close", exact: true }).click();
-    await openConversation();
-    await expect(panel.locator("textarea")).toHaveValue(
-      "A draft retained across panel navigation.",
-    );
-    await expect(panel.getByPlaceholder("Subject (optional)")).toHaveValue("Retry receipt");
-    let lost = false;
-    const requestIds: string[] = [];
-    await page.route("**/__orkestrator/invoke", async (route) => {
-      const request = route.request().postDataJSON() as {
-        command?: string;
-        args?: { requestId?: string };
-      };
-      if (request.command !== "send_agent_mail") return route.continue();
-      requestIds.push(request.args?.requestId ?? "");
-      if (lost) return route.continue();
-      lost = true;
-      await route.fetch();
-      await route.abort("failed");
-    });
-    await panel.getByRole("button", { name: "Send", exact: true }).click();
-    await expect(page.getByText("Message was not sent", { exact: true })).toBeVisible();
-    await panel.getByRole("button", { name: "Close", exact: true }).click();
-    await dismissSidebarTooltip(page, fixture!.name);
-    await page.getByText(sender.name, { exact: true }).first().click();
-    await dismissSidebarTooltip(page, fixture!.name);
-    await page.getByText(recipient.name, { exact: true }).first().click();
     await page.setViewportSize({ width: 390, height: 844 });
-    await openConversation();
-    await expect(panel.locator("textarea")).toHaveValue(
-      "A draft retained across panel navigation.",
-    );
-    await panel.getByRole("button", { name: "Send", exact: true }).click();
-    await expect(panel.locator("textarea")).toHaveValue("");
-    expect(requestIds).toHaveLength(2);
-    expect(requestIds[0]).toBeTruthy();
-    expect(requestIds[1]).toBe(requestIds[0]);
-    const sentMailbox = await invoke<{ messages: Array<{ subject?: string }> }>(
-      "get_agent_mail_mailbox",
-      {
-        environmentId: recipient.id,
-        tabId: recipientTabId,
-      },
-    );
-    expect(sentMailbox.messages.filter(({ subject }) => subject === "Retry receipt")).toHaveLength(
-      1,
-    );
-    await page.unroute("**/__orkestrator/invoke");
-    await panel.getByRole("button", { name: "Close", exact: true }).click();
-    await page
-      .getByRole("button", {
-        name: "Agent mail: 2 messages in inbox · pull only",
-        exact: true,
-      })
-      .click();
     const deliverNow = page.getByRole("button", { name: "Deliver now", exact: true });
     await expect(deliverNow).toBeVisible();
     const bounds = await deliverNow.boundingBox();

@@ -36,7 +36,7 @@ MCP token.
 | Sent status | Read placement and both receipt states for mail this tab sent (`get_message_status`) |
 | Idle inject | When policy allows, the store drains pending mail into a new user turn as a tagged carrier |
 | Presence gate | Inject only when the recipient is idle (or an unprompted “cold” native tab) |
-| User inbox | Messages panel (conversations, compose), per-tab banner, mute and inject-policy overrides |
+| User inbox | Mail is read inline in the transcript; the per-tab banner releases, retries or discards held deliveries. There is no messages panel and no sidebar or title-bar unread count |
 | Routed wake | Coordinator ↔ the workers it created, and peer ↔ peer while **Wake peers** is on, wake the recipient even when the default inject policy is off (see [Routes](#routes)) |
 
 A carrier the recipient cannot acknowledge is not a usable delivery channel:
@@ -606,13 +606,11 @@ policy is. Mute, explicit Off, pause, hop budget, and `canInject` still apply.
 | Surface | Location | Notes |
 | --- | --- | --- |
 | Transcript, delivered mail | `MailTile` (`apps/web/src/components/chat/`) | Each injected message is a collapsed tile: an icon for its kind or notice tone, sender, subject and about three clamped lines of the body. The header is a button (`aria-expanded`); clicking it, or the clipped preview, expands the Markdown body, and the choice survives remounts and paging for the session. A batched prompt becomes one tile per message |
-| Transcript, sent and read mail | `MailToolPart` (`apps/web/src/components/chat/`) | `send_message`, `reply_message`, `read_message` and a coordinator's `get_message` calls render as mail tiles, not tool rows, and stay out of the collapsed tool group (`agentMailToolCall`, `apps/web/src/lib/chat/agent-mail-tool-call.ts`). A sent tile shows the recipient and its live delivery state from the recipient's mailbox; a read tile is where pull-only mail enters the transcript. Every tile with both participants known opens their conversation |
-| Messages panel | `AgentMailPanel` (`apps/web/src/components/agent-mail/`) | A right-hand sheet. The list is one row per pair that has exchanged mail (`list_agent_mail_conversations`), those needing the person first; a conversation is both directions between two participants, oldest first (`get_agent_mail_conversation`), with retry, resume, deliver-now and discard on the messages that need them. The person composes only in their own conversation with a tab. Opening a conversation marks it seen (`mark_agent_mail_conversation_seen`) |
-| Title-bar button | `AgentMailButton` | Opens the panel. Its badge counts `attentionCount`: failed and budget-held deliveries, unseen external or cross-project mail, and unseen non-system mail waiting for an agent (`agentMailNeedsAttention`), not the agents' own traffic |
-| Per-tab banner | `AgentMailBanner` | A floating notice (`components/ui/floating-notice.tsx`) at the top right of environment tabs and coordinator conversations: beside the transcript column when there is room, a pill otherwise. Pending, failed, pull-only, waiting for an agent, budget or hourly-limit held; retry / resume / deliver now / discard, and View opens the tab's conversations |
-| Tab menu, Agent info | `DraggableTab`, `AgentInfoButton` | One "Messages…" entry when `canPull`: the panel focused on the tab, with its delivery policy and mutes |
+| Transcript, sent and read mail | `MailToolPart` (`apps/web/src/components/chat/`) | `send_message`, `reply_message`, `read_message` and a coordinator's `get_message` calls render as mail tiles, not tool rows, and stay out of the collapsed tool group (`agentMailToolCall`, `apps/web/src/lib/chat/agent-mail-tool-call.ts`). A sent tile shows the recipient and its live delivery state from the recipient's mailbox; a read tile is where pull-only mail enters the transcript |
+| Per-tab banner | `AgentMailBanner` | A floating notice (`components/ui/floating-notice.tsx`) at the top right of environment tabs and coordinator conversations: beside the transcript column when there is room, a pill otherwise. Pending, failed, pull-only, waiting for an agent, budget or hourly-limit held; retry / resume / deliver now / discard |
+| Removed | — | The messages panel (`AgentMailPanel`), its title-bar button, the "Messages…" tab-menu and Agent info entries, and the unread-mail counts on sidebar rows were removed on 2026-11-18: mail is read inline. The renderer no longer offers composing mail to a tab or per-mailbox mute and inject overrides; the backend commands (`list_agent_mail_conversations`, `get_agent_mail_conversation`, `mute_agent_mail`, …) remain |
 | Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `coordinatorStatusWakes` (`off` / `settled` / `stages`), `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
-| Per-mailbox policy | `mute_agent_mail` | `inject`: inherit / off / idle; inbound and outbound mute |
+| Per-mailbox policy | `mute_agent_mail` | `inject`: inherit / off / idle; inbound and outbound mute. Backend command only; no renderer control sets it |
 
 **Conversations.** A participant is a mailbox id (`agentMailParticipantKey`), so
 history survives a tab's session being replaced, or a fixed key for the person
@@ -631,9 +629,7 @@ mail). Coordinator-route mail wakes regardless. Peer mail wakes only after
 two peers answering each other start billable turns nobody asked for, and a
 missing setting normalizes to off.
 
-The user sender bypasses the sender `canSend` check. The compose UI still
-only lists pull-capable destinations, so native Cursor and Grok tabs appear
-there the same way Claude and Pi do.
+The user sender bypasses the sender `canSend` check.
 
 ## Mail tools and approval settings
 
@@ -863,7 +859,7 @@ capability row says so.
 | Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator-providers.ts` |
 | UI commands | `apps/backend/src/core/commands-registry-mail.ts` |
 | Conversations (pairs) | `apps/backend/src/core/agent-mail-conversations.ts` |
-| Settings / panel / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
+| Settings / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
 | Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/lib/chat/agent-mail-tool-call.ts` (mail tool calls), `apps/web/src/components/chat/MailTile.tsx`, `MailToolPart.tsx` |
 | Main / side coordinator, respawn | `apps/backend/src/core/coordinator-service.ts`, `packages/protocol/src/coordinator.ts` |
 | Coordinator status wakes | `apps/backend/src/core/coordinator-status-wakes.ts` |

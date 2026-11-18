@@ -1,5 +1,6 @@
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import * as realResizable from "@/components/ui/resizable";
@@ -13,7 +14,6 @@ import * as realSidebar from "./Sidebar";
 import * as realOpenFileDialog from "./OpenFileDialog";
 import * as realAgentInfoButton from "./AgentInfoButton";
 import * as realSystemUsageIndicator from "./SystemUsageIndicator";
-import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
@@ -58,7 +58,6 @@ const useRealUIStore = realUIStore;
 const INITIAL_PROJECT_BOARD_TAB = uiStore().getState().projectBoardTab;
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
 const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
-const realAgentMailPanelSnapshot = { ...realAgentMailPanel };
 const INITIAL_PORTAL = portalStore.getState();
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const realResizableSnapshot = { ...realResizable };
@@ -166,11 +165,6 @@ mock.module("./SystemUsageIndicator", () => ({
   ),
 }));
 
-// Observable as a slot: the banner's View opens it in whichever layout is shown.
-mock.module("@/components/agent-mail/AgentMailPanel", () => ({
-  AgentMailPanel: () => <div data-testid="agent-mail-panel-host" />,
-}));
-
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
   useMediaQuery: () => isMobile,
@@ -227,7 +221,6 @@ afterAll(() => {
   mock.module("./OpenFileDialog", () => realOpenFileDialogSnapshot);
   mock.module("./AgentInfoButton", () => realAgentInfoButtonSnapshot);
   mock.module("./SystemUsageIndicator", () => realSystemUsageIndicatorSnapshot);
-  mock.module("@/components/agent-mail/AgentMailPanel", () => realAgentMailPanelSnapshot);
 });
 
 function seedPaneLayout(tabs: TabInfo[], activeTabId: string | null, activePaneId = "pane-a") {
@@ -296,6 +289,32 @@ afterEach(() => {
 });
 
 describe("AppShell", () => {
+  test.each([false, true])(
+    "mounts no inbox or mail panel with messaging enabled (mobile: %s)",
+    (mobile) => {
+      isMobile = mobile;
+      const store = appCommandStore(configStore);
+      const { config } = store.getState();
+      store.setState({
+        config: {
+          ...config,
+          global: {
+            ...config.global,
+            agentMessaging: normalizeAgentMessagingSettings({ enabled: true }),
+          },
+        },
+      });
+      try {
+        renderInAppCommandScope(<AppShell>Workspace</AppShell>);
+        expect(screen.queryByRole("button", { name: /^Agent mail\b/i, hidden: true })).toBeNull();
+        expect(screen.queryByTestId("agent-mail-panel")).toBeNull();
+      } finally {
+        cleanup();
+        store.setState({ config });
+      }
+    },
+  );
+
   test("an open files sheet stays hidden over a remote workspace across layout changes", () => {
     filesPanelOpen = true;
     isMobile = false;

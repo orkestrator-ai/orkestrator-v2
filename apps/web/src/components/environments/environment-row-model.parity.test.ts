@@ -67,8 +67,6 @@ const base = {
 interface Markers {
   buildPipeline?: boolean;
   buildActive?: boolean;
-  unreadMail?: number;
-  failedMail?: boolean;
   /** The machine's Docker availability; absent as from a leaf that predates it. */
   dockerAvailable?: boolean;
   monitor?: PrMonitorEnvironmentState;
@@ -124,8 +122,6 @@ function localRow(environment: Environment, markers: Markers): Row {
         environment.environmentType === "local" ||
         (dockerAvailable && environment.status === "running"),
       buildPipeline: markers.buildPipeline === true,
-      unreadMail: markers.unreadMail ?? 0,
-      failedMail: markers.failedMail === true,
       prMergeState: localEnvironmentPrMergeState(
         environment,
         markers.monitor ?? null,
@@ -146,8 +142,6 @@ function nodeSummary(environment: Environment, markers: Markers) {
     ...environment,
     ...(markers.buildPipeline ? { buildPipeline: true } : {}),
     ...(markers.buildActive ? { buildActive: true } : {}),
-    ...(markers.unreadMail ? { agentMailUnread: markers.unreadMail } : {}),
-    ...(markers.failedMail ? { agentMailFailed: true } : {}),
     ...(markers.dockerAvailable === undefined ? {} : { dockerAvailable: markers.dockerAvailable }),
     ...(isPrReadingConfirmedByMonitor(environment, markers.monitor)
       ? { prMonitorConfirmed: true }
@@ -251,11 +245,7 @@ const cases: Array<[string, Partial<Environment>, Markers]> = [
   ],
   ["a paused build pipeline", { name: "Build: feature" }, { buildPipeline: true }],
   ["a project home", { name: "project-home", projectHome: true }, {}],
-  [
-    "unread work, unread mail and a failed delivery",
-    { hasUnreadWork: true },
-    { unreadMail: 3, failedMail: true },
-  ],
+  ["unread work", { hasUnreadWork: true }, {}],
   [
     "a running container on a machine whose Docker is down",
     { environmentType: "containerized", status: "running", agentActivityState: "working" },
@@ -402,8 +392,6 @@ test("Docker unavailable blocks container actions while local worktree actions r
     activity: "idle",
     running: true,
     buildPipeline: false,
-    unreadMail: 0,
-    failedMail: false,
     prMergeState: null,
     machine: null,
     dockerAvailable: false,

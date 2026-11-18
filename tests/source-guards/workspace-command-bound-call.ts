@@ -53,7 +53,6 @@ export const WORKSPACE_ROOT_MODULES: readonly string[] = [
   `${WEB_SOURCE_ROOT}/components/layout/NodeWorkspaceLayout`,
   // The panels `InTreeWorkspace` mounts inside the node's scope.
   `${WEB_SOURCE_ROOT}/components/layout/OpenFileDialog`,
-  `${WEB_SOURCE_ROOT}/components/agent-mail/AgentMailPanel`,
 ];
 
 /** The scope machinery and the typed clients: the calls they make are the point. */

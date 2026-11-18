@@ -11,7 +11,6 @@ import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { fileDirtyStore } from "@/stores";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import { configStore } from "@/stores/configStore";
-import { agentMailStore } from "@/stores/agentMailStore";
 import { previewServiceStore } from "@/stores/previewServiceStore";
 import {
   formatPreviewServiceUri,
@@ -994,38 +993,19 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
-  test("shows the mail context action only while agent messaging is enabled", () => {
-    appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
+  test("offers no messages panel action, even with agent messaging enabled", () => {
     const tab: TabInfo = {
       id: "tab-claude",
       type: "agent-native",
       nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
     const config = structuredClone(appCommandStore(configStore).getInitialState().config);
-    config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: false };
+    config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
     appCommandStore(configStore).setState({ config });
-    const view = renderTab(tab);
+    renderTab(tab);
     fireEvent.contextMenu(screen.getByText("Claude 1"));
+    // Mail is read inline in the transcript.
     expect(screen.queryByText("Messages…") === null).toBe(true);
-
-    config.global.agentMessaging.enabled = true;
-    appCommandStore(configStore).setState({ config: structuredClone(config) });
-    view.rerender(
-      <DraggableTab
-        tab={tab}
-        paneId="pane-1"
-        index={0}
-        isActive={false}
-        canClose
-        onSelect={() => {}}
-      />,
-    );
-    fireEvent.contextMenu(screen.getByText("Claude 1"));
-    fireEvent.click(screen.getByText("Messages…"));
-    // The panel opens on this tab's conversations.
-    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
-      focus: "env-1\0tab-claude",
-    });
   });
 
   test("hides the file tooltip again on mouse leave", async () => {

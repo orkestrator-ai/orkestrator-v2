@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX,
@@ -126,11 +126,6 @@ describe("mounted mail tool tiles", () => {
     live.messages[100] = { ...live.messages[100]!, placement: "inject_failed", ackedAt: undefined };
     act(() => appCommandStore(agentMailStore).getState().setMailbox(live));
     expect(screen.getByText("delivery failed")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
-    expect(appCommandStore(agentMailStore).getState().panel?.conversation).toEqual([
-      "sender\0agent",
-      "recipient\0agent",
-    ]);
   });
   test("sent mail waits for an agent when its recipient cannot pull", async () => {
     const pending = mailbox();
@@ -159,7 +154,6 @@ describe("mounted mail tool tiles", () => {
     const mounted = renderInAppCommandScope(<MailToolPart call={call} expansionKey="missed" />);
     expect(await screen.findByText("waiting to deliver")).toBeTruthy();
     mounted.unmount();
-    expect(appCommandStore(agentMailStore).getState().sent.size).toBe(0);
     invokeMock.mockImplementation(async (command) => {
       if (command === "get_agent_mail_summary")
         return { revision: 2, mailboxes: [{ ...mailbox(2).descriptor, revision: 2 }] };
@@ -231,10 +225,6 @@ describe("mounted mail tool tiles", () => {
     expect(screen.getByText("The result")).toBeTruthy();
     expect(invokeMock.mock.calls.some(([command]) => command === "get_agent_mail_mailboxes")).toBe(
       false,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
-    expect(appCommandStore(agentMailStore).getState().panel?.conversation?.[1]).toBe(
-      "recipient\0agent",
     );
   });
 });

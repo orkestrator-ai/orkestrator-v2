@@ -280,6 +280,7 @@ test("switching graphs off persists across reload and keeps an open designer usa
       .getByRole("button", { name: new RegExp(`^${project.name}`) })
       .first()
       .click();
+    await dismissSidebarTooltip(page, project.name);
     await page.getByRole("tab", { name: "Kanban", exact: true }).click();
     await page.getByText("Graphs switch-off regression", { exact: true }).hover();
     await page

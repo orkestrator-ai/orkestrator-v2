@@ -9,6 +9,8 @@ import {
   releaseClaudeRuntimeTasks,
 } from "./session-manager-background-tasks.js";
 import { readLiveCommandInventory } from "./session-manager-commands.js";
+import { ClaudeControlRequests } from "./claude-control-requests.js";
+import { recoverClaudeRequestsOnRejoin } from "./live-claude-control.js";
 import {
   createStructuredUsageRefreshCoordinator,
   sessionOperationError,
@@ -106,6 +108,9 @@ function endClaudeRuntime(
   failure: { turn: ClaudeRuntimeTurn; error: unknown } | undefined,
 ): void {
   runtime.state = "ended";
+  // Every card this process raised is withdrawn and any late delivery
+  // refused: an answer could no longer reach the CLI that asked.
+  runtime.requests.end();
   disarmClaudeRuntimeIdleDetach(runtime);
   // Nothing reads the held prompt any more; release it.
   runtime.input.close();
@@ -235,6 +240,10 @@ async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRunt
       required,
     });
     recordMcpConfigRevision(session, plan, running.mcp);
+    // An actual rejoin of a surviving CLI: learn what it still waits on before
+    // the prompt is written. Never refuses the join; an unread inventory is
+    // unknown, and the cards the bridge already holds stand.
+    await recoverClaudeRequestsOnRejoin(running);
     return await sdkPromptMessages(sdkPrompt, turn.promptUuid);
   } catch (error) {
     abandonJoin(turn, running);
@@ -288,6 +297,8 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
   const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, turn.promptUuid);
   // Created before the query so the hooks it launches with read this state.
   const mcp = createClaudeRuntimeMcp(mcpServers, mcpServerNames, plan.accountOnlyMcpServers);
+  // Request ids are per process, so each CLI gets its own ledger.
+  const requests = new ClaudeControlRequests();
   // Hooks and callbacks fire on the runtime's behalf for whichever turn
   // they concern: the one whose row holds the tool, else the latest turn.
   const turnFor = (toolUseId?: string): ClaudeRuntimeTurn =>
@@ -296,7 +307,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
     turn.thisTurn!;
   const queryIterator = query({
     prompt: heldSdkPrompt.prompt,
-    options: claudeQueryOptions(turn, plan, turnFor, mcp),
+    options: claudeQueryOptions(turn, plan, turnFor, mcp, requests),
   });
   const liveQuery = Object.assign(queryIterator, {
     pushInput: (message: SDKUserMessage) => turnFor().pushSteerInput(message),
@@ -316,6 +327,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
     },
     mcpServers: mcpServersKey,
     mcp,
+    requests,
     firstTurn: turn.thisTurn!,
   });
   const launched = created.runtime;

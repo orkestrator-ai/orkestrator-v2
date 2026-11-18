@@ -1133,7 +1133,8 @@ server as loaded; the address is never contacted.
 - [agent-accounts.md](../../architecture/agent-accounts.md#sign-in-readiness), to-do
   0003 (retired 2026-11-13) (provider sign-in and readiness).
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md)
-  (deferred Claude pending-permission re-arm and MCP permission provenance).
+  (Claude pending-permission re-arm on a rejoin and MCP permission provenance,
+  both done).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Docker and provider runs.
 - [agent-engines.md](../../architecture/agent-engines.md) "Execution policy".

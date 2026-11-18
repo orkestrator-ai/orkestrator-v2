@@ -14,7 +14,9 @@ Assumptions and decisions). Task 4 rechecked 2026-11-02 against `main` at
 Task 8 rechecked 2026-11-03 against `main` at `7b48c23fb` (Pi `1.4.0`, Codex
 `0.166.0`, OpenCode `1.19.5`) before its instructions half was built, and
 again 2026-11-06 against `main` at `c1724ab74` (Pi still `1.4.0`) before its
-abort and auto-compaction toggle were built.
+abort and auto-compaction toggle were built. Task 4 rechecked again 2026-11-18
+against `main` at `85c55358f` (Claude Agent SDK `0.3.326`) before its re-arm
+half was built.
 
 The "Decided out" list is product decisions, not tasks; only where the current
 pins undercut one of them is it raised below (task 1).
@@ -24,7 +26,7 @@ pins undercut one of them is it raised below (task 1).
 1. **Re-check the backlog against current pins**: the "Needs verification" item; every pin in "Current state" has moved. Status: done (pins, verification note and Codex-goals wording refreshed; see Assumptions and decisions).
 2. **Delete the dead Claude compaction guard**: remove `isSdkCompactBoundaryMessage` and its imports. Status: done (`refactor(claude-bridge): delete dead compact-boundary guard`).
 3. **Claude in-process MCP server**: decide `createSdkMcpServer()` versus the HTTP loopback for Orkestrator tools. Status: done (decided out: keep HTTP; recorded under "Decided out").
-4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: blocked (re-arm waits on 7568: 0001 tasks 3 to 6, the real-login live runs, which moved there from 0001 on 2026-11-10); provenance done 2026-11-02 (an optional `source` on the shared interaction request, filled by Claude, shown on the card).
+4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: done (re-arm 2026-11-18: a prompt that rejoins a surviving CLI re-reads its initialize inventory, and each request only the CLI still holds becomes one card; proved on the pinned CLI without credentials. Provenance 2026-11-02: an optional `source` on the shared interaction request, filled by Claude, shown on the card). Recovering MCP elicitations the same way waits on an Agent SDK that hands them over (see Candidates).
 5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (decision recorded: until a user-visible MCP server needs it).
 6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates).
 7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still at `1.2.0`).
@@ -116,6 +118,20 @@ the card as one line of prose, but `source` (where the server's definition came
 from, which the SDK says is what trust should key on) was dropped, and nothing
 structured reached the shared contract for other consumers or providers.
 Re-arm is still untouched.
+
+Rechecked 2026-11-18 at SDK `0.3.326` before re-arm was built. The initialize
+answer carries `pending_permission_requests`, `pending_user_dialog_requests`
+and `pending_elicitation_requests` beside its `response`, not inside it.
+`Query.reinitialize()` re-sends `initialize` and the SDK itself redelivers the
+first two lists to `canUseTool` and `onUserDialog`, skipping an id it is still
+answering; it drops the elicitation list, and `reinitialize()` resolves with
+the inner `response`, so the caller sees none of the three. Over stdio the
+re-sent request repeats the launch's hooks, prompts and agents; the bridge
+sends MCP servers, plugins and managed settings on `argv`, so those are not
+restated. The pinned CLI listed permissions on every answer and elicitations
+on none (`claude-rejoin-requests.live.test.ts`). The bridge's question and
+plan-approval cards did not watch the SDK's withdrawal signal, so a request
+the CLI withdrew, or one from a CLI that had exited, stayed answerable.
 
 **Decisions.**
 
@@ -428,6 +444,45 @@ tasks 3–7), as the ticket asked.
   the current pins and send none. Nothing here changes how a request is
   answered or which requests a permission rule may answer.
 
+### Task 4: re-arm on an actual rejoin (2026-11-18)
+
+Built the re-arm half. Decisions:
+
+- **When to read the inventory.** Options: on every prompt written into a
+  surviving CLI, the join path (chosen); on a tab remount; or only when some
+  evidence says the CLI holds something. A remount reads the cards the
+  bridge already holds and never reaches a CLI, so it cannot learn of a
+  request only the CLI knows; the join is the one moment the bridge rejoins
+  that process, and the bridge has no evidence that would pick out the cases.
+  The cost is one control round trip per joined prompt, bounded at 2 s
+  (`REJOIN_INVENTORY_TIMEOUT_MS`), and the CLI settling a hook callback it
+  was still waiting on (a PreToolUse denied with a retry notice). A failed,
+  slow or unsupported read never refuses the join.
+- **How to read it.** Options: `Query.reinitialize()` (chosen), or tapping the
+  CLI's stdout through `spawnClaudeCodeProcess` to see the raw answer. The SDK
+  already redelivers permissions and dialogs from a `reinitialize()` answer
+  and dedupes ids it is answering; a tap would put a frame parser in front of
+  every production frame for one read.
+- **Rendering each request once.** The SDK skips a redelivery only while its
+  first delivery is open, so a re-read that crosses the bridge's answer would
+  raise a second card for a resolved request. One ledger per CLI
+  (`claude-control-requests.ts`) shares an open answer, refuses an answered id
+  (deny), withdraws every open card when the process ends and refuses any
+  later delivery. Alternatives were relying on the SDK alone (the crossing
+  case shows a dead card) or replaying the recorded answer (would keep tool
+  inputs in memory for a case the CLI ignores anyway); a refusal fails closed.
+- **Withdrawn and dead-CLI requests.** Question and plan-approval cards now
+  withdraw on the SDK's signal like tool approvals, and every kind is taken
+  down in the same tick, so an answer cannot land in between.
+- **Absent inventory.** Treated as unknown: nothing is withdrawn or raised for
+  a missing list. Withdrawing a held card because a present list omits it was
+  not built, because the caller cannot see the lists; a CLI that withdraws a
+  request says so with `control_cancel_request`, which the signal carries.
+- **Elicitations.** Not recoverable at `0.3.326` (no list reaches the caller
+  or a callback). `live-claude-control.test.ts` fails the typecheck when the
+  SDK starts returning a `pending_*` list, and the live test pins what the
+  CLI lists.
+
 ### Tasks 5, 6 and 9: keep deferred
 
 Chose the recommended option for each: MCP Apps widgets stay deferred until a
@@ -668,9 +723,10 @@ Unadopted today. Each line says what blocks it or what decision it needs.
 
 - Claude (`bridges/claude-bridge`):
   - `additionalDirectories`, inline `agents` and the `skills` option. Not used.
-  - Pending-permission re-arm on (re)initialize: `pending_permission_requests` on
-    the initialize response and `Query.reinitialize()`. This touches the
-    authorization lifecycle.
+  - Pending-permission re-arm on (re)initialize is adopted (task 4): a rejoin
+    calls `Query.reinitialize()` and the SDK redelivers
+    `pending_permission_requests` and `pending_user_dialog_requests`
+    (`recoverClaudeRequestsOnRejoin` in `live-claude-control.ts`).
   - MCP Apps widgets (`readMcpResource`, the tool's `_meta.ui`), and the Codex
     equivalent. Both need a provider-neutral tool-card field before either
     bridge wires them.
@@ -680,9 +736,13 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     `permissions.blockReadsExemptPaths` and `workingDirectoriesAsGiven` (only
     from `--settings` or flag settings), which could let the CLI hold the
     coordinator read boundary beside the hook; same decision.
-  - `pending_elicitation_requests` on the initialize answer (0.3.319) belongs
-    with the re-arm item below; `mcp_call.check_permissions` (0.3.319) with MCP
-    Apps widgets.
+  - `pending_elicitation_requests` on the initialize answer (0.3.319): blocked
+    upstream. SDK `0.3.326` drops it and returns none of the lists to the
+    caller, and the pinned CLI did not list it. Wire it into
+    `recoverClaudeRequestsOnRejoin` once the SDK redelivers it to
+    `onElicitation` or returns it (the typecheck pin in
+    `live-claude-control.test.ts` fails then). `mcp_call.check_permissions`
+    (0.3.319) belongs with MCP Apps widgets.
   - `CLAUDE_CODE_SUBAGENT_EFFORT` (2.1.316): since 2.1.317 a subagent on
     another model uses that model's saved effort, not the composer's. It is
     launch-only, which conflicts with restating effort on every join; revisit
@@ -811,6 +871,10 @@ The billed Grok `costUsdTicks` run moved to the
   SDK with the faux model only; a signed-in Pi tab has not run them
   (to-do 7280, retired 2026-11-10; the live check is in the manual-test
   checklist).
+- Re-arm (task 4) is proved on the pinned CLI with a loopback model and a
+  dropped frame (`claude-rejoin-requests.live.test.ts`), not on a signed-in
+  session whose frame was genuinely lost; over stdio the bridge has seen no
+  such loss. Rerun the live test on every Claude CLI or SDK bump.
 - The MCP provenance line (task 4) is covered by bridge, backend, protocol and
   card tests with synthetic payloads; nobody has yet seen it on a card raised by
   a real Claude CLI for an `mcp__*` tool under the `ask` policy, nor which

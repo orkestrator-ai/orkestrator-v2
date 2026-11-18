@@ -552,6 +552,19 @@ the projection can show the previous number for up to that long after a
 relaunch. `claude-warm-runtime-live.spec.ts` drives one CLI through the app
 against a loopback model and asserts the number holds (todo 0005 task 8).
 
+A prompt written into that surviving CLI is a rejoin, and it first re-reads
+what the CLI still waits on: `Query.reinitialize()`, after which the SDK
+redelivers each permission request and dialog the CLI's initialize answer
+lists (`recoverClaudeRequestsOnRejoin` in `live-claude-control.ts`). One
+ledger per CLI (`claude-control-requests.ts`) turns each request id into one
+card however often it is delivered, refuses one already answered, and
+withdraws every card the CLI raised once it exits, so nothing a dead CLI asked
+can be approved. A tab that remounts only reads the cards the bridge holds; it
+is not a rejoin. A missing or failed read leaves the inventory unknown and
+withdraws nothing. MCP elicitations the CLI holds are not recoverable at Agent
+SDK 0.3.326, which hands that list to nobody (todo 0007 task 4).
+`claude-rejoin-requests.live.test.ts` proves the rejoin on the pinned CLI.
+
 A background task the user stops (`POST /session/:id/tasks/:taskId/stop`)
 leaves nothing owed. The CLI's `stopped` edge can arrive before its answer to
 the stop request, and CLI 2.1.319 queues the `killed` notification for the

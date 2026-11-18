@@ -53,6 +53,16 @@ function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "plan
 
 type CanUseToolContext = Parameters<CanUseTool>[2];
 
+/**
+ * Run `withdraw` when the CLI withdraws the request or its process ends (the
+ * signal `ClaudeControlRequests` hands the callback). Answers the cleanup.
+ */
+function withdrawOnAbort(signal: AbortSignal | undefined, withdraw: () => void): () => void {
+  if (!signal) return () => {};
+  signal.addEventListener("abort", withdraw, { once: true });
+  return () => signal.removeEventListener("abort", withdraw);
+}
+
 /** AskUserQuestion: park a question card and answer the SDK with the user's answers. */
 async function askUserQuestion(
   turn: TurnState,
@@ -87,6 +97,9 @@ async function askUserQuestion(
     expiresAt: requestedAt + QUESTION_TIMEOUT_MS,
   };
 
+  if (permissionContext?.signal?.aborted) {
+    return { behavior: "deny", message: "The question was withdrawn" };
+  }
   if (!canAdmitInteraction(questionRequest, "questions")) {
     return {
       behavior: "deny",
@@ -120,6 +133,20 @@ async function askUserQuestion(
   const answerPromise = new Promise<Record<string, string>>((resolve, reject) => {
     questionResolvers.set(questionId, { resolve, reject });
   });
+  const stopWithdrawal = withdrawOnAbort(permissionContext?.signal, () => {
+    // Taken down at once: an answer in the tick before this waiter resumes
+    // would otherwise look accepted for a request the CLI no longer holds.
+    if (pendingQuestions.get(questionId) !== questionRequest) return;
+    const resolver = questionResolvers.get(questionId);
+    pendingQuestions.delete(questionId);
+    questionResolvers.delete(questionId);
+    eventEmitter.emit({
+      type: "question.answered",
+      sessionId,
+      data: { requestId: questionId, cancelled: true },
+    });
+    resolver?.reject(new Error("The question was withdrawn"));
+  });
 
   try {
     const answers = await Promise.race([answerPromise, timeoutPromise]);
@@ -146,8 +173,9 @@ async function askUserQuestion(
     return { behavior: "deny" as const, message };
   } finally {
     // Cleanup
+    stopWithdrawal();
     releaseDeadline();
-    pendingQuestions.delete(questionId);
+    if (pendingQuestions.get(questionId) === questionRequest) pendingQuestions.delete(questionId);
     questionResolvers.delete(questionId);
   }
 }
@@ -216,6 +244,9 @@ async function requestPlanApproval(
     expiresAt: requestedAt + PLAN_APPROVAL_TIMEOUT_MS,
   };
 
+  if (permissionContext?.signal?.aborted) {
+    return { behavior: "deny", message: "The plan approval was withdrawn" };
+  }
   if (!canAdmitInteraction(approvalRequest, "approvals")) {
     return {
       behavior: "deny",
@@ -239,6 +270,18 @@ async function requestPlanApproval(
 
   const approvalPromise = new Promise<PlanApprovalResponse>((resolve, reject) => {
     planApprovalResolvers.set(approvalId, { resolve, reject });
+  });
+  const stopWithdrawal = withdrawOnAbort(permissionContext?.signal, () => {
+    if (pendingPlanApprovals.get(approvalId) !== approvalRequest) return;
+    const resolver = planApprovalResolvers.get(approvalId);
+    pendingPlanApprovals.delete(approvalId);
+    planApprovalResolvers.delete(approvalId);
+    eventEmitter.emit({
+      type: "plan.approval-responded",
+      sessionId,
+      data: { requestId: approvalId, approved: false, cancelled: true },
+    });
+    resolver?.reject(new Error("The plan approval was withdrawn"));
   });
 
   // Emit event so frontend knows to show the approval UI
@@ -340,8 +383,11 @@ async function requestPlanApproval(
     return { behavior: "deny" as const, message: errorMessage };
   } finally {
     // Cleanup
+    stopWithdrawal();
     releaseDeadline();
-    pendingPlanApprovals.delete(approvalId);
+    if (pendingPlanApprovals.get(approvalId) === approvalRequest) {
+      pendingPlanApprovals.delete(approvalId);
+    }
     planApprovalResolvers.delete(approvalId);
   }
 }

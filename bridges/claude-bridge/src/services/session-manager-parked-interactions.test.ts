@@ -935,8 +935,14 @@ for (const policy of [ASK_POLICY, DENY_POLICY]) {
       },
     });
     const call = await nextQueryCall();
+    // Each call its own request id, as the CLI gives them.
+    let requests = 0;
     const decide = (name: string, input: Record<string, unknown>) =>
-      call.options.canUseTool!(`mcp__orkestrator__${name}`, input, context(name));
+      call.options.canUseTool!(
+        `mcp__orkestrator__${name}`,
+        input,
+        context(`${name}-${(requests += 1)}`),
+      );
     for (const [name, input] of [
       ["submit_a", { resultKey: "key-a" }],
       ["validate_a", { resultKey: "key-a" }],
@@ -1019,18 +1025,19 @@ test("declines unsupported arrays and oversized UTF-8 schemas with a visible not
   track(session.id);
   const prompt = sendPrompt(session.id, "go");
   const call = await nextQueryCall();
-  for (const schema of [
+  for (const [index, schema] of [
     {
       type: "object",
       properties: { tags: { type: "array", items: { type: "string" } } },
       required: ["tags"],
     },
     { type: "object", properties: { team: { type: "string", description: "界".repeat(6000) } } },
-  ]) {
+  ].entries()) {
     expect(
       await call.options.onElicitation!(
         { serverName: "linear", message: "Input", mode: "form", requestedSchema: schema } as never,
-        { signal: new AbortController().signal, requestId: "invalid" },
+        // A CLI never reuses a request id; a reused one is refused as answered.
+        { signal: new AbortController().signal, requestId: `invalid-${index}` },
       ),
     ).toEqual({ action: "decline" });
     expect(getPendingInteractions(session.id)).toHaveLength(0);

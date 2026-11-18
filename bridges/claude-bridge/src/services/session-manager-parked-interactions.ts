@@ -77,7 +77,14 @@ export async function parkInteraction(
       }),
   });
   const releaseDeadline = registerInteractionDeadline("interactions", request, deadline);
-  const withdraw = () => resolveOutcome({ action: "withdrawn" });
+  const withdraw = () => {
+    // Taken down at once, as `respondToInteraction` does for an answer: in the
+    // tick before this waiter resumes, an approval would otherwise be accepted
+    // for a request the CLI withdrew or can no longer receive.
+    if (pendingInteractions.get(key) === request) pendingInteractions.delete(key);
+    if (interactionResolvers.get(key) === resolveOutcome) interactionResolvers.delete(key);
+    resolveOutcome({ action: "withdrawn" });
+  };
   signal?.addEventListener("abort", withdraw, { once: true });
   // Store and register the resolver before announcing the request, so an
   // instant answer can never find it missing.

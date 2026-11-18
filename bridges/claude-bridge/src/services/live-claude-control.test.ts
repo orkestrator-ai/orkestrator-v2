@@ -15,7 +15,10 @@ import {
   LIVE_CLAUDE_READ_TIMEOUT_MS,
   liveClaudeControls,
   readFromLiveClaude,
+  reinitializeLiveClaude,
 } from "./live-claude-control.js";
+import type { SDKControlInitializeResponse } from "@anthropic-ai/claude-agent-sdk";
+import type { ClaudeQueryControl } from "../types/index.js";
 
 // The model catalogue, the account and the plan windows are bridge-wide. A
 // CLI a session keeps warm between turns answers them; only without one does
@@ -252,5 +255,47 @@ describe("bridge-wide reads from a running CLI", () => {
     // A login since the CLI launched is visible only to a probe.
     await expect(readClaudeAuthStatus()).resolves.toMatchObject({ state: "signed-in" });
     await expectControlOnlyPrompt(await nextQueryCall());
+  });
+});
+
+// The SDK reads the inventory lists off the CLI's initialize answer itself and
+// hands the caller none of them, so the bridge cannot see what the CLI listed
+// (and cannot reach `pending_elicitation_requests` at all). This fails the
+// typecheck once an SDK bump starts returning one: then wire it into
+// `recoverClaudeRequestsOnRejoin` and update 0007 task 4.
+const INVENTORY_HIDDEN_FROM_CALLER: [
+  Extract<keyof SDKControlInitializeResponse, `pending_${string}`>,
+] extends [never]
+  ? true
+  : false = true;
+
+describe("re-reading a running CLI's pending requests", () => {
+  test("the SDK hands the caller no inventory list", () => {
+    expect(INVENTORY_HIDDEN_FROM_CALLER).toBe(true);
+  });
+
+  test("a CLI that cannot be re-read leaves the inventory unknown", async () => {
+    await expect(reinitializeLiveClaude({} as ClaudeQueryControl)).resolves.toBe("unsupported");
+  });
+
+  test("an answer is a read, and a slow or failed one leaves it unknown", async () => {
+    const answered = { reinitialize: mock(async () => ({})) } as ClaudeQueryControl;
+    await expect(reinitializeLiveClaude(answered)).resolves.toBe("read");
+    expect(answered.reinitialize).toHaveBeenCalledTimes(1);
+
+    const silent = { reinitialize: () => new Promise<unknown>(() => {}) } as ClaudeQueryControl;
+    await expect(reinitializeLiveClaude(silent, 10)).resolves.toBe("timeout");
+
+    const refused = {
+      reinitialize: async () => Promise.reject(new Error("Query closed")),
+    } as ClaudeQueryControl;
+    await expect(reinitializeLiveClaude(refused)).resolves.toBe("failed");
+
+    const throwing = {
+      reinitialize: () => {
+        throw new Error("closed");
+      },
+    } as unknown as ClaudeQueryControl;
+    await expect(reinitializeLiveClaude(throwing)).resolves.toBe("failed");
   });
 });

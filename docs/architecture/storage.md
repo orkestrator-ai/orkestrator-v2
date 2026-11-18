@@ -1081,13 +1081,12 @@ parameter `autoFix` becomes `autoAddressFindings`, the action default
 `fixReviewIssues` becomes `addressFindings`, and the built-in node ids move
 (`fix` to `rework` or `address-findings`, `address` to `address-findings`).
 It rewrites user templates and "Describe a graph" drafts, saved launch
-defaults, scheduled graph launches and workflow calls, workflow result entries and slots, and
-graph runs with their artifacts. Matching subgraph digest pins follow the
-upgraded child definitions. The migration verifies the original run before
-rewriting it consistently: its plan
-digest and every changed artifact's digest and id are recomputed and every
-reference follows, while session keys stay pinned to the key the activation
-had so transcripts and provider sessions stay attached. A run whose rewrite
+defaults, scheduled graph launches and workflow calls, workflow result entries
+and slots, and graph runs with their artifacts. Matching subgraph digest pins
+follow the upgraded child definitions. The migration verifies the original run,
+recomputes the plan digest and any changed artifact digests and IDs, and updates
+their references. Session keys retain the original activation key so transcripts
+and provider sessions stay attached. A run whose rewrite
 would not validate is left as it was. Project templates live in their
 repositories and are not rewritten.
 

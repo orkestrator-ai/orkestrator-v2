@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { CoordinatorWorkspace } from "@orkestrator/protocol/coordinator";
+import { graphLaunchParams } from "@orkestrator/protocol/graphs/launch";
 import { graphMockPinIssues, graphMockPinTargetFromPlan } from "@orkestrator/protocol/graphs/mock";
 import { renderGraphPromptSource } from "@orkestrator/protocol/graphs/prompts";
 import type { ScheduleFire, ScheduledJob } from "@orkestrator/protocol/scheduled-jobs";
@@ -533,39 +534,45 @@ describe("graph vocabulary upgrade", () => {
 
   test("colliding and overlong node and edge proposals keep stable identifiers", () => {
     const old = former(userTemplate());
-    const fix = old.nodes.find((node) => node.id === "fix")!;
     const longNode = "fix-" + "a".repeat(60);
-    const longEdge = "fix-" + "b".repeat(60);
-    old.nodes.push(
-      { ...fix, id: "address-findings" },
-      {
-        capabilities: { profile: "reviewer" },
-        workspaceAccess: "read",
-        id: "address-findings-findings",
-        kind: "agent",
-        role: "describer",
-        prompt: { template: "Independent node" },
-      },
-      { ...fix, id: longNode },
-      { ...fix, id: "fix-other" },
-    );
-    const edge = old.edges.find((entry) => "node" in entry.from && entry.from.node === "fix")!;
-    old.edges.push({
-      ...edge,
-      id: longEdge.replace("fix-", "fix-other-").slice(0, 64),
-      from: { node: "fix-other", port: "result" },
+    const longEdge = "fix-other-" + "b".repeat(54);
+    const agent = (id: string, role: string) => ({
+      id,
+      role,
+      kind: "agent" as const,
+      capabilities: { profile: "reviewer" as const },
+      workspaceAccess: "read" as const,
+      prompt: { template: "Read the findings." },
     });
+    old.inputs = [];
+    old.outputs = [];
+    delete old.layout;
+    old.nodes = [
+      agent("fix", "fixer"),
+      agent("address-findings", "fixer"),
+      agent("address-findings-findings", "describer"),
+      agent(longNode, "fixer"),
+      { ...agent("fix-other", "fixer"), outputs: [{ name: "report", type: "review-report@1" }] },
+      { ...agent("reader", "describer"), inputs: [{ name: "report", type: "review-report@1" }] },
+    ];
+    old.edges = [
+      {
+        id: longEdge,
+        from: { node: "fix-other", port: "report" },
+        to: { node: "reader", port: "report" },
+      },
+    ];
     const migrated = upgradeGraphTemplate(old) as GraphTemplateV1;
     expect(validateGraphTemplate(migrated)).toMatchObject({ ok: true });
-    expect(migrated.nodes.map(({ id }) => id)).toEqual(
-      old.nodes.map(({ id }) =>
-        id === "fix-other"
-          ? "address-findings-other"
-          : id === "fix-complete"
-            ? "address-findings-complete"
-            : id,
-      ),
-    );
+    expect(migrated.nodes.map(({ id }) => id)).toEqual([
+      "fix",
+      "address-findings",
+      "address-findings-findings",
+      longNode,
+      "address-findings-other",
+      "reader",
+    ]);
+    expect(compile(migrated).diagnostics.filter((d) => d.severity === "error")).toEqual([]);
     expect(migrated.edges.at(-1)).toMatchObject({
       id: old.edges.at(-1)!.id,
       from: { node: "address-findings-other" },
@@ -738,10 +745,14 @@ describe("graph vocabulary upgrade", () => {
     });
     const request = {
       ref: { scope: "user", id: child.id },
+      projectId: "project-1",
+      environment: { kind: "existing", environmentId: "env-1" },
       params: { autoFix: true },
       roles: { fixer: { platform: "claude" } },
     };
-    before.writeStore("scheduled-jobs", { graph: { action: { kind: "graph", request } } });
+    before.writeStore("scheduled-jobs", {
+      graph: { id: "graph", owner: { kind: "operator" }, action: { kind: "graph", request } },
+    });
     before.close();
 
     const after = openBackendDatabase(directory);
@@ -757,9 +768,41 @@ describe("graph vocabulary upgrade", () => {
       roles: inner.roles,
       params: { autoFix: { value: true }, autoAddressFindings: { value: false } },
     });
-    expect(after.readStore("scheduled-jobs")?.value).toMatchObject({
-      graph: { action: { request } },
+    const jobs = after.readStore("scheduled-jobs")?.value as Record<string, ScheduledJob>;
+    expect(jobs.graph?.action).toEqual({ kind: "graph", request });
+    const executor = new ScheduledJobExecutor({
+      async invoke() {
+        throw new Error("Unexpected backend command");
+      },
+      storage: {
+        async sendAgentMail() {
+          throw new Error("Unexpected mail");
+        },
+        coordinators: { getCoordinatorWorkspace: async () => null },
+      },
+      graphs: {
+        async options() {
+          throw new Error("Unexpected graph options lookup");
+        },
+        async launch(launched, origin) {
+          expect(origin).toEqual({ requestedBy: "schedule", scheduleId: "graph" });
+          const plan = compile(saved.templates[child.id]!.template).plan!;
+          const resolved = graphLaunchParams(plan.parameters, launched.params ?? {});
+          expect(resolved.issues).toEqual([]);
+          expect(resolved.params).toMatchObject({ autoFix: true, autoAddressFindings: false });
+          return {
+            runId: "run-1",
+            projectId: launched.projectId,
+            status: "running",
+            template: plan.template,
+            repeated: false,
+          };
+        },
+      },
     });
+    expect(
+      await executor.execute(jobs.graph!, { fireId: "graph" } as ScheduleFire, () => {}),
+    ).toMatchObject({ ok: true, outcome: { runId: "run-1" } });
   });
 
   test("seeded public and coordinator schedules fire through the renamed action handlers", async () => {

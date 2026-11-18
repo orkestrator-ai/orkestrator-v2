@@ -205,6 +205,7 @@ import {
   describeRewindTarget,
   formatCount,
   summarizeRewindPreview,
+  summarizeRewindResult,
   ConnectionPathPanel,
 } from "./AgentInfoButton.panels";
 import { useFederation } from "@/components/federation/FederationProvider";
@@ -216,6 +217,7 @@ export {
   labelWindowMinutes,
   limitWindowPosition,
   summarizeRewindPreview,
+  summarizeRewindResult,
   windowDurationMinutes,
 } from "./AgentInfoButton.panels";
 
@@ -1262,17 +1264,19 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                               )
                             )
                               return;
-                            await backendForScope(nodeScope).performNativeAgentSessionAction({
+                            const { preview: applied } = await backendForScope(
+                              nodeScope,
+                            ).performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
                               agent: activeSession.provider,
                               logicalSessionKey: activeSession.sessionKey,
                               action: { kind: "rewind-files", messageId: target.id },
                             });
-                            toast.success(
-                              fileCount === 0
-                                ? "Claude files rewound"
-                                : `Claude restored ${fileCount} ${fileCount === 1 ? "file" : "files"}`,
-                            );
+                            // Report what the real rewind did, not the dry run's
+                            // count: only the real result says which files it skipped.
+                            const result = summarizeRewindResult(applied);
+                            if (result.tone === "warning") toast.warning(result.message);
+                            else toast.success(result.message);
                           })
                         }
                       >

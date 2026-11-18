@@ -21,6 +21,7 @@ test("renders fallback windows with account attribution before any context usage
   expect(account.getByText("(Work) (work@example.com)")).toBeTruthy();
   expect(screen.queryByText(/Usage will appear/) === null).toBe(true);
   expect(screen.getByText("Provider reported")).toBeTruthy();
+  expect(screen.getByText("claude").title).toBe("claude");
 });
 
 test("appends fallback windows while preserving daily token buckets and context usage", () => {
@@ -32,6 +33,7 @@ test("appends fallback windows while preserving daily token buckets and context 
         percentUsed: 25,
         estimated: false,
         source: "claude",
+        modelId: "provider/reported-model",
         updatedAt: "2026-11-03T12:00:00Z",
         account: [{ window: "daily:2026-11-02", label: "2026-11-02", tokens: 60000000 }],
       }}
@@ -44,4 +46,5 @@ test("appends fallback windows while preserving daily token buckets and context 
   expect(account.getByText("62% used")).toBeTruthy();
   expect(screen.getByRole("region", { name: "Daily tokens" })).toBeTruthy();
   expect(screen.getByText("25%")).toBeTruthy();
+  expect(screen.getByText("provider/reported-model").title).toBe("provider/reported-model");
 });

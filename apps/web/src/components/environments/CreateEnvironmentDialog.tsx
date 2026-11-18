@@ -169,7 +169,7 @@ export function resolveAgentDefaults(
   } as const;
 }
 
-const MOBILE_TAB_TRIGGER_CLASSES = "h-11 min-w-0 flex-col gap-0.5 px-1 text-xs";
+const MOBILE_TAB_TRIGGER_CLASSES = "h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px]";
 const MOBILE_TAB_CONTENT_CLASSES =
   "create-environment-mobile-tab-panel mt-0 data-[state=inactive]:hidden";
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;

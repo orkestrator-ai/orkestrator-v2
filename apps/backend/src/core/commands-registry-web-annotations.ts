@@ -442,6 +442,12 @@ export function registerWebAnnotationCommands(registerCommand: CommandRegistrar)
     return annotations.captureResult(input as Args["web_annotation_result_capture"]);
   });
 
+  register(wa.webAnnotationResultDiffCommand, async (input, context) => {
+    const annotations = service(context);
+    await requireEnvironment(context, input.environmentId);
+    return { diff: await annotations.resultDiff(input.environmentId, input.captureId) };
+  });
+
   register(wa.webAnnotationsMigrateCommand, async (input, context) => {
     const annotations = service(context);
     await requireEnvironment(context, input.environmentId);

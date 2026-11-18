@@ -92,6 +92,7 @@ const ACCESS: Record<string, WebAnnotationCommandAccess> = {
   [c.receipt]: "read",
   [c.assetGet]: "read",
   [c.migrationStatus]: "read",
+  [c.resultDiff]: "read",
   [c.draftGet]: "draft",
   [c.draftSave]: "draft",
   [c.draftDelete]: "draft",

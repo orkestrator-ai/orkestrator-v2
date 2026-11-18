@@ -79,8 +79,8 @@ export class WebAnnotationStoreOperations {
         dispatch,
         batch: dispatch,
         resultTools: dispatch && this.ctx.options.resultTools === true,
-        // Side-by-side after-captures (`web_annotation_result_capture`). Pixel
-        // differences are not implemented and are never advertised here.
+        // Side-by-side after-captures (`web_annotation_result_capture`).
+        // Region diffs of them have their own flag, `resultDiffs`.
         comparison: dispatch,
         migration: authoring && Boolean(this.ctx.options.storage?.listComposeDrafts),
         // Recovery mode keeps resolution and in-flight request handling.
@@ -93,6 +93,9 @@ export class WebAnnotationStoreOperations {
         shadowTargets: authoring,
         // This backend validates and stores `frame` anchor scopes.
         frameTargets: authoring,
+        // Advisory region diffs read stored captures only, so they follow
+        // readability, not authoring (`result-diff.ts`).
+        resultDiffs: readable && this.ctx.options.resultDiffs !== false,
       },
       targets: authoring ? [...WEB_ANNOTATION_SUBMITTABLE_TARGET_KINDS] : [],
       maxRequestAnnotations: dispatch ? WEB_ANNOTATION_LIMITS.briefAnnotations : 0,

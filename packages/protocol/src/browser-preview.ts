@@ -211,6 +211,14 @@ export interface BrowserPreviewResultCaptureStart {
    */
   masks?: BrowserPreviewCaptureMask[];
   originalCaptureId?: string;
+  /**
+   * Take a second sample of the page right after the screenshot and report
+   * the regions that changed between the two as `unstableRegions` (the
+   * unstable-region mask an advisory diff needs). Renderers set it only for a
+   * backend that advertises `operations.resultDiffs`; without it the capture
+   * is exactly what it was before.
+   */
+  sampleUnstable?: boolean;
 }
 
 export interface BrowserPreviewStartCaptureInput {
@@ -288,6 +296,12 @@ export interface BrowserPreviewResultCaptureMetadata {
   stability: "stable" | "unstable";
   /** Every mask painted into the after-image, including reapplied originals. */
   masks: BrowserPreviewCaptureMask[];
+  /**
+   * Regions, in document CSS pixels, that changed between two samples of the
+   * page with nothing else happening. Present (possibly empty) only when the
+   * start asked for `sampleUnstable` and both samples could be compared.
+   */
+  unstableRegions?: WebAnnotationRect[];
 }
 
 /** A region crop derived from the (possibly redacted) spooled source image at read time. */
@@ -475,7 +489,12 @@ export interface BrowserPreviewCaptureCapabilities {
     keyboardSelection: boolean;
     recapture: boolean;
     receipts: boolean;
-    resultCapture: { stability: boolean; masks: boolean };
+    resultCapture: {
+      stability: boolean;
+      masks: boolean;
+      /** Honours `sampleUnstable`. Absent on older desktops. */
+      unstableRegions?: boolean;
+    };
     regionCrop: boolean;
     responsiveSets: { maxWidths: number; minWidth: number; maxWidth: number } | null;
     livePins: boolean;

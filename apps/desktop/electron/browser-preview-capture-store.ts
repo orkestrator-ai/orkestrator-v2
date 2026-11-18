@@ -35,7 +35,9 @@ import type {
 import {
   WEB_ANNOTATION_LIMITS,
   type WebAnnotationCaptureInput,
+  type WebAnnotationRect,
 } from "@orkestrator/protocol/web-annotations";
+import { WEB_ANNOTATION_DIFF_LIMITS } from "@orkestrator/protocol/web-annotations-diff";
 import {
   isWebAnnotationId,
   isWebAnnotationRect,
@@ -208,7 +210,16 @@ function isResultMetadata(value: unknown): value is BrowserPreviewResultCaptureM
     Number.isFinite(scroll.x) &&
     Number.isFinite(scroll.y) &&
     (value.stability === "stable" || value.stability === "unstable") &&
-    isMaskList(value.masks)
+    isMaskList(value.masks) &&
+    (value.unstableRegions === undefined || isUnstableRegionList(value.unstableRegions))
+  );
+}
+
+function isUnstableRegionList(value: unknown): value is WebAnnotationRect[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= WEB_ANNOTATION_DIFF_LIMITS.unstableRegions &&
+    value.every(isWebAnnotationRect)
   );
 }
 

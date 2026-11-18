@@ -52,6 +52,29 @@ describe("result capture commit", () => {
     });
   });
 
+  test("the unstable-region mask goes only to a backend that advertises diffs", () => {
+    const record = {
+      result: {
+        zoomFactor: 1,
+        deviceScaleFactor: 2,
+        scroll: { x: 0, y: 120 },
+        stability: "stable" as const,
+        masks: [],
+        unstableRegions: [{ x: 48, y: 136, width: 32, height: 32 }],
+      },
+    };
+    expect(resultCaptureMetadata(record)).not.toHaveProperty("unstableRegions");
+    expect(resultCaptureMetadata(record, false)).not.toHaveProperty("unstableRegions");
+    expect(resultCaptureMetadata(record, true).unstableRegions).toEqual([
+      { x: 48, y: 136, width: 32, height: 32 },
+    ]);
+    // An empty mask still says the desktop sampled.
+    expect(
+      resultCaptureMetadata({ result: { ...record.result, unstableRegions: [] } }, true)
+        .unstableRegions,
+    ).toEqual([]);
+  });
+
   test("names the annotation and forwards the after-image metadata", async () => {
     const fake = createFakeCaptureApi();
     const record = seedPending(fake.spool, { captureId: "cap-result" });

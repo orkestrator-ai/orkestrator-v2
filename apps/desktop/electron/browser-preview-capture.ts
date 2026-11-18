@@ -12,7 +12,9 @@
  *
  * Result captures (`purpose: "result"`) additionally wait for a bounded
  * font/layout stability window, report `stable`/`unstable` instead of marking
- * a layout change stale, and repaint the original capture's masks.
+ * a layout change stale, and repaint the original capture's masks. When the
+ * start asks for `sampleUnstable` (a backend with `operations.resultDiffs`),
+ * a second screenshot taken a moment later gives the unstable-region mask.
  */
 import type {
   BrowserPreviewCaptureAck,
@@ -54,6 +56,7 @@ import {
   documentMask,
   maskCaptureImage,
   masksInViewport,
+  unstableRegionsBetween,
 } from "./browser-preview-capture-image.js";
 import {
   browserPreviewPageIdentity,
@@ -145,7 +148,12 @@ export interface BrowserPreviewCaptureOptions {
   focusHost?: () => void;
   /** Result-capture stability window (tests shorten it). */
   stability?: { deadlineMs: number; quietMs: number };
+  /** Wait between the screenshot and the unstable-region sample (tests shorten it). */
+  unstableSampleDelayMs?: number;
 }
+
+/** Long enough for a typical animation frame or carousel step to show movement. */
+const UNSTABLE_SAMPLE_DELAY_MS = 300;
 
 // ---------------------------------------------------------------------------
 // Sessions
@@ -165,6 +173,8 @@ interface CaptureSession {
   purpose: BrowserPreviewCapturePurpose;
   /** Result captures: masks of the original capture, in document CSS pixels. */
   resultMasks: BrowserPreviewCaptureMask[];
+  /** Result captures: sample twice for the unstable-region mask. */
+  sampleUnstable: boolean;
   /** Pending capture this session replaces once it is spooled. */
   recaptureOf: string | null;
 }
@@ -240,7 +250,11 @@ export class BrowserPreviewCaptureSessions {
         keyboardSelection: available,
         recapture: available,
         receipts: available,
-        resultCapture: { stability: available, masks: available },
+        resultCapture: {
+          stability: available,
+          masks: available,
+          unstableRegions: available,
+        },
         regionCrop: available && crop,
         responsiveSets: available ? { ...RESPONSIVE_SET_LIMITS } : null,
         livePins: true,
@@ -373,6 +387,7 @@ export class BrowserPreviewCaptureSessions {
       timer: null,
       purpose,
       resultMasks,
+      sampleUnstable: purpose === "result" && input.result?.sampleUnstable === true,
       recaptureOf,
     };
     this.sessions.set(input.tabId, session);
@@ -564,6 +579,12 @@ export class BrowserPreviewCaptureSessions {
       const stability: "stable" | "unstable" =
         settled === "stable" && !outcome.staleReason ? "stable" : "unstable";
       const staleReason = isResult && layoutOnly ? null : outcome.staleReason;
+      // Sampled on the unmasked screenshot; only geometry is kept.
+      const unstableRegions =
+        isResult && session.sampleUnstable && outcome.image && !outcome.staleReason
+          ? await this.sampleUnstableRegions(session, outcome.image, view)
+          : null;
+      if (this.sessions.get(session.tabId) !== session) return;
 
       let png: { png: Buffer; width: number; height: number; reduced: boolean } | null = null;
       let unmaskable = false;
@@ -650,6 +671,7 @@ export class BrowserPreviewCaptureSessions {
             scroll: { ...view.scroll },
             stability,
             masks: painted,
+            ...(unstableRegions ? { unstableRegions } : {}),
           }
         : undefined;
       if (this.sessions.get(session.tabId) !== session) return;
@@ -688,6 +710,62 @@ export class BrowserPreviewCaptureSessions {
       const code = error instanceof CaptureFailure ? error.code : "capture-failed";
       this.end(session, this.errorStatus(session, code));
     }
+  }
+
+  /**
+   * A second screenshot a moment after the first, compared with it to find
+   * what moves on its own. Null (no mask) when the page navigated, the view
+   * changed size or scroll, or the samples cannot be compared: a missing mask
+   * makes a later diff refuse, which is safer than a mask that is wrong.
+   */
+  private async sampleUnstableRegions(
+    session: CaptureSession,
+    first: CaptureImageLike,
+    view: Viewport,
+  ): Promise<WebAnnotationRect[] | null> {
+    const delay = this.options.unstableSampleDelayMs ?? UNSTABLE_SAMPLE_DELAY_MS;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, delay);
+      timer.unref?.();
+    });
+    if (this.sessions.get(session.tabId) !== session) return null;
+    const handle = this.options.preview(session.tabId);
+    if (
+      !handle ||
+      handle.contents !== session.contents ||
+      handle.generation !== session.generation ||
+      session.contents.isDestroyed()
+    ) {
+      return null;
+    }
+    const urlBefore = session.contents.getURL();
+    let second: CaptureImageLike;
+    try {
+      second = await session.contents.capturePage();
+    } catch {
+      return null;
+    }
+    const probe = parseCaptureProbe(
+      await runInPage(session.contents, browserPreviewCaptureProbeScript(session.captureId)).catch(
+        () => null,
+      ),
+      session,
+    );
+    const current = this.options.preview(session.tabId);
+    if (
+      !probe ||
+      !current ||
+      current.generation !== session.generation ||
+      session.contents.isDestroyed() ||
+      session.contents.getURL() !== urlBefore ||
+      probe.viewport.width !== view.viewport.width ||
+      probe.viewport.height !== view.viewport.height ||
+      probe.scroll.x !== view.scroll.x ||
+      probe.scroll.y !== view.scroll.y
+    ) {
+      return null;
+    }
+    return unstableRegionsBetween(first, second, view.viewport, view.scroll, this.now);
   }
 
   /** Align the target with the pixels: use the pre-capture rect and derive region image coordinates. */

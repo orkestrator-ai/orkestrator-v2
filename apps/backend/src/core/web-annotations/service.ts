@@ -13,6 +13,7 @@
  * - `service-requests.ts`: prepare/send, the durable queue
  *   handoff, cancellation/recovery, and the reconciler.
  * - `migration.ts`: legacy compose-draft import.
+ * - `result-diff.ts`: advisory region diffs of result captures.
  *
  * Each part takes the context and the parts it calls; none extends another
  * (`tests/unit/inheritance-chains.test.ts`). Storage lives in
@@ -23,6 +24,7 @@ import type { WebAnnotationRolloutMode } from "@orkestrator/protocol/web-annotat
 import { WebAnnotationContext, type WebAnnotationServiceOptions } from "./context.js";
 import type { WebAnnotationMetrics } from "./metrics.js";
 import { WebAnnotationMigration } from "./migration.js";
+import { WebAnnotationResultDiffs } from "./result-diff.js";
 import { WebAnnotationRequests } from "./service-requests.js";
 import { WebAnnotationResults } from "./service-results.js";
 import { WebAnnotationStoreOperations } from "./service-store.js";
@@ -46,6 +48,7 @@ export class WebAnnotationService {
   private readonly results: WebAnnotationResults;
   private readonly requests: WebAnnotationRequests;
   private readonly migration: WebAnnotationMigration;
+  private readonly diffs: WebAnnotationResultDiffs;
 
   constructor(options: WebAnnotationServiceOptions) {
     this.context = new WebAnnotationContext(options);
@@ -62,6 +65,7 @@ export class WebAnnotationService {
       this.results,
     );
     this.migration = new WebAnnotationMigration(this.context, this.threads);
+    this.diffs = new WebAnnotationResultDiffs(this.context, this.threads);
   }
 
   get generation(): string {
@@ -266,10 +270,22 @@ export class WebAnnotationService {
     return this.results.reportToolResult(...args);
   }
 
-  toolHost(
-    ...args: Parameters<WebAnnotationResults["toolHost"]>
-  ): ReturnType<WebAnnotationResults["toolHost"]> {
-    return this.results.toolHost(...args);
+  /** Advisory diff of a result capture (`web_annotation_result_diff`). */
+  resultDiff(
+    ...args: Parameters<WebAnnotationResultDiffs["diff"]>
+  ): ReturnType<WebAnnotationResultDiffs["diff"]> {
+    return this.diffs.diff(...args);
+  }
+
+  /** The agent tool host; it offers diffs only while `operations.resultDiffs` is on. */
+  toolHost(): ReturnType<WebAnnotationResults["toolHost"]> {
+    const host = this.results.toolHost();
+    if (!this.diffs.enabled) return host;
+    return {
+      ...host,
+      resultDiff: (scope, requestId, annotationId, resultCaptureId) =>
+        this.diffs.toolDiff(scope, requestId, annotationId, resultCaptureId),
+    };
   }
 
   // -------------------------------------------------------------------------

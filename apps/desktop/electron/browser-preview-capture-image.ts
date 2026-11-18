@@ -6,6 +6,10 @@
 import type { BrowserPreviewCaptureMask } from "@orkestrator/protocol/browser-preview";
 import type { WebAnnotationRect } from "@orkestrator/protocol/web-annotations";
 import {
+  compareWebAnnotationRasters,
+  WEB_ANNOTATION_DIFF_LIMITS,
+} from "@orkestrator/protocol/web-annotations-diff";
+import {
   CaptureFailure,
   type CaptureImageLike,
   type CaptureNativeImageApi,
@@ -186,6 +190,88 @@ export function cropPng(
     const croppedPng = cropped.toPNG();
     if (croppedPng.length === 0) return null;
     return { png: croppedPng, width: croppedSize.width, height: croppedSize.height };
+  } catch {
+    return null;
+  }
+}
+
+/** Longest side the unstable-region comparison runs at (the stored image ceiling). */
+const UNSTABLE_COMPARE_DIMENSION = MAX_SCREENSHOT_DIMENSION;
+/** The comparison runs in main; a page this large would rather go without a mask. */
+const UNSTABLE_COMPARE_BUDGET_MS = 1_000;
+
+function comparableBitmap(
+  image: CaptureImageLike,
+  size: { width: number; height: number },
+): Buffer | null {
+  if (typeof image.toBitmap !== "function") return null;
+  const native = captureImageRepresentation(image);
+  if (native.width === size.width && native.height === size.height) {
+    return Buffer.from(image.toBitmap({ scaleFactor: native.scaleFactor }));
+  }
+  const resized = image.resize({ width: size.width, height: size.height, quality: "good" });
+  if (typeof resized.toBitmap !== "function") return null;
+  return Buffer.from(resized.toBitmap({ scaleFactor: 1 }));
+}
+
+/**
+ * The unstable-region mask (to-do 0047 (retired) task 2): regions, in document CSS pixels,
+ * that differ between two samples of the same page taken a moment apart with
+ * nothing else happening. Any movement counts (one changed pixel marks its
+ * cell), so the mask errs towards leaving more out of a later diff. More
+ * regions than the limit collapse into their bounding box rather than drop
+ * any. Null when the samples cannot be compared (no bitmap access, different
+ * sizes, or too slow), which means "no mask", never "nothing moved".
+ */
+export function unstableRegionsBetween(
+  first: CaptureImageLike,
+  second: CaptureImageLike,
+  viewport: { width: number; height: number },
+  scroll: { x: number; y: number },
+  now: () => number = Date.now,
+): WebAnnotationRect[] | null {
+  if (viewport.width <= 0 || viewport.height <= 0) return null;
+  try {
+    const a = captureImageRepresentation(first);
+    const b = captureImageRepresentation(second);
+    if (a.width !== b.width || a.height !== b.height || a.width < 1 || a.height < 1) return null;
+    const shrink = Math.min(1, UNSTABLE_COMPARE_DIMENSION / Math.max(a.width, a.height));
+    const size = {
+      width: Math.max(1, Math.round(a.width * shrink)),
+      height: Math.max(1, Math.round(a.height * shrink)),
+    };
+    const before = comparableBitmap(first, size);
+    const after = comparableBitmap(second, size);
+    const expected = size.width * size.height * 4;
+    if (!before || !after || before.length !== expected || after.length !== expected) return null;
+    const scaleX = size.width / viewport.width;
+    const scaleY = size.height / viewport.height;
+    const compared = compareWebAnnotationRasters(
+      { width: size.width, height: size.height, channels: 4, data: before },
+      { width: size.width, height: size.height, channels: 4, data: after },
+      {
+        cellPixels: Math.max(
+          1,
+          Math.round(WEB_ANNOTATION_DIFF_LIMITS.unstableCellCssPixels * scaleX),
+        ),
+        minCellPixels: 1,
+        maxRegions: WEB_ANNOTATION_DIFF_LIMITS.unstableRegions,
+        deadline: now() + UNSTABLE_COMPARE_BUDGET_MS,
+        now,
+      },
+    );
+    if (compared.timedOut) return null;
+    const rects =
+      compared.truncatedRegions && compared.bounds
+        ? [compared.bounds]
+        : compared.regions.map((region) => region.rect);
+    return rects.map((rect) => {
+      const x0 = Math.floor(rect.x / scaleX + scroll.x);
+      const y0 = Math.floor(rect.y / scaleY + scroll.y);
+      const x1 = Math.ceil((rect.x + rect.width) / scaleX + scroll.x);
+      const y1 = Math.ceil((rect.y + rect.height) / scaleY + scroll.y);
+      return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+    });
   } catch {
     return null;
   }

@@ -84,10 +84,12 @@ export function mergedRedaction(
 /**
  * Desktop metadata of an after-image (zoom, device scale, scroll, stability,
  * masks) in the backend's optional result-capture fields. Absent on older
- * desktops, which the backend accepts.
+ * desktops, which the backend accepts. The unstable-region mask goes only to
+ * a backend that advertises `operations.resultDiffs` (`diffsAdvertised`).
  */
 export function resultCaptureMetadata(
   record: Pick<BrowserPreviewPendingCapture, "result">,
+  diffsAdvertised = false,
 ): WebAnnotationResultCaptureMetadata {
   const meta = record.result;
   if (!meta) return {};
@@ -100,6 +102,16 @@ export function resultCaptureMetadata(
     ...(meta.stability ? { stability: meta.stability } : {}),
     ...(Array.isArray(meta.masks)
       ? { masks: meta.masks.map((mask) => ({ source: mask.source, rect: mask.rect })) }
+      : {}),
+    ...(diffsAdvertised && Array.isArray(meta.unstableRegions)
+      ? {
+          unstableRegions: meta.unstableRegions.map((rect) => ({
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          })),
+        }
       : {}),
   };
 }
@@ -145,6 +157,10 @@ export function withAdvertisedFrameScope(
     return { ...capture, target: { ...target, container: downgrade(target.container) } };
   }
   return capture;
+}
+
+function resultDiffsAdvertised(environmentId: string, scope?: NodeScope): boolean {
+  return getWebAnnotationCache(environmentId, scope).capabilities?.operations.resultDiffs === true;
 }
 
 function frameTargetsAdvertised(environmentId: string, scope?: NodeScope): boolean {
@@ -271,7 +287,7 @@ export async function commitPendingCapture({
         requestId,
         // Required for batch requests: names which selected note this shows.
         ...(resultAnnotationId ? { annotationId: resultAnnotationId } : {}),
-        ...resultCaptureMetadata(record),
+        ...resultCaptureMetadata(record, resultDiffsAdvertised(environmentId, scope)),
         capture: captureInput,
       });
       annotationId = resultAnnotationId;

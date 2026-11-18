@@ -31,6 +31,7 @@ import type {
   WebAnnotationTurnOutcome,
 } from "@orkestrator/protocol/web-annotations";
 import type { WebAnnotationResultReportInput } from "@orkestrator/protocol/web-annotations-validation";
+import type { WebAnnotationResultDiff } from "@orkestrator/protocol/web-annotations-diff";
 
 // ---------------------------------------------------------------------------
 // Brief compilation (pure; deterministic for identical input)
@@ -269,4 +270,15 @@ export interface WebAnnotationToolHost {
     scope: WebAnnotationToolScope,
     report: WebAnnotationResultReportInput,
   ): Promise<WebAnnotationResult>;
+  /**
+   * Advisory region diff of one annotation's latest after-capture (or the
+   * named one) in the assigned request; null when none was captured yet.
+   * Present only while the backend advertises `operations.resultDiffs`.
+   */
+  resultDiff?(
+    scope: WebAnnotationToolScope,
+    requestId: string,
+    annotationId: string,
+    resultCaptureId?: string,
+  ): Promise<WebAnnotationResultDiff | null>;
 }

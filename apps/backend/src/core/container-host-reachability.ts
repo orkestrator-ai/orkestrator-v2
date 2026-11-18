@@ -47,9 +47,10 @@ const probeFailures = new WeakMap<ContainerHostProbe, CommandFailureFields>();
  * network namespace, where nothing of the host listens. The only way back to
  * the host is RootlessKit's host loopback address, which the daemon refuses
  * unless it runs with host loopback enabled. On a rootless daemon the check
- * therefore also probes through that address; when it answers, new
- * containers' `host.docker.internal` names it (`hostAddress`), and when it
- * does not, the remediation is the daemon setting, not a host firewall rule.
+ * therefore also probes through each driver's address; when one answers with
+ * the agent tools server's own 405, new containers' `host.docker.internal`
+ * names it (`hostAddress`), and when none does, the remediation is the daemon
+ * setting, not a host firewall rule.
  *
  * Three checks share one parser:
  * - at startup (Linux), from a throwaway ~1 MB busybox container on the
@@ -82,6 +83,38 @@ const DISPOSE_WAIT_MS = 3_000;
 /** Per-command bound on shutdown's own removal when the check did not finish. */
 const DISPOSE_REMOVE_TIMEOUT_MS = 5_000;
 const PROBE_NETWORK_COMMAND_TIMEOUT_MS = 20_000;
+
+/**
+ * The agent tools server's answer to the probe's credential-free GET of
+ * `/mcp` (`agent-tools.ts`). A RootlessKit host loopback candidate counts
+ * only when this status comes back through it: outside its own network
+ * driver an address leaves the namespace through that driver's NAT, and any
+ * other HTTP server answering there is not this backend.
+ */
+export const AGENT_TOOLS_PROBE_HTTP_STATUS = 405;
+
+/** Whether a probe through a host loopback candidate got the agent tools server's answer. */
+export function answeredAsAgentTools(probe: ContainerHostProbe): boolean {
+  return probe.outcome === "reachable" && probe.httpStatus === AGENT_TOOLS_PROBE_HTTP_STATUS;
+}
+
+/**
+ * A loopback probe that some HTTP server answered, but not with the agent
+ * tools server's 405: it says so in its detail, so the verdict does not
+ * read as the host.
+ */
+function markForeignAnswer(probe: ContainerHostProbe): ContainerHostProbe {
+  if (probe.outcome !== "reachable" || answeredAsAgentTools(probe)) return probe;
+  const note = `HTTP ${probe.httpStatus ?? "2xx"} is not Orkestrator's agent tools server (it answers ${AGENT_TOOLS_PROBE_HTTP_STATUS})`;
+  const joined = probe.detail ? `${note} | ${probe.detail}` : note;
+  const detail =
+    joined.length > MAX_DETAIL_CHARS ? `${joined.slice(0, MAX_DETAIL_CHARS)}…` : joined;
+  const marked = { ...probe, detail };
+  const failure = probeFailures.get(probe);
+  if (failure) probeFailures.set(marked, failure);
+  return marked;
+}
+
 /** Longest network command, plus time for runCommand to reap its timed-out child. */
 const DISPOSE_PREPARATION_WAIT_MS = PROBE_NETWORK_COMMAND_TIMEOUT_MS + 1_000;
 
@@ -1018,14 +1051,15 @@ export class ContainerHostReachabilityService {
       const loopbackProbes: ContainerHostProbe[] = [];
       let loopbackAddress: string | null = null;
       // Rootless: host-gateway is inside RootlessKit's namespace; try its
-      // host loopback addresses (slirp4netns's, then gvisor-tap-vsock's)
-      // before calling the path blocked, and keep the first that answers.
+      // host loopback addresses (slirp4netns's and pasta's, gvisor-tap-vsock's,
+      // then VPNKit's) before calling the path blocked, and keep the first
+      // through which the agent tools server itself answers.
       if (rootless && !probes.every((probe) => probe.outcome === "reachable")) {
         for (const address of ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES) {
           yield* this.stopIfClosing;
-          const attempt = yield* probeBoth(address);
+          const attempt = (yield* probeBoth(address)).map(markForeignAnswer);
           loopbackProbes.push(...attempt);
-          if (attempt.length > 0 && attempt.every((probe) => probe.outcome === "reachable")) {
+          if (attempt.length > 0 && attempt.every(answeredAsAgentTools)) {
             loopbackAddress = address;
             break;
           }
@@ -1137,7 +1171,13 @@ export class ContainerHostReachabilityService {
         summary: `Docker containers can reach Orkestrator's agent tools server on port ${port} through RootlessKit's host loopback (${loopbackAddress}).`,
       });
     }
-    if (!loopbackProbes.some((probe) => isBlockingOutcome(probe.outcome))) {
+    // Every loopback probe failed to run: nothing is known about the path.
+    // A foreign HTTP answer is a result (not the host), not a failed probe.
+    if (
+      !loopbackProbes.some(
+        (probe) => isBlockingOutcome(probe.outcome) || probe.outcome === "reachable",
+      )
+    ) {
       return this.finish(startedAt, {
         ...common,
         status: "unverified",

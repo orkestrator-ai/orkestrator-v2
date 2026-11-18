@@ -918,6 +918,14 @@ const viaGvisorLoopback = (args: string[]) => args.includes("host.docker.interna
 // host loopback on): 10.0.2.2 is not RootlessKit's host there.
 const GVISOR_SLIRP_ADDRESS_UNREACHABLE =
   "ORK_PROBE_TOOL=wget\nwget: can't connect to remote host (10.0.2.2): Host is unreachable\nORK_PROBE_RC=1\n";
+const viaVpnkitLoopback = (args: string[]) => args.includes("host.docker.internal:192.168.65.2");
+// Observed on Docker 29.9.2 rootless (RootlessKit 3.3.0, VPNKit, host
+// loopback on): 10.0.2.2 and 10.0.2.1 leave VPNKit's 192.168.65.0/24 and time out.
+const VPNKIT_OTHER_ADDRESS_TIMEOUT =
+  "ORK_PROBE_TOOL=wget\nConnecting to host.docker.internal:38179 (10.0.2.2:38179)\nwget: download timed out\nORK_PROBE_RC=1\n";
+// Another HTTP server at a candidate address, not the agent tools server.
+const BUSYBOX_HTTP_404 =
+  "ORK_PROBE_TOOL=wget\nConnecting to host.docker.internal:38179 (192.168.65.2:38179)\nwget: server returned error: HTTP/1.1 404 Not Found\nORK_PROBE_RC=1\n";
 
 describe("rootless Docker", () => {
   const rootless = async () => ({ kind: "local-engine" as const, rootless: true });
@@ -973,6 +981,77 @@ describe("rootless Docker", () => {
     expect(await svc.resolveContainerHostAddress()).toBe("10.0.2.1");
   });
 
+  test("VPNKit's host loopback (192.168.65.2) is found once the other drivers' addresses fail", async () => {
+    const runner = fakeRunner({
+      probeOutput: (args) =>
+        viaVpnkitLoopback(args)
+          ? BUSYBOX_HTTP_405
+          : viaLoopback(args) || viaGvisorLoopback(args)
+            ? VPNKIT_OTHER_ADDRESS_TIMEOUT
+            : ROOTLESS_GATEWAY_REFUSED,
+    });
+    const { svc } = service({ runner, detectTopology: rootless });
+    const result = await svc.check("boot");
+    expect(result).toMatchObject({
+      status: "reachable",
+      dockerRootless: true,
+      hostAddress: "192.168.65.2",
+      remediation: null,
+    });
+    expect(result.summary).toContain("RootlessKit's host loopback (192.168.65.2)");
+    // host-gateway, then each driver's address in order, each on both networks.
+    expect(result.probes.map((probe) => probe.hostAddress ?? null)).toEqual([
+      null,
+      null,
+      "10.0.2.2",
+      "10.0.2.2",
+      "10.0.2.1",
+      "10.0.2.1",
+      "192.168.65.2",
+      "192.168.65.2",
+    ]);
+    expect(svc.containerHostAddress()).toBe("192.168.65.2");
+    expect(await svc.resolveContainerHostAddress()).toBe("192.168.65.2");
+  });
+
+  test("an address answered by another HTTP server is not taken for the host", async () => {
+    // Off its own driver, 192.168.65.2 leaves the namespace through the
+    // driver's NAT; a LAN server there answers, but not with the agent tools 405.
+    const runner = fakeRunner({
+      probeOutput: (args) =>
+        viaVpnkitLoopback(args)
+          ? BUSYBOX_HTTP_404
+          : viaLoopback(args)
+            ? ROOTLESS_LOOPBACK_DISABLED
+            : ROOTLESS_GATEWAY_REFUSED,
+    });
+    const { svc } = service({ runner, detectTopology: rootless });
+    const result = await svc.check("boot");
+    expect(result.status).toBe("blocked");
+    expect(result.hostAddress ?? null).toBeNull();
+    expect(result.remediation).toEqual(buildRootlessHostRemediation(38179));
+    const foreign = result.probes.filter((probe) => probe.hostAddress === "192.168.65.2");
+    expect(foreign).toHaveLength(2);
+    for (const probe of foreign) {
+      expect(probe).toMatchObject({ outcome: "reachable", httpStatus: 404 });
+      expect(probe.detail).toContain("is not Orkestrator's agent tools server");
+    }
+    expect(svc.containerHostAddress()).toBeNull();
+  });
+
+  test("a candidate answered only by other HTTP servers is a result, not a failed probe", async () => {
+    const runner = fakeRunner({
+      probeOutput: (args) =>
+        viaLoopback(args) || viaGvisorLoopback(args) || viaVpnkitLoopback(args)
+          ? BUSYBOX_HTTP_404
+          : ROOTLESS_GATEWAY_REFUSED,
+    });
+    const { svc } = service({ runner, detectTopology: rootless });
+    const result = await svc.check("boot");
+    expect(result).toMatchObject({ status: "blocked", reason: null });
+    expect(result.hostAddress ?? null).toBeNull();
+  });
+
   test("slirp4netns's address answering skips the gvisor-tap-vsock probe", async () => {
     const runner = fakeRunner({
       probeOutput: (args) => (viaLoopback(args) ? BUSYBOX_HTTP_405 : ROOTLESS_GATEWAY_REFUSED),
@@ -1014,9 +1093,10 @@ describe("rootless Docker", () => {
       "DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false",
     );
     expect(result.remediation?.commands.join("\n")).not.toContain("ufw");
-    // Both drivers' addresses were tried before the verdict.
+    // Every driver's address was tried before the verdict.
     expect(runner.calls.some(viaLoopback)).toBe(true);
     expect(runner.calls.some(viaGvisorLoopback)).toBe(true);
+    expect(runner.calls.some(viaVpnkitLoopback)).toBe(true);
     expect(svc.containerHostAddress()).toBeNull();
   });
 
@@ -1028,6 +1108,7 @@ describe("rootless Docker", () => {
     expect(result.hostAddress ?? null).toBeNull();
     expect(runner.calls.some(viaLoopback)).toBe(false);
     expect(runner.calls.some(viaGvisorLoopback)).toBe(false);
+    expect(runner.calls.some(viaVpnkitLoopback)).toBe(false);
   });
 
   test("a rootful daemon never probes RootlessKit's address", async () => {
@@ -1038,6 +1119,7 @@ describe("rootless Docker", () => {
     expect(result.dockerRootless).toBe(false);
     expect(runner.calls.some(viaLoopback)).toBe(false);
     expect(runner.calls.some(viaGvisorLoopback)).toBe(false);
+    expect(runner.calls.some(viaVpnkitLoopback)).toBe(false);
   });
 
   test("container creation waits for the first check, bounded", async () => {

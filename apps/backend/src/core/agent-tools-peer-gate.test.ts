@@ -4,6 +4,7 @@ import { connect } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer } from "./agent-tools.js";
+import { AGENT_TOOLS_PROBE_HTTP_STATUS } from "./container-host-reachability.js";
 import { startEvidenceListener } from "../../scripts/agent-tools-peer-evidence-support.js";
 import {
   AgentToolsPeerFilter,
@@ -219,7 +220,10 @@ describe("agent-tools peer gate", () => {
 
   test("the default filter admits loopback, so the credential-free reachability probe still gets its 405", async () => {
     const port = await startWith(undefined);
-    expect(await exchange("127.0.0.1", port, GET_MCP)).toStartWith("HTTP/1.1 405");
+    // The status a RootlessKit host loopback candidate must return to be taken for the host.
+    expect(await exchange("127.0.0.1", port, GET_MCP)).toStartWith(
+      `HTTP/1.1 ${AGENT_TOOLS_PROBE_HTTP_STATUS}`,
+    );
   });
 
   const interfaceAddress = hostInterfaceAddress();

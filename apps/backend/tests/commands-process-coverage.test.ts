@@ -1026,8 +1026,8 @@ describe("process and platform command behavior", () => {
     }
   });
 
-  // slirp4netns's and gvisor-tap-vsock's host loopback addresses alike.
-  for (const alias of ["10.0.2.2", "10.0.2.1"]) {
+  // slirp4netns's (and pasta's), gvisor-tap-vsock's and VPNKit's host loopback addresses alike.
+  for (const alias of ["10.0.2.2", "10.0.2.1", "192.168.65.2"]) {
     test(`preserves the RootlessKit alias ${alias} when topology discovery fails`, async () => {
       process.env.FAKE_DOCKER_HOSTS_OUTPUT = `${alias} host.docker.internal\n`;
       process.env.FAKE_DOCKER_FAIL_INFO = "daemon temporarily unavailable";

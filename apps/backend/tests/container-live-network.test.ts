@@ -17,6 +17,7 @@ import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { restartRuntime, startRuntime } from "./container-live-start";
 import { removeLabelledResources } from "./container-live-cleanup";
+import { agentToolsStandIn } from "./container-live-host-service-context";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -58,7 +59,11 @@ afterAll(async () => {
 }, 180_000);
 
 function hostListener(): number {
-  const server = Bun.serve({ hostname: "0.0.0.0", port: 0, fetch: () => new Response("host-ok") });
+  const server = Bun.serve({
+    hostname: "0.0.0.0",
+    port: 0,
+    fetch: (request) => agentToolsStandIn(request, "host-ok"),
+  });
   servers.push(server);
   return server.port!;
 }

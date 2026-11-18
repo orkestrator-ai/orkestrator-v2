@@ -150,7 +150,7 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="xl">
         <DialogHeader>
-          <DialogTitle>Queued Prompts</DialogTitle>
+          <DialogTitle>Queued prompts</DialogTitle>
           <DialogDescription>
             {onSteer
               ? "Review pending prompts. Click a message to edit it, reorder and remove items, or steer one into the running turn."

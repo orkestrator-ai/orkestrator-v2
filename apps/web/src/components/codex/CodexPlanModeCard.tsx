@@ -26,7 +26,7 @@ export function CodexPlanModeCard({
     >
       <div className="flex items-center gap-2 border-b border-border bg-amber-500/10 px-4 py-2.5">
         <FileText className="h-4 w-4 text-amber-500" />
-        <span className="text-sm font-medium text-foreground">Plan Mode</span>
+        <span className="text-sm font-medium text-foreground">Plan mode</span>
         <span className="ml-auto text-xs text-muted-foreground">
           Review the latest plan, then keep planning or switch back to build mode
         </span>
@@ -67,7 +67,7 @@ export function CodexPlanModeCard({
             ) : (
               <ArrowRight className="mr-1.5 h-3.5 w-3.5" />
             )}
-            Switch To Build
+            Switch to Build
           </Button>
           <Button size="sm" onClick={() => void onApproveAndBuild()} disabled={isSubmitting}>
             {isSubmitting ? (
@@ -75,7 +75,7 @@ export function CodexPlanModeCard({
             ) : (
               <Check className="mr-1.5 h-3.5 w-3.5" />
             )}
-            Approve Plan
+            Approve plan
           </Button>
         </div>
       </div>

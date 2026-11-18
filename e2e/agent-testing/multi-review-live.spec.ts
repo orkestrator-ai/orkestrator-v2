@@ -368,7 +368,7 @@ class MultiReviewCycle {
     await expect(
       this.page.getByText("Checking Docker availability...", { exact: true }),
     ).toBeHidden({ timeout: 30_000 });
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
       const button = this.page.getByRole("button", {
         name: label,
         exact: true,

@@ -904,7 +904,7 @@ describe("RT-02/OP-05: actions keep the destination captured when they started",
     const dialog = await screen.findByRole("alertdialog");
     // The same confirmation this window's rows use, naming the owner.
     const question = () => within(dialog).getByText(/Are you sure you want to delete/).textContent;
-    expect(within(dialog).getByRole("heading").textContent).toBe("Delete Environment");
+    expect(within(dialog).getByRole("heading").textContent).toBe("Delete environment");
     expect(question()).toContain("delete feature on Machine A?");
 
     // The user's focus moves to machine B while the confirmation is open.
@@ -978,15 +978,15 @@ describe("another machine's menus offer what this machine's do", () => {
           .getAllByRole("menuitem")
           .map((item) => item.textContent),
       ).toEqual([
-        "Open Board",
-        "Open Repo on GitHub",
-        "Repository Settings",
-        "New Environment",
+        "Open board",
+        "Open repo on GitHub",
+        "Repository settings",
+        "New environment",
         "Copy to Machine…",
         "Add to Folder",
-        "Delete Project",
+        "Delete project",
       ]);
-      fireEvent.click(within(menu).getByRole("menuitem", { name: "Open Repo on GitHub" }));
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Open repo on GitHub" }));
       expect(open).toHaveBeenCalledWith(
         "https://github.com/acme/app",
         "_blank",
@@ -994,8 +994,8 @@ describe("another machine's menus offer what this machine's do", () => {
       );
 
       for (const [name, dialog] of [
-        ["Repository Settings", "repository-settings"],
-        ["Delete Project", "delete-project"],
+        ["Repository settings", "repository-settings"],
+        ["Delete project", "delete-project"],
       ] as const) {
         fireEvent.click(within(await openProjectMenu()).getByRole("menuitem", { name }));
         await waitFor(() =>
@@ -1406,7 +1406,7 @@ for (const mode of ["remote", "merged"] as const) {
     renderWithFederation(mode === "remote" ? <RemoteSections /> : <AggregateList mode="project" />);
     fireEvent.click(await screen.findByRole("button", { name: "Collapse folder Work" }));
     fireEvent.contextMenu(screen.getByTitle("Expand folder Work"));
-    fireEvent.click(await screen.findByText("Rename Folder"));
+    fireEvent.click(await screen.findByText("Rename folder"));
     fireEvent.change(await screen.findByLabelText("Rename folder Work"), {
       target: { value: "  New    Folder  " },
     });

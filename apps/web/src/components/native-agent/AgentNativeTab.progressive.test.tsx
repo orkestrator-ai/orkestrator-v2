@@ -1080,7 +1080,7 @@ describe("AgentNativeTab progressive controller", () => {
     stateUpdates = [() => heldState.promise];
     renderTab();
     await holdMessage("only for A");
-    fireEvent.click(screen.getByText("Resume Session").closest("button")!);
+    fireEvent.click(screen.getByText("Resume session").closest("button")!);
     fireEvent.click(await screen.findByRole("button", { name: /Conversation B/ }));
     await expectUnsent(/The conversation changed, so nothing was sent/);
     expect(resumeSessionMock).toHaveBeenCalledTimes(1);

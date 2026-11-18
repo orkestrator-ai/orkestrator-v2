@@ -1145,7 +1145,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     const releaseLaunch = claimTabLaunch("run", environmentId, actionBarScope);
     if (!releaseLaunch) return;
     const tabId = `terminal-job-${createUuid()}`;
-    const launch = beginLaunchedTab(environmentId, tabId, "Run Commands", "terminal");
+    const launch = beginLaunchedTab(environmentId, tabId, "Run commands", "terminal");
     try {
       const result = await backendForScope(actionBarScope).launchTerminalJob({
         requestId: `run-commands-${createUuid()}`,
@@ -1153,7 +1153,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         tabId,
         tabType: "plain",
         data: `${runCommands.join(" && ")}\n`,
-        title: "Run Commands",
+        title: "Run commands",
       });
       launch.settled(result.tabId);
       releaseLaunch();
@@ -1203,7 +1203,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       );
       if (!releaseLaunch) return Promise.resolve(false);
       const tabId = `agent-job-${createUuid()}`;
-      const launch = beginLaunchedTab(environmentId, tabId, "Run Script");
+      const launch = beginLaunchedTab(environmentId, tabId, "Run script");
       return nodeBackend
         .launchNativeAgentJob({
           requestId: `run-script-${createUuid()}`,
@@ -1211,7 +1211,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           tabId,
           agent,
           prompt: initialPrompt,
-          title: "Run Script",
+          title: "Run script",
           conversationMode: "build",
           ...(initialAgentModel ? { modelId: initialAgentModel } : {}),
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),

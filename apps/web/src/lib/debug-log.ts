@@ -2,7 +2,7 @@
 //
 // The renderer has no process environment, so `ORKESTRATOR_LOG_LEVEL` cannot
 // reach it. A localStorage preference raises it instead: Settings → Debug →
-// Renderer Debug Logging sets it and reloads, or by hand in DevTools,
+// Renderer debug logging sets it and reloads, or by hand in DevTools,
 // `localStorage.setItem("orkestrator:debug", "1")`, then reload. It belongs to
 // this window's storage, not the host, so another client sets its own.
 //

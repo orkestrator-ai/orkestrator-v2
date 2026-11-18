@@ -213,7 +213,7 @@ test("self Rebuild with no node id waits for its snapshot and repeated requests 
   await page.getByRole("button", { name: /^Updates for Studio/ }).click();
   await page.getByRole("button", { name: "Rebuild Old environment", exact: true }).click();
   await expect(page.getByRole("dialog", { name: /^Updates for Studio/ })).toHaveCount(0);
-  const settings = page.getByRole("dialog", { name: "Environment Settings" });
+  const settings = page.getByRole("dialog", { name: "Environment settings" });
   await expect(settings).toHaveCount(0);
   await expect(page.getByTestId("machine-row")).toHaveCount(0);
   await page.getByRole("button", { name: "Load environment snapshot" }).click();

@@ -2253,9 +2253,9 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
           React.createElement(
             dialog.AlertDialogContent,
             { ...focus, "data-late-startup-notice": "" },
-            React.createElement(dialog.AlertDialogTitle, null, "GitHub CLI Not Found"),
+            React.createElement(dialog.AlertDialogTitle, null, "GitHub CLI not found"),
             React.createElement(dialog.AlertDialogDescription, null, "Forced late startup check"),
-            React.createElement(dialog.AlertDialogAction, null, "Continue Without GitHub CLI"),
+            React.createElement(dialog.AlertDialogAction, null, "Continue without GitHub CLI"),
           ),
         );
       }

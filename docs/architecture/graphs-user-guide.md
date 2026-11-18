@@ -91,7 +91,7 @@ Select a node to edit it in the inspector. An agent node has four tabs:
   locked part Orkestrator adds (the output tools to call, what the node may
   do, untrusted-content rules). You cannot edit or remove the contract. The
   size meter warns when the prompt approaches its ceiling.
-- **Inputs/Outputs.** Port names and types, how an input is rendered, how a
+- **Inputs/outputs.** Port names and types, how an input is rendered, how a
   list input collects branches, the choices of a decision output.
 - **Capabilities.** The profile (Observer, Reviewer, Verifier, Researcher,
   Builder or Custom), workspace access, extra allows and denies, Orkestrator

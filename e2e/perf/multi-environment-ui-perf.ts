@@ -412,7 +412,7 @@ export async function watchWindow(
 const MAX_DIALOGS_PER_PASS = 5;
 
 /**
- * Dismisses every visible dialog for this page only, by its "Continue Without"
+ * Dismisses every visible dialog for this page only, by its "Continue without"
  * button or Escape, and appends each title to `dismissed`. Notices can open
  * over the workspace at any time, not only at startup ("Claude Code Is Not
  * Logged In" in a credential-free profile, "Docker containers can't reach
@@ -426,7 +426,7 @@ export async function dismissDialogs(
   hiddenTimeoutMs = 5_000,
 ): Promise<number> {
   const dialog = page.locator('[role="dialog"]:visible, [role="alertdialog"]:visible').first();
-  const continueWithout = page.getByRole("button", { name: /^Continue Without / }).first();
+  const continueWithout = page.getByRole("button", { name: /^Continue without / }).first();
   let count = 0;
   while (count < MAX_DIALOGS_PER_PASS && (await dialog.isVisible())) {
     const title = await dialog

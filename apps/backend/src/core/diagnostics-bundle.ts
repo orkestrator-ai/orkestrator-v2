@@ -208,14 +208,14 @@ async function collectLogs(
   if (!sources.debugLogging) {
     absent.push({
       name: "logs/debug",
-      reason: "Save Logs to Disk is off, so the debug log was not read.",
+      reason: "Save logs to disk is off, so the debug log was not read.",
     });
     return;
   }
   let remaining = sources.debugLogBytes ?? DIAGNOSTICS_DEBUG_LOG_BYTES;
   const debugFiles = await namedFiles(sources.logsDir, DEBUG_LOG_FILE);
   if (debugFiles.length === 0) {
-    absent.push({ name: "logs/debug", reason: "Save Logs to Disk is on, but no log file exists." });
+    absent.push({ name: "logs/debug", reason: "Save logs to disk is on, but no log file exists." });
   }
   // Newest first, so the budget keeps the lines nearest the problem.
   for (const file of debugFiles) {

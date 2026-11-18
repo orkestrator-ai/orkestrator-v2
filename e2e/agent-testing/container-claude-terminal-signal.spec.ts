@@ -252,7 +252,7 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
     // CLI gets its fixture token from settings, so the host notice is moot.
     // A live run keeps the notice: there it means the login is missing.
     await page.addLocatorHandler(
-      page.getByRole("button", { name: "Continue Without Claude", exact: true }),
+      page.getByRole("button", { name: "Continue without Claude", exact: true }),
       (button) => button.click(),
     );
   }

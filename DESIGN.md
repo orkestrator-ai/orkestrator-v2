@@ -461,6 +461,7 @@ A 16px-radius panel on the ground colour, with header and footer bands separated
 ## Do's and Don'ts
 
 ### Do:
+- **Do** write UI labels, buttons, menu items, tabs, headings, dialog titles, accessible names and toasts in sentence case. Capitalize the first word and preserve acronyms, proper names and established product terms, including Multi Review, Coordinator, Claude Code, GitHub and Linear. Keep generic product terms such as project home, prompt environment, pipeline environment, build pipeline, execution policy, agent mail and subork lowercase within a sentence.
 - **Do** reach for semantic tokens (`elevated`, `divider`, `selected`, `success`, `failure`) before any raw ramp step or hex.
 - **Do** keep a resting screen near-monochrome and let blue, green, red and yellow mark only selection, outcome and needs-you states.
 - **Do** use `elevated` for controls on chrome or sidebar; `accent`, `secondary`, `muted`, `card` and `popover` are rebound inside the central panel.

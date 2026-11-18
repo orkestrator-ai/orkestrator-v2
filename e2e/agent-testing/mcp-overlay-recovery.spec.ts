@@ -115,7 +115,7 @@ test("container MCP reset recovers unreadable changes and rehydrates after reloa
     ).toBe("corrupt");
 
     const openSettings = async () => {
-      for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+      for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
         const button = page.getByRole("button", { name: label, exact: true });
         if (await button.isVisible()) await button.click();
       }

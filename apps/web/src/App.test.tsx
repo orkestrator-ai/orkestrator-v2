@@ -1528,7 +1528,7 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expectStartupBlockerTheme(await screen.findByRole("heading", { name: "macOS File Access" }));
+      expectStartupBlockerTheme(await screen.findByRole("heading", { name: "macOS file access" }));
       expect(screen.queryByText("Checking macOS file access...") === null).toBe(true);
       expect(screen.getByText("Full Disk Access")).toBeTruthy();
       expect(screen.getByText("Documents folder")).toBeTruthy();
@@ -1545,10 +1545,10 @@ describe("App Docker availability", () => {
       ).toBe(true);
       expect(mockCheckDocker).not.toHaveBeenCalled();
 
-      fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access Settings" }));
-      fireEvent.click(screen.getByRole("button", { name: "Open Files & Folders Settings" }));
-      fireEvent.click(screen.getByRole("button", { name: "Open Photos Settings" }));
-      fireEvent.click(screen.getByRole("button", { name: "Open Media Library Settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open Files & Folders settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open Photos settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open Media Library settings" }));
       await waitFor(() => {
         expect(openMacOsSettings).toHaveBeenCalledWith("full-disk-access");
         expect(openMacOsSettings).toHaveBeenCalledWith("files-and-folders");
@@ -1556,7 +1556,7 @@ describe("App Docker availability", () => {
         expect(openMacOsSettings).toHaveBeenCalledWith("media-library");
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "Check Again" }));
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
       expect(getMacOsStatus).toHaveBeenCalledTimes(2);
     } finally {
@@ -1591,19 +1591,19 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      expect(await screen.findByText("macOS file access")).toBeTruthy();
       expect(screen.getByText("Full Disk Access")).toBeTruthy();
       expect(screen.getByText("Recommended")).toBeTruthy();
       expect(mockCheckDocker).not.toHaveBeenCalled();
       expect(screen.queryByRole("button", { name: "Continue anyway" }) === null).toBe(true);
 
-      fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access Settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access settings" }));
       await waitFor(() => expect(openMacOsSettings).toHaveBeenCalledWith("full-disk-access"));
       expect(mockCheckDocker).not.toHaveBeenCalled();
 
       fireEvent.click(screen.getByRole("button", { name: "Continue without Full Disk Access" }));
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
-      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+      expect(screen.queryByText("macOS file access") === null).toBe(true);
     } finally {
       cleanup();
       window.orkestrator = originalOrkestrator;
@@ -1635,13 +1635,13 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      expect(await screen.findByText("macOS file access")).toBeTruthy();
       expect(mockCheckDocker).not.toHaveBeenCalled();
       expect(screen.queryByRole("button", { name: "Continue anyway" }) === null).toBe(true);
       expect(
         screen.queryByRole("button", { name: "Continue without Full Disk Access" }) === null,
       ).toBe(true);
-      expect(screen.getByRole("button", { name: "Check Again" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
     } finally {
       cleanup();
       window.orkestrator = originalOrkestrator;
@@ -1682,7 +1682,7 @@ describe("App Docker availability", () => {
         }),
       );
 
-      fireEvent.click(screen.getByRole("button", { name: "Check Again" }));
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
       expect(screen.queryByText("Could not check macOS file access") === null).toBe(true);
     } finally {
@@ -1736,7 +1736,7 @@ describe("App Docker availability", () => {
 
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
       expect(getMacOsStatus).not.toHaveBeenCalled();
-      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+      expect(screen.queryByText("macOS file access") === null).toBe(true);
       expect(screen.getByTestId("app-shell")).toBeTruthy();
     } finally {
       cleanup();
@@ -1890,7 +1890,7 @@ describe("App Docker availability", () => {
       expect(screen.getByTestId("app-shell")).toBeTruthy();
       expect(getMacOsStatus).not.toHaveBeenCalled();
       expect(mockCheckDocker).not.toHaveBeenCalled();
-      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+      expect(screen.queryByText("macOS file access") === null).toBe(true);
     } finally {
       cleanup();
       window.orkestrator = originalOrkestrator;
@@ -1928,7 +1928,7 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      expect(await screen.findByText("macOS file access")).toBeTruthy();
       expect(screen.getByText("Documents folder")).toBeTruthy();
       expect(getMacOsStatus).toHaveBeenCalled();
       expect(mockCheckDocker).not.toHaveBeenCalled();
@@ -1954,7 +1954,7 @@ describe("App Docker availability", () => {
       render(<App />);
 
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
-      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+      expect(screen.queryByText("macOS file access") === null).toBe(true);
       expect(screen.queryByText("Checking macOS file access...") === null).toBe(true);
     } finally {
       cleanup();
@@ -1997,14 +1997,14 @@ describe("App Docker availability", () => {
       render(<App />);
 
       expect(await screen.findByText("Checking macOS file access...")).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: "Check Again" }));
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
       releaseFirst?.();
       await act(async () => {
         await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       });
       expect(screen.queryByText("Downloads folder") === null).toBe(true);
-      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+      expect(screen.queryByText("macOS file access") === null).toBe(true);
     } finally {
       cleanup();
       window.orkestrator = originalOrkestrator;
@@ -2043,7 +2043,7 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      expect(await screen.findByText("macOS file access")).toBeTruthy();
       expect(pollCallbacks).toEqual([]);
       expect(mockCheckDocker).not.toHaveBeenCalled();
     } finally {
@@ -2078,8 +2078,8 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(await screen.findByText("macOS File Access")).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: "Restart App" }));
+      expect(await screen.findByText("macOS file access")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Restart app" }));
       await waitFor(() => expect(mockRestart).toHaveBeenCalledTimes(1));
       expect(mockCheckDocker).not.toHaveBeenCalled();
     } finally {
@@ -2105,7 +2105,7 @@ describe("App Docker availability", () => {
     try {
       render(<App />);
 
-      expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+      expect(await screen.findByText("Docker is not running")).toBeTruthy();
       expect(mockCheckDocker).toHaveBeenCalledTimes(1);
       await deferredConfirmation.releaseNext();
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
@@ -2113,7 +2113,7 @@ describe("App Docker availability", () => {
       expect(mockSyncAllEnvironmentsWithDocker).not.toHaveBeenCalled();
 
       act(() => {
-        screen.getByRole("button", { name: "Check Again" }).click();
+        screen.getByRole("button", { name: "Check again" }).click();
       });
 
       await waitFor(() => {
@@ -2134,7 +2134,7 @@ describe("App Docker availability", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Docker Permission Required")).toBeTruthy();
+    expect(await screen.findByText("Docker permission required")).toBeTruthy();
     expect(mockCheckDocker).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/your user account cannot access the Docker daemon/i)).toBeTruthy();
     expect(screen.getByText(/Docker group membership grants root-level host access/i)).toBeTruthy();
@@ -2142,9 +2142,9 @@ describe("App Docker availability", () => {
   });
 
   test.each([
-    ["timed-out", "Docker Check Timed Out", /did not respond within 10 seconds/i],
-    ["unknown", "Docker Is Unavailable", /docker info.*failed/i],
-    ["daemon-unavailable", "Docker Is Not Running", /Start the Docker service/i],
+    ["timed-out", "Docker check timed out", /did not respond within 10 seconds/i],
+    ["unknown", "Docker is unavailable", /docker info.*failed/i],
+    ["daemon-unavailable", "Docker is not running", /Start the Docker service/i],
   ] as const)("renders the %s Docker diagnostic", async (reason, title, description) => {
     mockCheckDocker.mockImplementation(async () => ({ available: false, reason }));
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
@@ -2167,11 +2167,11 @@ describe("App Docker availability", () => {
     try {
       render(<App />);
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
-      expect(screen.queryByText("Docker Is Not Installed") === null).toBe(true);
+      expect(screen.queryByText("Docker is not installed") === null).toBe(true);
       expect(screen.getByText("Checking Docker availability...")).toBeTruthy();
 
       await deferredConfirmation.releaseNext();
-      expect(await screen.findByText("Docker Is Not Installed")).toBeTruthy();
+      expect(await screen.findByText("Docker is not installed")).toBeTruthy();
       expect(screen.getByText(/Install Docker, then restart Orkestrator/i)).toBeTruthy();
       expect(mockCheckDocker).toHaveBeenCalledTimes(2);
     } finally {
@@ -2180,9 +2180,9 @@ describe("App Docker availability", () => {
   });
 
   test.each([
-    ["daemon-unavailable", "Docker Is Not Running"],
-    ["permission-denied", "Docker Permission Required"],
-    ["timed-out", "Docker Check Timed Out"],
+    ["daemon-unavailable", "Docker is not running"],
+    ["permission-denied", "Docker permission required"],
+    ["timed-out", "Docker check timed out"],
   ] as const)(
     "uses the confirming %s diagnosis after a withheld missing-binary result",
     async (reason, title) => {
@@ -2198,11 +2198,11 @@ describe("App Docker availability", () => {
       try {
         render(<App />);
         await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
-        expect(screen.queryByText("Docker Is Not Installed") === null).toBe(true);
+        expect(screen.queryByText("Docker is not installed") === null).toBe(true);
 
         await deferredConfirmation.releaseNext();
         expect(await screen.findByText(title)).toBeTruthy();
-        expect(screen.queryByText("Docker Is Not Installed") === null).toBe(true);
+        expect(screen.queryByText("Docker is not installed") === null).toBe(true);
       } finally {
         deferredConfirmation.restore();
       }
@@ -2222,11 +2222,11 @@ describe("App Docker availability", () => {
     try {
       render(<App />);
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
-      expect(screen.queryByText("Docker Is Not Installed") === null).toBe(true);
+      expect(screen.queryByText("Docker is not installed") === null).toBe(true);
 
       await deferredConfirmation.releaseNext();
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
-      expect(screen.queryByText("Docker Is Not Installed") === null).toBe(true);
+      expect(screen.queryByText("Docker is not installed") === null).toBe(true);
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
     } finally {
       deferredConfirmation.restore();
@@ -2279,13 +2279,13 @@ describe("App Docker availability", () => {
       expect(screen.getByTestId("app-shell").getAttribute("data-docker-ready")).toBe("false");
       await deferredConfirmation.releaseNext();
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
-      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      expect(screen.queryByText("Docker is not running") === null).toBe(true);
       expect(screen.queryByText("Checking Docker availability...") === null).toBe(true);
       expect(screen.getByText(/could not check Docker availability/i)).toBeTruthy();
       expect(screen.getByTestId("app-shell").getAttribute("data-docker-ready")).toBe("true");
       expect(screen.getByTestId("app-shell").getAttribute("data-docker-available")).toBe("false");
 
-      act(() => screen.getByRole("button", { name: "Check Docker Again" }).click());
+      act(() => screen.getByRole("button", { name: "Check Docker again" }).click());
       await waitFor(() => {
         expect(mockCheckDocker).toHaveBeenCalledTimes(3);
         expect(screen.queryByText(/could not check Docker availability/i) === null).toBe(true);
@@ -2341,11 +2341,11 @@ describe("App Docker availability", () => {
     try {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
-      await screen.findByText("Docker Is Not Running");
+      await screen.findByText("Docker is not running");
       await deferredConfirmation.releaseNext();
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
 
-      act(() => screen.getByRole("button", { name: "Check Again" }).click());
+      act(() => screen.getByRole("button", { name: "Check again" }).click());
       await waitFor(() => {
         expect(logs.records()).toContainEqual(
           expect.objectContaining({
@@ -2360,8 +2360,8 @@ describe("App Docker availability", () => {
         );
       });
 
-      act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
-      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      act(() => screen.getByRole("button", { name: "Continue without Docker" }).click());
+      expect(screen.queryByText("Docker is not running") === null).toBe(true);
       expect(screen.getByTestId("app-shell")).toBeTruthy();
       expect(mockExit).not.toHaveBeenCalled();
     } finally {
@@ -2386,15 +2386,15 @@ describe("App Docker availability", () => {
     try {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
-      expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+      expect(await screen.findByText("Docker is not running")).toBeTruthy();
       await deferredConfirmation.releaseNext();
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
 
-      act(() => screen.getByRole("button", { name: "Check Again" }).click());
+      act(() => screen.getByRole("button", { name: "Check again" }).click());
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(3));
 
-      expect(screen.getByText("Docker Is Not Running")).toBeTruthy();
-      expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+      expect(screen.getByText("Docker is not running")).toBeTruthy();
+      expect(screen.queryByText("AI CLI required") === null).toBe(true);
     } finally {
       logs.restore();
       deferredConfirmation.restore();
@@ -2444,7 +2444,7 @@ describe("App Docker availability", () => {
       await runPoll();
       await waitFor(() => {
         expect(mockCheckDocker).toHaveBeenCalledTimes(3);
-        expect(screen.getByText("Docker Is Not Running")).toBeTruthy();
+        expect(screen.getByText("Docker is not running")).toBeTruthy();
       });
       // The daemon being down says nothing about whether this container is
       // still up, and answering "not running" here disposes the environment's
@@ -2453,11 +2453,11 @@ describe("App Docker availability", () => {
         screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"),
       ).toBe("true");
 
-      act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
+      act(() => screen.getByRole("button", { name: "Continue without Docker" }).click());
       await runPoll();
       await waitFor(() => {
         expect(mockCheckDocker).toHaveBeenCalledTimes(4);
-        expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+        expect(screen.queryByText("Docker is not running") === null).toBe(true);
       });
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(2);
     } finally {
@@ -2498,7 +2498,7 @@ describe("App Docker availability", () => {
       });
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(3));
 
-      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      expect(screen.queryByText("Docker is not running") === null).toBe(true);
       expect(
         screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"),
       ).toBe("true");
@@ -2540,7 +2540,7 @@ describe("App Docker availability", () => {
       });
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
 
-      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      expect(screen.queryByText("Docker is not running") === null).toBe(true);
       expect(screen.queryByText(/could not check Docker availability/i) === null).toBe(true);
       expect(
         screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"),
@@ -2582,7 +2582,7 @@ describe("App Docker availability", () => {
       });
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(3));
 
-      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      expect(screen.queryByText("Docker is not running") === null).toBe(true);
       expect(
         screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"),
       ).toBe("true");
@@ -2600,7 +2600,7 @@ describe("App Docker availability", () => {
 
     try {
       render(<App />);
-      expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+      expect(await screen.findByText("Docker is not running")).toBeTruthy();
       expect(screen.queryByText("Checking Docker availability...") === null).toBe(true);
       expect(mockCheckDocker).toHaveBeenCalledTimes(1);
       expect(deferredConfirmation.confirmationCallbacks).toHaveLength(1);
@@ -2630,13 +2630,13 @@ describe("App Docker availability", () => {
     try {
       render(<App />);
 
-      expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+      expect(await screen.findByText("Docker is not running")).toBeTruthy();
       expect(screen.queryByText("Checking Docker availability...") === null).toBe(true);
       expect(mockCheckDocker).toHaveBeenCalledTimes(1);
       await deferredConfirmation.releaseNext();
 
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
-      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      expect(screen.queryByText("Docker is not running") === null).toBe(true);
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
     } finally {
       deferredConfirmation.restore();
@@ -2655,12 +2655,12 @@ describe("App Docker availability", () => {
 
     try {
       render(<App />);
-      expect(await screen.findByText("Docker Is Unavailable")).toBeTruthy();
+      expect(await screen.findByText("Docker is unavailable")).toBeTruthy();
       await deferredConfirmation.releaseNext();
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
 
-      expect(screen.getByText("Docker Is Unavailable")).toBeTruthy();
-      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      expect(screen.getByText("Docker is unavailable")).toBeTruthy();
+      expect(screen.queryByText("Docker is not running") === null).toBe(true);
     } finally {
       deferredConfirmation.restore();
     }
@@ -2732,7 +2732,7 @@ describe("App startup checks and global events", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("AI CLI Required")).toBeTruthy();
+      expect(screen.getByText("AI CLI required")).toBeTruthy();
     });
     expect(
       screen.getAllByText(/Option [123]: Install/).map((option) => option.textContent),
@@ -2753,7 +2753,7 @@ describe("App startup checks and global events", () => {
     await waitFor(
       () => {
         expect(mockCheckClaudeCli).toHaveBeenCalledTimes(3);
-        expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+        expect(screen.queryByText("AI CLI required") === null).toBe(true);
       },
       {
         // The aggregate runner executes the bridge suites concurrently; allow
@@ -2776,7 +2776,7 @@ describe("App startup checks and global events", () => {
     render(<App />);
 
     await waitFor(() => expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(2));
-    expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+    expect(screen.queryByText("AI CLI required") === null).toBe(true);
     expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true);
   });
 
@@ -2790,12 +2790,12 @@ describe("App startup checks and global events", () => {
     try {
       render(<App />);
       await waitFor(() => expect(mockCheckGithubCli).toHaveBeenCalledTimes(1));
-      expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
+      expect(screen.queryByText("GitHub CLI not found") === null).toBe(true);
       expect(deferredConfirmation.confirmationCallbacks).toHaveLength(1);
 
       await deferredConfirmation.releaseNext();
       await waitFor(() => expect(mockCheckGithubCli).toHaveBeenCalledTimes(2));
-      expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
+      expect(screen.queryByText("GitHub CLI not found") === null).toBe(true);
     } finally {
       deferredConfirmation.restore();
     }
@@ -2811,12 +2811,12 @@ describe("App startup checks and global events", () => {
     try {
       render(<App />);
       await waitFor(() => expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(1));
-      expect(screen.queryByText("Claude Code Is Not Logged In") === null).toBe(true);
+      expect(screen.queryByText("Claude Code is not logged in") === null).toBe(true);
       expect(deferredConfirmation.confirmationCallbacks).toHaveLength(1);
 
       await deferredConfirmation.releaseNext();
       await waitFor(() => expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(2));
-      expect(screen.queryByText("Claude Code Is Not Logged In") === null).toBe(true);
+      expect(screen.queryByText("Claude Code is not logged in") === null).toBe(true);
     } finally {
       deferredConfirmation.restore();
     }
@@ -2830,7 +2830,7 @@ describe("App startup checks and global events", () => {
     render(<App />);
 
     await waitFor(() => expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+    expect(screen.queryByText("AI CLI required") === null).toBe(true);
   });
 
   test("checks host CLIs and shows onboarding after continuing without Docker", async () => {
@@ -2842,10 +2842,10 @@ describe("App startup checks and global events", () => {
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     render(<App />);
-    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
-    act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
+    expect(await screen.findByText("Docker is not running")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Continue without Docker" }).click());
 
-    expect(await screen.findByText("AI CLI Required")).toBeTruthy();
+    expect(await screen.findByText("AI CLI required")).toBeTruthy();
     expect(mockCheckClaudeCli).toHaveBeenCalledTimes(2);
     expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(2);
     expect(mockCheckGithubCli).toHaveBeenCalledTimes(2);
@@ -2858,10 +2858,10 @@ describe("App startup checks and global events", () => {
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     render(<App />);
-    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
-    act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
+    expect(await screen.findByText("Docker is not running")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Continue without Docker" }).click());
 
-    expect(await screen.findByText("GitHub CLI Not Found")).toBeTruthy();
+    expect(await screen.findByText("GitHub CLI not found")).toBeTruthy();
   });
 
   test("shows the Claude login warning after continuing without Docker", async () => {
@@ -2870,10 +2870,10 @@ describe("App startup checks and global events", () => {
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     render(<App />);
-    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
-    act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
+    expect(await screen.findByText("Docker is not running")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Continue without Docker" }).click());
 
-    expect(await screen.findByText("Claude Code Is Not Logged In")).toBeTruthy();
+    expect(await screen.findByText("Claude Code is not logged in")).toBeTruthy();
   });
 
   test("shows a Claude login notice when Claude is installed but not configured", async () => {
@@ -2890,7 +2890,7 @@ describe("App startup checks and global events", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("Claude Code Is Not Logged In")).toBeTruthy();
+      expect(screen.getByText("Claude Code is not logged in")).toBeTruthy();
     });
   });
 
@@ -2906,9 +2906,9 @@ describe("App startup checks and global events", () => {
     await waitFor(() =>
       expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true),
     );
-    expect(screen.queryByText("AI CLI Required") === null).toBe(true);
-    expect(screen.queryByText("Claude Code Is Not Logged In") === null).toBe(true);
-    expect(screen.queryByRole("button", { name: "Close Application" }) === null).toBe(true);
+    expect(screen.queryByText("AI CLI required") === null).toBe(true);
+    expect(screen.queryByText("Claude Code is not logged in") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Close application" }) === null).toBe(true);
   });
 
   test("lets an unauthenticated Claude be dismissed while Codex keeps working", async () => {
@@ -2921,17 +2921,17 @@ describe("App startup checks and global events", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Claude Code Is Not Logged In")).toBeTruthy();
+    expect(await screen.findByText("Claude Code is not logged in")).toBeTruthy();
     expect(screen.getByText(/other agent platforms keep working/)).toBeTruthy();
-    expect(screen.queryByText("AI CLI Required") === null).toBe(true);
-    expect(screen.queryByRole("button", { name: "Close Application" }) === null).toBe(true);
+    expect(screen.queryByText("AI CLI required") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Close application" }) === null).toBe(true);
 
-    act(() => screen.getByRole("button", { name: "Continue Without Claude" }).click());
+    act(() => screen.getByRole("button", { name: "Continue without Claude" }).click());
 
     await waitFor(() =>
-      expect(screen.queryByText("Claude Code Is Not Logged In") === null).toBe(true),
+      expect(screen.queryByText("Claude Code is not logged in") === null).toBe(true),
     );
-    expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+    expect(screen.queryByText("AI CLI required") === null).toBe(true);
   });
 
   test("waits for the Claude login notice before showing the GitHub CLI warning", async () => {
@@ -2943,12 +2943,12 @@ describe("App startup checks and global events", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Claude Code Is Not Logged In")).toBeTruthy();
-    expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
+    expect(await screen.findByText("Claude Code is not logged in")).toBeTruthy();
+    expect(screen.queryByText("GitHub CLI not found") === null).toBe(true);
 
-    act(() => screen.getByRole("button", { name: "Continue Without Claude" }).click());
+    act(() => screen.getByRole("button", { name: "Continue without Claude" }).click());
 
-    expect(await screen.findByText("GitHub CLI Not Found")).toBeTruthy();
+    expect(await screen.findByText("GitHub CLI not found")).toBeTruthy();
   });
 
   test("does not misreport a rejected CLI check as no installed tools", async () => {
@@ -2972,7 +2972,7 @@ describe("App startup checks and global events", () => {
         );
       });
       expect(mockCheckClaudeCli).toHaveBeenCalledTimes(2);
-      expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+      expect(screen.queryByText("AI CLI required") === null).toBe(true);
       expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true);
     } finally {
       logs.restore();
@@ -2993,9 +2993,9 @@ describe("App startup checks and global events", () => {
       render(<App />);
 
       await waitFor(() => expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(2));
-      expect(screen.queryByText("AI CLI Required") === null).toBe(true);
-      expect(screen.queryByText("Claude Code Is Not Logged In") === null).toBe(true);
-      expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
+      expect(screen.queryByText("AI CLI required") === null).toBe(true);
+      expect(screen.queryByText("Claude Code is not logged in") === null).toBe(true);
+      expect(screen.queryByText("GitHub CLI not found") === null).toBe(true);
       expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true);
     } finally {
       logs.restore();
@@ -3011,7 +3011,7 @@ describe("App startup checks and global events", () => {
     try {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
-      expect(await screen.findByText("AI CLI Required")).toBeTruthy();
+      expect(await screen.findByText("AI CLI required")).toBeTruthy();
 
       mockCheckClaudeCli.mockImplementationOnce(async () => {
         throw new Error("retry failed");
@@ -3023,7 +3023,7 @@ describe("App startup checks and global events", () => {
           description: "retry failed",
         });
       });
-      expect(screen.getByText("AI CLI Required")).toBeTruthy();
+      expect(screen.getByText("AI CLI required")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     } finally {
       logs.restore();
@@ -3031,10 +3031,10 @@ describe("App startup checks and global events", () => {
   });
 
   test.each([
-    ["docker", "Docker Is Not Running"],
-    ["ai", "AI CLI Required"],
-    ["claude", "Claude Code Is Not Logged In"],
-    ["github", "GitHub CLI Not Found"],
+    ["docker", "Docker is not running"],
+    ["ai", "AI CLI required"],
+    ["claude", "Claude Code is not logged in"],
+    ["github", "GitHub CLI not found"],
   ])("wires focus return to the %s startup notice", async (notice, title) => {
     if (notice === "docker")
       mockCheckDocker.mockImplementation(async () => DOCKER_DAEMON_UNAVAILABLE);
@@ -3066,15 +3066,15 @@ describe("App startup checks and global events", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("GitHub CLI Not Found")).toBeTruthy();
+      expect(screen.getByText("GitHub CLI not found")).toBeTruthy();
     });
 
     act(() => {
-      screen.getByRole("button", { name: "Continue Without GitHub CLI" }).click();
+      screen.getByRole("button", { name: "Continue without GitHub CLI" }).click();
     });
 
     await waitFor(() => {
-      expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
+      expect(screen.queryByText("GitHub CLI not found") === null).toBe(true);
     });
   });
 
@@ -3089,11 +3089,11 @@ describe("App startup checks and global events", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Sign In to GitHub")).toBeTruthy();
+    expect(await screen.findByText("Sign in to GitHub")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Sign in to GitHub" })).toBeTruthy();
-    act(() => screen.getByRole("button", { name: "Not Now" }).click());
+    act(() => screen.getByRole("button", { name: "Not now" }).click());
 
-    await waitFor(() => expect(screen.queryByText("Sign In to GitHub") === null).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Sign in to GitHub") === null).toBe(true));
   });
 
   test("does not offer GitHub sign-in where the backend refuses it", async () => {
@@ -3108,7 +3108,7 @@ describe("App startup checks and global events", () => {
     render(<App />);
 
     await waitFor(() => expect(mockGetGitHubCliStatus).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText("Sign In to GitHub") === null).toBe(true);
+    expect(screen.queryByText("Sign in to GitHub") === null).toBe(true);
   });
 
   test("remembers 'Don't remind me again' for the GitHub sign-in", async () => {
@@ -3122,12 +3122,12 @@ describe("App startup checks and global events", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Sign In to GitHub")).toBeTruthy();
+    expect(await screen.findByText("Sign in to GitHub")).toBeTruthy();
     act(() => screen.getByRole("checkbox", { name: "Don't remind me again" }).click());
-    act(() => screen.getByRole("button", { name: "Not Now" }).click());
+    act(() => screen.getByRole("button", { name: "Not now" }).click());
 
     await waitFor(() => expect(mockSetGitHubCliReminderDismissed).toHaveBeenCalledWith(true));
-    expect(screen.queryByText("Sign In to GitHub") === null).toBe(true);
+    expect(screen.queryByText("Sign in to GitHub") === null).toBe(true);
   });
 
   test("does not save a reminder preference when the box is left unticked", async () => {
@@ -3141,10 +3141,10 @@ describe("App startup checks and global events", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Sign In to GitHub")).toBeTruthy();
-    act(() => screen.getByRole("button", { name: "Not Now" }).click());
+    expect(await screen.findByText("Sign in to GitHub")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Not now" }).click());
 
-    await waitFor(() => expect(screen.queryByText("Sign In to GitHub") === null).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Sign in to GitHub") === null).toBe(true));
     expect(mockSetGitHubCliReminderDismissed).not.toHaveBeenCalled();
   });
 
@@ -3161,8 +3161,8 @@ describe("App startup checks and global events", () => {
     render(<App />);
 
     await waitFor(() => expect(mockGetGitHubCliStatus).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
-    expect(screen.queryByText("Sign In to GitHub") === null).toBe(true);
+    expect(screen.queryByText("GitHub CLI not found") === null).toBe(true);
+    expect(screen.queryByText("Sign in to GitHub") === null).toBe(true);
   });
 
   test("continues rendering when config load fails", async () => {
@@ -3511,7 +3511,7 @@ describe("App terminal overlay actions", () => {
     });
 
     render(<App />);
-    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+    expect(await screen.findByText("Docker is not running")).toBeTruthy();
 
     act(() => {
       screen.getByTestId("start-env-visible").click();
@@ -3543,7 +3543,7 @@ describe("App terminal overlay actions", () => {
     });
 
     render(<App />);
-    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+    expect(await screen.findByText("Docker is not running")).toBeTruthy();
     act(() => screen.getByTestId("start-env-local").click());
 
     await waitFor(() => {

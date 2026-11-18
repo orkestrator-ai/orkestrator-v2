@@ -114,9 +114,9 @@ async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) 
   );
 
   if (options.turnOffLaunchAgent) {
-    fireEvent.click(screen.getByLabelText("Launch Agent"));
+    fireEvent.click(screen.getByLabelText("Launch agent"));
   }
-  fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
   await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());
   await waitFor(() => expect(startEnvironment).toHaveBeenCalled());
@@ -204,7 +204,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect((screen.getByRole("button", { name: /Local/ }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    const submit = screen.getByRole("button", { name: "Create Environment" });
+    const submit = screen.getByRole("button", { name: "Create environment" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(submit);
     expect(createEnvironment).not.toHaveBeenCalled();
@@ -228,7 +228,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
     expect(screen.getByText(/sign in to GitHub/i)).toBeTruthy();
@@ -256,7 +256,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     expect(await screen.findByText("This container will have no GitHub access")).toBeTruthy();
     expect(screen.getByText(/GitHub access for containers/)).toBeTruthy();
@@ -284,7 +284,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     expect(await screen.findByText("No GitHub token configured")).toBeTruthy();
     expect(screen.getByText(/no token is stored/i)).toBeTruthy();
@@ -312,7 +312,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     expect(await screen.findByText("GitHub credentials could not be verified")).toBeTruthy();
     expect(
@@ -339,7 +339,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     };
     const view = renderInAppCommandScope(<CreateEnvironmentFlowDialog open {...props} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
 
     view.rerender(<CreateEnvironmentFlowDialog open={false} {...props} />);
@@ -372,7 +372,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       <CreateEnvironmentFlowDialog projectId="project-1" {...sharedProps} />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
 
     view.rerender(<CreateEnvironmentFlowDialog projectId="project-2" {...sharedProps} />);
@@ -382,7 +382,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
 
     expect(screen.queryByText("No GitHub CLI credentials found") === null).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() =>
       expect(createEnvironment).toHaveBeenCalledWith(
         "project-2",
@@ -416,7 +416,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
     view.unmount();
 
@@ -450,7 +450,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       </DockerAvailabilityProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
 
     view.rerender(
@@ -486,7 +486,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       </DockerAvailabilityProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
 
     view.rerender(
@@ -519,7 +519,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create anyway" }));
 
@@ -538,13 +538,13 @@ describe("CreateEnvironmentFlowDialog", () => {
   function startFeatureBuild(name: string) {
     fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
     fireEvent.change(screen.getByLabelText(/Feature name/i), { target: { value: name } });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
   }
 
   function startFeatureBuildFromDescription(description: string) {
     fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
     fireEvent.change(screen.getByLabelText(/^Description$/i), { target: { value: description } });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
   }
 
   test("warns before a containerized feature build when credentials are unavailable", async () => {
@@ -937,7 +937,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Local/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => expect(createEnvironment).toHaveBeenCalledTimes(1));
     expect(getContainerGitHubCredentialStatusMock).not.toHaveBeenCalled();
@@ -1017,7 +1017,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(startEnvironment).toHaveBeenCalledWith("env-background", "", {
@@ -1046,7 +1046,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(startEnvironment).toHaveBeenCalledWith("env-pending-start", "", {
@@ -1077,7 +1077,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
       await waitFor(() => {
         expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -1117,7 +1117,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("Could not create environment", {
@@ -1164,7 +1164,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());
     const call = updateEnvironmentAgentSettingsMock.mock.calls[0]!;
@@ -1396,7 +1396,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
 
     fireEvent.click(screen.getByRole("checkbox", { name: /Launch agent/i }));
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());
     const stored = appCommandStore(claudeOptionsStore).getState().getOptions("env-agent-off");
@@ -1423,7 +1423,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
 
     // The title renders bare rather than with a stray separator or "undefined".
-    expect(screen.getByText("Create Ork (Environment)")).toBeTruthy();
+    expect(screen.getByText("Create Ork (environment)")).toBeTruthy();
   });
 
   test("uses the stored project name unless an explicit name is provided", () => {
@@ -1454,7 +1454,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
     expect(
       screen.getByRole("heading", {
-        name: "Create Ork (Environment) - Stored Project",
+        name: "Create Ork (environment) - Stored Project",
       }),
     ).toBeTruthy();
 
@@ -1469,7 +1469,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
     expect(
       screen.getByRole("heading", {
-        name: "Create Ork (Environment) - Explicit Project",
+        name: "Create Ork (environment) - Explicit Project",
       }),
     ).toBeTruthy();
   });
@@ -1489,10 +1489,10 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     expect(createEnvironment).not.toHaveBeenCalled();
-    expect(screen.getByText("Create Ork (Environment)")).toBeTruthy();
+    expect(screen.getByText("Create Ork (environment)")).toBeTruthy();
   });
 
   test("maps optional create fields and derives naming intent only for unnamed environments", () => {

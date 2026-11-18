@@ -50,7 +50,7 @@ and contain sink failures.
 | `trace` | Per-item detail too heavy for `debug`. | Off |
 
 A site moved to `debug` disappears from normal logs, including from a saved log,
-until someone turns on **Log Detail**. Treat that as a decision to review, not a
+until someone turns on **Log detail**. Treat that as a decision to review, not a
 tidy-up.
 
 ### Hot paths
@@ -284,7 +284,7 @@ and no site logs a stderr tail.
 | `storage` | `scrub.checkpoint-failed` | `warn`, throttled under `scrub` | The truncating checkpoint threw, or SQLite reported it blocked (`kind=busy`), which it does in a result row rather than as an error. Scrubbing is a [privacy step](storage.md#durability-and-deletion). |
 
 The lines the [essential log](#the-essential-event-log) lists are always kept there;
-the rest reach disk only while **Save Logs to Disk** is on. A normal agent close
+the rest reach disk only while **Save logs to disk** is on. A normal agent close
 also writes `agent.exited` at `warn`, on every session close, so filter on
 `requested=false` to find the exits nothing asked for. Stopping a turn sends
 `session/cancel` and keeps the process, so it writes no such line.
@@ -416,7 +416,7 @@ and its spacing constants in `storage-slow-operations.ts`, `SLOW_COMMAND_MS` and
 
 ## The essential event log
 
-With **Save Logs to Disk** off, which is the default, the saved log keeps nothing, so
+With **Save logs to disk** off, which is the default, the saved log keeps nothing, so
 the first occurrence of a crash or a silent fallback would be lost. So a small event
 log is written **whatever that setting says**. This is a deliberate change from
 "nothing persisted unless enabled", and Settings says so.
@@ -598,7 +598,7 @@ still fit. Its timestamp is replaced unless it looks like one.
 
 ### Writes with saving on and off
 
-| Save Logs to Disk | Normal log | Essential log |
+| Save logs to disk | Normal log | Essential log |
 | --- | --- | --- |
 | Off | Not written | Written |
 | On | Written, unchanged | Written as well |
@@ -857,7 +857,7 @@ Export diagnostics** or `orkestrator diagnostics export`. Nothing uploads it. Th
 | `log-policy.json` | Whether logs are saved and the levels in force: names and levels only |
 | `log-storage.json` | Log sizes and counts |
 | `logs/essential/*` | The essential log |
-| `logs/debug/*` | With **Save Logs to Disk** on: the newest 8 MiB across the daily log files, from a line start |
+| `logs/debug/*` | With **Save logs to disk** on: the newest 8 MiB across the daily log files, from a line start |
 | `logs/containers/<environmentId>/*` | Only for the environments the user chose: each container server's log and the run before its last relaunch (`*.prev.log`), the newest 64 KiB and 200 lines of each |
 
 **The manifest is what is written.** A plan builds the whole archive in the backend's
@@ -1168,8 +1168,8 @@ interrupts a running agent.
 
 | Control | Config keys | Decides |
 | --- | --- | --- |
-| **Save Logs to Disk**, with retention | `debugLogging`, `debugLogRetentionDays` | Whether what is written reaches the log file, and for how long it stays. The [essential log](#the-essential-event-log) follows neither. |
-| **Log Detail** | `logDetail` (`level`, `areaLevels`), `logDetailKeepRaised`; `logDetailExpiresAt` is the backend's | What each process writes: a preset, a default level and levels by area. Raised detail goes back to `info` after 24 hours unless kept on. It cannot switch off an essential event. |
+| **Save logs to disk**, with retention | `debugLogging`, `debugLogRetentionDays` | Whether what is written reaches the log file, and for how long it stays. The [essential log](#the-essential-event-log) follows neither. |
+| **Log detail** | `logDetail` (`level`, `areaLevels`), `logDetailKeepRaised`; `logDetailExpiresAt` is the backend's | What each process writes: a preset, a default level and levels by area. Raised detail goes back to `info` after 24 hours unless kept on. It cannot switch off an essential event. |
 
 An area covers its children unless a child has its own entry: `desktop=debug` also
 covers `desktop.dialog`. The default is `info`. Bridge snapshots
@@ -1235,7 +1235,7 @@ flowchart LR
   A bridge the backend launches inherits the backend's value at launch, so the
   override sits on top there too; a bridge already running keeps what it started
   with. Unset, the settings are the whole answer.
-- **Presets are a shortcut, not a setting.** **Log Detail** offers Normal, Quiet,
+- **Presets are a shortcut, not a setting.** **Log detail** offers Normal, Quiet,
   Agent sessions (`bridge=debug`), Crashes and stopped processes (`backend`, `desktop`
   and `local-server` at `debug`, the lines
   [the crash guide](../debugging/process-crashes-and-kills.md) reads), Updates
@@ -1252,7 +1252,7 @@ flowchart LR
   `reconcileLogDetailExpiry`); when it is due, raised levels go back to `info` (a
   lowered area such as `updater=warn` stays) through an ordinary config write, so the
   audit line, this process and every bridge follow, and `logging` `policy.detail-expired`
-  is written. **Save Logs to Disk** is never touched. A raised setting with no expiry,
+  is written. **Save logs to disk** is never touched. A raised setting with no expiry,
   written by hand, by an older backend or by the upgrade from `debugLogging`, gets one
   at the next check. The expiry is in `config.json`, so it survives a restart, and an
   expiry that passed while the backend was stopped is honoured at its next start.
@@ -1426,7 +1426,7 @@ per-entry bound) is passed on in 64 KiB pieces rather than held or dropped; a re
 cut that way stays as `[Backend]` text. Lines end where Node's `readline` ended them:
 at `\n`, `\r\n` and a lone `\r`. UTF-8 is decoded across chunk boundaries.
 
-**The relay runs even when nothing reads it.** With Save Logs to Disk off in a
+**The relay runs even when nothing reads it.** With Save logs to disk off in a
 packaged app, every backend line is still parsed and written to a stdout nobody
 reads. It stays that way: it costs about 1–2.5 µs of CPU a line under Node
 (measured 2026-11-05 on macOS, 100,000 relayed record and raw lines with stdout at
@@ -1527,7 +1527,7 @@ download URL loses its signature.
 
 The differential download plan is the library's `debug` output. It made up most of
 the lines in a sampled log. It is now off by default, and neither built nor written.
-To see it, set `updater` to Debug in **Log Detail**, or
+To see it, set `updater` to Debug in **Log detail**, or
 `ORKESTRATOR_LOG_LEVEL=updater=debug`; it appears as one line cut at 2 KiB.
 
 `library.message` is the one event whose field is vendor text rather than ours.
@@ -1581,7 +1581,7 @@ with one vocabulary file per domain (`web-kanban.ts`, `web-sync.ts`, and so on).
   (`apps/web/src/lib/debug-log.ts`) reads it once at startup. This is the old
   `rendererDebugLog` gate, which every `debug` site now goes through, including those
   that were plain `console.debug` and always wrote. `trace` stays off.
-- **Its switch.** Settings → Debug → **Renderer Debug Logging**
+- **Its switch.** Settings → Debug → **Renderer debug logging**
   (`RendererDebugSettings.tsx`) sets or clears the key for this window and reloads. It
   is per window by design: the key is in the window's own storage, so a browser tab or a
   window on another machine sets its own, and a host setting never changes another

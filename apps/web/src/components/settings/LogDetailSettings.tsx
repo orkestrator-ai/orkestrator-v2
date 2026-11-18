@@ -174,7 +174,7 @@ export function LogDetailSettings({
 
   return (
     <div className="space-y-3">
-      <SettingsSectionHeader title="Log Detail">
+      <SettingsSectionHeader title="Log detail">
         How much each part of Orkestrator writes, including agent bridges that are already running.
         This does not decide whether anything is saved. Logs are designed to leave out prompts,
         terminal output, file contents and credentials.

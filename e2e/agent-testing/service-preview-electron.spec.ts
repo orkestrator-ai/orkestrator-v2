@@ -3091,7 +3091,7 @@ test("a remote terminal link opens the native localhost forward in a separate br
         .waitForFunction(
           () =>
             Array.from(document.querySelectorAll("button")).some(
-              (button) => button.textContent?.trim() === "Continue Without GitHub CLI",
+              (button) => button.textContent?.trim() === "Continue without GitHub CLI",
             ),
           undefined,
           { timeout: 15_000 },

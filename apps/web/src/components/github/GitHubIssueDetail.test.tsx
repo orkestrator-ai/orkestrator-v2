@@ -407,9 +407,9 @@ describe("GitHubIssueDetail", () => {
     fireEvent.click(screen.getByRole("button", { name: /Open on GitHub/ }));
     expect(openInBrowserMock).toHaveBeenCalledWith(detail.htmlUrl);
 
-    fireEvent.click(screen.getByRole("button", { name: "Close Issue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close issue" }));
     expect(screen.getByText("Close issue #42?")).toBeTruthy();
-    fireEvent.click(screen.getAllByRole("button", { name: "Close Issue" }).at(-1)!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Close issue" }).at(-1)!);
 
     await waitFor(() => {
       expect(closeIssueMock).toHaveBeenCalledWith("project-1", 42);
@@ -421,8 +421,8 @@ describe("GitHubIssueDetail", () => {
     closeIssueMock.mockRejectedValueOnce(new Error("Issue changed on GitHub"));
     renderDetail();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close Issue" }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Close Issue" }).at(-1)!);
+    fireEvent.click(screen.getByRole("button", { name: "Close issue" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Close issue" }).at(-1)!);
 
     expect(await screen.findByText("Issue changed on GitHub")).toBeTruthy();
     expect(screen.getByText("Close issue #42?")).toBeTruthy();
@@ -431,7 +431,7 @@ describe("GitHubIssueDetail", () => {
   test("starts a local build with the complete current issue snapshot", async () => {
     renderDetail();
 
-    fireEvent.click(screen.getByRole("button", { name: "Build Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Build local" }));
 
     await waitFor(() => {
       expect(startBuildMock).toHaveBeenCalledTimes(1);
@@ -460,10 +460,10 @@ describe("GitHubIssueDetail", () => {
 
     expect(screen.getByText("A build is already active for this issue.")).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Build container" }) as HTMLButtonElement).disabled,
     ).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: /View Build/ }));
+    fireEvent.click(screen.getByRole("button", { name: /View build/ }));
     await waitFor(() => {
       expect(navigateToPipelineMock).toHaveBeenCalledWith(
         expect.objectContaining({ id: activeId, environmentId: "env-active" }),
@@ -476,16 +476,16 @@ describe("GitHubIssueDetail", () => {
     renderDetail();
 
     expect(screen.getByText("Build phase: creating-environment")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /View Build/ }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /View build/ }) === null).toBe(true);
     expect(
-      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Build container" }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
   test("starts a container build when no pipeline exists", async () => {
     renderDetail();
 
-    fireEvent.click(screen.getByRole("button", { name: "Build Container" }));
+    fireEvent.click(screen.getByRole("button", { name: "Build container" }));
 
     await waitFor(() => {
       expect(startBuildMock).toHaveBeenCalledWith(
@@ -516,13 +516,13 @@ describe("GitHubIssueDetail", () => {
     const view = renderInAppCommandScope(renderWithDocker(true));
 
     expect(
-      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Build container" }) as HTMLButtonElement).disabled,
     ).toBe(false);
 
     view.rerender(renderWithDocker(false));
 
-    const containerBuild = screen.getByRole("button", { name: "Build Container" });
-    const localBuild = screen.getByRole("button", { name: "Build Local" });
+    const containerBuild = screen.getByRole("button", { name: "Build container" });
+    const localBuild = screen.getByRole("button", { name: "Build local" });
     expect((containerBuild as HTMLButtonElement).disabled).toBe(true);
     expect(containerBuild.getAttribute("title")).toBe("Start Docker to run a container build");
     expect((localBuild as HTMLButtonElement).disabled).toBe(false);
@@ -555,7 +555,7 @@ describe("GitHubIssueDetail", () => {
     });
     renderDetail();
 
-    const localBuild = screen.getByRole("button", { name: "Build Local" });
+    const localBuild = screen.getByRole("button", { name: "Build local" });
     expect((localBuild as HTMLButtonElement).disabled).toBe(true);
     expect(localBuild.getAttribute("title")).toBe(
       "Add a local project checkout to run a local build",
@@ -566,7 +566,7 @@ describe("GitHubIssueDetail", () => {
     // The container build stays available - the missing checkout says nothing
     // about Docker.
     expect(
-      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Build container" }) as HTMLButtonElement).disabled,
     ).toBe(false);
   });
 
@@ -575,7 +575,7 @@ describe("GitHubIssueDetail", () => {
     appCommandStore(projectStore).setState({ projects: [] });
     renderDetail();
 
-    const localBuild = screen.getByRole("button", { name: "Build Local" });
+    const localBuild = screen.getByRole("button", { name: "Build local" });
     expect((localBuild as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(localBuild);
     await waitFor(() => {
@@ -591,7 +591,7 @@ describe("GitHubIssueDetail", () => {
     startBuildMock.mockResolvedValueOnce(undefined);
     renderDetail();
 
-    fireEvent.click(screen.getByRole("button", { name: "Build Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Build local" }));
 
     expect(
       await screen.findByText(

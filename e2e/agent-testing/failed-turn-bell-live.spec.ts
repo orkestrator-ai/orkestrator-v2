@@ -328,7 +328,7 @@ function containerBridgePid(containerId: string): number | undefined {
 }
 
 async function dismissStartupDialogs(page: Page) {
-  for (const name of ["Continue Without Claude", "Continue Without Docker", "Hide"]) {
+  for (const name of ["Continue without Claude", "Continue without Docker", "Hide"]) {
     const button = page.getByRole("button", { name, exact: true });
     if (await button.isVisible().catch(() => false)) await button.click().catch(() => undefined);
   }
@@ -343,7 +343,7 @@ test.describe("failed native turns ring the right bell", () => {
       await page.setViewportSize({ width: 1440, height: 1000 });
       page.setDefaultTimeout(60_000);
       // Startup notices can open at any time (no Claude login is expected here).
-      for (const name of ["Continue Without Claude", "Continue Without Docker"]) {
+      for (const name of ["Continue without Claude", "Continue without Docker"]) {
         const button = page.getByRole("button", { name, exact: true });
         await page.addLocatorHandler(button, () => button.click());
       }

@@ -330,7 +330,7 @@ function paneSelectionAllowsSetupHandoff(
  * True when the pipeline tab may take focus.
  *
  * A rebuild into an already-ready environment has no long setup to protect, so
- * Start Build activates unconditionally. During a live setup, stay on the
+ * Start build activates unconditionally. During a live setup, stay on the
  * setup surface — or, when this window armed the pipeline, the startup-agent
  * tab the automatic setup handoff just chose — and decline a later steal from
  * a tab the user picked. Unarmed windows following a backend-published
@@ -788,7 +788,7 @@ export function reconcileAuthoritativePaneLayout(
       current,
       scope,
     );
-    // Apply the pipeline handoff first so a Start Build during setup wins over
+    // Apply the pipeline handoff first so a Start build during setup wins over
     // the automatic startup-agent landing in the same reconcile frame. A window
     // that did not launch the pipeline has no one-shot, so fall back to the
     // build tab the backend itself made authoritative. An armed window keeps

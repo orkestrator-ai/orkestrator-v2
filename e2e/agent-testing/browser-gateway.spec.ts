@@ -135,7 +135,7 @@ async function authenticatedInvoke(page: Page, status: Status) {
 // Local-worktree scenarios can proceed through these optional startup dialogs.
 // The host reachability notice can also arrive later, on top of any surface.
 test.beforeEach(async ({ page }) => {
-  for (const name of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+  for (const name of ["Continue without Docker", "Continue without GitHub CLI"]) {
     const dismiss = page.getByRole("button", { name, exact: true });
     await page.addLocatorHandler(dismiss, (button) => button.click());
   }
@@ -271,7 +271,7 @@ test.describe("host path browsing", () => {
             // the complete user action with bounded clicks while it settles.
             await expect(async () => {
               const repository = page.getByRole("dialog", {
-                name: "Repository Settings",
+                name: "Repository settings",
                 exact: true,
               });
               if (!(await repository.isVisible())) {
@@ -288,13 +288,13 @@ test.describe("host path browsing", () => {
             }).toPass({ timeout: 15_000 });
           } else {
             await page.getByText(fixture.name, { exact: true }).first().click({ button: "right" });
-            await page.getByRole("menuitem", { name: "Repository Settings", exact: true }).click();
+            await page.getByRole("menuitem", { name: "Repository settings", exact: true }).click();
           }
-          const repository = page.getByRole("dialog", { name: "Repository Settings", exact: true });
+          const repository = page.getByRole("dialog", { name: "Repository settings", exact: true });
           await repository.getByRole("button", { name: "Browse for local path" }).click();
           const picker = await assertPickerLayers(
-            "Select Repository Directory",
-            "Repository Settings",
+            "Select repository directory",
+            "Repository settings",
           );
           await expect(picker.getByRole("button", { name: "Select this folder" })).toBeEnabled();
           await picker.getByLabel("Path", { exact: true }).fill(directory);
@@ -321,7 +321,7 @@ test.describe("host path browsing", () => {
           }
           await expect(picker.getByRole("button", { name: "Select this folder" })).toBeEnabled();
           await picker.getByRole("button", { name: "Select this folder" }).click();
-          await expect(repository.getByLabel("Local Path", { exact: true })).toHaveValue(
+          await expect(repository.getByLabel("Local path", { exact: true })).toHaveValue(
             createdDirectory,
           );
           // Reopen immediately, then revisit after reload to prove host filesystem persistence.

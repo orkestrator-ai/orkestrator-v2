@@ -36,14 +36,14 @@ tab. The old PIPELINE stage list (`PipelineStageRail`) is gone.
   conflict resolution) this tab shows.
 - **Pipeline environment**: an environment a build pipeline created and runs
   in. A ticket's Build button, the Features view, `start_build_pipeline`, the
-  CLI's `build launch` and the New Environment dialog's "A feature" option all
+  CLI's `build launch` and the New environment dialog's "A feature" option all
   make one. The sidebar marks it with the pipe icon (`PipeIcon.tsx`).
 - **Prompt environment**: an environment that runs one prompt, from the New
   Environment dialog's "With a prompt" option or a coordinator's
   `launch_environment`. Review and the PR are started by hand or by a
   coordinator.
 
-The New Environment dialog keeps the "A feature" / "With a prompt" wording and
+The New environment dialog keeps the "A feature" / "With a prompt" wording and
 says under it which of the two each choice creates. Internal names still say
 "feature build" (`BuildIntent = "feature" | "prompt"`, `createFeatureBuild`,
 the `create_feature_build` command, `featureBuildRequestHash`, the `feature-build.*` log
@@ -360,7 +360,7 @@ renderer and stage mapping live in
 `packages/protocol/src/build-pipeline-stage-instructions.ts`
 (`@orkestrator/protocol/build-pipeline-stage-instructions`); `isBuildStepConfig`
 rejects a longer text, so every launch input that carries steps (the launcher,
-the New Environment dialog's feature option, the coordinator, the public
+the New environment dialog's feature option, the coordinator, the public
 `build.launch` action) is bounded by
 the same check.
 
@@ -389,7 +389,7 @@ the same check.
   rewind, a retried stage, a fresh review panel and a backend restart all read
   the same text. Resume, reminders and repairs continue a session that already
   has the opening prompt and do not repeat it. A pipeline environment from the
-  New Environment dialog's feature option that pins Address Findings but not Verify copies the Address Findings model to Verify, not its
+  New environment dialog's feature option that pins Address Findings but not Verify copies the Address Findings model to Verify, not its
   instructions.
 - **Launcher.** Each step card in `BuildLaunchDialog.tsx` has a collapsed
   "*Step* instructions" field (`BuildStepInstructionsField.tsx`) with a byte
@@ -424,7 +424,7 @@ other step and `normalizeReviewPreparation` from the preparation step.
   reviewer's label as `focus`.
 - **Defaults.** `buildPipelineConfiguredDefaults` gives each reviewer row the
   saved focus of its Multi Review position (`multiReview.reviewerLenses`), so
-  the Build button, the New Environment dialog's feature option, the coordinator
+  the Build button, the New environment dialog's feature option, the coordinator
   and the CLI's `build launch` start build pipelines with the same focus as the
   Multi Review button;
   `build launch --reviewer … --focus N=TEXT` replaces it per row.
@@ -623,7 +623,7 @@ work is live), the message returns to the queue, nothing about the stage changes
 and it is tried again a minute later; the stage is never failed for it.
 
 Actions sit in each node's context menu and in the inspector: open the session
-(Open Rework session on a Rework node), open the review pass as a Multi Review tab,
+(Open rework session on a Rework node), open the review pass as a Multi Review tab,
 retry a failed reviewer (`retry_build_pipeline_reviewer`), stop one reviewer
 (`stop_build_pipeline_reviewer`), restart one reviewer
 (`restart_build_pipeline_reviewer`), retry the failed
@@ -911,8 +911,8 @@ Resuming a paused push-only Ship explicitly forbids opening or editing a PR.
   can judge which are part of the work. It cannot be skipped. When the turn ends,
   the backend asks origin (`branchPushState`, `git ls-remote`) whether the branch
   has HEAD; if not, the stage fails and can be retried, so the run cannot claim a
-  push that did not happen. The labels read "Pushing branch", "Retry Push Stage"
-  and "Restart Push Stage", and the board card "Pushing".
+  push that did not happen. The labels read "Pushing branch", "Retry push stage"
+  and "Restart push stage", and the board card "Pushing".
 - **`commit-only`** starts nothing. The pipeline completes at once, recording
   how many uncommitted paths remain.
 

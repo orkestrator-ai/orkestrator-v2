@@ -1041,7 +1041,7 @@ describe("LinearTicketsView", () => {
           }),
         );
       });
-      await screen.findByRole("button", { name: /View Build.*building/ });
+      await screen.findByRole("button", { name: /View build.*building/ });
       expect((screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement).disabled).toBe(
         true,
       );
@@ -1051,7 +1051,7 @@ describe("LinearTicketsView", () => {
       cleanup();
       renderLinearTicketsView();
       fireEvent.click(await screen.findByText("Add Linear integration"));
-      await screen.findByRole("button", { name: /View Build.*building/ });
+      await screen.findByRole("button", { name: /View build.*building/ });
       expect((screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement).disabled).toBe(
         true,
       );

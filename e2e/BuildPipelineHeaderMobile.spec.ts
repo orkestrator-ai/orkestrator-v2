@@ -17,10 +17,10 @@ for (const width of [320, 390]) {
           ? []
           : [
               phase === "building"
-                ? "Restart Build Stage"
+                ? "Restart build stage"
                 : phase === "creating-pr"
-                  ? "Restart PR Stage"
-                  : "Restart Conflict Resolution",
+                  ? "Restart PR stage"
+                  : "Restart conflict resolution",
             ]),
         "Pause",
         "Cancel",

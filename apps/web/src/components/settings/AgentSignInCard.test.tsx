@@ -62,7 +62,7 @@ const HINTS: Record<AgentPlatform, string> = {
   codex: "Sign in from a Codex tab, or add an account below and make it active.",
   cursor: "",
   grok: "Open a terminal and run grok login.",
-  opencode: "Sign each model provider in under Provider Sign-in.",
+  opencode: "Sign each model provider in under Provider sign-in.",
   pi: "Open a Pi terminal tab and run /login.",
 };
 

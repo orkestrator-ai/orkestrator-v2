@@ -66,7 +66,7 @@ test("project header highlights Home selection, counts worker rows, and opens th
   expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
   appCommandStore(uiStore).setState({ projectBoardTab: "home" });
   fireEvent.contextMenu(row);
-  fireEvent.click(screen.getByText("Open Board"));
+  fireEvent.click(screen.getByText("Open board"));
   expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
   view.rerender(
     <SortableProjectGroup

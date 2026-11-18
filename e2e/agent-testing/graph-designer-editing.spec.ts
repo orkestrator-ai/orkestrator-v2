@@ -188,7 +188,7 @@ test("Graphs designer builds the design bake-off on the canvas, compiles it clea
     }
     await expect(node("design").locator('[data-graph-port="in:ticket"]')).toBeVisible();
     await connect("$inputs|out:target", "design|in:+");
-    await tab("Inputs/Outputs");
+    await tab("Inputs/outputs");
     await commit(portCard("out:result").getByLabel("Name"), "brief");
     await portCard("out:brief").getByLabel("Type", { exact: true }).selectOption("design-brief@1");
     await portCard("in:ticket").getByLabel("Render as").selectOption("markdown");
@@ -228,7 +228,7 @@ test("Graphs designer builds the design bake-off on the canvas, compiles it clea
     await page.keyboard.press("Control+Shift+z");
     await expect.poll(draftEdgeCount).toBe(withBriefs);
     await connect("$inputs|out:ticket", "judge|in:+");
-    await tab("Inputs/Outputs");
+    await tab("Inputs/outputs");
     await expect(portCard("in:brief").getByLabel("Shape")).toHaveValue("1");
     await commit(portCard("out:result").getByLabel("Name"), "decision");
     await portCard("out:decision").getByLabel("Type", { exact: true }).selectOption("decision@1");
@@ -259,7 +259,7 @@ test("Graphs designer builds the design bake-off on the canvas, compiles it clea
 
     // ---- Build, the PR description and the pull request (a system node).
     await add(/Agent/, "build", "Build");
-    await tab("Inputs/Outputs");
+    await tab("Inputs/outputs");
     await inspector.getByRole("button", { name: /Add input/ }).click();
     await commit(portCard("in:input").getByLabel("Name"), "brief");
     await portCard("in:brief").getByLabel("Type", { exact: true }).selectOption("design-brief@1");
@@ -275,7 +275,7 @@ test("Graphs designer builds the design bake-off on the canvas, compiles it clea
     await inspector.getByLabel("Prompt source").selectOption("builtin:build");
 
     await add(/Agent/, "describe-pr", "Describe PR");
-    await tab("Inputs/Outputs");
+    await tab("Inputs/outputs");
     await inspector.getByRole("button", { name: /Add input/ }).click();
     await commit(portCard("in:input").getByLabel("Name"), "brief");
     await portCard("in:brief").getByLabel("Type", { exact: true }).selectOption("design-brief@1");

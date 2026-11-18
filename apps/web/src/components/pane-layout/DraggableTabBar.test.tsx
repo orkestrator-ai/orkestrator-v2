@@ -294,7 +294,7 @@ describe("DraggableTabBar", () => {
               finish = resolve;
             }),
         );
-        const confirm = await screen.findByRole("button", { name: "Close Without Saving" });
+        const confirm = await screen.findByRole("button", { name: "Close without saving" });
         confirm.focus();
         fireEvent.click(confirm);
         await waitFor(() => expect(finish).toBeDefined());
@@ -724,8 +724,8 @@ describe("DraggableTabBar", () => {
     const close = container.querySelector("button");
     if (!close) throw new Error("close button missing");
     fireEvent.click(close);
-    expect(screen.getByText("Unsaved Changes")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Close Without Saving" }));
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close without saving" }));
 
     await waitFor(() => {
       expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.has("dirty-file")).toBe(false);
@@ -847,7 +847,7 @@ describe("DraggableTabBar", () => {
       appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
     ).toHaveLength(2);
 
-    fireEvent.click(screen.getByRole("button", { name: "Close Without Saving" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close without saving" }));
     await waitFor(() => {
       expect(
         appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
@@ -906,7 +906,7 @@ describe("DraggableTabBar", () => {
     );
     fireEvent.contextMenu(screen.getByText("Terminal 3"));
     fireEvent.click(await screen.findByText(/close all/i));
-    fireEvent.click(screen.getByRole("button", { name: "Close Without Saving" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close without saving" }));
 
     await waitFor(() => {
       expect(
@@ -916,7 +916,7 @@ describe("DraggableTabBar", () => {
           ?.tabs.map((tab) => tab.id),
       ).toEqual(["multi-review"]);
       expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.has("dirty-file")).toBe(false);
-      expect(screen.queryByText("Unsaved Changes") === null).toBe(true);
+      expect(screen.queryByText("Unsaved changes") === null).toBe(true);
     });
   });
 
@@ -1005,7 +1005,7 @@ describe("DraggableTabBar", () => {
     expect(
       appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
     ).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "Close Without Saving" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close without saving" }));
     await waitFor(() => {
       expect(
         appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,

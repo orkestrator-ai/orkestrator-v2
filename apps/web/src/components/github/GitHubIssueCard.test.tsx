@@ -92,7 +92,7 @@ describe("GitHubIssueCard", () => {
   test("provides stable labels for every workflow stage and unknown values", () => {
     expect(getGitHubStageLabel("backlog")).toBe("Backlog");
     expect(getGitHubStageLabel("todo")).toBe("Todo");
-    expect(getGitHubStageLabel("inprogress")).toBe("In Progress");
+    expect(getGitHubStageLabel("inprogress")).toBe("In progress");
     expect(getGitHubStageLabel("review")).toBe("Review");
     expect(getGitHubStageLabel("unexpected" as never)).toBe("unexpected");
   });

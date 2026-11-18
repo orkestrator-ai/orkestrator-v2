@@ -130,7 +130,7 @@ will stop on the list.
 
 ## Generating `orkestrator-ai.json`
 
-The Run Script agent writes the file from `createOrkestratorScriptPrompt`
+The Run script agent writes the file from `createOrkestratorScriptPrompt`
 (`packages/protocol/src/orkestrator-script-prompt.ts`). Its guidance lists
 `aptPackages` among the allowed keys with the rules above (names only, at most
 `MAX_APT_PACKAGES`, real trixie packages, the refused kinds), names the tools

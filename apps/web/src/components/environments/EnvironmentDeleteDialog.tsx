@@ -44,7 +44,7 @@ export function EnvironmentDeleteDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete Environment</AlertDialogTitle>
+          <AlertDialogTitle>Delete environment</AlertDialogTitle>
           <AlertDialogDescription>
             Are you sure you want to delete <strong>{name}</strong>
             {machineName ? (

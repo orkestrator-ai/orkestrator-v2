@@ -486,7 +486,7 @@ describe("RepositorySettings", () => {
       );
 
       await waitFor(() => expect(mockOpenDialog).toHaveBeenCalledTimes(1));
-      expect((screen.getByLabelText("Local Path") as HTMLInputElement).value).toBe(
+      expect((screen.getByLabelText("Local path") as HTMLInputElement).value).toBe(
         "/Users/test/repo",
       );
     });
@@ -499,7 +499,7 @@ describe("RepositorySettings", () => {
       });
 
       fireEvent.change(screen.getByLabelText("Name"), { target: { value: "  renamed repo  " } });
-      fireEvent.change(screen.getByLabelText("Local Path"), { target: { value: "  /tmp/repo  " } });
+      fireEvent.change(screen.getByLabelText("Local path"), { target: { value: "  /tmp/repo  " } });
       fireEvent.click(getSaveButton());
 
       await waitFor(() => expect(onUpdateProject).toHaveBeenCalledTimes(1));
@@ -555,7 +555,7 @@ describe("RepositorySettings", () => {
         onUpdateProject,
       });
 
-      fireEvent.change(screen.getByLabelText("Default Branch"), { target: { value: "develop" } });
+      fireEvent.change(screen.getByLabelText("Default branch"), { target: { value: "develop" } });
       expect((getSaveButton() as HTMLButtonElement).disabled).toBe(false);
       fireEvent.click(getSaveButton());
 
@@ -567,7 +567,7 @@ describe("RepositorySettings", () => {
     test("sends only the fields edited since the dialog loaded", async () => {
       renderSettings({ section: "branches" });
 
-      fireEvent.change(screen.getByLabelText("Default Branch"), { target: { value: "develop" } });
+      fireEvent.change(screen.getByLabelText("Default branch"), { target: { value: "develop" } });
       fireEvent.click(getSaveButton());
 
       await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
@@ -680,7 +680,7 @@ describe("RepositorySettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Use the local clone's origin remote" }));
       expect((screen.getByLabelText("Git URL") as HTMLInputElement).disabled).toBe(true);
       expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
-      expect((screen.getByLabelText("Local Path") as HTMLInputElement).disabled).toBe(true);
+      expect((screen.getByLabelText("Local path") as HTMLInputElement).disabled).toBe(true);
 
       await act(async () => resolveRemote("git@github.com:moved/repo.git"));
       expect((screen.getByLabelText("Git URL") as HTMLInputElement).value).toBe(
@@ -760,7 +760,7 @@ describe("RepositorySettings", () => {
       expect(mockOpenDialog).toHaveBeenCalledWith({
         nodeId: commandNodeId(),
         mode: "file",
-        title: "Select Icon Image",
+        title: "Select icon image",
         defaultPath: undefined,
       });
       expect(mockReadHostImageFile).toHaveBeenCalledWith("/icons/logo.png");
@@ -914,7 +914,7 @@ describe("RepositorySettings", () => {
         fireEvent.click(screen.getByRole("button", { name: "Icon" }));
         await waitFor(() =>
           expect(mockToastSuccess).toHaveBeenCalledWith("Found the project's icon", {
-            description: `${displayed}. Use Change Image to browse for another.`,
+            description: `${displayed}. Use Change image to browse for another.`,
           }),
         );
         expect(mockFindProjectIcons).toHaveBeenCalledWith(root);
@@ -936,7 +936,7 @@ describe("RepositorySettings", () => {
       expect(mockOpenDialog).toHaveBeenCalledWith({
         nodeId: commandNodeId(),
         mode: "file",
-        title: "Select Icon Image",
+        title: "Select icon image",
         defaultPath: "/repo",
       });
     });
@@ -957,7 +957,7 @@ describe("RepositorySettings", () => {
       expect(mockOpenDialog).toHaveBeenCalledWith({
         nodeId: commandNodeId(),
         mode: "file",
-        title: "Select Icon Image",
+        title: "Select icon image",
         defaultPath: "/repo",
       });
       expect(mockToastError).not.toHaveBeenCalled();
@@ -1086,7 +1086,7 @@ describe("RepositorySettings", () => {
       });
 
       fireEvent.change(screen.getByLabelText("Name"), { target: { value: "changed" } });
-      fireEvent.change(screen.getByLabelText("Local Path"), { target: { value: "/tmp/changed" } });
+      fireEvent.change(screen.getByLabelText("Local path"), { target: { value: "/tmp/changed" } });
       fireEvent.change(screen.getByLabelText("Git URL"), {
         target: { value: "https://github.com/changed/repo.git" },
       });
@@ -1096,7 +1096,7 @@ describe("RepositorySettings", () => {
       expect((screen.getByLabelText("Git URL") as HTMLInputElement).value).toBe(
         "git@github.com:test/repo.git",
       );
-      expect((screen.getByLabelText("Local Path") as HTMLInputElement).value).toBe("");
+      expect((screen.getByLabelText("Local path") as HTMLInputElement).value).toBe("");
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
   });
@@ -1105,8 +1105,8 @@ describe("RepositorySettings", () => {
     test("saves default branch and PR base branch changes", async () => {
       renderSettings({ section: "branches" });
 
-      fireEvent.change(screen.getByLabelText("Default Branch"), { target: { value: "develop" } });
-      fireEvent.change(screen.getByLabelText("PR Base Branch"), { target: { value: "release" } });
+      fireEvent.change(screen.getByLabelText("Default branch"), { target: { value: "develop" } });
+      fireEvent.change(screen.getByLabelText("PR base branch"), { target: { value: "release" } });
       fireEvent.click(getSaveButton());
 
       await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
@@ -1141,7 +1141,7 @@ describe("RepositorySettings", () => {
         },
       });
 
-      fireEvent.change(screen.getByLabelText("Default Branch"), { target: { value: "develop" } });
+      fireEvent.change(screen.getByLabelText("Default branch"), { target: { value: "develop" } });
       fireEvent.click(getSaveButton());
 
       await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
@@ -1172,7 +1172,7 @@ describe("RepositorySettings", () => {
         },
       });
 
-      fireEvent.change(screen.getByLabelText("Container Entry Port"), {
+      fireEvent.change(screen.getByLabelText("Container entry port"), {
         target: { value: "8080" },
       });
       fireEvent.change(screen.getByPlaceholderText("Host"), { target: { value: "4000" } });
@@ -1228,7 +1228,7 @@ describe("RepositorySettings", () => {
     test("omits an out-of-range entry port on save", async () => {
       renderSettings({ section: "ports" });
 
-      fireEvent.change(screen.getByLabelText("Container Entry Port"), {
+      fireEvent.change(screen.getByLabelText("Container entry port"), {
         target: { value: "70000" },
       });
       fireEvent.click(getSaveButton());

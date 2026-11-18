@@ -47,6 +47,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from "node:os";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { expect, test, type Page } from "./browser-test";
 import {
   dispatchProbeTurn,
@@ -56,6 +57,7 @@ import {
   TRANSIENT_APPLY_STATES,
 } from "./mcp-apply-live-support";
 import { startMcpFakeModel, type McpFakeModelHandle } from "./mcp-fake-model-wiring";
+import { ensureProjectExpanded, sidebarEnvironmentRow } from "./sidebar-project";
 
 type Status = {
   status: string;
@@ -65,7 +67,7 @@ type Status = {
   browserUrl?: string;
   testProject?: string;
 };
-type Project = { id: string; localPath: string | null };
+type Project = { id: string; name: string; localPath: string | null };
 type Environment = { id: string; name: string; worktreePath?: string | null };
 type Message = { id: string; role: string; content?: unknown; parts?: unknown };
 type Interaction = { id: string; sessionId: string; kind: string; state: string };
@@ -680,17 +682,18 @@ test.describe("warm Claude CLI app path", () => {
 
       // What a user sees: the generation beside the CLI's state in Agent Info.
       try {
-        await page.goto(status.browserUrl!, { waitUntil: "domcontentloaded" });
-        // A credential-free profile reports no Claude login, and a host
-        // without Docker access says so too; each dialog offers to carry on.
-        await page.waitForTimeout(4_000);
-        for (let attempt = 0; attempt < 4; attempt += 1) {
-          const carryOn = page.getByRole("button", { name: /^Continue Without/ }).first();
-          if (!(await carryOn.isVisible().catch(() => false))) break;
-          await carryOn.click();
-          await page.waitForTimeout(1_000);
+        await acknowledgeDockerReachabilityWarning(page);
+        // Startup probes can open these dialogs while the sidebar is hydrating.
+        for (const tool of ["Docker", "Claude", "GitHub CLI", "Full Disk Access"]) {
+          const carryOn = page.getByRole("button", {
+            name: `Continue without ${tool}`,
+            exact: true,
+          });
+          await page.addLocatorHandler(carryOn, (button) => button.click());
         }
-        await page.getByText(environment.name, { exact: true }).first().click({ timeout: 30_000 });
+        await page.goto(status.browserUrl!, { waitUntil: "domcontentloaded" });
+        await ensureProjectExpanded(page, fixture!.name);
+        await sidebarEnvironmentRow(page, environment.name).click({ timeout: 30_000 });
         await page
           .getByRole("button", { name: "Open agent information" })
           .click({ timeout: 30_000 });

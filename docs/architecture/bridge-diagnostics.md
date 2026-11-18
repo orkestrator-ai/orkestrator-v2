@@ -7,9 +7,9 @@ process scope and snapshots for stalls, plus a keepalive every ten minutes. A
 healthy turn writes nothing else, however much it changes.
 [When a snapshot is written](#when-a-snapshot-is-written) has the rules. For a
 snapshot every minute, as before, set `bridge` or `bridge.diagnostics` to Debug or
-Trace in **Settings → Debug → Log Detail**, or the default level to either. It
+Trace in **Settings → Debug → Log detail**, or the default level to either. It
 applies to running local and Docker bridges at once, turns already running
-included, with no restart. To keep what they write, turn on **Save Logs to Disk**
+included, with no restart. To keep what they write, turn on **Save logs to disk**
 too; that also applies at once. [logging.md](logging.md#live-settings) covers both
 controls and how the setting reaches a bridge.
 
@@ -105,8 +105,8 @@ shows where they ended up. For that history, use `debug` (each minute) or `trace
 (each change).
 
 **Restoring the per-minute stream.** Set `bridge.diagnostics=debug` (or `bridge`, or
-the default level) in Log Detail, or `ORKESTRATOR_LOG_LEVEL=bridge.diagnostics=debug`
-for a bridge started by hand. A config saved with **Save Logs to Disk** on before
+the default level) in Log detail, or `ORKESTRATOR_LOG_LEVEL=bridge.diagnostics=debug`
+for a bridge started by hand. A config saved with **Save logs to disk** on before
 the logging split is upgraded to `bridge: debug` ([logging.md](logging.md#live-settings)),
 so it keeps the per-minute stream with no change.
 
@@ -196,7 +196,7 @@ Only exact, allowlisted console markers from the main frame and bounded lifecycl
 metadata enter the desktop log. Raw renderer console output, subframe messages,
 error messages, stacks, URLs, paths and backend responses are not forwarded.
 Duplicate events are suppressed per main-frame navigation, with a maximum of 32
-records per navigation. The existing Save Logs to Disk and retention settings
+records per navigation. The existing Save logs to disk and retention settings
 apply. In the JSON log format (`ORKESTRATOR_LOG_FORMAT=json`) the same events are
 records with `"area":"desktop.startup"` and the event name, such as `ready`.
 

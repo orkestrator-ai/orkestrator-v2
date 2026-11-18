@@ -112,9 +112,9 @@ async function run(profile: string, checkout: string, out: string) {
     let quietSince = Date.now();
     for (let attempt = 0; attempt < 120; attempt++) {
       for (const label of [
-        "Continue Without Docker",
-        "Continue Without GitHub CLI",
-        "Continue Without Claude",
+        "Continue without Docker",
+        "Continue without GitHub CLI",
+        "Continue without Claude",
       ]) {
         const button = page.getByRole("button", { name: label, exact: true });
         if (await button.isVisible()) await button.click();

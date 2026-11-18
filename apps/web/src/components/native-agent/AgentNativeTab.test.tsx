@@ -1802,7 +1802,7 @@ describe("AgentNativeTab", () => {
     expect(screen.getByText("Ask an agent anything…")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add attachment" })).toBeTruthy();
     expect(screen.getByText("Ready to build")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Resume Session" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Resume session" })).toBeTruthy();
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
   });
@@ -1978,7 +1978,7 @@ describe("AgentNativeTab", () => {
     expect(screen.getByText("Ask the coordinator to inspect or plan…")).toBeTruthy();
     // A coordinator conversation owns its provider session, so there is no
     // rollout for it to adopt.
-    expect(screen.queryByRole("button", { name: "Resume Session" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Resume session" }) === null).toBe(true);
 
     const input = container.querySelector<HTMLElement>(".native-compose-input")!;
     fireEvent.input(input, { target: { textContent: "Inspect this" } });
@@ -3234,7 +3234,7 @@ describe("AgentNativeTab", () => {
     });
 
     renderInAppCommandScope(<PaneBackedAgentNativeTab />);
-    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
 
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("Resume a session")).toBeTruthy();
@@ -3253,7 +3253,7 @@ describe("AgentNativeTab", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: /Cursor Agent/ }));
 
-    expect(await screen.findByRole("dialog", { name: "Resume Session" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Resume session" })).toBeTruthy();
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
   });
 
@@ -3288,9 +3288,9 @@ describe("AgentNativeTab", () => {
 
   async function openGrokResumePicker(tabId: string) {
     renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
-    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Grok Build/ }));
-    return await screen.findByRole("dialog", { name: "Resume Session" });
+    return await screen.findByRole("dialog", { name: "Resume session" });
   }
 
   test.each([true, false])(
@@ -3311,13 +3311,13 @@ describe("AgentNativeTab", () => {
       );
       seedUnassignedResumeTab("tab-lineage");
       renderInAppCommandScope(<PaneBackedAgentNativeTab tabId="tab-lineage" />);
-      fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+      fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
       fireEvent.click(
         within(screen.getByRole("dialog")).getByRole("button", {
           name: archive ? /Codex/ : /Grok Build/,
         }),
       );
-      const picker = await screen.findByRole("dialog", { name: "Resume Session" });
+      const picker = await screen.findByRole("dialog", { name: "Resume session" });
       expect(await within(picker).findByText("Alternative branch")).toBeTruthy();
       expect(within(picker).getByText("Fork of base")).toBeTruthy();
       const listInput = listNativeAgentResumableSessionsMock.mock.calls.at(-1)?.[0];
@@ -3352,9 +3352,9 @@ describe("AgentNativeTab", () => {
     );
     seedUnassignedResumeTab("tab-opencode-archive");
     renderInAppCommandScope(<PaneBackedAgentNativeTab tabId="tab-opencode-archive" />);
-    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /OpenCode/ }));
-    const picker = await screen.findByRole("dialog", { name: "Resume Session" });
+    const picker = await screen.findByRole("dialog", { name: "Resume session" });
     expect(await within(picker).findByText("Legacy request")).toBeTruthy();
     expect(listNativeAgentResumableSessionsMock.mock.calls.at(-1)?.[0]).toMatchObject({
       agent: "opencode",

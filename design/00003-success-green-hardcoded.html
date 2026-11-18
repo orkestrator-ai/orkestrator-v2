@@ -11,22 +11,21 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00003</p>
       <h1>00003 · Replace hard-coded green and emerald classes with the success token</h1>
       <div class="meta">
-        <span class="status" data-status="in-progress">In progress</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-high">High</span>
         <span class="pill">Color tokens</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 8 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 8 / 8 images</span
         >
       </div>
 
       <h2>Problem</h2>
       <p>
-        Success text appears as <code>emerald-400</code> (31), <code>emerald-300</code> (27),
+        Success text appeared as <code>emerald-400</code> (31), <code>emerald-300</code> (27),
         <code>green-500</code> (21), <code>emerald-500</code> (16), <code>green-400</code> (13) and
         more. Diff additions in <code>AgentsMdApprovalDialog.tsx:383</code> and
-        <code>GraphTemplateReviewPanel.tsx:63</code> use <code>emerald</code> rather than
-        <code>text-success</code>, so the same diff line is a different green depending on the
-        screen.
+        <code>GraphTemplateReviewPanel.tsx:63</code> used <code>emerald</code>, which made added
+        lines appear in different greens across diff views.
       </p>
       <div class="rule">
         <div>
@@ -272,14 +271,15 @@ mise run lint</code></pre>
       <ul class="check">
         <li>
           <input type="checkbox" checked aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
-            under <code>design/images/00003/</code>.</span
+            >Before images captured on <b>unmodified</b> code for every slot, and committed under
+            <code>design/images/00003/</code>.</span
           >
         </li>
         <li>
           <input type="checkbox" checked aria-label="Done" /><span
-            >After images captured after the change, with the same profile, data, theme, viewport
-            and file names, and committed beside the before images.</span
+            >After images captured after the change, with the same profile, data, theme, and
+            viewport, and committed beside the before images under the exact paired file
+            names.</span
           >
         </li>
         <li>
@@ -301,12 +301,12 @@ mise run lint</code></pre>
         </li>
         <li>
           <input type="checkbox" checked aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
@@ -317,7 +317,7 @@ mise run lint</code></pre>
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -325,13 +325,9 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
-      </p>
       <ul>
         <li>
-          <b>Hit classification</b> (158 raw hits in <code>.tsx</code> plus 4 files in
+          <b>Migration audit</b> (158 raw hits in <code>.tsx</code> plus 4 files in
           <code>.ts</code>; 118 lines in 84 <code>.tsx</code> files and 2 lines in
           <code>key-information-format.ts</code> changed):
           <ul>
@@ -348,16 +344,16 @@ mise run lint</code></pre>
             <li>
               <b>Identity, kept:</b> <code>AgentModelPicker.tsx</code>,
               <code>AgentIcons.tsx</code> (Codex emerald, OpenCode green), the Codex icon in
-              <code>McpSettings.tsx:599</code>, <code>usage-format.ts</code> and the Input series in
-              <code>UsageSummary.tsx</code>. These tell platforms apart (the Platform Hue
-              Exception).
+              <code>McpSettings.tsx:599</code> and <code>usage-format.ts</code>. These tell
+              platforms apart under the Platform Hue Exception.
             </li>
             <li>
               <b>Kind, kept:</b> <code>RichCallout.tsx</code> (callout kind),
               <code>FileIcon.tsx</code> (file type), <code>ticket-label-style.ts</code> and
               <code>machine-colors.ts</code> (user-chosen label and machine colors),
               <code>ComposerIconPicker.tsx</code> (plan mode),
-              <code>GitHubIssueCard.tsx</code> (GitHub's open-issue green).
+              <code>GitHubIssueCard.tsx</code> (GitHub's open-issue green) and the Input series in
+              <code>UsageSummary.tsx</code> (chart category).
             </li>
             <li>
               <b>Action, kept:</b> the green merge buttons in <code>MergePrDialog.tsx</code>,
@@ -377,6 +373,7 @@ mise run lint</code></pre>
               <code>GlobalSettings.sections.tsx</code>.
             </li>
           </ul>
+          The current scan found 48 matching source lines, all in the retained categories above.
         </li>
         <li>
           <b>Decisions chosen:</b>
@@ -399,32 +396,50 @@ mise run lint</code></pre>
           </ul>
         </li>
         <li>
-          <b>What changed per image pair:</b> the additions in the agents.md dialog and the graph
-          template review were two different greens (<code>emerald-300</code> text on an
-          <code>emerald-500/10</code> tint) and are now <code>rgb(94, 227, 155)</code> on the
-          <code>success/10</code> tint in both (checked with <code>getComputedStyle</code>). The
-          graph header count “+3” and the goal pill, bug report chip and band moved from
-          <code>emerald</code> to the same mint. Layout, spacing and text are unchanged. Removals
-          still use <code>red-300</code> in both places; that is task 00002.
+          <b>What changed in each pair.</b>
+          <ul>
+            <li>
+              <b>AGENTS.md approval.</b> Both added lines moved from emerald text and tint to
+              <code>text-success</code> on <code>bg-success/10</code>.
+            </li>
+            <li>
+              <b>Graph template review.</b> The added line, <code>+1</code> count, and
+              <code>compiles</code> label now share the success text color. The added row uses
+              <code>bg-success/10</code>.
+            </li>
+            <li>
+              <b>Bug report.</b> The scratch-folder chip uses success text, border, and tint. The
+              “Issue filed” band uses the success tint at 5% opacity.
+            </li>
+            <li>
+              <b>Goal complete.</b> The check icon, label, border, and background tint use the
+              success color while preserving the pill's existing opacity levels.
+            </li>
+          </ul>
         </li>
         <li>
-          <b>How the images were captured (not the live app):</b> none of the four states could be
-          reached safely in a fixture profile: the agents.md approval needs a coordinator proposal,
-          the bug report band needs a real GitHub issue to be filed, a goal needs a live agent run,
-          and the graph review needs a shared template. Each image shows the real component, with
-          the real stylesheet, in the <code>design-00003</code> profile's renderer, on a throwaway
-          harness page (since removed) fed representative props, and for the dialog a stubbed
-          preview response. The after images were taken after a restart of the profile, because its
-          Vite server does not pick up edits to existing files on this volume. No page reload or
-          narrow viewport check was done, so the task stays In progress.
+          <b>Capture setup.</b> Playwright used the real browser renderer of the isolated headless
+          <code>design-00003</code> profile with host seeding and agent credentials disabled. The
+          before images use the unmodified <code>0cc406750</code> revision immediately preceding the
+          migration in <code>9450556c2</code>. The after images use <code>259e88d90</code>. Both
+          runs used the same fixture, dark theme, and 1440×900 viewport at 1× scale.
         </li>
         <li>
-          <b>Tests:</b> updated class assertions in <code>AddProjectDialog.test.tsx</code>,
-          <code>CoordinatorPanel.outcome.test.tsx</code>, <code>ActionBar.test.tsx</code>,
-          <code>QuestionCard.test.tsx</code> and <code>MultiReviewFlowGraph.test.tsx</code>. Not
-          run: the full suite, and the guards stage of <code>mise run test:changed</code> fails on
-          <code>HtmlFileTab.test.tsx</code>, <code>SelfImprovementProgress.test.tsx</code> and
-          <code>e2e/HtmlPreview.spec.ts</code>, files this change does not touch.
+          <b>Fixture data.</b> The approval dialog read a pending proposal and previewed the
+          fixture's local Git base. The graph review compared a fixture template with its previously
+          approved version. The bug report read a locally recorded fixture issue URL. The goal pill
+          read the same completed goal data in both runs. The goal record was seeded again after
+          restarting the profile on the newer revision.
+        </li>
+        <li>
+          <b>Browser checks.</b> All four states were checked after a page reload. The approval
+          dialog also fit a 390×844 viewport. The browser reported <code>rgb(94, 227, 155)</code>
+          for added text in the approval dialog, graph review, and workspace file diff, with the
+          workspace viewer using its own tint opacity.
+        </li>
+        <li>
+          <b>Checks.</b> The verification commands above and the owning tests for the four capture
+          components passed. The final pipeline validation runs on the committed snapshot.
         </li>
       </ul>
 

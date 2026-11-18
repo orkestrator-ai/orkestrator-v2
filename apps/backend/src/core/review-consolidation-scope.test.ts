@@ -205,28 +205,17 @@ describe("completeConsolidatedReview", () => {
 });
 
 describe("the consolidated review submission schema", () => {
-  test("makes exactly the backend-filled lists optional", () => {
-    const scope = (
-      CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA as {
-        properties: { reviewScope: { required: string[]; properties: Record<string, unknown> } };
-      }
-    ).properties.reviewScope;
+  test("omits exactly the backend-filled lists", () => {
+    const scope = CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA.properties.reviewScope;
     for (const field of CONSOLIDATION_SCOPE_LIST_FIELDS) {
       expect(scope.required).not.toContain(field);
-      expect(scope.properties[field]).toBeDefined();
+      expect(scope.properties).not.toHaveProperty(field);
     }
-    expect(scope.required).toContain("limitations");
+    expect(Object.keys(scope.properties)).toEqual(scope.required);
     expect(
       validateWorkflowJsonSchema(
         CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA,
         CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE,
-      ),
-    ).toEqual([]);
-    // A prompt saved before the upgrade can still submit a full report.
-    expect(
-      validateWorkflowJsonSchema(
-        CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA,
-        CONSOLIDATED_REVIEW_EXAMPLE,
       ),
     ).toEqual([]);
   });
@@ -243,6 +232,35 @@ describe("the consolidated review submission schema", () => {
         context: { type: "consolidated-review", sources },
       }),
     ).toBe(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA);
+  });
+
+  test("the per-slot submission tool advertises the reduced scope", async () => {
+    let inputSchema: unknown;
+    const server = {
+      registerTool(name: string, meta: { inputSchema: unknown }) {
+        if (name === "submit_consolidated_review") inputSchema = meta.inputSchema;
+      },
+    };
+    const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+    registerWorkflowResultTools(server as never, {} as never, {
+      kind: "consolidated-review",
+      workflowResultKey: crypto.randomUUID(),
+      environmentId: "env-1",
+      projectId: "project-1",
+      slot: { context: { type: "consolidated-review", sources: {}, scope: MERGED } },
+    });
+    const schema = inputSchema as {
+      "~standard": { jsonSchema: { input: () => unknown } };
+    };
+    const { required } = CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA.properties.reviewScope;
+    const published = schema["~standard"].jsonSchema.input();
+    expect(published).toHaveProperty("properties.result.properties.reviewScope.required", required);
+    const scopeProperties = (
+      published as {
+        properties: { result: { properties: { reviewScope: { properties: object } } } };
+      }
+    ).properties.result.properties.reviewScope.properties;
+    expect(Object.keys(scopeProperties)).toEqual(required);
   });
 });
 

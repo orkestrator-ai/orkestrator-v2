@@ -7,9 +7,9 @@
  * submission, and a submission that size is where a model's tool-call JSON
  * most often fails to parse (52 of 185 Haiku consolidations on one host in a
  * week, every failure above 15 KB). So when a consolidation runs over the
- * result tool, the slot carries the merged lists in its context, the tool's
- * schema makes them optional, and the backend fills them in before it validates
- * and stores the report. Every consumer still reads a complete
+ * result tool, the slot carries the merged lists in its context, its published
+ * schema omits them, and the backend fills them in before it validates and
+ * stores the report. Every consumer still reads a complete
  * `StructuredReviewReport`.
  *
  * Judgement about the scope stays with the model: `targetBranch`, `baseRef`,
@@ -40,6 +40,8 @@ export const CONSOLIDATION_SCOPE_LIST_FIELDS = [
   "commandsRun",
   "commandsNotRun",
 ] as const satisfies readonly (keyof ConsolidationScopeLists)[];
+
+const BACKEND_FILLED_SCOPE_FIELDS = new Set<string>(CONSOLIDATION_SCOPE_LIST_FIELDS);
 
 const LIST_LIMITS: Readonly<Record<keyof ConsolidationScopeLists, number>> = {
   filesReviewed: STRUCTURED_REVIEW_MAX_FILES_REVIEWED,
@@ -191,33 +193,40 @@ export function inspectScopeListText(
   }
 }
 
-/** The optional lists also allow full reports from prompts saved before the upgrade. */
-function reportSchemaWithOptionalLists(note: string) {
-  const full = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA;
-  const filled = new Set<string>(CONSOLIDATION_SCOPE_LIST_FIELDS);
-  const scope = full.properties.reviewScope;
+const FULL_REPORT_SCHEMA = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA;
+const FULL_SCOPE_SCHEMA = FULL_REPORT_SCHEMA.properties.reviewScope;
+
+function reportSchemaWithScope(properties: JsonSchema, note: string) {
   return {
-    ...full,
+    ...FULL_REPORT_SCHEMA,
     properties: {
-      ...full.properties,
+      ...FULL_REPORT_SCHEMA.properties,
       reviewScope: {
-        ...scope,
-        description: `${scope.description} ${note}`,
-        required: scope.required.filter((key) => !filled.has(key)),
+        ...FULL_SCOPE_SCHEMA,
+        description: `${FULL_SCOPE_SCHEMA.description} ${note}`,
+        properties,
+        required: FULL_SCOPE_SCHEMA.required.filter((key) => !BACKEND_FILLED_SCOPE_FIELDS.has(key)),
       },
     },
   } satisfies JsonSchema;
 }
 
-export const CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA = reportSchemaWithOptionalLists(
-  `The backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")} from the reviewer reports. Omit them from new submissions.`,
+export const CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA = reportSchemaWithScope(
+  Object.fromEntries(
+    Object.entries(FULL_SCOPE_SCHEMA.properties).filter(
+      ([key]) => !BACKEND_FILLED_SCOPE_FIELDS.has(key),
+    ),
+  ),
+  "The backend fills in the reviewed files and validation command lists from the reviewer reports.",
 );
 
 /**
- * The OpenCode broker publishes one tool per kind. The service still requires
- * the lists if the slot has no merged scope.
+ * Accepts full reports from saved prompts and reduced reports from scoped slots.
+ * The OpenCode broker publishes this schema for every slot. The service still
+ * requires the lists if the slot has no merged scope.
  */
-export const CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA = reportSchemaWithOptionalLists(
+export const CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA = reportSchemaWithScope(
+  FULL_SCOPE_SCHEMA.properties,
   `When your instructions say the backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.join(", ")}, leave them out; otherwise send them.`,
 );
 
@@ -233,11 +242,11 @@ export function completeConsolidatedReview(
 ): unknown {
   if (!record(value) || !record(value.reviewScope)) return value;
   const reviewScope: Record<string, unknown> = Object.create(null);
-  const filled = new Set<string>(CONSOLIDATION_SCOPE_LIST_FIELDS);
   // Rebuilt in schema order, so a stored report reads the same as one the
   // model wrote in full.
-  for (const key of STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.reviewScope.required) {
-    if (filled.has(key)) reviewScope[key] = scope[key as keyof ConsolidationScopeLists];
+  for (const key of FULL_SCOPE_SCHEMA.required) {
+    if (BACKEND_FILLED_SCOPE_FIELDS.has(key))
+      reviewScope[key] = scope[key as keyof ConsolidationScopeLists];
     else if (Object.hasOwn(value.reviewScope, key)) reviewScope[key] = value.reviewScope[key];
   }
   for (const [key, entry] of Object.entries(value.reviewScope)) {

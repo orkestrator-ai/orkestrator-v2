@@ -531,8 +531,7 @@ const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
     finalContent: validateReviewNarratives,
   }),
   builtInKind("consolidated-review", () => STRUCTURED_REVIEW_REPORT_JSON_SCHEMA, {
-    // A scoped slot fills in the optional lists and accepts full reports
-    // from prompts saved before scope completion was available.
+    // A scoped slot advertises the fields the model supplies.
     providerSchema: (slot) =>
       consolidationScope(slot)
         ? CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA

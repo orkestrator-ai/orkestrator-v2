@@ -1787,9 +1787,9 @@ the first submission the normal path:
   `filesReviewed`, `filesSkipped`, `filesLeftUncommitted`, `commandsRun` and
   `commandsNotRun` (`review-consolidation-scope.ts`). The model writes the full
   scope when the union exceeds a report list limit or 32 KiB, or contains text
-  the result tool would reject. Otherwise initial and repair prompts let the
-  model omit the five lists, and the submission tool accepts them as optional
-  for compatibility with saved prompts. The kind's `complete` hook fills them
+  the result tool would reject. Otherwise initial and repair prompts and the
+  published per-slot tool schema omit the five lists. The backend still accepts
+  full reports from saved prompts. The kind's `complete` hook fills the lists
   in before validation and storage, so every consumer reads a complete report.
   Judgement about the scope
   (`limitations`, `outcome`, the commit range) stays with the model. A slot an

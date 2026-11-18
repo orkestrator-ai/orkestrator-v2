@@ -1613,7 +1613,7 @@ export class WorkflowResultService {
     ) {
       return null;
     }
-    // A consolidation slot with merged scope offers those lists as optional.
+    // A consolidation slot with merged scope omits those lists from its published schema.
     if (entry.context?.type === "consolidated-review" && entry.context.scope) {
       return { kind: entry.kind, provider: entry.provider, slot: { context: entry.context } };
     }

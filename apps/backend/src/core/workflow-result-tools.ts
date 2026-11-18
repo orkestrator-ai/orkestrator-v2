@@ -15,6 +15,10 @@ import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import { Schema } from "effect";
 import { jsonSchemaField, str, strictObject, toolInput } from "./tool-schema.js";
+import {
+  CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA,
+  CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA,
+} from "./review-consolidation-scope.js";
 // Registers the built-in kinds the registry functions below look up.
 import "./workflow-result-contracts.js";
 import { graphOutputContext } from "./workflow-result-graph-output.js";
@@ -290,7 +294,13 @@ export function registerWorkflowResultSlotTools(
     return { scope, view, definition, tools };
   });
   for (const { scope, view, definition, tools } of slots) {
-    const resultSchema = jsonSchemaField(workflowResultProviderSchema(scope.kind, view));
+    const publishedSchema = workflowResultProviderSchema(scope.kind, view);
+    // Saved prompts can still send full reports to a slot that now fills in scope.
+    const acceptanceSchema =
+      publishedSchema === CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA
+        ? CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA
+        : publishedSchema;
+    const resultSchema = jsonSchemaField(publishedSchema, acceptanceSchema);
     const graphPort = graphOutputContext(view);
     const port = portDescription(scope);
     server.registerTool(

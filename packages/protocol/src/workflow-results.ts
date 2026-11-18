@@ -172,8 +172,8 @@ export interface WorkflowResultSlotInput {
         type: "consolidated-review";
         sources: Record<string, "issue" | "coverage-gap">;
         /**
-         * The merged scope lists. The submission tool makes these fields
-         * optional and the backend fills them in before validation and storage.
+         * The merged scope lists. The per-slot tool schema omits these fields
+         * and the backend fills them in before validation and storage.
          * A slot without merged scope takes the full report.
          */
         scope?: ConsolidationScopeLists;

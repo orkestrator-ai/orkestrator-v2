@@ -27,7 +27,7 @@ describe("SlashCommandMenu", () => {
       />,
     );
 
-    const menu = screen.getByText("Slash Commands").closest(".rounded-xl") as HTMLElement;
+    const menu = screen.getByText("Slash commands").closest(".rounded-xl") as HTMLElement;
     expect(menu.className).toContain("bg-zinc-900/95");
 
     const selected = screen.getByRole("option", { name: /clear/i });

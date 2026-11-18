@@ -286,7 +286,7 @@ export function SortableProjectFolder({
                   }}
                 >
                   <Pencil className="mr-2 h-4 w-4" />
-                  Rename Folder
+                  Rename folder
                 </ContextMenuItem>
               ) : null}
               {onSort ? (
@@ -300,7 +300,7 @@ export function SortableProjectFolder({
                   <ContextMenuSeparator />
                   <ContextMenuItem onClick={() => void onUngroup()}>
                     <FolderMinus className="mr-2 h-4 w-4" />
-                    Remove Folder
+                    Remove folder
                   </ContextMenuItem>
                 </>
               ) : null}
@@ -351,7 +351,7 @@ export function SortableProjectFolder({
       <Dialog open={isRenaming} onOpenChange={setIsRenaming}>
         <DialogContent size="md">
           <DialogHeader>
-            <DialogTitle>Rename Folder</DialogTitle>
+            <DialogTitle>Rename folder</DialogTitle>
             <DialogDescription>
               Every project in <strong className="text-foreground">{name}</strong> moves to the new
               name.
@@ -412,22 +412,22 @@ function RepositoryMenuItems({
       ) : null}
       <ContextMenuItem onClick={actions.openBoard}>
         <LayoutGrid className="mr-2 h-4 w-4" />
-        Open Board
+        Open board
       </ContextMenuItem>
       {actions.openGithub ? (
         <ContextMenuItem onClick={actions.openGithub}>
           <GithubIcon className="mr-2 h-4 w-4" />
-          Open Repo on GitHub
+          Open repo on GitHub
         </ContextMenuItem>
       ) : null}
       <ContextMenuSeparator />
       <ContextMenuItem disabled={!actions.writable} onClick={actions.openSettings}>
         <Settings2 className="mr-2 h-4 w-4" />
-        Repository Settings
+        Repository settings
       </ContextMenuItem>
       <ContextMenuItem disabled={!actions.writable} onClick={actions.newEnvironment}>
         <Plus className="mr-2 h-4 w-4" />
-        New Environment
+        New environment
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onClick={onToggleCollapse}>

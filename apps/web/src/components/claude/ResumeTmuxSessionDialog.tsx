@@ -80,7 +80,7 @@ export function ResumeTmuxSessionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="md">
         <DialogHeader>
-          <DialogTitle>Resume Session</DialogTitle>
+          <DialogTitle>Resume session</DialogTitle>
           <DialogDescription>
             Pick a previous Claude session recorded for this workspace. Selecting one will reload
             its full transcript and continue the conversation in this tab.

@@ -235,7 +235,7 @@ test.describe("Auto-pipeline on a fake model", () => {
     // On a host whose user cannot reach Docker (or has no GitHub CLI) a modal
     // startup notice can open after any reload, at any point of a later step,
     // and hide the sidebar. Dismiss it whenever it appears.
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
       await page.addLocatorHandler(
         page.getByRole("button", { name: label, exact: true }),
         (button) => button.click(),
@@ -374,7 +374,7 @@ test.describe("Auto-pipeline on a fake model", () => {
       await shot(page, "draft-edited-narrow");
       await page.getByRole("button", { name: "Next", exact: true }).click();
       await expect(review.getByText(`?? ${FIXTURE_FILE}`)).toBeVisible();
-      await page.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
+      await page.getByRole("button", { name: "Confirm auto-pipeline" }).click();
 
       await page.setViewportSize({ width: 1280, height: 900 });
 

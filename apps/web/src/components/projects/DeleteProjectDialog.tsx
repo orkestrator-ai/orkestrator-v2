@@ -45,7 +45,7 @@ export function DeleteProjectDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete Project</AlertDialogTitle>
+          <AlertDialogTitle>Delete project</AlertDialogTitle>
           <AlertDialogDescription>
             Are you sure you want to remove <strong>{projectName}</strong> from your projects?
             <span className="block mt-2">

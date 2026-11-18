@@ -1363,7 +1363,7 @@ describe("GlobalSettings", () => {
 
   test("renders every settings section", () => {
     const { rerender } = renderInAppCommandScope(<GlobalSettings activeSection="general" />);
-    expect(screen.getByText("Preferred Editor")).toBeTruthy();
+    expect(screen.getByText("Preferred editor")).toBeTruthy();
     rerender(<GlobalSettings activeSection="version-control" />);
     expect(screen.getByText("GitHub authentication")).toBeTruthy();
     expect(screen.getByText("Auto-merge")).toBeTruthy();
@@ -1376,9 +1376,9 @@ describe("GlobalSettings", () => {
     rerender(<GlobalSettings activeSection="codex" />);
     expect(screen.getByText(/How Codex runs in environments/)).toBeTruthy();
     rerender(<GlobalSettings activeSection="terminal" />);
-    expect(screen.getByText("Font Family")).toBeTruthy();
+    expect(screen.getByText("Font family")).toBeTruthy();
     rerender(<GlobalSettings activeSection="network" />);
-    expect(screen.getByText("Network Whitelist")).toBeTruthy();
+    expect(screen.getByText("Network whitelist")).toBeTruthy();
     rerender(<GlobalSettings activeSection="container" />);
     expect(screen.getByText("Limit resources of new containers")).toBeTruthy();
     rerender(<GlobalSettings activeSection="experimental" />);
@@ -1386,8 +1386,8 @@ describe("GlobalSettings", () => {
     expect(screen.queryByText("Codex Raw Event Logging") === null).toBe(true);
     rerender(<GlobalSettings activeSection="debug" />);
     expect(screen.getByText("App version")).toBeTruthy();
-    expect(screen.getByText("Save Logs to Disk")).toBeTruthy();
-    expect(screen.getByText("Log Detail")).toBeTruthy();
+    expect(screen.getByText("Save logs to disk")).toBeTruthy();
+    expect(screen.getByText("Log detail")).toBeTruthy();
   });
 
   test("saves one shared custom review instruction", async () => {
@@ -2324,7 +2324,7 @@ describe("GlobalSettings", () => {
     // section gate holds, so assert the gate rather than the fetch alone.
     mockGetAppVersion.mockResolvedValue("3.2.1-active");
     const { rerender } = renderInAppCommandScope(<GlobalSettings activeSection="general" />);
-    expect(screen.getByText("Preferred Editor")).toBeTruthy();
+    expect(screen.getByText("Preferred editor")).toBeTruthy();
     expect(mockGetAppVersion).not.toHaveBeenCalled();
 
     rerender(<GlobalSettings activeSection="debug" />);

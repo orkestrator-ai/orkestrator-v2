@@ -22,7 +22,7 @@ for (const paneName of ["report-pane", "findings-pane"]) {
     await expect(article).toBeVisible();
     const lists = [
       sectionList(article, "Issues · 2"),
-      sectionList(article, "Test Coverage Gaps · 2"),
+      sectionList(article, "Test coverage gaps · 2"),
     ];
     if (paneName === "report-pane") lists.push(sectionList(article, "Strengths"));
 

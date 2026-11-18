@@ -743,7 +743,7 @@ describe("BuildChatTab backend projection", () => {
       };
       renderInBuildChat(<BuildChatTab data={data} />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Restart Build Stage" }));
+      fireEvent.click(screen.getByRole("button", { name: "Restart build stage" }));
       await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(pipeline.id));
       await waitFor(() =>
         expect((screen.getByRole("button", { name: "Pause" }) as HTMLButtonElement).disabled).toBe(
@@ -793,7 +793,7 @@ describe("BuildChatTab backend projection", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: "Retry Verification Stage" }));
+      fireEvent.click(screen.getByRole("button", { name: "Retry verification stage" }));
       await waitFor(() => expect(retryStageMock).toHaveBeenCalledWith(pipeline.id));
     } finally {
       setMobileViewport(false);

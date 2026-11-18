@@ -5,7 +5,7 @@
  * leaf over the leaf's real gateway. A plan is held by the backend that built
  * it, so every piece has to reach the same node.
  *
- * The leaf's bundle is made large on purpose: Save Logs to Disk is turned on
+ * The leaf's bundle is made large on purpose: Save logs to disk is turned on
  * there and a synthetic debug log of plain words is written into its log
  * directory, so the archive spans several 256 KiB pieces through the link.
  *

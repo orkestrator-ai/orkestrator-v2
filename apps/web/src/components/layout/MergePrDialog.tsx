@@ -95,7 +95,7 @@ export function MergePrDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto">
         <AlertDialogHeader>
-          <AlertDialogTitle>Merge Pull Request</AlertDialogTitle>
+          <AlertDialogTitle>Merge pull request</AlertDialogTitle>
           <AlertDialogDescription>
             Squash and merge {sourceBranch} into {targetBranch}.{" "}
             {mergeability === "checking"

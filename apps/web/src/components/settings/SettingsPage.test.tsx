@@ -203,7 +203,7 @@ test("the Docker tab renders while global config is still loading", async () => 
   renderInAppCommandScope(
     <SettingsPage open defaultSection="docker" onOpenChange={() => undefined} />,
   );
-  expect(await screen.findByText("System Resources")).toBeTruthy();
+  expect(await screen.findByText("System resources")).toBeTruthy();
   expect(appCommandStore(configStore).getState().isLoading).toBe(true);
   expect(screen.queryByText("Loading Docker stats...") === null).toBe(true);
 });

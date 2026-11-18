@@ -10,7 +10,7 @@ import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks
 import { AllFilesView } from "./AllFilesView";
 import { ChangedFileItem } from "./ChangedFileItem";
 import { ChangesView } from "./ChangesView";
-import { CreateFolderDialog, DEFAULT_NEW_FOLDER_NAME } from "./CreateFolderDialog";
+import { CreateFolderDialog } from "./CreateFolderDialog";
 import { FileTreeNode } from "./FileTreeNode";
 import { fileNameStemLength, RenameFileDialog } from "./RenameFileDialog";
 import { FilesPanelHeader } from "./FilesPanelHeader";
@@ -581,7 +581,7 @@ describe("files panel views", () => {
     expect(screen.getByText(/Create a folder in/).textContent).toContain("src");
 
     const nameInput = screen.getByLabelText("Folder name") as HTMLInputElement;
-    expect(nameInput.value).toBe(DEFAULT_NEW_FOLDER_NAME);
+    expect(nameInput.value).toBe("New Folder");
     fireEvent.change(nameInput, { target: { value: "hooks" } });
     fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
 
@@ -595,6 +595,11 @@ describe("files panel views", () => {
     fireEvent.change(screen.getByLabelText("Folder name"), { target: { value: "legacy" } });
     fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
     await waitFor(() => expect(onCreateFolder).toHaveBeenCalledWith("src", "legacy"));
+
+    fireEvent.contextMenu(screen.getByLabelText("Workspace empty space"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "New folder" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await waitFor(() => expect(onCreateFolder).toHaveBeenLastCalledWith(".", "New Folder"));
   });
 
   test("opens only the leaf context menu for a nested file", async () => {

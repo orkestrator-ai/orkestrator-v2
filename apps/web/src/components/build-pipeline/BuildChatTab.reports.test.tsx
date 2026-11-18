@@ -539,7 +539,7 @@ describe("BuildChatTab reports and verdicts", () => {
     expect(screen.queryByLabelText("Raw structured review JSON") === null).toBe(true);
     expect(screen.queryByText("Updates the review workflow.") === null).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    fireEvent.click(screen.getByRole("button", { name: /What changed/ }));
     await waitFor(() => expect(screen.getByText("Updates the review workflow.")).toBeTruthy());
   });
 
@@ -841,7 +841,7 @@ describe("BuildChatTab reports and verdicts", () => {
     ).toHaveLength(1);
     const header = within(screen.getByTestId("build-pipeline-header"));
     expect(header.queryByRole("button", { name: /^Restart/ }) === null).toBe(true);
-    const retry = header.getByRole("button", { name: "Retry Build Stage" });
+    const retry = header.getByRole("button", { name: "Retry build stage" });
     expect(screen.queryByRole("button", { name: "Retry failed build phase" }) === null).toBe(true);
     expect(graphNode("Build").getAttribute("data-flow-state")).toBe("failed");
     fireEvent.click(retry);
@@ -874,7 +874,7 @@ describe("BuildChatTab reports and verdicts", () => {
     });
 
     const retry = screen.getByRole("button", {
-      name: "Retry Build Stage",
+      name: "Retry build stage",
     }) as HTMLButtonElement;
     fireEvent.click(retry);
 
@@ -902,7 +902,7 @@ describe("BuildChatTab reports and verdicts", () => {
       backendRevision: 58,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry Build Stage" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry build stage" }));
 
     await waitFor(() => {
       expect(pipelineStore().getState().pipelines.get(reviewed.id)).toEqual(failedAgain);
@@ -915,16 +915,16 @@ describe("BuildChatTab reports and verdicts", () => {
 
   test("labels the failed-stage retry for every resumable phase", () => {
     const cases: Array<[ResumableBuildPhase, string]> = [
-      ["creating-environment", "Retry Environment Creation"],
-      ["starting-environment", "Retry Environment Start"],
-      ["waiting-for-setup", "Retry Setup"],
-      ["building", "Retry Build Stage"],
-      ["reviewing", "Retry Review Stage"],
-      ["addressing-findings", "Retry Address Findings Stage"],
-      ["verifying", "Retry Verification Stage"],
-      ["reworking", "Retry Rework Stage"],
-      ["creating-pr", "Retry PR Stage"],
-      ["resolving-conflicts", "Retry Conflict Resolution"],
+      ["creating-environment", "Retry environment creation"],
+      ["starting-environment", "Retry environment start"],
+      ["waiting-for-setup", "Retry setup"],
+      ["building", "Retry build stage"],
+      ["reviewing", "Retry review stage"],
+      ["addressing-findings", "Retry address findings stage"],
+      ["verifying", "Retry verification stage"],
+      ["reworking", "Retry rework stage"],
+      ["creating-pr", "Retry PR stage"],
+      ["resolving-conflicts", "Retry conflict resolution"],
     ];
     for (const [phase, label] of cases) {
       cleanup();

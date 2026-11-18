@@ -230,11 +230,11 @@ describe("the fix prompt", () => {
     });
     const prompt = buildFixPrompt(facts);
     expect(prompt).toContain("debug logging is off");
-    expect(prompt).toContain("Settings → Debug → Save Logs to Disk");
+    expect(prompt).toContain("Settings → Debug → Save logs to disk");
     // The always-on log comes first: asking to reproduce is the fallback.
     expect(prompt).toContain("logs/essential/essential.jsonl");
     expect(prompt.indexOf("logs/essential/essential.jsonl")).toBeLessThan(
-      prompt.indexOf("ask me to turn on Settings → Debug → Save Logs to Disk"),
+      prompt.indexOf("ask me to turn on Settings → Debug → Save logs to disk"),
     );
     expect(prompt).toContain("Log files: none");
   });

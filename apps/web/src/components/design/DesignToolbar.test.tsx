@@ -105,7 +105,7 @@ describe("DesignToolbar tooltips", () => {
       "Preview mode": "Preview: scroll and hover the mockupP",
       "Add frame": "Add frame",
       "Undo design change": "Undo move frameCtrl/⌘+Z",
-      "Export design to repository": "Export a revision to the repository (Save As)",
+      "Export design to repository": "Export a revision to the repository (Save as)",
       "Download orkdes": "Download the design as an .orkdes file",
       "Design history": "Design history",
       "Ask agent about the selection": "Ask agent about the selection",

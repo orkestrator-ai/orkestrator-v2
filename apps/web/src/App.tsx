@@ -159,7 +159,7 @@ function dockerUnavailableMessage(reason: DockerUnavailableReason | null): {
 } {
   if (reason === "permission-denied") {
     return {
-      title: "Docker Permission Required",
+      title: "Docker permission required",
       description: (
         <>
           Orkestrator found Docker, but your user account cannot access the Docker daemon. On Linux,
@@ -175,26 +175,26 @@ function dockerUnavailableMessage(reason: DockerUnavailableReason | null): {
   }
   if (reason === "not-installed") {
     return {
-      title: "Docker Is Not Installed",
+      title: "Docker is not installed",
       description: "Install Docker, then restart Orkestrator to use container environments.",
     };
   }
   if (reason === "timed-out") {
     return {
-      title: "Docker Check Timed Out",
+      title: "Docker check timed out",
       description:
         "Docker did not respond within 10 seconds. Check the Docker service and try again.",
     };
   }
   if (reason === "unknown") {
     return {
-      title: "Docker Is Unavailable",
+      title: "Docker is unavailable",
       description:
         "Orkestrator found Docker, but `docker info` failed. Run `docker info` in a terminal for more details, then try again.",
     };
   }
   return {
-    title: "Docker Is Not Running",
+    title: "Docker is not running",
     description: "Start the Docker service or Docker Desktop, then try again.",
   };
 }
@@ -975,7 +975,7 @@ function ConnectedApp() {
                 onClick={handleRetryDockerCheck}
                 disabled={isCheckingDocker}
               >
-                {isCheckingDocker ? "Checking..." : "Check Docker Again"}
+                {isCheckingDocker ? "Checking..." : "Check Docker again"}
               </Button>
             </div>
           )}
@@ -1004,7 +1004,7 @@ function ConnectedApp() {
                       variant="ghost"
                       onClick={() => void refreshMacOsPermissions()}
                     >
-                      Check Again
+                      Check again
                     </Button>
                   )}
                 </div>
@@ -1031,7 +1031,7 @@ function ConnectedApp() {
                           Checking...
                         </>
                       ) : (
-                        "Check Again"
+                        "Check again"
                       )}
                     </Button>
                     <Button
@@ -1045,7 +1045,7 @@ function ConnectedApp() {
                         });
                       }}
                     >
-                      Restart App
+                      Restart app
                     </Button>
                   </div>
                 </div>
@@ -1055,7 +1055,7 @@ function ConnectedApp() {
                     <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
                       {macOsHasBlockingMissing ? "Setup required" : "Recommended setup"}
                     </p>
-                    <h1 className="text-2xl font-semibold">macOS File Access</h1>
+                    <h1 className="text-2xl font-semibold">macOS file access</h1>
                     <p className="mt-2 text-sm leading-6 text-muted-foreground">
                       {macOsHasBlockingMissing
                         ? "Grant the missing folder, Photos, and Media access before continuing so agents can search your home directory without interrupting their work with macOS privacy prompts."
@@ -1093,7 +1093,7 @@ function ConnectedApp() {
                         variant="outline"
                         onClick={() => void handleOpenMacOsSettings("files-and-folders")}
                       >
-                        Open Files &amp; Folders Settings
+                        Open Files &amp; Folders settings
                       </Button>
                     )}
                     {macOsPermissions.missing.some(
@@ -1104,7 +1104,7 @@ function ConnectedApp() {
                         variant="outline"
                         onClick={() => void handleOpenMacOsSettings("full-disk-access")}
                       >
-                        Open Full Disk Access Settings
+                        Open Full Disk Access settings
                       </Button>
                     )}
                     {macOsPermissions.missing.some(
@@ -1115,7 +1115,7 @@ function ConnectedApp() {
                         variant="outline"
                         onClick={() => void handleOpenMacOsSettings("photos")}
                       >
-                        Open Photos Settings
+                        Open Photos settings
                       </Button>
                     )}
                     {macOsPermissions.missing.some(
@@ -1126,7 +1126,7 @@ function ConnectedApp() {
                         variant="outline"
                         onClick={() => void handleOpenMacOsSettings("media-library")}
                       >
-                        Open Media Library Settings
+                        Open Media Library settings
                       </Button>
                     )}
                     <Button
@@ -1140,7 +1140,7 @@ function ConnectedApp() {
                           Checking...
                         </>
                       ) : (
-                        "Check Again"
+                        "Check again"
                       )}
                     </Button>
                     {!macOsHasBlockingMissing && macOsHasAdvisoryMissing && (
@@ -1163,7 +1163,7 @@ function ConnectedApp() {
                         });
                       }}
                     >
-                      Restart App
+                      Restart app
                     </Button>
                   </div>
                 </div>
@@ -1238,11 +1238,11 @@ function ConnectedApp() {
                       Checking...
                     </>
                   ) : (
-                    "Check Again"
+                    "Check again"
                   )}
                 </Button>
                 <AlertDialogAction onClick={() => setDockerWarningDismissed(true)}>
-                  Continue Without Docker
+                  Continue without Docker
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
@@ -1252,7 +1252,7 @@ function ConnectedApp() {
           <AlertDialog open={noAiCliAvailable}>
             <AlertDialogContent {...noAiCliFocus}>
               <AlertDialogHeader>
-                <AlertDialogTitle>AI CLI Required</AlertDialogTitle>
+                <AlertDialogTitle>AI CLI required</AlertDialogTitle>
                 <AlertDialogDescription>
                   No compatible AI CLI is installed on your system. Orkestrator AI requires Claude
                   Code, Codex, or OpenCode to create and manage AI-powered development environments.
@@ -1293,7 +1293,7 @@ function ConnectedApp() {
                     "Retry"
                   )}
                 </Button>
-                <Button onClick={handleCloseApp}>Close Application</Button>
+                <Button onClick={handleCloseApp}>Close application</Button>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
@@ -1302,7 +1302,7 @@ function ConnectedApp() {
           <AlertDialog open={showClaudeLoginNotice}>
             <AlertDialogContent {...claudeLoginFocus}>
               <AlertDialogHeader>
-                <AlertDialogTitle>Claude Code Is Not Logged In</AlertDialogTitle>
+                <AlertDialogTitle>Claude Code is not logged in</AlertDialogTitle>
                 <AlertDialogDescription>
                   Claude Code is installed but you haven't logged in yet. Claude sessions will not
                   start until you do; other agent platforms keep working.
@@ -1329,7 +1329,7 @@ function ConnectedApp() {
                   )}
                 </Button>
                 <AlertDialogAction onClick={() => setClaudeLoginNoticeDismissed(true)}>
-                  Continue Without Claude
+                  Continue without Claude
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
@@ -1340,7 +1340,7 @@ function ConnectedApp() {
             <AlertDialogContent {...githubWarningFocus}>
               <AlertDialogHeader>
                 <AlertDialogTitle>
-                  {githubCliMissing ? "GitHub CLI Not Found" : "Sign In to GitHub"}
+                  {githubCliMissing ? "GitHub CLI not found" : "Sign in to GitHub"}
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {githubCliMissing
@@ -1361,10 +1361,10 @@ function ConnectedApp() {
                 )}
                 <AlertDialogAction onClick={handleCloseGithubCliSetup}>
                   {githubCliMissing
-                    ? "Continue Without GitHub CLI"
+                    ? "Continue without GitHub CLI"
                     : githubCliSetupStatus?.authenticated
                       ? "Done"
-                      : "Not Now"}
+                      : "Not now"}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

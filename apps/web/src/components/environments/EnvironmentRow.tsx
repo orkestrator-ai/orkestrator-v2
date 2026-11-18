@@ -375,7 +375,7 @@ export function environmentRowMenuItems(
     },
     {
       key: "copy-environment-id",
-      label: "Copy Environment ID",
+      label: "Copy environment ID",
       icon: <Copy className={icon} />,
       onSelect: () => copyEnvironmentId(model.environmentId),
     },
@@ -383,7 +383,7 @@ export function environmentRowMenuItems(
       ? [
           {
             key: "copy-address",
-            label: "Copy Address",
+            label: "Copy address",
             icon: <Copy className={icon} />,
             onSelect: actions.copyAddress,
           },
@@ -393,7 +393,7 @@ export function environmentRowMenuItems(
       ? [
           {
             key: "copy-initial-prompt",
-            label: "Copy Initial Prompt",
+            label: "Copy initial prompt",
             icon: <Copy className={icon} />,
             onSelect: actions.copyInitialPrompt,
           },

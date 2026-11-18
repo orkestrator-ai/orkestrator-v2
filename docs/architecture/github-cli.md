@@ -75,10 +75,10 @@ On startup the renderer reads the status. When `gh` is missing, or signed out
 and `canSignIn`, and the reminder is not dismissed, it shows a non-blocking
 dialog (`App.tsx`):
 
-- **Sign In to GitHub** hosts `GitHubCliSetup`: the code with a copy button,
+- **Sign in to GitHub** hosts `GitHubCliSetup`: the code with a copy button,
   **Open sign-in page**, and a waiting state until `gh` exits. The close
-  button reads **Not Now** until sign-in succeeds, then **Done**.
-- **GitHub CLI Not Found** (no managed copy and nothing on `PATH`) shows
+  button reads **Not now** until sign-in succeeds, then **Done**.
+- **GitHub CLI not found** (no managed copy and nothing on `PATH`) shows
   install commands, **Install instructions** and **Check again**.
 - Closing the dialog dismisses it for the session. Ticking **Don't remind me
   again** first turns the reminder off for good, for both variants.

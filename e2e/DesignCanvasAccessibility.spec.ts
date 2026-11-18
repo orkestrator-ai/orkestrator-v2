@@ -273,6 +273,50 @@ async function typeStyle(page: Page, value: string) {
   await page.keyboard.press("Enter");
 }
 
+test("the keyboard-focused hierarchy divider paints its outline on both sides", async ({
+  page,
+}) => {
+  await withCanvas(page, async ({ canvasId }) => {
+    await openCanvas(page, canvasId);
+    const divider = page.getByRole("separator", { name: "Resize design hierarchy" });
+    await tabTo(page, divider);
+    await expect(divider).toBeFocused();
+    await expect(divider).toHaveCSS("outline-style", "solid");
+    await expect(divider).toHaveCSS("outline-width", "1px");
+    await expect(divider).toHaveCSS("outline-offset", "2px");
+    await expect(divider).toHaveCSS("outline-color", "rgb(59, 130, 246)");
+
+    // Computed styles cannot tell whether the canvas or an ancestor clips
+    // the outline. Sample the painted pixels across the divider halfway down.
+    const box = await divider.boundingBox();
+    if (!box) throw new Error("Divider has no rendered bounds");
+    const strip = await page.screenshot({
+      clip: {
+        x: Math.round(box.x) - 4,
+        y: Math.round(box.y + box.height / 2),
+        width: 9,
+        height: 1,
+      },
+      scale: "css",
+    });
+    const blueColumns = await page.evaluate(async (png) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${png}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      const { data } = context.getImageData(0, 0, image.width, 1);
+      return Array.from({ length: image.width }, (_, x) => x).filter(
+        (x) => data[x * 4] === 59 && data[x * 4 + 1] === 130 && data[x * 4 + 2] === 246,
+      );
+    }, strip.toString("base64"));
+    expect(blueColumns).toEqual([1, 7]);
+  });
+});
+
 test("toolbar tooltips describe focused controls and preserve rename and compact layout", async ({
   page,
 }, testInfo) => {

@@ -247,7 +247,7 @@ export function NativeResumeSessionDialog({
     >
       <DialogContent size="md">
         <DialogHeader>
-          <DialogTitle>Resume Session</DialogTitle>
+          <DialogTitle>Resume session</DialogTitle>
           <DialogDescription>
             Select a previous {agentLabel} session to continue the conversation.
           </DialogDescription>

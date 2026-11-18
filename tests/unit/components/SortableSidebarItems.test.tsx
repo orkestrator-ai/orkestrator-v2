@@ -455,14 +455,14 @@ describe("sortable sidebar items", () => {
 
   async function openProjectContextMenu(): Promise<void> {
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
-    await screen.findByRole("menuitem", { name: "Open Board" });
+    await screen.findByRole("menuitem", { name: "Open board" });
   }
 
   test("SortableProjectGroup opens a GitHub remote as a canonical repository URL", async () => {
     renderProjectGroup();
     await openProjectContextMenu();
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Open Repo on GitHub" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open repo on GitHub" }));
 
     await waitFor(() => {
       expect(openInBrowser).toHaveBeenCalledWith("https://github.com/acme/project-one");
@@ -476,7 +476,7 @@ describe("sortable sidebar items", () => {
       renderProjectGroup({ project: { ...project, gitUrl } });
       await openProjectContextMenu();
 
-      expect(screen.queryByRole("menuitem", { name: "Open Repo on GitHub" }) === null).toBe(true);
+      expect(screen.queryByRole("menuitem", { name: "Open repo on GitHub" }) === null).toBe(true);
       expect(openInBrowser).not.toHaveBeenCalled();
     },
   );
@@ -488,7 +488,7 @@ describe("sortable sidebar items", () => {
     renderProjectGroup();
     await openProjectContextMenu();
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Open Repo on GitHub" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open repo on GitHub" }));
 
     await waitFor(() => {
       expect(toastError).toHaveBeenCalledWith("Could not open repository in browser.");
@@ -635,7 +635,7 @@ describe("sortable sidebar items", () => {
     renderProjectGroup({ onDeleteProject });
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete project" }));
 
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog.textContent).toContain("Project One");
@@ -663,7 +663,7 @@ describe("sortable sidebar items", () => {
     renderProjectGroup({ onDeleteProject });
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete project" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(onDeleteProject).toHaveBeenCalledWith("project-1"));
@@ -703,7 +703,7 @@ describe("sortable sidebar items", () => {
 
   async function openRenameDialog(): Promise<HTMLElement> {
     fireEvent.contextMenu(screen.getByTitle("Collapse folder Work"));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename Folder" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename folder" }));
     return await screen.findByLabelText("Rename folder Work");
   }
 

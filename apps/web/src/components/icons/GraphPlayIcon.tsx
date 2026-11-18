@@ -6,7 +6,7 @@ const PLAY_PATH = "M15 14.2v7.6a1 1 0 0 0 1.5.86l6.1-4a1 1 0 0 0 0-1.32l-6.1-4a1
 /**
  * "Run graph": lucide's `Network` with its bottom-right node swapped for an
  * outlined play triangle, so it reads as a graph and stays distinct from the
- * plain `Play` used by Run Commands. A mask clears the triangle's whole area
+ * plain `Play` used by Run commands. A mask clears the triangle's whole area
  * plus a gap around it, so its hollow centre is empty rather than showing the
  * graph through it. Masking rather than painting a background-coloured halo
  * keeps that holding on any button background (hover included). Decorative,

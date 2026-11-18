@@ -418,7 +418,7 @@ export function getWindowBuildPipelineActivation(
 /**
  * True when this window armed after setup had already finished, so there is no
  * long setup whose user-chosen tab we must protect. A rebuild into an existing
- * environment is this case: the user just clicked Start Build.
+ * environment is this case: the user just clicked Start build.
  */
 export function wasWindowBuildPipelineSetupReadyAtArm(
   environmentId: string,

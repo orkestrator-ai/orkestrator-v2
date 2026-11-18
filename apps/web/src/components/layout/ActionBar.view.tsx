@@ -430,7 +430,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
   // Graphs are experimental: their buttons show only while they are on.
   const graphsEnabled = config.global.experimentalGraphs === true;
-  // Tmux mode is experimental: "Claude Tmux Tab" shows only while it is on.
+  // Tmux mode is experimental: "Claude Tmux tab" shows only while it is on.
   const tmuxModeEnabled = isTmuxModeEnabled(config.global);
   const multiReviewResolvedDefaults = useMultiReviewLaunchDefaults(
     multiReviewDialogOpen,
@@ -591,7 +591,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   /*
    * Placed like the Create PR control above. The same as a row's Delete, so it
-   * opens that confirmation. A finished PR already offers Clean Up, whose dialog
+   * opens that confirmation. A finished PR already offers Clean up, whose dialog
    * describes that state; the project home's page would read it as deleting the
    * project.
    */
@@ -791,7 +791,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     <ToolbarContextMenuTrigger
                       tooltip={
                         <>
-                          <p>New Native Agent Tab</p>
+                          <p>New native agent tab</p>
                           <p className="text-xs text-muted-foreground">
                             ⌘T · Right-click for options
                           </p>
@@ -813,7 +813,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     <ContextMenuContent>
                       <ContextMenuItem onClick={handleCreateNativeTab} disabled={!canCreateTab}>
                         <Plus className="mr-2 h-4 w-4" />
-                        Native Tab
+                        Native tab
                       </ContextMenuItem>
                       {tmuxModeEnabled && enabledAgents.has("claude") && (
                         <ContextMenuItem
@@ -821,7 +821,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           disabled={!canCreateTab}
                         >
                           <ClaudeIcon className="mr-2 h-4 w-4" />
-                          Claude Tmux Tab
+                          Claude Tmux tab
                         </ContextMenuItem>
                       )}
                     </ContextMenuContent>
@@ -831,7 +831,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     <ToolbarContextMenuTrigger
                       tooltip={
                         <>
-                          <p>New Terminal Tab</p>
+                          <p>New terminal tab</p>
                           <p className="text-xs text-muted-foreground">
                             ⌘R · Right-click for agent CLIs
                           </p>
@@ -893,7 +893,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   <ToolbarTooltipTrigger
                     tooltip={
                       <>
-                        <p>New Root Terminal</p>
+                        <p>New root terminal</p>
                         <p className="text-xs text-red-500">
                           Full root privileges inside container
                         </p>
@@ -923,7 +923,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   <ToolbarTooltipTrigger
                     tooltip={
                       <>
-                        <p>New Browser Tab</p>
+                        <p>New browser tab</p>
                         <p className="text-xs text-muted-foreground">
                           {!browserPreviewSupported
                             ? "Available in the desktop app; the web client cannot authenticate previews"
@@ -950,7 +950,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   <ToolbarTooltipTrigger
                     tooltip={
                       <>
-                        <p>Code Review</p>
+                        <p>Code review</p>
                         <p className="text-xs text-muted-foreground">
                           Commit changes and review code
                         </p>
@@ -1074,11 +1074,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     </>
                   )}
 
-                  {/* Play Button - Run Commands */}
+                  {/* Play Button - Run commands */}
                   <ToolbarTooltipTrigger
                     tooltip={
                       <>
-                        <p>Run Commands</p>
+                        <p>Run commands</p>
                         <p className="text-xs text-muted-foreground">
                           {setupRunning
                             ? "Waiting for setup scripts to finish..."
@@ -1236,7 +1236,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         <GitPullRequest className="h-4 w-4" />
                       )}
                       <span className={cn(isGrid && "truncate text-xs")}>
-                        {isPRMerged ? "PR Merged" : isPRClosed ? "PR Closed" : "View PR"}
+                        {isPRMerged ? "PR merged" : isPRClosed ? "PR closed" : "View PR"}
                       </span>
                       {!isPRFinished && checkSummary && checkSummary.total > 0 && (
                         <PullRequestCheckStatus
@@ -1422,7 +1422,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         }}
                       >
                         <Trash2 className="h-4 w-4" />
-                        <span className={cn(isGrid && "truncate text-xs")}>Clean Up</span>
+                        <span className={cn(isGrid && "truncate text-xs")}>Clean up</span>
                       </Button>
                     </ToolbarTooltipTrigger>
                   )}
@@ -1446,7 +1446,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           disabled={!isRunning || !canLaunchBackendJob}
                         >
                           <Upload className="h-4 w-4" />
-                          <span className={cn(isGrid && "truncate text-xs")}>Push Changes</span>
+                          <span className={cn(isGrid && "truncate text-xs")}>Push changes</span>
                         </Button>
                       </ToolbarContextMenuTrigger>
                       <ContextMenuContent>
@@ -1693,7 +1693,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       <AlertDialog open={!!editorError} onOpenChange={() => setEditorError(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Failed to Open Editor</AlertDialogTitle>
+            <AlertDialogTitle>Failed to open editor</AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
               <p>{editorError}</p>
               <p className="text-xs">
@@ -1730,7 +1730,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       >
         <AlertDialogContent className="max-h-[calc(100vh-2rem)] overflow-hidden">
           <AlertDialogHeader>
-            <AlertDialogTitle>Clean Up Environment</AlertDialogTitle>
+            <AlertDialogTitle>Clean up environment</AlertDialogTitle>
             <AlertDialogDescription>
               This will permanently delete the environment "
               {cleanupTarget?.environmentName ?? selectedEnvironment?.name}". The PR has been{" "}
@@ -1761,7 +1761,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   Deleting...
                 </>
               ) : (
-                "Delete Environment"
+                "Delete environment"
               )}
             </Button>
           </AlertDialogFooter>

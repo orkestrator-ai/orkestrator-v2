@@ -18,7 +18,7 @@ test("startup dialog handlers dismiss delayed notices in existing and new window
       <button id="workspace" onclick="this.textContent='Workspace ready'">Workspace</button>
       <div id="notices"></div>
     `);
-    for (const button of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    for (const button of ["Continue without Docker", "Continue without GitHub CLI"]) {
       await window.locator("#notices").evaluate((element, label) => {
         element.innerHTML = `<div role="dialog"><button onclick="this.parentElement.remove()">${label}</button></div>`;
       }, button);

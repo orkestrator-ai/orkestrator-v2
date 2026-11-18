@@ -412,7 +412,7 @@ export function PipelineFlowView({
     if (node.session && createTab) {
       actions.push({
         key: "open",
-        label: node.kind === "fix" ? "Open Rework session" : "Open session",
+        label: node.kind === "fix" ? "Open rework session" : "Open session",
         icon: ExternalLink,
         onSelect: () => openSession(node),
       });
@@ -804,7 +804,7 @@ export function PipelineFlowView({
               />
               {selected.session?.adoptedFromTabId && (
                 <details className="mb-3 rounded border border-divider p-3">
-                  <summary>Original Build notes and acceptance criteria</summary>
+                  <summary>Original build notes and acceptance criteria</summary>
                   {selected.session.adoptedBuildNotes && (
                     <AutoPipelineBuildNotes notes={selected.session.adoptedBuildNotes} />
                   )}

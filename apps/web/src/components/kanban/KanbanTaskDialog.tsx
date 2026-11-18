@@ -96,7 +96,7 @@ const log = createLogger("web.kanban");
 
 const STATUS_LABELS: Record<KanbanStatus, string> = {
   backlog: "Backlog",
-  "in-progress": "In Progress",
+  "in-progress": "In progress",
   review: "Review",
   done: "Done",
 };
@@ -983,7 +983,7 @@ export function KanbanTaskDialog({
                     </span>
                   </div>
                   <div className="space-y-2 pt-1">
-                    <DialogTitle className="sr-only">New Task</DialogTitle>
+                    <DialogTitle className="sr-only">New task</DialogTitle>
                     <Input
                       value={editTitle}
                       onChange={(e) => {
@@ -1010,11 +1010,11 @@ export function KanbanTaskDialog({
 
                 <Separator />
 
-                {/* Acceptance Criteria */}
+                {/* Acceptance criteria */}
                 <div>
                   <div className="flex items-center gap-1.5 mb-2">
                     <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-                    <h4 className="text-sm font-medium">Acceptance Criteria</h4>
+                    <h4 className="text-sm font-medium">Acceptance criteria</h4>
                   </div>
                   <Textarea
                     value={editAC}
@@ -1040,7 +1040,7 @@ export function KanbanTaskDialog({
                 onClick={handleCreate}
                 disabled={!editTitle.trim() || isBuildStarting}
               >
-                Create Task
+                Create task
               </Button>
               <Button
                 ref={buildLaunchTriggerRef}
@@ -1337,7 +1337,7 @@ export function KanbanTaskDialog({
                     }}
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
-                    View Build
+                    View build
                     {existingPipeline ? (
                       <span className="ml-1 text-xs text-muted-foreground">
                         ({existingPipeline.phase})
@@ -1374,7 +1374,7 @@ export function KanbanTaskDialog({
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Environment Already Exists</AlertDialogTitle>
+              <AlertDialogTitle>Environment already exists</AlertDialogTitle>
               <AlertDialogDescription>
                 This task already has an environment linked to it. Starting a new build will create
                 an additional environment.
@@ -1399,7 +1399,7 @@ export function KanbanTaskDialog({
                   setConfirmBuildSelection(null);
                 }}
               >
-                Start Build
+                Start build
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

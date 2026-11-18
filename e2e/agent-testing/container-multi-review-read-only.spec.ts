@@ -228,7 +228,7 @@ test("Docker fixture Multi Review with Claude read-only reviewers runs without t
   await page.setViewportSize({ width: 1440, height: 900 });
   // The profile has no host Claude login by design: the fake answers instead.
   await page.addLocatorHandler(
-    page.getByRole("button", { name: "Continue Without Claude", exact: true }),
+    page.getByRole("button", { name: "Continue without Claude", exact: true }),
     (button) => button.click(),
   );
   const invoke = await login(page, testInfo, status);

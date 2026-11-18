@@ -76,7 +76,7 @@ describe("ErrorDetailsDialog", () => {
     });
     render(<ErrorDetailsDialog />);
 
-    expect(screen.queryByText("Initial Prompt") === null).toBe(true);
+    expect(screen.queryByText("Initial prompt") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("Failed to copy to clipboard"));
   });

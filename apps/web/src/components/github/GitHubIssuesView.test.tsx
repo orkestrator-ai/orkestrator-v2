@@ -107,7 +107,7 @@ describe("GitHubIssuesView", () => {
     const expectedCounts = new Map([
       ["Backlog", "1"],
       ["Todo", "1"],
-      ["In Progress", "1"],
+      ["In progress", "1"],
       ["Review", "2"],
     ]);
     for (const [headingName, count] of expectedCounts) {
@@ -131,7 +131,7 @@ describe("GitHubIssuesView", () => {
     await waitFor(() => expect(loadIssuesMock).toHaveBeenCalledTimes(2));
 
     fireEvent.click(screen.getByRole("combobox", { name: "Status for issue #2" }));
-    fireEvent.click(await screen.findByRole("option", { name: "In Progress" }));
+    fireEvent.click(await screen.findByRole("option", { name: "In progress" }));
 
     await waitFor(() => {
       expect(changeStatusMock).toHaveBeenCalledWith("project-1", 2, "inprogress");

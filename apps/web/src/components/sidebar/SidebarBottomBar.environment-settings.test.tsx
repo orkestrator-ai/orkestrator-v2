@@ -87,7 +87,7 @@ test("the drawer's bottom bar and AppDialogHost open interactive settings and re
     const launch = await screen.findByRole("button", { name: "Environment settings" });
     launch.focus();
     fireEvent.click(launch);
-    const settings = await screen.findByRole("dialog", { name: "Environment Settings" });
+    const settings = await screen.findByRole("dialog", { name: "Environment settings" });
     // The drawer closes for the dialog, which renders outside it.
     await waitFor(() =>
       expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
@@ -107,7 +107,7 @@ test("the drawer's bottom bar and AppDialogHost open interactive settings and re
     if (pass === 0) fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     else fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     await waitFor(() =>
-      expectDomAbsent(screen.queryByRole("dialog", { name: "Environment Settings" })),
+      expectDomAbsent(screen.queryByRole("dialog", { name: "Environment settings" })),
     );
     await waitFor(() =>
       expect(document.activeElement).toBe(

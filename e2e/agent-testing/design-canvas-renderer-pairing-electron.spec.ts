@@ -243,14 +243,14 @@ async function pairingAgent(): Promise<{
 
 /**
  * The backends' Claude Code has no login, only the loopback model's fixture
- * key in its settings, so both renderers open "Claude Code Is Not Logged In".
+ * key in its settings, so both renderers open "Claude Code is not logged in".
  * The notice is non-blocking, and sessions still run on that key; it is
  * dismissed for this run only, as the other fake-model specs do.
  */
 function dismissClaudeLoginNotice(window: Page): void {
   window
     .addLocatorHandler(
-      window.getByRole("button", { name: "Continue Without Claude", exact: true }),
+      window.getByRole("button", { name: "Continue without Claude", exact: true }),
       async (button) => {
         await button.click({ timeout: 5_000 }).catch(() => undefined);
       },

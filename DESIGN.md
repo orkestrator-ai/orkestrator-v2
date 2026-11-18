@@ -423,6 +423,8 @@ The Control Room's instruments. **Name shimmer:** a light band sweeps across an 
 ### Focus Hairline (signature)
 One keyboard-focus indicator for the whole product: a single 1px outline in `--color-ring`, inset 2px so it never touches selection, outset 2px on solid fills and bare text. It needs no border, leaves shadows alone, and becomes `Highlight` under forced colors.
 
+A borderless input inside a framed control shows its keyboard-focus hairline on the frame. Use `:has()` to track the input's `:focus-visible` state so neighboring buttons keep their own focus indicators. The native compose bar uses the neutral border cue described below.
+
 ### Compose Bar (native tab, signature)
 The input bar at the bottom of every native agent tab (Claude, Codex, OpenCode, Cursor, Grok, Pi) and the Coordinator. It is the one control that floats in the work, so it is the one place outside overlays that casts a shadow.
 - **Frame:** a 12px-radius card on the opaque `compose-surface` (not the translucent `input-surface`), 1px `border` at 70%, 12px padding, compose-dock shadow. It centers in the transcript's 56rem column (full width less 0.75rem on phones) and sits 16px above the pane's bottom edge. When the prompt input is focused, the card's border steps up one neutral shade (`zinc-700`, 150ms). It is never blue and never an outline: the input is focused almost all the time, and a standing blue frame around the composer was rejected.
@@ -459,6 +461,7 @@ A 16px-radius panel on the ground color, with header and footer bands separated 
 ## Do's and Don'ts
 
 ### Do:
+- **Do** write UI labels, buttons, menu items, tabs, headings, dialog titles, accessible names and toasts in sentence case. Capitalize the first word and preserve acronyms, proper names and established product terms, including Multi Review, Coordinator, Claude Code, GitHub and Linear. Keep generic product terms such as project home, prompt environment, pipeline environment, build pipeline, execution policy, agent mail and subork lowercase within a sentence.
 - **Do** reach for semantic tokens (`elevated`, `divider`, `selected`, `success`, `failure`) before any raw ramp step or hex.
 - **Do** keep a resting screen near-monochrome and let blue, green, red and yellow mark only selection, outcome and needs-you states.
 - **Do** use `elevated` for controls on chrome or sidebar; `accent`, `secondary`, `muted`, `card` and `popover` are rebound inside the central panel.
@@ -483,7 +486,7 @@ A 16px-radius panel on the ground color, with header and footer bands separated 
 - **Don't** use `vh`/`dvh` for the app's root height; it overflows under CSS zoom.
 - **Don't** bring the site's display sizes, gradient text or glow shadows into the app's operating surfaces.
 - **Don't** add a second focus style (rings, glows, border swaps) alongside the hairline.
-- **Don't** outline the compose card in blue on focus; the composer is almost always focused, so its focus cue is a one-shade lighter neutral border.
+- **Don't** outline the native compose card in blue on focus; the composer is almost always focused, so its focus cue is a one-shade lighter neutral border.
 - **Don't** animate anything that is not reporting a state change.
 - **Don't** give a destructive action a standing red fill in a toolbar; it is a ghost that turns coral on hover, behind its confirmation.
 - **Don't** use a colored side bar thicker than 1px; callouts carry their kind in a 1px frame (solid, dotted for Tip, dashed for Warning; Caution 2px), an icon, a label and a hue.

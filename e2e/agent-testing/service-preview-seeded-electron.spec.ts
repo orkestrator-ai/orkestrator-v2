@@ -66,7 +66,7 @@ type Name = "a" | "b";
 interface SeededEnvironment {
   id: string;
   worktreePath: string;
-  /** The Run Commands terminal tab, once Run has been pressed. */
+  /** The Run commands terminal tab, once Run has been pressed. */
   runTabId?: string;
   /** The tab the environment browser button opened. */
   serviceTabId?: string;
@@ -366,7 +366,7 @@ function pidOf(marker: string): number {
   return pid;
 }
 
-/** Press Run in the selected environment and return the Run Commands tab. */
+/** Press Run in the selected environment and return the Run commands tab. */
 async function pressRun(name: Name): Promise<string> {
   const run = s().window.getByRole("button", { name: "Run commands" });
   await expect(run).toHaveAttribute("aria-disabled", "false", { timeout: 60_000 });
@@ -682,7 +682,7 @@ test("3. a restarted dev server is reached from the open tab without a reload, a
 
   // Restart in the same terminal, as a user would: Ctrl-C, then the command.
   const sessionId = (await tabs("a")).find((tab) => tab.id === env("a").runTabId)?.sessionId;
-  expect(sessionId, "the Run Commands tab's terminal session").toBeTruthy();
+  expect(sessionId, "the Run commands tab's terminal session").toBeTruthy();
   await invoke("local_terminal_write", { sessionId, data: "\u0003" });
   await expect.poll(() => alive(pidOf(before)), { timeout: 30_000 }).toBe(false);
   await invoke("local_terminal_write", { sessionId, data: `${s().runCommand}\r` });

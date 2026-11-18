@@ -241,6 +241,11 @@ const TabLaunchOverrideFixture = lazy(async () => ({
 const PipelineWorkerMailFixture = lazy(async () => ({
   default: (await import("./PipelineWorkerMailFixture")).PipelineWorkerMailFixture,
 }));
+const FocusHairlineFixture = lazy(async () => {
+  const fixture = await import("./FocusHairlineFixture");
+  fixture.installFocusHairlineFixture();
+  return { default: fixture.FocusHairlineFixture };
+});
 const MailTilesFixture = lazy(async () => ({
   default: (await import("./MailTilesFixture")).MailTilesFixture,
 }));
@@ -2280,6 +2285,13 @@ function fixtureForPath() {
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/remember-rule-panel") return <RememberRulePanelFixture />;
+  if (window.location.pathname === "/focus-hairline") {
+    return (
+      <Suspense fallback={null}>
+        <FocusHairlineFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/focus-visibility") return <FocusVisibilityFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/markdown-editor") return <MarkdownEditorFixture />;

@@ -1134,7 +1134,7 @@ the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 
-The files the **Environment Files** setting (`envFilePatterns`, by default
+The files the **Environment files** setting (`envFilePatterns`, by default
 `.env` and `.env.local`) matches in the project folder, and the project's
 `opencode.json`, are copied into every new container
 (`container-project-seed-files.ts`, matching in

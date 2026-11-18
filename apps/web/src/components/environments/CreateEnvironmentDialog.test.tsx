@@ -99,7 +99,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     fireEvent.click(within(speed).getByRole("menuitemradio", { name: /Fast/, hidden: true }));
     act(() => fireEvent.keyDown(document.body, { key: "Escape" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
@@ -160,7 +160,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     }
     fireEvent.click(customize);
     expect(customize.getAttribute("aria-checked")).toBe("false");
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
     expect(onCreateFeatureBuild.mock.calls[0]?.[0]).toMatchObject({
       steps: {
@@ -256,7 +256,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "Create Ork (Environment) - orkestrator-v2",
+        name: "Create Ork (environment) - orkestrator-v2",
       }),
     ).toBeTruthy();
     expect(screen.getByText("orkestrator-v2")).toBeTruthy();
@@ -274,15 +274,15 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
 
     expect(screen.getByRole("button", { name: "With a prompt" }).className).toContain("font-bold");
     expect(screen.getByRole("button", { name: "A feature" }).className).toContain("font-normal");
-    expect(screen.getByRole("button", { name: "Create Environment" }).className).toContain(
+    expect(screen.getByRole("button", { name: "Create environment" }).className).toContain(
       "font-bold",
     );
     expect(screen.getByRole("button", { name: "Cancel" }).dataset.variant).toBe("outline");
 
-    const name = screen.getByLabelText("Environment Name (optional)");
+    const name = screen.getByLabelText("Environment name (optional)");
     const agent = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
-    const launch = screen.getByRole("checkbox", { name: "Launch Agent" });
-    const prompt = screen.getByLabelText("Initial Prompt (optional)");
+    const launch = screen.getByRole("checkbox", { name: "Launch agent" });
+    const prompt = screen.getByLabelText("Initial prompt (optional)");
     expect(name.className).toContain("h-9");
     expect(name.className).toContain("px-3");
     expect(name.className).toContain("bg-input-surface");
@@ -303,7 +303,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(promptField?.contains(prompt)).toBe(true);
     expect(promptField?.className).toContain("sm:grid-cols-[7.5rem_minmax(0,1fr)]");
     expect(promptLabel?.htmlFor).toBe(prompt.id);
-    expect(promptLabel?.textContent).toContain("Initial Prompt");
+    expect(promptLabel?.textContent).toContain("Initial prompt");
     expect(promptLabel?.querySelector(".sr-only")?.textContent).toBe("(optional)");
     expect(promptLabel?.className).toContain("text-muted-foreground");
     expect(prompt.getAttribute("aria-label")).toBeNull();
@@ -341,7 +341,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     act(() => useHostPathPickerStore.getState().settle("/srv/trees"));
     await waitFor(() => expect(screen.getByText("Worktree in /srv/trees")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ environmentType: "local", worktreeBaseDir: "/srv/trees" }),
@@ -362,7 +362,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
         </DockerAvailabilityProvider>,
       );
 
-      const prompt = screen.getByRole("textbox", { name: /Initial Prompt/ });
+      const prompt = screen.getByRole("textbox", { name: /Initial prompt/ });
       fireEvent.change(prompt, { target: { value: "first line" } });
       fireEvent.keyDown(prompt, { key: "Enter", ...modifier });
       await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
@@ -387,13 +387,13 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     );
 
     // The prompt is multi-line: Enter is left to the textarea to insert a newline.
-    const prompt = screen.getByRole("textbox", { name: /Initial Prompt/ });
+    const prompt = screen.getByRole("textbox", { name: /Initial prompt/ });
     fireEvent.change(prompt, { target: { value: "first line" } });
     expect(fireEvent.keyDown(prompt, { key: "Enter" })).toBe(true);
     expect(fireEvent.keyDown(prompt, { key: "Enter", shiftKey: true })).toBe(true);
 
     // The name is single-line: Enter is swallowed so it cannot submit the form.
-    const name = screen.getByRole("textbox", { name: "Environment Name (optional)" });
+    const name = screen.getByRole("textbox", { name: "Environment name (optional)" });
     expect(fireEvent.keyDown(name, { key: "Enter" })).toBe(false);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -410,7 +410,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
         <CreateEnvironmentDialog open onOpenChange={() => undefined} onCreate={onCreate} />
       </DockerAvailabilityProvider>,
     );
-    const prompt = screen.getByRole("textbox", { name: /Initial Prompt/ });
+    const prompt = screen.getByRole("textbox", { name: /Initial prompt/ });
     for (const extra of [
       { repeat: true },
       { isComposing: true },
@@ -456,7 +456,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
         }
       }
       expect(
-        (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+        (screen.getByRole("button", { name: "Create environment" }) as HTMLButtonElement).disabled,
       ).toBe(true);
       for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
         fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", ...modifier });
@@ -466,7 +466,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     });
   }
 
-  test("Cmd+Enter does nothing while Create Environment is disabled", async () => {
+  test("Cmd+Enter does nothing while Create environment is disabled", async () => {
     const onCreate = mock(async (_options: ClaudeOptions) => true);
     renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
@@ -481,7 +481,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     );
 
     expect(
-      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Create environment" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", metaKey: true });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -579,10 +579,10 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     fireEvent.drop(dialog, { dataTransfer });
 
     await screen.findByText("requirements.md");
-    fireEvent.change(screen.getByLabelText(/Initial Prompt/), {
+    fireEvent.change(screen.getByLabelText(/Initial prompt/), {
       target: { value: "Implement the attached requirements." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]?.[0]).toEqual(
@@ -742,7 +742,7 @@ describe("CreateEnvironmentDialog root setup step warning", () => {
     const onCreate = renderDialog();
     fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
     await waitFor(() => expect(screen.getByText(ROOT_WARNING)).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]?.[0].networkAccessMode).toBe("restricted");
   });

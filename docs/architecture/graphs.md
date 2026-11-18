@@ -1524,7 +1524,7 @@ only in the store.
 template form (`GraphTemplateEditor`: id for new drafts, name, workspace,
 limits, parameters, roles, run inputs and outputs, custom types,
 acknowledgements on record); agent nodes (`GraphNodeEditor`: Prompt,
-Inputs/Outputs, Capabilities with the MCP servers editor, Isolation and
+Inputs/outputs, Capabilities with the MCP servers editor, Isolation and
 `GraphEnforcementMatrix`, Execution with replication, session, `ask_human`,
 retry, timeout, on-failure and `when`, and a Mock run tab); system nodes (the
 action spec and a typed params form, `GraphSystemParamsEditor`); gates with

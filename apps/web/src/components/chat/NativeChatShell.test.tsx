@@ -1213,7 +1213,7 @@ describe("NativeChatShell", () => {
       expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
       expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
       // Exactly one reachable entry point, the centered one, throughout.
-      expect(screen.getAllByRole("button", { name: /Resume Session/ })).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: /Resume session/ })).toHaveLength(1);
 
       rerender(
         <NativeChatShell
@@ -1232,7 +1232,7 @@ describe("NativeChatShell", () => {
       expect(screen.getByTestId("session-refresh-shimmer-pinned")).toBeTruthy();
       expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
       expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
-      expect(screen.getAllByRole("button", { name: /Resume Session/ })).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: /Resume session/ })).toHaveLength(1);
 
       rerender(
         <NativeChatShell
@@ -1247,7 +1247,7 @@ describe("NativeChatShell", () => {
       );
 
       expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
-      expect(screen.getAllByRole("button", { name: /Resume Session/ })).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: /Resume session/ })).toHaveLength(1);
       expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
       expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
     });
@@ -1536,7 +1536,7 @@ describe("NativeChatShell", () => {
         />,
       );
 
-      expect(screen.getByText("Connection Failed")).toBeTruthy();
+      expect(screen.getByText("Connection failed")).toBeTruthy();
       expect(screen.getByText("spawn ENOENT")).toBeTruthy();
       expect(screen.queryByTestId("compose-dock") === null).toBe(true);
 
@@ -1569,10 +1569,10 @@ describe("NativeChatShell", () => {
 
       expect(screen.queryByText(/EADDRINUSE/) === null).toBe(true);
 
-      fireEvent.click(screen.getByRole("button", { name: "Show Log" }));
+      fireEvent.click(screen.getByRole("button", { name: "Show log" }));
       expect(screen.getByText(/EADDRINUSE/)).toBeTruthy();
 
-      fireEvent.click(screen.getByRole("button", { name: "Hide Log" }));
+      fireEvent.click(screen.getByRole("button", { name: "Hide log" }));
       expect(screen.queryByText(/EADDRINUSE/) === null).toBe(true);
     });
 
@@ -1583,7 +1583,7 @@ describe("NativeChatShell", () => {
         <NativeChatShell {...shellProps()} connectionState="error" serverLog={"   \n  "} />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: "Show Log" }));
+      fireEvent.click(screen.getByRole("button", { name: "Show log" }));
       expect(screen.getByText("(empty log)")).toBeTruthy();
     });
   });
@@ -1610,24 +1610,24 @@ describe("NativeChatShell", () => {
       expect(screen.queryByText(/No messages yet/) === null).toBe(true);
     });
 
-    test("offers Resume Session from the empty transcript", () => {
+    test("offers Resume session from the empty transcript", () => {
       const onResumeClick = mock(() => {});
       renderInAppCommandScope(<NativeChatShell {...shellProps()} onResumeClick={onResumeClick} />);
 
       // The dock's copy is aria-hidden while docked, so this is the empty
       // state's button.
-      fireEvent.click(screen.getByRole("button", { name: /Resume Session/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Resume session/ }));
       expect(onResumeClick).toHaveBeenCalledTimes(1);
     });
 
-    test("omits Resume Session when there is nothing to resume", () => {
+    test("omits Resume session when there is nothing to resume", () => {
       renderInAppCommandScope(<NativeChatShell {...shellProps()} />);
-      expect(screen.queryByText("Resume Session") === null).toBe(true);
+      expect(screen.queryByText("Resume session") === null).toBe(true);
     });
   });
 
   describe("dock actions", () => {
-    test("exposes Resume Session only while the composer is centered", () => {
+    test("exposes Resume session only while the composer is centered", () => {
       const onResumeClick = mock(() => {});
       const { rerender } = renderInAppCommandScope(
         <NativeChatShell {...shellProps()} centerCompose onResumeClick={onResumeClick} />,

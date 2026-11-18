@@ -102,7 +102,7 @@ const PLAN: DiagnosticsBundlePlan = {
         redactions: 3,
       },
     ],
-    absent: [{ name: "logs/debug", reason: "Save Logs to Disk is off." }],
+    absent: [{ name: "logs/debug", reason: "Save logs to disk is off." }],
   },
 };
 
@@ -181,7 +181,7 @@ test("export shows the manifest first, and saves only when asked", async () => {
   expect(within(dialog).getByText("metrics.json")).toBeTruthy();
   expect(within(dialog).getByText("logs/essential/essential.jsonl")).toBeTruthy();
   expect(within(dialog).getByText(/3 redacted\./)).toBeTruthy();
-  expect(within(dialog).getByText(/Save Logs to Disk is off\./)).toBeTruthy();
+  expect(within(dialog).getByText(/Save logs to disk is off\./)).toBeTruthy();
   expect(within(dialog).getByText(/not a proof/)).toBeTruthy();
   expect(within(dialog).getByText(/Nothing is uploaded/)).toBeTruthy();
   expect(read).not.toHaveBeenCalled();

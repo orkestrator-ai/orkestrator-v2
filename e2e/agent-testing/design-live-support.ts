@@ -79,7 +79,7 @@ export function sidebarNavigator(page: Page, projectName: string) {
     const expand = page.getByRole("button", { name: `Expand project ${projectName}` });
     const entry = page.getByText(name, { exact: true }).first();
     await expect(expand.or(entry).first()).toBeVisible({ timeout: 30_000 });
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
       const continueButton = page.getByRole("button", { name: label, exact: true });
       if (await continueButton.isVisible()) await continueButton.click();
     }

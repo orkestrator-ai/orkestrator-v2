@@ -481,9 +481,9 @@ async function openEnvironment(page: Page, projectName: string, environmentName:
   // the sidebar. Clicks are bounded, and the loop ends once none has shown
   // for 2 s; an unbounded click on a covered button would wait forever.
   const labels = [
-    "Continue Without Docker",
-    "Continue Without GitHub CLI",
-    "Continue Without Claude",
+    "Continue without Docker",
+    "Continue without GitHub CLI",
+    "Continue without Claude",
     "Continue Without Codex",
   ];
   let quietSince = Date.now();

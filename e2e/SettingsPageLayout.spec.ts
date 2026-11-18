@@ -49,7 +49,7 @@ for (const width of [390, 1680]) {
 
 test("related Debug controls and notes use section spacing", async ({ page }) => {
   await page.goto("/global-settings?section=debug");
-  const heading = page.getByRole("heading", { name: "Save Logs to Disk" });
+  const heading = page.getByRole("heading", { name: "Save logs to disk" });
   const group = heading.locator("../..");
   await expect(group.getByLabel("Log retention days")).toBeVisible();
   await expect(group.getByText("Stored logs", { exact: true })).toBeVisible();

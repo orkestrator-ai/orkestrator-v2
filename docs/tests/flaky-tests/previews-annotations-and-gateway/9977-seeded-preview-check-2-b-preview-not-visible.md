@@ -29,3 +29,21 @@
 - **Related change:** to-do 7062 (retired) touched only the Electron config's
   spec list and added `startup-recovery-electron.spec.ts`; the seeded spec's
   startup passed and the failure is later.
+
+## Recurrence — 2026-11-18 (label casing review)
+
+Preparation at `ecece3ab3`, base `259e88d90c`, repeated the failure in
+the one-worker macOS arm64 Electron suite. After the saved port changed,
+`expectShown` waited 60 s for environment B's marker and last saw `[]`.
+The test and call site match the previous observation. The suite recorded
+69 passed, two failed, 11 skipped and four that did not run.
+
+- Preparation command `mise run test:logged -- --name agent-electron -- mise run test:agent:electron`.
+  Evidence `validation-08.stderr.txt` in review package
+  `review-validation-8d78d30c-c186-4696-a5c1-9995daac3275`.
+- On `c9dcee2d9`, the complete seeded spec passed six tests with one
+  worker. Command `ORKESTRATOR_AGENT_TEST_RUN_ID=label-casing-seeded-owner-rerun mise run test:logged -- --name label-casing-seeded-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-seeded-electron.spec.ts --workers=1`.
+  Evidence `output/agent-testing/label-casing-seeded-owner-rerun/electron/results.json`.
+- `mise run flaky:recurrence -- 9977 --base 259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`
+  reported the case open. The label-casing diff in the seeded spec changes
+  comments and a failure diagnostic in a later case.

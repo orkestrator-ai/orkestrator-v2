@@ -321,7 +321,7 @@ describe("BuildChatTab across the breakpoint", () => {
     // pushed the phase line underneath themselves and clipped the last control
     // off the edge. The label survives as the accessible name and is displayed
     // by the shared tooltip rather than duplicated inside the button.
-    for (const name of ["Restart Build Stage", "Pause", "Cancel"]) {
+    for (const name of ["Restart build stage", "Pause", "Cancel"]) {
       const control = screen.getByRole("button", { name });
       expect(control.getAttribute("aria-label")).toBe(name);
       expect(control.getAttribute("title")).toBeNull();
@@ -357,8 +357,8 @@ describe("BuildChatTab across the breakpoint", () => {
       backendRevision: 10,
     });
 
-    const retry = screen.getByRole("button", { name: "Retry Verification Stage" });
-    expect(retry.getAttribute("aria-label")).toBe("Retry Verification Stage");
+    const retry = screen.getByRole("button", { name: "Retry verification stage" });
+    expect(retry.getAttribute("aria-label")).toBe("Retry verification stage");
     expect(retry.getAttribute("title")).toBeNull();
     expect(retry.textContent?.trim()).toBe("");
   });
@@ -372,7 +372,7 @@ describe("BuildChatTab across the breakpoint", () => {
 
     expect(screen.getByTestId("build-pipeline-header")).toBeTruthy();
     expect(screen.queryByTestId("build-pipeline-header-controls") === null).toBe(true);
-    for (const name of ["Restart Build Stage", "Pause", "Resume", "Cancel"]) {
+    for (const name of ["Restart build stage", "Pause", "Resume", "Cancel"]) {
       expect(screen.queryByRole("button", { name }) === null).toBe(true);
     }
   });
@@ -407,13 +407,13 @@ describe("BuildChatTab on a desktop", () => {
   test("keeps the pipeline controls icon-only and reveals their labels in tooltips", async () => {
     renderTab();
 
-    for (const name of ["Restart Build Stage", "Pause", "Cancel"]) {
+    for (const name of ["Restart build stage", "Pause", "Cancel"]) {
       const control = screen.getByRole("button", { name });
       expect(control.getAttribute("aria-label")).toBe(name);
       expect(control.textContent?.trim()).toBe("");
     }
 
-    fireEvent.focus(screen.getByRole("button", { name: "Restart Build Stage" }));
-    expect((await screen.findByRole("tooltip")).textContent).toContain("Restart Build Stage");
+    fireEvent.focus(screen.getByRole("button", { name: "Restart build stage" }));
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Restart build stage");
   });
 });

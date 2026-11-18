@@ -53,7 +53,8 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
         // The restart opens a new session; follow it rather than leaving the
         // user on whichever stage they were reading.
         onFollow();
-        toast.success(`${label?.replace(/^Restart /, "") ?? "Stage"} restarted`);
+        const stage = label?.replace(/^Restart /, "") ?? "Stage";
+        toast.success(`${stage.charAt(0).toUpperCase()}${stage.slice(1)} restarted`);
       } catch (error) {
         toast.error("Failed to restart the stage", { description: describe(error) });
       }

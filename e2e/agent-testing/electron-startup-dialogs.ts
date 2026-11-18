@@ -5,10 +5,10 @@ import type { ElectronApplication, Page } from "playwright";
  * profile, by their dismiss buttons (the same pair the browser specs close).
  * The Electron specs launch with an empty platform selection, so the profile
  * provisions no managed `gh`, and agent-test host tool checks never fall back
- * to PATH (`apps/backend/src/core/host-tools.ts`): "GitHub CLI Not Found"
+ * to PATH (`apps/backend/src/core/host-tools.ts`): "GitHub CLI not found"
  * opens on every start.
  */
-const STARTUP_DIALOG_BUTTONS = ["Continue Without Docker", "Continue Without GitHub CLI"];
+const STARTUP_DIALOG_BUTTONS = ["Continue without Docker", "Continue without GitHub CLI"];
 
 /**
  * The backend's boot-time container reachability check opens this modal a few

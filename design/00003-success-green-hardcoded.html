@@ -37,7 +37,8 @@
       </div>
 
       <h2>Find every instance</h2>
-      <pre><code>grep -rnE --include=*.tsx "(text|bg|border)-(green|emerald|lime)-[0-9]{2,3}" apps/web/src | grep -v "\.test\."</code></pre>
+      <pre><code>git grep -nE '(text|bg|border)-(green|emerald|lime)-[0-9]{2,3}' -- \
+  'apps/web/src/**/*.tsx' 'apps/web/src/**/*.ts' ':!*.test.*'</code></pre>
 
       <h2>Scope</h2>
       <table>
@@ -91,8 +92,8 @@
             <td>“Status: finished” frame</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/chat/AgentModelPicker.tsx:1061</code></td>
-            <td><b>Check:</b> platform identity, probably keep</td>
+            <td><code>apps/web/src/components/chat/AgentModelPicker.tsx:262,1061</code></td>
+            <td>enforced read-only tier pill and positive note</td>
           </tr>
           <tr>
             <td><code>apps/web/src/components/chat/rich/RichCallout.tsx:27</code></td>
@@ -327,23 +328,24 @@ mise run lint</code></pre>
       <h2>Notes</h2>
       <ul>
         <li>
-          <b>Migration audit</b> (158 raw hits in <code>.tsx</code> plus 4 files in
+          <b>Migration audit</b> (original migration: 158 raw hits in <code>.tsx</code> plus 4 files in
           <code>.ts</code>; 118 lines in 84 <code>.tsx</code> files and 2 lines in
           <code>key-information-format.ts</code> changed):
           <ul>
             <li>
               <b>Success, replaced with <code>success</code>:</b> diff additions (agents.md dialog,
               graph template review, file diff), check icons and “passed”, “complete”, “resolved”,
-              “enforced”, “in sync”, “connected”, “signed in” and “active” text, chosen option
-              frames, goal complete (pill and tile), mail “finished”, bug report chip and band,
+              “enforced”, “in sync”, “connected”, “signed in” and “active” text, the coordinator
+              model picker's enforced tier pill and positive note, chosen option frames, goal
+              complete (pill and tile), mail “finished”, bug report chip and band,
               annotation result and resolved, review strengths, the
               <code>bg-success/10 text-green-300</code> pairs in the flow graph, and light/dark
               pairs such as <code>text-green-600 dark:text-green-400</code> in
               <code>PullRequestCheckStatus.tsx</code>.
             </li>
             <li>
-              <b>Identity, kept:</b> <code>AgentModelPicker.tsx</code>,
-              <code>AgentIcons.tsx</code> (Codex emerald, OpenCode green), the Codex icon in
+              <b>Identity, kept:</b> provider icons from <code>AgentIcons.tsx</code> (Codex emerald,
+              OpenCode green), including in the model picker, the Codex icon in
               <code>McpSettings.tsx:599</code> and <code>usage-format.ts</code>. These tell
               platforms apart under the Platform Hue Exception.
             </li>
@@ -373,7 +375,8 @@ mise run lint</code></pre>
               <code>GlobalSettings.sections.tsx</code>.
             </li>
           </ul>
-          The current scan found 48 matching source lines, all in the retained categories above.
+          The current scan found 46 matching source lines (38 <code>.tsx</code> and 8
+          <code>.ts</code>), all in the retained categories above.
         </li>
         <li>
           <b>Decisions chosen:</b>

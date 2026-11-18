@@ -21,6 +21,7 @@ import { PinnedScrollFixture } from "./PinnedScrollFixture";
 import { SidebarMotionFixture } from "../../apps/web/src/test/SidebarMotionFixture";
 import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
 import { SuborkGroupFixture } from "./SuborkGroupFixture";
+import { HoverWashesFixture, installHoverWashesFixture } from "./HoverWashesFixture";
 import { ProjectHomeMessageApprovalFixture } from "./ProjectHomeMessageApprovalFixture";
 import { WorkerQuestionApprovalFixture } from "./WorkerQuestionApprovalFixture";
 import { DiffBaseFixture, installDiffBaseFixture } from "./DiffBaseFixture";
@@ -2295,6 +2296,10 @@ function fixtureForPath() {
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
   if (window.location.pathname === "/agent-usage") return <AgentUsageFixture />;
   if (window.location.pathname === "/subork-group") return <SuborkGroupFixture />;
+  if (window.location.pathname === "/hover-washes") {
+    installHoverWashesFixture();
+    return <HoverWashesFixture />;
+  }
   if (window.location.pathname === "/ended-agent") return <EndedAgentFixture />;
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;

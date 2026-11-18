@@ -81,7 +81,7 @@ function PullRequestRow({
         aria-current={highlighted ? "true" : undefined}
         className={cn(
           "flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors focus-hairline",
-          highlighted ? "bg-selected/50 ring-1 ring-selected-edge" : "hover:bg-hover",
+          highlighted ? "bg-selected/50 ring-1 ring-selected-edge" : "hover:bg-hover/50",
         )}
       >
         <PullRequestStateIcon state={item.state} isDraft={item.isDraft} className="mt-0.5" />

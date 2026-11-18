@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { SnapshotStaleMarker } from "./SnapshotStaleMarker";
 
 const STATUS_DOT: Record<SnapshotEnvironment["status"], string> = {
-  running: "bg-emerald-500",
+  running: "bg-status-running",
   creating: "bg-amber-500",
   stopping: "bg-amber-500",
   stopped: "bg-muted-foreground/40",

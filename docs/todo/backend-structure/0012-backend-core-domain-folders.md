@@ -50,7 +50,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** `plan-usage`, `features`, `coordinator`, `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`.
 
-**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) were the subject of the size todo 0057 (retired 2026-11-17; the resulting collaborators are listed in [`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators)). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it. Re-measured 2026-11-16 on `c1fcc573b` for the third slice: `preview-*` was 8 source (7 modules and `preview-test-support.ts`) / 12 tests, with 12 production importers outside the domain (three in `core/` and nine `apps/backend/src/preview-*.ts` and `gateway-*.ts` files) using six symbols, plus the two test-only harness entrypoints (one more symbol and the test support); no pull request was open. Re-measured 2026-11-17 on `0265e7882` for the fourth slice: `worktree-*` was 8 source / 11 tests, with 13 production importers outside the domain (all in `core/`, two of them in `change-tracking/`) using 25 symbols from seven modules, plus five repository scripts and two `apps/backend/tests` files; no pull request was open. Re-measured 2026-11-18 on `b2c91abb9` for the fifth slice: `git-*`, `github*` and `pr-*` were 31 source (two test-support files included) / 28 tests (the table's 11 / 8 was stale), with 47 production importers outside the domain (all in `core/`) using about 100 symbols from 28 modules, plus two `apps/backend/scripts` files, 22 `apps/backend/tests` files and one renderer test; one open pull request (#2394) edits `pr-monitor.ts` and `pr-monitor-runtime.ts` and adds a root `pr-merge-tab-notices.ts`.
+**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) were the subject of the size todo 0057 (retired 2026-11-17; the resulting collaborators are listed in [`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators)). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it. Re-measured 2026-11-16 on `c1fcc573b` for the third slice: `preview-*` was 8 source (7 modules and `preview-test-support.ts`) / 12 tests, with 12 production importers outside the domain (three in `core/` and nine `apps/backend/src/preview-*.ts` and `gateway-*.ts` files) using six symbols, plus the two test-only harness entrypoints (one more symbol and the test support); no pull request was open. Re-measured 2026-11-17 on `0265e7882` for the fourth slice: `worktree-*` was 8 source / 11 tests, with 13 production importers outside the domain (all in `core/`, two of them in `change-tracking/`) using 25 symbols from seven modules, plus five repository scripts and two `apps/backend/tests` files; no pull request was open. Re-measured 2026-11-18 on `b2c91abb9` for the fifth slice: `git-*`, `github*` and `pr-*` were 31 source (two test-support files included) / 28 tests (the table's 11 / 8 was stale), with 47 production importers outside the domain (all in `core/`) using about 100 symbols from 28 modules, plus two `apps/backend/scripts` files, 22 `apps/backend/tests` files and one renderer test; PR #2394 was then open and added merge notices alongside changes to the PR monitor.
 
 **Decisions.**
 
@@ -345,7 +345,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `github-ranges-seed-delivery.js`, `pr-auto-merge.js`,
   `pr-auto-merge-resolve-settled.js`, `pr-monitor-runtime.js` and
   `pr-required-checks.js`, each imported directly by its one production
-  importer. See "Assumptions and decisions".
+  importer. The integration of #2394 also moved its merge-notice module and
+  test into `core/git/`. See "Assumptions and decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -447,10 +448,7 @@ before the busy ones move.
 2. **Wave 2 (mid-tier):** `coordinator`,
    `agent-accounts`, `workflows`, `review`,
    `build-pipeline`, `native-agent`. (Done: `plan-usage`, `features`,
-   `previews`, `worktrees`, `git`.) A `pr-*` file added at the `core/`
-   root after the `git` slice (such as `pr-merge-tab-notices.ts` from
-   #2394, open on 2026-11-18) belongs in `git/`: move it there and add any
-   symbol it exports to other domains to `git/index.ts`.
+   `previews`, `worktrees`, `git`.)
 3. **Wave 3 (hubs):** `terminals`, `tmux`, `recurring`, `containers`,
    `environments`, `storage`. Many files import these, and `containers` is
    also imported from outside `core/` (as `previews` was), so these slices
@@ -532,10 +530,10 @@ they move many files that other work in flight touches.
   groups), moved with the codemod and a map file against `main` at
   `b2c91abb9`. The ticket named it and offered `agent-accounts` only if an
   ordering rule blocked it. None does: the only ordering rule in wave 2 is
-  that `native-agent` waits for 0057. One pull request was open (#2394,
-  which edits `pr-monitor.ts` and `pr-monitor-runtime.ts`); that is a
-  rebase over a rename, which Git's rename detection carries, not an
-  ordering rule. The ticket also kept coordinator tool, CLI and graph
+  that `native-agent` waits for 0057. The feature branch merged #2394 from
+  `main`, keeping the monitor and merge-notice code and tests under `core/git/`.
+  The merge-notice module is internal to the Git domain, so it needs no public
+  export or lint exception. The ticket also kept coordinator tool, CLI and graph
   template names out of scope (to-do 4740 runs in parallel): the slice
   changes only import specifiers and path comments in those files, never a
   name.

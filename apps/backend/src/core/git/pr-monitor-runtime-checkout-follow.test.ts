@@ -138,7 +138,10 @@ for (const failure of ["throw", "reject", "removed"] as const) {
       if (failure === "reject") return Promise.reject(new Error("unreadable"));
       return Promise.resolve(null);
     });
-    runtime.resumeTerminalEffects("environment", { url: prUrl, state: "merged" });
+    const delivery = runtime.resumeTerminalEffects("environment", { url: prUrl, state: "merged" });
+    if (failure !== "removed")
+      await expect(Promise.resolve(delivery)).rejects.toThrow("unreadable");
+    else await delivery;
     expect(scheduleMergeCleanup).toHaveBeenCalledTimes(1);
     await settle();
     expect(follow).not.toHaveBeenCalled();

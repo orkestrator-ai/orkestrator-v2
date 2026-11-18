@@ -125,3 +125,25 @@ describe("PullRequestUpdateNotice", () => {
     expect(watchedPullRequestRef("../x#1")).toBeNull();
   });
 });
+
+test("renders a linkless merged notice for a non-GitHub host", () => {
+  const { container, unmount } = renderInAppCommandScope(
+    <PullRequestUpdateNotice
+      mail={mail({
+        body: "The pull request for this environment's branch was merged.\nURL: https://git.example.com/acme/widgets/pull/7",
+        notice: {
+          resource: {
+            kind: "watched-pull-request",
+            id: "https://git.example.com/acme/widgets/pull/7",
+          },
+          state: "pr-merged",
+          tone: "success",
+        },
+      })}
+      timestampLabel="10:04"
+    />,
+  );
+  expect(container.querySelector("[data-pr-update-notice]")?.textContent).toContain("merged");
+  expect(container.querySelector("a")).toBeNull();
+  unmount();
+});

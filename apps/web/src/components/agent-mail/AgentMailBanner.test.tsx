@@ -588,7 +588,9 @@ describe("AgentMailBanner", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Discard" }));
 
-      await waitFor(() => expect(screen.queryByRole("region", { name: "Agent mail" })).toBeNull());
+      await waitFor(() =>
+        expect(screen.queryByRole("region", { name: "Agent mail" }) === null).toBe(true),
+      );
       expect(discard).toHaveBeenCalledWith("env-1", "tab-1", discarded.id);
       expect(refreshSummary).toHaveBeenCalledTimes(2);
     },

@@ -21,7 +21,7 @@ const pending = new Map<string, () => void>();
  * so this waits for it (bounded). It runs outside the tab's component: closing
  * the tab unmounts it, and leaving the environment meanwhile does not cancel
  * the handoff. The pipeline tab takes focus only when the Auto-pipeline tab is
- * still the selected tab of its pane; a tab the user chose meanwhile keeps
+ * still the selected tab of its focused pane; a tab the user chose meanwhile keeps
  * focus. A user who closed the Auto-pipeline tab already is left alone.
  *
  * Returns a function that stops the wait; a second call for the same tab
@@ -55,7 +55,10 @@ export function handOffAutoPipelineToBuildTab(options: {
     if (!buildPane) return false;
     applying = true;
     try {
-      if (autoPane.activeTabId === autoPipelineTabId) {
+      if (
+        store.environments.get(environmentId)?.activePaneId === autoPane.id &&
+        autoPane.activeTabId === autoPipelineTabId
+      ) {
         store.setActivePane(buildPane.id, environmentId);
         store.setActiveTab(buildPane.id, buildTab.id, environmentId);
       }

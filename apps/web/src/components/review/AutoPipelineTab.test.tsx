@@ -175,6 +175,68 @@ test("a started pipeline's tab is selected and the Auto-pipeline tab closes", as
   expect(panes()[0]!.activeTabId).toBe("build-pipeline-1");
 });
 
+test("confirmation resolving after unmount still closes Auto-pipeline on delayed layout", async () => {
+  const { node, holder } = client({ phase: "ready", draft });
+  const view = render(node);
+  const auto: TabInfo = {
+    id: "auto",
+    type: "auto-pipeline",
+    autoPipelineData: { sourceTabId: "original" },
+  };
+  const layouts = view.scope.store(paneLayoutStore);
+  const panes = () => getAllLeaves(layouts.getState().environments.get("env")!.root);
+  layouts.getState().finishHydration("env", {
+    containerId: null,
+    activePaneId: "pane",
+    root: {
+      kind: "leaf",
+      id: "pane",
+      tabs: [{ id: "original", type: "plain" }, auto],
+      activeTabId: "auto",
+    },
+  });
+  await screen.findByLabelText("Title");
+  goTo(/Confirm/);
+  let finish!: () => void;
+  node.respond(
+    "confirm_auto_pipeline",
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm Auto-pipeline" }));
+  await waitFor(() => expect(node.calls("confirm_auto_pipeline")).toHaveLength(1));
+  view.unmount();
+  holder.state = { phase: "promoted", pipelineId: "pipeline-1" };
+  finish();
+  await waitFor(() => expect(node.calls("get_auto_pipeline_state").length).toBeGreaterThan(1));
+  // Nothing closes until the backend's pipeline tab reaches this window.
+  expect(panes()[0]!.tabs.map((tab) => tab.id)).toEqual(["original", "auto"]);
+  layouts.getState().applyAuthoritativeLayout("env", {
+    containerId: null,
+    activePaneId: "pane",
+    root: {
+      kind: "leaf",
+      id: "pane",
+      tabs: [
+        { id: "original", type: "plain" },
+        auto,
+        {
+          id: "build-pipeline-1",
+          type: "claude-build",
+          buildTabData: { environmentId: "env", pipelineId: "pipeline-1", taskId: "task-1" },
+        },
+      ],
+      activeTabId: "auto",
+    },
+  });
+  await waitFor(() =>
+    expect(panes()[0]!.tabs.map((tab) => tab.id)).toEqual(["original", "build-pipeline-1"]),
+  );
+  expect(panes()[0]!.activeTabId).toBe("build-pipeline-1");
+});
+
 test("saved edits come back from the backend when the tab is shown again", async () => {
   const { node } = client({
     phase: "ready",

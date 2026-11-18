@@ -134,3 +134,32 @@ test("a second request for the same tab joins the pending one, and stop ends it"
   });
   expect(environment(layouts).leaves[0]!.activeTabId).toBe("auto");
 });
+
+test("delayed arrival preserves focus in another pane while closing Auto-pipeline", () => {
+  const root = (withBuild: boolean): PaneNode => ({
+    kind: "split",
+    id: "split",
+    depth: 0,
+    direction: "horizontal",
+    sizes: [50, 50],
+    children: [
+      leaf([agent, auto, ...(withBuild ? [build] : [])], "auto", "left"),
+      leaf([{ id: "other", type: "plain" }], "other", "right"),
+    ],
+  });
+  const layouts = layoutsWith(root(false), "left");
+  handOff(layouts);
+  layouts.getState().setActivePane("right", "env");
+  layouts.getState().applyAuthoritativeLayout("env", {
+    containerId: null,
+    activePaneId: "right",
+    root: root(true),
+  });
+  const { state, leaves } = environment(layouts);
+  expect(state.activePaneId).toBe("right");
+  expect(leaves.find((pane) => pane.id === "right")!.activeTabId).toBe("other");
+  expect(leaves.find((pane) => pane.id === "left")!.tabs.map((tab) => tab.id)).toEqual([
+    "agent",
+    "build-pipeline-1",
+  ]);
+});

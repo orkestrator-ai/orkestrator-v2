@@ -1130,8 +1130,10 @@ process-local; after a restart the tab shows the persisted draft.
   layout while starting the pipeline) and closes itself
   (`auto-pipeline-handoff.ts`). The handoff waits, bounded, for the build tab
   to reach the window's layout, outlives the tab's unmount, and moves focus
-  only while the Auto-pipeline tab is still selected in its pane; a tab the
-  user chose meanwhile keeps focus. If the build tab never arrives the tab
+  only while the Auto-pipeline tab is still selected in the focused pane; a
+  tab or pane the user chose meanwhile keeps focus. A confirmation that finishes
+  after unmount starts the handoff from its state read, without waiting for a
+  return to the environment. If the build tab never arrives the tab
   stays open with its "Auto-pipeline started" notice.
 - **Unsaved edits are never dropped.** A failed save keeps the newest edits
   pending, warns that they are unsaved, retries (a bounded number of times, or

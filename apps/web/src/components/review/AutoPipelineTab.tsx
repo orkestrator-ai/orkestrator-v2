@@ -124,6 +124,16 @@ export function AutoPipelineTab({
     () =>
       backend.getAutoPipelineState(environmentId, sourceTabId).then(
         (value) => {
+          // The read can finish after confirmation's component has unmounted.
+          // Start the layout handoff here rather than relying on a mounted effect.
+          if (value.phase === "promoted") {
+            handOffAutoPipelineToBuildTab({
+              layouts: paneLayouts,
+              environmentId,
+              autoPipelineTabId: tabId,
+              pipelineId: value.pipelineId,
+            });
+          }
           setState(value);
           setReadError(null);
           return value;
@@ -133,7 +143,7 @@ export function AutoPipelineTab({
           return null;
         },
       ),
-    [backend, environmentId, sourceTabId],
+    [backend, environmentId, paneLayouts, sourceTabId, tabId],
   );
   // Re-read on every return to the tab and keep polling while it is shown.
   useEffect(() => {
@@ -142,19 +152,6 @@ export function AutoPipelineTab({
     const timer = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(timer);
   }, [isActive, refresh]);
-
-  // A started pipeline replaces this tab: select the pipeline's tab and close
-  // this one. Not cancelled on unmount, since closing the tab unmounts it.
-  const promotedPipelineId = state?.phase === "promoted" ? state.pipelineId : null;
-  useEffect(() => {
-    if (!promotedPipelineId) return;
-    handOffAutoPipelineToBuildTab({
-      layouts: paneLayouts,
-      environmentId,
-      autoPipelineTabId: tabId,
-      pipelineId: promotedPipelineId,
-    });
-  }, [environmentId, paneLayouts, promotedPipelineId, tabId]);
 
   /**
    * Saves the newest pending edits. A failure keeps them pending (and in

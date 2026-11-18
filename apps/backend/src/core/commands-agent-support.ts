@@ -20,7 +20,7 @@ import { dockerExec } from "./commands-container-exec.js";
 import type { AcpLocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
-import { runRemoteGit } from "./git-noninteractive-env.js";
+import { runRemoteGit } from "./git/index.js";
 import {
   environmentBranchNamespace,
   parseEnvironmentBranchNamespace,

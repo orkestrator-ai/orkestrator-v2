@@ -99,7 +99,7 @@ describe("workflow result contracts", () => {
   });
 
   test("the instruction carries no credential material", () => {
-    const instruction = workflowResultInstruction("fix-result", crypto.randomUUID());
+    const instruction = workflowResultInstruction("address-findings-result", crypto.randomUUID());
     expect(instruction).not.toContain("token");
     expect(instruction).not.toContain("Bearer");
     expect(instruction).not.toContain("http");
@@ -107,7 +107,7 @@ describe("workflow result contracts", () => {
 
   test("a broker instruction carries its attempt capability inside the system frame", () => {
     const capability = "signed-attempt-capability";
-    const instruction = workflowResultInstruction("fix-result", crypto.randomUUID(), {
+    const instruction = workflowResultInstruction("address-findings-result", crypto.randomUUID(), {
       capability,
     });
     expect(instruction).toContain(`capability ${JSON.stringify(capability)}`);
@@ -179,6 +179,13 @@ describe("workflow result rollout settings", () => {
     expect(settings.kinds).toEqual(["review-report"]);
   });
 
+  test("a saved Address Findings kind under its former name is read under the current one", () => {
+    const settings = normalizeWorkflowResultToolsSettings({
+      kinds: ["fix-result", "review-report", "address-findings-result"],
+    });
+    expect(settings.kinds).toEqual(["address-findings-result", "review-report"]);
+  });
+
   test("an explicitly empty list closes admission instead of restoring defaults", () => {
     expect(normalizeWorkflowResultToolsSettings({ providers: [], kinds: [] })).toEqual({
       enabled: true,
@@ -210,7 +217,9 @@ describe("provisional findings in the reviewer instruction", () => {
     const resultKey = crypto.randomUUID();
     expect(workflowResultInstruction("review-report", resultKey)).not.toContain("report_finding");
     expect(
-      workflowResultInstruction("fix-result", resultKey, { provisionalFindings: true }),
+      workflowResultInstruction("address-findings-result", resultKey, {
+        provisionalFindings: true,
+      }),
     ).not.toContain("report_finding");
   });
 });
@@ -244,9 +253,9 @@ describe("a turn's declared workflow-result attempt", () => {
       "get_workflow_result_status",
       "report_finding",
     ]);
-    expect(workflowResultTurnToolNames({ tool: "submit_fix_result", resultKey })).not.toContain(
-      "report_finding",
-    );
+    expect(
+      workflowResultTurnToolNames({ tool: "submit_address_findings_result", resultKey }),
+    ).not.toContain("report_finding");
   });
 
   test("a call is the attempt's own only when its arguments name the attempt's key", () => {

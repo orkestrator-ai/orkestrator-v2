@@ -1,5 +1,5 @@
 /**
- * Page-side frame helpers for the anchor kit (todo 0047 task 5, same-origin
+ * Page-side frame helpers for the anchor kit (#2363, same-origin
  * iframes).
  *
  * Like `browserPreviewAnchorKit`, `browserPreviewFrameKit` is serialized with

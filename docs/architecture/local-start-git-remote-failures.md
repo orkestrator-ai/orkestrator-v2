@@ -21,7 +21,7 @@ their own wording:
 | The fetch outlived Orkestrator's 120 s deadline | The remote timeout message. On Linux an SSH connect to a dropped port usually lands here, because the kernel's connect timeout is longer than the deadline. |
 
 The SSH connect message carries only the host and port, which
-`sshConnectFailure` (`git-ssh-transport.ts`) restricts to hostname
+`sshConnectFailure` (`git/ssh-transport.ts`) restricts to hostname
 characters and a number; no path, URL or other child output is persisted.
 A failed start rethrows these messages as-is, so the immediate error and the
 persisted one agree.

@@ -196,7 +196,7 @@ State convergence and notifications are separate contracts.
   and deferred notifications beyond `maxDeferredNotifications` (32) are dropped
   oldest-first and counted.
 - Terminal side effects (task status, comments, metadata, merge cleanup)
-  remain backend-owned in `pr-monitor.ts`; client notification delivery never
+  remain backend-owned in `git/pr-monitor.ts`; client notification delivery never
   gates them. A durable acknowledged transition journal was not needed for
   this policy and is not implemented.
 - PR monitor freshness fields `lastCheckAt` (attempted) and the additive
@@ -204,7 +204,7 @@ State convergence and notifications are separate contracts.
   event; neither is announced on its own, so a snapshot may carry a value
   older than the latest attempt. Lifecycle scheduling (terminal repair,
   five-minute terminal discovery, admission) is internal and never appears on
-  the wire; see `pr-monitor-policy.ts`.
+  the wire; see `git/pr-monitor-policy.ts`.
 
 ## Supported peers
 

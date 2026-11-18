@@ -3,7 +3,7 @@
 - **ID:** 1253
 - **Status:** open
 - **Date observed:** 2026-10-28
-- **File:** `apps/backend/src/core/git-fsmonitor.test.ts`
+- **File:** `apps/backend/src/core/git/fsmonitor.test.ts`
 - **Original command:** `mise run test` during review preparation at `05737aff0133f4d7a377ec30d1cfb37f514b71de`.
 - **Worker configuration:** default concurrent workspace/root/bridges/protocol groups, with 6/1/2/1 reserved worker slots respectively.
 
@@ -27,7 +27,7 @@ Preparation evidence is in `validation-05.stdout.txt` under
 The complete unchanged owner passed alone (exit 0, 8.3 s) with:
 
 ```sh
-mise run test:logged -- --name git-fsmonitor-isolated -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+mise run test:logged -- --name git-fsmonitor-isolated -- bun test --cwd apps/backend ./src/core/git/fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
 ```
 
 The aggregate-only recurrence is consistent with timing contention around real
@@ -54,7 +54,7 @@ its root, bridge and protocol-lockfile groups passed. Preparation evidence is
 The complete unchanged fsmonitor owner passed alone in 10.1 s (exit 0):
 
 ```sh
-mise run test:logged -- --name git-fsmonitor-isolated -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+mise run test:logged -- --name git-fsmonitor-isolated -- bun test --cwd apps/backend ./src/core/git/fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
 ```
 
 It also passed alongside the native-agent admission and image-download owners
@@ -81,7 +81,7 @@ The complete unchanged fsmonitor and source-store owners passed sequentially
 with one Bun worker (exit 0, 9.8 s):
 
 ```sh
-mise run test:logged -- --name recorded-backend-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name recorded-backend-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/git/fsmonitor.test.ts ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
 ```
 
 No fsmonitor implementation, assertion, timeout or skip changed. The passing
@@ -104,7 +104,7 @@ transient `--get` and `--unset` migration scan timeouts (5,010.70 ms and
 The complete unchanged owner passed alone (exit 0, 12.6 s):
 
 ```sh
-mise run test:logged -- --name git-fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+mise run test:logged -- --name git-fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git/fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
 ```
 
 No fsmonitor implementation, tests, assertions or deadlines changed.
@@ -118,7 +118,7 @@ workspace/root/bridges/protocol worker reservations of 6/1/2/1 alongside
 component-browser validation. The complete unchanged owner passed alone:
 
 ```sh
-mise run test:logged -- --name fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git/fsmonitor.test.ts --parallel=1 --only-failures
 ```
 
 Exit 0, 8.9 seconds. Preparation evidence:
@@ -146,7 +146,7 @@ three between-test errors. Evidence is `validation-04.stdout.txt` under
 The complete unchanged owner passed alone (exit 0, 7.1 seconds):
 
 ```sh
-mise run test:logged -- --name fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git/fsmonitor.test.ts --parallel=1 --only-failures
 ```
 
 No fsmonitor implementation, assertion, deadline, or skip changed. Contention
@@ -172,7 +172,7 @@ and protocol one. Backend totals were 13,069 pass, two fail, with the other
 failure in standalone-ready timing. The complete unchanged fsmonitor owner
 passed alone (23 tests, exit 0, 8.3 s):
 
-`mise run test:logged -- --name branch-fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+`mise run test:logged -- --name branch-fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git/fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
 
 Detached `origin/main` at `88c3c6bac`, using independently installed dependencies,
 also passed the complete owner (7.8 s). An attempted `--rerun-each=10` run
@@ -204,7 +204,7 @@ unavailable. Evidence: host temporary artifact directory
 The unchanged complete owner was rerun alone:
 
 ```sh
-mise run test:logged -- --name fsmonitor-isolated -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name fsmonitor-isolated -- bun test --cwd apps/backend ./src/core/git/fsmonitor.test.ts --parallel=1 --only-failures
 ```
 
 It still failed: 22 pass, one fail, one between-test error, 12.5 s. This time
@@ -227,7 +227,7 @@ workspace/root/bridges/protocol were 5/1/2/1. The aggregate exited 1 in
 desktop keepalive failure.
 
 The complete unchanged owner passed alone, exit 0 in 3.5 s:
-`mise run test:logged -- --name merge-rerun-git-fsmonitor -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures`.
+`mise run test:logged -- --name merge-rerun-git-fsmonitor -- bun test --cwd apps/backend ./src/core/git/fsmonitor.test.ts --parallel=1 --only-failures`.
 No Git implementation, assertion, timeout, or skip changed. Evidence:
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.LvO7CJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
@@ -241,12 +241,12 @@ protocol groups passed. The owner and implementation have no diff in
 `origin/main...HEAD`.
 
 The complete unchanged branch owner passed alone (exit 0, 3.6 s):
-`mise run test:logged -- --name r4-git-fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures`.
+`mise run test:logged -- --name r4-git-fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git/fsmonitor.test.ts --parallel=1 --only-failures`.
 
 A detached main worktree at `62e99ff599cfcfa2bfdd23f907b8f05039925d63`, with
 independently installed frozen dependencies, reproduced the exact --unset scan
 timeout at 5006.19 ms:
-`mise run test:logged -- --name r4-main-git-fsmonitor-preloaded -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts --parallel=1 --rerun-each=10 --only-failures`.
+`mise run test:logged -- --name r4-main-git-fsmonitor-preloaded -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/git/fsmonitor.test.ts --parallel=1 --rerun-each=10 --only-failures`.
 It reported 218 passed, 12 failed and three errors across 230 cases. Ten failures
 were the fixture's fsmonitor-off prerequisite; the remaining failures included
 --get and --unset scan timeouts. An earlier 20-repeat main run reported 438
@@ -281,7 +281,7 @@ rejects late. The log does not name the process Bun killed, so that link is
 inferred from the matching call path and signal.
 
 The complete unchanged owner passed alone at `71bd88528` (exit 0, 18.0 s):
-`mise run test:logged -- --name fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+`mise run test:logged -- --name fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git/fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
 
 The branch does not change the owner or `git-fsmonitor.ts`. The cause of the
 slow scan is still not established, so this stays open. Evidence:
@@ -305,7 +305,7 @@ No assertion, timeout, skip, or unrelated implementation changed.
   which is the recorded "Unhandled error between tests" with SIGTERM and
   `timedOut: false`. On Linux, where no daemon starts, the slowest case takes
   0.15 s.
-- **Fix:** `apps/backend/src/core/git-fsmonitor.test.ts` sets a 30 s file
+- **Fix:** `apps/backend/src/core/git/fsmonitor.test.ts` sets a 30 s file
   budget with `setDefaultTimeout`, matching its own per-command Git
   deadlines. No assertion changed.
 - **Reproduction:** the unchanged file with `--timeout 60` reproduced both
@@ -314,7 +314,7 @@ No assertion, timeout, skip, or unrelated implementation changed.
   deadline itself was not reached on Linux.
 - **Verification:** six runs of `mise run test:logged -- --name
   env-fsmonitor-runN -- bun --cwd=apps/backend test
-  ./src/core/git-fsmonitor.test.ts ./src/core/commands-files-local-scan.test.ts
+  ./src/core/git/fsmonitor.test.ts ./src/core/commands-files-local-scan.test.ts
   --parallel=2`: all PASS. `--rerun-each` cannot stress this owner: on the
   second and later iterations `fixture repositories inherit fsmonitor off from
   the test preload` fails, and it fails identically on the unchanged file
@@ -344,7 +344,7 @@ recurrence.
 - **Suite counts:** backend 18,325 pass, 200 skip, 1 fail across 1,276 files
   (339.66 s); every other group passed.
 - **Isolated rerun:** the runner's own one-file rerun of
-  `apps/backend/src/core/git-fsmonitor.test.ts` passed (25 pass, 0 fail, 4.6 s).
+  `apps/backend/src/core/git/fsmonitor.test.ts` passed (25 pass, 0 fail, 4.6 s).
 - **Hypothesis (unconfirmed):** the daemon auto-start is asynchronous, and under
   load `git fsmonitor--daemon status` can run before the daemon reports
   watching. Not investigated further in this change.
@@ -369,7 +369,7 @@ reported `open`: record it as a recurrence.
 - **Suite counts:** backend 18,016 pass, 200 skip, 1 fail across 1,272 files
   (173.57 s).
 - **Isolated rerun:** the runner's one-file rerun of
-  `apps/backend/src/core/git-fsmonitor.test.ts` passed alone (3.5 s).
+  `apps/backend/src/core/git/fsmonitor.test.ts` passed alone (3.5 s).
 
 ## Codex read-only container fallback review recurrence — 2026-11-12
 
@@ -393,7 +393,7 @@ as a recurrence.
 - **Isolated reruns:** the runner's own one-file rerun, which waited 15 s for
   another worktree's exclusive resource, failed the same assertion alone
   (24 pass, 1 fail, 11,261.61 ms). In the address-findings step, at load
-  average about 3, `bun --cwd=apps/backend test src/core/git-fsmonitor.test.ts
+  average about 3, `bun --cwd=apps/backend test src/core/git/fsmonitor.test.ts
   --parallel=1` passed alone three times (5.0 s, 7.2 s, 5.6 s), and a
   `--rerun-each 3` run passed this case all three times (its two failures
   were `fixture repositories inherit fsmonitor off from the test preload` on
@@ -423,7 +423,7 @@ as a recurrence.
   (192.03 s); every other group passed.
 - **Isolated reruns:** the runner's own one-file rerun failed alone again
   (14.4 s). In the address-findings step (load average about 7),
-  `bun test ./src/core/git-fsmonitor.test.ts` from `apps/backend` passed alone
+  `bun test ./src/core/git/fsmonitor.test.ts` from `apps/backend` passed alone
   twice (25 pass, 7.2 s; and 4.7 s through `test:logged`), and the exact
   recorded command then passed (212.3 s).
 - **Note:** a second alone failure straight after a loaded aggregate, then
@@ -453,7 +453,7 @@ reported `open`: record it as a recurrence.
   one-file rerun also failed (13.8 s), so the failure was not confined to the
   aggregate. On the same host after the preparation load had gone, the
   address-findings stage reran the unchanged owner alone on the fix commit
-  `045dfa433` (`bun --cwd=apps/backend test ./src/core/git-fsmonitor.test.ts
+  `045dfa433` (`bun --cwd=apps/backend test ./src/core/git/fsmonitor.test.ts
   --parallel=1`) and it passed (6.5 s).
 - **Hypothesis (unconfirmed):** as above, the asynchronous daemon start can
   lose the race with the follow-up `status` call when the host is loaded; a
@@ -481,7 +481,7 @@ reported `open`: record it as a recurrence.
   worktree's exclusive resource until the 1,800 s group deadline ended the
   run, so the command was recorded as incomplete.
 - **Isolated rerun:** the address-findings stage reran the unchanged owner
-  alone (`bun --cwd=apps/backend test src/core/git-fsmonitor.test.ts
+  alone (`bun --cwd=apps/backend test src/core/git/fsmonitor.test.ts
   --parallel=1`) and it passed (7.8 s).
 
 ## Hidden-window Electron specs review preparation recurrence — 2026-11-13
@@ -505,7 +505,7 @@ reported `open`: record it as a recurrence.
 - **Isolated reruns:** the runner's own one-file rerun never got host capacity
   and ended `INCOMPLETE` after 600 s. In the address-findings stage the
   unchanged owner passed alone on the fix commit `7542820b4`
-  (`bun test --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts
+  (`bun test --preload ../../tests/setup-node.ts ./src/core/git/fsmonitor.test.ts
   --parallel=1` from `apps/backend`, through `test:logged`, 10.8 s).
 
 ## macOS diagnostics and lost-child-event review preparation recurrence — 2026-11-13
@@ -533,7 +533,7 @@ reported `open`: record it as a recurrence.
   aggregate also failed (16.8 s). On the same host at load average about 3, the
   address-findings stage ran the unchanged owner alone twice on `857cc2a7b`
   (`mise run test:logged -- --name fsmonitor-alone-N -- bun --cwd=apps/backend
-  test src/core/git-fsmonitor.test.ts --parallel=1`): both passed (9.3 s and
+  test src/core/git/fsmonitor.test.ts --parallel=1`): both passed (9.3 s and
   12.5 s).
 - **Hypothesis (unconfirmed):** as above, the asynchronous daemon start loses
   the race with the follow-up `status` call on a loaded host.
@@ -543,7 +543,7 @@ reported `open`: record it as a recurrence.
 - **Root cause:** The fsmonitor scans run real Git (and on macOS a daemon); they exceeded Bun's 5 s default under load.
 - **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. The file's own `setDefaultTimeout(30_000)`, which undercut the preload, now sets `DEFAULT_TEST_TIMEOUT_MS` (60 s) explicitly, because in a run without `--parallel`/`--isolate` Bun applies a preload's `setDefaultTimeout` to the first test file only. The product Git commands keep their own 10–30 s timeouts, unchanged.
 - **Reproduced:** no — the recorded deadline was Bun's default budget on a loaded host; the failing body is fast alone, and a 5 s exhaustion was not re-created per case here.
-- **Stress:** `mise run test:logged -- --name ec-stress-b -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts <seventeen container, pipeline, move, worktree and native-agent owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 1,139 passed, 1 failed — `git fsmonitor > fixture repositories inherit fsmonitor off from the test preload` on its second rerun, which fails the same way without contention and with the unchanged file (`git-fsmonitor.test.ts` is not rerun-safe). Fresh processes instead: `mise run test:logged -- --name ec-fsmon-stress -- bash -c 'cd apps/backend && for i in 1 2 3; do bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts --parallel=1 || exit 1; done'` passed 3 of 3.
+- **Stress:** `mise run test:logged -- --name ec-stress-b -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts <seventeen container, pipeline, move, worktree and native-agent owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 1,139 passed, 1 failed — `git fsmonitor > fixture repositories inherit fsmonitor off from the test preload` on its second rerun, which fails the same way without contention and with the unchanged file (`git-fsmonitor.test.ts` is not rerun-safe). Fresh processes instead: `mise run test:logged -- --name ec-fsmon-stress -- bash -c 'cd apps/backend && for i in 1 2 3; do bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts ./src/core/git/fsmonitor.test.ts --parallel=1 || exit 1; done'` passed 3 of 3.
 - **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).
 
 ## CI repair review preparation recurrence — 2026-11-17
@@ -565,7 +565,7 @@ in the address-findings stage.
   (660.51 s). The other four failures are not fsmonitor failures.
 - **Isolated rerun:** preparation's automatic one-worker rerun of the unchanged
   owner passed: 25 pass, 0 fail, 65 assertions (11.56 s; runner wall time
-  11.729 s). It used `bun test ./src/core/git-fsmonitor.test.ts --preload
+  11.729 s). It used `bun test ./src/core/git/fsmonitor.test.ts --preload
   ../../tests/setup-node.ts --only-failures --parallel=1` from `apps/backend`.
 - **Evidence:** `validation-04.stderr.txt` under
   `.orkestrator/review-artifacts/review-validation-18e46bcf-68f8-4afa-bb15-44eaa0371d75/`;

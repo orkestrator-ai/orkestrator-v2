@@ -73,7 +73,7 @@ describe("pipelineWorkers", () => {
   test("one worker per session, with step, round, slot and status", () => {
     const sessions = [
       session("build", "b", { agent: "codex", model: "gpt-5", status: "idle" }),
-      session("build", "prep", { label: REVIEW_PACKAGE_SESSION_LABEL }),
+      session("package-preparation", "prep", { label: REVIEW_PACKAGE_SESSION_LABEL }),
       session("review", "r1", { label: "Independent Review 1", status: "running" }),
       session("review", "r2", { label: "Independent Review 2", status: "error" }),
       session("review", "c", { label: "Consolidation" }),

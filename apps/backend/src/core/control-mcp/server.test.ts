@@ -165,7 +165,11 @@ describe("Orkestrator control MCP server", () => {
         for (const [name, args] of [
           [
             "launch_multi_review",
-            { environmentId: worker.environmentId, reviewers: [selection], fixModel: selection },
+            {
+              environmentId: worker.environmentId,
+              reviewers: [selection],
+              addressFindingsModel: selection,
+            },
           ],
           [
             "start_build_pipeline",
@@ -194,7 +198,7 @@ describe("Orkestrator control MCP server", () => {
             expect(content.wake).toContain("Only terminal");
             expect(content.wake).not.toBe(COORDINATOR_WORKFLOW_STATUS_WAKE);
             expect(content.nextStep).toContain("tell the user to inspect");
-            expect(content.nextStep).toContain("do not wait for a ready or fix-turn wake");
+            expect(content.nextStep).toContain("do not wait for a ready or Address Findings wake");
           } else expect(content.wake).toBe(COORDINATOR_WORKFLOW_STATUS_WAKE);
         }
         for (const id of ["launched"]) {
@@ -307,7 +311,7 @@ describe("Orkestrator control MCP server", () => {
       { description?: string; inputSchema?: { required?: string[] } } | undefined;
     // Omitted model rows use the saved defaults, the same as the button.
     expect(multiReviewTool?.description).toContain(
-      "Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults",
+      "Omit reviewers, reviewModel and addressFindingsModel to use the user's saved Multi Review defaults",
     );
     expect(multiReviewTool?.inputSchema?.required).toEqual(["requestId", "environmentId"]);
     const required = (name: string) =>
@@ -315,9 +319,15 @@ describe("Orkestrator control MCP server", () => {
         definitions.find((tool) => tool.name === name) as
           { inputSchema?: { required?: string[] } } | undefined
       )?.inputSchema?.required ?? [];
-    for (const field of ["reviewers", "reviewModel", "fixModel", "autoFix", "autoPr"])
+    for (const field of [
+      "reviewers",
+      "reviewModel",
+      "addressFindingsModel",
+      "autoAddressFindings",
+      "autoPr",
+    ])
       expect(required("launch_multi_review")).not.toContain(field);
-    // The launch tool exposes auto-fix and auto-PR as optional, saved-by-default booleans.
+    // The launch tool exposes auto-address findings and auto-PR as optional, saved-by-default booleans.
     for (const name of ["launch_multi_review"]) {
       const tool = definitions.find((item) => item.name === name) as
         | {
@@ -326,13 +336,13 @@ describe("Orkestrator control MCP server", () => {
           }
         | undefined;
       expect(tool?.description).toContain(
-        "Omit autoFix and autoPr to use the user's saved Auto-address findings and Auto-PR settings, as the button does; set them only when the user asks.",
+        "Omit autoAddressFindings and autoPr to use the user's saved Auto-address findings and Auto-PR settings, as the button does; set them only when the user asks.",
       );
       expect(tool?.description).toContain(
         "A failed, stopped or stalled Address Findings starts no PR.",
       );
       expect(tool?.description).not.toContain("always apply");
-      for (const field of ["autoFix", "autoPr"]) {
+      for (const field of ["autoAddressFindings", "autoPr"]) {
         expect(tool?.inputSchema?.properties?.[field]?.type).toBe("boolean");
         expect(tool?.inputSchema?.properties?.[field]?.description).toContain(
           "Set only when the user asks.",
@@ -383,7 +393,7 @@ describe("Orkestrator control MCP server", () => {
         steps: {
           build: { agent: "claude" },
           review: { agent: "codex", model: "gpt-5.6" },
-          address: { agent: "codex" },
+          "address-findings": { agent: "codex" },
         },
       },
     });
@@ -398,18 +408,16 @@ describe("Orkestrator control MCP server", () => {
         "address-findings": { agent: "codex" },
       },
     });
+    expect(build.body.result?.structuredContent?.selection).not.toHaveProperty("steps.address");
     expect(build.body.result?.structuredContent?.selection).not.toHaveProperty(
-      "steps.address-findings",
-    );
-    expect(build.body.result?.structuredContent?.selection).not.toHaveProperty(
-      "source.steps.address-findings",
+      "source.steps.address",
     );
     expect(build.body.result?.structuredContent?.selection).toMatchObject({
       agentType: "claude",
-      steps: { address: { agent: "codex" } },
+      steps: { "address-findings": { agent: "codex" } },
       source: {
         agentType: "requested",
-        steps: { build: "requested", review: "requested", address: "requested" },
+        steps: { build: "requested", review: "requested", "address-findings": "requested" },
         reviewers: "default",
         reviewPreparation: "default",
       },
@@ -424,7 +432,7 @@ describe("Orkestrator control MCP server", () => {
     for (const name of [
       "launch_multi_review",
       "open_multi_review",
-      "open_multi_review_fix",
+      "open_multi_review_address_findings",
       "address_multi_review",
     ])
       expect(definitions.find((tool) => tool.name === name)?.annotations?.idempotentHint).toBe(
@@ -449,7 +457,7 @@ describe("Orkestrator control MCP server", () => {
         requestId: "launch-review",
         environmentId: "env-1",
         reviewers: [{ agent: "codex", model: "default", reasoningEffort: "x".repeat(128) }],
-        fixModel: { agent: "claude", model: "default" },
+        addressFindingsModel: { agent: "claude", model: "default" },
       },
     });
     expect(button.body.result).toMatchObject({
@@ -475,7 +483,7 @@ describe("Orkestrator control MCP server", () => {
         requestId: "launch-review-started",
         environmentId: "env-1",
         reviewers: [{ agent: "codex", model: "default" }],
-        fixModel: { agent: "claude", model: "default" },
+        addressFindingsModel: { agent: "claude", model: "default" },
       },
     });
     // Started work tells the coordinator how it will hear back, so it does not poll.
@@ -487,7 +495,7 @@ describe("Orkestrator control MCP server", () => {
     });
 
     expect(button.body.result?.structuredContent?.selection).toMatchObject({
-      source: { reviewers: "requested", reviewModel: "default", fixModel: "requested" },
+      source: { reviewers: "requested", reviewModel: "default", addressFindingsModel: "requested" },
     });
     // Leaving every model row out hands the choice to the saved defaults.
     overrides.set("launch_coordinator_multi_review_action", () => ({
@@ -517,14 +525,14 @@ describe("Orkestrator control MCP server", () => {
     expect(defaulted.body.result?.structuredContent?.selection).toEqual({
       reviewers: [{ agent: "claude", model: "default" }],
       reviewModel: { agent: "claude", model: "default" },
-      fixModel: { agent: "claude", model: "default", reasoningEffort: "high" },
-      autoFix: false,
+      addressFindingsModel: { agent: "claude", model: "default", reasoningEffort: "high" },
+      autoAddressFindings: false,
       autoPr: false,
       source: {
         reviewers: "default",
         reviewModel: "default",
-        fixModel: "default",
-        autoFix: "default",
+        addressFindingsModel: "default",
+        autoAddressFindings: "default",
         autoPr: "default",
       },
     });
@@ -556,13 +564,13 @@ describe("Orkestrator control MCP server", () => {
         ?.args.input,
     ).toEqual({ requestId: "launch-review-auto-pr", environmentId: "env-1", autoPr: true });
     expect(autoPr.body.result?.structuredContent?.selection).toMatchObject({
-      autoFix: true,
+      autoAddressFindings: true,
       autoPr: true,
-      source: { autoFix: "implied", autoPr: "requested" },
+      source: { autoAddressFindings: "implied", autoPr: "requested" },
     });
     expect(autoPr.body.result?.structuredContent?.workflow).toMatchObject({
       automation: {
-        autoFix: true,
+        autoAddressFindings: true,
         autoPr: true,
         next: "Address Findings starts automatically if consolidation reports findings, then a PR session once Address Findings completes; a clean report starts the PR session directly.",
       },
@@ -570,14 +578,14 @@ describe("Orkestrator control MCP server", () => {
     const autoAddressFindingsOff = await rpc(credential.url, credential.token, "tools/call", {
       name: "launch_multi_review",
       arguments: {
-        requestId: "launch-review-auto-fix-off",
+        requestId: "launch-review-auto-address-findings-off",
         environmentId: "env-1",
-        autoFix: false,
+        autoAddressFindings: false,
         autoPr: true,
       },
     });
     expect(autoAddressFindingsOff.body.result?.structuredContent?.selection).toMatchObject({
-      source: { autoFix: "requested", autoPr: "requested" },
+      source: { autoAddressFindings: "requested", autoPr: "requested" },
     });
     const notBoolean = await rpc(credential.url, credential.token, "tools/call", {
       name: "launch_multi_review",
@@ -612,7 +620,7 @@ describe("Orkestrator control MCP server", () => {
         requestId: "launch-review-invalid-effort",
         environmentId: "env-1",
         reviewers: [{ agent: "codex", model: "default", reasoningEffort: "x".repeat(129) }],
-        fixModel: { agent: "claude", model: "default" },
+        addressFindingsModel: { agent: "claude", model: "default" },
       },
     });
     expect(invalidEffort.body.result?.isError).toBe(true);

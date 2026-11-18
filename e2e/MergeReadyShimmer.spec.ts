@@ -64,6 +64,36 @@ for (const [signal, label] of [
   });
 }
 
+test("the conflict sweep, static name, marker and tooltip use the failure palette", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/sidebar-drag?signal=merge-conflicts");
+  const row = page.getByRole("button", { name: /^p-env-1(?:, on |$)/ });
+  const name = row.getByText("p-env-1", { exact: true });
+  await expect(name).toBeVisible();
+  const { failure, band } = await name.evaluate((element) => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--color-failure)";
+    probe.style.backgroundColor = "color-mix(in oklab, var(--color-failure) 75%, white)";
+    element.after(probe);
+    const styles = getComputedStyle(probe);
+    const result = { failure: styles.color, band: styles.backgroundColor };
+    probe.remove();
+    return result;
+  });
+
+  expect((await paint(name)).backgroundImage).toContain(band);
+  const tooltip = page.getByTestId("environment-tooltip-merge-conflicts");
+  await row.focus();
+  await expect(tooltip).toHaveCSS("color", failure);
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(name).toHaveCSS("color", failure);
+  await expect(row.getByTestId("merge-conflicts-indicator")).toHaveCSS("color", failure);
+  await expect(tooltip).toHaveCSS("color", failure);
+});
+
 test("another machine's clean PR stays plain without leaf monitor health", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto("/remote-machine-tree?merge-ready=1");

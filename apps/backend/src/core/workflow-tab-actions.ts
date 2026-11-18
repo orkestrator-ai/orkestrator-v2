@@ -31,7 +31,7 @@ export async function openMultiReviewTab(
     | "addressFindingsSession"
     | "addressPromptPending"
   >,
-  surface: "root" | "fix" | "reviewer" = "root",
+  surface: "root" | "address-findings" | "reviewer" = "root",
   checkOnly = false,
   /** The reviewer whose read-only transcript subtab to open (`reviewer` only). */
   reviewerId?: string,
@@ -101,15 +101,15 @@ export async function openMultiReviewTab(
           : (workflow.addressFindingsTabId ?? `multi-review-fix:${workflow.id}`));
     if (!existing && panes.some((pane) => pane.tabs.some((tab) => tab.id === tabId)))
       throw new Error("The reserved tab ID is already in use");
-    if (surface === "fix" && !workflow.addressFindingsSession)
+    if (surface === "address-findings" && !workflow.addressFindingsSession)
       throw new Error("The Address Findings session is not available yet");
-    if (surface === "fix" && workflow.addressPromptPending)
+    if (surface === "address-findings" && workflow.addressPromptPending)
       throw new Error(
         "The Address Findings handoff is still pending; retry after dispatch is confirmed",
       );
-    if (existing && surface === "fix" && existing.type !== "agent-native")
+    if (existing && surface === "address-findings" && existing.type !== "agent-native")
       throw new Error("The Address Findings tab ID is already in use");
-    if (existing && surface === "fix") {
+    if (existing && surface === "address-findings") {
       const data = isRecord(existing.nativeAgentData) ? existing.nativeAgentData : {};
       if (
         data.environmentId !== environment.id ||

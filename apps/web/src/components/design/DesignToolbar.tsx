@@ -167,7 +167,7 @@ function RenameField({
           }
         }}
       />
-      {!valid && <span className="text-xs text-destructive">Enter 1–120 characters</span>}
+      {!valid && <span className="text-xs text-failure">Enter 1–120 characters</span>}
     </form>
   );
 }

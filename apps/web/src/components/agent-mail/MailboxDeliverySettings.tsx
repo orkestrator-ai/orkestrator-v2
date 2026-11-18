@@ -68,7 +68,7 @@ export function MailboxDeliverySettings({ mailbox }: { mailbox: MailboxDescripto
         </Button>
       </div>
       {error && (
-        <p role="alert" className="text-red-300">
+        <p role="alert" className="text-failure">
           {error}
         </p>
       )}

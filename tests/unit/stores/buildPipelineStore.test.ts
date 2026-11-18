@@ -67,6 +67,7 @@ describe("buildPipelineStore backend projection", () => {
       "addressing-findings",
       "verifying",
       "reworking",
+      "preparing-package",
       "creating-pr",
       "resolving-conflicts",
       "paused",

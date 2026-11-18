@@ -59,7 +59,7 @@ export function TabProse({ text, lead = false }: { text: string; lead?: boolean 
       text={text}
       className={cn(
         "max-w-[75ch] text-foreground",
-        lead ? "gap-3 text-[15px] leading-7" : "text-sm leading-6 text-foreground/90",
+        lead ? "min-w-0 gap-3 text-[15px] leading-7" : "text-sm leading-6 text-foreground/90",
       )}
       renderText={(value) => <KeyInformationText text={value} />}
     />
@@ -150,7 +150,7 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
                             <li key={`c${conIndex}`} className="flex items-start gap-1.5">
                               <Minus
                                 aria-label="Con"
-                                className="mt-0.5 size-3.5 shrink-0 text-rose-400"
+                                className="mt-0.5 size-3.5 shrink-0 text-failure"
                               />
                               <span className="min-w-0 break-words text-foreground/85">
                                 <KeyInformationText text={con} />
@@ -171,7 +171,7 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
               </div>
             ) : null}
             {decision.rationale ? (
-              <div className="mt-3 rounded-md border-l-2 border-success/40 bg-muted/20 px-3 py-2">
+              <div className="mt-3 rounded-md border border-success/30 bg-muted/20 px-3 py-2">
                 <div className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
                   Why
                 </div>

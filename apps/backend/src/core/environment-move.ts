@@ -12,7 +12,7 @@ import { stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-
 import { assertEnvironmentDeletionNotRequested } from "./commands-terminal.js";
 import { enqueueEnvironmentLifecycleOperation } from "./commands-environment.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
-import { stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
+import { stopGitFsmonitorDaemon } from "./git/index.js";
 import {
   defaultSessionRelocationHomes,
   relocateAgentSessionState,

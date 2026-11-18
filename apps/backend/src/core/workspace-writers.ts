@@ -97,7 +97,7 @@ function strongest(left: WorkspaceUse | null, right: WorkspaceUse | null): Works
 
 /**
  * How a Build Pipeline uses its checkout now: `write` in a writing stage
- * (Build, Fix and package preparation, Address, Verify — whose shell may write
+ * (Build, Rework, package preparation and its validation, Address, Verify — whose shell may write
  * build outputs — PR, conflicts) or while setup runs, `read` while reviewing;
  * a session still running counts by its own stage, whatever the phase says.
  */

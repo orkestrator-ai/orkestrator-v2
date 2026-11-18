@@ -15,7 +15,8 @@ import { isRecord } from "./storage-shared.js";
  * "fix" means different things in the two workflows: Rework in a build
  * pipeline, Address Findings in a Multi Review. Each therefore has its own
  * map. The review-package preparation session was stored as Rework (`fix`,
- * `fixing`) and stays there; giving it its own phase is task 4 of 4740.
+ * `fixing`) and moves to Rework here; the next migration
+ * (`storage-package-preparation-phase-upgrade.ts`) gives it its own phase.
  *
  * Session keys are left exactly as they were: transcript paths are a hash of
  * the key and worker mail tab ids derive from it, so rewriting one would

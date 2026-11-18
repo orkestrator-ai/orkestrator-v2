@@ -431,6 +431,21 @@
                   "!**/worktrees/removal-reads.js"
                 ],
                 "message": "Import the worktrees domain through worktrees/index.js."
+              },
+              {
+                "group": [
+                  "**/git/*",
+                  "!**/git/index.js",
+                  "!**/git/github-cli-setup.js",
+                  "!**/git/github-clone-browser.js",
+                  "!**/git/github-ranges-seed-delivery.js",
+                  "!**/git/pr-auto-merge-resolve-settled.js",
+                  "!**/git/pr-auto-merge.js",
+                  "!**/git/pr-monitor-runtime.js",
+                  "!**/git/pr-required-checks.js",
+                  "!@orkestrator/protocol/contract/domains/git/*"
+                ],
+                "message": "Import the git domain through git/index.js."
               }
             ]
           }
@@ -575,6 +590,10 @@
                   "!**/backend/src/core/worktrees/index.js"
                 ],
                 "message": "Import the worktrees domain through worktrees/index.js."
+              },
+              {
+                "group": ["**/backend/src/core/git/*", "!**/backend/src/core/git/index.js"],
+                "message": "Import the git domain through git/index.js."
               }
             ]
           }

@@ -13,7 +13,7 @@ import {
 } from "./container-readiness.js";
 import { withCoordinatorReceipt } from "./coordinator-action-scope.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
-import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCli } from "./git/index.js";
 import { GraphSystemActionMemory } from "./graph-system-action.js";
 import { applyGhChannel } from "./host-maintenance-tasks.js";
 import type { HostCatalog } from "./host-model-catalog-refresh.js";

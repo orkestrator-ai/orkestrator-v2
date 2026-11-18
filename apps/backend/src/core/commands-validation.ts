@@ -10,8 +10,13 @@ import {
   resolveCursorCredential,
   type CursorApiKeySource,
 } from "./agent-test-cursor-credential.js";
-import { resolveGitHubRepository } from "./github.js";
-import { gitHubCredentialSource, resolveGitHubToken } from "./github-credentials.js";
+import {
+  gitHubCredentialSource,
+  type GitHubIssueStatus,
+  type GitHubRepositoryRef,
+  resolveGitHubRepository,
+  resolveGitHubToken,
+} from "./git/index.js";
 import { isStartFeaturePlanningInput } from "@orkestrator/protocol/feature-planning";
 import { COMPACT_INSTRUCTIONS_MAX_LENGTH } from "@orkestrator/protocol/native-agent";
 import { assertValidPromptAttachments, assertValidPromptImages } from "./prompt-attachments.js";
@@ -28,7 +33,6 @@ import type {
 } from "./models.js";
 import type { AgentSkillProvider } from "./agent-skills.js";
 import type { JsonRecord, KanbanStorage } from "./storage.js";
-import type { GitHubIssueStatus, GitHubRepositoryRef } from "./github.js";
 import type {
   NativeAgentControlUpdate,
   NativeAgentSessionAction,

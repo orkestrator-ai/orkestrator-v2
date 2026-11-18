@@ -64,7 +64,9 @@ describe("a turn's declared workflow-result attempt", () => {
     expect(refusal("validate_b", { resultKey: "key-a" }, activation)).toBeDefined();
     expect(refusal("ask_human", {}, activation)).toBeDefined();
     expect(refusal("read_artifact", {}, activation)).toBeUndefined();
-    expect(refusal("submit_fix_result", { resultKey: "key-a" }, activation)).toBeDefined();
+    expect(
+      refusal("submit_address_findings_result", { resultKey: "key-a" }, activation),
+    ).toBeDefined();
     // Mail and other Orkestrator tools are not result tools.
     expect(refusal("send_message", {}, activation)).toBeUndefined();
     expect(refusal("get_artifact", {}, activation)).toBeUndefined();

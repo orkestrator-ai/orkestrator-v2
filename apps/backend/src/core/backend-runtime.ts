@@ -20,11 +20,11 @@ import {
 import { DockerContainerStateCache } from "./docker-container-state-cache.js";
 import { EnvironmentOperations } from "./environment-operations.js";
 import { FeatureBuildTasks } from "./features/index.js";
-import { GitHubCliSelection } from "./github-cli-binary.js";
+import { GitHubCliSelection } from "./git/index.js";
+import { PrMonitorRuntime, type PrMonitorRuntimeOptions } from "./git/pr-monitor-runtime.js";
 import { IntegrationLocks } from "./integration-locks.js";
 import { LinearMergedLabels, type LinearMergedLabelsOptions } from "./linear-merged-label.js";
 import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-server-runtime.js";
-import { PrMonitorRuntime, type PrMonitorRuntimeOptions } from "./pr-monitor-runtime.js";
 import { PublicApiReconciliations } from "./public-api/index.js";
 import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminal-runtime.js";
 import { TmuxRuntime, type TmuxRuntimeOptions } from "./tmux-runtime.js";

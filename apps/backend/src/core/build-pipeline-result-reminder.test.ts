@@ -193,7 +193,7 @@ describe("build pipeline consolidation result reminder", () => {
 for (const [phase, kind, tool] of [
   ["reworking", "validation-plan", "submit_validation_plan"],
   ["reviewing", "review-report", "submit_review_report"],
-  ["addressing-findings", "fix-result", "submit_fix_result"],
+  ["addressing-findings", "address-findings-result", "submit_address_findings_result"],
   ["verifying", "verification-result", "submit_verification_result"],
 ] as const) {
   test.each(["present", "missing", "throws", "mismatch"] as const)(
@@ -214,9 +214,9 @@ for (const [phase, kind, tool] of [
               ...binding!,
               kind:
                 bindingState === "mismatch"
-                  ? kind === "fix-result"
+                  ? kind === "address-findings-result"
                     ? "pr-result"
-                    : "fix-result"
+                    : "address-findings-result"
                   : kind,
             };
           });
@@ -237,7 +237,7 @@ for (const [phase, kind, tool] of [
                   ? REVIEW_VALIDATION_PLAN_SCHEMA
                   : kind === "review-report"
                     ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
-                    : kind === "fix-result"
+                    : kind === "address-findings-result"
                       ? REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA
                       : VERIFICATION_SCHEMA,
               );

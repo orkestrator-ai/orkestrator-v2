@@ -1727,7 +1727,7 @@ describe("ClaudeTmuxChatTab", () => {
     }
   }
 
-  test("autofocuses the compose input on desktop but not on mobile", () => {
+  test("keeps the compose frame responsive and autofocuses the input only on desktop", () => {
     appCommandStore(claudeTmuxStore).getState().setRunning(TMUX_STATE_KEY, true, {
       environmentId: "env-1",
       sessionId: "session-1",
@@ -1754,7 +1754,13 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    expect(document.activeElement).not.toBe(screen.getByPlaceholderText(/Ask Claude anything/));
+    const mobileInput = screen.getByPlaceholderText(/Ask Claude anything/);
+    expect(document.activeElement).not.toBe(mobileInput);
+    // The textarea sits in an input container inside the outer compose frame.
+    const composeFrame = mobileInput.parentElement?.parentElement;
+    expect(Array.from(composeFrame?.classList ?? [])).toEqual(
+      expect.arrayContaining(["w-[calc(100%_-_0.75rem)]", "sm:w-[min(calc(100%_-_2rem),56rem)]"]),
+    );
   });
 
   test("typing / opens the built-in slash command menu and selecting one fills the input", async () => {

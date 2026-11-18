@@ -382,8 +382,8 @@ describe("EnvironmentSettingsDialog", () => {
     // Six tabs do not fit one row at a narrow width. happy-dom does not lay
     // out, so the class contract stands in for the measurement: a fixed row
     // height with no wrapping is what clipped the two agents added last.
-    expect(tabList.className).toContain("flex-wrap");
-    expect(/(^|\s)h-\d+(\s|$)/.test(tabList.className)).toBe(false);
+    expect(tabList.classList.contains("flex-wrap")).toBe(true);
+    expect(tabList.className).not.toMatch(/(?:^|\s|:)!?(?:h|size)-(?!auto\b|fit\b|min\b|max\b)\S+/);
     expect(screen.getByText("claude-review")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("claude-skill").length).toBeGreaterThan(0));
     expect(screen.getByText("Project")).toBeTruthy();

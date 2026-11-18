@@ -38,17 +38,17 @@
   "completed"`, `state: "failed"` whose `execution` says `exitCode: 3`,
   `evidence: "process-exit"`, started 17:50:08.150 and finished 17:50:08.158.
   The receipt was created at 08.056 and completed at 08.424.
-- **What this establishes:** the start was not refused. The process started
-  and exited (`sh -c '…; exit 3'`) about 8 ms later, and by the time the start
-  response was built the operation was already terminal, so `environment.exec`
-  answered with the finished operation's failure instead of an accepted start.
-  The test's command exits at once with a non-zero status, so any delay
-  between spawn and the start answer turns `ok: true` into this `ok: false`.
-  The 2026-10-21 failure (96 ms, `started.ok` false) fits the same race.
-- **Next step:** decide which answer is the contract for a start that loses
-  this race (see [public-cli.md](../../../architecture/public-cli.md)): either
-  the start always answers the admitted start and leaves the outcome to the
-  receipt, or the terminal answer is correct and the test must hold its
-  command running until the start has answered (for example by blocking on
-  a file the test creates after `exec` returns). No assertion, timeout or skip
-  was changed.
+- **What this establishes:** the command started and exited with status 3
+  about 8 ms later. After spawning the worker, the start control reads and
+  returns one state snapshot. The action uses that snapshot to choose its
+  reply. A `starting` or `running` snapshot yields an accepted start
+  (`ok: true`), even if the process exits before the reply arrives. In this
+  run, the control already read `exited` with status 3, so the action returned
+  the completed failure (`ok: false`, `exec-failed`). The 2026-10-21
+  observation is consistent with this sequence.
+- **Next step:** decide whether the start response should always acknowledge
+  admission and leave the outcome to the receipt, or should report a terminal
+  outcome when the start control observes one. Under the latter contract, the
+  test can exercise the accepted response by holding the command on a file
+  that the test creates after `exec` returns. See
+  [the public CLI contract](../../../architecture/public-cli.md).

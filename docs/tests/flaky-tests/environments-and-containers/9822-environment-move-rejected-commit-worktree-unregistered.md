@@ -36,17 +36,19 @@ arm64) `bun test src/core/environment-move.recovery.test.ts` from
 
 ## Assessment
 
-Unconfirmed. The assertions and edit check passed; only the worktree
-registration was missing after `recoverInterruptedEnvironmentMoves`. The
-missing `.git/worktrees/<name>` directory points to the rejected commit's
-rollback (the `git worktree move` back to the original path, or its backlink
-repair) still running, or having lost a race, when recovery and the registry
-read ran. Treat it as a possible product race (a slow host can hit the same
-gap) before raising any budget.
+The cause is open. The first assertion after rejection found the journal
+clear, and the edit at the original path survived recovery. The watcher
+reported a missing Git admin directory, and the final worktree listing omitted
+the restored path. The rollback path awaits the Git move or rename repair
+before rejecting and retains the journal if rollback fails. The observations
+leave open when registration went missing and whether concurrent work removed
+the admin directory.
 
 ## Next step
 
 Reproduce under load (the backend group at its CI worker count, or the file
-with `--rerun-each`) and capture whether `.git/worktrees/<name>` exists after
-the rejected commit returns. If it does not, the rejection path returns before
-its rollback has re-registered the worktree.
+with `--rerun-each`). Record the rollback Git command's exit result, and
+capture `git worktree list --porcelain` and whether `.git/worktrees/<name>`
+exists immediately before and after rollback, when the caller receives the
+rejection, and after recovery. These observations can show whether rollback
+restored registration and, if it did, when it went missing again.

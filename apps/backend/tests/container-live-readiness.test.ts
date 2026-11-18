@@ -1184,6 +1184,7 @@ describe("C22 live host-service reply", () => {
 
       const service = new ContainerHostReachabilityService({
         servicePort: () => servicePort,
+        signLoopbackProbe: server.signLoopbackProbe,
         ownerNamespace: scene.owner,
         fallbackImage: () => IMAGE,
       });

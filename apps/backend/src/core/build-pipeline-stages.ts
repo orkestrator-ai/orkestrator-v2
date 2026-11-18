@@ -94,7 +94,11 @@ export const BUILD_PIPELINE_STAGES: readonly BuildPipelineStage[] = Object.freez
         turn: "write",
         result: "validation-plan",
         only: "preparation-session",
-        session: { phase: "rework", buildPhase: "reworking", label: REVIEW_PACKAGE_SESSION_LABEL },
+        session: {
+          phase: "package-preparation",
+          buildPhase: "preparing-package",
+          label: REVIEW_PACKAGE_SESSION_LABEL,
+        },
       },
       { key: "validation", round: "every", turn: "system", result: null },
       {
@@ -115,7 +119,7 @@ export const BUILD_PIPELINE_STAGES: readonly BuildPipelineStage[] = Object.freez
         key: "address-findings",
         round: "every",
         turn: "write",
-        result: "fix-result",
+        result: "address-findings-result",
         session: {
           phase: "address-findings",
           buildPhase: "addressing-findings",
@@ -157,12 +161,17 @@ export function buildPipelineStage(key: BuildPipelineStageKey): BuildPipelineSta
   return BY_KEY.get(key)!;
 }
 
+/** The stages that run a session of their own, one per session phase. */
+const SESSION_STAGES = BUILD_PIPELINE_STAGES.filter((stage) => stage.session);
+
+const BY_SESSION_PHASE = new Map(SESSION_STAGES.map((stage) => [stage.session!.phase, stage]));
+
 /**
- * The stage a session phase names. `rework` is the Rework stage; the dedicated
- * package preparation also runs as a `rework` session, under its own label.
+ * The stage a session phase names: the stage of the same key, except
+ * `package-preparation`, which is the `preparation` stage.
  */
 export function buildPipelineSessionStage(phase: PipelineSessionPhase): BuildPipelineStage {
-  return buildPipelineStage(phase);
+  return BY_SESSION_PHASE.get(phase)!;
 }
 
 /** The pipeline phase a session phase runs in. */
@@ -170,16 +179,12 @@ export function buildPhaseForSessionPhase(phase: PipelineSessionPhase): Resumabl
   return buildPipelineSessionStage(phase).session!.buildPhase;
 }
 
-/** The stages a session phase names, one per phase. */
-const SESSION_STAGES = BUILD_PIPELINE_STAGES.filter((stage) => stage.session?.phase === stage.key);
-
 /** Each session phase's default session label. */
 export const BUILD_PIPELINE_SESSION_LABELS: Readonly<Record<PipelineSessionPhase, string>> =
   Object.freeze(
-    Object.fromEntries(SESSION_STAGES.map((stage) => [stage.key, stage.session!.label])) as Record<
-      PipelineSessionPhase,
-      string
-    >,
+    Object.fromEntries(
+      SESSION_STAGES.map((stage) => [stage.session!.phase, stage.session!.label]),
+    ) as Record<PipelineSessionPhase, string>,
   );
 
 /** The session phase that runs a pipeline phase, or null for the setup phases. */

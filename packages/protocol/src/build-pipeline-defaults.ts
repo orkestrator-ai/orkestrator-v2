@@ -175,12 +175,12 @@ export function buildPipelineConfiguredDefaults(
       : undefined;
   const verify = actionHasUsablePlatform(configuredActions.verify, enabledAgents)
     ? actionSelection(tiers, "verify", enabledAgents)
-    : actionSelection(tiers, "fixReviewIssues", enabledAgents);
+    : actionSelection(tiers, "addressFindings", enabledAgents);
 
   return {
     steps: {
       review: reviewers[0],
-      "address-findings": actionSelection(tiers, "fixReviewIssues", enabledAgents),
+      "address-findings": actionSelection(tiers, "addressFindings", enabledAgents),
       verify,
       pr: actionSelection(tiers, "pr", enabledAgents),
       "resolve-conflicts": actionSelection(tiers, "resolve", enabledAgents),

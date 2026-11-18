@@ -52,6 +52,6 @@ describe("SignInExpiry", () => {
     const line = container.querySelector("[data-sign-in-expiry]");
     expect(line?.getAttribute("data-sign-in-expiry")).toBe("ended");
     expect(line?.textContent).toBe("Sign-in may have ended on 1 Nov 2026");
-    expect(line?.className).toContain("text-destructive");
+    expect(line?.className).toContain("text-failure");
   });
 });

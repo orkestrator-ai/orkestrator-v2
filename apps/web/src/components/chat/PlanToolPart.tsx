@@ -68,8 +68,8 @@ export function PlanToolPart({
         )}
         {toolError && (
           <div className="mt-2 flex items-start gap-2">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
-            <pre className="text-xs font-mono text-destructive whitespace-pre-wrap break-all">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-failure" />
+            <pre className="text-xs font-mono text-failure whitespace-pre-wrap break-all">
               {toolError}
             </pre>
           </div>

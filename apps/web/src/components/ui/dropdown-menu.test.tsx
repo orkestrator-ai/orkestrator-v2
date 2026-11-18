@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "./context-menu";
 import { OverlayPortalLayer } from "./overlay-portal-layer";
 import {
   DropdownMenu,
@@ -13,6 +19,36 @@ import {
 } from "./dropdown-menu";
 
 afterEach(cleanup);
+
+test.each(["context", "dropdown"] as const)(
+  "%s menu uses the failure foreground for destructive items",
+  (kind) => {
+    render(
+      kind === "context" ? (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <button>Actions</button>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem variant="destructive">Delete</ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      ) : (
+        <DropdownMenu defaultOpen>
+          <DropdownMenuTrigger>Actions</DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuItem variant="destructive">Delete</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ),
+    );
+    if (kind === "context") fireEvent.contextMenu(screen.getByRole("button", { name: "Actions" }));
+
+    const item = screen.getByRole("menuitem", { name: "Delete" });
+    expect(item.getAttribute("data-variant")).toBe("destructive");
+    expect(Array.from(item.classList)).toContain("data-[variant=destructive]:text-failure");
+  },
+);
 
 /**
  * Radix opens a submenu from its trigger rather than from a `defaultOpen` on

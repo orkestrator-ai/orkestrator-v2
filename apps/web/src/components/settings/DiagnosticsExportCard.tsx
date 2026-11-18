@@ -30,7 +30,7 @@ function failureText(error: unknown, fallback: string): string {
 
 function FailureText({ failure }: { failure: string }) {
   return (
-    <p className="text-xs text-destructive" role="alert">
+    <p className="text-xs text-failure" role="alert">
       {failure}
     </p>
   );

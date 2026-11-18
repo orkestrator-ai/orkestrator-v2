@@ -118,7 +118,7 @@ function GoalPanelBody({
   const failure = error ? (
     <p
       role="alert"
-      className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive"
+      className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-failure"
     >
       {error}
     </p>
@@ -263,7 +263,7 @@ function GoalForm({
       {problem ? (
         <p
           role="alert"
-          className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive"
+          className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-failure"
         >
           {problem}
         </p>
@@ -407,7 +407,7 @@ function GoalDetails({
           variant="ghost"
           size="sm"
           disabled={busy}
-          className="text-destructive hover:text-destructive"
+          className="text-failure hover:text-failure"
           onClick={() => onRun("clear", "clear", { close: true })}
         >
           Clear
@@ -493,7 +493,7 @@ function GoalCheckResult({
         ) : null}
       </div>
       {problem ? (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-xs text-failure">
           {problem}
         </p>
       ) : null}

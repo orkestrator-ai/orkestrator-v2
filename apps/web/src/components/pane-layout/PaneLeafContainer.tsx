@@ -454,6 +454,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 renderError={renderTabError(isTabActive && isActive)}
               >
                 <LazyAutoPipelineTab
+                  tabId={tab.id}
                   environmentId={environmentId}
                   data={tab.autoPipelineData}
                   isActive={isTabActive && isActive}

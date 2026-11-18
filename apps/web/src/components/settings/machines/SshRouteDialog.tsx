@@ -139,7 +139,7 @@ export function SshRouteDialog({
                 </li>
               ))}
             </ul>
-            {error ? <p className="text-sm text-red-300">{error}</p> : null}
+            {error ? <p className="text-sm text-failure">{error}</p> : null}
             <DialogFooter>
               <Button type="button" variant="ghost" onClick={() => setReview(null)} disabled={busy}>
                 Don’t trust
@@ -247,7 +247,7 @@ export function SshRouteDialog({
                 DynamicForward; Orkestrator refuses aliases that open extra forwards.
               </p>
               {error ? (
-                <p className="text-sm text-red-300" role="alert">
+                <p className="text-sm text-failure" role="alert">
                   {error}
                 </p>
               ) : null}

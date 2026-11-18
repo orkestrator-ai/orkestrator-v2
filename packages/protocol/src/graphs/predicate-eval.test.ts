@@ -27,7 +27,7 @@ const report = {
 
 const environment: GraphPredicateEnvironment = {
   values: { report, "verify.verdict": { complete: true }, failures: [] },
-  params: { autoFix: true, mode: "fast", threshold: 0.25 },
+  params: { autoAddressFindings: true, mode: "fast", threshold: 0.25 },
   run: { iteration: 2 },
 };
 
@@ -137,12 +137,16 @@ describe("predicate evaluator: operators", () => {
     all: [
       [
         "every child true",
-        { all: [leaf("report.issues", "nonEmpty"), leaf("params.autoFix", "eq", true)] },
+        {
+          all: [leaf("report.issues", "nonEmpty"), leaf("params.autoAddressFindings", "eq", true)],
+        },
         "true",
       ],
       [
         "one child false",
-        { all: [leaf("report.issues", "nonEmpty"), leaf("params.autoFix", "eq", false)] },
+        {
+          all: [leaf("report.issues", "nonEmpty"), leaf("params.autoAddressFindings", "eq", false)],
+        },
         "false",
       ],
       [
@@ -220,12 +224,15 @@ describe("predicate evaluator: roots", () => {
   test("reads roots from a Map", () => {
     const env = { values: new Map<string, unknown>([["report", report]]) };
     expect(truthOf(leaf("report.issues", "nonEmpty"), env)).toBe("true");
-    expect(truthOf(leaf("params.autoFix", "exists"), env)).toBe("false");
+    expect(truthOf(leaf("params.autoAddressFindings", "exists"), env)).toBe("false");
   });
 
   test("reserved roots win over values of the same name", () => {
-    const env = { values: { params: { autoFix: false } }, params: { autoFix: true } };
-    expect(truthOf(leaf("params.autoFix", "eq", true), env)).toBe("true");
+    const env = {
+      values: { params: { autoAddressFindings: false } },
+      params: { autoAddressFindings: true },
+    };
+    expect(truthOf(leaf("params.autoAddressFindings", "eq", true), env)).toBe("true");
   });
 
   test("a path naming a root alone reads the root", () => {

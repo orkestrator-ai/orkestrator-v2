@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
-import { Bell, Boxes, FolderGit2, Plus } from "lucide-react";
+import { Boxes, FolderGit2, Plus } from "lucide-react";
+import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -206,16 +207,13 @@ export function ActivityEnvironmentList({
               <div
                 className={cn(
                   "flex h-7 min-w-9 items-center justify-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums",
-                  waitingCount > 0 ? "bg-amber-500/10 text-amber-400" : "text-zinc-600",
+                  waitingCount > 0 ? "bg-amber-500/10 text-amber-400" : "text-muted-foreground",
                 )}
                 aria-label={`${waitingCount} waiting ${
                   waitingCount === 1 ? "environment" : "environments"
                 }`}
               >
-                <Bell
-                  className={cn("h-3.5 w-3.5", waitingCount > 0 && "fill-amber-400/20")}
-                  aria-hidden="true"
-                />
+                <UnreadBellIcon className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>{waitingCount}</span>
               </div>
             </TooltipTrigger>

@@ -1,6 +1,6 @@
 import { promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
-import { HARDENED_GIT_CONFIG } from "../git-fsmonitor.js";
+import { HARDENED_GIT_CONFIG } from "../git/index.js";
 import { CommandFailedError, runCommand } from "../shell.js";
 
 /**

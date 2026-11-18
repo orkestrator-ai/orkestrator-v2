@@ -1132,7 +1132,7 @@ describe("BuildPipelineService retry review", () => {
           .every((session) => session.reviewReport === undefined),
       ).toBe(true);
       expect(retried.sessions).toHaveLength(sessionCount + 2);
-      expect(retried.sessions.at(-2)?.phase).toBe("rework");
+      expect(retried.sessions.at(-2)?.phase).toBe("package-preparation");
       expect(retried.sessions.at(-1)?.phase).toBe("review");
       expect(provider.sent.at(-1)?.prompt).toContain("pins the exact committed range");
       expect(packageGeneration.count).toBe(2);
@@ -1216,8 +1216,8 @@ describe("BuildPipelineService retry review", () => {
 
       await service.advanceNow(built.id);
       const preparing = await snapshot(storage, built.id);
-      expect(preparing.phase).toBe("reworking");
-      expect(preparing.sessions.at(-1)?.phase).toBe("rework");
+      expect(preparing.phase).toBe("preparing-package");
+      expect(preparing.sessions.at(-1)?.phase).toBe("package-preparation");
 
       await service.advanceNow(built.id);
       const recovered = await snapshot(storage, built.id);
@@ -1248,7 +1248,7 @@ describe("BuildPipelineService retry review", () => {
 
       await service.advanceNow(built.id);
       const preparing = await snapshot(storage, built.id);
-      expect(preparing.phase).toBe("reworking");
+      expect(preparing.phase).toBe("preparing-package");
       expect(preparing.reviewPackage).toBeUndefined();
       expect(invocations.some((entry) => entry.command === "verify_review_package")).toBe(true);
 

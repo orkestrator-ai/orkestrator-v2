@@ -304,8 +304,8 @@ export class BuildPipelineInteractions {
           )
         : sessionForCurrentPhase(pipeline);
     // Before preparation owns a session, an adopted Build retries from its
-    // setup handoff. Retrying the destination "reworking" phase would launch
-    // Rework instead of package preparation.
+    // setup handoff, which decides again between review and package
+    // preparation, rather than from the phase it was entering.
     const adoptedBootstrap =
       (pipeline.phase === "starting-environment" || pipeline.phase === "waiting-for-setup") &&
       pipeline.sessions.some((session) => session.adoptedFromTabId);

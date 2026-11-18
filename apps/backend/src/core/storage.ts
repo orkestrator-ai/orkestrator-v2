@@ -1913,6 +1913,8 @@ export class StorageService {
     options: {
       /** Backend-only cancellation fence under the mail writer lease. */
       isStillWanted?: () => boolean;
+      /** Backend-only expected merge identity, fenced at admission. */
+      mergeNoticeUrl?: string;
       newDelegation?: boolean;
       nodePrefix?: string;
       fallbackNotice?: string;

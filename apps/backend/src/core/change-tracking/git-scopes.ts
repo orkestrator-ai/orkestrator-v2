@@ -45,7 +45,7 @@ import {
 import { mapWithConcurrency, parseGitDiffSummary, type GitFileChange } from "../commands-files.js";
 import { CaptureError, captureErrorReason, type CaptureErrorReason } from "./capture-error.js";
 import { UNTRACKED_SCAN_CONCURRENCY } from "../commands-validation.js";
-import { gitDockerScanPool } from "../git-docker-scan-pool.js";
+import { gitDockerScanPool } from "../git/index.js";
 import { countUntrackedFileLines } from "../local-git-scan-caches.js";
 import { runCommandBuffer } from "../shell.js";
 import { encodePath, SAFE_GIT_CONFIG } from "./capture.js";

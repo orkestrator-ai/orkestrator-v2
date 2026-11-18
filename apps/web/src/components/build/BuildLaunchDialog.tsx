@@ -1337,7 +1337,7 @@ export function BuildLaunchDialog({
                     </p>
                   )}
                   {networkPreference.error && (
-                    <p role="alert" className="mt-2 text-xs text-destructive">
+                    <p role="alert" className="mt-2 text-xs text-failure">
                       Could not load this machine's saved network access. Reopen the launcher to
                       retry.
                     </p>

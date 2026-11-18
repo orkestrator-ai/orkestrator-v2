@@ -568,7 +568,7 @@ function ProsCons({ pros, cons }: { pros: string[]; cons: string[] }) {
       {cons.length > 0 ? (
         <ul className="flex flex-col gap-0.5">
           {cons.map((con, index) => (
-            <li key={index} className="break-words text-rose-400/90">
+            <li key={index} className="break-words text-failure">
               − <KeyInformationText text={con} />
             </li>
           ))}

@@ -20,7 +20,7 @@
 import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { hostname } from "node:os";
-import { gitDockerScanPool } from "../git-docker-scan-pool.js";
+import { gitDockerScanPool } from "../git/index.js";
 import { runCommand } from "../shell.js";
 import { CaptureError, captureErrorReason } from "./capture-error.js";
 import type { WorkAdmissionPool } from "../work-admission.js";

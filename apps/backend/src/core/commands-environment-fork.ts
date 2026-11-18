@@ -16,7 +16,7 @@ import {
 } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { toClientEnvironment } from "./commands-terminal.js";
-import { runRemoteGit } from "./git-noninteractive-env.js";
+import { runRemoteGit } from "./git/index.js";
 import { environmentHasDeletionTombstone } from "@orkestrator/protocol/node-summaries";
 
 const GIT_REMOTE_QUERY_TIMEOUT_MS = 30_000;

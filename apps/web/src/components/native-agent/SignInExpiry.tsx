@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 const TONE_CLASS: Record<SignInExpiryTone, string> = {
   upcoming: "text-muted-foreground",
   soon: "text-amber-500",
-  ended: "font-medium text-destructive",
+  ended: "font-medium text-failure",
 };
 
 export function SignInExpiry({

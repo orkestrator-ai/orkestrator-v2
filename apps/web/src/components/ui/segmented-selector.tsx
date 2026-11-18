@@ -1,6 +1,8 @@
 import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
+export const SEGMENT_TRACK_CLASS_NAME = "rounded-lg border border-divider bg-input-surface p-0.5";
+
 /**
  * The selected segment. A selector row can scroll and clip an outset line, so its
  * focus hairline stays inset and takes the text colour, clear of the blue fill.
@@ -69,10 +71,7 @@ export function SegmentedSelector<T extends string>({
     <div
       role={semantics === "tabs" ? "tablist" : "group"}
       aria-label={ariaLabel}
-      className={cn(
-        "inline-flex min-w-0 items-center rounded-lg border border-divider bg-input-surface p-0.5",
-        className,
-      )}
+      className={cn("inline-flex min-w-0 items-center", SEGMENT_TRACK_CLASS_NAME, className)}
     >
       {options.map((option, index) => {
         const selected = value === option.value;

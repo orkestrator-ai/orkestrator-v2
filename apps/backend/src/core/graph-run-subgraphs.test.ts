@@ -139,12 +139,17 @@ describe("the §9.3 design bake-off with Multi Review inlined (item 402)", () =>
       expect({ id, states: states(run, id) }).toEqual({ id, states: ["complete"] });
     }
     // The inlined Multi Review ran on the graph runtime, under namespaced ids.
-    for (const id of ["review/plan", "review/package", "review/consolidate", "review/fix"]) {
+    for (const id of [
+      "review/plan",
+      "review/package",
+      "review/consolidate",
+      "review/address-findings",
+    ]) {
       expect({ id, states: states(run, id) }).toEqual({ id, states: ["complete"] });
     }
     expect(states(run, "review/review")).toEqual(["complete", "complete"]);
     expect(only(run, "review/has-findings").outlet).toBe("findings");
-    expect(only(run, "review/fix-complete").outlet).toBe("complete");
+    expect(only(run, "review/address-findings-complete").outlet).toBe("complete");
     // autoPr is bound off: the child's own pull request nodes were skipped.
     expect(states(run, "review/describe-pr")).toEqual(["skipped"]);
     expect(states(run, "review/pr")).toEqual(["skipped"]);
@@ -153,7 +158,7 @@ describe("the §9.3 design bake-off with Multi Review inlined (item 402)", () =>
     // Wiring through the sub-graph's ports: build's commit in, the Fix's commit out.
     const build = only(run, "build");
     expect(only(run, "review/plan").inputs.code).toBe(build.outputs.code);
-    const fixed = only(run, "review/fix").outputs.code;
+    const fixed = only(run, "review/address-findings").outputs.code;
     expect(only(run, "describe-pr").inputs.code).toBe(fixed);
     expect(only(run, "pr").inputs.code).toBe(fixed);
     expect(run.status === "complete" && only(run, "pr").outputs.pr).toBeDefined();
@@ -164,7 +169,7 @@ describe("the §9.3 design bake-off with Multi Review inlined (item 402)", () =>
     const reviewers = agentStarts.filter((call) => call.nodeId === "review/review");
     expect(reviewers.map((call) => call.binding?.model).sort()).toEqual(["model-1", "model-2"]);
     expect(run.bindings.roles.builder).toBeDefined();
-    expect(agentStarts.find((call) => call.nodeId === "review/fix")?.binding).toEqual({
+    expect(agentStarts.find((call) => call.nodeId === "review/address-findings")?.binding).toEqual({
       platform: "claude",
       model: "model",
     });
@@ -172,7 +177,7 @@ describe("the §9.3 design bake-off with Multi Review inlined (item 402)", () =>
     expect(run.plan.subgraphs![0]!).toMatchObject({
       id: "review",
       template: { scope: "builtin", id: "multi-review", engine: "multi-review" },
-      params: { autoFix: { param: "autoFix" }, autoPr: { value: false } },
+      params: { autoAddressFindings: { param: "autoAddressFindings" }, autoPr: { value: false } },
     });
   });
 
@@ -182,23 +187,25 @@ describe("the §9.3 design bake-off with Multi Review inlined (item 402)", () =>
     const run = await finish(h, (await launch(h)).id);
     expect(run.status).toBe("complete");
     expect(only(run, "review/has-findings").outlet).toBe("clean");
-    expect(states(run, "review/fix")).toEqual(["skipped"]);
+    expect(states(run, "review/address-findings")).toEqual(["skipped"]);
     const reviewed = only(run, "review/plan").outputs.code;
     expect(only(run, "pr").inputs.code).toBe(reviewed);
     expect(states(run, "pr")).toEqual(["complete"]);
   });
 
-  test("the parent's autoFix parameter passes through to the inlined Fix", async () => {
+  test("the parent's autoAddressFindings parameter passes through to the inlined Fix", async () => {
     const h = await harness();
     scriptReport(h, true);
-    const run = await finish(h, (await launch(h, { autoFix: false })).id);
-    expect(run.bindings.params.autoFix).toBe(false);
+    const run = await finish(h, (await launch(h, { autoAddressFindings: false })).id);
+    expect(run.bindings.params.autoAddressFindings).toBe(false);
     // The review ends with findings and no Fix, so there is no pull request (an optional output).
     expect(run.status).toBe("complete");
     expect(only(run, "review/has-findings").outlet).toBe("findings");
-    // The Fix's `when: params.autoFix` read the parent's value through the sub-graph scope.
-    expect(states(run, "review/fix")).toEqual(["skipped"]);
+    // The Fix's `when: params.autoAddressFindings` read the parent's value through the sub-graph scope.
+    expect(states(run, "review/address-findings")).toEqual(["skipped"]);
     expect(states(run, "pr")).toEqual(["skipped"]);
-    expect(h.world.fakes.callsOf("start").some((call) => call.nodeId === "review/fix")).toBe(false);
+    expect(
+      h.world.fakes.callsOf("start").some((call) => call.nodeId === "review/address-findings"),
+    ).toBe(false);
   });
 });

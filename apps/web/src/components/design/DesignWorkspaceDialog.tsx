@@ -94,6 +94,7 @@ type AgentChoice = DesignAgent | "none";
 type CreateTab = (type: CreatableTabType, options?: CreateTabOptions) => boolean;
 
 const DEFAULT_ENABLED_AGENTS: readonly string[] = ["claude", "codex", "opencode"];
+const MODE_TAB_CLASS = "h-auto min-h-8 min-w-0 px-1.5 py-1 whitespace-normal sm:px-3";
 
 /** Current layout facts for one environment of `layouts`' node, read at decision time. */
 export function readDesignLayoutFacts(
@@ -605,11 +606,25 @@ export function DesignWorkspaceDialog({
             design file.
           </DialogDescription>
         </DialogHeader>
-        <Tabs value={mode} onValueChange={(value) => setMode(value as DesignWorkspaceMode)}>
-          <TabsList className="w-full">
-            <TabsTrigger value="new">New design</TabsTrigger>
-            <TabsTrigger value="open">Open design</TabsTrigger>
-            <TabsTrigger value="saved">Saved designs</TabsTrigger>
+        <Tabs
+          value={mode}
+          onValueChange={(value) => setMode(value as DesignWorkspaceMode)}
+          className="min-w-0"
+        >
+          <TabsList
+            variant="segmented"
+            aria-label="Design workspace mode"
+            className="w-full items-stretch"
+          >
+            <TabsTrigger value="new" className={MODE_TAB_CLASS}>
+              New design
+            </TabsTrigger>
+            <TabsTrigger value="open" className={MODE_TAB_CLASS}>
+              Open design
+            </TabsTrigger>
+            <TabsTrigger value="saved" className={MODE_TAB_CLASS}>
+              Saved designs
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="new">
             <form
@@ -633,7 +648,7 @@ export function DesignWorkspaceDialog({
                 />
               </label>
               {showNameError && (
-                <p id="design-name-error" className="text-xs text-destructive">
+                <p id="design-name-error" className="text-xs text-failure">
                   {nameProblem}
                 </p>
               )}
@@ -810,7 +825,7 @@ export function DesignWorkspaceDialog({
           </p>
         )}
         {error && (
-          <div role="alert" className="grid gap-2 text-sm text-destructive">
+          <div role="alert" className="grid gap-2 text-sm text-failure">
             <p>{error}</p>
             {recovery && (
               <div className="flex flex-wrap items-center gap-2 text-foreground">

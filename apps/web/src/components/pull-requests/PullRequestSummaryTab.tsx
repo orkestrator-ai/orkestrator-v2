@@ -258,7 +258,7 @@ function ReviewersRow({
               </DropdownMenuItem>
             )}
             {users.error && (
-              <DropdownMenuItem disabled className="text-xs text-destructive">
+              <DropdownMenuItem disabled className="text-xs text-failure">
                 {users.error}
               </DropdownMenuItem>
             )}
@@ -362,7 +362,7 @@ function LabelsRow({
               </DropdownMenuItem>
             )}
             {labels.error && (
-              <DropdownMenuItem disabled className="text-xs text-destructive">
+              <DropdownMenuItem disabled className="text-xs text-failure">
                 {labels.error}
               </DropdownMenuItem>
             )}

@@ -88,7 +88,7 @@ export function ClaudeQuestionCard({
   return (
     <div>
       {card}
-      <div role="alert" className="mt-1 px-1 text-xs text-destructive">
+      <div role="alert" className="mt-1 px-1 text-xs text-failure">
         {holdError}
       </div>
     </div>

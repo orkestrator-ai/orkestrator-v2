@@ -29,17 +29,19 @@ describe("GraphSubgraphEditor (item 402)", () => {
       document.querySelector("[data-graph-subgraph-nodes]")!.textContent!.split(", "),
     ).toContain("review/consolidate");
 
-    // autoFix passes this template's parameter through; autoPr is a value.
-    const autoFix = screen.getByLabelText("Address Findings automatically") as HTMLSelectElement;
-    expect(autoFix.value).toBe("param:autoFix");
-    fireEvent.change(autoFix, { target: { value: "default" } });
+    // autoAddressFindings passes this template's parameter through; autoPr is a value.
+    const autoAddressFindings = screen.getByLabelText(
+      "Address Findings automatically",
+    ) as HTMLSelectElement;
+    expect(autoAddressFindings.value).toBe("param:autoAddressFindings");
+    fireEvent.change(autoAddressFindings, { target: { value: "default" } });
     expect(reviewOf(harness.current()).params).toEqual({ autoPr: false });
 
     // Roles bind by name unless the node maps them.
-    const fixer = screen.getByLabelText(/^Address Findings \(one model\)/) as HTMLSelectElement;
-    expect(fixer.value).toBe("builder");
-    fireEvent.change(fixer, { target: { value: "describer" } });
-    expect(reviewOf(harness.current()).roles!.fixer).toBe("describer");
+    const addresser = screen.getByLabelText(/^Address Findings \(one model\)/) as HTMLSelectElement;
+    expect(addresser.value).toBe("builder");
+    fireEvent.change(addresser, { target: { value: "describer" } });
+    expect(reviewOf(harness.current()).roles!.addresser).toBe("describer");
   });
 
   test("pins the current version, which a compile then holds it to", async () => {

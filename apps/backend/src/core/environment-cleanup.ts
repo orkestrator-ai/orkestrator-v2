@@ -24,7 +24,7 @@ import { removeEnvironmentNetwork } from "./container-network.js";
 import { removeEnvironmentEgressGateways } from "./egress-gateway.js";
 import type { Environment, Project } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
-import { stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
+import { stopGitFsmonitorDaemon } from "./git/index.js";
 import { removeConfinedDirectory } from "./path-safety.js";
 import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";

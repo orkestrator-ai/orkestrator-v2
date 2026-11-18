@@ -673,7 +673,7 @@ describe("agent Kanban tools", () => {
     expect(JSON.stringify(statusKeyCorrection.body.result)).not.toContain(firstKey);
 
     const kindMismatch = await rpc(first.url, first.token, "tools/call", {
-      name: "submit_fix_result",
+      name: "submit_address_findings_result",
       arguments: {
         resultKey: firstKey,
         capability: first.workflowResultCapability,

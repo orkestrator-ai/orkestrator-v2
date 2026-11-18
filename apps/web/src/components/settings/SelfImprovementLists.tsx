@@ -143,7 +143,7 @@ export function LastRunDetails({
   return (
     <div className="space-y-3">
       {run.outcome === "failed" ? (
-        <p className="text-xs text-red-400">{run.error ?? "The run stopped before it finished."}</p>
+        <p className="text-xs text-failure">{run.error ?? "The run stopped before it finished."}</p>
       ) : null}
       <TicketList
         onOpenTicket={onOpenTicket}

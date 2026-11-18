@@ -324,7 +324,7 @@ describe("pinned sequences", () => {
       (await w.launch(ref, { pins: { approve: [{ outlet: "rejected" }] } })).id,
     );
     // Rejected: build and everything after it skip. The PR run output is optional
-    // (item 402: a review with findings and autoFix off ends without one), so the
+    // (item 402: a review with findings and autoAddressFindings off ends without one), so the
     // run completes, without a pull request or a "would have run" record for one.
     expect(rejected.status).toBe("complete");
     expect(rejected.activations.find((a) => a.nodeId === "approve")?.outlet).toBe("rejected");
@@ -365,17 +365,25 @@ describe("pinned sequences", () => {
     const state = (run: GraphRun, nodeId: string) =>
       run.activations.filter((a) => a.nodeId === nodeId).map((a) => a.state);
 
-    // autoFix off reaches the inlined Fix through the sub-graph's passed-through
+    // autoAddressFindings off reaches the inlined Fix through the sub-graph's passed-through
     // parameter: findings and no Fix end the review on neither branch, so there
     // is no pull request (the run output is optional) and no PR record.
-    const unfixed = await w.finish((await w.launch(ref, { params: { autoFix: false } })).id);
+    const unfixed = await w.finish(
+      (await w.launch(ref, { params: { autoAddressFindings: false } })).id,
+    );
     expect(unfixed.status).toBe("complete");
-    expect(unfixed.bindings.params).toEqual({ autoFix: false });
+    expect(unfixed.bindings.params).toEqual({ autoAddressFindings: false });
     expect(state(unfixed, "review/consolidate")).toEqual(["complete"]);
     expect(unfixed.activations.find((a) => a.nodeId === "review/has-findings")?.outlet).toBe(
       "findings",
     );
-    for (const nodeId of ["review/fix", "review/fix-complete", "describe-pr", "pr", "review/pr"]) {
+    for (const nodeId of [
+      "review/address-findings",
+      "review/address-findings-complete",
+      "describe-pr",
+      "pr",
+      "review/pr",
+    ]) {
       expect(state(unfixed, nodeId)).toEqual(["skipped"]);
     }
     expect((await wouldRun(w, unfixed)).map((effect) => effect.nodeId)).toEqual(["review/package"]);
@@ -393,7 +401,7 @@ describe("pinned sequences", () => {
     expect(shipped.status).toBe("complete");
     const gate = shipped.activations.find((a) => a.nodeId === "review/has-findings")!;
     expect(gate.outlet).toBe("clean");
-    expect(state(shipped, "review/fix")).toEqual(["skipped"]);
+    expect(state(shipped, "review/address-findings")).toEqual(["skipped"]);
     const pr = shipped.activations.find((a) => a.nodeId === "pr")!;
     expect(pr.state).toBe("complete");
     expect(pr.inputs.code).toBe(gate.outputs.code!);

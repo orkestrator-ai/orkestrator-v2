@@ -44,7 +44,7 @@ export const MULTI_REVIEW_STEP_TURNS: Readonly<Record<MultiReviewStepKind, Multi
   Object.freeze({
     prepare: Object.freeze({ result: "validation-plan", readOnly: false }),
     consolidate: Object.freeze({ result: "consolidated-review", readOnly: true }),
-    "address-findings": Object.freeze({ result: "fix-result", readOnly: false }),
+    "address-findings": Object.freeze({ result: "address-findings-result", readOnly: false }),
   });
 
 /** Each reviewer submits one structured report, in a read-only plan-mode turn over the package. */

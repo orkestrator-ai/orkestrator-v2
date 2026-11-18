@@ -678,7 +678,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "create_schedule",
   "create_ticket",
   "create_ticket_label",
-  "custom_fix_multi_review",
+  "custom_address_multi_review",
   "delete_ticket",
   "edit_worker_tab",
   "fork_worker",
@@ -720,7 +720,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "list_worker_commands",
   "list_workflows",
   "open_multi_review",
-  "open_multi_review_fix",
+  "open_multi_review_address_findings",
   "open_worker_browser",
   "pause_build_pipeline",
   "pause_schedule",
@@ -797,7 +797,7 @@ export const COORDINATOR_REPLAYED_NOTE =
  * user's configured default. Kept short: it is injected on every turn.
  */
 export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
-  "Defaults: omit agent, modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
+  "Defaults: omit agent, modelId, reasoningId, Multi Review model rows, autoAddressFindings and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or automation, or agrees to one the task needs.";
 
 /**
  * How long after a coordinator's last sent message to a project home the next
@@ -823,7 +823,7 @@ export const COORDINATOR_ROUTING_RULE =
  * would have taken end to end. The PR mechanics stay in `COORDINATOR_PR_RULE`.
  */
 export const COORDINATOR_ENVIRONMENT_CHOICE_RULE =
-  "Environments: a pipeline environment is the default. Start one with start_build_pipeline whenever the whole spec is known (a ticket, or what is being built has been settled with the user); it builds, reviews, fixes, verifies, opens the PR and resolves conflicts on its own. Use a prompt environment (launch_environment) for investigation, or for interactive work that may stop, raise many questions or need back-and-forth with the user. With a prompt environment the rest of the lifecycle is yours: when you judge the work ready, launch Multi Review, then see it through its fix, the pull request and conflict resolution. Investigation with no code change ends with the worker's report.";
+  "Environments: a pipeline environment is the default. Start one with start_build_pipeline whenever the whole spec is known (a ticket, or what is being built has been settled with the user); it builds, reviews, fixes, verifies, opens the PR and resolves conflicts on its own. Use a prompt environment (launch_environment) for investigation, or for interactive work that may stop, raise many questions or need back-and-forth with the user. With a prompt environment the rest of the lifecycle is yours: when you judge the work ready, launch Multi Review, then see it through Address Findings, the pull request and conflict resolution. Investigation with no code change ends with the worker's report.";
 
 /**
  * Who raises a pull request, told to every main coordinator verbatim.
@@ -836,7 +836,7 @@ export const COORDINATOR_ENVIRONMENT_CHOICE_RULE =
  * is the next step for a conflicting one.
  */
 export const COORDINATOR_PR_RULE =
-  "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. For a prompt environment, a Multi Review with auto-fix and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and its fix have finished. You are woken when a pull request you raised opens, conflicts with its base branch, fails its checks, becomes ready to merge, or is merged or closed; when it conflicts, call resolve_conflicts, which opens the worker's Resolve tab and wakes you once it finishes. Never merge a pull request: the user does. A pipeline environment (one a build pipeline runs, from start_build_pipeline or a Build button) has its own PR step, so never raise one for it.";
+  "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. For a prompt environment, a Multi Review with auto-address findings and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and Address Findings have finished. You are woken when a pull request you raised opens, conflicts with its base branch, fails its checks, becomes ready to merge, or is merged or closed; when it conflicts, call resolve_conflicts, which opens the worker's Resolve tab and wakes you once it finishes. Never merge a pull request: the user does. A pipeline environment (one a build pipeline runs, from start_build_pipeline or a Build button) has its own PR step, so never raise one for it.";
 
 /**
  * Who runs full validation, told to every main coordinator verbatim.
@@ -917,7 +917,7 @@ export const COORDINATOR_PR_STATUS_WAKE =
  * know?", and without an answer the obvious move is to poll its status.
  */
 export const COORDINATOR_WORKFLOW_STATUS_WAKE =
-  "This conversation will be woken with a status update when this workflow settles: a Multi Review ready to address, its fix done or failed, its automatic PR session started, opened or failed (after which the pull request's own changes wake you: conflicts, failing checks, ready to merge, merged or closed), a build paused on an error, a stall, and any workflow completing, failing or being cancelled. With auto-fix and auto-PR the review advances on its own, and you hear the outcome rather than each step. Updates that land together arrive in one wake. Do not poll its status.";
+  "This conversation will be woken with a status update when this workflow settles: a Multi Review ready to address, its Address Findings done or failed, its automatic PR session started, opened or failed (after which the pull request's own changes wake you: conflicts, failing checks, ready to merge, merged or closed), a build paused on an error, a stall, and any workflow completing, failing or being cancelled. With auto-address findings and auto-PR the review advances on its own, and you hear the outcome rather than each step. Updates that land together arrive in one wake. Do not poll its status.";
 
 /**
  * What moved the checkout's HEAD: a fast-forward to its upstream

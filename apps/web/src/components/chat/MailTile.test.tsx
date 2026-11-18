@@ -364,7 +364,9 @@ describe("MailTile", () => {
     );
     expect(tile(failed.container).firstElementChild!.className).not.toBe(workerFrame);
     expect(tile(failed.container).querySelector("svg")!.getAttribute("class")).not.toBe(workerIcon);
-    expect(tile(failed.container).firstElementChild!.className).toContain("red");
+    expect(tile(failed.container).firstElementChild!.classList.contains("border-failure/30")).toBe(
+      true,
+    );
   });
 
   test("a notice without structured facts reads as neutral news", () => {

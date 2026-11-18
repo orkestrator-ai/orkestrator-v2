@@ -92,7 +92,7 @@ test("backend startup restores saved auto-merge and polls without any client req
   const context = internals.context;
   const service = context.runtime.prMonitor.service;
   const options = (
-    service as unknown as { options: import("./pr-monitor.js").PrMonitorServiceOptions }
+    service as unknown as { options: import("./git/pr-monitor.js").PrMonitorServiceOptions }
   ).options;
   const timers: Array<() => void> = [];
   options.schedule = (callback) => {

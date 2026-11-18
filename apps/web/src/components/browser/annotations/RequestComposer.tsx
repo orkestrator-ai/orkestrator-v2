@@ -340,7 +340,7 @@ export function RequestComposer({
         </div>
       )}
       {error && (
-        <p role="alert" className="text-[11px] text-destructive">
+        <p role="alert" className="text-[11px] text-failure">
           {error}
         </p>
       )}
@@ -401,7 +401,7 @@ export function RequestComposer({
               {preparation.issues.map((issue, index) => (
                 <li
                   key={`${issue.code}-${issue.annotationId ?? ""}-${index}`}
-                  className={issue.severity === "blocker" ? "text-destructive" : "text-amber-200"}
+                  className={issue.severity === "blocker" ? "text-failure" : "text-amber-200"}
                 >
                   <TriangleAlert className="mr-1 inline h-3 w-3" aria-hidden />
                   {issue.severity === "blocker" ? "Blocks sending: " : "Warning: "}

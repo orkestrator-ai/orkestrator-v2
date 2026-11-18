@@ -348,6 +348,44 @@ are invalidations only; the file list and tree are re-read with
   target then holds the environment's own commits. Containers still measure
   from the creation commit.
 
+### Native composer file index
+
+An assigned or unassigned native composer starts a tree read only when the
+user opens inline file mentions or chooses a workspace file from the
+attachment menu. Those entry points share one in-flight read and one flattened
+index for the same node scope and worktree path or container ID. Closing a tab
+does not cancel a shared read. Each consumer clears its visible results when
+the target changes, so a late result cannot supply paths to a different node
+or workspace. Open File retains its own load-on-open behavior.
+
+On opening the menu, an index checked less than three seconds ago can be
+reused. After that, the next opening requests a fresh backend observation
+with the last digest. An unchanged reply reuses the flattened index. A changed
+reply replaces it, and a failed read shows Retry. The menu does not poll while
+open. The renderer retains up to eight completed workspace indexes and allows
+up to eight concurrent workspace reads per node scope. Each backend read uses
+the existing 5,000-node tree cap.
+
+To-do 8310 task 1 was completed and retired on 2026-11-18. In Chromium
+against an isolated local gateway, the fixture worktree hit the 5,000-node cap.
+The run activated both tabs without opening mentions, revisited the assigned
+tab, and opened mentions in both tabs within the reuse window. The table counts
+composer tree RPCs and decoded JSON response bytes, including the gateway
+envelope. It excludes Files panel and Open File reads.
+
+| Phase | Before (requests / bytes) | After (requests / bytes) |
+| --- | ---: | ---: |
+| Tab activation before any mention | 4 / 2,478,204 | 0 / 0 |
+| First mention | 1 / 619,551 | 1 / 619,842 |
+| Second mention | 1 / 619,551 | 0 / 0 |
+| Total | 6 / 3,717,306 | 1 / 619,842 |
+
+The first read includes the conditional response metadata. Reopening after
+three seconds with no path changes sent one 292-byte response. A rename
+between openings produced a new index with the current path. The focused
+web tests assert that in-flight and warm tab reads share the same flattened
+array and that an unchanged recheck reuses it.
+
 ## Coordinator view
 
 The coordinator panel is invalidation-led, not event-folded: it subscribes to

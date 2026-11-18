@@ -108,9 +108,7 @@ import {
   mergeReorderedFavoriteModels,
   useAgentModelFavorites,
 } from "@/hooks/useAgentModelFavorites";
-import { useFileMentions } from "@/hooks/useFileMentions";
-import { useFileSearch } from "@/hooks/useFileSearch";
-import { useComposerFileSearchFeedback } from "@/hooks/useComposerFileSearchFeedback";
+import { useComposerFileMentions } from "@/hooks/useComposerFileMentions";
 import { useComposerMountFocus } from "@/hooks/useComposerMountFocus";
 import { useFocusComposerShortcut } from "@/hooks/useFocusComposerShortcut";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
@@ -713,12 +711,9 @@ export function SharedNativeAgentController({
   // projection is the platform table narrowed by what this session offers.
   const attachmentCapabilities =
     projection?.capabilities?.attachments ?? adapter.capabilities.attachments;
-  const fileSearch = useFileSearch(
-    data.containerId,
-    envWorktreePath ?? coordinatorWorkspacePath,
-    attachmentCapabilities.files || attachmentCapabilities.images,
-  );
+  const canSearchFiles = attachmentCapabilities.files || attachmentCapabilities.images;
   const {
+    fileSearch,
     isMenuOpen: fileMentionMenuOpen,
     selectedIndex: fileMentionSelectedIndex,
     filteredFiles,
@@ -727,7 +722,10 @@ export function SharedNativeAgentController({
     closeMenu: closeFileMentionMenu,
     serializeForLLM,
     createMention,
-  } = useFileMentions({ searchFiles: fileSearch.searchFiles });
+  } = useComposerFileMentions(
+    canSearchFiles ? data.containerId : undefined,
+    canSearchFiles ? (envWorktreePath ?? coordinatorWorkspacePath) : undefined,
+  );
   // Bound after `submit` exists; the menu's "Send as text" only needs a stable handle.
   const sendAsTextRef = useRef<() => void>(() => {});
   const sendDraftAsText = useCallback(() => sendAsTextRef.current(), []);
@@ -2887,11 +2885,6 @@ export function SharedNativeAgentController({
     onImageRejected: () => toast.error("Images are not supported by this agent"),
     logLabel: "SharedNativeAgentController",
   });
-  useComposerFileSearchFeedback({
-    error: fileSearch.error,
-    refresh: fileSearch.refresh,
-    mentionMenuOpen: fileMentionMenuOpen,
-  });
   useComposerMountFocus(inputRef, isActive);
   useFocusComposerShortcut({
     isActive: ownsGlobalShortcuts ?? isActive,
@@ -4277,6 +4270,15 @@ export function SharedNativeAgentController({
             fileMentionMenuOpen ? (
               <FileMentionMenu
                 files={filteredFiles}
+                loading={fileSearch.isLoading}
+                onRetry={
+                  fileSearch.error
+                    ? () => {
+                        inputRef.current?.focus();
+                        void fileSearch.refresh();
+                      }
+                    : undefined
+                }
                 selectedIndex={fileMentionSelectedIndex}
                 onSelect={handleFileMentionSelect}
                 onClose={closeFileMentionMenu}
@@ -4288,7 +4290,7 @@ export function SharedNativeAgentController({
           primaryControls={
             composer ? (
               <>
-                {attachmentCapabilities.files || attachmentCapabilities.images ? (
+                {canSearchFiles ? (
                   <NativeAttachmentMenu
                     disabled={queueEditPending || (sendLocked && !canQueue)}
                     fileSearch={fileSearch}

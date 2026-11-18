@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { Folder } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { FileIcon } from "@/components/files-panel/FileIcon";
 import { useViewportBoundedMenu } from "@/hooks/useViewportBoundedMenu";
 import type { FileCandidate } from "@/types";
@@ -10,12 +11,21 @@ const PREFERRED_MAX_HEIGHT_PX = 384;
 
 interface FileMentionMenuProps {
   files: FileCandidate[];
+  loading?: boolean;
+  onRetry?: () => void;
   selectedIndex: number;
   onSelect: (file: FileCandidate) => void;
   onClose: () => void;
 }
 
-export function FileMentionMenu({ files, selectedIndex, onSelect, onClose }: FileMentionMenuProps) {
+export function FileMentionMenu({
+  files,
+  loading,
+  onRetry,
+  selectedIndex,
+  onSelect,
+  onClose,
+}: FileMentionMenuProps) {
   const { menuRef, setMenuRef, style, side } =
     useViewportBoundedMenu<HTMLDivElement>(PREFERRED_MAX_HEIGHT_PX);
   const selectedRef = useRef<HTMLButtonElement>(null);
@@ -44,8 +54,9 @@ export function FileMentionMenu({ files, selectedIndex, onSelect, onClose }: Fil
     return (
       <div
         ref={setMenuRef}
-        role="listbox"
+        role={onRetry ? "group" : "listbox"}
         aria-label="File and folder suggestions"
+        aria-busy={loading || undefined}
         data-side={side}
         className={cn(
           "absolute z-50 w-full min-w-0 overflow-y-auto overscroll-contain rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm sm:w-96",
@@ -58,10 +69,30 @@ export function FileMentionMenu({ files, selectedIndex, onSelect, onClose }: Fil
     );
   }
 
-  if (files.length === 0) {
+  if (onRetry) {
+    return renderShell(
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5">
+        <span role="status" className="text-sm text-failure">
+          Couldn’t load workspace files
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 max-sm:h-10"
+          onMouseDown={(event) => event.preventDefault()}
+          title="Retry (Enter)"
+          onClick={onRetry}
+        >
+          Retry
+        </Button>
+      </div>,
+    );
+  }
+
+  if (loading || files.length === 0) {
     return renderShell(
       <div className="p-3 text-center text-sm text-muted-foreground" role="status">
-        No files or folders found
+        {loading ? "Loading workspace files…" : "No files or folders found"}
       </div>,
     );
   }

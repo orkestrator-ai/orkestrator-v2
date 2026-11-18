@@ -5,6 +5,10 @@ import { createUuid } from "@/lib/uuid";
 interface UseFileMentionsOptions {
   /** Callback to search files */
   searchFiles: (query: string, limit?: number) => FileCandidate[];
+  /** Lets a composer use the menu's open state to drive its file read. */
+  openState?: { open: boolean; setOpen: (open: boolean) => void };
+  /** Action on Enter when the open menu has no selectable files. */
+  onEmptyEnter?: () => void;
   /** Max files to show in menu (default: 30) */
   maxResults?: number;
 }
@@ -47,19 +51,26 @@ interface CloseMenuOptions {
  */
 export function useFileMentions({
   searchFiles,
+  openState,
+  onEmptyEnter,
   maxResults = 30,
 }: UseFileMentionsOptions): UseFileMentionsReturn {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isMenuOpen = openState?.open ?? internalOpen;
+  const setIsMenuOpen = openState?.setOpen ?? setInternalOpen;
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const suppressedAcceptedFilenameRef = useRef<string | null>(null);
 
-  const closeMenu = useCallback((options?: CloseMenuOptions) => {
-    suppressedAcceptedFilenameRef.current = options?.suppressReopenFor ?? null;
-    setIsMenuOpen(false);
-    setSearchQuery("");
-    setSelectedIndex(0);
-  }, []);
+  const closeMenu = useCallback(
+    (options?: CloseMenuOptions) => {
+      suppressedAcceptedFilenameRef.current = options?.suppressReopenFor ?? null;
+      setIsMenuOpen(false);
+      setSearchQuery("");
+      setSelectedIndex(0);
+    },
+    [setIsMenuOpen],
+  );
 
   const handleMenuKey = useCallback((event: React.KeyboardEvent) => {
     event.preventDefault();
@@ -118,7 +129,7 @@ export function useFileMentions({
         setSearchQuery("");
       }
     },
-    [searchQuery],
+    [searchQuery, setIsMenuOpen],
   );
 
   /**
@@ -148,6 +159,7 @@ export function useFileMentions({
         case "Enter":
           handleMenuKey(event);
           if (filteredFiles.length === 0) {
+            if (event.key === "Enter") onEmptyEnter?.();
             return true;
           }
           const selectedFile = filteredFiles[safeSelectedIndex] ?? filteredFiles[0]!;
@@ -175,7 +187,7 @@ export function useFileMentions({
 
       return false;
     },
-    [closeMenu, filteredFiles, handleMenuKey, isMenuOpen, safeSelectedIndex],
+    [closeMenu, filteredFiles, handleMenuKey, isMenuOpen, safeSelectedIndex, onEmptyEnter],
   );
 
   /**

@@ -7,7 +7,7 @@
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { afterAll, afterEach, beforeEach, expect, mock } from "bun:test";
 import { isValidElement, memo, useEffect, type ReactNode } from "react";
-import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { createNativeAgentSessionBackend } from "@/test/native-agent-session-backend";
 import { NativeMessage as NativeMessageCard } from "@/components/chat/NativeMessage";
 import type { NativeMessageProps } from "@/components/chat/NativeMessage.shared";
@@ -317,7 +317,20 @@ const cancelAgentAccountLoginMock = mock(async () => {
 export const stopNativeAgentBackgroundTaskMock = mock(async () =>
   sessionProjectionMock({ agent: "claude", environmentId: "env-1" }),
 );
-export const getLocalFileTreeMock = mock(async (_worktreePath: string) => []);
+export const getLocalFileTreeSnapshotMock = mock<typeof realBackend.getLocalFileTreeSnapshot>();
+export const getFileTreeSnapshotMock = mock<typeof realBackend.getFileTreeSnapshot>();
+
+export function typeFileMention(input: HTMLElement) {
+  input.focus();
+  input.textContent = "@";
+  const range = document.createRange();
+  range.selectNodeContents(input);
+  range.collapse(false);
+  const selection = window.getSelection()!;
+  selection.removeAllRanges();
+  selection.addRange(range);
+  fireEvent.input(input);
+}
 export const writeCoordinatorAttachmentMock = mock(
   async (environmentId: string, filename: string, _base64Data: string) =>
     `/data/coordinator-attachments/${environmentId}/${filename}`,
@@ -868,8 +881,8 @@ export async function installAgentNativeTabFixture() {
     resumeNativeAgentSession: resumeNativeAgentSessionMock,
     stopNativeAgentSession: stopNativeAgentSessionMock,
     stopNativeAgentBackgroundTask: stopNativeAgentBackgroundTaskMock,
-    getFileTree: async () => [],
-    getLocalFileTree: getLocalFileTreeMock,
+    getFileTreeSnapshot: getFileTreeSnapshotMock,
+    getLocalFileTreeSnapshot: getLocalFileTreeSnapshotMock,
     writeCoordinatorAttachment: writeCoordinatorAttachmentMock,
     writeBugReportAttachment: writeBugReportAttachmentMock,
     ...sessionBackend.api,
@@ -889,6 +902,14 @@ export async function installAgentNativeTabFixture() {
     flushPaneLayoutNow: flushPaneLayoutNowMock,
   }));
   beforeEach(() => {
+    getLocalFileTreeSnapshotMock.mockReset();
+    getLocalFileTreeSnapshotMock.mockResolvedValue({
+      unchanged: false,
+      digest: "local",
+      value: [],
+    });
+    getFileTreeSnapshotMock.mockReset();
+    getFileTreeSnapshotMock.mockResolvedValue({ unchanged: false, digest: "container", value: [] });
     configSnapshot = appCommandStore(configStore).getState().config;
     useNativeNoticeDismissalStore.getState().clear();
     appCommandStore(agentModelCatalogStore).setState({
@@ -988,7 +1009,6 @@ export async function installAgentNativeTabFixture() {
     sessionHistoryMock.mockReset();
     sessionHistoryMock.mockImplementation(async () => []);
     sessionBackend.reset();
-    getLocalFileTreeMock.mockClear();
     writeCoordinatorAttachmentMock.mockClear();
     writeBugReportAttachmentMock.mockClear();
     getComposeDraftMock.mockClear();

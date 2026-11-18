@@ -64,7 +64,9 @@ import {
   startAgentAccountLoginMock,
   getAgentAccountLoginMock,
   listAgentAccountsMock,
-  getLocalFileTreeMock,
+  getLocalFileTreeSnapshotMock,
+  getFileTreeSnapshotMock,
+  typeFileMention,
   writeCoordinatorAttachmentMock,
   writeBugReportAttachmentMock,
   composeDraftRecords,
@@ -2140,7 +2142,14 @@ describe("AgentNativeTab", () => {
       />,
     );
 
-    await waitFor(() => expect(getLocalFileTreeMock).toHaveBeenCalledWith("/tmp/project"));
+    const input = await screen.findByRole("textbox");
+    expect(getLocalFileTreeSnapshotMock).not.toHaveBeenCalled();
+    typeFileMention(input);
+    await waitFor(() =>
+      expect(getLocalFileTreeSnapshotMock).toHaveBeenCalledWith("/tmp/project", undefined, {
+        refresh: true,
+      }),
+    );
     await waitFor(() => expect(latestPasteOptions).not.toBeNull());
     expect(latestPasteOptions?.worktreePath ?? null).toBeNull();
     expect(await latestPasteOptions?.writeImage?.("clipboard.png", "cG5n")).toBe(
@@ -2151,6 +2160,44 @@ describe("AgentNativeTab", () => {
       "clipboard.png",
       "cG5n",
     );
+  });
+
+  test("a container composer opens mentions on demand, retries, and selects by keyboard", async () => {
+    getFileTreeSnapshotMock.mockRejectedValueOnce(new Error("Container offline"));
+    getFileTreeSnapshotMock.mockResolvedValueOnce({
+      unchanged: false,
+      digest: "container-tree",
+      value: [
+        { name: "first.ts", path: "first.ts", isDirectory: false },
+        { name: "second.ts", path: "second.ts", isDirectory: false },
+      ],
+    });
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="container-mentions" data={identity("codex")} isActive />,
+    );
+
+    const input = await screen.findByRole("textbox");
+    expect(getFileTreeSnapshotMock).not.toHaveBeenCalled();
+    typeFileMention(input);
+    expect(screen.getByText("Loading workspace files…")).toBeTruthy();
+    await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByText("Couldn’t load workspace files")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByRole("option", { name: "second.ts" });
+    expect(getFileTreeSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(getFileTreeSnapshotMock).toHaveBeenLastCalledWith("container-1", undefined, {
+      refresh: true,
+    });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(
+        appCommandStore(nativeComposeStore)
+          .getState()
+          .drafts.get(createSessionKey("env-1", "container-mentions"))?.mentions,
+      ).toMatchObject([{ filename: "second.ts", relativePath: "second.ts" }]),
+    );
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
   });
 
   test("a failed coordinator assignment is reported and leaves the composer usable", async () => {

@@ -2,165 +2,122 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { type FileNode } from "@/lib/backend";
+import type { FileNode } from "@/lib/backend";
 import type { FileCandidate } from "@/types";
+import { flattenFileTree, readComposerFileIndex } from "./composer-file-index";
 
 const log = createLogger("web.files");
+const EMPTY_FILES: FileCandidate[] = [];
+
+interface FileRead {
+  scope: object;
+  flatFiles: FileCandidate[];
+  isLoading: boolean;
+  error: string | null;
+}
 
 /**
- * Hook for loading and searching workspace files for @ mentions.
- * Supports both containerized (Docker) and local (worktree) environments.
+ * Loads and searches files in a container or local worktree.
+ * Native composers share an index. Other callers own their own reads.
  */
 export function useFileSearch(
   containerId: string | undefined,
   worktreePath: string | undefined,
   enabled = true,
+  mode: "independent" | "composer" = "independent",
 ) {
   // This node's backend (plan item 4001); the command node outside a node scope.
   const backendScope = useScopesWithCommandFallback().scope;
-  // Determine if environment is available
   const isAvailable = !!(containerId || worktreePath);
+  const loadScope = useMemo(
+    () => ({ backendScope, containerId, worktreePath, enabled, mode }),
+    [backendScope, containerId, worktreePath, enabled, mode],
+  );
+  const initialRead: FileRead = {
+    scope: loadScope,
+    flatFiles: EMPTY_FILES,
+    isLoading: enabled && isAvailable,
+    error: null,
+  };
+  const [fileRead, setFileRead] = useState(initialRead);
+  // A render for another target cannot select or report the old target's
+  // paths, even before effects run. Reopening waits for a freshness check.
+  if (fileRead.scope !== loadScope) setFileRead(initialRead);
+  const { flatFiles, isLoading, error } = fileRead.scope === loadScope ? fileRead : initialRead;
 
-  const [fileTree, setFileTree] = useState<FileNode[]>([]);
-  // The mount effect starts a load at once when it can.
-  const [isLoading, setIsLoading] = useState(() => enabled && isAvailable);
-  const [error, setError] = useState<string | null>(null);
-  const requestGenerationRef = useRef(0);
-  const activeRequestRef = useRef<{
-    key: string;
-    generation: number;
-    promise: Promise<void>;
-  } | null>(null);
+  const activeRequestRef = useRef<{ scope: object; promise: Promise<void> } | null>(null);
+
+  const readFiles = useCallback(async () => {
+    const backend = backendForScope(backendScope);
+    if (mode === "composer") {
+      if (worktreePath) {
+        return readComposerFileIndex(backendScope, `worktree:${worktreePath}`, (digest) =>
+          backend.getLocalFileTreeSnapshot(worktreePath, digest, { refresh: true }),
+        );
+      }
+      if (containerId) {
+        return readComposerFileIndex(backendScope, `container:${containerId}`, (digest) =>
+          backend.getFileTreeSnapshot(containerId, digest, { refresh: true }),
+        );
+      }
+    }
+    let tree: FileNode[] = [];
+    if (worktreePath) tree = await backend.getLocalFileTree(worktreePath);
+    else if (containerId) tree = await backend.getFileTree(containerId);
+    return flattenFileTree(tree);
+  }, [backendScope, containerId, worktreePath, mode]);
 
   // Starts (or joins) a read of the current environment's tree. Callers own
   // the synchronous loading state; only the settled read writes state here.
   const requestFileTree = useCallback((): Promise<void> => {
-    const requestKey = worktreePath ? `worktree:${worktreePath}` : `container:${containerId}`;
     const activeRequest = activeRequestRef.current;
-    if (activeRequest?.key === requestKey) {
+    if (activeRequest?.scope === loadScope) {
       return activeRequest.promise;
     }
 
-    const requestGeneration = requestGenerationRef.current + 1;
-    requestGenerationRef.current = requestGeneration;
-
-    const promise = Promise.resolve().then(async () => {
-      try {
-        let tree: FileNode[] = [];
-        if (worktreePath) {
-          // Local environment - use local file tree command
-          tree = await backendForScope(backendScope).getLocalFileTree(worktreePath);
-        } else if (containerId) {
-          // Container environment - use container file tree command
-          tree = await backendForScope(backendScope).getFileTree(containerId);
+    const request = {
+      scope: loadScope,
+      promise: Promise.resolve().then(async () => {
+        let files = EMPTY_FILES;
+        let failure: string | null = null;
+        try {
+          files = await readFiles();
+        } catch (err) {
+          if (activeRequestRef.current === request) {
+            log.error("file-tree.load-failed", { error: formatLogError(err) });
+          }
+          failure = err instanceof Error ? err.message : "Failed to load files";
         }
-
-        if (requestGenerationRef.current === requestGeneration) {
-          setFileTree(tree);
-        }
-      } catch (err) {
-        if (requestGenerationRef.current === requestGeneration) {
-          log.error("file-tree.load-failed", { error: formatLogError(err) });
-          setError(err instanceof Error ? err.message : "Failed to load files");
-          setFileTree([]);
-        }
-      } finally {
-        if (requestGenerationRef.current === requestGeneration) {
-          setIsLoading(false);
-        }
-        if (activeRequestRef.current?.generation === requestGeneration) {
-          activeRequestRef.current = null;
-        }
-      }
-    });
-
-    activeRequestRef.current = {
-      key: requestKey,
-      generation: requestGeneration,
-      promise,
+        if (activeRequestRef.current !== request) return;
+        activeRequestRef.current = null;
+        setFileRead((current) =>
+          current.scope === loadScope
+            ? { scope: loadScope, flatFiles: files, isLoading: false, error: failure }
+            : current,
+        );
+      }),
     };
-    return promise;
-  }, [backendScope, containerId, worktreePath]);
+    activeRequestRef.current = request;
+    return request.promise;
+  }, [loadScope, readFiles]);
 
-  // Load file tree from environment (explicit refresh)
   const loadFileTree = useCallback((): Promise<void> => {
-    if (!isAvailable) {
-      requestGenerationRef.current += 1;
-      activeRequestRef.current = null;
-      setFileTree([]);
-      setIsLoading(false);
-      setError(null);
-      return Promise.resolve();
-    }
-    const requestKey = worktreePath ? `worktree:${worktreePath}` : `container:${containerId}`;
-    if (activeRequestRef.current?.key !== requestKey) {
-      setIsLoading(true);
-      setError(null);
+    if (!isAvailable) return Promise.resolve();
+    if (activeRequestRef.current?.scope !== loadScope) {
+      setFileRead((current) =>
+        current.scope === loadScope ? { ...current, isLoading: true, error: null } : current,
+      );
     }
     return requestFileTree();
-  }, [isAvailable, containerId, worktreePath, requestFileTree]);
+  }, [isAvailable, loadScope, requestFileTree]);
 
-  // The state half of the effect below, applied while rendering when the
-  // environment or enablement changes: an unavailable environment has no
-  // tree, a new one is loading, and disabling abandons the read in flight.
-  const loadScope = JSON.stringify([enabled, containerId ?? null, worktreePath ?? null]);
-  const [renderedLoadScope, setRenderedLoadScope] = useState(loadScope);
-  if (renderedLoadScope !== loadScope) {
-    setRenderedLoadScope(loadScope);
-    if (!enabled) {
-      setIsLoading(false);
-    } else if (!isAvailable) {
-      setFileTree([]);
-      setIsLoading(false);
-      setError(null);
-    } else {
-      setIsLoading(true);
-      setError(null);
-    }
-  }
-
-  // Load file tree on mount and when environment changes
   useEffect(() => {
     if (enabled && isAvailable) void requestFileTree();
 
     return () => {
-      requestGenerationRef.current += 1;
-      activeRequestRef.current = null;
+      if (activeRequestRef.current?.scope === loadScope) activeRequestRef.current = null;
     };
-  }, [enabled, isAvailable, requestFileTree]);
-
-  // Flatten hierarchical file tree into searchable array of files and directories
-  const flatFiles = useMemo((): FileCandidate[] => {
-    const result: FileCandidate[] = [];
-
-    function flatten(nodes: FileNode[]) {
-      for (const node of nodes) {
-        if (node.isDirectory) {
-          // Add directory to list
-          result.push({
-            filename: node.name,
-            relativePath: node.path,
-            isDirectory: true,
-          });
-          // Recurse into directories
-          if (node.children) {
-            flatten(node.children);
-          }
-        } else {
-          // Add file to flat list
-          result.push({
-            filename: node.name,
-            relativePath: node.path,
-            extension: node.extension,
-            isDirectory: false,
-          });
-        }
-      }
-    }
-
-    flatten(fileTree);
-    return result;
-  }, [fileTree]);
+  }, [enabled, isAvailable, loadScope, requestFileTree]);
 
   /**
    * Search files by query (case-insensitive).

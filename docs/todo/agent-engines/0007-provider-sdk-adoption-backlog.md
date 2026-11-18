@@ -14,7 +14,9 @@ Assumptions and decisions). Task 4 rechecked 2026-11-02 against `main` at
 Task 8 rechecked 2026-11-03 against `main` at `7b48c23fb` (Pi `1.4.0`, Codex
 `0.166.0`, OpenCode `1.19.5`) before its instructions half was built, and
 again 2026-11-06 against `main` at `c1724ab74` (Pi still `1.4.0`) before its
-abort and auto-compaction toggle were built.
+abort and auto-compaction toggle were built. Task 6's Codex dynamic tools
+rechecked 2026-11-18 against `main` at `85c55358f` (Codex `0.169.0`) and
+decided: deferred, with the conditions for adoption recorded.
 
 The "Decided out" list is product decisions, not tasks; only where the current
 pins undercut one of them is it raised below (task 1).
@@ -26,7 +28,7 @@ pins undercut one of them is it raised below (task 1).
 3. **Claude in-process MCP server**: decide `createSdkMcpServer()` versus the HTTP loopback for Orkestrator tools. Status: done (decided out: keep HTTP; recorded under "Decided out").
 4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: blocked (re-arm waits on 7568: 0001 tasks 3 to 6, the real-login live runs, which moved there from 0001 on 2026-11-10); provenance done 2026-11-02 (an optional `source` on the shared interaction request, filled by Claude, shown on the card).
 5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (decision recorded: until a user-visible MCP server needs it).
-6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates).
+6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates; Codex dynamic tools qualified against a concrete consumer on 2026-11-18 and deferred, with what would justify adoption under "Task 6: Codex dynamic tools deferred").
 7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still at `1.2.0`).
 8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: done (custom instructions 2026-11-03: `/compact <instructions>` behind `actions.compactInstructions`, on for Claude and Pi; 2026-11-06: Stop ends a Pi compaction through the cancel routes, and an Auto-compact composer toggle per session that never writes Pi's settings file). Live check on a signed-in Pi was to-do 7280 (retired 2026-11-10); how it works is in [native-agent-commands.md](../../architecture/native-agent-commands.md).
 9. **Second ACP agent**: Gemini CLI or Claude-over-ACP through `AcpProviderConfig`. Status: deferred (decision recorded: until a user asks for a specific agent).
@@ -158,7 +160,42 @@ Re-arm is still untouched.
 
 **Context.** Each needs a product reason before adoption; dynamic tools are answered as failure on purpose.
 
-**Investigation.** Claude `additionalDirectories` / `skills` are referenced only in a comment (`bridges/claude-bridge/src/services/coordinator-skills.ts:6`). Codex uses only `config/mcpServer/reload` among config writes (`bridges/codex-bridge/src/engine/app-server-engine.ts:2161,2175`); `item/tool/call` still fails with a transcript explanation (`bridges/codex-bridge/src/app-server/server-request-router.ts:593-600`); `configRequirements/read` exists in the generated protocol and is not projected.
+**Investigation.** Claude `additionalDirectories` / `skills` are referenced only in a comment (`bridges/claude-bridge/src/services/coordinator-skills.ts:6`). Codex uses only `config/mcpServer/reload` among config writes (`bridges/codex-bridge/src/engine/app-server-engine.ts:2161,2175`); `item/tool/call` still fails with a transcript explanation (the `item/tool/call` branch of `bridges/codex-bridge/src/app-server/server-request-router.ts`); `configRequirements/read` exists in the generated protocol and is not projected.
+
+Codex dynamic tools, checked 2026-11-18 against the `0.169.0` pin:
+
+- Registration is experimental and start-only. The committed (stable)
+  protocol has no way to register one: `dynamicTools` is absent from the
+  generated `ThreadStartParams`. Running `codex app-server generate-ts
+  --experimental` on the pinned binary shows `dynamicTools?:
+  Array<DynamicToolSpec>` on `ThreadStartParams` only, not on
+  `ThreadResumeParams`, `ThreadForkParams` or `TurnStartParams`. The bridge
+  initializes with `experimentalApi: false` (`process-supervisor.ts`), so it
+  registers none and an `item/tool/call` is not expected at all.
+- The concrete consumer is the workflow-result submit tool: the one
+  host-provided tool a pipeline or graph result turn must call to finish
+  (`workflowResultTool` and the graph slot tools, admitted in
+  `app-server-runtime-prompt.ts`). The Orkestrator agent tools (mail,
+  tickets, key information, artifacts) are the second candidate. Both are
+  served today by the backend's `orkestrator` MCP server, the same server
+  every other platform reaches.
+- What that consumer needs: the call must reach the backend with the
+  attempt's own credential, the tool set must change per attempt on a thread
+  that keeps its conversation, and the call must bypass Codex's MCP approval
+  gate. The turn should also be refused before dispatch when the tool is
+  unavailable. The MCP path uses a per-attempt credential with
+  `reloadThread` (which keeps the rollout) and a narrow workflow-result
+  server that bypasses the approval gate. A confirmed missing tool returns
+  424 before dispatch. An unverified inventory, such as after a timeout or
+  RPC failure, permits dispatch.
+- What a dynamic tool would change: the call would be answered inside the
+  bridge, which would then need its own backend credential and a proxy route
+  to deliver the result (the same hop that kept Claude off
+  `createSdkMcpServer`, see "Decided out"). A per-attempt tool change would
+  need a new thread, losing the conversation, because tools can be set only
+  on `thread/start`. Whether registered tools survive the idle detach and
+  `thread/resume` from the rollout is unverified. It would also be
+  Codex-only, while the other five platforms keep MCP.
 
 **Decisions.**
 
@@ -169,6 +206,21 @@ Re-arm is still untouched.
   - **Move to "Decided out".**
     - Pros: shorter backlog.
     - Cons: needs a real product decision for each, which nobody has made.
+
+- **Codex dynamic tools: adopt one for the workflow-result submit tool, or defer?**
+  - **Defer, answer every call with an explicit failure, and record what would justify adoption (recommended).**
+    - Pros: no experimental opt-in; one tool path for every platform; the
+      shared MCP path already serves the workflow-result submit tool; any
+      unexpected call still gets one answer that tells the model and the
+      user why it failed.
+    - Cons: no in-bridge tool path exists if a future consumer needs one.
+  - **Register the submit tool as a dynamic tool.**
+    - Pros: no MCP server, and none of its configuration, on the thread.
+    - Cons: needs `experimentalApi`, which exposes every experimental field
+      and method to the bridge; registration only on `thread/start`, so a
+      per-attempt change costs the conversation; the bridge would need its own
+      backend credential to deliver the result; Codex would diverge from the
+      other platforms.
 
 ### 7. Cursor `askQuestion`
 
@@ -434,6 +486,42 @@ Chose the recommended option for each: MCP Apps widgets stay deferred until a
 user-visible MCP server needs them; the other Claude and Codex surfaces stay as
 candidates and are rechecked on each bump; a second ACP agent waits for a user
 to ask for a specific one. Nothing in the current pins changes those reasons.
+
+### Task 6: Codex dynamic tools deferred (2026-11-18)
+
+Task 6, Codex dynamic tools. Chose to defer, the recommended option above.
+The consumer examined was the workflow-result submit tool, compared with the
+`orkestrator` MCP server that serves it today; the investigation under task 6
+has the comparison, including the admission check for confirmed missing
+tools. A dynamic tool would add an experimental opt-in, a second backend
+credential in the bridge and a Codex-only path.
+
+The router now answers an `item/tool/call` with exactly one failure: no
+JSON-RPC error, `success: false` and one `inputText` item naming the requested
+tool and saying the session registers no dynamic tools, so the model does not
+retry an empty result. The transcript notice names the tool too; the call's
+arguments are never echoed. The tool label is single-line and capped at 120
+Unicode code points before the ellipsis. An unusable tool name gets a generic
+failure notice. The call still counts as an invariant violation, because
+the bridge registers no dynamic tools.
+
+What would justify adoption, all of:
+
+1. `dynamicTools` in the stable protocol, so it appears in the committed
+   generated `ThreadStartParams` without `experimentalApi`.
+2. Registration on `thread/resume` or `turn/start`, or documented persistence
+   of registered tools across `thread/resume`, so an idle detach, a reload
+   and a bridge restart keep them.
+3. A consumer the shared MCP server cannot serve: a tool whose implementation
+   needs bridge-local state (the app-server child or the live thread), or a
+   recorded failure of the MCP path (the 424 refusal firing for users, or the
+   reload losing the tool) that a dynamic tool would avoid.
+
+If adopted, the tool is registered per thread from the session's execution
+policy. Each call gets one answer within that policy. A name the thread did
+not register keeps today's explicit failure. A call pending when its
+generation dies is abandoned as a dead generation's approval is. Logs stay
+content-free.
 
 ### Task 7: still blocked
 
@@ -701,8 +789,13 @@ Unadopted today. Each line says what blocks it or what decision it needs.
 - Codex (`bridges/codex-bridge`):
   - `config/*` writes (only `config/mcpServer/reload` is used), `command/exec`,
     `fs/*`, `feedback/upload`, `gitDiffToRemote`.
-  - Dynamic tools. `item/tool/call` is answered as a failure with a transcript
-    explanation (`server-request-router.ts`).
+  - Dynamic tools. Deferred 2026-11-18 (task 6): the workflow-result submit
+    tool, the concrete consumer, is fully served by the `orkestrator` MCP
+    server, and registration needs `experimentalApi` and works only on
+    `thread/start`. `item/tool/call` is answered as one explicit failure
+    naming the tool (`server-request-router.ts`). Adoption needs a stable
+    `dynamicTools`, registration that survives `thread/resume`, and a
+    consumer MCP cannot serve.
   - `Account.chatgpt.workspaceName` (0.166.0) in the account label. The shared
     account shape (`label`, `plan`) has no workspace field, so it needs a
     protocol field first.

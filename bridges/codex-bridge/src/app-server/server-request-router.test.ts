@@ -3,6 +3,7 @@ import {
   KNOWN_SERVER_REQUEST_METHODS,
   ServerRequestRouter,
   type ServerRequestRouterOptions,
+  dynamicToolCallName,
 } from "./server-request-router.js";
 import {
   INTERACTIVE_APPROVAL_METHODS,
@@ -210,8 +211,107 @@ describe("requests needing UI we do not have", () => {
     h.router.handle(request("item/tool/call"), 1);
     await settle();
 
-    expect(h.answers[0]!.result).toEqual({ contentItems: [], success: false });
+    // Exactly one answer: a failure that tells the model why, never a success.
+    expect(h.answers).toHaveLength(1);
+    expect(h.answers[0]!.error).toBeUndefined();
+    expect(h.answers[0]!.result).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "This tool is not available: Orkestrator registers no dynamic tools for Codex sessions. Use the tools this session lists instead.",
+        },
+      ],
+    });
+    // The bridge registers no dynamic tools, so any call is unexpected.
+    expect(h.violations).toEqual([
+      { method: "item/tool/call", detail: "dynamic tool execution requested" },
+    ]);
+    expect(h.router.getHistory()[0]!.resolution).toBe("unsupported");
+    expect(h.transcript.map(({ message }) => message)).toEqual([
+      "Codex asked Orkestrator to execute a tool it does not provide. The call was reported as failed.",
+    ]);
   });
+
+  test("a dynamic tool call names the requested tool to the user and the model", async () => {
+    const h = harness();
+    h.router.handle(
+      {
+        kind: "server-request",
+        id: "srv-9",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: "host",
+          tool: "submit_result",
+          arguments: { secret: "must-not-be-echoed" },
+        },
+      },
+      1,
+    );
+    await settle();
+
+    const result = h.answers[0]!.result as {
+      contentItems: Array<{ type: string; text: string }>;
+      success: boolean;
+    };
+    expect(result.success).toBe(false);
+    expect(result.contentItems).toHaveLength(1);
+    expect(result.contentItems[0]!.type).toBe("inputText");
+    expect(result.contentItems[0]!.text).toContain("host.submit_result");
+    expect(h.transcript[0]!.message).toContain("host.submit_result");
+    // Arguments are model content: neither the notice nor the answer repeats them.
+    expect(JSON.stringify(h.answers)).not.toContain("must-not-be-echoed");
+    expect(h.transcript[0]!.message).not.toContain("must-not-be-echoed");
+  });
+
+  test.each([
+    { namespace: "host", tool: "", label: null },
+    { namespace: "host", tool: "\n\u202e", label: null },
+    { namespace: " \t ", tool: " run ", label: "run" },
+    {
+      namespace: " host\u202e ",
+      tool: "read\u2028write\u2029list\u0085status\u2066check",
+      label: "host.read write list status check",
+    },
+    { namespace: null, tool: `${"x".repeat(119)}😀y`, label: `${"x".repeat(119)}😀…` },
+    { namespace: null, tool: "run\ud800tool", label: "run tool" },
+  ])(
+    "normalizes a dynamic tool label in the answer and notice (case %#)",
+    async ({ namespace, tool, label }) => {
+      const h = harness();
+      h.router.handle(
+        {
+          ...request("item/tool/call"),
+          params: { threadId: "thread-1", turnId: "turn-1", namespace, tool },
+        },
+        1,
+      );
+      await settle();
+
+      expect(h.answers).toHaveLength(1);
+      const subject = label === null ? "This tool" : `The tool ${label}`;
+      const noticeSubject =
+        label === null
+          ? "a tool it does not provide"
+          : `the tool ${label}, which Orkestrator does not provide`;
+      expect(h.answers[0]!.result).toEqual({
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: `${subject} is not available: Orkestrator registers no dynamic tools for Codex sessions. Use the tools this session lists instead.`,
+          },
+        ],
+      });
+      expect(JSON.stringify(h.answers[0]!.result)).not.toMatch(/\\u[dD][89a-fA-F][\da-fA-F]{2}/);
+      expect(h.transcript.map(({ message }) => message)).toEqual([
+        `Codex asked Orkestrator to execute ${noticeSubject}. The call was reported as failed.`,
+      ]);
+    },
+  );
 
   test("auth refresh and attestation return errors, never invented values", async () => {
     for (const method of ["account/chatgptAuthTokens/refresh", "attestation/generate"]) {
@@ -1735,5 +1835,25 @@ describe("refuseApproval", () => {
     } finally {
       resetLogger();
     }
+  });
+});
+
+describe("dynamicToolCallName", () => {
+  test("joins a namespace and a tool name", () => {
+    expect(dynamicToolCallName({ namespace: "ns", tool: "run" })).toBe("ns.run");
+    expect(dynamicToolCallName({ namespace: null, tool: "run" })).toBe("run");
+  });
+
+  test("returns null without a usable name", () => {
+    expect(dynamicToolCallName(undefined)).toBeNull();
+    expect(dynamicToolCallName({ tool: 7 })).toBeNull();
+    expect(dynamicToolCallName({ tool: "\n\t" })).toBeNull();
+  });
+
+  test("keeps the label on one line and bounded", () => {
+    expect(dynamicToolCallName({ tool: "a\nb" })).toBe("a b");
+    const long = dynamicToolCallName({ tool: "x".repeat(500) })!;
+    expect(long.length).toBeLessThanOrEqual(121);
+    expect(long.endsWith("…")).toBe(true);
   });
 });

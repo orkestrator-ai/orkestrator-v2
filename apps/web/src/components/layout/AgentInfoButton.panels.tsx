@@ -121,7 +121,7 @@ export function SystemUsagePanel({
       data-sampled-at={sampledAt ?? undefined}
     >
       {heading || unavailable ? (
-        <div className="flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+        <div className="flex items-center justify-between gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
           {heading ? <span>System</span> : null}
           {unavailable ? <span role="status">Data unavailable</span> : null}
         </div>
@@ -318,7 +318,7 @@ export function Metric({
 }) {
   return (
     <div className="min-w-0 border-l border-border/70 pl-3">
-      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         {label}
       </div>
       <div className="mt-1 truncate font-mono text-sm tabular-nums text-foreground">{value}</div>
@@ -593,7 +593,7 @@ export function AgentRuntimePanel({
       {runtime?.state || runtime?.version ? (
         <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
           <span>
-            {runtime.state ?? "state unavailable"}
+            <span className="text-[11px] font-medium">{runtime.state ?? "state unavailable"}</span>
             {/* Which agent process the bridge runs: unchanged while one warm
                 process takes every turn, higher once another starts. */}
             {runtime.runtimeGeneration !== undefined ? (
@@ -605,7 +605,7 @@ export function AgentRuntimePanel({
               </span>
             ) : null}
           </span>
-          <span>
+          <span className={runtime.version ? undefined : "text-[11px] font-medium"}>
             {runtime.version ? `${providerLabel} ${runtime.version}` : "version unavailable"}
           </span>
         </div>
@@ -632,9 +632,11 @@ export function AgentRuntimePanel({
           <div className="text-[11px] font-medium text-amber-100/90">
             Steering is full for this turn
           </div>
-          <div className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+          <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             New steering is refused until the turn finishes; the turn keeps running.{" "}
-            {`${saturatedSteer.entries} of ${saturatedSteer.limitEntries} records, ${formatSteerBytes(saturatedSteer.bytes)} of ${formatSteerBytes(saturatedSteer.limitBytes)}.`}
+            <span className="font-medium">
+              {`${saturatedSteer.entries} of ${saturatedSteer.limitEntries} records, ${formatSteerBytes(saturatedSteer.bytes)} of ${formatSteerBytes(saturatedSteer.limitBytes)}.`}
+            </span>
           </div>
         </div>
       ) : null}
@@ -765,12 +767,14 @@ function DailyTokenChart({ points }: { points: DailyTokenPoint[] }) {
   return (
     <section className="space-y-2" aria-label="Daily tokens">
       <div className="flex items-baseline justify-between gap-3">
-        <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+        <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
           Daily tokens
         </div>
         <div className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
           {formatDayLabel(readout.date)}{" "}
-          <span className="text-foreground">{formatTokenCount(readout.tokens)}</span>
+          <span className="text-[11px] font-medium text-foreground">
+            {formatTokenCount(readout.tokens)}
+          </span>
         </div>
       </div>
       <div className="flex h-14 items-stretch gap-[2px]" onMouseLeave={() => setHoveredKey(null)}>
@@ -796,7 +800,7 @@ function DailyTokenChart({ points }: { points: DailyTokenPoint[] }) {
       </div>
       <div className="flex items-baseline justify-between gap-2 text-[10px] text-muted-foreground">
         <span className="truncate">{formatDayLabel(oldest.date)}</span>
-        <span className="shrink-0 font-mono tabular-nums">
+        <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums">
           Peak {plotted.length}d {formatTokenCount(peak)}
         </span>
         <span className="truncate">{formatDayLabel(latest.date)}</span>
@@ -1040,7 +1044,7 @@ function AccountRowView({ row, nowMs }: { row: AccountRow; nowMs: number }) {
       ) : null}
       {resetLabel ? (
         <div
-          className="mt-1 text-right text-[10px] text-muted-foreground"
+          className="mt-1 text-right text-[11px] font-medium text-muted-foreground"
           title={new Date(row.resetsAt!).toLocaleString()}
         >
           Resets {resetLabel}
@@ -1104,10 +1108,10 @@ function AccountSection({
     <div className="space-y-3 border-t border-border/60 pt-4">
       {rows.length > 0 ? (
         <section className="space-y-3" aria-label="Account usage">
-          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
             Account
             {accountLabel ? (
-              <span className="break-words normal-case tracking-normal">
+              <span className="break-words text-[10px] normal-case tracking-normal text-muted-foreground/70">
                 {" "}
                 ({accountLabel})
                 {accountEmail && accountEmail !== accountLabel ? ` (${accountEmail})` : null}
@@ -1183,6 +1187,7 @@ export function UsagePanel({
   planWindows?: NativeAgentAccountUsageWindow[];
 }) {
   const displayedRateLimits = rateLimits ?? usage?.rateLimits;
+  const reportedModelId = usage?.modelId ?? modelId;
   const { rows: accountRows, daily: dailyTokens } = buildAccountRows({
     account: planWindows ? [...(usage?.account ?? []), ...planWindows] : usage?.account,
     rateLimits: displayedRateLimits,
@@ -1204,8 +1209,13 @@ export function UsagePanel({
         <div className="space-y-4">
           {account}
           <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">
-            <span className="truncate">{modelId ?? "Model unavailable"}</span>
-            <span className="shrink-0">Provider reported</span>
+            <span
+              className={cn("truncate", !reportedModelId && "text-[11px] font-medium")}
+              title={reportedModelId}
+            >
+              {reportedModelId ?? "Model unavailable"}
+            </span>
+            <span className="shrink-0 text-[11px] font-medium">Provider reported</span>
           </div>
         </div>
       );
@@ -1236,7 +1246,7 @@ export function UsagePanel({
         <div>
           <div className="mb-2 flex items-end justify-between gap-3">
             <div>
-              <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+              <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                 Context
               </div>
               <div className="mt-1 font-mono text-xl tabular-nums text-foreground">
@@ -1303,8 +1313,15 @@ export function UsagePanel({
       {account}
 
       <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">
-        <span className="truncate">{usage.modelId ?? modelId ?? "Model unavailable"}</span>
-        <span className="shrink-0">{usage.estimated ? "Estimated" : "Provider reported"}</span>
+        <span
+          className={cn("truncate", !reportedModelId && "text-[11px] font-medium")}
+          title={reportedModelId}
+        >
+          {reportedModelId ?? "Model unavailable"}
+        </span>
+        <span className="shrink-0 text-[11px] font-medium">
+          {usage.estimated ? "Estimated" : "Provider reported"}
+        </span>
       </div>
     </div>
   );
@@ -1341,7 +1358,7 @@ export function AgentInteractionCapability({
   if (kinds === undefined) return null;
   return (
     <div className="mt-3 border-t border-border/60 pt-3">
-      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         Approvals
       </div>
       <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -1612,7 +1629,7 @@ export function ConnectionPathPanel({
       data-testid="connection-path"
       data-path={path?.path ?? "this-node"}
     >
-      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">
+      <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
         Connection
       </div>
       <div className="mt-1 text-foreground">{text}</div>

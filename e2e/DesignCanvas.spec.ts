@@ -47,6 +47,58 @@ test("pageLoad preserves unlimited timeouts", async ({ page }, testInfo) => {
   expect(testInfo.timeout).toBe(0);
 });
 
+test("the inspector keeps a long computed width beside the Changed marker", async ({ page }) => {
+  const dir = await mkdtemp(join(tmpdir(), "ork-design-width-"));
+  const worktree = join(dir, "worktree");
+  await mkdir(worktree);
+  const service = startDesignServiceHost(dir, worktree);
+  try {
+    const canvas = await service.create("design-fixture", "Inspector width");
+    await service.createFrame(canvas.id, "design-fixture", 1, {
+      name: "Screen",
+      x: 0,
+      y: 0,
+      width: 420,
+      height: 300,
+      html: '<button id="save" style="width:12345.678px">Save</button>',
+    });
+    await page.exposeFunction("designInvoke", service.invoke);
+    await page.setViewportSize(
+      page.viewportSize()!.width < 600 ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+    );
+    await pageLoad(() => page.goto(`/design-canvas?canvasId=${canvas.id}`));
+    const layers = page.getByRole("navigation", { name: "Design hierarchy" });
+    if (!(await layers.isVisible())) {
+      await page.getByRole("button", { name: "Toggle layers", exact: true }).click();
+    }
+    const frameRow = layers.getByRole("treeitem", { name: /^Screen, \d+ elements$/ });
+    if ((await frameRow.getAttribute("aria-expanded")) !== "true") {
+      await frameRow.press("Enter");
+    }
+    await layers.getByRole("treeitem", { name: "save (button)", exact: true }).press("Enter");
+
+    const width = page.getByRole("textbox", { name: "Width", exact: true });
+    await width.fill("invalid");
+    await expect(width).toHaveAccessibleDescription(/Not a valid value for width.*computed 12345/);
+    await expect(page.getByRole("button", { name: "Apply styles" })).toBeDisabled();
+
+    const field = page.locator('[data-property="width"]');
+    const marker = field.getByText("Changed ·", { exact: true });
+    const computed = field.getByText(/^computed 12345/);
+    await expect(computed).toHaveCSS("font-size", "11px");
+    await expect(computed).toHaveCSS("text-overflow", "ellipsis");
+    const markerBox = (await marker.boundingBox())!;
+    const valueBox = (await computed.boundingBox())!;
+    expect(valueBox.y).toBeCloseTo(markerBox.y, 0);
+    expect(valueBox.x).toBeGreaterThan(markerBox.x + markerBox.width);
+    expect(valueBox.width).toBeGreaterThan(0);
+    expect(await computed.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+  } finally {
+    await service.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("canvas edits, script isolation, missed events, conflict and reload", async ({
   page,
 }, testInfo) => {

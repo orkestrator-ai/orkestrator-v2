@@ -30,21 +30,25 @@ export function percent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
-/** "Zoom 110% · 2× device scale · scrolled 0,480 · stable" (only known parts). */
-export function captureConditionsLabel(meta: WebAnnotationResultCaptureMetadata): string | null {
-  const parts: string[] = [];
-  if (typeof meta.zoomFactor === "number") parts.push(`Zoom ${percent(meta.zoomFactor)}`);
+/** Known capture conditions, with stability marked as a status. */
+export function captureConditionLabels(meta: WebAnnotationResultCaptureMetadata) {
+  const parts: Array<{ text: string; status?: true }> = [];
+  if (typeof meta.zoomFactor === "number") parts.push({ text: `Zoom ${percent(meta.zoomFactor)}` });
   if (typeof meta.deviceScaleFactor === "number") {
-    parts.push(`${meta.deviceScaleFactor}× device scale`);
+    parts.push({ text: `${meta.deviceScaleFactor}× device scale` });
   }
   if (meta.scroll) {
-    parts.push(`scrolled ${Math.round(meta.scroll.x)},${Math.round(meta.scroll.y)}`);
+    parts.push({ text: `scrolled ${Math.round(meta.scroll.x)},${Math.round(meta.scroll.y)}` });
   }
-  if (meta.stability) parts.push(meta.stability === "stable" ? "stable" : "unstable");
+  if (meta.stability) {
+    parts.push({ text: meta.stability === "stable" ? "stable" : "unstable", status: true });
+  }
   if (meta.masks && meta.masks.length > 0) {
-    parts.push(`${meta.masks.length} redaction${meta.masks.length === 1 ? "" : "s"} reapplied`);
+    parts.push({
+      text: `${meta.masks.length} redaction${meta.masks.length === 1 ? "" : "s"} reapplied`,
+    });
   }
-  return parts.length ? parts.join(" · ") : null;
+  return parts;
 }
 
 const TARGET_MATCH: Record<WebAnnotationComparisonMetadata["targetMatch"], string> = {

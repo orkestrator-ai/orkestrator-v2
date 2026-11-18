@@ -155,12 +155,37 @@ function applyLiveFrames(
 }
 
 describe("workflow task edges", () => {
+  test("live and replayed workflow progress use the captured latest agent description", () => {
+    const frames = capturedWorkflow.systemFrames.filter(
+      ({ subtype }) => subtype === "task_started" || subtype === "task_progress",
+    );
+    const taskId = frames[0]!.task_id;
+    const { session, turn } = liveTurn("Captured workflow progress");
+    applyLiveFrames(turn, frames);
+
+    const liveTask = backgroundTasksForSnapshot(session.backgroundTasks)[taskId];
+    const replayedTask = replay(frames)?.[taskId];
+    for (const task of [liveTask, replayedTask]) {
+      expect(task).toMatchObject({
+        description: "Inspect the fixture",
+        progressSummary: "Inspect: Review",
+        workflowAgentCounts: { total: 1 },
+      });
+    }
+  });
+
   test("live progress keeps the workflow's name and reads its agents", () => {
     const { session, turn } = liveTurn("Workflow live");
     handleTaskEdge(turn, started as unknown as SDKMessage);
     handleTaskEdge(turn, progress([agentRow(1), agentRow(2)]) as unknown as SDKMessage);
     // A throttled frame carries no list; the last one stands.
     handleTaskEdge(turn, progress(undefined, "Build: saved") as unknown as SDKMessage);
+    // A frame with just the launch summary leaves the latest agent in place.
+    handleTaskEdge(turn, {
+      ...progress(undefined),
+      description: undefined,
+      summary: started.description,
+    } as unknown as SDKMessage);
 
     const task = session.backgroundTasks?.["wf-1"];
     expect(task?.description).toBe(started.description);
@@ -199,10 +224,12 @@ describe("workflow task edges", () => {
       subtype: "task_progress",
       task_id: "agent-1",
       description: "Renamed by the provider",
+      summary: "Searching for references",
       last_tool_name: "Grep",
     } as unknown as SDKMessage);
     expect(session.backgroundTasks?.["agent-1"]).toMatchObject({
       description: "Renamed by the provider",
+      progressSummary: "Searching for references",
       lastToolName: "Grep",
     });
   });

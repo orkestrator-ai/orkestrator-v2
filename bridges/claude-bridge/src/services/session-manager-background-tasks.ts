@@ -350,11 +350,13 @@ export function taskMessageMetadata(
 ): BackgroundTaskMetadata {
   const workflow = isWorkflowTaskEdge(message, previous);
   // On every other subtype `summary` is the terminal report, not a status.
+  // Workflow progress puts the latest agent in `description` and may repeat
+  // the launch title in `summary`.
   const progressSummary =
     message.subtype !== "task_progress"
       ? undefined
       : workflow
-        ? (message.summary ?? message.description)
+        ? message.description
         : message.summary;
   return {
     ...(message.task_type

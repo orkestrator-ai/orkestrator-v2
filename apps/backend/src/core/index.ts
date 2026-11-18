@@ -297,8 +297,8 @@ import {
 } from "./workspace-code-rewind.js";
 import { WorkspaceWriters } from "./workspace-writers.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
-import { PrAutoMergeController } from "./pr-auto-merge.js";
-import { resolveTabsSettled } from "./pr-auto-merge-resolve-settled.js";
+import { resolveTabsSettled } from "./git/pr-auto-merge-resolve-settled.js";
+import { PrAutoMergeController } from "./git/pr-auto-merge.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
 import { readEnvironmentBranchPushState } from "./build-pipeline-branch-push.js";
 import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";

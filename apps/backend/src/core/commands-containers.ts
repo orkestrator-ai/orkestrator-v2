@@ -114,10 +114,7 @@ import {
   ensureEnvironmentNetwork,
   ingressPorts,
 } from "./container-network.js";
-import {
-  githubRangesSeedMountArguments,
-  prepareGithubRangesSeedBind,
-} from "./github-ranges-cache.js";
+import { githubRangesSeedMountArguments, prepareGithubRangesSeedBind } from "./git/index.js";
 import { rememberNetworkOwner } from "./container-network-owner.js";
 import {
   DOCKER_LABEL_EGRESS_GATEWAY,

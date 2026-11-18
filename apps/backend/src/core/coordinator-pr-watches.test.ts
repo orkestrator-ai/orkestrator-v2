@@ -3,7 +3,12 @@ import {
   COORDINATOR_WORKSPACE_VERSION,
 } from "@orkestrator/protocol/coordinator";
 import { describe, expect, spyOn, test } from "bun:test";
-import { GitHubCliSelection } from "./github-cli-binary.js";
+import {
+  confirmGitHubPullRequestDeleted,
+  GitHubApiError,
+  GitHubCliSelection,
+  type GitHubPullRequestStatus,
+} from "./git/index.js";
 import * as shell from "./shell.js";
 import { AgentMailError, type AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { GitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
@@ -15,11 +20,6 @@ import {
   WATCHED_PR_POLL_INTERVAL_MS,
   watchedPullRequestReading,
 } from "./coordinator-pr-watches.js";
-import { GitHubApiError } from "./github.js";
-import {
-  confirmGitHubPullRequestDeleted,
-  type GitHubPullRequestStatus,
-} from "./github-pull-requests.js";
 import type { StorageService } from "./storage.js";
 import { withTemporaryStorage } from "./storage-test-support.js";
 

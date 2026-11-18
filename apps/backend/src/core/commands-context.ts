@@ -84,8 +84,8 @@ export type CommandContext = {
   nativeAgents?: NativeAgentService;
   suborks?: NativeAgentSuborkService;
   multiReviews?: MultiReviewService;
-  /** Auto-merge of ready pull requests (`pr-auto-merge.ts`); absent in fixtures. */
-  prAutoMerge?: import("./pr-auto-merge.js").PrAutoMergeController;
+  /** Auto-merge of ready pull requests (`git/pr-auto-merge.ts`); absent in fixtures. */
+  prAutoMerge?: import("./git/pr-auto-merge.js").PrAutoMergeController;
   featurePlanning?: FeaturePlanningService;
   workflowResults?: import("./workflow-result-service.js").WorkflowResultService;
   /** Remote-initiated Orkestrator updates of this host. */

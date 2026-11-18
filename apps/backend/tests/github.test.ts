@@ -15,7 +15,7 @@ import {
   updateGitHubIssueComment,
   updateGitHubIssueStatus,
   type GitHubLabel,
-} from "../src/core/github";
+} from "../src/core/git/github";
 import { IntegrationLocks } from "../src/core/integration-locks";
 
 const token = "github_pat_super_secret";

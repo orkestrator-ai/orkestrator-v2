@@ -3,7 +3,7 @@ import {
   GITHUB_STATUS_LABELS as backendStatusLabels,
   type GitHubIssueDetail as BackendGitHubIssueDetail,
   type GitHubIssuesSnapshot as BackendGitHubIssuesSnapshot,
-} from "../../../backend/src/core/github";
+} from "../../../backend/src/core/git/github";
 import type {
   GitHubIssueDetail as RendererGitHubIssueDetail,
   GitHubIssueStatus as RendererGitHubIssueStatus,

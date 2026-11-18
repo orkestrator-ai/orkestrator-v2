@@ -94,7 +94,13 @@ import {
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
 import { CommandFailedError, pathExists, runCommand } from "./shell.js";
-import { retryGitWithoutFsmonitorOnTimeout, stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
+import {
+  type GitHubCliConfigSource,
+  type GitHubCliSelection,
+  resolveContainerGitHubToken,
+  retryGitWithoutFsmonitorOnTimeout,
+  stopGitFsmonitorDaemon,
+} from "./git/index.js";
 import { removeRuntimeContainer, stopRuntimeContainer } from "./egress-gateway.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
 import { shutdownClaudeStatePolling } from "./tmux.js";
@@ -170,8 +176,6 @@ import {
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
 import { syncRuntimeGitHubCredential } from "./container-github-credential.js";
-import type { GitHubCliSelection } from "./github-cli-binary.js";
-import { resolveContainerGitHubToken, type GitHubCliConfigSource } from "./github-credentials.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
 import {
   configuredImageRef,

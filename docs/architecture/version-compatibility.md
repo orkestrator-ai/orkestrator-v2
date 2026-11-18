@@ -1026,7 +1026,7 @@ export const nodeMailClient = domainClient(nodeMail, {
   `variantRecord` (`contract/model-schema.ts`) for the `kind`-discriminated
   change results): the routed-on fields are typed and every other key passes
   through; the GitHub issue model (`domains/pull-requests/schemas.ts`) is
-  field for field, and `github.ts` and the web's `types/github.ts` take their
+  field for field, and `git/github.ts` and the web's `types/github.ts` take their
   types from it. `access` is `admin` for `changes_get_diagnostics` and
   `internal` for `pr_monitor_agent_turn_completed` and
   `pr_monitor_probe_environment`. Critical keys: `pathIds` on

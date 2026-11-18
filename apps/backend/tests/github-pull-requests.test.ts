@@ -9,7 +9,7 @@ import {
   mergeabilityFromApi,
   mergeChecks,
   rollUpChecks,
-} from "../src/core/github-pull-requests";
+} from "../src/core/git/github-pull-requests";
 import {
   HEAD_SHA,
   REF,

@@ -17,6 +17,7 @@ import {
   renderInNodeScope,
 } from "@/test/render-in-node-scope";
 import { CreateEnvironmentDialog } from "./CreateEnvironmentDialog";
+import type { CreateEnvironmentMachine } from "./create-environment-machines";
 
 const LEAF = "bk_studio" as BackendId;
 
@@ -61,7 +62,7 @@ describe("CreateEnvironmentDialog target machine", () => {
   test("on the command node it names the machine the window works on", () => {
     const remoteView = federated();
     renderInAppCommandScope(dialog());
-    expect(screen.getByTestId("create-environment-machine").textContent).toContain("on Build Mac");
+    expect(screen.getByTestId("create-environment-machine").textContent).toContain("Build Mac");
     expect(screen.queryByText("Isolated Docker environment on Build Mac") !== null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Local" }));
     expect(screen.queryByText("Git worktree on Build Mac") !== null).toBe(true);
@@ -78,7 +79,7 @@ describe("CreateEnvironmentDialog target machine", () => {
       .setState({ config: appCommandStore(configStore).getState().config });
     view.rerender(dialog());
     const label = screen.getByTestId("create-environment-machine").textContent ?? "";
-    expect(label).toContain("on Studio");
+    expect(label).toContain("Studio");
     expect(label).not.toContain("Build Mac");
     // The type hint names the target machine too, not "your machine".
     expect(screen.queryByText("Isolated Docker environment on Studio") !== null).toBe(true);
@@ -113,6 +114,104 @@ describe("CreateEnvironmentDialog target machine", () => {
     expect(screen.queryByText("Isolated Docker environment") !== null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Local" }));
     expect(screen.queryByText("Git worktree on the host") !== null).toBe(true);
+  });
+});
+
+const OWN: CreateEnvironmentMachine = {
+  key: "node:own",
+  name: "Build Mac",
+  machine: undefined,
+  nodeId: "own",
+  projectId: "project-1",
+  current: true,
+  available: true,
+  hasCheckout: true,
+};
+const STUDIO: CreateEnvironmentMachine = {
+  key: "node:studio",
+  name: "Studio",
+  machine: "studio",
+  nodeId: "studio",
+  projectId: "project-studio",
+  current: false,
+  available: true,
+  hasCheckout: true,
+};
+
+function dialogWithMachines(
+  machines: CreateEnvironmentMachine[],
+  onSelectMachine: (machine: CreateEnvironmentMachine) => void,
+  projectId = "project-1",
+) {
+  return (
+    <DockerAvailabilityProvider available>
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => undefined}
+        onCreate={async () => true}
+        projectId={projectId}
+        machines={machines}
+        onSelectMachine={onSelectMachine}
+      />
+    </DockerAvailabilityProvider>
+  );
+}
+
+describe("CreateEnvironmentDialog machine dropdown", () => {
+  test("sits in the header and lists only the machines that can take the environment", async () => {
+    federated();
+    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], () => undefined));
+    const header = screen.getByRole("dialog").querySelector("[data-slot='dialog-header']");
+    const select = screen.getByRole("combobox", { name: "Machine" });
+    expect(header?.contains(select)).toBe(true);
+    expect(select.textContent).toContain("Build Mac");
+    expect((select as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(select);
+    const options = await screen.findAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual(["Build Mac", "Studio"]);
+  });
+
+  test("with no other machine holding the repository it names this one, disabled", () => {
+    federated();
+    renderInAppCommandScope(dialogWithMachines([OWN], () => undefined));
+    const select = screen.getByRole("combobox", { name: "Machine" }) as HTMLButtonElement;
+    expect(select.textContent).toContain("Build Mac");
+    expect(select.disabled).toBe(true);
+  });
+
+  test("picking another machine hands the typed prompt and name to its dialog", async () => {
+    federated();
+    const onSelectMachine = mock((_machine: CreateEnvironmentMachine) => undefined);
+    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], onSelectMachine));
+    fireEvent.change(screen.getByLabelText("Environment name (optional)"), {
+      target: { value: "dark-mode" },
+    });
+    fireEvent.change(screen.getByLabelText("Initial prompt (optional)"), {
+      target: { value: "Add a dark mode" },
+    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Machine" }));
+    fireEvent.click(await screen.findByRole("option", { name: /Studio/ }));
+    expect(onSelectMachine).toHaveBeenCalledTimes(1);
+    expect(onSelectMachine.mock.calls[0]![0]).toBe(STUDIO);
+    cleanup();
+
+    // Studio's own dialog, for its copy of the project, opens with them.
+    renderInAppCommandScope(dialogWithMachines([STUDIO], () => undefined, "project-studio"));
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value,
+      ).toBe("Add a dark mode"),
+    );
+    expect((screen.getByLabelText("Environment name (optional)") as HTMLInputElement).value).toBe(
+      "dark-mode",
+    );
+    cleanup();
+
+    // They moved: this machine's project keeps no copy of the prompt.
+    renderInAppCommandScope(dialogWithMachines([OWN], () => undefined));
+    expect((screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value).toBe(
+      "",
+    );
   });
 });
 

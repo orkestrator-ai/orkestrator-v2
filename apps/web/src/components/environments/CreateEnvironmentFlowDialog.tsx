@@ -34,6 +34,11 @@ import type {
   PortMapping,
 } from "@/types";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
+import {
+  openCreateEnvironmentOnMachine,
+  useCreateEnvironmentMachines,
+  type CreateEnvironmentMachine,
+} from "./create-environment-machines";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -171,6 +176,12 @@ export function startEnvironmentInBackground(
 /**
  * Owns the shared create/configure/start workflow so every project entry point
  * behaves the same way.
+ *
+ * The environment is created on the machine of the node scope the dialog
+ * renders in, so an entry point chooses the default machine by opening the
+ * dialog there (`openMachineWorkspace` with `createEnvironment` for another
+ * machine). The header's machine dropdown moves the dialog to another
+ * machine that holds the same repository.
  */
 export function CreateEnvironmentFlowDialog({
   open,
@@ -208,6 +219,7 @@ export function CreateEnvironmentFlowDialog({
     localEnvironmentAvailableRef.current = localEnvironmentAvailable;
   }, [dockerAvailable, localEnvironmentAvailable]);
   const projectName = providedProjectName ?? storedProjectName;
+  const machines = useCreateEnvironmentMachines(projectId);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
 
@@ -446,6 +458,15 @@ export function CreateEnvironmentFlowDialog({
     });
   };
 
+  // That machine's own dialog takes over: this one closes, and the window
+  // shows the machine's copy of the project with its dialog open.
+  const handleSelectMachine = (machine: CreateEnvironmentMachine) => {
+    if (isCreating) return;
+    cancelPendingCredentialFlow();
+    onOpenChange(false);
+    openCreateEnvironmentOnMachine(machine, projectName ?? "New environment");
+  };
+
   const handleCreate = (options: ClaudeOptions): Promise<boolean> =>
     withGitHubCredentialPreflight(options.environmentType, () => performCreate(options));
 
@@ -541,6 +562,8 @@ export function CreateEnvironmentFlowDialog({
         projectId={projectId}
         projectName={projectName}
         localEnvironmentAvailable={localEnvironmentAvailable}
+        machines={machines}
+        onSelectMachine={handleSelectMachine}
         defaultPortMappings={
           projectId ? config.repositories[projectId]?.defaultPortMappings : undefined
         }

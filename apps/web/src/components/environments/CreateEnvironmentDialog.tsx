@@ -1,7 +1,6 @@
 import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useRemoteMachineView } from "@/components/federation/useMachineViews";
-import { MachineDot } from "@/components/federation/MachineDot";
 import {
   resolveAgentPlatformSettings,
   resolveDefaultAgent,
@@ -128,6 +127,8 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { launchBaseForCreate, type EnvironmentLaunchBase } from "@/lib/launch-base";
 import { LaunchBaseRow } from "./LaunchBaseRow";
+import { CreateEnvironmentMachinePicker } from "./CreateEnvironmentMachinePicker";
+import type { CreateEnvironmentMachine } from "./create-environment-machines";
 import { useLaunchBase } from "./useLaunchBase";
 import { useProjectSetupRequirements } from "@/hooks/useBuildLaunchOptions";
 import { aptPackagesNotice } from "@/lib/apt-packages-notice";
@@ -275,10 +276,24 @@ interface CreateEnvironmentDialogProps {
    * matching {@link onCreate}.
    */
   onCreateFeatureBuild?: (input: CreateFeatureBuildInput) => Promise<void | boolean>;
+  /**
+   * The machines the environment can be created on, this dialog's own
+   * (`current`) first (`useCreateEnvironmentMachines`). The header's machine
+   * dropdown lists them while several machines are in view.
+   */
+  machines?: readonly CreateEnvironmentMachine[];
+  /**
+   * Moves the dialog to another machine's own New Environment dialog. The
+   * typed prompt and name travel with it; this dialog is reset first.
+   */
+  onSelectMachine?: (machine: CreateEnvironmentMachine) => void;
 }
 
 // Persist draft prompt text per project across dialog open/close within the session
 const draftPrompts = new Map<string, string>();
+// An environment name typed before the dialog moved to another machine, for
+// that machine's project. Spent by the next opening for that project.
+const carriedEnvironmentNames = new Map<string, string>();
 
 export function CreateEnvironmentDialog({
   open,
@@ -291,6 +306,8 @@ export function CreateEnvironmentDialog({
   projectName,
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
   localEnvironmentAvailable = true,
+  machines,
+  onSelectMachine,
 }: CreateEnvironmentDialogProps) {
   const nodeBackend = useScopeBackend();
   // Browses the host of the node this component renders in.
@@ -774,6 +791,11 @@ export function CreateEnvironmentDialog({
       const draft = draftPrompts.get(projectId);
       if (draft) {
         setInitialPrompt(draft);
+      }
+      const carriedName = carriedEnvironmentNames.get(projectId);
+      if (carriedName) {
+        carriedEnvironmentNames.delete(projectId);
+        setEnvironmentName(carriedName);
       }
     }
   }, [open, projectId]);
@@ -1415,6 +1437,23 @@ export function CreateEnvironmentDialog({
     [onOpenChange, resetForm, projectId, initialPrompt],
   );
 
+  // The prompt and name move to the other machine's project; nothing else
+  // does, since that machine resolves its own defaults.
+  const handleSelectMachine = useCallback(
+    (machine: CreateEnvironmentMachine) => {
+      if (!onSelectMachine || isLoading) return;
+      const prompt = initialPrompt.trim();
+      const name = environmentName.trim();
+      if (projectId) draftPrompts.delete(projectId);
+      if (prompt) draftPrompts.set(machine.projectId, prompt);
+      else draftPrompts.delete(machine.projectId);
+      if (name) carriedEnvironmentNames.set(machine.projectId, name);
+      resetForm();
+      onSelectMachine(machine);
+    },
+    [environmentName, initialPrompt, isLoading, onSelectMachine, projectId, resetForm],
+  );
+
   // Validate port mappings - returns true if all valid
   const validatePortMappings = useCallback((): boolean => {
     for (const mapping of portMappings) {
@@ -1643,7 +1682,7 @@ export function CreateEnvironmentDialog({
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader className="m-0 shrink-0 gap-0 border-b border-divider bg-background px-4 py-3.5 pr-14 sm:m-0 sm:px-6 sm:py-4 sm:pr-14">
-          <div className="flex min-w-0 items-start gap-3">
+          <div className="flex min-w-0 items-start gap-3 sm:items-center">
             <span
               role="img"
               aria-label={
@@ -1665,29 +1704,27 @@ export function CreateEnvironmentDialog({
                   ? `Create Ork (environment) - ${projectName}`
                   : "Create Ork (environment)"
               }
-              className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-xl leading-tight"
+              className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1 text-xl leading-tight"
             >
-              <span className="shrink-0">Create Ork (environment)</span>
+              <span className="min-w-0 sm:shrink-0">Create Ork (environment)</span>
               {projectName && (
                 <span className="max-w-full truncate font-mono text-sm text-muted-foreground">
                   {projectName}
                 </span>
               )}
-              {federation.enabled && targetMachine ? (
-                // With several machines in view, the dialog names the machine
-                // the environment is created on.
-                <span
-                  className="flex items-center gap-1.5 text-sm font-normal text-muted-foreground"
-                  data-testid="create-environment-machine"
-                >
-                  <MachineDot
-                    colorToken={targetMachine.colorToken}
-                    machineName={targetMachine.name}
-                  />
-                  on {targetMachine.name}
-                </span>
-              ) : null}
             </DialogTitle>
+            {federation.enabled && targetMachine ? (
+              // With several machines in view, the header names the machine the
+              // environment is created on, and offers the others that can take it.
+              <div className="ml-auto">
+                <CreateEnvironmentMachinePicker
+                  current={targetMachine}
+                  machines={machines ?? []}
+                  onSelect={handleSelectMachine}
+                  disabled={isLoading}
+                />
+              </div>
+            ) : null}
           </div>
           <DialogDescription className="sr-only">
             Configure a new Ork environment with an optional initial prompt.

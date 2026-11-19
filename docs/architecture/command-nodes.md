@@ -587,7 +587,16 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   another node's was shown.
 - **Creating on another node** opens that node's New environment dialog on
   its scope, so the node's defaults — the command node's inherited settings
-  laid over its own — and start apply as they would there.
+  laid over its own — and start apply as they would there. The entry point
+  chooses the default machine by where it opens the dialog. The dialog's
+  header has a Machine dropdown beside its close button
+  (`CreateEnvironmentMachinePicker`), listing the dialog's own machine and
+  every reachable machine holding a project for the same repository
+  (`repositoryHint`, `useCreateEnvironmentMachines`). Picking another closes
+  this dialog and opens that machine's own for its copy of the project
+  (`openCreateEnvironmentOnMachine`), carrying the typed prompt and name.
+  Attachments and other choices do not travel: that machine resolves its own
+  defaults.
 - **Project and environment menus** of another node offer what the node's
   own sidebar does. Dialogs (Repository settings, Delete project, an
   environment's Settings) open on the node's scope, so they read and write the

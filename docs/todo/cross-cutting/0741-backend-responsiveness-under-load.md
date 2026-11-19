@@ -726,6 +726,25 @@ stall is inconclusive, so task 6 remains open pending live evidence.
   `apps/backend/scripts/agent-mail-store-bench.ts` (`…AfterWriteMs`) for the
   measurement.
 
+  *Measured* on beelink (16 CPUs) on 2026-11-19, base commit `0007f0e66` and
+  this change run alternately twice each with `--iterations 50`, at a load
+  average of 34 to 46 from other work. CPU ms per read made right after
+  another tab's send (100 environments × 6 tabs; 600 messages is about 1.2 MB
+  of mail, 6,000 about 11 MB):
+
+  | Read | Base, 600 | Base, 6,000 | Change, 600 | Change, 6,000 |
+  | --- | --- | --- | --- | --- |
+  | Identity (pull-tab lookup) | 2.24, 2.27 | 13.9, 13.0 | 0.25, 0.26 | 0.51, 0.44 |
+  | One environment's directory | 3.13, 4.13 | 14.8, 16.5 | 0.85, 1.01 | 2.91, 3.84 |
+  | Inbox | 3.49, 3.63 | 17.7, 16.1 | 0.92, 0.80 | 3.44, 3.08 |
+  | Message status | 3.03, 2.89 | 12.0, 12.8 | 0.13, 0.14 | 0.16, 0.14 |
+  | Send then acknowledge (`ackMs`) | 19.8, 21.3 | 129, 126 | 16.4, 16.0 | 77.3, 66.2 |
+
+  The inbox and directory still grow with the size of the mailboxes they read
+  (ten times as many messages each at 6,000), not with the rest of the store.
+  The send itself is unchanged (57–70 ms CPU at 6,000) and is what is left
+  of `ackMs`.
+
 ### Task 5: share one frozen snapshot rather than hand out copies
 
 - **Chose:** freeze the snapshot deeply and share it, so that mutating it

@@ -152,13 +152,16 @@ live-tail reads: requesting one does not cancel a tail read already in flight,
 and a background poll that lands while a page is in flight does not retire
 it. The page merges into the live tail current when it lands, after checking
 that it is still the newest page, that no mutation took over the transcript,
-and that the session generation, the paging epoch and the cursor it was
-fetched behind are unchanged. So it is dropped only when a mutation, a later
+that session state and the live tail agree on the generation, and that the
+generation, paging epoch and cursor it was fetched behind are unchanged.
+A page is dropped when a mutation, a later
 page, a new session generation, a read that replaced its epoch or cursor (a
 rotated history, a collapse to the live tail) or a read that found the
-session gone superseded it. A held row that a
-poll revised while the page was in flight keeps the poll's copy; the page
-refreshes only held rows still as it found them. A page that leaves the head where it was (superseded, or
+session gone supersedes it. A held row that a poll revised while the page
+was in flight keeps the poll's copy. If a poll instead arrives after a page
+and carries a conflicting revision, the client keeps the displayed copy,
+applies the live tail, and reconciles the held history with a fresh read.
+A page that leaves the head where it was (superseded, or
 failed) is retried once; after a second
 it stops until the head moves some other way. Those two pages per head count
 for the whole session, even if the head moved in between, so a transcript that

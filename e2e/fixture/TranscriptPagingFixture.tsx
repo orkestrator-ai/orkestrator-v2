@@ -188,6 +188,9 @@ const loadHistoryPage = async (_workflow: string, _reviewer: string, page: { bef
 /** The cursors the native tab paged from, in order, for tests to read. */
 const pageRequests: string[] = [];
 (window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests = pageRequests;
+let pageResponses = 0;
+(window as unknown as { pagingFixtureResponses: () => number }).pagingFixtureResponses = () =>
+  pageResponses;
 /** How many rows the tab holds right now, for tests sampling every frame. */
 (window as unknown as { pagingFixtureRowCount: () => number }).pagingFixtureRowCount = () =>
   appCommandStore(useNativeAgentProjectionStore.def)
@@ -200,9 +203,6 @@ const pageRequests: string[] = [];
       .getState()
       .projections.get(identity.logicalSessionKey)?.messages ?? []
   ).map((message) => String((message as { id?: unknown }).id));
-/** How many transcript reads the tab has made, to prove the tail kept moving. */
-(window as unknown as { pagingFixtureTranscriptReads: () => number }).pagingFixtureTranscriptReads =
-  () => transcriptReads;
 /** The live tail a transcript read answers with, streaming a row in `stream` mode. */
 function liveTail() {
   if (!streaming) return { messages: tail, cursor: `before-${tailStart}`, token: undefined };
@@ -325,6 +325,7 @@ function installBackend() {
           pageRequests.push(String(args?.before));
           await pause();
           result = { syncVersion: 1, ...pageBefore(args?.before as string | undefined) };
+          pageResponses += 1;
           break;
         case "get_native_agent_discovery_update":
           result = {

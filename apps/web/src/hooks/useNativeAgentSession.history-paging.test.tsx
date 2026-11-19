@@ -78,7 +78,9 @@ const getNativeAgentTranscriptUpdateMock = mock(
     return next();
   },
 );
-let stateUpdates: Array<() => NativeAgentSessionStateUpdate> = [];
+let stateUpdates: Array<
+  () => NativeAgentSessionStateUpdate | Promise<NativeAgentSessionStateUpdate>
+> = [];
 const getNativeAgentSessionStateUpdateMock = mock(async (input: { knownToken?: string }) => {
   const next = stateUpdates.shift();
   if (next) return next();
@@ -522,6 +524,102 @@ describe("useNativeAgentSession history paging", () => {
 
     expect(ids(result.current.projection)).toEqual(["m3", "m4"]);
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+  });
+
+  test("a late page cannot replace a new runtime's state while its transcript is pending", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const transcript = Promise.withResolvers<NativeAgentTranscriptUpdate<TestMessage>>();
+    const stateGate = Promise.withResolvers<void>();
+    const restarted = { ...identity, sourceGeneration: "generation-2" };
+    transcriptUpdates = [() => transcript.promise];
+    stateUpdates = [
+      async () => {
+        await stateGate.promise;
+        return {
+          viewVersion: 1,
+          status: "snapshot",
+          token: "state-2",
+          value: {
+            identity: restarted,
+            connection: "connected",
+            turn: { phase: "running" },
+            interactions: [],
+            composerControls: [],
+            capabilities: nativeAgentCapabilities("codex"),
+            notices: [],
+          },
+        };
+      },
+    ];
+    let reading: Promise<unknown> = Promise.resolve();
+    act(() => {
+      reading = result.current.refresh({ manual: false });
+    });
+    await waitFor(() => expect(transcriptCalls).toHaveLength(2));
+    try {
+      const release = await holdPage(result, [message("m1"), message("m2")]);
+      await act(async () => stateGate.resolve());
+      await waitFor(() => expect(result.current.projection?.generation).toBe("generation-2"));
+      await release();
+      expect(result.current.projection?.generation).toBe("generation-2");
+      expect(result.current.projection?.turn.phase).toBe("running");
+      expect(ids(result.current.projection)).toEqual(["m3", "m4"]);
+    } finally {
+      await act(async () => {
+        stateGate.resolve();
+        transcript.resolve(
+          tail("transcript-2", liveTail, { identity: restarted, cursor: "new-cursor" }),
+        );
+        await reading;
+      });
+    }
+    messagePages = [() => page([message("m1")])];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+    expect(messagePageCalls.map(({ before }) => before)).toEqual([
+      "cursor-before-m3",
+      "new-cursor",
+    ]);
+  });
+
+  test("a delayed tail applies live rows and reconciles a conflicting paged row", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const transcript = Promise.withResolvers<NativeAgentTranscriptUpdate<TestMessage>>();
+    transcriptUpdates = [() => transcript.promise];
+    let reading: Promise<unknown> = Promise.resolve();
+    act(() => {
+      reading = result.current.refresh({ manual: false });
+    });
+    await waitFor(() => expect(transcriptCalls).toHaveLength(2));
+    messagePages = [() => page([message("m1", "completed"), message("m2")])];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    const history = Promise.withResolvers<NativeAgentMessagePage<TestMessage>>();
+    messagePages = [() => history.promise];
+    await act(async () => {
+      transcript.resolve(
+        tail("transcript-2", [message("m4"), message("m5")], {
+          revisedMessages: [message("m1", "running"), message("m3", "updated")],
+        }),
+      );
+      await reading;
+    });
+    try {
+      expect(ids(result.current.projection)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+      expect(result.current.projection?.messages[0]?.text).toBe("completed");
+      expect(result.current.projection?.messages[2]?.text).toBe("updated");
+      await waitFor(() => expect(messagePageCalls).toHaveLength(2));
+    } finally {
+      await act(async () => {
+        history.resolve(
+          page([message("m1", "confirmed"), message("m2"), message("m3", "updated")]),
+        );
+      });
+    }
+    expect(result.current.projection?.messages[0]?.text).toBe("confirmed");
   });
 
   test("a row a poll revised while an overlapping page was in flight keeps its revision", async () => {

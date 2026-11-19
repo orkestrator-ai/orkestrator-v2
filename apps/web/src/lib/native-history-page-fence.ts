@@ -57,7 +57,10 @@ export function historyPageSession(
   };
 }
 
-function sameSession(a: HistoryPageSession | null, b: HistoryPageSession | null): boolean {
+export function sameHistoryPageSession(
+  a: HistoryPageSession | null,
+  b: HistoryPageSession | null,
+): boolean {
   if (a === null || b === null) return a === b;
   return (
     a.platform === b.platform &&
@@ -78,7 +81,7 @@ export function checkHistoryPageFence(
 ): HistoryPageFenceVerdict {
   if (requested.sequence !== now.sequence) return "superseded";
   if (requested.operationEpoch !== now.operationEpoch) return "mutated";
-  if (!sameSession(requested.session, now.session)) return "session-changed";
+  if (!sameHistoryPageSession(requested.session, now.session)) return "session-changed";
   if (requested.historyEpoch !== now.historyEpoch) return "history-rewritten";
   if (requested.cursor !== now.cursor) return "cursor-moved";
   return "current";

@@ -52,6 +52,7 @@ import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-ac
 import {
   checkHistoryPageFence,
   historyPageSession,
+  sameHistoryPageSession,
   type HistoryPageFence,
 } from "@/lib/native-history-page-fence";
 import {
@@ -790,7 +791,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   const historyUnpageableRef = useRef(sharedSyncCache?.historyUnpageable === true);
   /** Rows before the live tail may be out of date until a re-read settles. */
   const heldHistoryReconcileOwedRef = useRef(false);
-  const heldHistoryReconcileRunRef = useRef<object | null>(null);
+  const heldHistoryReconcileRunRef = useRef<{ superseded: boolean } | null>(null);
   const heldHistoryReconcileStartedAtRef = useRef(0);
   const historyMessagesRef = useRef<TMessage[]>(
     (sharedSyncCache?.historyMessages as TMessage[] | undefined) ?? [],
@@ -1198,6 +1199,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     (
       incoming: NativeAgentTranscriptView<TMessage>,
       token: string,
+      messagesAtRequest: TMessage[] | undefined,
       delta?: {
         deletedMessageIds: readonly string[];
         /** Rows the delta upserted or patched; the rest of the view is held. */
@@ -1275,6 +1277,16 @@ export function useNativeAgentSession<TMessage = unknown>({
           value.historyReconciliationToken;
       const historyEpochChanged =
         previousEpoch !== value.historyEpoch || (heldHistoryStale && !value.historyCursor);
+      // State can already have installed this generation while the cursor
+      // and retained rows still belong to the previous transcript.
+      const pagingSessionChanged =
+        syncLiveProjectionRef.current !== null &&
+        !sameHistoryPageSession(syncLiveProjectionRef.current, {
+          platform,
+          environmentId,
+          sessionId: value.identity.providerSessionId || undefined,
+          generation: value.identity.sourceGeneration,
+        });
       const evictionGeneration = projectionStore.getState().historyEvictions.get(sessionKey) ?? 0;
       const evicted = evictionGeneration !== progressiveHistoryEvictionRef.current;
       const deleted = deletedMessageIds?.length ? new Set(deletedMessageIds) : undefined;
@@ -1320,6 +1332,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       let retained =
         current &&
         !identityChanged &&
+        !pagingSessionChanged &&
         !historyEpochChanged &&
         !evicted &&
         firstLiveIndex > 0 &&
@@ -1335,8 +1348,31 @@ export function useNativeAgentSession<TMessage = unknown>({
               return !liveIds.has(id);
             })
           : [];
+      let needsHistoryReconcile = false;
+      if (revised && retained.length > 0 && messagesAtRequest !== current?.messages) {
+        const heldAtRequest = new Set(messagesAtRequest);
+        for (const message of retained) {
+          const id = (message as { id?: unknown })?.id;
+          if (typeof id !== "string" || heldAtRequest.has(message)) continue;
+          const replacement = revised.get(id);
+          if (
+            replacement === undefined ||
+            JSON.stringify(replacement) === JSON.stringify(message)
+          ) {
+            continue;
+          }
+          // A page or history walk installed this copy during the tail read.
+          // The responses have no comparable row versions. Preserve the copy
+          // on screen and resolve the conflict with a fresh history walk.
+          revised.delete(id);
+          needsHistoryReconcile = true;
+        }
+      }
       // Before the byte accounting below, so it measures the copies kept.
       retained = withRevisedMessages(retained, revised, liveIds);
+      if (needsHistoryReconcile && heldHistoryReconcileRunRef.current) {
+        heldHistoryReconcileRunRef.current.superseded = true;
+      }
       /*
        * Retention is a client-side buffer and gets the same explicit ceiling
        * sync materialization applies to its retained pages. Exceeding it
@@ -1355,7 +1391,8 @@ export function useNativeAgentSession<TMessage = unknown>({
         retained = [];
         retainedBytes = 0;
       }
-      const heldHistoryReconcileOwed = heldHistoryStale && retained.length > 0;
+      const heldHistoryReconcileOwed =
+        (heldHistoryStale || needsHistoryReconcile) && retained.length > 0;
       /*
        * The live tail no longer starts at any row this tab holds, so nothing
        * on screen can be stitched to it. A single oversized newest row does
@@ -1382,6 +1419,7 @@ export function useNativeAgentSession<TMessage = unknown>({
        */
       const pagingCarriesOver =
         !identityChanged &&
+        !pagingSessionChanged &&
         !historyEpochChanged &&
         !evicted &&
         syncLiveProjectionRef.current !== null;
@@ -1930,7 +1968,9 @@ export function useNativeAgentSession<TMessage = unknown>({
           operationEpoch === projectionOperationEpochRef.current;
         let transcriptMissing = false;
         let stateMissing = false;
+        let messagesAtRequest = projectionRef.current?.messages;
         const requestTranscript = (forceSnapshot: boolean) => {
+          messagesAtRequest = projectionRef.current?.messages;
           const input = {
             ...identity,
             viewVersion: 1 as const,
@@ -1980,6 +2020,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             applyProgressiveTranscript(
               update.value as NativeAgentTranscriptView<TMessage>,
               update.token,
+              messagesAtRequest,
             );
             return "applied";
           }
@@ -1992,7 +2033,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             ) {
               const merged = applyNativeAgentTranscriptDelta(current, update.delta);
               if (merged) {
-                applyProgressiveTranscript(merged, update.token, {
+                applyProgressiveTranscript(merged, update.token, messagesAtRequest, {
                   deletedMessageIds: update.delta.deletedMessageIds,
                   deliveredIds: new Set(
                     [
@@ -3102,6 +3143,9 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (requestedOperationEpoch !== projectionOperationEpochRef.current) {
         return projectionRef.current;
       }
+      if (!sameHistoryPageSession(syncLiveProjectionRef.current, projectionRef.current)) {
+        return projectionRef.current;
+      }
       const before = historyCursorRef.current;
       if (!before) {
         if (historyUnpageableRef.current) return projectionRef.current;
@@ -3171,10 +3215,15 @@ export function useNativeAgentSession<TMessage = unknown>({
        * 500–1500 ms cadence, so on a busy host a click on "Load earlier
        * messages" did nothing and automatic paging stalled (flakes 0483, 1602).
        */
-      if (checkHistoryPageFence(requestedFence, currentFence()) !== "current") {
+      const syncLive = syncLiveProjectionRef.current;
+      const current = projectionRef.current;
+      if (
+        !current ||
+        checkHistoryPageFence(requestedFence, currentFence()) !== "current" ||
+        !sameHistoryPageSession(syncLive, current)
+      ) {
         return projectionRef.current;
       }
-      const syncLive = syncLiveProjectionRef.current;
       const token = syncTokenRef.current;
       /*
        * `historyEpochRef` is the epoch of the view that named this cursor, and
@@ -3187,21 +3236,11 @@ export function useNativeAgentSession<TMessage = unknown>({
         await refresh({ manual: true });
         return projectionRef.current;
       }
-      const current = projectionRef.current;
-      const live =
-        current &&
-        current.platform === syncLive.platform &&
-        current.environmentId === syncLive.environmentId &&
-        current.sessionId === syncLive.sessionId &&
-        current.generation === syncLive.generation
-          ? {
-              ...current,
-              messages: syncLive.messages,
-              ...(syncLive.messageWindow
-                ? { messageWindow: syncLive.messageWindow }
-                : { messageWindow: undefined }),
-            }
-          : syncLive;
+      const live = {
+        ...current,
+        messages: syncLive.messages,
+        messageWindow: syncLive.messageWindow,
+      };
       const pageMessageId = (message: TMessage): unknown => (message as { id?: unknown }).id;
       const liveIds = new Set(live.messages.map(pageMessageId));
       const held = new Map(
@@ -3332,14 +3371,16 @@ export function useNativeAgentSession<TMessage = unknown>({
     if (progressiveTranscriptTokenRef.current === undefined) return;
     // An owed remount requests a fresh snapshot before walking. Its temporary
     // delta base includes held rows, so it cannot yet identify the live tail.
-    const run = {};
+    const run = { superseded: false };
     heldHistoryReconcileRunRef.current = run;
     heldHistoryReconcileStartedAtRef.current = Date.now();
     const operationEpoch = projectionOperationEpochRef.current;
     const stillCurrent = () =>
       backgroundRefreshEnabledRef.current &&
       heldHistoryReconcileRunRef.current === run &&
+      !run.superseded &&
       operationEpoch === projectionOperationEpochRef.current &&
+      sameProgressiveIdentity(progressiveIdentityRef.current, view.identity) &&
       lastTranscriptViewRef.current !== null &&
       sameProgressiveIdentity(lastTranscriptViewRef.current.identity, view.identity) &&
       lastTranscriptViewRef.current.historyEpoch === view.historyEpoch;

@@ -325,31 +325,41 @@ test("native: a page held 3 s while the agent streams lands on one click and hol
   // Let the wheel settle before capturing the place to hold.
   await page.waitForTimeout(400);
   const before = (await toolPosition(list, "call-40"))!;
-  // The agent starts streaming: from here every tail read moves the window on.
-  await page.evaluate(() =>
-    (window as unknown as { startPagingFixtureStream: () => void }).startPagingFixtureStream(),
-  );
-  const readsAtClick = await page.evaluate(() =>
-    (
-      window as unknown as { pagingFixtureTranscriptReads: () => number }
-    ).pagingFixtureTranscriptReads(),
-  );
   await startAnchorProbe(list, "call-40");
   await load.click();
   const loading = page.getByRole("button", { name: "Loading…", exact: true });
   await expect(loading).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests,
+      ),
+    )
+    .toEqual(["before-40"]);
+  // Start the stream after the request goes out, then check the applied
+  // projection and the response counter in the same browser evaluation.
+  await page.evaluate(() =>
+    (window as unknown as { startPagingFixtureStream: () => void }).startPagingFixtureStream(),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const fixture = window as unknown as {
+          pagingFixtureResponses: () => number;
+          pagingFixtureRowIds: () => string[];
+        };
+        return (
+          fixture.pagingFixtureResponses() === 0 &&
+          fixture.pagingFixtureRowIds().some((id) => id.startsWith("streamed-"))
+        );
+      }),
+    )
+    .toBe(true);
   await expect(loading).toHaveCount(0, { timeout: 10_000 });
   // Let late measurement and the restoration's own frames finish.
   await page.waitForTimeout(800);
   const probe = await stopAnchorProbe(list);
 
-  // The tail kept streaming while the page was held.
-  const readsAfter = await page.evaluate(() =>
-    (
-      window as unknown as { pagingFixtureTranscriptReads: () => number }
-    ).pagingFixtureTranscriptReads(),
-  );
-  expect(readsAfter - readsAtClick).toBeGreaterThan(2);
   // One click, one request, and it landed.
   expect(
     await page.evaluate(

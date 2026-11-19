@@ -15,6 +15,8 @@ function turn(overrides: Partial<NativeAgentTurnUsage> = {}): NativeAgentTurnUsa
   return {
     turnId: "t1",
     at: RESPONSE_AT,
+    cacheAccessNotBefore: new Date(RESPONSE_MS - MINUTE).toISOString(),
+    modelId: "claude-sonnet",
     cacheReadTokens: 40_000,
     cacheWriteTokens: 2_000,
     ...overrides,
@@ -61,13 +63,36 @@ describe("assessContinuation", () => {
     expect(result.cache).toBe("likely-expired");
   });
 
-  test("the verdict is anchored to the response time, not to when it is evaluated", () => {
-    const first = assess({ nowMs: RESPONSE_MS + 4 * MINUTE });
-    const later = assess({ nowMs: RESPONSE_MS + 6 * MINUTE });
+  test("the verdict is anchored to the cache-access bound", () => {
+    const first = assess({ nowMs: RESPONSE_MS + 3 * MINUTE });
+    const later = assess({ nowMs: RESPONSE_MS + 4 * MINUTE });
     expect(first.cache).toBe("likely-warm");
     // Evaluating again does not extend the lifetime.
     expect(later.cache).toBe("unknown");
-    expect(later.idleMs).toBe(6 * MINUTE);
+    expect(later.idleMs).toBe(4 * MINUTE);
+  });
+
+  test("recent completion alone cannot establish cache freshness", () => {
+    const longTurn = turn({
+      cacheAccessNotBefore: new Date(RESPONSE_MS - 12 * MINUTE).toISOString(),
+    });
+    for (const newest of [longTurn, turn({ cacheAccessNotBefore: undefined })]) {
+      expect(assess({ turns: [newest] })).toMatchObject({
+        cache: "unknown",
+        reason: "cache-access-time-unknown",
+        idleMs: 2 * MINUTE,
+      });
+    }
+  });
+
+  test("usage under a different model does not predict a warm cache", () => {
+    expect(assess({ selectedModelId: "claude-opus" })).toMatchObject({
+      cache: "unknown",
+      reason: "model-mismatch",
+    });
+    expect(assess({ selectedModelId: "sonnet", resolvedModelId: "claude-sonnet" }).cache).toBe(
+      "likely-warm",
+    );
   });
 
   test("session-wide history alone never makes the cache warm", () => {

@@ -205,6 +205,8 @@ export interface EngineTurnUsage {
   turnId: string;
   /** When this turn was last accounted, ISO-8601; what dates recorded usage. */
   at?: string;
+  cacheAccessNotBefore?: string;
+  modelId?: string;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -229,6 +231,8 @@ export interface EngineAccountUsageWindow {
 
 export interface EngineUsageSnapshot {
   usedTokens: number;
+  occupancyUnknown?: true;
+  contextCompacted?: true;
   totalTokens: number;
   percentUsed: number;
   inputTokens?: number;

@@ -1051,6 +1051,9 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     provider: activeSession.provider,
                     running: currentSessionLoading,
                     canCompact,
+                    resolvedModelId: neutralProjection?.composer?.models.find(
+                      (model) => model.id === modelId,
+                    )?.resolvedModel,
                   }}
                 />
               </div>

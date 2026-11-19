@@ -1229,6 +1229,7 @@ export function UsagePanel({
     provider: AgentPlatform | undefined;
     running: boolean;
     canCompact: boolean;
+    resolvedModelId?: string;
     nowMs?: number;
   };
 }) {
@@ -1249,11 +1250,22 @@ export function UsagePanel({
       />
     ) : null;
 
+  const continuationSection = continuation ? (
+    <ContinuationExplanation
+      {...continuation}
+      turns={usage?.turns}
+      selectedModelId={modelId}
+      contextCompacted={usage?.contextCompacted}
+      contextTokens={usage?.occupancyUnknown || usage?.estimated ? undefined : usage?.usedTokens}
+    />
+  ) : null;
+
   if (!usage) {
     if (account) {
       return (
         <div className="space-y-4">
           {account}
+          {continuationSection}
           <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">
             <span
               className={cn("truncate", !reportedModelId && "text-[11px] font-medium")}
@@ -1266,15 +1278,24 @@ export function UsagePanel({
         </div>
       );
     }
-    return (
+    const empty = (
       <div className="rounded-lg border border-dashed border-border/70 px-4 py-5 text-sm text-muted-foreground">
         Usage will appear after this session reports its first token snapshot.
       </div>
+    );
+    return continuationSection ? (
+      <div className="space-y-4">
+        {empty}
+        {continuationSection}
+      </div>
+    ) : (
+      empty
     );
   }
 
   const used = Math.max(0, usage.usedTokens);
   const contextWindow =
+    !usage.occupancyUnknown &&
     usage.totalTokens !== undefined &&
     Number.isFinite(usage.totalTokens) &&
     usage.percentUsed !== undefined &&
@@ -1351,16 +1372,7 @@ export function UsagePanel({
         ) : null}
       </div>
 
-      {continuation ? (
-        <ContinuationExplanation
-          provider={continuation.provider}
-          turns={usage.turns}
-          contextTokens={usage.occupancyUnknown ? undefined : usage.usedTokens}
-          running={continuation.running}
-          canCompact={continuation.canCompact}
-          nowMs={continuation.nowMs}
-        />
-      ) : null}
+      {continuationSection}
 
       {/*
        * Account standing sits below the session's own counters: the context

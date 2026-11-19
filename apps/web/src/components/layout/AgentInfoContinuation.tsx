@@ -80,8 +80,16 @@ export function cacheExplanation(
       return `${ago}. It did not report whether it used the cache.`;
     case "no-cache-activity":
       return `${ago}. It recorded no cache reads or writes.`;
+    case "cache-access-time-unknown":
+      return `${ago}. The turn reported cache activity, but its freshness is uncertain.`;
+    case "model-mismatch":
+      return `${ago}. The last response used a different model than the current selection.`;
+    case "model-unknown":
+      return `${ago}. The last response did not identify its model.`;
+    case "context-compacted":
+      return "Context was compacted. Waiting for usage from the updated context.";
     case "within-minimum-lifetime":
-      return `${ago}, inside the shortest cache lifetime (${minimum}).`;
+      return `${ago}. The turn reported cache activity within the shortest lifetime (${minimum}).`;
     case "past-minimum-lifetime":
       return maximum
         ? `${ago}, past the shortest cache lifetime (${minimum}); still warm only if the session used longer caching (up to ${maximum}).`
@@ -97,18 +105,16 @@ export function continuationExplanation(
   canCompact: boolean,
 ): string[] {
   const tokens = assessment.contextTokens;
-  if (tokens === undefined) return [];
-  const amount = `about ${formatTokenCount(tokens)} tokens`;
-  const lines = [
-    assessment.cache === "likely-warm"
-      ? `Continuing re-sends ${amount}; most should be read from cache.`
-      : assessment.cache === "likely-expired"
-        ? `Continuing re-sends ${amount}, likely processed again in full without a cache discount.`
-        : `Continuing re-sends ${amount}; whether they are read from cache is unknown.`,
-  ];
-  if (canCompact) {
+  const lines = [];
+  if (tokens !== undefined) {
+    lines.push(`Last reported context: about ${formatTokenCount(tokens)} tokens.`);
+  }
+  if (assessment.reason === "within-minimum-lifetime") {
+    lines.push("The cached share of the next request is unknown.");
+  }
+  if (canCompact && tokens !== undefined) {
     lines.push(
-      "Compacting first replaces the history with a summary: a smaller request that starts a new cache.",
+      "Compacting first can reduce retained context. Cache reuse depends on the provider and which parts of the prompt still match.",
     );
   }
   return lines;
@@ -117,31 +123,59 @@ export function continuationExplanation(
 /**
  * The next continuation, explained from the evidence the provider reported:
  * how likely the prompt cache is to be warm, how long ago the last response
- * was, and what continuing or compacting would send. "Unknown" stays unknown
+ * was, and how much context the provider reported. "Unknown" stays unknown
  * whenever the evidence is not there.
  */
-export function ContinuationExplanation({
-  provider,
-  turns,
-  contextTokens,
-  running,
-  canCompact,
-  nowMs: fixedNowMs,
-}: {
+interface ContinuationExplanationProps {
   provider: AgentPlatform | undefined;
   turns: readonly NativeAgentTurnUsage[] | undefined;
   contextTokens: number | undefined;
+  contextCompacted?: boolean;
+  selectedModelId?: string;
+  resolvedModelId?: string;
   running: boolean;
   canCompact: boolean;
   /** Fixed clock for tests; the panel otherwise reads the time itself. */
   nowMs?: number;
-}) {
-  const lastResponseAt = running ? undefined : turns?.at(-1)?.at;
-  const nowMs = useContinuationNow(lastResponseAt, fixedNowMs);
-  const assessment = assessContinuation({ provider, turns, contextTokens, running, nowMs });
-  const continuation = continuationExplanation(assessment, canCompact);
+}
+
+export function ContinuationExplanation(props: ContinuationExplanationProps) {
+  const lastResponseAt =
+    props.running || props.contextCompacted ? undefined : props.turns?.at(-1)?.at;
   return (
     <section aria-label="Next continuation" className="border-t border-border/60 pt-3">
+      {/* A newly dated turn needs a fresh clock before its first render. */}
+      <ContinuationDetails key={lastResponseAt} {...props} lastResponseAt={lastResponseAt} />
+    </section>
+  );
+}
+
+function ContinuationDetails({
+  provider,
+  turns,
+  contextTokens,
+  contextCompacted,
+  selectedModelId,
+  resolvedModelId,
+  running,
+  canCompact,
+  nowMs: fixedNowMs,
+  lastResponseAt,
+}: ContinuationExplanationProps & { lastResponseAt: string | undefined }) {
+  const nowMs = useContinuationNow(lastResponseAt, fixedNowMs);
+  const assessment = assessContinuation({
+    provider,
+    turns,
+    contextTokens,
+    contextCompacted,
+    selectedModelId,
+    resolvedModelId,
+    running,
+    nowMs,
+  });
+  const continuation = continuationExplanation(assessment, canCompact);
+  return (
+    <>
       <div className="flex items-center justify-between gap-3">
         <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
           Next continuation
@@ -171,6 +205,6 @@ export function ContinuationExplanation({
           cache, especially after a model, account or context change.
         </p>
       </div>
-    </section>
+    </>
   );
 }

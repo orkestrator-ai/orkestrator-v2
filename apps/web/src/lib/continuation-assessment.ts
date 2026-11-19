@@ -7,7 +7,7 @@ import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
  *
  * The assessment is a pure function of that evidence and the caller's clock.
  * Re-evaluating it never refreshes anything: the cache's reference point is
- * the provider-dated time of the last response, so a panel that re-renders
+ * a bound on when the turn accessed the cache, so a panel that re-renders
  * every few seconds cannot keep a cache "warm" by looking at it. Session-wide
  * cache-read totals are history and are deliberately not used as evidence.
  */
@@ -15,7 +15,7 @@ import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
 export type ContinuationCacheState = "likely-warm" | "likely-expired" | "unknown";
 
 export type ContinuationCacheReason =
-  /** The last response's cache use is within the provider's shortest lifetime. */
+  /** All reported cache activity falls within the provider's shortest lifetime. */
   | "within-minimum-lifetime"
   /** Past the shortest lifetime but inside the longest one the provider offers. */
   | "past-minimum-lifetime"
@@ -33,6 +33,10 @@ export type ContinuationCacheReason =
   | "no-cache-report"
   /** The last response reported neither cache reads nor cache writes. */
   | "no-cache-activity"
+  | "cache-access-time-unknown"
+  | "model-mismatch"
+  | "model-unknown"
+  | "context-compacted"
   /** A response is running now. */
   | "response-running";
 
@@ -75,6 +79,9 @@ export interface ContinuationEvidence {
   contextTokens: number | undefined;
   /** Whether a response is in progress now. */
   running?: boolean;
+  contextCompacted?: boolean;
+  selectedModelId?: string;
+  resolvedModelId?: string;
   nowMs: number;
 }
 
@@ -92,13 +99,13 @@ export interface ContinuationAssessment {
 function lastResponseTime(
   turn: NativeAgentTurnUsage,
   nowMs: number,
-): { idleMs: number } | { reason: "undated-response" | "clock-mismatch" } {
+): { idleMs: number; responseMs: number } | { reason: "undated-response" | "clock-mismatch" } {
   if (turn.at === undefined) return { reason: "undated-response" };
   const at = Date.parse(turn.at);
   if (!Number.isFinite(at) || !Number.isFinite(nowMs) || at > nowMs + CONTINUATION_CLOCK_SKEW_MS) {
     return { reason: "clock-mismatch" };
   }
-  return { idleMs: Math.max(0, nowMs - at) };
+  return { idleMs: Math.max(0, nowMs - at), responseMs: at };
 }
 
 function cacheActivity(turn: NativeAgentTurnUsage): "active" | "none" | "unreported" {
@@ -110,6 +117,7 @@ function cacheActivity(turn: NativeAgentTurnUsage): "active" | "none" | "unrepor
 
 export function assessContinuation(evidence: ContinuationEvidence): ContinuationAssessment {
   const contextTokens =
+    !evidence.contextCompacted &&
     evidence.contextTokens !== undefined &&
     Number.isFinite(evidence.contextTokens) &&
     evidence.contextTokens > 0
@@ -124,6 +132,9 @@ export function assessContinuation(evidence: ContinuationEvidence): Continuation
   }
 
   const turn = evidence.turns?.at(-1);
+  if (evidence.contextCompacted) {
+    return { ...base, cache: "unknown", reason: "context-compacted" };
+  }
   if (!turn) return { ...base, cache: "unknown", reason: "no-response" };
   const time = lastResponseTime(turn, evidence.nowMs);
   if ("reason" in time) return { ...base, cache: "unknown", reason: time.reason };
@@ -134,17 +145,38 @@ export function assessContinuation(evidence: ContinuationEvidence): Continuation
   if (!lifetime) return { ...timed, cache: "unknown", reason: "lifetime-unknown" };
   const judged = { ...timed, lifetime };
 
-  // Past the longest lifetime nothing survives, whatever the last response did.
+  if (
+    evidence.selectedModelId &&
+    turn.modelId &&
+    turn.modelId !== evidence.selectedModelId &&
+    turn.modelId !== evidence.resolvedModelId
+  ) {
+    return { ...timed, cache: "unknown", reason: "model-mismatch" };
+  }
+
+  // Cache accesses for this turn cannot be later than its recorded response.
+  // This is a lower bound on cache age, independent of its earliest access.
   if (lifetime.maximumMs !== undefined && idleMs >= lifetime.maximumMs) {
     return { ...judged, cache: "likely-expired", reason: "past-maximum-lifetime" };
   }
   const activity = cacheActivity(turn);
   if (activity === "unreported") return { ...judged, cache: "unknown", reason: "no-cache-report" };
   if (activity === "none") return { ...judged, cache: "unknown", reason: "no-cache-activity" };
-  if (idleMs < lifetime.minimumMs) {
-    return { ...judged, cache: "likely-warm", reason: "within-minimum-lifetime" };
+  if (idleMs >= lifetime.minimumMs) {
+    return { ...judged, cache: "unknown", reason: "past-minimum-lifetime" };
   }
-  return { ...judged, cache: "unknown", reason: "past-minimum-lifetime" };
+  if (evidence.selectedModelId && !turn.modelId) {
+    return { ...timed, cache: "unknown", reason: "model-unknown" };
+  }
+  const earliestAccess = Date.parse(turn.cacheAccessNotBefore ?? "");
+  if (
+    !Number.isFinite(earliestAccess) ||
+    earliestAccess > time.responseMs ||
+    evidence.nowMs - earliestAccess >= lifetime.minimumMs
+  ) {
+    return { ...timed, cache: "unknown", reason: "cache-access-time-unknown" };
+  }
+  return { ...judged, cache: "likely-warm", reason: "within-minimum-lifetime" };
 }
 
 /** "45s", "12m", "3h 5m", "2d 4h": coarse enough to read at a glance. */

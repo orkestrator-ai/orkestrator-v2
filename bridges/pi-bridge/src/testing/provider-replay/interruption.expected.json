@@ -72,8 +72,9 @@
           {
             "type": "tool-invocation",
             "toolName": "bash",
-            "toolState": "pending",
-            "outputLength": 18
+            "toolState": "failure",
+            "outputLength": 18,
+            "error": true
           }
         ]
       }

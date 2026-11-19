@@ -97,8 +97,12 @@ Codex replays app-server recordings
 - **The recorder stays off the provider's callback.** Each bridge's hook only
   queues a frame (`@orkestrator/protocol/node/provider-replay-recorder`); it
   needs `ORKESTRATOR_PROVIDER_RECORD_DIR` and
-  `ORKESTRATOR_PROVIDER_RECORD_CONFIRM=1`, and its output holds prompts and
-  file contents until scrubbed with `scripts/scrub-codex-recording.ts`.
+  `ORKESTRATOR_PROVIDER_RECORD_CONFIRM=1`. Captures can hold prompts and
+  file contents. Scrub with `scripts/scrub-codex-recording.ts` and review the
+  retained fields before committing.
+- **ACP replay restricts fixture-supplied client requests.** Permission
+  prompts exercise the approval path. File and terminal requests are refused
+  before the relay writes them to stdout.
 
 ## The bridge token is not proof of the user's intent
 

@@ -16,6 +16,7 @@ import {
   PROVIDER_REPLAY_BRIDGES,
   parseProviderReplayFixture,
 } from "../conformance/provider-replay/fixture";
+import { observe } from "../conformance/provider-replay/observation";
 import { PROVIDER_REPLAY_SCENARIOS } from "../conformance/provider-replay/scenarios";
 import { buildRedactions, scrub } from "../../scripts/scrub-codex-recording.ts";
 import { slowTestFiles } from "../../scripts/test-tiers";
@@ -139,4 +140,31 @@ describe("provider replay corpus", () => {
       }
     },
   );
+});
+
+test("a revised row must have the current tool result even when the stale result is the same length", () => {
+  const row = {
+    id: "revised",
+    role: "assistant",
+    content: "",
+    parts: [{ type: "tool-invocation", toolState: "success", toolOutput: "new result" }],
+  };
+  const input = (toolOutput: string) => ({
+    activity: "idle",
+    pending: [],
+    served: {
+      messages: [row, { id: "tail", content: "", parts: [] }],
+      summary: {
+        status: "snapshot",
+        value: {
+          startIndex: 1,
+          revisedMessages: [{ ...row, parts: [{ ...row.parts[0], toolOutput }] }],
+        },
+      },
+    },
+  });
+  expect(
+    observe("current", input("new result")).liveTail.revisedRows?.[0]?.row.parts,
+  ).toMatchObject([{ outputExcerpt: "new result" }]);
+  expect(() => observe("stale", input("old result"))).toThrow("Stale revised row");
 });

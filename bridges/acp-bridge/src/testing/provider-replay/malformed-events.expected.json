@@ -4,7 +4,10 @@
     "activity": "idle",
     "completion": {
       "status": "idle",
-      "prompt": 202
+      "dispatch": "dispatched",
+      "turn": {
+        "state": "completed"
+      }
     },
     "pending": [],
     "drift": {

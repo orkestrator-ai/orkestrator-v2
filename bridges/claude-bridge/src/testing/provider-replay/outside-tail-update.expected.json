@@ -126,7 +126,34 @@
     ],
     "liveTail": {
       "startIndex": 2,
-      "revisedOutsideTail": [1]
+      "revisedOutsideTail": [1],
+      "revisedRows": [
+        {
+          "index": 1,
+          "row": {
+            "role": "assistant",
+            "text": "",
+            "textLength": 0,
+            "parts": [
+              {
+                "type": "tool-invocation",
+                "toolName": "Agent",
+                "toolState": "success",
+                "outputLength": 34,
+                "outputExcerpt": "Async agent launched successfully."
+              },
+              {
+                "type": "tool-invocation",
+                "toolName": "Read",
+                "toolState": "success",
+                "outputLength": 17,
+                "outputExcerpt": "{\"name\":\"replay\"}",
+                "parentTask": true
+              }
+            ]
+          }
+        }
+      ]
     },
     "extra": {
       "providerSessionId": "derived from the bridge id"
@@ -196,7 +223,34 @@
     ],
     "liveTail": {
       "startIndex": 2,
-      "revisedOutsideTail": [1]
+      "revisedOutsideTail": [1],
+      "revisedRows": [
+        {
+          "index": 1,
+          "row": {
+            "role": "assistant",
+            "text": "",
+            "textLength": 0,
+            "parts": [
+              {
+                "type": "tool-invocation",
+                "toolName": "Agent",
+                "toolState": "success",
+                "outputLength": 34,
+                "outputExcerpt": "Async agent launched successfully."
+              },
+              {
+                "type": "tool-invocation",
+                "toolName": "Read",
+                "toolState": "success",
+                "outputLength": 17,
+                "outputExcerpt": "{\"name\":\"replay\"}",
+                "parentTask": true
+              }
+            ]
+          }
+        }
+      ]
     },
     "extra": {
       "providerSessionId": "derived from the bridge id"
@@ -278,7 +332,34 @@
     ],
     "liveTail": {
       "startIndex": 3,
-      "revisedOutsideTail": [1]
+      "revisedOutsideTail": [1],
+      "revisedRows": [
+        {
+          "index": 1,
+          "row": {
+            "role": "assistant",
+            "text": "",
+            "textLength": 0,
+            "parts": [
+              {
+                "type": "tool-invocation",
+                "toolName": "Agent",
+                "toolState": "success",
+                "outputLength": 34,
+                "outputExcerpt": "Async agent launched successfully."
+              },
+              {
+                "type": "tool-invocation",
+                "toolName": "Read",
+                "toolState": "success",
+                "outputLength": 17,
+                "outputExcerpt": "{\"name\":\"replay\"}",
+                "parentTask": true
+              }
+            ]
+          }
+        }
+      ]
     },
     "extra": {
       "providerSessionId": "derived from the bridge id"

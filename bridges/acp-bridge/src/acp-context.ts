@@ -5,7 +5,7 @@ import {
 import { createProviderReplayRecorderFromEnv } from "@orkestrator/protocol/node/provider-replay-recorder";
 import { loadBridgeCredential } from "@orkestrator/protocol/node/bridge-credential";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
 import {
   DEFAULT_CAPACITY_RETRY_POLICY,
@@ -713,7 +713,7 @@ export const agentRuntime: {
  * process; `tests/conformance/provider-replay/README.md` turns one into a
  * fixture.
  */
-const replayRecorder = createProviderReplayRecorderFromEnv({
+export const replayRecorder = createProviderReplayRecorderFromEnv({
   bridge: "acp",
   provider: providerConfig.id,
   providerVersion: () => agentRuntime.version,
@@ -992,10 +992,8 @@ export class AcpProcess {
   #terminating: Promise<void> | undefined;
   #terminationOutcome?: "resolved" | "rejected";
   readonly #stdoutFramer = new JsonlLineFramer(MAX_LINE_BYTES);
-  /** One recording per agent process: its pid is the key, never content. */
-  get #replayKey(): string {
-    return `process-${this.child.pid ?? "unknown"}`;
-  }
+  /** A new stream even when the OS recycles a child PID. */
+  readonly #replayKey = replayRecorder ? randomUUID() : "";
   onUpdate: (params: JsonObject) => void = unattachedUpdate;
   /**
    * The latest `available_commands_update` that arrived before a session
@@ -1189,7 +1187,7 @@ export class AcpProcess {
   ): Promise<unknown> {
     if (this.#closed) return Promise.reject(new Error(`${provider} ACP process is not running`));
     const id = this.#nextId++;
-    if (method === "session/prompt") replayRecorder?.prompt(this.#replayKey);
+    if (method === "session/prompt") replayRecorder?.prompt(this.#replayKey, id);
     this.#diagnostics?.count("requestsSent");
     this.#diagnostics?.tool(String(id), method, "started");
     return new Promise((resolvePromise, reject) => {
@@ -1302,6 +1300,7 @@ export class AcpProcess {
       void this.#terminateChild("rejected");
       return;
     }
+    if (!isObject(message) || Array.isArray(message)) return;
     if (typeof message.id === "number" && ("result" in message || "error" in message)) {
       this.#diagnostics?.activity("response");
       this.#diagnostics?.count("responsesReceived");

@@ -405,10 +405,12 @@ export async function followRun(
   const terminal = run.wait().then(
     (result) => {
       diagnostics?.terminalSettled("resolved");
+      replayRecorder?.action(state.id, "cursor-terminal", { result });
       return result;
     },
     (error) => {
       diagnostics?.terminalSettled("rejected");
+      replayRecorder?.action(state.id, "cursor-terminal", { rejection: errorText(error) });
       throw error;
     },
   );

@@ -159,6 +159,11 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   // area's debug lines, such as the review fan-out's per-pass prompt reads
   // (`test:agent:auto-pipeline`). Levels only, never a credential.
   "ORKESTRATOR_LOG_LEVEL",
+  // Explicit opt-in to record provider traffic from this disposable profile.
+  // These are a directory, confirmation flag and byte limit.
+  "ORKESTRATOR_PROVIDER_RECORD_DIR",
+  "ORKESTRATOR_PROVIDER_RECORD_CONFIRM",
+  "ORKESTRATOR_PROVIDER_RECORD_MAX_BYTES",
   // Service-preview transport overrides (`PreviewRuntime.effectiveSettings`),
   // so an isolated profile can qualify the tunnel and relay. Policy only.
   "ORKESTRATOR_PREVIEW_RELAY",

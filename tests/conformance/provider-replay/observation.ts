@@ -21,6 +21,7 @@
  * excerpt. A replay should fail when the structure changes, not when a
  * recorded file's contents shift by a line.
  */
+import { summarizeBridgeMessage } from "@orkestrator/protocol/node/bridge-transcript-summary";
 import {
   bridgeTranscriptRouteBody,
   type BridgeTranscriptSource,
@@ -38,6 +39,7 @@ export interface ReplayPartShape {
   toolName?: string;
   toolState?: string;
   outputLength?: number;
+  outputExcerpt?: string;
   error?: true;
   leftRunning?: true;
   parentTask?: true;
@@ -72,6 +74,7 @@ export interface ReplayObservation {
     startIndex: number;
     /** Rows before the window that the summary carries as revised, by index. */
     revisedOutsideTail: number[];
+    revisedRows?: Array<{ index: number; row: ReplayRowShape }>;
   };
   /** Bridge-specific facts an adapter pins (provider session id mapping, …). */
   extra?: Record<string, unknown>;
@@ -113,7 +116,7 @@ function str(value: unknown): string | undefined {
 
 const PROSE_PART_TYPES = new Set(["text", "thinking", "reasoning", "status", "error", "file"]);
 
-export function normalizePart(part: unknown): ReplayPartShape {
+function normalizePart(part: unknown, includeOutput: boolean): ReplayPartShape {
   const record = (part ?? {}) as Record<string, unknown>;
   const type = str(record.type) ?? "unknown";
   const shape: ReplayPartShape = { type };
@@ -127,23 +130,25 @@ export function normalizePart(part: unknown): ReplayPartShape {
   const toolState = str(record.toolState);
   if (toolState) shape.toolState = toolState;
   const output = str(record.toolOutput);
-  if (output !== undefined) shape.outputLength = output.length;
+  if (output !== undefined) {
+    shape.outputLength = output.length;
+    if (includeOutput) shape.outputExcerpt = excerpt(output);
+  }
   if (str(record.toolError)) shape.error = true;
   if (record.toolLeftRunning === true) shape.leftRunning = true;
   if (str(record.parentTaskUseId)) shape.parentTask = true;
   return shape;
 }
 
-export function normalizeRow(row: {
-  role?: unknown;
-  content: string;
-  parts: unknown[];
-}): ReplayRowShape {
+function normalizeRow(
+  row: { role?: unknown; content: string; parts: unknown[] },
+  includeOutput = false,
+): ReplayRowShape {
   return {
     role: str(row.role) ?? "unknown",
     text: excerpt(row.content),
     textLength: row.content.length,
-    parts: row.parts.map(normalizePart),
+    parts: row.parts.map((part) => normalizePart(part, includeOutput)),
   };
 }
 
@@ -172,10 +177,21 @@ export function observe<T extends { id: string; content: string; parts: unknown[
     throw new Error(`transcript summary for ${label} was not a snapshot`);
   }
   const indexById = new Map(messages.map((message, index) => [message.id, index]));
-  const revisedOutsideTail = (body.value.revisedMessages ?? [])
-    .map((message) => indexById.get((message as { id?: string }).id ?? ""))
-    .filter((index): index is number => index !== undefined)
-    .sort((a, b) => a - b);
+  const revisedRows = (body.value.revisedMessages ?? [])
+    .map((raw) => {
+      const message = raw as T & { role?: unknown };
+      const index = indexById.get(message.id);
+      if (index === undefined || index >= body.value!.startIndex) {
+        throw new Error(`Unexpected revised row in ${label}`);
+      }
+      const row = normalizeRow(message, true);
+      const expected = normalizeRow(summarizeBridgeMessage(messages[index]!), true);
+      if (JSON.stringify(expected) !== JSON.stringify(row)) {
+        throw new Error(`Stale revised row at index ${index} in ${label}`);
+      }
+      return { index, row };
+    })
+    .sort((a, b) => a.index - b.index);
   return {
     label,
     activity: input.activity,
@@ -190,7 +206,11 @@ export function observe<T extends { id: string; content: string; parts: unknown[
         }
       : {}),
     rows: messages.map((message) => normalizeRow(message as T & { role?: unknown })),
-    liveTail: { startIndex: body.value.startIndex, revisedOutsideTail },
+    liveTail: {
+      startIndex: body.value.startIndex,
+      revisedOutsideTail: revisedRows.map(({ index }) => index),
+      ...(revisedRows.length > 0 ? { revisedRows } : {}),
+    },
     ...(input.extra && Object.keys(input.extra).length > 0 ? { extra: input.extra } : {}),
   };
 }

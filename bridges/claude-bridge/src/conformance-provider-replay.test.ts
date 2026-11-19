@@ -27,7 +27,41 @@
  * until the turn is over, which a turn released to background work reaches
  * before its prompt settles), `resume`.
  */
+import { afterAll, expect, test } from "bun:test";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  PROVIDER_RECORD_CONFIRM_ENV,
+  PROVIDER_RECORD_DIR_ENV,
+} from "@orkestrator/protocol/node/provider-replay-recorder";
+import type { QueryCall, SdkSessionMessage } from "./services/session-manager-test-harness.js";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  readProviderReplayFixture,
+  replayProviderFixture,
+  runProviderReplaySuite,
+  type ProviderReplayAdapter,
+} from "../../../tests/conformance/provider-replay/scenarios.js";
+import {
+  parseProviderReplayFixture,
+  type ProviderReplayActionStep,
+  type ProviderReplayFrameStep,
+} from "../../../tests/conformance/provider-replay/fixture.js";
+
+const recordings = await mkdtemp(join(tmpdir(), "claude-replay-recordings-"));
+const previousEnv = [PROVIDER_RECORD_DIR_ENV, PROVIDER_RECORD_CONFIRM_ENV].map(
+  (key) => [key, process.env[key]] as const,
+);
+process.env[PROVIDER_RECORD_DIR_ENV] = recordings;
+process.env[PROVIDER_RECORD_CONFIRM_ENV] = "1";
+const { replayRecorder } = await import("./services/replay-recorder.js");
+for (const [key, value] of previousEnv) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+
+const {
   PERSISTED_SDK_ID,
   abortSession,
   createSession,
@@ -46,19 +80,15 @@ import {
   sendPrompt,
   track,
   waitFor,
-  type QueryCall,
-  type SdkSessionMessage,
-} from "./services/session-manager-test-harness.js";
-import { join } from "node:path";
-import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { runProviderReplaySuite } from "../../../tests/conformance/provider-replay/scenarios.js";
-import type {
-  ProviderReplayActionStep,
-  ProviderReplayFrameStep,
-} from "../../../tests/conformance/provider-replay/fixture.js";
-import { claudeTranscriptSource } from "./routes/session-transcript.js";
-import { sdkSessionIdFromBridgeId } from "./services/session-manager.js";
-import { sessionHealth } from "./types/index.js";
+} = await import("./services/session-manager-test-harness.js");
+const { claudeTranscriptSource } = await import("./routes/session-transcript.js");
+const { sdkSessionIdFromBridgeId } = await import("./services/session-manager.js");
+const { sessionHealth } = await import("./types/index.js");
+
+afterAll(async () => {
+  await replayRecorder?.close();
+  await rm(recordings, { recursive: true, force: true });
+});
 
 /** Policies a fixture may name in `prompt`: `ask` parks every tool for a person. */
 const POLICIES: Record<string, NativeAgentExecutionPolicy> = {
@@ -103,13 +133,16 @@ function pendingCount(sessionId: string): number {
   );
 }
 
-runProviderReplaySuite({
+const adapter: ProviderReplayAdapter = {
   bridge: "claude",
   fixtureDir: join(import.meta.dir, "testing", "provider-replay"),
-  async start() {
+  async start(fixture) {
     const rollout: SdkSessionMessage[] = [];
     let sessionId: string | undefined;
     let call: QueryCall | undefined;
+    let input: AsyncIterator<unknown> | undefined;
+    let queryCount = 0;
+    let expectedRekey: string | undefined;
     let prompt: Promise<unknown> | undefined;
     let promptOutcome: string | undefined;
     const parked: ParkedCall[] = [];
@@ -165,6 +198,16 @@ runProviderReplaySuite({
           await waitFor(() => answered || pendingCount(id) > before);
           return;
         }
+        if (
+          fixture.header.scenario === "session-rekey" &&
+          isRecord(step.frame) &&
+          step.frame.type === "system" &&
+          step.frame.subtype === "init" &&
+          typeof step.frame.session_id === "string" &&
+          step.frame.session_id !== "$derived"
+        ) {
+          expectedRekey = step.frame.session_id;
+        }
         call.push(withDerivedId(step.frame, live()));
         await call.consumed();
       },
@@ -180,14 +223,35 @@ runProviderReplaySuite({
               typeof step.args.policy === "string" ? POLICIES[step.args.policy] : undefined;
             if (step.args.policy !== undefined && !policy) throw new Error("unknown policy");
             if (policy) getSession(sessionId)!.executionPolicy = policy;
+            const previousRuntime = getSession(sessionId)?.claudeRuntime;
+            let submitted = false;
             watch(
               sendPrompt(
                 sessionId,
                 typeof step.args.text === "string" ? step.args.text : "Provider replay prompt",
                 isRecord(step.args.options) ? step.args.options : undefined,
+                {
+                  onQueryStarted: () => {
+                    submitted = true;
+                  },
+                },
               ),
             );
-            call = await nextQueryCall();
+            await waitFor(() => submitted || promptOutcome !== undefined, 5_000);
+            if (!submitted) throw new Error(promptOutcome ?? "prompt was not submitted");
+            if (!call || previousRuntime !== getSession(sessionId)?.claudeRuntime) {
+              call = await nextQueryCall();
+              queryCount += 1;
+              input =
+                typeof call.prompt === "string"
+                  ? undefined
+                  : (call.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+            }
+            if (step.args.reuseQuery === true && queryCount !== 1) {
+              throw new Error("the second prompt launched another SDK query");
+            }
+            if (input && (await input.next()).done)
+              throw new Error("SDK input ended before the prompt");
             return;
           }
           case "answer": {
@@ -271,6 +335,9 @@ runProviderReplaySuite({
           drift: sessionHealth(session).drift(),
           extra: {
             providerSessionId,
+            ...(expectedRekey
+              ? { adoptedProviderSessionId: providerSessionId === expectedRekey }
+              : {}),
             ...(decisions.length > 0 ? { decisions: [...decisions] } : {}),
           },
         };
@@ -283,4 +350,40 @@ runProviderReplaySuite({
       },
     };
   },
+};
+
+runProviderReplaySuite(adapter);
+
+test("Claude records and replays prompt, SDK frames, and canUseTool", async () => {
+  await replayRecorder!.flush();
+  const previous = new Set(await readdir(recordings));
+  const fixture = readProviderReplayFixture(adapter.fixtureDir, "approval-denial.jsonl");
+  const original = await replayProviderFixture(adapter, fixture);
+  await replayRecorder!.flush();
+  const fresh = (await readdir(recordings)).filter((name) => !previous.has(name));
+  expect(fresh).toHaveLength(1);
+  const capture = parseProviderReplayFixture(
+    fresh[0]!,
+    await readFile(join(recordings, fresh[0]!), "utf8"),
+  );
+  const first = capture.steps[0];
+  expect(first).toMatchObject({ kind: "action", action: "prompt", args: {} });
+  if (first?.kind !== "action") throw new Error("Missing recorded prompt");
+  first.args.policy = "ask";
+  const approval = capture.steps.findIndex(
+    (step) => step.kind === "frame" && permissionRequest(step.frame),
+  );
+  expect(approval).toBeGreaterThan(0);
+  capture.steps.splice(approval + 1, 0, {
+    kind: "action",
+    action: "answer",
+    args: { decision: "deny" },
+    line: 0,
+  });
+  capture.steps.push({ kind: "action", action: "settle", args: {}, line: 0 });
+  const replayed = await replayProviderFixture(adapter, capture);
+  expect(replayed.at(-1)?.extra?.decisions).toEqual(original.at(-1)?.extra?.decisions);
+  expect(replayed.at(-1)?.rows.filter((row) => row.role === "assistant")).toEqual(
+    original.at(-1)?.rows.filter((row) => row.role === "assistant"),
+  );
 });

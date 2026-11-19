@@ -123,7 +123,30 @@
     ],
     "liveTail": {
       "startIndex": 2,
-      "revisedOutsideTail": [1]
+      "revisedOutsideTail": [1],
+      "revisedRows": [
+        {
+          "index": 1,
+          "row": {
+            "role": "assistant",
+            "text": "Starting the build.",
+            "textLength": 19,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Starting the build."
+              },
+              {
+                "type": "tool-invocation",
+                "toolName": "shell",
+                "toolState": "success",
+                "outputLength": 12,
+                "outputExcerpt": "built in 3s\n"
+              }
+            ]
+          }
+        }
+      ]
     }
   },
   {
@@ -187,7 +210,30 @@
     ],
     "liveTail": {
       "startIndex": 2,
-      "revisedOutsideTail": [1]
+      "revisedOutsideTail": [1],
+      "revisedRows": [
+        {
+          "index": 1,
+          "row": {
+            "role": "assistant",
+            "text": "Starting the build.",
+            "textLength": 19,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Starting the build."
+              },
+              {
+                "type": "tool-invocation",
+                "toolName": "shell",
+                "toolState": "success",
+                "outputLength": 12,
+                "outputExcerpt": "built in 3s\n"
+              }
+            ]
+          }
+        }
+      ]
     }
   }
 ]

@@ -18,6 +18,7 @@ import {
   hostname,
   port,
   provider,
+  replayRecorder,
   setShuttingDown,
   sessions,
 } from "./acp-context.js";
@@ -72,6 +73,7 @@ export function shutdown(): Promise<void> {
       for (const approval of Array.from(state.approvals.values())) approval.respond();
     }
     await Promise.allSettled([...sessions.values()].map((state) => state.child?.close()));
+    await replayRecorder?.close();
     await flushStreamingPersist();
     await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
   })();

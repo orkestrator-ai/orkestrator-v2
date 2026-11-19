@@ -36,7 +36,8 @@
       "revisedOutsideTail": []
     },
     "extra": {
-      "providerSessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+      "providerSessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "adoptedProviderSessionId": true
     }
   }
 ]

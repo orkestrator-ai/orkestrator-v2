@@ -15,16 +15,25 @@
  *     listener or the agent's stdout loop. It serialises the frame and queues
  *     it; disk I/O happens on a detached, serialized chain.
  *  2. **Never grow without bound.** Recording stops at `maxBytes` overall and
- *     at `maxSessions` files, and says so in the file.
+ *     at `maxSessions` streams.
  *
  * Opt-in only, and deliberately awkward to switch on. A recording holds every
  * prompt, file content and absolute path verbatim, and Bun loads `.env` files
  * on its own, so it needs both `ORKESTRATOR_PROVIDER_RECORD_DIR=<dir>` and
  * `ORKESTRATOR_PROVIDER_RECORD_CONFIRM=1`, and a live recorder keeps saying so.
  */
-import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { appendFile, mkdir } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  constants,
+  closeSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { lstat, mkdir, open } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { createLogger, formatLogError } from "../logger.js";
@@ -58,7 +67,7 @@ export interface ProviderReplayRecorderOptions {
   flushIntervalMs?: number;
   warnIntervalMs?: number;
   /** Injected in tests. */
-  appendFileImpl?: (path: string, contents: string) => Promise<void>;
+  appendFileImpl?: (path: string, contents: string, first: boolean) => Promise<void>;
   ensureDirImpl?: (path: string) => Promise<void>;
   warnImpl?: (message: string) => void;
   now?: () => number;
@@ -84,26 +93,71 @@ function notice(message: string): void {
   log.warn("replay-recorder.notice", { detail: message });
 }
 
+const MAX_VERSION_JSON_BYTES = 96;
+const MAX_QUEUED_LINES = 65_536;
+const CAP_NOTICE = JSON.stringify({ __recorderNotice: "recording stopped: max bytes reached" });
+
+function assertPrivate(stat: { uid: number; mode: number }, expectedKind: boolean): void {
+  if (!expectedKind || (process.getuid && (stat.uid !== process.getuid() || stat.mode & 0o077))) {
+    throw new Error("Recording destination must be owned by the current user and private");
+  }
+}
+
+function recordingFlags(first: boolean): number {
+  return (
+    constants.O_WRONLY |
+    constants.O_APPEND |
+    constants.O_NOFOLLOW |
+    constants.O_NONBLOCK |
+    (first ? constants.O_CREAT | constants.O_EXCL : 0)
+  );
+}
+
+async function appendPrivate(path: string, contents: string, first: boolean): Promise<void> {
+  const file = await open(path, recordingFlags(first), 0o600);
+  try {
+    const stat = await file.stat();
+    assertPrivate(stat, stat.isFile() && stat.nlink === 1);
+    await file.writeFile(contents, "utf8");
+  } finally {
+    await file.close();
+  }
+}
+
+async function ensurePrivateDirectory(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  const stat = await lstat(path);
+  assertPrivate(stat, stat.isDirectory());
+}
+
+interface RecordingFile {
+  name: string;
+  started: boolean;
+  failed: boolean;
+}
+
 export class ProviderReplayRecorder {
   private readonly maxBytes: number;
   private readonly maxSessions: number;
   private readonly flushIntervalMs: number;
   private readonly warnIntervalMs: number;
-  private readonly appendFileImpl: (path: string, contents: string) => Promise<void>;
+  private readonly appendFileImpl: NonNullable<ProviderReplayRecorderOptions["appendFileImpl"]>;
   private readonly ensureDirImpl: (path: string) => Promise<void>;
   private readonly warnImpl: (message: string) => void;
   private readonly now: () => number;
   private readonly stamp: string;
+  private readonly headerAllowance: number;
 
-  /** Session key → file name, in first-seen order. */
-  private readonly files = new Map<string, string>();
-  /** `line` undefined marks a file's header, written at flush time. */
-  private buffer: Array<{ file: string; line?: string }> = [];
+  private readonly files = new Map<string, RecordingFile>();
+  private buffer = new Map<RecordingFile, string[]>();
   private resolvedVersion: string | undefined;
-  private bufferedBytes = 0;
+  // Includes disk bytes, bytes queued/in flight and uncertain writes. An I/O
+  // error may have written a prefix, so that reservation is never refunded.
+  private reservedBytes = 0;
+  private queuedLines = 0;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
-  private flushChain: Promise<void> = Promise.resolve();
-  private directoryReady = false;
+  private activeFlush: Promise<void> | null = null;
+  private closePromise: Promise<void> | null = null;
   private closed = false;
   private lastWarnedAt: number | null = null;
   private readonly stats: ProviderReplayRecorderStats = {
@@ -120,139 +174,139 @@ export class ProviderReplayRecorder {
     this.maxSessions = options.maxSessions ?? DEFAULT_PROVIDER_RECORDING_MAX_SESSIONS;
     this.flushIntervalMs = options.flushIntervalMs ?? PROVIDER_RECORDING_FLUSH_INTERVAL_MS;
     this.warnIntervalMs = options.warnIntervalMs ?? PROVIDER_RECORDING_WARN_INTERVAL_MS;
-    this.appendFileImpl =
-      options.appendFileImpl ?? ((path, contents) => appendFile(path, contents, "utf8"));
-    this.ensureDirImpl =
-      options.ensureDirImpl ?? ((path) => mkdir(path, { recursive: true }).then(() => undefined));
+    this.appendFileImpl = options.appendFileImpl ?? appendPrivate;
+    this.ensureDirImpl = options.ensureDirImpl ?? ensurePrivateDirectory;
     this.warnImpl = options.warnImpl ?? notice;
     this.now = options.now ?? Date.now;
     this.stamp = new Date(this.now()).toISOString().replace(/[:.]/g, "-");
+    this.headerAllowance = Buffer.byteLength(this.headerLine("")) + MAX_VERSION_JSON_BYTES - 1;
     if (options.flushOnExit) process.once("exit", this.flushOnExit);
   }
 
   private readonly flushOnExit = (): void => {
-    if (this.buffer.length === 0) return;
-    const pending = this.buffer;
-    this.buffer = [];
-    this.bufferedBytes = 0;
+    // A hard exit cannot await the active write. Never append the newer buffer
+    // ahead of it. Normal signal shutdown awaits close() in each bridge.
+    if (this.activeFlush || this.buffer.size === 0) return;
+    const directory = this.options.directory;
     try {
-      mkdirSync(this.options.directory, { recursive: true });
-      for (const entry of pending) {
-        appendFileSync(
-          join(this.options.directory, entry.file),
-          `${entry.line ?? this.headerLine(this.syncVersion())}\n`,
-          "utf8",
-        );
-      }
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const stat = lstatSync(directory);
+      assertPrivate(stat, stat.isDirectory());
     } catch {
-      // The process is exiting; a recording it cannot finish is simply shorter.
+      return;
+    }
+    for (const [file, lines] of this.takeBuffer()) {
+      if (file.failed) continue;
+      try {
+        const contents = this.contents(file, lines);
+        const fd = openSync(join(directory, file.name), recordingFlags(!file.started), 0o600);
+        try {
+          const stat = fstatSync(fd);
+          assertPrivate(stat, stat.isFile() && stat.nlink === 1);
+          writeFileSync(fd, contents, "utf8");
+        } finally {
+          closeSync(fd);
+        }
+      } catch {
+        // Last resort only. Other files can still be written independently.
+      }
     }
   };
-
-  /** The version without awaiting: an exit handler cannot. */
-  private syncVersion(): string {
-    if (this.resolvedVersion !== undefined) return this.resolvedVersion;
-    const declared = this.options.providerVersion;
-    try {
-      const value = typeof declared === "function" ? declared() : declared;
-      return typeof value === "string" && value.trim() ? value.trim() : "unknown";
-    } catch {
-      return "unknown";
-    }
-  }
 
   getStats(): ProviderReplayRecorderStats {
     return { ...this.stats };
   }
 
-  /** One provider frame for `sessionKey`, in the bridge's native shape. */
   frame(sessionKey: string, frame: unknown): void {
     this.record(sessionKey, () => JSON.stringify({ frame }));
   }
 
-  /** One raw line from a line-oriented provider, kept byte for byte. */
+  /** Keep the wire representation distinct from a structured JSON string. */
   rawLine(sessionKey: string, line: string): void {
-    this.record(sessionKey, () => {
-      // A line that is valid JSON is a frame; anything else is kept verbatim
-      // as a string frame, which the ACP replay writes back as that raw line.
-      try {
-        return JSON.stringify({ frame: JSON.parse(line) as unknown });
-      } catch {
-        return JSON.stringify({ frame: line });
-      }
-    });
+    this.record(sessionKey, () => JSON.stringify({ rawLine: line }));
   }
 
   /** A turn began. Its prompt text is deliberately not recorded. */
-  prompt(sessionKey: string): void {
-    this.record(sessionKey, () => JSON.stringify({ action: "prompt" }));
+  prompt(sessionKey: string, rpcId?: number): void {
+    this.action(sessionKey, "prompt", { rpcId });
+  }
+
+  action(sessionKey: string, action: string, args: Record<string, unknown>): void {
+    this.record(sessionKey, () => JSON.stringify({ ...args, action }));
   }
 
   private record(sessionKey: string, serialize: () => string): void {
-    if (this.closed || this.stats.capped) {
+    let file = this.files.get(sessionKey);
+    if (
+      this.closed ||
+      this.stats.capped ||
+      file?.failed ||
+      this.queuedLines >= MAX_QUEUED_LINES ||
+      (!file && this.files.size >= this.maxSessions)
+    ) {
       this.stats.linesDropped += 1;
       return;
-    }
-    let file = this.files.get(sessionKey);
-    if (!file) {
-      if (this.files.size >= this.maxSessions) {
-        this.stats.linesDropped += 1;
-        return;
-      }
-      // The key may be a provider session id; the file name carries only a digest.
-      const digest = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
-      file = `${this.options.bridge}-${this.stamp}-${digest}.jsonl`;
-      this.files.set(sessionKey, file);
-      this.stats.sessions = this.files.size;
-      this.buffer.push({ file });
     }
     let line: string;
     try {
       line = serialize();
     } catch {
-      // A frame JSON cannot represent (a cycle, a BigInt) is dropped, never thrown.
       this.stats.linesDropped += 1;
       return;
     }
-    this.enqueue(file, line);
-  }
-
-  private enqueue(file: string, line: string): void {
-    const size = Buffer.byteLength(line, "utf8") + 1;
-    if (this.stats.bytesRecorded + this.bufferedBytes + size > this.maxBytes) {
-      // Stop cleanly rather than truncating mid-line.
+    const size = Buffer.byteLength(line) + 1 + (file ? 0 : this.headerAllowance);
+    if (this.reservedBytes + size > this.maxBytes) {
       this.stats.capped = true;
       this.stats.linesDropped += 1;
-      for (const name of new Set(this.files.values())) {
-        this.buffer.push({
-          file: name,
-          line: JSON.stringify({ __recorderNotice: "recording stopped: max bytes reached" }),
-        });
+      if (file && this.reservedBytes + Buffer.byteLength(CAP_NOTICE) + 1 <= this.maxBytes) {
+        this.reservedBytes += Buffer.byteLength(CAP_NOTICE) + 1;
+        this.queue(file, CAP_NOTICE);
       }
-      this.scheduleFlush();
       return;
     }
-    this.buffer.push({ file, line });
-    this.bufferedBytes += size;
-    this.stats.linesRecorded += 1;
-    this.scheduleFlush();
+    if (!file) {
+      const digest = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
+      file = {
+        name: `${this.options.bridge}-${this.stamp}-${digest}-${randomUUID()}.jsonl`,
+        started: false,
+        failed: false,
+      };
+      this.files.set(sessionKey, file);
+      this.stats.sessions = this.files.size;
+    }
+    this.reservedBytes += size;
+    this.queue(file, line);
   }
 
-  private scheduleFlush(): void {
-    if (this.flushTimer) return;
+  private queue(file: RecordingFile, line: string): void {
+    const lines = this.buffer.get(file) ?? [];
+    lines.push(line);
+    this.buffer.set(file, lines);
+    this.queuedLines += 1;
+    if (this.flushTimer || this.activeFlush) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      // Detached on purpose: the provider callback must not await this.
       void this.flush();
     }, this.flushIntervalMs);
     this.flushTimer.unref?.();
   }
 
-  /** Serialized, so two flushes cannot interleave lines within a file. */
-  async flush(): Promise<void> {
-    const attempt = this.flushChain.then(() => this.flushOnce());
-    this.flushChain = attempt.catch(() => undefined);
-    await attempt;
+  private takeBuffer(): Map<RecordingFile, string[]> {
+    const pending = this.buffer;
+    this.buffer = new Map();
+    return pending;
+  }
+
+  /** Coalesce overlapping calls into a single drain, in arrival order. */
+  flush(): Promise<void> {
+    this.activeFlush ??= Promise.resolve().then(async () => {
+      try {
+        while (this.buffer.size > 0) await this.flushOnce();
+      } finally {
+        this.activeFlush = null;
+      }
+    });
+    return this.activeFlush;
   }
 
   private warnIfDue(): void {
@@ -261,23 +315,28 @@ export class ProviderReplayRecorder {
     this.lastWarnedAt = now;
     this.warnImpl(
       `RECORDING ${this.options.bridge} provider traffic to ${this.options.directory} ` +
-        `(${this.stats.linesRecorded} lines, ${this.stats.sessions} sessions). Prompts, file ` +
-        `contents and absolute paths are written verbatim. Unset ${PROVIDER_RECORD_DIR_ENV} to stop.`,
+        `(${this.stats.linesRecorded} lines, ${this.stats.sessions} sessions). Provider frames may hold prompts, ` +
+        `file contents and absolute paths. Unset ${PROVIDER_RECORD_DIR_ENV} to stop.`,
     );
   }
 
-  private async header(): Promise<string> {
-    if (this.resolvedVersion === undefined) {
-      const declared = this.options.providerVersion;
-      let version: string | undefined;
-      try {
-        version = typeof declared === "function" ? await declared() : declared;
-      } catch {
-        version = undefined;
-      }
-      this.resolvedVersion = version?.trim() || "unknown";
+  private async resolveVersion(): Promise<void> {
+    if (this.resolvedVersion !== undefined) return;
+    const declared = this.options.providerVersion;
+    let version: string | undefined;
+    try {
+      version = typeof declared === "function" ? await declared() : declared;
+    } catch {
+      version = undefined;
     }
-    return this.headerLine(this.resolvedVersion);
+    this.resolvedVersion = this.boundedVersion(version);
+  }
+
+  private boundedVersion(value: string | undefined): string {
+    const version = value?.trim() || "unknown";
+    return Buffer.byteLength(JSON.stringify(version)) <= MAX_VERSION_JSON_BYTES
+      ? version
+      : "unknown";
   }
 
   private headerLine(providerVersion: string): string {
@@ -289,52 +348,78 @@ export class ProviderReplayRecorder {
       provider: this.options.provider,
       providerVersion,
       description:
-        "Recorded traffic. Name the scenario, add the user's actions, scrub it and read the diff before committing.",
+        "Name the scenario, add actions, scrub the capture and review it before committing.",
+    });
+  }
+
+  private contents(file: RecordingFile, lines: string[]): string {
+    const version =
+      this.resolvedVersion ??
+      this.boundedVersion(
+        typeof this.options.providerVersion === "string" ? this.options.providerVersion : undefined,
+      );
+    const prefix = file.started ? "" : `${this.headerLine(version)}\n`;
+    return `${prefix}${lines.join("\n")}\n`;
+  }
+
+  private writeFailed(error: unknown, lines: number): void {
+    this.stats.writeErrors += 1;
+    this.stats.linesDropped += lines;
+    log.error("replay-recorder.write-failed", {
+      error: formatLogError(error, { stack: false, message: false }),
     });
   }
 
   private async flushOnce(): Promise<void> {
-    if (this.buffer.length === 0) return;
-    this.warnIfDue();
-    const pending = this.buffer;
-    const pendingBytes = this.bufferedBytes;
-    this.buffer = [];
-    this.bufferedBytes = 0;
-    const byFile = new Map<string, string[]>();
-    for (const entry of pending) {
-      const lines = byFile.get(entry.file) ?? [];
-      lines.push(entry.line ?? (await this.header()));
-      byFile.set(entry.file, lines);
-    }
+    const pending = this.takeBuffer();
     try {
-      if (!this.directoryReady) {
-        await this.ensureDirImpl(this.options.directory);
-        this.directoryReady = true;
-      }
-      for (const [file, lines] of byFile) {
-        await this.appendFileImpl(join(this.options.directory, file), `${lines.join("\n")}\n`);
-      }
-      this.stats.bytesRecorded += pendingBytes;
+      this.warnIfDue();
+      await this.resolveVersion();
+      await this.ensureDirImpl(this.options.directory);
     } catch (error) {
-      // A recording is a developer convenience; failing to write one must never
-      // affect the session it records.
-      this.stats.writeErrors += 1;
-      this.stats.linesDropped += pending.length;
-      log.error("replay-recorder.write-failed", {
-        error: formatLogError(error, { stack: false }),
-      });
+      const lines = [...pending.values()].reduce((total, batch) => total + batch.length, 0);
+      this.queuedLines -= lines;
+      this.writeFailed(error, lines);
+      return;
+    }
+    for (const [file, lines] of pending) {
+      try {
+        if (file.failed) {
+          this.stats.linesDropped += lines.length;
+          continue;
+        }
+        const contents = this.contents(file, lines);
+        await this.appendFileImpl(join(this.options.directory, file.name), contents, !file.started);
+        if (!file.started) {
+          this.reservedBytes -=
+            this.headerAllowance - Buffer.byteLength(this.headerLine(this.resolvedVersion!)) - 1;
+          file.started = true;
+        }
+        this.stats.bytesRecorded += Buffer.byteLength(contents);
+        this.stats.linesRecorded += lines.length;
+      } catch (error) {
+        // An append can fail after writing a prefix. Retire the file instead of
+        // appending more frames to potentially incomplete JSONL.
+        file.failed = true;
+        this.writeFailed(error, lines.length);
+      } finally {
+        this.queuedLines -= lines.length;
+      }
     }
   }
 
-  /** Flushes what is buffered and stops accepting frames. */
-  async close(): Promise<void> {
+  /** Stop admission immediately, then drain queued and in-flight writes. */
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
-    process.removeListener("exit", this.flushOnExit);
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    await this.flush();
+    this.closePromise = this.flush().finally(() =>
+      process.removeListener("exit", this.flushOnExit),
+    );
+    return this.closePromise;
   }
 }
 

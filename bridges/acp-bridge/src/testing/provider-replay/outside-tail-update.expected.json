@@ -4,7 +4,7 @@
     "activity": "working",
     "completion": {
       "status": "running",
-      "prompt": 202
+      "dispatch": "dispatched"
     },
     "pending": [],
     "rows": [
@@ -68,7 +68,7 @@
     "activity": "working",
     "completion": {
       "status": "running",
-      "prompt": 202
+      "dispatch": "dispatched"
     },
     "pending": [],
     "rows": [
@@ -125,7 +125,30 @@
     ],
     "liveTail": {
       "startIndex": 2,
-      "revisedOutsideTail": [1]
+      "revisedOutsideTail": [1],
+      "revisedRows": [
+        {
+          "index": 1,
+          "row": {
+            "role": "assistant",
+            "text": "Starting the build.",
+            "textLength": 19,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Starting the build."
+              },
+              {
+                "type": "tool-invocation",
+                "toolName": "execute",
+                "toolState": "success",
+                "outputLength": 11,
+                "outputExcerpt": "built in 3s"
+              }
+            ]
+          }
+        }
+      ]
     }
   },
   {
@@ -133,7 +156,10 @@
     "activity": "idle",
     "completion": {
       "status": "idle",
-      "prompt": 202
+      "dispatch": "dispatched",
+      "turn": {
+        "state": "completed"
+      }
     },
     "pending": [],
     "rows": [
@@ -190,7 +216,30 @@
     ],
     "liveTail": {
       "startIndex": 2,
-      "revisedOutsideTail": [1]
+      "revisedOutsideTail": [1],
+      "revisedRows": [
+        {
+          "index": 1,
+          "row": {
+            "role": "assistant",
+            "text": "Starting the build.",
+            "textLength": 19,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Starting the build."
+              },
+              {
+                "type": "tool-invocation",
+                "toolName": "execute",
+                "toolState": "success",
+                "outputLength": 11,
+                "outputExcerpt": "built in 3s"
+              }
+            ]
+          }
+        }
+      ]
     }
   }
 ]

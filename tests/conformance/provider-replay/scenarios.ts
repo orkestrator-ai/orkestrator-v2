@@ -71,12 +71,19 @@ export const PROVIDER_REPLAY_SCENARIOS = [
   },
   {
     id: "interruption",
-    title: "an interrupted turn keeps what streamed and settles idle",
+    title: "an interrupted turn keeps what streamed, settles its tools and goes idle",
     check(observations) {
       const last = final(observations);
       expect(last.rows.some((row) => row.role === "assistant")).toBe(true);
       expect(last.pending).toEqual([]);
       expect(idle(last)).toBe(true);
+      const interrupted = observations.find((observation) => observation.label === "mid-turn");
+      expect(
+        interrupted?.rows.some((row) => row.parts.some((part) => part.toolState === "pending")),
+      ).toBe(true);
+      expect(last.rows.some((row) => row.parts.some((part) => part.toolState === "pending"))).toBe(
+        false,
+      );
     },
   },
   {
@@ -105,7 +112,10 @@ export const PROVIDER_REPLAY_SCENARIOS = [
     title: "a provider that answers under a new session id keeps one bridge session",
     check(observations) {
       const last = final(observations);
-      expect(last.extra).toBeDefined();
+      expect(last.extra?.adoptedProviderSessionId).toBe(true);
+      expect(last.extra?.providerSessionId).toMatch(
+        /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i,
+      );
       expect(last.rows.some((row) => row.role === "assistant")).toBe(true);
     },
   },
@@ -122,8 +132,20 @@ export const PROVIDER_REPLAY_SCENARIOS = [
     id: "outside-tail-update",
     title: "an update to a row outside the live tail reaches readers as a revised row",
     check(observations) {
+      const before = observations[0]!;
       expect(
-        observations.some((observation) => observation.liveTail.revisedOutsideTail.length > 0),
+        observations.slice(1).some((observation) =>
+          observation.liveTail.revisedRows?.some(({ index, row }) => {
+            const prior = before.rows[index];
+            if (!prior) return false;
+            const { parts, ...body } = row;
+            const comparable = {
+              ...body,
+              parts: parts.map(({ outputExcerpt: _excerpt, ...part }) => part),
+            };
+            return JSON.stringify(comparable) !== JSON.stringify(prior);
+          }),
+        ),
       ).toBe(true);
     },
   },
@@ -225,11 +247,11 @@ export function runProviderReplaySuite(
             expect(fixture.header.bridge).toBe(adapter.bridge);
             const observations = await replayProviderFixture(adapter, fixture);
             const path = expectationPath(adapter.fixtureDir, fixture.name);
+            scenario.check(observations);
             if (process.env[PROVIDER_REPLAY_UPDATE_ENV] === "1") {
               writeFileSync(path, `${JSON.stringify(observations, null, 2)}\n`);
+              return;
             }
-            scenario.check(observations);
-            if (process.env[PROVIDER_REPLAY_UPDATE_ENV] === "1") return;
             if (!existsSync(path)) {
               throw new Error(
                 `${fixture.name} has no expectation; run with ${PROVIDER_REPLAY_UPDATE_ENV}=1 and review it`,

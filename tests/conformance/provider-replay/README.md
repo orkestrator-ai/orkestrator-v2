@@ -32,8 +32,8 @@ the recording scrubber would redact.
 | Bridge | Frames are | Delivered through |
 | --- | --- | --- |
 | Claude | Agent SDK messages (`query()` output; the CLI's stream-json) | The session manager's real turn, via the `query()` double; a `control_request`/`can_use_tool` frame is delivered as the SDK's `canUseTool` call |
-| Cursor | `@cursor/sdk` interaction updates | The real router and prompt route; each update goes to the `onDelta` callback the bridge gave `agent.send` |
-| Pi | Pi `AgentSessionEvent`s | The real router and attach path; each event goes to the listener the bridge subscribed with; a `tool_call` frame goes to the approval hook |
+| Cursor | `@cursor/sdk` interaction updates | The real router and prompt route; each update goes to the `onDelta` callback and the recorded terminal result or rejection settles `run.wait()` |
+| Pi | Pi `AgentSessionEvent`s | The real router and attach path; each event goes to the listener the bridge subscribed with; a `tool_call` frame goes through the installed approval extension |
 | ACP (Grok) | JSON-RPC lines from the agent | A real bridge process and `AcpProcess`; a relay agent (`testing/fake-agent-replay-relay.ts`) writes each line to its stdout |
 
 ## Fixture format
@@ -52,7 +52,11 @@ The first line is a header; every later line is one step.
   `synthetic` (hand-written in the recorded shape, no real data).
 - `{"frame": …}` is provider traffic in the bridge's native shape. Each
   adapter's header comment lists its placeholders (`"$derived"` for Claude,
-  `"$prompt"` and `"$load"` for ACP).
+  `"$prompt"` and `"$load"` for ACP). ACP also accepts `{"rawLine":"…"}`
+  for a single wire line. The relay supplies startup handshakes and the ACP
+  adapter remaps recorded session and prompt IDs. It rejects fixture-supplied
+  client requests other than permission prompts, including file and terminal
+  requests.
 - `{"action": …}` is what the user, the backend or the provider did between
   frames. Shared actions are `prompt`, `answer` (`decision` allow | deny),
   `interrupt` and `observe` (`label`); each adapter documents the rest
@@ -62,7 +66,7 @@ The first line is a header; every later line is one step.
 Every replay records a checkpoint at each `observe` and one labelled `end`.
 A checkpoint holds the rows (role, part types, tool names and states, short
 prose excerpts, output lengths), the live tail as the v2 transcript summary
-reports it (including rows outside it that it carries as revised), pending
+reports it (including revised row bodies and bounded output excerpts), pending
 interactions, activity, completion, the runtime-health drift (provider
 vocabulary the bridge had no branch for), and adapter facts such as the
 decision returned to the provider for a parked approval.
@@ -99,11 +103,11 @@ or a new drift kind is an adapter decision, not a snapshot refresh.
 
 Every one of the four bridges carries an opt-in recorder
 (`@orkestrator/protocol/node/provider-replay-recorder`). It needs both
-variables, because a recording holds every prompt, file content and absolute
-path verbatim:
+variables, because provider frames can contain prompts, file contents and
+absolute paths:
 
 ```bash
-ORKESTRATOR_PROVIDER_RECORD_DIR=/tmp/provider-recordings \
+ORKESTRATOR_PROVIDER_RECORD_DIR="$HOME/.local/state/orkestrator/provider-recordings" \
   ORKESTRATOR_PROVIDER_RECORD_CONFIRM=1 \
   mise run dev:test --profile replay-recording --fixture
 ```
@@ -112,20 +116,30 @@ Drive the scenario in a **local** fixture environment: a local bridge inherits
 the backend's environment, while a container's bridge does not receive these
 variables. It writes one file per session (per agent process for ACP) in this format,
 with the header's `scenario` set to `unclassified` and its `providerVersion`
-read from the installed SDK or the agent's own `initialize`. Prompt text is
-never recorded; a turn's start is an `{"action":"prompt"}` line. To turn one
-into a fixture:
+read from the installed SDK or the agent's own `initialize`. The recorder
+creates private directories and files, refuses an existing shared destination,
+and drains pending writes during graceful shutdown. The prompt marker omits
+prompt text, which can still appear in returned provider frames. Cursor also
+records `cursor-terminal` actions with the result or rejection of `run.wait()`.
+For a captured Cursor or Pi cancellation, give `interrupt` the argument
+`"awaitProvider": true` so the following captured terminal step settles it.
+ACP prompt markers carry the outgoing RPC ID.
+
+To turn a capture into a fixture:
 
 1. Copy it into the bridge's `src/testing/provider-replay/`, named after the
    scenario, and set `scenario` and `description` in the header.
-2. Add the actions the user took (`answer`, `interrupt`), the checkpoints to
-   pin (`observe`), and the adapter's settling actions (`end`, `settle`).
-   Replace ids the replay cannot know in advance with the adapter's
-   placeholders.
+2. Add the user actions (`answer`, `interrupt`), checkpoints (`observe`),
+   and settling actions where needed (`end`, `settle`). Use the adapter's
+   placeholders for IDs the replay still needs to supply. For ACP, omit
+   side-effecting client requests, keep the prompt response and add a
+   `settle` step to wait for the terminal dispatch journal record.
 3. Scrub it: `bun scripts/scrub-codex-recording.ts <in> <out>` (the scrubber
-   is format-agnostic; add `--strip-content` to blank prose), then **read the
-   diff**. The guard test rejects anything the scrubber would still redact,
-   but it cannot recognise a secret it has no pattern for.
+   handles provider envelopes and ACP wire lines. Add `--strip-content` to
+   blank known payload fields, then **read every retained frame and the diff**
+   for unexpected payload fields, metadata, machine-specific paths and secrets.
+   Use a disposable fixture project and harmless prompts so any prose you need
+   to retain is safe to share.
 4. Generate its expectation with `ORKESTRATOR_PROVIDER_REPLAY_UPDATE=1`, read
    it, and commit both files.
 

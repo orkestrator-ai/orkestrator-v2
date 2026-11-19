@@ -8,15 +8,13 @@
  * `applySessionEvent` and the approval hook receive them, in the shape the
  * replay suite hands back to those same functions.
  */
-import {
-  createProviderReplayRecorderFromEnv,
-  installedPackageVersion,
-} from "@orkestrator/protocol/node/provider-replay-recorder";
+import { VERSION } from "@earendil-works/pi-coding-agent";
+import { createProviderReplayRecorderFromEnv } from "@orkestrator/protocol/node/provider-replay-recorder";
 
 const SDK_PACKAGE = "@earendil-works/pi-coding-agent";
 
 export const replayRecorder = createProviderReplayRecorderFromEnv({
   bridge: "pi",
   provider: SDK_PACKAGE,
-  providerVersion: () => installedPackageVersion(SDK_PACKAGE, import.meta.url),
+  providerVersion: VERSION,
 });

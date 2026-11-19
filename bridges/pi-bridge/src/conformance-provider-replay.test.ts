@@ -18,14 +18,24 @@
  * `interrupt`, `end` (Pi settles the run), `restart` (a successor process
  * loads the published state, as after a bridge restart).
  */
-import { afterAll } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { createServer, type Server } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import { runProviderReplaySuite } from "../../../tests/conformance/provider-replay/scenarios.js";
+import { parseProviderReplayFixture } from "../../../tests/conformance/provider-replay/fixture.js";
+import {
+  readProviderReplayFixture,
+  replayProviderFixture,
+  runProviderReplaySuite,
+  type ProviderReplayAdapter,
+} from "../../../tests/conformance/provider-replay/scenarios.js";
+import {
+  PROVIDER_RECORD_CONFIRM_ENV,
+  PROVIDER_RECORD_DIR_ENV,
+} from "@orkestrator/protocol/node/provider-replay-recorder";
 
 const ENV_KEYS = [
   "PORT",
@@ -33,6 +43,8 @@ const ENV_KEYS = [
   "PI_BRIDGE_TOKEN",
   "PI_BRIDGE_LIBRARY_ONLY",
   "PI_BRIDGE_STATE_DIR",
+  PROVIDER_RECORD_DIR_ENV,
+  PROVIDER_RECORD_CONFIRM_ENV,
 ] as const;
 const originalEnv = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
 
@@ -43,12 +55,15 @@ process.env.HOSTNAME = "127.0.0.1";
 process.env.PI_BRIDGE_TOKEN = "pi-replay-token";
 process.env.PI_BRIDGE_LIBRARY_ONLY = "1";
 delete process.env.PI_BRIDGE_STATE_DIR;
+const recordings = await mkdtemp(join(tmpdir(), "pi-replay-recordings-"));
+process.env[PROVIDER_RECORD_DIR_ENV] = recordings;
+process.env[PROVIDER_RECORD_CONFIRM_ENV] = "1";
+const { replayRecorder } = await import("./replay-recorder.js");
 
 const { json, route } = await import("./http.js");
 const { authToken } = await import("./config.js");
-const { setAgentSessionTestHooks } = await import("./agent-session.js");
+const { setAgentSessionTestHooks, createPiSessionServices } = await import("./agent-session.js");
 const { sessions, clientSessionKeys } = await import("./state.js");
-const { requestToolApproval } = await import("./interactions.js");
 const { publicActivity } = await import("./public.js");
 const { piTranscriptSource } = await import("./transcript-source.js");
 const {
@@ -59,7 +74,9 @@ const {
 } = await import("./persistence.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
-afterAll(() => {
+afterAll(async () => {
+  await replayRecorder?.close();
+  await rm(recordings, { recursive: true, force: true });
   for (const [key, value] of originalEnv) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -82,6 +99,7 @@ interface Run {
 /** The stand-in for Pi's `AgentSession`, driven by the fixture. */
 function replaySession(sessionDirectory: string, runs: Run[]) {
   let listener: ((event: unknown) => void) | undefined;
+  let settleOnAbort = true;
   const session = {
     sessionId: "pi-replay-session",
     sessionFile: join(sessionDirectory, "replay.jsonl"),
@@ -107,6 +125,8 @@ function replaySession(sessionDirectory: string, runs: Run[]) {
     },
     abort: async () => {
       // A real abort ends the run Pi is executing.
+      if (!settleOnAbort) return;
+      listener?.({ type: "agent_settled", aborted: true });
       for (const run of runs.splice(0)) run.settle();
     },
     abortCompaction: () => undefined,
@@ -118,6 +138,9 @@ function replaySession(sessionDirectory: string, runs: Run[]) {
   };
   return {
     session: session as unknown as AgentSession,
+    deferAbortSettlement() {
+      settleOnAbort = false;
+    },
     emit(event: unknown) {
       if (!listener) throw new Error("the bridge has not subscribed to the Pi session");
       listener(event);
@@ -137,7 +160,7 @@ async function waitUntil(condition: () => boolean, what: string): Promise<void> 
   }
 }
 
-runProviderReplaySuite({
+const adapter: ProviderReplayAdapter = {
   bridge: "pi",
   fixtureDir: join(import.meta.dir, "testing", "provider-replay"),
   async start() {
@@ -147,9 +170,22 @@ runProviderReplaySuite({
     process.env.PI_BRIDGE_STATE_DIR = stateDirectory;
     const runs: Run[] = [];
     let provider = replaySession(stateDirectory, runs);
+    let approveTool: ((frame: Record<string, unknown>) => Promise<unknown>) | undefined;
     setAgentSessionTestHooks({
       hydrateComposer: async (composer) => composer,
-      createAgentSession: async () => provider.session,
+      createAgentSession: async (state) => {
+        const services = await createPiSessionServices(state, {
+          cwd: stateDirectory,
+          agentDir: join(stateDirectory, "agent"),
+        });
+        const extension = services.resourceLoader
+          .getExtensions()
+          .extensions.find((entry) => entry.path === "<inline:orkestrator>");
+        const [handler] = extension?.handlers.get("tool_call") ?? [];
+        if (!handler) throw new Error("Pi did not register the tool approval extension");
+        approveTool = async (frame) => handler(frame as never, undefined as never);
+        return provider.session;
+      },
     });
 
     let server: Server = createServer((request, response) => {
@@ -189,12 +225,10 @@ runProviderReplaySuite({
           let answered = false;
           const toolName = String(frame.toolName);
           parked.push(
-            requestToolApproval(current, String(frame.toolCallId), toolName, frame.input).then(
-              (decision) => {
-                answered = true;
-                decisions.push({ toolName, blocked: decision.block });
-              },
-            ),
+            approveTool!(frame).then((decision) => {
+              answered = true;
+              decisions.push({ toolName, blocked: isRecord(decision) && decision.block === true });
+            }),
           );
           await waitUntil(() => answered || current.approvals.size > before, "the approval gate");
           return;
@@ -239,9 +273,12 @@ runProviderReplaySuite({
             return;
           }
           case "interrupt": {
+            if (step.args.awaitProvider === true) provider.deferAbortSettlement();
             const cancelled = await call("POST", `/session/${state().id}/cancel`);
             if (cancelled.status >= 300) throw new Error(`cancel answered ${cancelled.status}`);
-            await waitUntil(() => state().status !== "running", "the cancelled turn to settle");
+            if (step.args.awaitProvider !== true) {
+              await waitUntil(() => state().status !== "running", "the cancelled turn to settle");
+            }
             return;
           }
           case "end": {
@@ -300,4 +337,47 @@ runProviderReplaySuite({
       },
     };
   },
+};
+
+runProviderReplaySuite(adapter);
+
+test("Pi records and replays the subscribed events and installed approval extension", async () => {
+  await replayRecorder!.flush();
+  const previous = new Set(await readdir(recordings));
+  const fixture = readProviderReplayFixture(adapter.fixtureDir, "approval-denial.jsonl");
+  const original = await replayProviderFixture(adapter, fixture);
+  await replayRecorder!.flush();
+  const fresh = (await readdir(recordings)).filter((name) => !previous.has(name));
+  expect(fresh).toHaveLength(1);
+  const capture = parseProviderReplayFixture(
+    fresh[0]!,
+    await readFile(join(recordings, fresh[0]!), "utf8"),
+  );
+  expect(
+    capture.steps.some(
+      (step) => step.kind === "frame" && isRecord(step.frame) && step.frame.type === "tool_call",
+    ),
+  ).toBe(true);
+  // The recorder marks provider ingress. The operator supplies user decisions and
+  // Pi's test run-settlement action when preparing a fixture.
+  const promptStep = capture.steps.find(
+    (step) => step.kind === "action" && step.action === "prompt",
+  );
+  if (promptStep?.kind !== "action") throw new Error("Missing recorded prompt");
+  promptStep.args.policy = "ask";
+  const approval = capture.steps.findIndex(
+    (step) => step.kind === "frame" && isRecord(step.frame) && step.frame.type === "tool_call",
+  );
+  capture.steps.splice(approval + 1, 0, {
+    kind: "action",
+    action: "answer",
+    args: { decision: "deny" },
+    line: 0,
+  });
+  capture.steps.push({ kind: "action", action: "end", args: {}, line: 0 });
+  const reproduced = await replayProviderFixture(adapter, capture);
+  expect(reproduced.at(-1)?.extra).toEqual(original.at(-1)?.extra);
+  expect(reproduced.at(-1)?.rows.filter((row) => row.role === "assistant")).toEqual(
+    original.at(-1)?.rows.filter((row) => row.role === "assistant"),
+  );
 });

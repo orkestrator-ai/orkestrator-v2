@@ -14,19 +14,53 @@
  * published state; a fresh stand-in agent is attached to the restored
  * session, as a resume would).
  */
+import { afterAll, expect, test } from "bun:test";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SDKAgent } from "@cursor/sdk";
-import { runProviderReplaySuite } from "../../../tests/conformance/provider-replay/scenarios.js";
-import { mcpConnectionKey } from "./mcp.js";
-import { drainPersistence, loadPersistedState, reopenPersistenceForTests } from "./persistence.js";
-import { publicActivity } from "./public.js";
-import { clientSessionKeys, closingTombstones, sessions, type SessionState } from "./state.js";
-import { startRouterHarness, waitFor, type RouterHarness } from "./testing/router-harness.js";
-import { cursorTranscriptSource } from "./transcript-source.js";
+import { parseProviderReplayFixture } from "../../../tests/conformance/provider-replay/fixture.js";
+import {
+  readProviderReplayFixture,
+  replayProviderFixture,
+  runProviderReplaySuite,
+  type ProviderReplayAdapter,
+} from "../../../tests/conformance/provider-replay/scenarios.js";
+import {
+  PROVIDER_RECORD_CONFIRM_ENV,
+  PROVIDER_RECORD_DIR_ENV,
+} from "@orkestrator/protocol/node/provider-replay-recorder";
+import type { SessionState } from "./state.js";
+import type { RouterHarness } from "./testing/router-harness.js";
+
+const recordings = await mkdtemp(join(tmpdir(), "cursor-replay-recordings-"));
+const previousEnv = [PROVIDER_RECORD_DIR_ENV, PROVIDER_RECORD_CONFIRM_ENV].map(
+  (key) => [key, process.env[key]] as const,
+);
+process.env[PROVIDER_RECORD_DIR_ENV] = recordings;
+process.env[PROVIDER_RECORD_CONFIRM_ENV] = "1";
+const { replayRecorder } = await import("./replay-recorder.js");
+for (const [key, value] of previousEnv) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+const { mcpConnectionKey } = await import("./mcp.js");
+const { drainPersistence, loadPersistedState, reopenPersistenceForTests } =
+  await import("./persistence.js");
+const { publicActivity } = await import("./public.js");
+const { clientSessionKeys, closingTombstones, sessions } = await import("./state.js");
+const { startRouterHarness, waitFor } = await import("./testing/router-harness.js");
+const { cursorTranscriptSource } = await import("./transcript-source.js");
+
+afterAll(async () => {
+  await replayRecorder?.close();
+  await rm(recordings, { recursive: true, force: true });
+});
 
 interface ReplayRun {
+  awaitProvider?: boolean;
   deliver(update: unknown): void;
-  settle(outcome: { status: string; result?: string; error?: { message: string } }): void;
+  settle(outcome: { status: string; result?: string; error?: { message: string } } | Error): void;
 }
 
 /** An attached agent whose runs the fixture drives frame by frame. */
@@ -36,9 +70,9 @@ function replayAgent(runs: ReplayRun[]): SDKAgent {
     model: undefined,
     async send(_message: unknown, options: { onDelta?: (args: { update: unknown }) => void } = {}) {
       let settle!: ReplayRun["settle"];
-      const outcome = new Promise<{ status: string; result?: string; error?: { message: string } }>(
-        (resolve) => {
-          settle = resolve;
+      const outcome = new Promise<Exclude<Parameters<ReplayRun["settle"]>[0], Error>>(
+        (resolve, reject) => {
+          settle = (value) => (value instanceof Error ? reject(value) : resolve(value));
         },
       );
       let settled = false;
@@ -64,7 +98,9 @@ function replayAgent(runs: ReplayRun[]): SDKAgent {
         },
         conversation: async () => [],
         wait: async () => ({ id: `replay-run-${runs.length}`, ...(await outcome) }),
-        cancel: async () => run.settle({ status: "cancelled" }),
+        cancel: async () => {
+          if (!run.awaitProvider) run.settle({ status: "cancelled" });
+        },
         onDidChangeStatus: () => () => undefined,
       };
     },
@@ -86,7 +122,7 @@ function attach(state: SessionState, runs: ReplayRun[]): void {
   state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
 }
 
-runProviderReplaySuite({
+const adapter: ProviderReplayAdapter = {
   bridge: "cursor",
   fixtureDir: join(import.meta.dir, "testing", "provider-replay"),
   async start() {
@@ -132,12 +168,29 @@ runProviderReplaySuite({
             return;
           }
           case "interrupt": {
+            if (!current) throw new Error("no run to cancel");
+            current.awaitProvider = step.args.awaitProvider === true;
             const response = await harness.call(`/session/${state().id}/cancel`, {
               method: "POST",
             });
             if (response.status >= 300) throw new Error(`cancel answered ${response.status}`);
-            await waitFor(() => state().status !== "running", 10_000);
+            if (!current.awaitProvider) {
+              await waitFor(() => state().status !== "running", 10_000);
+              current = undefined;
+            }
+            return;
+          }
+          case "cursor-terminal": {
+            if (!current) throw new Error("no run to settle");
+            if (typeof step.args.rejection === "string") {
+              current.settle(new Error(step.args.rejection));
+            } else {
+              current.settle(
+                step.args.result as Exclude<Parameters<ReplayRun["settle"]>[0], Error>,
+              );
+            }
             current = undefined;
+            await waitFor(() => state().status !== "running", 10_000);
             return;
           }
           case "end": {
@@ -191,4 +244,43 @@ runProviderReplaySuite({
       },
     };
   },
-});
+};
+
+runProviderReplaySuite(adapter);
+
+for (const rejection of [undefined, "The provider disconnected"]) {
+  test(`Cursor records and replays a ${rejection ? "rejected" : "resolved"} run.wait`, async () => {
+    await replayRecorder!.flush();
+    const previous = new Set(await readdir(recordings));
+    const fixture = readProviderReplayFixture(adapter.fixtureDir, "basic-turn.jsonl");
+    if (rejection) {
+      fixture.steps = fixture.steps.filter(
+        (step) => step.kind !== "action" || step.action !== "end",
+      );
+      fixture.steps.push({
+        kind: "action",
+        action: "cursor-terminal",
+        args: { rejection },
+        line: 0,
+      });
+    }
+    const original = await replayProviderFixture(adapter, fixture);
+    await replayRecorder!.flush();
+    const fresh = (await readdir(recordings)).filter((name) => !previous.has(name));
+    expect(fresh).toHaveLength(1);
+    const capture = parseProviderReplayFixture(
+      fresh[0]!,
+      await readFile(join(recordings, fresh[0]!), "utf8"),
+    );
+    expect(capture.steps.some((step) => step.kind === "frame")).toBe(true);
+    expect(capture.steps.at(-1)).toMatchObject({
+      action: "cursor-terminal",
+      args: rejection ? { rejection } : { result: { status: "finished" } },
+    });
+    const replayed = await replayProviderFixture(adapter, capture);
+    expect(replayed.at(-1)?.completion).toEqual(original.at(-1)?.completion);
+    expect(replayed.at(-1)?.rows.filter((row) => row.role === "assistant")).toEqual(
+      original.at(-1)?.rows.filter((row) => row.role === "assistant"),
+    );
+  });
+}

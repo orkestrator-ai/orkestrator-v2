@@ -4,7 +4,7 @@
     "activity": "working",
     "completion": {
       "status": "running",
-      "prompt": 202
+      "dispatch": "dispatched"
     },
     "pending": [],
     "rows": [
@@ -46,7 +46,10 @@
     "activity": "idle",
     "completion": {
       "status": "idle",
-      "prompt": 202
+      "dispatch": "dispatched",
+      "turn": {
+        "state": "completed"
+      }
     },
     "pending": [],
     "rows": [

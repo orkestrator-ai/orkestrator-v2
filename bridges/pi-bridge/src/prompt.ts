@@ -29,7 +29,7 @@ import { denyAllApprovals } from "./interactions.js";
 import { piSessionCostSource, piTurnCostSource, type PiCostParts } from "./cost-source.js";
 import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
-import { appendTurnFailure } from "./translate.js";
+import { appendTurnFailure, settleInterruptedTools } from "./translate.js";
 import {
   latestStoredModel,
   readEntryCount,
@@ -603,6 +603,7 @@ function finishTurn(state: SessionState, session: AgentSession, input: DispatchI
     failTurn(state, session, new Error(state.turnError), input);
     return;
   }
+  if (cancelled) settleInterruptedTools(state);
   settleTurn(state, session);
   recordTurnEnded(state, piRunId(state), cancelled ? "cancelled" : "succeeded");
   // A cancelled turn is not an error: someone asked for it, and the partial

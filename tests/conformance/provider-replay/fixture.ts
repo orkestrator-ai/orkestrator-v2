@@ -47,6 +47,7 @@ export interface ProviderReplayHeader {
 export interface ProviderReplayFrameStep {
   kind: "frame";
   frame: unknown;
+  rawLine?: string;
   line: number;
 }
 
@@ -125,6 +126,27 @@ export function parseProviderReplayFixture(name: string, text: string): Provider
           throw new Error(`${name}:${lineNumber}: header lacks ${field}`);
       }
       header = value as unknown as ProviderReplayHeader;
+      continue;
+    }
+    if ("__recorderNotice" in value) {
+      throw new Error(`${name}:${lineNumber}: capture did not finish within the byte cap`);
+    }
+    if ("rawLine" in value) {
+      if (
+        header.bridge !== "acp" ||
+        typeof value.rawLine !== "string" ||
+        /[\r\n]/.test(value.rawLine) ||
+        Object.keys(value).length !== 1
+      ) {
+        throw new Error(`${name}:${lineNumber}: an ACP rawLine must be a single line`);
+      }
+      let frame: unknown;
+      try {
+        frame = JSON.parse(value.rawLine);
+      } catch {
+        // The bridge itself handles malformed wire traffic.
+      }
+      steps.push({ kind: "frame", frame, rawLine: value.rawLine, line: lineNumber });
       continue;
     }
     if ("frame" in value) {

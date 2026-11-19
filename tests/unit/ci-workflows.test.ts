@@ -23,7 +23,14 @@ type Workflow = {
           include?: { shard: string; groups: string; "qualify-claude"?: boolean }[];
         };
       };
-      steps?: { id?: string; name?: string; run?: string; env?: Record<string, string> }[];
+      steps?: {
+        id?: string;
+        name?: string;
+        run?: string;
+        env?: Record<string, string>;
+        if?: string;
+        with?: Record<string, string>;
+      }[];
     }
   >;
 };
@@ -32,6 +39,85 @@ const workflow = (name: string) =>
   Bun.YAML.parse(read(`.github/workflows/${name}.yml`)) as Workflow;
 
 describe("CI workflow contracts", () => {
+  test("mobile browser cache keys separate Ubuntu releases and rotate only APT daily", () => {
+    const step = workflow("ci").jobs["mobile-shell-browser"]!.steps!.find(
+      (step) => step.id === "install-cache-keys",
+    )!;
+    expect(step.run).toContain("source /etc/os-release");
+    const run = (release: string, image: string, day: string) => {
+      const result = Bun.spawnSync(
+        [
+          "bash",
+          "-c",
+          'bunx() { printf "Version 1.65.0\\n"; }\ndate() { printf "%s\\n" "$CACHE_DAY"; }\n' +
+            step.run!.replace("source /etc/os-release", ""),
+        ],
+        {
+          env: {
+            ...process.env,
+            ID: "ubuntu",
+            VERSION_ID: release,
+            RUNNER_ARCH: "X64",
+            BROWSER: "webkit",
+            ImageVersion: image,
+            CACHE_DAY: day,
+            GITHUB_OUTPUT: "/dev/stdout",
+          },
+        },
+      );
+      expect({ code: result.exitCode, stderr: result.stderr.toString() }).toEqual({
+        code: 0,
+        stderr: "",
+      });
+      return Object.fromEntries(
+        result.stdout
+          .toString()
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+    };
+    const first = run("24.04", "20261118.1", "2026-11-19");
+    const nextImage = run("24.04", "20261119.1", "2026-11-19");
+    const nextRelease = run("26.04", "20261119.1", "2026-11-19");
+    const nextDay = run("26.04", "20261119.1", "2026-11-20");
+
+    expect(run("24.04", "20261118.1", "2026-11-19")).toEqual(first);
+    expect(nextImage["browser-key"]).not.toBe(first["browser-key"]);
+    expect(nextImage["browser-key"]).toStartWith(first["browser-prefix"]!);
+    expect(nextRelease["browser-key"]).not.toStartWith(first["browser-prefix"]!);
+    expect(nextRelease["apt-key"]).not.toStartWith(first["apt-prefix"]!);
+    expect(nextDay["browser-key"]).toBe(nextRelease["browser-key"]);
+    expect(nextDay["apt-key"]).not.toBe(nextRelease["apt-key"]);
+    expect(nextDay["apt-key"]).toStartWith(nextRelease["apt-prefix"]!);
+  });
+
+  test("mobile shell restores separate caches and exercises the browser before saving it", () => {
+    const steps = workflow("ci").jobs["mobile-shell-browser"]!.steps!;
+    const browserRestore = steps.find((step) => step.id === "browser-cache");
+    const aptRestore = steps.find((step) => step.id === "apt-cache");
+    const browserSave = steps.find((step) => step.name === "Save Playwright browser cache")!;
+    const aptSave = steps.find((step) => step.name === "Save APT archive cache")!;
+    expect(browserRestore?.with).toEqual({
+      path: "~/.cache/ms-playwright",
+      key: "${{ steps.install-cache-keys.outputs.browser-key }}",
+      "restore-keys": "${{ steps.install-cache-keys.outputs.browser-prefix }}",
+    });
+    expect(aptRestore?.with).toEqual({
+      path: "~/.cache/orkestrator-apt-archives",
+      key: "${{ steps.install-cache-keys.outputs.apt-key }}",
+      "restore-keys": "${{ steps.install-cache-keys.outputs.apt-prefix }}",
+    });
+    expect(browserSave.with?.path).toBe(browserRestore?.with?.path);
+    expect(browserSave.with?.key).toBe(browserRestore?.with?.key);
+    expect(aptSave.with?.path).toBe(aptRestore?.with?.path);
+    expect(aptSave.with?.key).toBe(aptRestore?.with?.key);
+    expect(browserSave.if).toBe("${{ steps.browser-cache.outputs.cache-hit != 'true' }}");
+    expect(aptSave.if).toBe("${{ steps.apt-cache.outputs.cache-hit != 'true' }}");
+    const smoke = steps.find((step) => step.name === "Test mobile shell input")!;
+    expect(steps.indexOf(browserSave)).toBeGreaterThan(steps.indexOf(smoke));
+  });
+
   test("ci supersedes older runs of the same pull request or of main", () => {
     const { concurrency } = workflow("ci");
     // A newer main commit cancels an older main commit's run; the Free plan's

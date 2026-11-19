@@ -33,6 +33,7 @@ import {
 } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { createSessionKey } from "@/lib/utils";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -101,7 +102,7 @@ export function DraggableTab({
   index,
   isActive,
   isFocused = false,
-  isWorking = false,
+  isWorking: isNativeWorking = false,
   onSelect,
   onRefresh,
   onClose,
@@ -125,6 +126,15 @@ export function DraggableTab({
   const session = Array.from(sessions.values()).find((s) => s.tabId === tab.id);
   const nativeAgentData = getNativeAgentData(tab);
   const owningEnvironmentId = environmentId ?? nativeAgentData?.environmentId;
+  // The tmux chat stays mounted when another tab is selected and rehydrates
+  // from backend status on mount. Subscribe to its busy flag, not its transcript.
+  const tmuxEnvironmentId = tab.claudeTmuxData?.environmentId ?? environmentId;
+  const isTmuxWorking = useClaudeTmuxStore((state) =>
+    tab.type === "claude-tmux" && tmuxEnvironmentId
+      ? state.tabs.get(createClaudeTmuxStateKey(tmuxEnvironmentId, tab.id))?.busy === true
+      : false,
+  );
+  const isWorking = isNativeWorking || isTmuxWorking;
   const tabOrdinal = usePaneLayoutStore((state) => {
     const paneState = owningEnvironmentId ? state.environments.get(owningEnvironmentId) : undefined;
     if (!paneState) return index + 1;

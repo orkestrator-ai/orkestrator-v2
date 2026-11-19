@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ReactNode } from "react";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { DndContext, KeyboardSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
@@ -10,6 +10,8 @@ import { fileDirtyStore } from "@/stores/fileDirtyStore";
 import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import { tabLaunchStore } from "@/stores/tabLaunchStore";
+import { agentActivityStore } from "@/stores/agentActivityStore";
+import { claudeTmuxStore, createClaudeTmuxStateKey } from "@/stores/claudeTmuxStore";
 import { createSessionKey } from "@/lib/utils";
 import { invoke } from "@/lib/native/backend";
 import { DraggableTabBar } from "./DraggableTabBar";
@@ -35,6 +37,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
+  appCommandStore(agentActivityStore).setState({ tabStates: {} });
+  appCommandStore(claudeTmuxStore).setState({ tabs: new Map() });
 });
 
 describe("DraggableTabBar", () => {
@@ -597,6 +601,53 @@ describe("DraggableTabBar", () => {
       const tab = screen.getByRole("tab", { name });
       expect(tab.hasAttribute("data-working")).toBe(false);
     }
+  });
+
+  test("only tints the owning tmux chat while a shared terminal signal is working", () => {
+    const environmentId = "environment";
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "pane",
+      activeTabId: "claude-chat",
+      tabs: [
+        { id: "shell", type: "plain" },
+        { id: "claude-terminal", type: "claude" },
+        { id: "codex-terminal", type: "codex" },
+        { id: "claude-chat", type: "claude-tmux", claudeTmuxData: { environmentId } },
+        { id: "other-chat", type: "claude-tmux", claudeTmuxData: { environmentId } },
+      ],
+    };
+    const tmux = appCommandStore(claudeTmuxStore).getState();
+    const chatKey = createClaudeTmuxStateKey(environmentId, "claude-chat");
+    const renderBar = (activeTabId: string) => (
+      <DndContext>
+        <DraggableTabBar
+          pane={{ ...pane, activeTabId }}
+          environmentId={environmentId}
+          onTabSelect={() => undefined}
+        />
+      </DndContext>
+    );
+    const { rerender } = renderInAppCommandScope(renderBar("claude-chat"));
+
+    act(() => {
+      // A container event fans out to every mounted PTY's activity entry.
+      for (const tabId of ["shell", "claude-terminal", "codex-terminal"]) {
+        appCommandStore(agentActivityStore).getState().setTabState(tabId, "working");
+      }
+      tmux.setBusy(createClaudeTmuxStateKey("another-env", "other-chat"), true);
+      tmux.setBusy(chatKey, true);
+    });
+    rerender(renderBar("shell"));
+    const chat = screen.getByRole("tab", { name: "Claude 4, working" });
+    expect(chat.getAttribute("aria-selected")).toBe("false");
+    expect(chat.hasAttribute("data-working")).toBe(true);
+    for (const name of ["Terminal 1", "Claude 2", "Codex 3", "Claude 5"]) {
+      expect(screen.getByRole("tab", { name }).hasAttribute("data-working")).toBe(false);
+    }
+
+    act(() => tmux.setBusy(chatKey, false));
+    expect(screen.getByRole("tab", { name: "Claude 4" }).hasAttribute("data-working")).toBe(false);
   });
 
   test("clears a clean file buffer when the tab is explicitly closed", async () => {

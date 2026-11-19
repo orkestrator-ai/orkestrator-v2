@@ -8,6 +8,61 @@ async function fitsInside(control: Locator, container: Locator) {
   );
 }
 
+test("a working tmux tab pulses independently of selection and respects motion preferences", async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ reducedMotion: "no-preference", forcedColors: "none" });
+  await page.goto("/tab-styles?view=working");
+  const strip = page.getByRole("tablist");
+  const shell = strip.getByRole("tab", { name: "Terminal 1", exact: true });
+  const chat = strip.getByRole("tab", { name: /^Claude 3/ });
+  const tint = chat.locator("[data-tab-working]");
+  const preview = (state: string) =>
+    strip.screenshot({
+      path: `output/visual-previews/working-tabs-${state}-${testInfo.project.name}.png`,
+    });
+  await expect(tint).toHaveCount(0);
+  await preview("idle");
+  await chat.press("Enter");
+  await expect(chat).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "Start turn" }).click();
+
+  await expect(chat).toHaveAccessibleName("Claude 3, working");
+  await expect(chat).toHaveAttribute("aria-selected", "true");
+  const underline = chat.locator(":scope > .bg-primary");
+  await expect(underline).toBeVisible();
+  await expect(tint).toHaveCSS("animation-name", "tab-working-pulse");
+  const opacity = await tint.evaluate((el) => {
+    const [pulse] = el.getAnimations();
+    pulse.pause();
+    pulse.currentTime = 0;
+    const start = Number(getComputedStyle(el).opacity);
+    pulse.currentTime = Number(pulse.effect?.getTiming().duration) / 2;
+    return { start, peak: Number(getComputedStyle(el).opacity) };
+  });
+  expect(opacity.peak).toBeGreaterThan(opacity.start);
+  await preview("selected");
+
+  await shell.press("Enter");
+  await expect(chat).toHaveAttribute("aria-selected", "false");
+  await expect(underline).toHaveCount(0);
+  await expect(tint).toBeVisible();
+  await expect(shell.locator("[data-tab-working]")).toHaveCount(0);
+  await expect(strip.getByRole("tab", { name: "Codex 2", exact: true })).toBeVisible();
+  await preview("background");
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(tint).toHaveCSS("animation-name", "none");
+  await expect(tint).toHaveCSS("opacity", "0.75");
+  await preview("reduced-motion");
+  await page.emulateMedia({ forcedColors: "active" });
+  await expect(tint).toHaveCSS("display", "none");
+
+  await page.getByRole("button", { name: "End turn" }).click();
+  await expect(chat).toHaveAccessibleName("Claude 3");
+  await expect(tint).toHaveCount(0);
+});
+
 test("long story tabs scroll without covering Build", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 780 });
   await page.goto("/tab-styles?view=features");

@@ -3,9 +3,9 @@ import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createWorkflowsApi } from "@/lib/backend/workflows";
 import { subscribeNativeObservationInvalidations } from "@/lib/native-observation-events";
-import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
+import { defineScopedStore, scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
+import { onNodeReconnected } from "@/lib/transport-connectivity";
 
 export type NativeSessionTurnActivity = "working" | "waiting";
 
@@ -52,15 +52,15 @@ function sameSessions(a: SessionActivity | undefined, b: SessionActivity): boole
  * (`list_native_agent_session_activity`), and this is a projection of it, so
  * a tab whose view is not mounted (any tab but the front one of a pane) still
  * shows its turn. Hints re-read it: an activity announcement for the
- * environment, a session record written, and the transport's resync and
- * safety checks, which also cover a missed hint. A stamp gap or observer
- * restart re-reads every held environment. Hints are coalesced per
+ * environment, a session record written, and the transport's reconnect,
+ * resync and safety checks. A stamp gap or observer restart re-reads every
+ * held environment. Hints are coalesced per
  * environment, and one read per environment runs at a time.
  */
 export const nativeSessionActivityStore = defineScopedStore<NativeSessionActivityStoreState>(
   "native-session-activity",
   (scope) => (set, get) => {
-    const retainers = new Map<string, number>();
+    const retainers = new Map<string, { count: number }>();
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
     const inFlight = new Map<string, Promise<void>>();
     const rerun = new Set<string>();
@@ -80,7 +80,7 @@ export const nativeSessionActivityStore = defineScopedStore<NativeSessionActivit
     };
 
     const updateBusyPoll = () => {
-      const wanted = retainers.size > 0 && anyWorking();
+      const wanted = !scope.disposed && retainers.size > 0 && anyWorking();
       if (wanted && !busyTimer) {
         busyTimer = setInterval(() => {
           for (const environmentId of retainers.keys()) schedule(environmentId);
@@ -101,6 +101,8 @@ export const nativeSessionActivityStore = defineScopedStore<NativeSessionActivit
     };
 
     const read = async (environmentId: string): Promise<void> => {
+      const retention = retainers.get(environmentId);
+      if (scope.disposed || !retention) return;
       const running = inFlight.get(environmentId);
       if (running) {
         rerun.add(environmentId);
@@ -109,8 +111,8 @@ export const nativeSessionActivityStore = defineScopedStore<NativeSessionActivit
       const task = (async () => {
         try {
           const answer = await api().listNativeAgentSessionActivity(environmentId);
-          // Released while the read was out: the answer has no consumer.
-          if (!retainers.has(environmentId)) return;
+          // A new retention needs its own snapshot even if the old read is still running.
+          if (scope.disposed || retainers.get(environmentId) !== retention) return;
           apply(environmentId, new Map(Object.entries(answer)));
         } catch {
           // A failed read keeps the last answer; the next hint or check reads
@@ -130,7 +132,7 @@ export const nativeSessionActivityStore = defineScopedStore<NativeSessionActivit
     };
 
     function schedule(environmentId: string): void {
-      if (!retainers.has(environmentId) || timers.has(environmentId)) return;
+      if (scope.disposed || !retainers.has(environmentId) || timers.has(environmentId)) return;
       timers.set(
         environmentId,
         setTimeout(() => {
@@ -152,6 +154,7 @@ export const nativeSessionActivityStore = defineScopedStore<NativeSessionActivit
       }, scope),
       onResourceChanged("native-agent-session", (change) => schedule(change.id), scope),
       onResourceResync(() => scheduleAll(), scope),
+      onNodeReconnected(scope, scheduleAll),
       onViewSafetyCheck(() => scheduleAll(), scope),
     ];
 
@@ -163,25 +166,29 @@ export const nativeSessionActivityStore = defineScopedStore<NativeSessionActivit
       if (busyTimer) clearInterval(busyTimer);
       busyTimer = null;
     };
-    // A retainer left mounted when the scope goes leaves no timer or listener.
-    scope.onDispose("native-session-activity", stop);
+    const reset = () => {
+      stop();
+      retainers.clear();
+      rerun.clear();
+      set({ environments: new Map() });
+    };
+    scope.onDispose("native-session-activity", reset);
 
     return {
       environments: new Map(),
       retain: (environmentId) => {
-        const count = retainers.get(environmentId) ?? 0;
-        retainers.set(environmentId, count + 1);
+        if (scope.disposed) return () => undefined;
+        const retention = retainers.get(environmentId) ?? { count: 0 };
+        retainers.set(environmentId, retention);
+        retention.count += 1;
         if (!subscriptions) subscriptions = subscribe();
-        if (count === 0) void read(environmentId);
+        if (retention.count === 1) void read(environmentId);
         let released = false;
         return () => {
-          if (released) return;
+          if (released || retainers.get(environmentId) !== retention) return;
           released = true;
-          const remaining = (retainers.get(environmentId) ?? 1) - 1;
-          if (remaining > 0) {
-            retainers.set(environmentId, remaining);
-            return;
-          }
+          retention.count -= 1;
+          if (retention.count > 0) return;
           retainers.delete(environmentId);
           const timer = timers.get(environmentId);
           if (timer) clearTimeout(timer);
@@ -197,12 +204,7 @@ export const nativeSessionActivityStore = defineScopedStore<NativeSessionActivit
         };
       },
       refresh: (environmentId) => read(environmentId),
-      reset: () => {
-        stop();
-        retainers.clear();
-        rerun.clear();
-        set({ environments: new Map() });
-      },
+      reset,
     };
   },
 );

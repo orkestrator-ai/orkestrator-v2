@@ -14,6 +14,9 @@ import { listNativeAgentSessionActivityCommand } from "@orkestrator/protocol/con
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { listen } from "@/lib/native/events";
 import { dispatchResourceChange, requestViewSafetyChecks } from "@/lib/resource-sync";
+import { setTransportDisconnected } from "@/lib/transport-connectivity";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 import {
   NATIVE_SESSION_ACTIVITY_BUSY_POLL_MS,
   NATIVE_SESSION_ACTIVITY_COALESCE_MS,
@@ -76,6 +79,7 @@ beforeEach(() => {
 
 afterEach(() => {
   store().getState().reset();
+  setTransportDisconnected("gateway-event-stream", false);
   invokeMock.mockReset();
   jest.useRealTimers();
 });
@@ -175,5 +179,88 @@ describe("native session activity store", () => {
     requestViewSafetyChecks("interval");
     await settled();
     expect(reads).toEqual(["env-1"]);
+  });
+
+  test("discards a pending answer after the last consumer releases it", async () => {
+    const pending = Promise.withResolvers<unknown>();
+    invokeMock.mockImplementationOnce(() => pending.promise);
+    const release = store().getState().retain("env-1");
+    release();
+    pending.resolve({ sessions: { "env-env-1:tab-a": "working" } });
+    await settled();
+    expect(store().getState().environments.has("env-1")).toBe(false);
+    await settled(NATIVE_SESSION_ACTIVITY_BUSY_POLL_MS + NATIVE_SESSION_ACTIVITY_COALESCE_MS);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("takes a fresh snapshot when retained again during a pending read", async () => {
+    const pending = Promise.withResolvers<unknown>();
+    invokeMock.mockImplementationOnce(() => pending.promise);
+    store().getState().retain("env-1")();
+    const release = store().getState().retain("env-1");
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    pending.resolve({ sessions: { "env-env-1:old": "working" } });
+    await settled(10);
+    expect(store().getState().environments.has("env-1")).toBe(false);
+    answers.set("env-1", { "env-env-1:new": "working" });
+    await settled();
+    expect(reads).toEqual(["env-1"]);
+    expect(store().getState().environments.get("env-1")).toEqual(
+      new Map([["env-env-1:new", "working"]]),
+    );
+    release();
+  });
+
+  test.each(["resolve", "reject"] as const)(
+    "does not publish or restart reads after disposal when a pending read settles (%s)",
+    async (settle) => {
+      const windowScope = new WindowScope();
+      const client = new FakeNodeClient({
+        invoke: { [COMMAND]: { sessions: { "env-env-1:tab-a": "working" } } },
+      });
+      const scope = windowScope.open({ role: "leaf", client });
+      const activity = scope.store(nativeSessionActivityStore);
+      try {
+        const release = activity.getState().retain("env-1");
+        await settled();
+        expect(activity.getState().environments.has("env-1")).toBe(true);
+        const pending = Promise.withResolvers<unknown>();
+        client.respond(COMMAND, () => pending.promise);
+        const read = activity.getState().refresh("env-1");
+        // Queue another read behind the pending request.
+        void activity.getState().refresh("env-1");
+        expect(client.calls(COMMAND)).toHaveLength(2);
+
+        scope.dispose();
+        const disposedState = activity.getState();
+        if (settle === "resolve") pending.resolve({ sessions: { "env-env-1:tab-b": "working" } });
+        else pending.reject(new Error("disconnected"));
+        await read;
+        await settled(NATIVE_SESSION_ACTIVITY_BUSY_POLL_MS + NATIVE_SESSION_ACTIVITY_COALESCE_MS);
+        expect(activity.getState()).toBe(disposedState);
+        expect(activity.getState().environments.size).toBe(0);
+        expect(client.calls(COMMAND)).toHaveLength(2);
+        release();
+      } finally {
+        windowScope.dispose();
+      }
+    },
+  );
+
+  test("recovers a failed first read on reconnect without a resource change", async () => {
+    failWith = new Error("offline");
+    setTransportDisconnected("gateway-event-stream", true);
+    const release = store().getState().retain("env-1");
+    await settled();
+    expect(reads).toEqual(["env-1"]);
+    expect(store().getState().environments.has("env-1")).toBe(false);
+
+    failWith = null;
+    answers.set("env-1", { "env-env-1:tab-a": "working" });
+    setTransportDisconnected("gateway-event-stream", false);
+    await settled();
+    expect(reads).toEqual(["env-1", "env-1"]);
+    expect(store().getState().environments.get("env-1")?.get("env-env-1:tab-a")).toBe("working");
+    release();
   });
 });

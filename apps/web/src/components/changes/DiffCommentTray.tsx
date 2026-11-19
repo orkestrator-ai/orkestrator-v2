@@ -92,7 +92,7 @@ export function DiffCommentTray({ environmentId }: { environmentId: string }) {
 
   const noAgent = destinations.length === 0;
   const sendTitle = noAgent
-    ? "Open an agent chat in this environment to send comments to it"
+    ? "Comments go to an agent chat of this environment that has started a conversation. Start one, or copy the request instead."
     : `Queue one request for ${destination?.label ?? "the agent"}; it runs when the agent is free`;
 
   return (

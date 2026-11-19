@@ -8,6 +8,7 @@ import type {
 } from "@orkestrator/protocol/change-resources";
 import { cn } from "@/lib/utils";
 import { diffCommentLocation } from "@/lib/changes/diff-comment-request";
+import { detectShortcutPlatform } from "@/lib/keyboard-shortcuts";
 import {
   MAX_DIFF_COMMENT_BODY,
   MAX_DIFF_COMMENT_EXCERPT_LINES,
@@ -114,7 +115,7 @@ export function DiffCommentEditor({
       />
       <div className="flex items-center justify-end gap-1.5">
         <span className="mr-auto text-[10px] text-muted-foreground">
-          Ctrl/⌘ + Enter to save · Esc to cancel
+          {detectShortcutPlatform() === "mac" ? "⌘" : "Ctrl"}+Enter to save · Esc to cancel
         </span>
         <Button type="button" variant="ghost" size="sm" className="h-7 px-2" onClick={onCancel}>
           Cancel

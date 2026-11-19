@@ -112,6 +112,7 @@ import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environme
 import type { CachedOpenCodeModel } from "@/lib/backend";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
+  AGENT_PLATFORM_LABELS,
   firstEnabledAgentPlatform,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
@@ -2199,7 +2200,10 @@ export function CreateEnvironmentDialog({
               className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:!block")}
             >
               {grokTerminalConflict && (
-                <div className="mb-3 flex flex-wrap items-center gap-2 text-sm" role="status">
+                <div
+                  className="flex flex-wrap items-center gap-2 px-4 pt-3 text-sm sm:px-6"
+                  role="status"
+                >
                   <span>Grok Terminal cannot launch with a prompt or attachments.</span>
                   <Button
                     type="button"
@@ -2213,7 +2217,7 @@ export function CreateEnvironmentDialog({
                 </div>
               )}
               {deferredTerminalPrompt && launchAgent && (
-                <p className="mb-3 text-sm text-muted-foreground" role="status">
+                <p className="px-4 pt-3 text-sm text-muted-foreground sm:px-6" role="status">
                   {terminalPromptNotice}
                 </p>
               )}
@@ -2273,13 +2277,7 @@ export function CreateEnvironmentDialog({
                         <Textarea
                           ref={promptRef}
                           id="initial-prompt"
-                          placeholder={
-                            agentType === "claude"
-                              ? "Enter a task for Claude to work on..."
-                              : agentType === "codex"
-                                ? "Enter a task for Codex to work on..."
-                                : "Enter a task for OpenCode to work on..."
-                          }
+                          placeholder={`Enter a task for ${AGENT_PLATFORM_LABELS[agentType]} to work on...`}
                           value={initialPrompt}
                           onChange={(e) => setInitialPrompt(e.target.value)}
                           disabled={isLoading}

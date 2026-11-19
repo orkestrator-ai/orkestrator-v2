@@ -481,7 +481,7 @@ test("explains how deferred terminal prompts are handled", async ({ page }, test
   await expect(note).toBeVisible();
   if (process.env.ORKESTRATOR_FINDINGS_SCREENSHOTS === "1") {
     await page.screenshot({
-      path: `output/visual-previews/deferred-terminal-${testInfo.project.name}.png`,
+      path: `output/visual-previews/opening-deferred-terminal-${testInfo.project.name}.png`,
     });
   }
   await page.getByLabel("Initial prompt (optional)").fill("Fix the build");
@@ -493,7 +493,7 @@ test("explains how deferred terminal prompts are handled", async ({ page }, test
   await expect(note).toBeVisible();
   if (process.env.ORKESTRATOR_FINDINGS_SCREENSHOTS === "1") {
     await page.screenshot({
-      path: `output/visual-previews/deferred-terminal-launch-off-${testInfo.project.name}.png`,
+      path: `output/visual-previews/opening-deferred-terminal-launch-off-${testInfo.project.name}.png`,
     });
   }
 });
@@ -522,7 +522,7 @@ for (const attachmentOnly of [false, true]) {
     await expect(create).toBeDisabled();
     if (process.env.ORKESTRATOR_FINDINGS_SCREENSHOTS === "1") {
       await page.screenshot({
-        path: `output/visual-previews/grok-terminal-${attachmentOnly ? "attachment" : "prompt"}-${testInfo.project.name}.png`,
+        path: `output/visual-previews/opening-grok-terminal-${attachmentOnly ? "attachment" : "prompt"}-${testInfo.project.name}.png`,
       });
     }
     await useNative.focus();
@@ -530,7 +530,7 @@ for (const attachmentOnly of [false, true]) {
     await expect(create).toBeEnabled();
     if (process.env.ORKESTRATOR_FINDINGS_SCREENSHOTS === "1" && !attachmentOnly) {
       await page.screenshot({
-        path: `output/visual-previews/grok-native-selected-${testInfo.project.name}.png`,
+        path: `output/visual-previews/opening-grok-native-selected-${testInfo.project.name}.png`,
       });
     }
     await create.click();

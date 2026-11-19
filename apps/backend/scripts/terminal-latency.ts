@@ -27,8 +27,8 @@
  * - key-to-echo percentiles seen by the client, and the backend's share of it
  *   (from `terminal_write` arriving to the echo being emitted);
  * - event-loop lag in this process (a timer chain, see `efficiency/resources.ts`);
- * - terminal state serializations (checkpoints and snapshots) per second, and
- *   how long each `SerializeAddon.serialize` call held the loop;
+ * - checkpoint serializations and snapshot reads per second, snapshot read
+ *   latency, and how long each `SerializeAddon.serialize` call held the loop;
  * - terminal throughput, desyncs and memory.
  *
  * Nothing touches a real data directory: every level uses its own temporary

@@ -96,18 +96,69 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # WebKit's --with-deps pulls ~200 apt packages. The install usually takes
-      # 30-60s, but a stalled Azure mirror has held it for the job's whole
-      # budget (each stalled fetch waits ~30s before apt moves on). Short apt
-      # timeouts with retries move past a stalled mirror sooner, and the step
-      # has its own bound so a stall fails visibly instead of starving the
-      # tests of the job's time.
+      # WebKit's --with-deps pulls ~185 apt packages (140 MB). The install
+      # usually takes 30-60s, but a stalled Azure mirror has held it for the
+      # job's whole budget (each stalled fetch waits ~30s before apt moves on),
+      # and a merely slow EC2 mirror (~300 kB/s with 15-50s pauses) ran the
+      # step past its bound on four PRs in one day. The downloaded .deb files
+      # and the browser build are therefore cached per runner image and
+      # Playwright version, so a cache hit fetches only the package lists.
+      # Short apt timeouts with retries still move past a stalled mirror on a
+      # miss, and the step has its own bound so a stall fails visibly instead
+      # of starving the tests of the job's time.
+      - name: Resolve browser cache key
+        id: browser-cache-key
+        shell: bash
+        env:
+          BROWSER: ${{ matrix.browser }}
+        run: |
+          set -euo pipefail
+          version="$(bunx playwright --version | awk '{print $2}')"
+          prefix="browser-${RUNNER_OS}-${RUNNER_ARCH}-${BROWSER}-playwright-${version}-"
+          echo "prefix=${prefix}" >> "$GITHUB_OUTPUT"
+          echo "key=${prefix}${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore browser install cache
+        id: browser-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/orkestrator-apt-archives
+          key: ${{ steps.browser-cache-key.outputs.key }}
+          restore-keys: ${{ steps.browser-cache-key.outputs.prefix }}
+
       - name: Install browser
         timeout-minutes: 12
+        shell: bash
         run: |
-          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+          set -euo pipefail
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\nAPT::Keep-Downloaded-Packages "true";\n' \
             | sudo tee /etc/apt/apt.conf.d/99orkestrator-ci-timeouts >/dev/null
+          apt_cache="$HOME/.cache/orkestrator-apt-archives"
+          mkdir -p "$apt_cache"
+          # apt reuses an archive only when its checksum matches the package
+          # list, so a stale restored file is ignored, never installed.
+          if compgen -G "$apt_cache/*.deb" >/dev/null; then
+            sudo cp "$apt_cache"/*.deb /var/cache/apt/archives/
+          fi
           bunx playwright install --with-deps ${{ matrix.browser }}
+          # Keep only archives the package lists still offer, so a cache
+          # restored from an older image does not grow without bound.
+          sudo apt-get autoclean -y >/dev/null
+          rm -f "$apt_cache"/*.deb
+          if compgen -G "/var/cache/apt/archives/*.deb" >/dev/null; then
+            cp /var/cache/apt/archives/*.deb "$apt_cache"/
+          fi
+
+      - name: Save browser install cache
+        if: ${{ steps.browser-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/orkestrator-apt-archives
+          key: ${{ steps.browser-cache-key.outputs.key }}
 
       - name: Test mobile shell input
         env:

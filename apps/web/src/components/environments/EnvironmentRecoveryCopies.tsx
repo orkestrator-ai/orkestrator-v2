@@ -89,14 +89,16 @@ export function EnvironmentRecoveryCopies({
     setLoading(true);
   }
 
-  const fetchList = useCallback(
-    () =>
-      nodeBackend
-        .listRecoveryCopies(environment.id, { measureSize: true })
-        .then(setList, () => setList(null))
-        .finally(() => setLoading(false)),
-    [environment.id, nodeBackend],
-  );
+  const listRequest = useRef(0);
+  const fetchList = useCallback(async () => {
+    const request = ++listRequest.current;
+    const result = await nodeBackend
+      .listRecoveryCopies(environment.id, { measureSize: true })
+      .catch(() => null);
+    if (request !== listRequest.current) return;
+    setList(result);
+    setLoading(false);
+  }, [environment.id, nodeBackend]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -105,6 +107,9 @@ export function EnvironmentRecoveryCopies({
 
   useEffect(() => {
     void fetchList();
+    return () => {
+      listRequest.current += 1;
+    };
   }, [fetchList]);
 
   // A rebuild, restore or reset finishing while this is open (started here,
@@ -113,7 +118,7 @@ export function EnvironmentRecoveryCopies({
   // record is checked when the node announces the environment's lifecycle
   // moved (push), and otherwise on a timer: 3 s, or the 30 s recovery poll
   // while that announcement is healthy.
-  const seenRevision = useRef<number | null>(null);
+  const seenRevision = useRef<{ environmentId: string; revision: number } | null>(null);
   const checkRef = useRef<(() => Promise<void>) | null>(null);
   const onPushChange = useCallback((change: PushKeyChange) => {
     if (change.parts === null || change.parts.length === 0 || change.parts.includes("lifecycle")) {
@@ -125,14 +130,17 @@ export function EnvironmentRecoveryCopies({
     "healthy";
   useEffect(() => {
     let cancelled = false;
+    let newestCheck = 0;
     const check = async () => {
+      const request = ++newestCheck;
       try {
         const snapshot = await nodeBackend.getContainerLifecycleSnapshot(environment.id);
-        if (cancelled) return;
-        if (seenRevision.current !== null && snapshot.revision !== seenRevision.current) {
+        if (cancelled || request !== newestCheck) return;
+        const seen = seenRevision.current;
+        if (seen?.environmentId === environment.id && snapshot.revision !== seen.revision) {
           void load();
         }
-        seenRevision.current = snapshot.revision;
+        seenRevision.current = { environmentId: environment.id, revision: snapshot.revision };
       } catch {
         // The next check tries again.
       }

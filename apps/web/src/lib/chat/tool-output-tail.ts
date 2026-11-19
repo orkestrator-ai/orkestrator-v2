@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { isIncompatibilityError } from "@orkestrator/protocol/contract/errors";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   TOOL_OUTPUT_READ_MAX_BYTES,
@@ -98,24 +99,27 @@ interface Held {
 
 /** Drop text from the front until it fits, at a line break where one is near. */
 function trimFront(held: Held): Held {
-  let bytes = pushUtf8Bytes(held.text);
-  if (bytes <= TOOL_OUTPUT_TAIL_MAX_HELD_BYTES) return held;
-  let text = held.text;
-  let start = held.start;
-  // Characters are at least one byte, so cutting `excess` characters removes
-  // at least `excess` bytes; one or two passes settle it.
-  while (bytes > TOOL_OUTPUT_TAIL_MAX_HELD_BYTES) {
-    const excess = bytes - TOOL_OUTPUT_TAIL_MAX_HELD_BYTES;
-    const newline = text.indexOf("\n", excess);
-    const cut = newline >= 0 && newline - excess < 4096 ? newline + 1 : excess;
-    const removed = text.slice(0, cut);
-    text = text.slice(cut);
-    const removedBytes = pushUtf8Bytes(removed);
-    start += removedBytes;
-    bytes -= removedBytes;
+  const excess = pushUtf8Bytes(held.text) - TOOL_OUTPUT_TAIL_MAX_HELD_BYTES;
+  if (excess <= 0) return held;
+  let cut = 0;
+  let removedBytes = 0;
+  for (const character of held.text) {
+    cut += character.length;
+    removedBytes += pushUtf8Bytes(character);
+    if (removedBytes >= excess) break;
+  }
+  const newline = held.text.indexOf("\n", cut);
+  if (newline >= 0 && newline - cut < 4096) {
+    removedBytes += pushUtf8Bytes(held.text.slice(cut, newline + 1));
+    cut = newline + 1;
   }
   // The start anchor described text this row no longer holds.
-  return { ...held, text, start, startAnchor: undefined };
+  return {
+    ...held,
+    text: held.text.slice(cut),
+    start: held.start + removedBytes,
+    startAnchor: undefined,
+  };
 }
 
 /**
@@ -195,6 +199,8 @@ export function useToolOutputTail(
           return;
         }
         const base = heldRef.current;
+        const behind = result.totalBytes - result.end;
+        const complete = result.complete && behind === 0;
         let next: Held;
         if (!base || result.reset || result.start !== base.end) {
           next = {
@@ -204,7 +210,7 @@ export function useToolOutputTail(
             totalBytes: result.totalBytes,
             startAnchor: result.startAnchor,
             endAnchor: result.endAnchor,
-            complete: result.complete,
+            complete,
             ...(result.toolError ? { toolError: result.toolError } : {}),
           };
         } else {
@@ -214,11 +220,10 @@ export function useToolOutputTail(
             end: result.end,
             totalBytes: result.totalBytes,
             endAnchor: result.endAnchor,
-            complete: result.complete,
+            complete,
             ...(result.toolError ? { toolError: result.toolError } : {}),
           };
         }
-        const behind = result.totalBytes - result.end;
         if (behind > CATCH_UP_MAX_BYTES) {
           // Far behind: the next read takes the tail rather than every byte between.
           commit(null);
@@ -226,10 +231,11 @@ export function useToolOutputTail(
           continue;
         }
         commit(trimFront(next));
-        if (behind > 0) dirtyRef.current = true;
+        if (behind > 0 && result.end > result.start) dirtyRef.current = true;
       } while (dirtyRef.current && epoch === epochRef.current);
-    } catch {
-      if (epoch === epochRef.current) setFallback(true);
+    } catch (error) {
+      // Transport failures are retried on the next push or recovery poll.
+      if (epoch === epochRef.current && isIncompatibilityError(error)) setFallback(true);
     } finally {
       if (epoch === epochRef.current) readingRef.current = false;
     }

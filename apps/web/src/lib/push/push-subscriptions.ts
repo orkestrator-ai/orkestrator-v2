@@ -30,8 +30,7 @@ const log = createLogger("web.push");
  *
  * While the document is hidden the set sent is empty, so the backend observes
  * nothing for this window; returning sends it again, and the answer's stamps
- * say what moved meanwhile. A node that offers no push (an older backend, the
- * Electron main-process stream) leaves every key unhealthy, and views keep
+ * say what moved meanwhile. A node that offers no push (an older backend) leaves every key unhealthy, and views keep
  * their polling cadence.
  *
  * Another node's scope (a leaf shown in-tree) subscribes through the window's
@@ -45,10 +44,11 @@ const log = createLogger("web.push");
 interface PushSlot {
   client: PushSubscriptionClient | null;
   stops: Array<() => void>;
+  relayedRevision: number;
 }
 
 const pushSlot = defineScopedSlot<PushSlot>("push-subscriptions", (scope) => {
-  const slot: PushSlot = { client: null, stops: [] };
+  const slot: PushSlot = { client: null, stops: [], relayedRevision: 0 };
   scope.onDispose("push-subscriptions", () => {
     for (const stop of slot.stops.splice(0)) stop();
     slot.client?.dispose();
@@ -83,11 +83,22 @@ export function setPushClientTimersForTests(timers: PushClientTimers | undefined
 
 function attach(scope: NodeScope, slot: PushSlot): PushSubscriptionClient {
   const route = pushRouteFor(scope);
+  const owner = route.nodeId === undefined ? null : pushSlot(route.stream);
   const client = new PushSubscriptionClient({
     setSubscriptions: (args, signal) =>
-      backendForScope(route.stream).setPushSubscriptions(args, signal),
+      route.stream.disposed
+        ? Promise.resolve({ status: "refused", reason: "stream-unknown" })
+        : backendForScope(route.stream).setPushSubscriptions(args, signal),
     onListenerError: (error) => log.error("listener.failed", { error: formatLogError(error) }),
-    ...(route.nodeId === undefined ? {} : { nodeId: route.nodeId }),
+    ...(route.nodeId === undefined || owner === null
+      ? {}
+      : {
+          nodeId: route.nodeId,
+          nextSetRevision: (previous: number) => {
+            owner.relayedRevision = Math.max(previous, owner.relayedRevision) + 1;
+            return owner.relayedRevision;
+          },
+        }),
     ...(clientTimers ? { timers: clientTimers } : {}),
   });
   slot.client = client;

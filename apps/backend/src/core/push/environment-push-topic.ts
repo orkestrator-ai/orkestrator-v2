@@ -73,6 +73,7 @@ interface Observer {
   timer: unknown;
   /** When the scheduled read runs, so a later wake never postpones it. */
   dueAt: number | null;
+  reconcileAt: number | null;
   reading: boolean;
   wakeAgain: boolean;
   stopped: boolean;
@@ -236,6 +237,7 @@ export class EnvironmentPushTopic implements PushTopicProvider {
       dirty: new Set(ALL_PARTS),
       timer: null,
       dueAt: null,
+      reconcileAt: null,
       reading: false,
       wakeAgain: false,
       stopped: false,
@@ -359,9 +361,8 @@ export class EnvironmentPushTopic implements PushTopicProvider {
       observer.wakeAgain = true;
       return;
     }
-    // A scheduled read with nothing dirty is a reconcile: re-read what a
-    // waiting tab shows.
-    if (observer.dirty.size === 0) {
+    // Include the reconcile in an event read if its deadline has arrived.
+    if (observer.reconcileAt !== null && observer.reconcileAt <= this.now()) {
       this.counters.reconciles += 1;
       for (const part of REGISTRY_PARTS) observer.dirty.add(part);
     }
@@ -417,12 +418,16 @@ export class EnvironmentPushTopic implements PushTopicProvider {
         moved,
       );
     }
+    if (registry || !record) {
+      const delay = registry ? this.reconcileDelay(observer, environmentId, registry) : null;
+      observer.reconcileAt = delay === null ? null : this.now() + delay;
+    }
     if (observer.wakeAgain || observer.dirty.size > 0) {
       this.scheduleNoLaterThan(observer, ENVIRONMENT_OBSERVE_COALESCE_MS);
-      return;
     }
-    const delay = registry ? this.reconcileDelay(observer, environmentId, registry) : null;
-    if (delay !== null) this.schedule(observer, delay);
+    if (observer.reconcileAt !== null) {
+      this.scheduleNoLaterThan(observer, Math.max(0, observer.reconcileAt - this.now()));
+    }
   }
 
   /** When to look at a waiting tab again with no event, or `null` for never. */

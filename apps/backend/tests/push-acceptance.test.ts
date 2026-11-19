@@ -10,6 +10,10 @@
  * restart (a new push layer behind a new gateway, so a new generation).
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
+import { NodeEventStream } from "../src/core/nodes/node-event-stream.js";
+import { NodePushSubscriptionController } from "../src/core/nodes/node-push-subscriptions.js";
 import { DEFAULT_NATIVE_AGENT_LIVE_WINDOW } from "@orkestrator/protocol/native-agent";
 import { PUSH_KEY_THROTTLE_MS } from "@orkestrator/protocol/push-events";
 import {
@@ -78,6 +82,101 @@ async function streamFor(stack: AcceptanceStack, ms: number) {
 }
 
 describe("push acceptance budgets", () => {
+  test("two relayed nodes share bridge reads across windows and meet the latency budget", async () => {
+    const clock = new ManualClock();
+    const command = await AcceptanceStack.start({ clock, push: true, bridge: "revisions" });
+    stacks.push(command);
+    const leaves = new Map<BackendId, AcceptanceStack>();
+    for (const id of ["bk_acceptance_a", "bk_acceptance_b"] as BackendId[]) {
+      const leaf = await AcceptanceStack.start({ clock, push: true, bridge: "revisions" });
+      stacks.push(leaf);
+      leaf.bridge.startTurn();
+      leaves.set(id, leaf);
+    }
+
+    const relay = new NodePushSubscriptionController({
+      timers: clock,
+      leaf: {
+        holdForPush: (nodeId) => {
+          const leaf = leaves.get(nodeId)!;
+          const stream = new NodeEventStream({
+            transport: () => ({
+              baseUrl: leaf.info.url,
+              headers: { authorization: `Bearer ${leaf.info.token}` },
+            }),
+            prefixes: ["native-agent-session-activity"],
+            onConnected: (info) => relay.upstreamConnected(nodeId, info.push),
+            onClosed: () => relay.upstreamClosed(nodeId),
+            onEvent: (event, payload) => relay.upstreamFrame(nodeId, event, payload),
+          });
+          stream.start();
+          return () => stream.stop();
+        },
+        link: (nodeId) => leaves.get(nodeId) ?? null,
+      },
+    });
+    relay.attachDownstream(command.push!.hub);
+    command.push!.attachNodeSubscriptions(relay);
+    const advance = async (ms: number) => {
+      // Let the leaf's socket deliver before advancing beyond a coalescing
+      // interval. Its SSE reader is external to the viewers' quiescence check.
+      for (let elapsed = 0; elapsed < ms; elapsed += 25) {
+        await clock.advanceAsync(Math.min(25, ms - elapsed), async () => {
+          await Promise.all(stacks.map((stack) => stack.settle()));
+        });
+      }
+    };
+
+    try {
+      for (const [nodeId, leaf] of leaves) {
+        await leaf.addViewer("first", { pushRoute: { command, nodeId } });
+      }
+      await advance(500);
+      expect([...leaves.values()].every((leaf) => leaf.viewers[0]!.pushHealthy())).toBe(true);
+
+      const measure = async () => {
+        const before = new Map([...leaves].map(([id, leaf]) => [id, leaf.bridge.readCalls()]));
+        for (const leaf of leaves.values()) {
+          leaf.bridge.changedAt.clear();
+          leaf.bridge.recording = true;
+          for (const viewer of leaf.viewers) viewer.observations.length = 0;
+        }
+        for (let index = 0; index < 24; index += 1) {
+          for (const leaf of leaves.values()) leaf.bridge.stream();
+          await advance(250);
+        }
+        await advance(500);
+        return [...leaves].map(([id, leaf]) => {
+          for (const viewer of leaf.viewers) {
+            expect(viewer.seenRevision).toBe(leaf.bridge.revision);
+            expect(viewer.observations).toHaveLength(24);
+            const delays = viewer.observations
+              .map(({ virtualMs }) => virtualMs)
+              .sort((a, b) => a - b);
+            expect(delays[Math.ceil(delays.length * 0.95) - 1]).toBeLessThanOrEqual(250);
+          }
+          return leaf.bridge.readCalls() - before.get(id)!;
+        });
+      };
+
+      const oneWindow = await measure();
+      for (const [nodeId, leaf] of leaves) {
+        await leaf.addViewer("second", { pushRoute: { command, nodeId } });
+      }
+      await advance(500);
+      expect(
+        [...leaves.values()].every((leaf) => leaf.viewers.every((viewer) => viewer.pushHealthy())),
+      ).toBe(true);
+      const twoWindows = await measure();
+      for (const [index, calls] of twoWindows.entries()) {
+        expect(calls).toBeLessThanOrEqual(oneWindow[index]! + 4);
+      }
+      expect(relay.metrics()).toMatchObject({ nodes: 2, heldKeys: 2, downstreamSets: 4 });
+    } finally {
+      relay.stop();
+    }
+  }, 30_000);
+
   test("quiet, streaming and announced workloads against the old cadence, one and two viewers", async () => {
     const scenario = {
       quietMinutes: 2,

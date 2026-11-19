@@ -121,7 +121,7 @@ it moved, so a quiet session costs no bridge read beyond a 30 s backstop.
   full `/status` body.
 - **The conditional read.** The state route answers
   `{ "unchanged": true, "stateRevision" }` to a `?knownStateRevision=` that
-  is still current, and the backend then reads no side route
+  is still current, and the backend then reuses its complete cached read
   (`apps/backend/src/core/http-bridge/state-revision.ts`). Without the query
   every body is today's plus `stateRevision`, so an older backend and the
   backend's full `interactiveSnapshot` read are unaffected; an older bridge

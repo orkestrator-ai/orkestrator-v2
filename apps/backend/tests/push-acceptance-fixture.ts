@@ -34,6 +34,10 @@ import { request as httpRequest, type ClientRequest } from "node:http";
 import { connect as connectSocket, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import type {
+  NativeAgentToolOutputRead,
+  ToolOutputReadMode,
+} from "@orkestrator/protocol/native-agent-tool-output";
 import { configureLogger } from "@orkestrator/protocol/logger";
 import {
   DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
@@ -44,7 +48,10 @@ import {
   NATIVE_AGENT_ACTIVITY_EVENT,
   parseNativeAgentActivityAnnouncement,
 } from "@orkestrator/protocol/native-agent-observation";
-import { bridgeTranscriptRouteBody } from "@orkestrator/protocol/node/bridge-transcript-routes";
+import {
+  bridgeTranscriptDetailRouteBody,
+  bridgeTranscriptRouteBody,
+} from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import {
   PushSubscriptionClient,
@@ -107,6 +114,7 @@ export const SESSION = {
   logicalSessionKey: "env-env-1:push-acceptance",
 } as const;
 export const PUSH_KEY = formatNativeSessionPushKey(SESSION);
+export const TOOL_CALL_ID = "acceptance-tool";
 
 interface Row {
   id: string;
@@ -259,6 +267,24 @@ export class FakeClaudeBridge {
     return this.revision;
   }
 
+  writeToolOutput(output: string): void {
+    const row = this.messages[this.tailIndex]!;
+    const part = {
+      type: "tool-invocation",
+      sourcePartId: `${row.id}:tool`,
+      toolUseId: TOOL_CALL_ID,
+      content: "Fixture output",
+      toolName: "Bash",
+      toolState: "pending",
+      toolOutput: output,
+    };
+    this.messages[this.tailIndex] = {
+      ...row,
+      parts: [...row.parts.filter((entry) => entry.toolUseId !== TOOL_CALL_ID), part],
+    };
+    this.changed(row.id);
+  }
+
   private newResponse(): void {
     this.messages.push({
       id: `a${this.messages.length}`,
@@ -372,20 +398,21 @@ export class FakeClaudeBridge {
       );
       return new Response(body, { headers: { "content-type": "text/event-stream" } });
     }
-    if (route === "GET /session/:id/transcript") {
-      const body = bridgeTranscriptRouteBody(
-        {
-          messages: this.messages,
-          sessionIdentity: "provider-session",
-          generation: "g1",
-          contentEpoch: 1,
-          revision: this.revision,
-          complete: true,
-          revisedMessageIds: this.revised.ids(),
-          revisedRowsOverflowVersion: this.revised.overflowVersion,
-        },
-        (name) => url.searchParams.get(name),
-      );
+    if (route === "GET /session/:id/transcript" || route === "GET /session/:id/transcript/detail") {
+      const source = {
+        messages: this.messages,
+        sessionIdentity: "provider-session",
+        generation: "g1",
+        contentEpoch: 1,
+        revision: this.revision,
+        complete: true,
+        revisedMessageIds: this.revised.ids(),
+        revisedRowsOverflowVersion: this.revised.overflowVersion,
+      };
+      const query = (name: string) => url.searchParams.get(name);
+      const body = route.endsWith("/detail")
+        ? bridgeTranscriptDetailRouteBody(source, query)
+        : bridgeTranscriptRouteBody(source, query);
       return this.answer(route, body);
     }
     if (route === "GET /session/:id/activity") {
@@ -521,6 +548,8 @@ export interface ViewerFaults {
    * push layer's own latency for an announced change.
    */
   ignoreActivity?: boolean;
+  /** Take push through a command gateway while reads still go to this leaf. */
+  pushRoute?: { command: AcceptanceStack; nodeId: string };
 }
 
 export interface ViewerCounters {
@@ -595,12 +624,14 @@ export class Viewer {
     this.client = new PushSubscriptionClient({
       timers: stack.clock,
       now: () => performance.now(),
+      ...(faults.pushRoute ? { nodeId: faults.pushRoute.nodeId } : {}),
       setSubscriptions: async (args, signal) => {
         this.inFlight += 1;
         try {
-          const answer = await httpCall(this.stack.info.url, "__orkestrator/invoke", {
+          const info = this.pushStack().info;
+          const answer = await httpCall(info.url, "__orkestrator/invoke", {
             method: "POST",
-            token: this.stack.info.token,
+            token: info.token,
             body: JSON.stringify({ command: "push_set_subscriptions", args }),
             signal,
           });
@@ -619,6 +650,10 @@ export class Viewer {
     this.client.onHealthChange(() => {
       if (!this.closed && !this.reading) this.schedulePoll();
     });
+  }
+
+  private pushStack(): AcceptanceStack {
+    return this.faults.pushRoute?.command ?? this.stack;
   }
 
   /** Whether the stream has delivered every byte the gateway wrote to it. */
@@ -647,8 +682,9 @@ export class Viewer {
 
   /** Open (or reopen) the event stream against the stack's current gateway. */
   async connect(): Promise<void> {
-    const url = new URL("__orkestrator/events?excludeEvents=terminal-output-", this.stack.info.url);
-    const known = new Set(this.stack.eventWriters().keys());
+    const gateway = this.pushStack();
+    const url = new URL("__orkestrator/events?excludeEvents=terminal-output-", gateway.info.url);
+    const known = new Set(gateway.eventWriters().keys());
     let text = "";
     let opened = false;
     // A raw socket, so pausing it really stops reading: the kernel buffers
@@ -689,10 +725,10 @@ export class Viewer {
     this.streamReceived = 0;
     socket.write(
       `GET ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\n` +
-        `Authorization: Bearer ${this.stack.info.token}\r\nAccept: text/event-stream\r\n\r\n`,
+        `Authorization: Bearer ${gateway.info.token}\r\nAccept: text/event-stream\r\n\r\n`,
     );
     await waitReal(() => opened, "event stream never connected");
-    const writer = [...this.stack.eventWriters().keys()].find((candidate) => !known.has(candidate));
+    const writer = [...gateway.eventWriters().keys()].find((candidate) => !known.has(candidate));
     if (!writer) throw new Error("gateway did not register the event stream");
     // Count what the gateway writes from here on, so a reading can wait for it.
     this.streamWritten = this.streamReceived;
@@ -929,6 +965,7 @@ export interface AcceptanceStackOptions {
   push: boolean;
   /** How the bridge signals changes (default `cadence`). */
   bridge?: BridgeSignalMode;
+  clock?: ManualClock;
 }
 
 type EventWriter = {
@@ -937,7 +974,7 @@ type EventWriter = {
 };
 
 export class AcceptanceStack {
-  readonly clock = new ManualClock();
+  readonly clock: ManualClock;
   readonly bridge: FakeClaudeBridge;
   readonly writers = new Map<Viewer, EventWriter>();
   readonly viewers: Viewer[] = [];
@@ -954,6 +991,7 @@ export class AcceptanceStack {
   private readonly base = Date.UTC(2026, 10, 19);
 
   private constructor(private readonly options: AcceptanceStackOptions) {
+    this.clock = options.clock ?? new ManualClock();
     this.bridge = new FakeClaudeBridge(() => this.clock.now(), options.bridge ?? "cadence");
   }
 
@@ -1031,6 +1069,8 @@ export class AcceptanceStack {
             service.canWakePushObserverFromBridge(environmentId, agent),
           forgetPushSettled: (environmentId, agent, logicalSessionKey) =>
             service.forgetPushSettled(environmentId, agent, logicalSessionKey),
+          toolOutputSource: (environmentId, agent, logicalSessionKey, toolUseId) =>
+            service.toolOutputSource(environmentId, agent, logicalSessionKey, toolUseId),
           notePushHint: (environmentId, agent, logicalSessionKey) =>
             service.notePushHint(environmentId, agent, logicalSessionKey),
         }),
@@ -1041,6 +1081,9 @@ export class AcceptanceStack {
         commandAccess: registryCommandAccess,
         ...(this.push ? { push: this.push } : {}),
         invoke: async (command, args) => {
+          if (command === "get_native_agent_tool_output") {
+            return service.readToolOutput(args as never);
+          }
           if (command !== "get_native_agent_live_update")
             throw new Error(`Unexpected gateway command: ${command}`);
           return service.getLiveUpdate(args as never);
@@ -1085,6 +1128,27 @@ export class AcceptanceStack {
     await viewer.mount();
     await this.settle();
     return viewer;
+  }
+
+  async invoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
+    const response = await httpCall(this.info.url, "__orkestrator/invoke", {
+      method: "POST",
+      token: this.info.token,
+      body: JSON.stringify({ command, args }),
+    });
+    if (response.status !== 200) throw new Error(`${command}: HTTP ${response.status}`);
+    return (JSON.parse(response.body) as { result: T }).result;
+  }
+
+  readToolOutput(mode: ToolOutputReadMode, cursor?: number, anchor?: string) {
+    return this.invoke<NativeAgentToolOutputRead>("get_native_agent_tool_output", {
+      ...SESSION,
+      toolUseId: TOOL_CALL_ID,
+      mode,
+      cursor,
+      anchor,
+      limit: 4_096,
+    });
   }
 
   /** What the backend's one emit does: every client's stream, and the push layer. */

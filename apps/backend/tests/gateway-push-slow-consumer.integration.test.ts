@@ -19,7 +19,8 @@
  */
 import { afterEach, expect, test } from "bun:test";
 import { DEFAULT_NATIVE_AGENT_LIVE_WINDOW } from "@orkestrator/protocol/native-agent";
-import { AcceptanceStack, SESSION, type Viewer } from "./push-acceptance-fixture.js";
+import { TOOL_OUTPUT_PUSH_TOPIC, formatToolOutputPushKey } from "@orkestrator/protocol/push-events";
+import { AcceptanceStack, SESSION, TOOL_CALL_ID, type Viewer } from "./push-acceptance-fixture.js";
 
 const SOFT_LIMIT = 1024 * 1024;
 const HARD_LIMIT = 8 * 1024 * 1024;
@@ -146,3 +147,80 @@ test("a slow real-socket consumer over thirty noisy minutes keeps every queue bo
   const late = Math.max(...heap.slice(-3));
   expect(late - early).toBeLessThan(16 * 1024 * 1024);
 }, 300_000);
+
+test("expanded tool ranges converge under real socket backpressure across repeated view closes", async () => {
+  const stack = await AcceptanceStack.start({ push: true, bridge: "revisions" });
+  stacks.push(stack);
+  stack.bridge.startTurn();
+  const key = formatToolOutputPushKey({ ...SESSION, toolUseId: TOOL_CALL_ID });
+  const noise = { blob: "n".repeat(16 * 1024) };
+  let output = "start";
+  stack.bridge.writeToolOutput(output);
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    const view = await stack.addViewer(`range-${cycle}`);
+    const tail = await stack.readToolOutput("tail");
+    if (tail.status !== "ok") throw new Error(`initial tail: ${tail.status}`);
+    let end = tail.end;
+    let anchor = tail.endAnchor;
+    let appended = "";
+    let reads = 0;
+    let reading: Promise<void> | null = null;
+    let failure: unknown;
+    let dirty = false;
+    const readAvailable = async () => {
+      do {
+        dirty = false;
+        const range = await stack.readToolOutput("range", end, anchor);
+        if (range.status !== "ok" || range.reset) throw new Error("expected a continuous range");
+        reads += 1;
+        appended += range.text;
+        end = range.end;
+        anchor = range.endAnchor;
+        dirty ||= end < range.totalBytes;
+      } while (dirty);
+    };
+    const unsubscribe = view.client.subscribe(TOOL_OUTPUT_PUSH_TOPIC, key, () => {
+      dirty = true;
+      if (reading) return;
+      view.inFlight += 1;
+      reading = readAvailable().finally(() => {
+        reading = null;
+        view.inFlight -= 1;
+      });
+      void reading.catch((error: unknown) => {
+        failure ??= error;
+      });
+    });
+    await stack.advance(500);
+    expect(view.client.isHealthy(TOOL_OUTPUT_PUSH_TOPIC, key)).toBe(true);
+    const start = output.length;
+    view.pauseStream();
+    for (let step = 0; step < 45; step += 1) {
+      output += `chunk-${cycle}-${step}:${"x".repeat(256)}\n`;
+      stack.bridge.writeToolOutput(output);
+      for (let i = 0; i < 12; i += 1) stack.emitBackendEvent("fixture-noise", noise);
+      await stack.advance(1_000);
+    }
+    expect(view.queuedBytes()).toBeGreaterThan(SOFT_LIMIT);
+    expect(stack.push!.metrics().pendingEntries).toBeLessThanOrEqual(2);
+    expect(stack.push!.toolOutputs.metrics().changes).toBeGreaterThan(0);
+    expect(await stack.readToolOutput("tail")).toMatchObject({ totalBytes: output.length });
+    view.resumeStream();
+    await stack.advance(2_000);
+    await reading;
+    expect(failure).toBeUndefined();
+    expect(end).toBe(output.length);
+    expect(appended).toBe(output.slice(start));
+    expect(reads).toBeGreaterThan(1);
+    unsubscribe();
+    view.close();
+    stack.viewers.splice(stack.viewers.indexOf(view), 1);
+    stack.writers.delete(view);
+    await stack.advance(500);
+    expect(stack.push!.metrics()).toMatchObject({
+      connections: 0,
+      pendingEntries: 0,
+      topics: { "tool-output": { watches: 0, holding: 0 } },
+    });
+  }
+}, 120_000);

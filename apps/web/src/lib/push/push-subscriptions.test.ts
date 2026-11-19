@@ -136,6 +136,46 @@ describe("push routing for another node", () => {
     expect(heardOnLeaf).toEqual(["subscribed", "frame"]);
   });
 
+  test("disposing a leaf releases its in-flight set before a reopened scope can subscribe", async () => {
+    const initialReply = Promise.withResolvers<unknown>();
+    commandClient.respond("push_set_subscriptions", (args: Record<string, unknown>) =>
+      args.setRevision === 1 ? initialReply.promise : applied(args),
+    );
+    pushClientFor(leaf).subscribe(TOPIC, "env/claude/old", () => undefined);
+    await flushMicrotasks();
+    const connect = () =>
+      commandClient.emit(PUSH_STREAM_STATE_EVENT, {
+        state: "connected",
+        offer: { versions: [1], streamId: STREAM, nodes: true },
+      });
+    connect();
+    await settle();
+    leaf.dispose();
+    await flushMicrotasks();
+    expect(commandClient.calls("push_set_subscriptions").at(-1)?.args).toEqual({
+      streamId: STREAM,
+      nodeId: LEAF,
+      setRevision: 2,
+      subscriptions: [],
+    });
+
+    const reopened = windowScope.open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: LEAF }),
+    });
+    pushClientFor(reopened).subscribe(TOPIC, "env/claude/new", () => undefined);
+    await flushMicrotasks();
+    connect();
+    await settle();
+    initialReply.resolve(applied({ ...commandClient.calls("push_set_subscriptions")[0]!.args }));
+    expect(commandClient.calls("push_set_subscriptions").at(-1)?.args).toMatchObject({
+      streamId: STREAM,
+      nodeId: LEAF,
+      setRevision: 3,
+      subscriptions: [{ key: "env/claude/new" }],
+    });
+  });
+
   test("a command node that does not offer nodes leaves the leaf's keys polling", async () => {
     pushClientFor(leaf).subscribe(TOPIC, "env/claude/tab", () => undefined);
     // The listeners attach once `listenInScope` resolves.

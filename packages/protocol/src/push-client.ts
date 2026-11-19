@@ -115,6 +115,8 @@ export interface PushSubscriptionClientOptions {
    * node's. Absent: the stream's own backend.
    */
   nodeId?: string;
+  /** Shares revision ordering with a replacement client on the same stream. */
+  nextSetRevision?: (previous: number) => number;
 }
 
 interface Entry {
@@ -359,7 +361,20 @@ export class PushSubscriptionClient {
 
   dispose(): void {
     if (this.stateValue === "closed") return;
+    const streamId = this.streamId;
+    const nodeId = this.options.nodeId;
     this.resetRequest();
+    if (nodeId !== undefined && streamId !== null && this.setRevision > 0) {
+      // This stream belongs to the command scope and can outlive this client.
+      // The replacement shares the allocator, so this release cannot clear it.
+      const setRevision = this.nextSetRevision();
+      void this.options
+        .setSubscriptions(
+          { streamId, nodeId, setRevision, subscriptions: [] },
+          AbortSignal.timeout(10_000),
+        )
+        .catch(() => undefined);
+    }
     this.streamId = null;
     this.entries.clear();
     this.setState("closed");
@@ -379,9 +394,12 @@ export class PushSubscriptionClient {
     this.lastSeq = seq;
     if (gap) {
       this.counters.seqGaps += 1;
-      // The frame itself is still applied; the re-sent set's answer covers
-      // whatever the missing frames named.
       this.recover();
+      // The next partial frame can advance the same key to the stamp the
+      // replacement set returns. Invalidate every part before applying it.
+      for (const entry of Array.from(this.entries.values())) {
+        this.emit(entry, { topic: entry.topic, key: entry.key, parts: null, reason: "resync" });
+      }
     }
     return true;
   }
@@ -455,14 +473,18 @@ export class PushSubscriptionClient {
     this.missingRetryDelay = Math.min(this.maxRetryMs, this.missingRetryDelay * 2);
   }
 
+  private nextSetRevision(): number {
+    this.setRevision = this.options.nextSetRevision?.(this.setRevision) ?? this.setRevision + 1;
+    return this.setRevision;
+  }
+
   private async send(): Promise<void> {
     const streamId = this.streamId;
     if (!streamId || !this.dirty || this.inFlight || this.stateValue === "closed") return;
     this.dirty = false;
     const request = new AbortController();
     this.inFlight = request;
-    this.setRevision += 1;
-    const setRevision = this.setRevision;
+    const setRevision = this.nextSetRevision();
     const sent = this.paused ? [] : Array.from(this.entries.values());
     this.counters.setCalls += 1;
     let result: PushSetSubscriptionsResult | null = null;

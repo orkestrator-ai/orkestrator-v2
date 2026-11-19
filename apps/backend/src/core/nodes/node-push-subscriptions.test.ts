@@ -54,7 +54,13 @@ function harness(options: { maxSubscriptions?: number } = {}) {
   const leafTopic = new LeafTopic();
   leafHub.registerTopic(leafTopic);
   const leafCalls: PushSetSubscriptionsArgs[] = [];
-  const leaf = { connected: true, holds: 0, failCalls: false };
+  const leaf = {
+    connected: true,
+    holds: 0,
+    failCalls: false,
+    failNextEmpty: false,
+    delay: null as Promise<void> | null,
+  };
   const port: NodePushLeafPort = {
     holdForPush: () => {
       leaf.holds += 1;
@@ -71,7 +77,15 @@ function harness(options: { maxSubscriptions?: number } = {}) {
             invoke: async <T>(command: string, args?: Record<string, unknown>) => {
               expect(command).toBe("push_set_subscriptions");
               if (leaf.failCalls) throw new Error("the node did not answer");
-              leafCalls.push(args as unknown as PushSetSubscriptionsArgs);
+              const set = args as unknown as PushSetSubscriptionsArgs;
+              leafCalls.push(set);
+              if (set.subscriptions.length === 0 && leaf.failNextEmpty) {
+                leaf.failNextEmpty = false;
+                throw new Error("temporary empty-set failure");
+              }
+              const delay = leaf.delay;
+              leaf.delay = null;
+              if (delay) await delay;
               return (await leafHub.setSubscriptions(
                 "command-node",
                 args as unknown as PushSetSubscriptionsArgs,
@@ -465,9 +479,59 @@ describe("node push subscription controller", () => {
       reason: "unavailable",
     });
     await h.settle(1_000);
-    expect(h.controller.metrics().leafSetCalls).toBe(1);
+    expect(h.hub.metrics().nodeSets).toBe(0);
     h.leaf.failCalls = false;
     expect(await h.set(a.streamId, 2, ["env/claude/a"])).toMatchObject({ status: "applied" });
+  });
+
+  test("superseded limit denials cannot release a key accepted by a newer set", async () => {
+    const h = harness({ maxSubscriptions: 1 });
+    h.openUpstream();
+    const a = h.open();
+    const key = "env/claude/new";
+    const delayed = Promise.withResolvers<void>();
+    h.leaf.delay = delayed.promise;
+    const older = h.set(a.streamId, 1, ["env/claude/old", key]);
+    await flushMicrotasks();
+    const newer = h.set(a.streamId, 2, [key]);
+    delayed.resolve();
+    expect(await older).toMatchObject({ status: "superseded" });
+    expect(await newer).toMatchObject({ subscriptions: [{ key, status: "ok" }] });
+    expect(h.controller.diagnostics()[0]?.keys).toBe(1);
+    expect(h.leafHub.isObserved(TOPIC, key)).toBe(true);
+  });
+
+  test("a transient empty-union failure retries on the same upstream stream", async () => {
+    const h = harness();
+    const upstream = h.openUpstream();
+    const a = h.open();
+    const key = "env/claude/old";
+    await h.set(a.streamId, 1, [key]);
+    h.leaf.failNextEmpty = true;
+    await h.set(a.streamId, 2, []);
+    expect(h.leafHub.isObserved(TOPIC, key)).toBe(true);
+    await h.settle(500);
+    expect(h.leafCalls.at(-1)).toMatchObject({ streamId: upstream, subscriptions: [] });
+    expect(h.leafHub.isObserved(TOPIC, key)).toBe(false);
+    expect(h.leaf.holds).toBe(0);
+    h.controller.stop();
+  });
+
+  test("cleared namespaces release capacity and fence delayed revisions after eviction", async () => {
+    const h = harness();
+    h.openUpstream();
+    const a = h.open();
+    for (let index = 0; index < 66; index += 1) {
+      expect(await h.set(a.streamId, index + 2, [], `bk_retired${index}`)).toMatchObject({
+        status: "applied",
+      });
+    }
+    expect(h.hub.metrics().nodeSets).toBe(0);
+    expect(await h.set(a.streamId, 1, ["env/claude/stale"], "bk_retired0")).toEqual({
+      status: "superseded",
+      setRevision: 3,
+    });
+    expect(await h.set(a.streamId, 68, ["env/claude/live"])).toMatchObject({ status: "applied" });
   });
 
   test("a set is refused without a controller, and stop() releases every hold", async () => {

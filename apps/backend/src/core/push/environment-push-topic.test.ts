@@ -204,6 +204,25 @@ describe("EnvironmentPushTopic", () => {
     h.topic.dispose();
   });
 
+  test("a lifecycle wake preserves the waiting tab's existing reconcile deadline", async () => {
+    const h = harness({ tabs: [{ tabId: "tab-1", state: "waiting", pending: true }] });
+    await h.retained();
+    try {
+      h.state.record = { ...h.state.record, containerId: "c2" };
+      h.topic.observeEvent(CONTAINER_LIFECYCLE_EVENT, { environmentId: "env-1", snapshot: {} });
+      await h.advance(ENVIRONMENT_OBSERVE_COALESCE_MS);
+      expect(h.reads.registry).toBe(1);
+      expect(h.published.at(-1)?.parts).toEqual(["lifecycle"]);
+
+      h.state.pendingLabel = "Another request";
+      await h.advance(ENVIRONMENT_OBSERVE_PENDING_MS - ENVIRONMENT_OBSERVE_COALESCE_MS);
+      expect(h.topic.metrics().reconciles).toBe(1);
+      expect(h.published.at(-1)?.parts).toEqual(["attention"]);
+    } finally {
+      h.topic.dispose();
+    }
+  });
+
   test("a waiting tab the registry could not read in time is retried through the ladder", async () => {
     const h = harness({ tabs: [{ tabId: "tab-1", state: "waiting", pending: false }] });
     await h.retained();

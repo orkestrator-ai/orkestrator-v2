@@ -164,9 +164,11 @@ interface NodeState {
   applied: number;
   dirty: boolean;
   sending: boolean;
-  /** The last node call failed; the next trigger retries, nothing loops on it. */
+  /** The last call failed; active unions retry on their next trigger. */
   failed: boolean;
   waiters: Waiter[];
+  cleanupRetry: unknown;
+  cleanupDelay: number;
   release: () => void;
 }
 
@@ -226,7 +228,9 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
       return Promise.resolve([]);
     }
     const node = existing ?? this.openNode(nodeId as BackendId);
-    const previous = node.sets.get(streamId) ?? new Set<string>();
+    this.cancelCleanupRetry(node);
+    // Each apply owns a distinct set, even when the union did not change.
+    const previous = new Set(node.sets.get(streamId));
     let unionChanged = false;
 
     // Removals first, so a key let go frees room for one added in the same set.
@@ -295,6 +299,7 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
       // A key the node cannot read is not held for this connection: its view
       // polls, as the hub does for a local key.
       const set = node.sets.get(streamId);
+      if (set !== previous) return answers;
       for (const entry of answers) {
         if (entry.status === "ok") continue;
         const id = pushSubscriptionId(entry.topic, entry.key);
@@ -376,7 +381,10 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
       answered: false,
     });
     const node = this.nodes.get(nodeId);
-    if (node) this.resync(node);
+    if (node) {
+      this.cancelCleanupRetry(node);
+      this.resync(node);
+    }
   }
 
   upstreamClosed(nodeId: BackendId): void {
@@ -388,6 +396,7 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
     node.generation += 1;
     this.failWaiters(node);
     this.resyncDownstream(node);
+    this.maybeRetire(node);
   }
 
   upstreamFrame(nodeId: BackendId, event: string, payload: unknown): void {
@@ -466,6 +475,7 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
     this.connections.clear();
     for (const node of nodes) {
       this.failWaiters(node);
+      this.cancelCleanupRetry(node);
       node.release();
     }
   }
@@ -484,6 +494,8 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
       sending: false,
       failed: false,
       waiters: [],
+      cleanupRetry: null,
+      cleanupDelay: 250,
       release: () => undefined,
     };
     this.nodes.set(nodeId, node);
@@ -622,6 +634,9 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
       const answered = new Map(
         result.subscriptions.map((entry) => [pushSubscriptionId(entry.topic, entry.key), entry]),
       );
+      // A reply for a superseded union must not replace stamps for keys
+      // added since the call started.
+      if (generation !== node.generation) continue;
       for (const [id, held] of node.keys) {
         const entry = answered.get(id);
         if (!entry) {
@@ -645,19 +660,28 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
     }
   }
 
+  private cancelCleanupRetry(node: NodeState): void {
+    if (node.cleanupRetry !== null) this.timers.clearTimeout(node.cleanupRetry);
+    node.cleanupRetry = null;
+    node.cleanupDelay = 250;
+  }
+
   /** Nothing held for the node and nothing left to tell it: let its stream go. */
   private maybeRetire(node: NodeState): void {
     if (node.sets.size > 0 || node.keys.size > 0 || node.sending || node.waiters.length > 0) return;
     // The node still holds the last non-empty union: send it the empty one first.
-    if (
-      node.dirty &&
-      !node.failed &&
-      this.upstreams.has(node.nodeId) &&
-      this.options.leaf.link(node.nodeId)
-    ) {
-      this.pump(node);
+    if (node.dirty && this.upstreams.has(node.nodeId)) {
+      if (!node.failed && this.options.leaf.link(node.nodeId)) this.pump(node);
+      else if (node.cleanupRetry === null) {
+        node.cleanupRetry = this.timers.setTimeout(() => {
+          node.cleanupRetry = null;
+          this.pump(node);
+        }, node.cleanupDelay);
+        node.cleanupDelay = Math.min(node.cleanupDelay * 2, 5_000);
+      }
       return;
     }
+    this.cancelCleanupRetry(node);
     if (this.nodes.get(node.nodeId) === node) this.nodes.delete(node.nodeId);
     node.release();
   }

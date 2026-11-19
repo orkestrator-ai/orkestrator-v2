@@ -5,7 +5,7 @@
  * the 30 s recovery poll; without push it is checked every 3 s.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { act, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import type { RecoveryCopyList } from "@orkestrator/protocol/container-recovery";
 import {
   ENVIRONMENT_PUSH_TOPIC,
@@ -121,6 +121,70 @@ describe("environment recovery copies over push", () => {
     // The recovery poll still runs.
     await h.advance(PUSH_RECOVERY_POLL_MS);
     expect(h.checks()).toBe(settled + 2);
+  });
+
+  test("a late list response cannot replace a newer recovery copy list", async () => {
+    const h = setup();
+    await h.connect({ versions: [1], streamId: STREAM });
+    await waitFor(() =>
+      expect(pushClientFor(h.scope).isHealthy(ENVIRONMENT_PUSH_TOPIC, environment.id)).toBe(true),
+    );
+    await h.advance(0);
+
+    const older = Promise.withResolvers<RecoveryCopyList>();
+    const newer = Promise.withResolvers<RecoveryCopyList>();
+    h.client.respond("list_recovery_copies", () =>
+      h.record.revision === 2 ? older.promise : newer.promise,
+    );
+    const notify = (revision: number) =>
+      act(async () => {
+        h.record.revision = revision;
+        h.client.emit(PUSH_CHANGED_EVENT, {
+          seq: revision - 1,
+          changes: [
+            {
+              topic: ENVIRONMENT_PUSH_TOPIC,
+              key: environment.id,
+              generation: "g1",
+              revision,
+              parts: ["lifecycle"],
+            },
+          ],
+        });
+      });
+    const before = h.lists();
+    await notify(2);
+    await waitFor(() => expect(h.lists()).toBe(before + 1));
+    await notify(3);
+    await waitFor(() => expect(h.lists()).toBe(before + 2));
+
+    await act(async () => {
+      newer.resolve({
+        ...emptyList,
+        revision: 3,
+        copies: [
+          {
+            copyId: "current-copy",
+            kind: "legacy-runtime",
+            reason: "workspace-reset",
+            retainedAt: null,
+            operationId: null,
+            containerId: "old",
+            storageSetId: null,
+            volumes: [],
+            workspaceGeneration: null,
+            presence: "present",
+            sizeBytes: null,
+            restorable: true,
+          },
+        ],
+      });
+    });
+    await screen.findByText("Before a reset");
+    await act(async () => older.resolve({ ...emptyList, revision: 2 }));
+    expect(screen.getByText("Before a reset")).toBeTruthy();
+    await h.advance(PUSH_RECOVERY_POLL_MS);
+    expect(h.lists()).toBe(before + 2);
   });
 
   test("without push, and again after the stream drops, the record is checked every 3 s", async () => {

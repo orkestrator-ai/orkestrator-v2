@@ -1480,6 +1480,53 @@ sleep 5
     expect(sent).toEqual(["a", "c"]);
   });
 
+  test("IPC push viewers receive independent offers and reconnect on a dropped stream", async () => {
+    const streams: Array<ReadableStreamDefaultController<Uint8Array>> = [];
+    const pushId = (index: number) => `stream-desktop-${String(index).padStart(12, "0")}`;
+    const frame = (event: string, payload: unknown) =>
+      new TextEncoder().encode(`data: ${JSON.stringify({ event, payload })}\n\n`);
+    stubFetch(async (input) => {
+      expect(new URL(String(input)).searchParams.get("includeEvents")).toBe("push.");
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streams.push(controller);
+            controller.enqueue(
+              frame("gateway.connected", {
+                status: "fresh",
+                push: { versions: [1], streamId: pushId(streams.length) },
+              }),
+            );
+          },
+        }),
+      );
+    });
+    const client = new BackendHttpClient("http://127.0.0.1:34000/", "test-token-123456", {
+      eventReconnectDelayMs: 5,
+    });
+    const left: unknown[] = [];
+    const right: unknown[] = [];
+    const leftStop = client.listenPush((event, payload) => left.push({ event, payload }));
+    const rightStop = client.listenPush((event, payload) => right.push({ event, payload }));
+    try {
+      await waitUntil(() => left.length === 1 && right.length === 1, "two push offers");
+      expect(left[0]).toMatchObject({ payload: { offer: { streamId: pushId(1) } } });
+      expect(right[0]).toMatchObject({ payload: { offer: { streamId: pushId(2) } } });
+      streams[0]!.enqueue(frame("push.changed", { seq: 1 }));
+      await waitUntil(() => left.length === 2, "left push change");
+      expect(right).toHaveLength(1);
+      streams[0]!.close();
+      await waitUntil(() => left.length === 4, "left push reconnected");
+      expect(left[2]).toMatchObject({ payload: { state: "disconnected" } });
+      expect(left[3]).toMatchObject({ payload: { offer: { streamId: pushId(3) } } });
+      expect(right).toHaveLength(1);
+    } finally {
+      leftStop();
+      rightStop();
+      client.stopListening();
+    }
+  });
+
   test("delivers a legitimate event frame larger than 1 MiB", async () => {
     const payload = "y".repeat(1.5 * 1024 * 1024);
     const frame = `data: ${JSON.stringify({ event: "large-snapshot", payload })}\n\n`;

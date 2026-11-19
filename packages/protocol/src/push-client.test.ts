@@ -163,7 +163,7 @@ describe("PushSubscriptionClient", () => {
     expect(h.client.state()).toBe("live");
   });
 
-  test("a seq gap recovers by re-subscribing; the answer names what moved", async () => {
+  test("a seq gap invalidates every part, including when the following frame names the same key", async () => {
     const h = harness();
     h.listen("k1");
     h.listen("k2");
@@ -174,7 +174,7 @@ describe("PushSubscriptionClient", () => {
       k2: { generation: "g1", revision: 1 },
     });
     h.changes.length = 0;
-    // seq 2 (k2's change) never arrives.
+    // Seq 2 (another part for k1) never arrives; seq 3 advances k1 to the answer stamp.
     h.frame(1, "k1", 2);
     h.frame(3, "k1", 3);
     expect(h.client.state()).toBe("recovering");
@@ -188,6 +188,8 @@ describe("PushSubscriptionClient", () => {
     expect(h.client.state()).toBe("live");
     expect(h.changes).toEqual([
       { topic: TOPIC, key: "k1", parts: ["transcript"], reason: "frame" },
+      { topic: TOPIC, key: "k1", parts: null, reason: "resync" },
+      { topic: TOPIC, key: "k2", parts: null, reason: "resync" },
       { topic: TOPIC, key: "k1", parts: ["transcript"], reason: "frame" },
       { topic: TOPIC, key: "k2", parts: null, reason: "resubscribed" },
     ]);

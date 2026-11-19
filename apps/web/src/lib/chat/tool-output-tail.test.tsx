@@ -28,6 +28,7 @@ import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import {
   ToolOutputTailContext,
+  TOOL_OUTPUT_TAIL_MAX_HELD_BYTES,
   useToolOutputTail,
   type ToolOutputTailSource,
 } from "./tool-output-tail";
@@ -40,10 +41,14 @@ type ReadInput = Parameters<ToolOutputTailSource["read"]>[0];
 
 /** The call's output on the "backend", and every read made of it. */
 function fakeCall(initial: string, complete = false) {
-  const state = { output: initial, complete, status: "ok" as "ok" | "missing" };
+  const state = { output: initial, complete, failNext: false, status: "ok" as "ok" | "missing" };
   const reads: ReadInput[] = [];
   const read = async (input: ReadInput): Promise<NativeAgentToolOutputRead> => {
     reads.push(input);
+    if (state.failNext) {
+      state.failNext = false;
+      throw new Error("Temporary read failure");
+    }
     if (state.status !== "ok") return { status: state.status };
     return {
       status: "ok",
@@ -156,7 +161,26 @@ function setup(initial: string, ui: ReactNode = <Probe />, complete = false) {
   const tail = () => screen.getByTestId("tail");
   /** Run the row's due poll ticks and settle the reads they start. */
   const advance = (ms: number) => act(async () => void (await clock.advanceAsync(ms)));
-  return { call, client, clock, view, sets, lastKeys, connect, frame, text, tail, advance };
+  const rerender = (next: ReactNode) =>
+    view.rerender(
+      <TailProvider read={call.read} timers={clock}>
+        {next}
+      </TailProvider>,
+    );
+  return {
+    call,
+    client,
+    clock,
+    view,
+    sets,
+    lastKeys,
+    connect,
+    frame,
+    text,
+    tail,
+    advance,
+    rerender,
+  };
 }
 
 afterEach(() => {
@@ -235,6 +259,50 @@ describe("useToolOutputTail", () => {
     expect(h.call.reads).toHaveLength(1);
   });
 
+  test("drains a multi-page final burst before releasing the subscription", async () => {
+    const h = setup("start");
+    await waitFor(() => expect(h.text()).toBe("start"));
+    await h.connect();
+    await waitFor(() => expect(h.lastKeys()).toEqual([KEY]));
+    h.call.state.output += "x".repeat(70 * 1024) + "final marker";
+    h.call.state.complete = true;
+    await h.frame();
+    await waitFor(() => expect(h.tail().dataset.complete).toBe("yes"));
+    expect(h.text()).toBe(h.call.state.output);
+    expect(h.call.reads.filter((read) => read.mode === "range").length).toBeGreaterThanOrEqual(3);
+    await waitFor(() => expect(h.lastKeys()).toEqual([]));
+  });
+
+  test("a transient range error preserves the held text and retries on the next poll", async () => {
+    const h = setup("start");
+    await waitFor(() => expect(h.text()).toBe("start"));
+    h.call.state.output += " and recovered";
+    h.call.state.failNext = true;
+    await h.advance(2_000);
+    expect(h.text()).toBe("start");
+    expect(h.tail().dataset.active).toBe("yes");
+    await h.advance(2_000);
+    expect(h.text()).toBe("start and recovered");
+  });
+
+  test("trimming advances the cursor by whole code points", async () => {
+    const h = setup("😀");
+    await waitFor(() => expect(h.text()).toBe("😀"));
+    const text = "a".repeat(16 * 1024);
+    while (h.call.state.output.length < TOOL_OUTPUT_TAIL_MAX_HELD_BYTES - text.length) {
+      h.call.state.output += text;
+      await h.advance(2_000);
+    }
+    h.call.state.output += "b".repeat(
+      TOOL_OUTPUT_TAIL_MAX_HELD_BYTES - h.call.state.output.length - 1,
+    );
+    await h.advance(2_000);
+    expect(h.tail().dataset.earlier).toBe("4");
+    expect(h.text()).toBe(h.call.state.output.slice(2));
+    const before = sliceToolOutput(h.call.state.output, { mode: "before", cursor: 4, limit: 32 });
+    expect(before).toMatchObject({ end: 4, text: "😀" });
+  });
+
   test("an answer the node cannot serve falls back to the row's details", async () => {
     const h = setup("x");
     h.call.state.status = "missing";
@@ -257,6 +325,7 @@ describe("useToolOutputTail", () => {
 
 describe("expanded running tool row", () => {
   type ToolCall = Extract<NativeMessagePart, { type: "tool-invocation" }>;
+  type DetailsLoader = NonNullable<React.ComponentProps<typeof NativeMessage>["loadToolDetails"]>;
   const running: ToolCall = {
     type: "tool-invocation",
     content: "make test",
@@ -268,14 +337,17 @@ describe("expanded running tool row", () => {
     createdAt: "2026-11-19T10:00:00.000Z",
   };
 
-  function row(part: ToolCall) {
+  function row(
+    part: ToolCall,
+    loadToolDetails: DetailsLoader = async (_detailRef: string): Promise<never> => {
+      throw new Error("details must not be read while the tail serves the row");
+    },
+  ) {
     return (
       <TerminalProvider>
         <NativeMessage
           agentExpansionScope="tail-test"
-          loadToolDetails={async () => {
-            throw new Error("details must not be read while the tail serves the row");
-          }}
+          loadToolDetails={loadToolDetails}
           message={{
             id: "m1",
             role: "assistant",
@@ -287,6 +359,68 @@ describe("expanded running tool row", () => {
       </TerminalProvider>
     );
   }
+
+  test("an edit's deferred diff replaces the tail while the row stays expanded", async () => {
+    const editing = {
+      ...running,
+      detailRef: "edit-diff-ref",
+      toolName: "Edit",
+      toolArgs: { file_path: "demo.txt" },
+    };
+    const load: DetailsLoader = async (detailRef) => ({
+      detailRef,
+      toolDiff: { filePath: "demo.txt", diff: "@@ -1 +1 @@\n-old-line\n+new-line" },
+    });
+    const h = setup("editing file", row(editing, load));
+    fireEvent.click(
+      screen.getAllByRole("button").find((button) => button.hasAttribute("aria-expanded"))!,
+    );
+    await screen.findByText("editing file");
+    h.client.respond("changes_measure_legacy_payload", {
+      provenanceLabelKey: "changes.provenance.legacy-payload",
+      additions: { value: 1, quality: "complete", bound: "exact" },
+      deletions: { value: 1, quality: "complete", bound: "exact" },
+      changedFiles: 1,
+      contentLines: null,
+      reasonKeys: [],
+      files: [
+        {
+          pathId: "legacy:demo",
+          oldPathDisplay: "demo.txt",
+          newPathDisplay: "demo.txt",
+          status: "modified",
+          fileKind: "text",
+          bodyAvailability: "available",
+          reasonKey: null,
+          truncated: false,
+          hunks: [
+            {
+              header: "@@ -1 +1 @@",
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              lines: [
+                { type: "remove", text: "old-line", oldLine: 1, newLine: null },
+                { type: "add", text: "new-line", oldLine: null, newLine: 1 },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    h.rerender(
+      row(
+        {
+          ...editing,
+          toolState: "success",
+          toolDiff: { filePath: "demo.txt", deferred: true },
+        },
+        load,
+      ),
+    );
+    await screen.findByText("new-line", { exact: false });
+  });
 
   test("expanding shows the tail with its truncation marker; collapsing stops it", async () => {
     const output = `${"x".repeat(50_000)}\nlast line\n`;

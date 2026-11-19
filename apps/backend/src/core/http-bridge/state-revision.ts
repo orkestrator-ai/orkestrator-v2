@@ -228,7 +228,8 @@ export class HttpBridgeStateReads {
     const stateRevision = isBridgeStateRevision(body.stateRevision)
       ? body.stateRevision
       : undefined;
-    if (stateRevision) {
+    // Pi's state is only reusable once the queue read has also succeeded.
+    if (stateRevision && queue !== null) {
       setBoundedMapEntry(
         this.states,
         sessionId,

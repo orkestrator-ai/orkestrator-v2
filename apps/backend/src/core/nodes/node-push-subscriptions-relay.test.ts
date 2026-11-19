@@ -125,6 +125,38 @@ describe("node push subscriptions over the relay", () => {
     expect(controller.diagnostics()).toEqual([]);
   });
 
+  test("a failed empty set is retried while an ordinary watch holds the same relay stream", async () => {
+    const { command, leaf, leafSets, controller } = await commandWithPushLeaf();
+    const watch = command.portal.events.watch({ nodeId: NODE, prefixes: ["resource-changed"] });
+    const applyToLeaf = leaf.commands.get("push_set_subscriptions")!;
+    const emptyStreamIds: string[] = [];
+    const cleared = Promise.withResolvers<void>();
+    leaf.commands.set("push_set_subscriptions", async (args) => {
+      const set = args as unknown as PushSetSubscriptionsArgs;
+      if (set.subscriptions.length === 0) {
+        emptyStreamIds.push(set.streamId);
+        if (emptyStreamIds.length === 1) throw new Error("Temporary empty set failure");
+        const response = await applyToLeaf(args);
+        cleared.resolve();
+        return response;
+      }
+      return applyToLeaf(args);
+    });
+
+    await controller.apply("window-stream", NODE, [{ topic: TOPIC, key: KEY }]);
+    const upstream = leafSets[0]!.streamId;
+    controller.connectionClosed("window-stream");
+    await cleared.promise;
+    await settle();
+    expect(emptyStreamIds).toEqual([upstream, upstream]);
+    expect(leafSets.at(-1)?.subscriptions).toEqual([]);
+    expect(controller.diagnostics()).toEqual([]);
+    expect(command.portal.events.diagnostics().relays).toEqual([
+      { nodeId: NODE, prefixes: ["resource-changed"] },
+    ]);
+    command.portal.events.unwatch(watch.watchId);
+  });
+
   test("a dropped leaf stream resyncs the window, and its replacement gets the union", async () => {
     const { leaf, leafSets, controller, resynced } = await commandWithPushLeaf();
     await controller.apply("window-stream", NODE, [{ topic: TOPIC, key: KEY }]);

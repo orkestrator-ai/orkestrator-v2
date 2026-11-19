@@ -13,6 +13,8 @@ function fakeBridge(agent: "codex" | "claude" | "pi", options: { revisions: bool
     composerRevision: 1,
     status: { status: "idle", phase: "idle", title: "One" } as Record<string, unknown>,
     approvals: [] as unknown[],
+    queue: { items: [] as unknown[] },
+    queueUnavailable: false,
   };
   const composer = { models: [{ id: "m1", label: "M1" }], modes: [], selectedModelId: "m1" };
   const statePath = agent === "claude" ? "/session/s1" : "/session/s1/status";
@@ -36,7 +38,9 @@ function fakeBridge(agent: "codex" | "claude" | "pi", options: { revisions: bool
       });
     }
     if (url.pathname === "/session/s1/config") return json({ model: "gpt", mode: "build" });
-    if (url.pathname === "/session/s1/queue") return json({ items: [] });
+    if (url.pathname === "/session/s1/queue") {
+      return state.queueUnavailable ? new Response(null, { status: 503 }) : json(state.queue);
+    }
     if (url.pathname === "/session/s1/approvals") return json({ approvals: state.approvals });
     if (url.pathname === "/session/s1/interactions") return json({ interactions: [] });
     if (url.pathname === "/session/s1/questions") return json({ questions: [] });
@@ -128,6 +132,19 @@ describe("HttpBridgeStateReads", () => {
       "/session/s1/interactions",
       "/session/s1/status",
     ]);
+  });
+
+  test("retries Pi's unavailable queue even when its state revision stays the same", async () => {
+    const bridge = fakeBridge("pi", { revisions: true });
+    bridge.state.queue.items = [{ id: "waiting-1" }];
+    bridge.state.queueUnavailable = true;
+    expect((await bridge.round()).snapshot).not.toHaveProperty("providerQueue");
+
+    bridge.state.queueUnavailable = false;
+    const recovered = await bridge.round();
+    expect(recovered.requests).toContain("/session/s1/queue");
+    expect(recovered.snapshot).toMatchObject({ providerQueue: bridge.state.queue });
+    expect((await bridge.round()).requests).not.toContain("/session/s1/queue");
   });
 
   test("Pi's composer is sent only when its own revision moved", async () => {

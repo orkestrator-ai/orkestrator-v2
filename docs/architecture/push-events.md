@@ -96,11 +96,17 @@ With `nodeId` the set is for that node's keys, held by the command node's
 subscription controller ([Relayed nodes](#relayed-nodes)). Each node id is
 its own namespace on the connection with its own `setRevision` order, and so
 is the absent one (this backend's keys), so a window's local set and its
-per-node sets never replace or supersede each other. A connection holds sets
-for at most 64 nodes. A `nodeId` set is answered `refused` / `unavailable`
+per-node sets never replace or supersede each other. A connection holds active sets for at most 64 nodes. Cleared sets free
+capacity. A bounded set of retired revisions and a revision floor fence delayed
+requests after release. A `nodeId` set is answered `refused` / `unavailable`
 by a backend without the controller, to a workspace-grant caller, and while
 the node cannot take it (not connected, no push on its stream, its call
 failed); a client retries that with backoff.
+
+Electron windows on the IPC transport each hold a filtered push stream in the
+main process. Main delivers its offer, disconnects and push frames to the
+owning window. Commands still use the window's bound backend credentials,
+and the ordinary shared relay carries the rest of its events.
 
 ### Frames
 
@@ -501,7 +507,7 @@ whether the subscription is healthy.
 | State | Meaning | Views |
 | --- | --- | --- |
 | `connecting` | No `gateway.connected` seen yet. | Old cadence |
-| `unavailable` | No offer (older backend, Electron main-process stream) or the stream was refused. | Old cadence |
+| `unavailable` | No offer (older backend) or the stream was refused. | Old cadence |
 | `snapshotting` | A set was sent and not answered yet. | Old cadence |
 | `live` | The newest set is answered and no frame was lost. | Recovery poll for `ok` keys |
 | `recovering` | The stream dropped, a `seq` gap or `push.resync` arrived, or the set call failed (retried 1 s, doubling to 30 s). | Old cadence |

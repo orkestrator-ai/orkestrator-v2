@@ -79,8 +79,8 @@ export function DeferredToolMessagePart({
   /*
    * A call expanded while it runs shows a bounded tail of its output that
    * follows the call (`tool-output`), instead of re-reading the whole body
-   * each time it grows. It keeps the tail until it is collapsed; a settled
-   * call expanded later reads its details as before.
+   * each time it grows. An arriving diff or a later expansion of a settled
+   * call uses the detail read.
    */
   const tailSource = useContext(ToolOutputTailContext) ?? null;
   const tailEligible =
@@ -91,7 +91,11 @@ export function DeferredToolMessagePart({
   const [tailLatched, setTailLatched] = useState(false);
   if (isOpen && tailEligible && part.toolState === "pending" && !tailLatched) setTailLatched(true);
   if (!isOpen && tailLatched) setTailLatched(false);
-  const tail = useToolOutputTail(part.toolUseId, part.detailRef, isOpen && tailLatched);
+  const tail = useToolOutputTail(
+    part.toolUseId,
+    part.detailRef,
+    isOpen && tailLatched && tailEligible,
+  );
   const { details, error: loadError } = useToolDetails(part.detailRef, wanted && tail === null);
   // The whole input, when the projection sent large values as previews.
   const { details: argsDetails, error: argsError } = useToolDetails(part.toolArgsDetailRef, wanted);

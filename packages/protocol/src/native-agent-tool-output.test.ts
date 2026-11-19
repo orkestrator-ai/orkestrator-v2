@@ -61,6 +61,19 @@ describe("sliceToolOutput", () => {
     expect(none).toMatchObject({ text: "", start: 21, end: 21 });
   });
 
+  test("retains literal U+FEFF at a range boundary", () => {
+    const output = "first\ufeffsecond";
+    const first = sliceToolOutput(output, { mode: "range", cursor: 0, limit: 5 });
+    const next = sliceToolOutput(output, {
+      mode: "range",
+      cursor: first.end,
+      anchor: first.endAnchor,
+      limit: 64,
+    });
+    expect(first.text + next.text).toBe(output);
+    expect(next.end).toBe(bytes(output));
+  });
+
   test("a rewritten output answers the tail with reset", () => {
     const first = sliceToolOutput("abcdef", { mode: "tail", limit: 64 });
     const rewritten = sliceToolOutput("xyzdefghi", {

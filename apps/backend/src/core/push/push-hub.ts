@@ -166,6 +166,8 @@ interface Connection {
   pendingResync: { reason: PushResyncPayload["reason"]; topics: Set<string> } | null;
   /** Per relayed node: the newest applied `setRevision` (design D10). */
   nodeRevisions: Map<string, number>;
+  retiredNodeRevisions: Map<string, number>;
+  retiredNodeFloor: number;
   /** Relayed nodes owed a `node-reset` resync, written before any change. */
   pendingNodeResyncs: Set<string>;
   /** When each subscription last went out in a frame; bounded by the set. */
@@ -294,6 +296,8 @@ export class PushHub {
       pendingBytes: 0,
       pendingResync: null,
       nodeRevisions: new Map(),
+      retiredNodeRevisions: new Map(),
+      retiredNodeFloor: -1,
       pendingNodeResyncs: new Set(),
       lastSentAt: new Map(),
       flushTimer: null,
@@ -567,20 +571,16 @@ export class PushHub {
   ): Promise<PushSetSubscriptionsResult> {
     const nodes = this.nodeSubscriptions;
     const nodeId = args.nodeId;
-    const held = nodeId === undefined ? undefined : connection.nodeRevisions.get(nodeId);
-    if (
-      !nodes ||
-      !isPushNodeId(nodeId) ||
-      (held === undefined && connection.nodeRevisions.size >= PUSH_MAX_NODE_NAMESPACES)
-    ) {
+    if (!nodes || !isPushNodeId(nodeId)) {
       this.counters.setRefusals += 1;
       return { status: "refused", reason: "unavailable" };
     }
-    if (held !== undefined && args.setRevision <= held) {
+    const wasActive = connection.nodeRevisions.has(nodeId);
+    const held = this.nodeRevision(connection, nodeId);
+    if (args.setRevision <= held) {
       this.counters.setSuperseded += 1;
       return { status: "superseded", setRevision: held };
     }
-    connection.nodeRevisions.set(nodeId, args.setRevision);
 
     const answers: PushSubscriptionAnswer[] = [];
     const accepted = new Map<string, PushSubscriptionRequest>();
@@ -615,6 +615,19 @@ export class PushHub {
       topics.add(topic);
       accepted.set(id, { topic, key });
     }
+    if (accepted.size > 0) {
+      if (
+        !connection.nodeRevisions.has(nodeId) &&
+        connection.nodeRevisions.size >= PUSH_MAX_NODE_NAMESPACES
+      ) {
+        this.counters.setRefusals += 1;
+        return { status: "refused", reason: "unavailable" };
+      }
+      connection.retiredNodeRevisions.delete(nodeId);
+      connection.nodeRevisions.set(nodeId, args.setRevision);
+    } else {
+      this.retireNodeNamespace(connection, nodeId, args.setRevision);
+    }
     const kept = new Set(
       Array.from(accepted.values(), ({ topic, key }) => nodeSubscriptionId(nodeId, topic, key)),
     );
@@ -632,12 +645,20 @@ export class PushHub {
     const seqBase = connection.seq;
     const leafAnswers = await answered.catch(() => null);
     if (connection.closed) return { status: "refused", reason: "stream-unknown" };
-    const current = connection.nodeRevisions.get(nodeId) ?? -1;
+    const current = this.nodeRevision(connection, nodeId);
     if (current !== args.setRevision) {
       this.counters.setSuperseded += 1;
       return { status: "superseded", setRevision: current };
     }
     if (leafAnswers === null) {
+      if (!wasActive && accepted.size > 0) {
+        this.retireNodeNamespace(connection, nodeId, args.setRevision);
+        try {
+          void nodes.apply(connection.streamId, nodeId, []).catch(() => null);
+        } catch (error) {
+          log.warn("node-subscriptions.apply-failed", { error: formatLogError(error) });
+        }
+      }
       this.counters.setRefusals += 1;
       return { status: "refused", reason: "unavailable" };
     }
@@ -647,7 +668,33 @@ export class PushHub {
       }
       answers.push(answer);
     }
+    if (accepted.size > 0 && !leafAnswers.some((entry) => entry.status === "ok")) {
+      this.retireNodeNamespace(connection, nodeId, args.setRevision);
+    }
     return { status: "applied", setRevision: args.setRevision, seqBase, subscriptions: answers };
+  }
+
+  private nodeRevision(connection: Connection, nodeId: string): number {
+    return (
+      connection.nodeRevisions.get(nodeId) ??
+      connection.retiredNodeRevisions.get(nodeId) ??
+      connection.retiredNodeFloor
+    );
+  }
+
+  private retireNodeNamespace(connection: Connection, nodeId: string, revision: number): void {
+    connection.nodeRevisions.delete(nodeId);
+    connection.pendingNodeResyncs.delete(nodeId);
+    this.dropNodePending(connection, nodeId, null);
+    connection.retiredNodeRevisions.delete(nodeId);
+    connection.retiredNodeRevisions.set(nodeId, revision);
+    if (connection.retiredNodeRevisions.size <= PUSH_MAX_NODE_NAMESPACES) return;
+    const oldest = connection.retiredNodeRevisions.entries().next().value;
+    if (!oldest) return;
+    connection.retiredNodeRevisions.delete(oldest[0]);
+    // A forgotten namespace still fences old requests. A client opening an
+    // unrelated namespace below this floor can advance from "superseded".
+    connection.retiredNodeFloor = Math.max(connection.retiredNodeFloor, oldest[1]);
   }
 
   /** Drops `nodeId`'s pending changes and throttle marks, except the ids in `keep`. */

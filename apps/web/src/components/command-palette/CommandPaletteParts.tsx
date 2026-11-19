@@ -105,6 +105,7 @@ export function CommandRow({
   const { command, target, availability } = result;
   const reasonId = useId();
   const reason = unavailableText(availability);
+  const recovery = availability.available ? undefined : availability.nextStep;
   const shortcut = useMemo(() => {
     if (!command.shortcut) return null;
     const platform = detectShortcutPlatform();
@@ -121,8 +122,10 @@ export function CommandRow({
       data-testid={`command-palette-item-${command.id}`}
       data-available={availability.available ? "true" : "false"}
       aria-selected={isActive}
-      aria-disabled={availability.available ? undefined : true}
-      aria-label={commandAccessibleLabel(command, target)}
+      aria-disabled={availability.available || recovery ? undefined : true}
+      aria-label={[commandAccessibleLabel(command, target), recovery?.label]
+        .filter(Boolean)
+        .join(", ")}
       aria-describedby={reason ? reasonId : undefined}
       onMouseEnter={onHighlight}
       onClick={() => onSelect(result)}
@@ -132,9 +135,12 @@ export function CommandRow({
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm">{command.label}</span>
         {reason ? (
-          <span id={reasonId} className="truncate text-[11px] text-amber-400/90">
+          <span id={reasonId} className="break-words text-[11px] text-amber-400/90">
             {reason}
           </span>
+        ) : null}
+        {targetText ? (
+          <span className="break-words text-[11px] text-zinc-400 sm:hidden">{targetText}</span>
         ) : null}
       </span>
       {targetText ? (
@@ -248,7 +254,8 @@ export function PaletteContextBar({
           ? "not yet loaded"
           : null),
   ].filter((part): part is string => Boolean(part));
-  const machineName = context.machine?.name ?? "This machine";
+  const machineName =
+    context.machine?.name ?? (context.machineMissing ? "Machine unavailable" : "This machine");
   return (
     <div
       data-testid="command-palette-context"
@@ -314,7 +321,7 @@ export function CommandConfirmPanel({
           <>
             <dt className="text-zinc-500">Environment</dt>
             <dd
-              className="min-w-0 truncate text-zinc-200"
+              className="min-w-0 break-words text-zinc-200"
               data-testid="command-palette-confirm-environment"
             >
               {target.environment.name}
@@ -324,12 +331,12 @@ export function CommandConfirmPanel({
         {target.project ? (
           <>
             <dt className="text-zinc-500">Project</dt>
-            <dd className="min-w-0 truncate text-zinc-200">{target.project.name}</dd>
+            <dd className="min-w-0 break-words text-zinc-200">{target.project.name}</dd>
           </>
         ) : null}
         <dt className="text-zinc-500">Machine</dt>
         <dd
-          className="min-w-0 truncate text-zinc-200"
+          className="min-w-0 break-words text-zinc-200"
           data-testid="command-palette-confirm-machine"
         >
           {describeTargetMachine(target)}

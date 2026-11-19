@@ -789,10 +789,9 @@ export function HierarchicalSidebar() {
     () => ({
       startEnvironment,
       stopEnvironment,
-      restartEnvironment,
       onAddProject: () => setShowAddProjectDialog(true),
     }),
-    [restartEnvironment, startEnvironment, stopEnvironment],
+    [startEnvironment, stopEnvironment],
   );
 
   const selection = useSelectedEnvironmentActions({

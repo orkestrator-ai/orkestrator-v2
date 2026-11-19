@@ -1105,7 +1105,7 @@ tabs around these results ([command-palette.md](command-palette.md)).
   A node that is not shown does not change recency.
   The node's older `recentProjectIds` follow as a fallback. Nothing is written to the window's
   workspace stores, and no remote ID is resolved against them.
-- **Filters.** Tab and Shift+Tab cycle All / Projects / Environments (then
+- **Filters.** Alt+Down and Alt+Up cycle All / Projects / Environments (then
   the palette's Actions / Settings / History) over every machine. The Filter menu adds a **Machine** group (shown when other
   machines exist): All machines (default), This machine, or one machine, each
   marked offline/stale/loading when it is. Both reset when the dialog closes.

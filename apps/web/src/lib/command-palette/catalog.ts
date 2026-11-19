@@ -21,7 +21,11 @@ import {
   type CommandDescriptor,
   type PaletteContext,
 } from "./model";
-import { GLOBAL_SETTINGS_CATALOG, isGlobalSettingsSectionEnabled } from "@/lib/settings-catalog";
+import {
+  GLOBAL_SETTINGS_CATALOG,
+  isCommandNodeSettingsSection,
+  isGlobalSettingsSectionEnabled,
+} from "@/lib/settings-catalog";
 import { GLOBAL_SETTINGS_SECTIONS } from "@/lib/settings-navigation";
 
 const isLocalEnvironment = (context: PaletteContext) => context.environment?.isLocal === true;
@@ -59,13 +63,24 @@ const ENVIRONMENT_COMMANDS: readonly CommandDescriptor[] = [
     suggested: true,
     availability: (context) =>
       context.selectionCurrent
-        ? AVAILABLE
+        ? context.agentTabBlock
+          ? {
+              available: false,
+              reason: {
+                setup: "Environment setup is still running",
+                limit: "Close a tab before creating another",
+                unavailable: "The workspace is not ready to create tabs",
+              }[context.agentTabBlock],
+              code: context.agentTabBlock === "setup" ? "transitioning" : "handler-missing",
+            }
+          : AVAILABLE
         : {
             available: false,
             reason: "The window now shows another environment",
             code: "not-shown",
             nextStep: { kind: "refresh-context", label: "Use the environment now shown" },
           },
+    movesFocus: true,
     shortcut: "new-agent-tab",
     run: (_target, runtime) => runtime.requestAppShortcut("new-agent-tab"),
   },
@@ -82,14 +97,14 @@ const ENVIRONMENT_COMMANDS: readonly CommandDescriptor[] = [
     hidden: (context) =>
       isLocalEnvironment(context) || context.environment?.model.isRunning === true,
     availability: (context) =>
-      !context.handlers.environmentPower
+      !context.handlers.environmentPower && !context.environment?.remote
         ? {
             available: false,
             reason: "Starting is not available from this view",
             code: "handler-missing",
           }
         : context.environment
-          ? environmentPowerAvailability(context.environment, "power")
+          ? environmentPowerAvailability(context.environment, "start")
           : AVAILABLE,
     run: (target, runtime) => runtime.environmentPower("start", target),
   },
@@ -106,14 +121,14 @@ const ENVIRONMENT_COMMANDS: readonly CommandDescriptor[] = [
       isLocalEnvironment(context) ||
       (context.environment !== null && !context.environment.model.isRunning),
     availability: (context) =>
-      !context.handlers.environmentPower
+      !context.handlers.environmentPower && !context.environment?.remote
         ? {
             available: false,
             reason: "Stopping is not available from this view",
             code: "handler-missing",
           }
         : context.environment
-          ? environmentPowerAvailability(context.environment, "power")
+          ? environmentPowerAvailability(context.environment, "stop")
           : AVAILABLE,
     run: (target, runtime) => runtime.environmentPower("stop", target),
   },
@@ -122,21 +137,21 @@ const ENVIRONMENT_COMMANDS: readonly CommandDescriptor[] = [
     label: "Restart environment",
     aliases: ["restart container", "reboot", "reload"],
     group: "actions",
-    effect: "mutation",
+    effect: "read",
     requires: "environment",
-    confirm: { title: "Restart this environment?", verb: "Restart" },
     hidden: isLocalEnvironment,
-    availability: (context) =>
-      !context.handlers.environmentPower
-        ? {
+    availability: (context) => {
+      const power =
+        context.environment && environmentPowerAvailability(context.environment, "restart");
+      return power && !power.available
+        ? power
+        : {
             available: false,
-            reason: "Restarting is not available from this view",
+            reason: "Restart requires a durable operation on the environment’s machine",
             code: "handler-missing",
-          }
-        : context.environment
-          ? environmentPowerAvailability(context.environment, "restart")
-          : AVAILABLE,
-    run: (target, runtime) => runtime.environmentPower("restart", target),
+          };
+    },
+    run: () => undefined,
   },
   {
     id: "environment.rebuild",
@@ -217,6 +232,7 @@ const PROJECT_COMMANDS: readonly CommandDescriptor[] = [
 const WINDOW_COMMANDS: readonly CommandDescriptor[] = [
   {
     id: "app.add-project",
+    movesFocus: true,
     label: "Add project",
     aliases: ["new project", "clone", "repository", "import"],
     group: "actions",
@@ -244,6 +260,7 @@ const WINDOW_COMMANDS: readonly CommandDescriptor[] = [
   },
   {
     id: "app.sidebar-grouping",
+    movesFocus: false,
     label: "Change sidebar grouping",
     aliases: ["group by", "sidebar view", "activity", "machines view"],
     group: "actions",
@@ -315,15 +332,17 @@ const SCOPED_SETTINGS: readonly CommandDescriptor[] = [
 const GLOBAL_SETTINGS: readonly CommandDescriptor[] = GLOBAL_SETTINGS_SECTIONS.map(
   (section): CommandDescriptor => {
     const entry = GLOBAL_SETTINGS_CATALOG[section];
+    const commandNode = isCommandNodeSettingsSection(section);
     return {
       id: `settings.${section}`,
       label: entry.label,
       aliases: ["settings", ...entry.aliases],
       group: "settings",
       effect: "navigation",
-      requires: "window",
+      requires: commandNode ? "window" : "machine",
       hidden: (context) => !isGlobalSettingsSectionEnabled(section, context.settingsFlags),
-      run: (_target, runtime) => runtime.openGlobalSettings(section),
+      run: (target, runtime) =>
+        runtime.openGlobalSettings(section, commandNode ? undefined : target.machine),
     };
   },
 );

@@ -76,6 +76,8 @@ export interface PaletteContext {
   /** The frozen selection's machine; null in a single-machine client. */
   machine: PaletteMachine | null;
   selection: PaletteSelection;
+  machineMissing: boolean;
+  agentTabBlock?: "setup" | "limit" | "unavailable";
   project: { id: string; name: string } | null;
   environment: PaletteEnvironment | null;
   /** The frozen selection named a project that no longer resolves. */
@@ -110,12 +112,14 @@ export type UnavailableReasonCode =
   | "no-project"
   | "no-environment"
   | "target-missing"
+  | "target-changed"
   | "target-unknown"
   | "machine-offline"
   | "busy"
   | "transitioning"
   | "docker-unavailable"
   | "not-running"
+  | "already-running"
   | "not-shown"
   | "handler-missing"
   | "nothing-to-clear";
@@ -204,10 +208,10 @@ export interface CommandRuntime {
       createEnvironment?: boolean;
     },
   ) => void;
-  openGlobalSettings: (section: GlobalSettingsSection) => void;
+  openGlobalSettings: (section: GlobalSettingsSection, machine?: PaletteMachine | null) => void;
   requestAppShortcut: (id: AppShortcutId) => void;
   /** Start, stop or restart the target environment through its row's own handler. */
-  environmentPower: (action: "start" | "stop" | "restart", target: CommandTarget) => Promise<void>;
+  environmentPower: (action: "start" | "stop", target: CommandTarget) => Promise<void>;
   addProject: () => void;
   copyText: (text: string, successMessage: string) => void;
   clearRecentCommands: () => void;
@@ -223,7 +227,9 @@ export interface CommandDescriptor {
   group: Exclude<PaletteGroup, "destinations" | "history">;
   effect: CommandEffect;
   /** What the command needs from the context, and so what its target names. */
-  requires: "window" | "project" | "environment";
+  requires: "window" | "machine" | "project" | "environment";
+  /** Activation hands focus to a dialog or workspace. */
+  movesFocus?: boolean;
   /**
    * The command writes to its machine or opens a dialog that does, so it
    * needs a live machine (the rule the sidebar menu applies to Settings).
@@ -250,7 +256,7 @@ export function commandTarget(command: CommandDescriptor, context: PaletteContex
   }
   return {
     machine: context.machine,
-    project: context.project,
+    project: command.requires === "machine" ? null : context.project,
     environment:
       command.requires === "environment" && context.environment
         ? {
@@ -278,6 +284,14 @@ export function commandAvailability(
   command: CommandDescriptor,
   context: PaletteContext,
 ): CommandAvailability {
+  if (command.requires === "machine" && context.machineMissing) {
+    return {
+      available: false,
+      reason: "Its machine is no longer available",
+      code: "target-unknown",
+      nextStep: { kind: "refresh-context", label: "Use the machine now shown" },
+    };
+  }
   const needsEnvironment = command.requires === "environment" && !context.environment;
   const needsProject = command.requires === "project" && !context.project;
   if ((needsEnvironment || needsProject) && context.targetUnknown) {
@@ -349,13 +363,25 @@ export function commandAvailability(
  */
 export function environmentPowerAvailability(
   environment: PaletteEnvironment,
-  action: "power" | "restart",
+  action: "start" | "stop" | "restart",
 ): CommandAvailability {
   const disabled =
-    action === "power"
-      ? environment.model.menu.powerDisabled
-      : environment.model.menu.restartDisabled;
-  if (!disabled) return AVAILABLE;
+    action === "restart"
+      ? environment.model.menu.restartDisabled
+      : environment.model.menu.powerDisabled;
+  if (!disabled) {
+    if (action === "start" && environment.model.isRunning) {
+      return {
+        available: false,
+        reason: "The environment is already running",
+        code: "already-running",
+      };
+    }
+    if (action === "stop" && !environment.model.isRunning) {
+      return { available: false, reason: "The environment is not running", code: "not-running" };
+    }
+    return AVAILABLE;
+  }
   const { facts, model } = environment;
   const machineName = facts.machine?.name ?? "this machine";
   if (!facts.writable) {

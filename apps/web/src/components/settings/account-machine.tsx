@@ -80,13 +80,15 @@ export function useResolvedAccountMachine(): {
     }));
     // The command node leads; the others keep the sidebar's order.
     options.sort((a, b) => Number(a.nodeId !== null) - Number(b.nodeId !== null));
-    if (!enabled || options.length < 2) return { machine: null, name: null, options: [] };
+    if (!enabled || options.length < 2) {
+      return { machine: chosen ?? null, name: null, options: [] };
+    }
     const wanted = chosen !== undefined ? chosen : onScreen === selfId ? null : onScreen;
     const selected =
       options.find((option) => option.nodeId === wanted) ?? options.find((o) => !o.nodeId);
     return {
-      machine: selected?.nodeId ?? null,
-      name: selected?.name ?? null,
+      machine: chosen !== undefined ? chosen : (selected?.nodeId ?? null),
+      name: selected?.nodeId === wanted ? (selected?.name ?? null) : null,
       options,
     };
   }, [chosen, enabled, machines, onScreen, portalState.selfId]);

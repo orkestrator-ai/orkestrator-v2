@@ -84,7 +84,7 @@ describe("command catalogue", () => {
 
   test("mutations either ask first or cannot be harmful, and none runs typed text", () => {
     const mutations = COMMAND_CATALOG.filter((entry) => entry.effect === "mutation");
-    for (const id of ["environment.start", "environment.stop", "environment.restart"]) {
+    for (const id of ["environment.start", "environment.stop"]) {
       expect(command(id).confirm).toBeDefined();
     }
     // The unconfirmed mutations are reversible window-local changes or a new tab.
@@ -127,7 +127,6 @@ describe("command catalogue", () => {
       "environment.new-agent-tab": "shortcut:new-agent-tab",
       "environment.start": "power:start",
       "environment.stop": "power:stop",
-      "environment.restart": "power:restart",
       "environment.rebuild": "openEnvironment:environment-rebuild",
       "environment.copy-id": "copy",
       "project.new-environment": "openProject:create",

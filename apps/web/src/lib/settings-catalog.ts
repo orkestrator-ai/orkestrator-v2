@@ -96,3 +96,21 @@ export function isGlobalSettingsSectionEnabled(
   const gate = GLOBAL_SETTINGS_CATALOG[section].gate;
   return gate === undefined || flags[gate] === true;
 }
+
+/**
+ * Sections only the command node has: its machines, the preferences every
+ * machine inherits from it, this client's own web server, and the Control
+ * MCP server, whose credentials never cross to another node.
+ */
+const COMMAND_NODE_SECTIONS: ReadonlySet<GlobalSettingsSection | ""> = new Set([
+  "machines",
+  "review",
+  "messaging",
+  "schedules",
+  "web-client",
+  "mcp",
+]);
+
+export function isCommandNodeSettingsSection(section: GlobalSettingsSection | ""): boolean {
+  return COMMAND_NODE_SECTIONS.has(section);
+}

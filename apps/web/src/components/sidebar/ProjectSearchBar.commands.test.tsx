@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { renderHookInAppCommandScope, renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import { appCommandStore } from "@/test/app-command-store";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
@@ -8,8 +10,13 @@ import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { uiStore } from "@/stores/uiStore";
 import { useCommandPaletteStore } from "@/stores/commandPaletteStore";
-import { useSidebarActionStore } from "@/stores/sidebarActionStore";
+import {
+  claimSidebarAction,
+  releaseSidebarAction,
+  useSidebarActionStore,
+} from "@/stores/sidebarActionStore";
 import type { Environment, Project } from "@/types";
+import { useCommandRuntime } from "@/components/command-palette/useCommandPalette";
 import { ProjectSearchBar } from "./ProjectSearchBar";
 
 const initialMachineView = useMachineViewStore.getState();
@@ -55,18 +62,17 @@ const worktree: Environment = {
   worktreePath: "/tmp/orkestrator-v2",
 };
 
-function renderPalette() {
+function renderPalette(containerState = container) {
   const handlers = {
     startEnvironment: mock(async (_id: string) => undefined),
     stopEnvironment: mock(async (_id: string) => undefined),
-    restartEnvironment: mock(async (_id: string) => undefined),
     onAddProject: mock(() => undefined),
   };
   const onSelectEnvironment = mock((_id: string) => undefined);
   const view = renderInAppCommandScope(
     <ProjectSearchBar
       projects={[project]}
-      environments={[worktree, container]}
+      environments={[worktree, containerState]}
       onSelectProject={() => undefined}
       onSelectEnvironment={onSelectEnvironment}
       commandHandlers={handlers}
@@ -165,7 +171,7 @@ describe("ProjectSearchBar commands", () => {
     const { handlers, view } = renderPalette();
     select("env-container");
     const input = await openPalette();
-    fireEvent.change(input, { target: { value: "restart" } });
+    fireEvent.change(input, { target: { value: "stop" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await screen.findByTestId("command-palette-confirm");
 
@@ -184,7 +190,103 @@ describe("ProjectSearchBar commands", () => {
     const run = screen.getByTestId("command-palette-confirm-run") as HTMLButtonElement;
     expect(run.disabled).toBe(true);
     fireEvent.click(run);
-    expect(handlers.restartEnvironment).not.toHaveBeenCalled();
+    expect(handlers.stopEnvironment).not.toHaveBeenCalled();
+  });
+
+  for (const action of ["start", "stop"] as const) {
+    test(`blocks a stale ${action} confirmation after the run state changes`, async () => {
+      const initial = { ...container, status: action === "start" ? "stopped" : "running" } as const;
+      const { handlers, view } = renderPalette(initial);
+      select(container.id);
+      const input = await openPalette();
+      fireEvent.change(input, { target: { value: action } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await screen.findByTestId("command-palette-confirm");
+      view.rerender(
+        <ProjectSearchBar
+          projects={[project]}
+          environments={[{ ...container, status: action === "start" ? "running" : "stopped" }]}
+          onSelectProject={() => undefined}
+          onSelectEnvironment={() => undefined}
+          commandHandlers={handlers}
+        />,
+      );
+      const run = screen.getByTestId("command-palette-confirm-run") as HTMLButtonElement;
+      expect(run.disabled).toBe(true);
+      fireEvent.click(run);
+      expect(handlers.startEnvironment).not.toHaveBeenCalled();
+      expect(handlers.stopEnvironment).not.toHaveBeenCalled();
+    });
+  }
+
+  test("the runtime refuses local power while another action holds the claim", async () => {
+    const stopEnvironment = mock(async (_id: string) => undefined);
+    const { result } = renderHookInAppCommandScope(() =>
+      useCommandRuntime({ handlers: { stopEnvironment }, machines: [] }),
+    );
+    const target = { machine: null, project: null, environment: container };
+    expect(claimSidebarAction(container.id)).toBe(true);
+    try {
+      await result.current.environmentPower("stop", target);
+      expect(stopEnvironment).not.toHaveBeenCalled();
+    } finally {
+      releaseSidebarAction(container.id);
+    }
+    await result.current.environmentPower("stop", target);
+    expect(stopEnvironment).toHaveBeenCalledTimes(1);
+  });
+
+  test("Restart recovery asks for explicit confirmation of Start", async () => {
+    const { handlers } = renderPalette({ ...container, status: "stopped" });
+    select(container.id);
+    const input = await openPalette();
+    fireEvent.change(input, { target: { value: "restart" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByRole("heading", { name: "Start this environment?" })).toBeTruthy();
+    expect(handlers.startEnvironment).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("command-palette-confirm-run"));
+    await waitFor(() => expect(handlers.startEnvironment).toHaveBeenCalledWith(container.id));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId("project-search-trigger")),
+    );
+  });
+
+  test("New agent tab explains why it is unavailable during setup", async () => {
+    renderPalette({ ...container, setupPhase: "running" });
+    select(container.id);
+    const input = await openPalette();
+    fireEvent.change(input, { target: { value: "new agent tab" } });
+    const row = await screen.findByTestId("command-palette-item-environment.new-agent-tab");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.textContent).toContain("Environment setup is still running");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(document.activeElement).toBe(input);
+  });
+
+  test("New agent tab follows the current layout's tab cap", async () => {
+    renderPalette();
+    select(container.id);
+    const layout = appCommandStore(paneLayoutStore).getState();
+    act(() => {
+      layout.initialize(container.containerId!, container.id);
+      const pane = layout.getActivePaneId(container.id)!;
+      for (let index = 0; index < MAX_TABS_PER_ENVIRONMENT; index++) {
+        layout.addTab(pane, { id: `cap-${index}`, type: "agent-native" }, container.id);
+      }
+    });
+    const input = await openPalette();
+    fireEvent.change(input, { target: { value: "new agent tab" } });
+    const row = await screen.findByTestId("command-palette-item-environment.new-agent-tab");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.textContent).toContain("Close a tab before creating another");
+    act(() => layout.removeTab(layout.getActivePaneId(container.id)!, "cap-0", container.id));
+    expect(row.getAttribute("aria-disabled")).toBeNull();
+    act(() => {
+      const pane = layout.getActivePaneId(container.id)!;
+      for (let index = 1; index < MAX_TABS_PER_ENVIRONMENT; index++) {
+        layout.removeTab(pane, `cap-${index}`, container.id);
+      }
+    });
   });
 
   test("Escape leaves a confirmation, then closes and restores focus", async () => {
@@ -214,12 +316,14 @@ describe("ProjectSearchBar commands", () => {
     fireEvent.change(input, { target: { value: "open changes" } });
 
     const row = await screen.findByTestId("command-palette-item-environment.open-changes");
-    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.getAttribute("aria-disabled")).toBeNull();
+    expect(row.getAttribute("aria-label")).toContain("Choose an environment");
     expect(row.textContent).toContain("Choose an environment first · Choose an environment");
     expect(activeOptionId(input)).toBe("project-search-option-command:environment.open-changes");
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(await screen.findByLabelText("Filter results: Environments")).toBeTruthy();
+    expect(screen.getByRole("option", { name: /build-modal-steps/ })).toBeTruthy();
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(handlers.stopEnvironment).not.toHaveBeenCalled();
   });
@@ -236,6 +340,32 @@ describe("ProjectSearchBar commands", () => {
       expect(requested).toEqual(["network"]);
     } finally {
       off();
+    }
+  });
+
+  test("copy restores the opener and records only the static action and counts", async () => {
+    const logs = captureLogs();
+    try {
+      renderPalette();
+      select(container.id);
+      const input = await openPalette();
+      fireEvent.change(input, { target: { value: "copy environment id" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByTestId("project-search-trigger")),
+      );
+      const record = logs
+        .records()
+        .find((entry) => entry.area === "web.command-palette" && entry.event === "session.closed");
+      expect(record?.fields).toEqual({
+        activated: "environment.copy-id",
+        activatedAfterMs: expect.any(Number),
+        openForMs: expect.any(Number),
+        noResultQueries: expect.any(Number),
+        unavailableChoices: 0,
+      });
+    } finally {
+      logs.restore();
     }
   });
 
@@ -272,17 +402,57 @@ describe("ProjectSearchBar commands", () => {
     expect(onSelectEnvironment).toHaveBeenCalledWith("env-container");
   });
 
-  test("Tab reaches every category and the category filter hides other groups", async () => {
+  test("History matches a non-context project and drops closed tabs on the same query", async () => {
+    const { view, handlers } = renderPalette();
+    const otherProject = { ...project, id: "other-project", name: "distinct-project" };
+    const otherEnvironment = { ...worktree, id: "other-environment", projectId: otherProject.id };
+    view.rerender(
+      <ProjectSearchBar
+        projects={[project, otherProject]}
+        environments={[container, otherEnvironment]}
+        onSelectProject={() => undefined}
+        onSelectEnvironment={() => undefined}
+        commandHandlers={handlers}
+      />,
+    );
+    select(container.id);
+    const layout = appCommandStore(paneLayoutStore).getState();
+    act(() => {
+      layout.initialize(null, otherEnvironment.id);
+      layout.addTab(
+        layout.getActivePaneId(otherEnvironment.id)!,
+        { id: "other-tab", type: "agent-native" },
+        otherEnvironment.id,
+      );
+    });
+    const input = await openPalette();
+    fireEvent.change(input, { target: { value: otherProject.name } });
+    await screen.findByTestId("command-palette-history-other-tab");
+    fireEvent.change(input, { target: { value: "unmatched" } });
+    fireEvent.change(input, { target: { value: otherProject.name } });
+    expectDomAbsent(screen.queryByTestId("command-palette-history-other-tab"), "previous request");
+    await screen.findByTestId("command-palette-history-other-tab");
+    act(() =>
+      layout.removeTab(
+        layout.getActivePaneId(otherEnvironment.id)!,
+        "other-tab",
+        otherEnvironment.id,
+      ),
+    );
+    expectDomAbsent(screen.queryByTestId("command-palette-history-other-tab"), "closed tab");
+  });
+
+  test("Alt+Down reaches every category and the category filter hides other groups", async () => {
     renderPalette();
     select("env-container");
     const input = await openPalette();
-    fireEvent.keyDown(input, { key: "Tab" });
-    fireEvent.keyDown(input, { key: "Tab" });
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     expect(await screen.findByLabelText("Filter results: Actions")).toBeTruthy();
     expectDomAbsent(screen.queryByTestId("project-search-item-project-1"), "project under Actions");
     expect(screen.getByTestId("command-palette-item-app.keyboard-shortcuts")).toBeTruthy();
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     expect(await screen.findByLabelText("Filter results: Settings")).toBeTruthy();
     expect(screen.getByTestId("command-palette-item-settings.environment")).toBeTruthy();
   });

@@ -5,6 +5,8 @@
  * `lib/command-palette/`.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useStore } from "zustand";
+import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import { toast } from "sonner";
 import { createLogger } from "@orkestrator/protocol/logger";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -37,16 +39,16 @@ import type { MachineView } from "@/lib/federation/aggregate";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { noteDrawerNavigation } from "@/lib/mobile-shell";
 import { writeText } from "@/lib/native/clipboard";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useScopesWithCommandFallback, useSignal } from "@/lib/node-scope/providers";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import type { WindowScope } from "@/lib/node-scope/window-scope";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
-import { useEnvironmentStore } from "@/stores";
+import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
 import { useCommandPaletteStore } from "@/stores/commandPaletteStore";
 import { useConfigStore } from "@/stores/configStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
-import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { getAllLeaves, paneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import {
   claimSidebarAction,
   releaseSidebarAction,
@@ -54,6 +56,7 @@ import {
 } from "@/stores/sidebarActionStore";
 import { isCommandNodeSelection, useWindowSelection } from "@/stores/windowSelectionStore";
 import type { Environment, Project } from "@/types";
+import type { PaneNode, TabInfo } from "@/types/paneLayout";
 
 const log = createLogger("web.command-palette");
 
@@ -61,7 +64,6 @@ const log = createLogger("web.command-palette");
 export interface CommandPaletteHandlers {
   startEnvironment?: (environmentId: string) => Promise<unknown>;
   stopEnvironment?: (environmentId: string) => Promise<unknown>;
-  restartEnvironment?: (environmentId: string) => Promise<unknown>;
   onAddProject?: () => void;
 }
 
@@ -132,9 +134,36 @@ export function useCommandPaletteContext({
     selection.nodeId === null ? null : { ...selection, nodeId: selection.nodeId as BackendId },
   );
 
-  const context = useMemo(
-    () =>
-      buildPaletteContext({
+  const workspaceScope = selection.nodeId ? windowScope.get(selection.nodeId as BackendId) : null;
+  const tabOwner = workspaceScope ?? windowScope.commandScope();
+  const environmentId = selection.environmentId;
+  const tabLayout = useStore(tabOwner.store(paneLayoutStore), (state) =>
+    open && environmentId && (workspaceScope || onWindowMachine)
+      ? state.environments.get(environmentId)
+      : undefined,
+  );
+  const workspaceEnvironment = useStore(tabOwner.store(environmentStore), (state) =>
+    open && environmentId && (workspaceScope || onWindowMachine)
+      ? state.getEnvironmentById(environmentId)
+      : undefined,
+  );
+  const selectedEnvironment =
+    workspaceEnvironment ??
+    (onWindowMachine ? environments.find((env) => env.id === environmentId) : undefined);
+  const agentTabBlock =
+    selectedEnvironment?.setupPhase === "running"
+      ? "setup"
+      : tabLayout &&
+          getAllLeaves(tabLayout.root).reduce((count, leaf) => count + leaf.tabs.length, 0) >=
+            MAX_TABS_PER_ENVIRONMENT
+        ? "limit"
+        : !selectedEnvironment || selectedEnvironment.status !== "running"
+          ? "unavailable"
+          : undefined;
+
+  const context = useMemo<PaletteContext>(
+    () => ({
+      ...buildPaletteContext({
         selection,
         shownSelection: shown,
         machines,
@@ -146,16 +175,17 @@ export function useCommandPaletteContext({
         dockerAvailable,
         requireChecks,
         handlers: {
-          environmentPower: Boolean(
-            handlers.startEnvironment && handlers.stopEnvironment && handlers.restartEnvironment,
-          ),
+          environmentPower: Boolean(handlers.startEnvironment && handlers.stopEnvironment),
           addProject: Boolean(handlers.onAddProject),
         },
         recentCommandCount,
         rememberRecentCommands: rememberRecent,
         settingsFlags: { experimentalScheduling, experimentalSelfImprovement },
       }),
+      agentTabBlock,
+    }),
     [
+      agentTabBlock,
       selection,
       shown,
       machines,
@@ -168,7 +198,6 @@ export function useCommandPaletteContext({
       requireChecks,
       handlers.startEnvironment,
       handlers.stopEnvironment,
-      handlers.restartEnvironment,
       handlers.onAddProject,
       recentCommandCount,
       rememberRecent,
@@ -245,7 +274,11 @@ export function useCommandRuntime({
           title: project.name,
         });
       },
-      openGlobalSettings: (section) => requestGlobalSettings(section),
+      openGlobalSettings: (section, machine) =>
+        requestGlobalSettings(
+          section,
+          machine === undefined ? undefined : machine?.bound ? null : (machine?.backendId ?? null),
+        ),
       requestAppShortcut: (id) => requestAppShortcut(id),
       environmentPower: async (action, target) => {
         const environment = target.environment;
@@ -253,11 +286,15 @@ export function useCommandRuntime({
         const { handlers: current, machines: views } = latest.current;
         if (target.machine && !target.machine.bound) {
           // Another machine's: the row's own path, on the summary read now.
-          const machine = views.find((view) => view.connectionId === target.machine?.connectionId);
+          const machine = views.find(
+            (view) =>
+              view.connectionId === target.machine?.connectionId &&
+              view.backendId === target.machine.backendId,
+          );
           const summary = machine
-            ? Array.from(machine.environmentsByProject.values())
-                .flat()
-                .find((entry) => entry.ref.environmentId === environment.id)
+            ? machine.environmentsByProject
+                .get(environment.projectId)
+                ?.find((entry) => entry.ref.environmentId === environment.id)
             : undefined;
           if (!machine || !summary) {
             toast.error(`Could not reach ${environment.name}`, {
@@ -268,12 +305,7 @@ export function useCommandRuntime({
           await runFederatedEnvironmentPower(portal, machine, summary, action);
           return;
         }
-        const handler =
-          action === "start"
-            ? current.startEnvironment
-            : action === "stop"
-              ? current.stopEnvironment
-              : current.restartEnvironment;
+        const handler = action === "start" ? current.startEnvironment : current.stopEnvironment;
         if (!handler) return;
         // This client runs one action per environment at a time, as bulk actions do.
         if (!claimSidebarAction(environment.id)) return;
@@ -300,7 +332,7 @@ export function useCommandRuntime({
 }
 
 /** Opens a History row's tab on its own machine, as an attention line opens one. */
-export function openHistoryResult(result: HistoryResult): void {
+function openHistoryResult(result: HistoryResult): void {
   const workTarget = {
     type: "worker-tab" as const,
     projectId: result.projectId,
@@ -309,7 +341,6 @@ export function openHistoryResult(result: HistoryResult): void {
   };
   noteDrawerNavigation();
   if (!result.machine || result.machine.bound) {
-    // This window's machine is the command scope's node.
     openCoordinatorWorkTarget(workTarget);
     return;
   }
@@ -322,107 +353,145 @@ export function openHistoryResult(result: HistoryResult): void {
   });
 }
 
-/** The open tabs of the palette's machine, its own environment first. */
-function historySources(
-  windowScope: WindowScope,
-  {
-    environments: local,
-    machines: views,
-    context,
-  }: {
-    environments: readonly Environment[];
-    machines: readonly MachineView[];
-    context: PaletteContext;
-  },
-): HistoryTabSource[] {
-  const machine = context.machine;
-  const scope = machineScope(windowScope, { machine, project: null, environment: null });
-  if (!scope) return [];
-  const layouts = scope.store(paneLayoutStore).getState();
-  const view =
-    machine && !machine.bound
-      ? (views.find((entry) => entry.connectionId === machine.connectionId) ?? null)
-      : null;
-  const describe = (environmentId: string) => {
-    if (view) {
-      const summary = Array.from(view.environmentsByProject.values())
-        .flat()
-        .find((entry) => entry.ref.environmentId === environmentId);
-      if (!summary) return null;
-      const project = view.projects.find((entry) => entry.ref.projectId === summary.projectId);
-      return { name: summary.name, projectId: summary.projectId, projectName: project?.name ?? "" };
-    }
-    const environment = local.find((entry) => entry.id === environmentId);
-    if (!environment) return null;
-    return {
-      name: environment.name,
-      projectId: environment.projectId,
-      projectName: context.project?.id === environment.projectId ? context.project.name : "",
-    };
-  };
-  const first = context.environment?.id;
-  const ids = Array.from(layouts.environments.keys()).sort((left, right) =>
-    left === first ? -1 : right === first ? 1 : 0,
-  );
-  const sources: HistoryTabSource[] = [];
-  for (const environmentId of ids) {
-    const described = describe(environmentId);
-    if (!described) continue;
-    sources.push({
-      environmentId,
-      environmentName: described.name,
-      projectId: described.projectId,
-      projectName: described.projectName,
-      tabs: layouts.getAllTabs(environmentId),
-    });
-  }
-  return sources;
+function* historyTabs(node: PaneNode): IterableIterator<TabInfo> {
+  if (node.kind === "leaf") yield* node.tabs;
+  else for (const child of node.children) yield* historyTabs(child);
 }
 
-/**
- * Searches the open tabs of the palette's machine when History is in scope.
- * Each query is a new generation; an older answer is discarded and its scan
- * aborted, and closing the palette stops the runner.
- */
+function* historySources(
+  layouts: ReadonlyMap<string, EnvironmentPaneState>,
+  first: string | null,
+  metadata: ReadonlyMap<string, { name: string; projectId: string }>,
+  projectNames: ReadonlyMap<string, string>,
+): IterableIterator<HistoryTabSource | null> {
+  function describe(environmentId: string, layout: EnvironmentPaneState) {
+    const environment = metadata.get(environmentId);
+    return environment
+      ? {
+          environmentId,
+          environmentName: environment.name,
+          projectId: environment.projectId,
+          projectName: projectNames.get(environment.projectId) ?? "",
+          tabs: historyTabs(layout.root),
+        }
+      : null;
+  }
+
+  const selected = first ? layouts.get(first) : undefined;
+  if (first && selected) yield describe(first, selected);
+  for (const [id, layout] of layouts) {
+    if (id !== first) yield describe(id, layout);
+  }
+}
+
+/** Search only the frozen owner's layout and invalidate on each change to its inputs. */
 export function useHistorySearch({
   context,
   query,
   enabled,
   environments,
+  projects,
   machines,
 }: {
   context: PaletteContext;
   query: string;
   enabled: boolean;
   environments: readonly Environment[];
+  projects: readonly Project[];
   machines: readonly MachineView[];
-}): { status: PaletteProviderStatus; rows: HistoryResult[] } {
+}): {
+  status: PaletteProviderStatus;
+  rows: HistoryResult[];
+  openResult: (result: HistoryResult) => boolean;
+} {
   const { windowScope } = useScopesWithCommandFallback();
-  const sourcesRef = useRef({ environments, machines, context });
+  useSignal(windowScope.nodeScopes);
+  const { machine, machineMissing } = context;
+  const scope = machineMissing
+    ? null
+    : machineScope(windowScope, { machine, project: null, environment: null });
+  const layoutStore = (scope ?? windowScope.commandScope()).store(paneLayoutStore);
+  const layouts = useStore(layoutStore, (state) => (enabled && scope ? state.environments : null));
+  const view =
+    machine && !machine.bound
+      ? machines.find((entry) => entry.connectionId === machine.connectionId)
+      : undefined;
+  const metadata = useMemo(() => {
+    if (!enabled || !scope) return null;
+    if (view) {
+      const environments = new Map<string, { name: string; projectId: string }>();
+      for (const entries of view.environmentsByProject.values()) {
+        for (const entry of entries) environments.set(entry.ref.environmentId, entry);
+      }
+      return {
+        environments,
+        projects: new Map(view.projects.map((project) => [project.ref.projectId, project.name])),
+      };
+    }
+    return {
+      environments: new Map(environments.map((environment) => [environment.id, environment])),
+      projects: new Map(projects.map((project) => [project.id, project.name])),
+    };
+  }, [enabled, scope, view, environments, projects]);
+  const first = context.environment?.id ?? null;
+  const ownerKey = machine?.connectionId ?? null;
+  // The identity changes even in an A → B → A query sequence or after reopening.
+  const request = useMemo(
+    () => (layouts && metadata ? { query, layouts, first, metadata, ownerKey } : null),
+    [query, layouts, first, metadata, ownerKey],
+  );
+  const machineRef = useRef(machine);
   useEffect(() => {
-    sourcesRef.current = { environments, machines, context };
-  }, [context, environments, machines]);
-  const nodeKey = context.machine && !context.machine.bound ? context.machine.backendId : "this";
+    machineRef.current = machine;
+  }, [machine]);
+  const [state, setState] = useState<{
+    request: typeof request;
+    answer: PaletteProviderState<HistoryResult>;
+  } | null>(null);
 
-  const [state, setState] = useState<PaletteProviderState<HistoryResult> | null>(null);
-  // The key names the machine and the query, so another machine's tabs or
-  // another query is a new request.
-  const key = enabled ? `${nodeKey}\u0000${query}` : null;
   useEffect(() => {
-    // One runner per request: the cleanup aborts it and discards its answer,
-    // so only the latest query's rows are ever reported. The tabs and names
-    // are read when the search runs, from the latest sources.
-    if (key === null) return;
+    if (!request) return;
     const provider = createTabHistoryProvider({
-      machine: () => sourcesRef.current.context.machine,
-      sources: () => historySources(windowScope, sourcesRef.current),
+      machine: () => machineRef.current,
+      sources: () =>
+        historySources(
+          request.layouts,
+          request.first,
+          request.metadata.environments,
+          request.metadata.projects,
+        ),
     });
-    const runner = new PaletteQueryRunner(provider, setState);
-    runner.run(query, key);
+    const runner = new PaletteQueryRunner(provider, (answer) => setState({ request, answer }));
+    runner.run(request.query, request.query);
     return () => runner.dispose();
-  }, [key, query, windowScope]);
+  }, [request]);
 
-  return providerView(state, key);
+  const resultView =
+    enabled && !scope
+      ? { status: "failed" as const, rows: [] }
+      : providerView(state?.request === request ? state.answer : null, request?.query ?? null);
+
+  return {
+    ...resultView,
+    openResult: (result) => {
+      if (!scope || !resultView.rows.includes(result)) return false;
+      const owner = result.machine;
+      if (
+        owner &&
+        !owner.bound &&
+        !machines.some(
+          (view) => view.connectionId === owner.connectionId && view.backendId === owner.backendId,
+        )
+      )
+        return false;
+      if (metadata?.environments.get(result.environmentId)?.projectId !== result.projectId)
+        return false;
+      const pane = layoutStore.getState().findPaneWithTab(result.tabId, result.environmentId);
+      if (!pane?.tabs.some((tab) => tab.id === result.tabId && !tab.embeddedIn)) return false;
+      openHistoryResult(result);
+      return true;
+    },
+  };
 }
 
 export type PaletteActivationKind =
@@ -489,7 +558,7 @@ export function usePaletteMeasurement(open: boolean) {
         if (session.current) session.current.unavailableChoices += 1;
         log.info("command.unavailable", { commandId, reason: code });
       },
-      revalidationFailed: (commandId: string, code: UnavailableReasonCode | "target-changed") => {
+      revalidationFailed: (commandId: string, code: UnavailableReasonCode) => {
         log.warn("command.revalidation-failed", { commandId, reason: code });
       },
     }),

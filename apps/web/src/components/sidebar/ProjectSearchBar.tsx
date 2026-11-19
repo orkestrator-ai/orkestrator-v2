@@ -79,7 +79,6 @@ import {
   paletteOptionId,
 } from "@/components/command-palette/CommandPaletteParts";
 import {
-  openHistoryResult,
   useCommandPaletteContext,
   useCommandRuntime,
   useHistorySearch,
@@ -119,11 +118,14 @@ type PaletteRow =
 interface PendingConfirmation {
   command: CommandDescriptor;
   target: CommandTarget;
+  status: string | undefined;
+  statusChanged: boolean;
 }
 
 function sameTarget(a: CommandTarget, b: CommandTarget): boolean {
   return (
     (a.machine?.connectionId ?? null) === (b.machine?.connectionId ?? null) &&
+    (a.machine?.backendId ?? null) === (b.machine?.backendId ?? null) &&
     (a.project?.id ?? null) === (b.project?.id ?? null) &&
     (a.environment?.id ?? null) === (b.environment?.id ?? null)
   );
@@ -348,7 +350,7 @@ export function ProjectSearchBar({
   /** Where focus was when the palette opened; dismissing returns it there. */
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   /** The palette closed because a result ran: the destination takes focus. */
-  const closedByActivationRef = useRef(false);
+  const destinationTakesFocusRef = useRef(false);
 
   const recentProjectIds = useUIStore((state) => state.recentProjectIds);
   const recentKeys = useMachineViewStore((state) => state.recentKeys);
@@ -446,6 +448,10 @@ export function ProjectSearchBar({
     handlers: commandHandlers,
     requireChecks,
   });
+  const powerStatus = context.environment?.facts.status;
+  if (confirmation && !confirmation.statusChanged && powerStatus !== confirmation.status) {
+    setConfirmation({ ...confirmation, statusChanged: true });
+  }
   const runtime = useCommandRuntime({ handlers: commandHandlers, machines: paletteMachines });
   const measurement = usePaletteMeasurement(open);
   const hasQuery = parseProjectSearchQuery(query).length > 0;
@@ -470,6 +476,7 @@ export function ProjectSearchBar({
     query,
     enabled: historyEnabled,
     environments: allEnvironments,
+    projects,
     machines: paletteMachines,
   });
   const historyRows = useMemo(
@@ -514,7 +521,7 @@ export function ProjectSearchBar({
   const rememberFocus = () => {
     const active = document.activeElement;
     restoreFocusRef.current = active instanceof HTMLElement ? active : null;
-    closedByActivationRef.current = false;
+    destinationTakesFocusRef.current = false;
   };
   const openSearch = () => {
     if (open) return;
@@ -546,7 +553,7 @@ export function ProjectSearchBar({
         if (!openRef.current) {
           const active = document.activeElement;
           restoreFocusRef.current = active instanceof HTMLElement ? active : null;
-          closedByActivationRef.current = false;
+          destinationTakesFocusRef.current = false;
           setNow(new Date());
         }
         openRef.current = !openRef.current;
@@ -610,8 +617,8 @@ export function ProjectSearchBar({
 
   const expandMachineProject = useExpandMachineProject();
 
-  const closeAfterActivation = () => {
-    closedByActivationRef.current = true;
+  const closeAfterActivation = (movesFocus = true) => {
+    destinationTakesFocusRef.current = movesFocus;
     setOpen(false);
   };
 
@@ -660,7 +667,7 @@ export function ProjectSearchBar({
   const runCommand = (command: CommandDescriptor, target: CommandTarget) => {
     measurement.activated({ kind: "command", commandId: command.id });
     noteCommand(command.id);
-    closeAfterActivation();
+    closeAfterActivation(command.movesFocus ?? command.effect === "navigation");
     // Run once and never retried here: a failure or a lost answer is
     // reported by the handler's owner (a toast, the row's state), and
     // repeating it is the user's call.
@@ -675,6 +682,7 @@ export function ProjectSearchBar({
 
   const followNextStep = (step: CommandNextStep) => {
     if (step.kind === "filter") {
+      setQuery("");
       setFilter(step.filter);
       inputRef.current?.focus();
       return;
@@ -687,9 +695,11 @@ export function ProjectSearchBar({
     const next = commandById(step.commandId);
     if (!next) return;
     const availability = commandAvailability(next, context);
-    // A next step is always a destination; it never runs a change unasked.
-    if (!availability.available || next.effect === "mutation") return;
-    runCommand(next, commandTarget(next, context));
+    if (!availability.available || next.hidden?.(context)) return;
+    const target = commandTarget(next, context);
+    if (next.confirm)
+      setConfirmation({ command: next, target, status: powerStatus, statusChanged: false });
+    else if (next.effect !== "mutation") runCommand(next, target);
   };
 
   const handleCommand = (result: CommandResult) => {
@@ -703,7 +713,7 @@ export function ProjectSearchBar({
     }
     const target = commandTarget(command, context);
     if (command.confirm) {
-      setConfirmation({ command, target });
+      setConfirmation({ command, target, status: powerStatus, statusChanged: false });
       return;
     }
     runCommand(command, target);
@@ -714,6 +724,16 @@ export function ProjectSearchBar({
     if (!confirmation) return null;
     const availability = commandAvailability(confirmation.command, context);
     if (!availability.available) return availability;
+    if (confirmation.statusChanged) {
+      return {
+        available: false,
+        reason: "The environment changed state. Choose the action again to confirm.",
+        code: "target-changed",
+      };
+    }
+    if (confirmation.command.hidden?.(context)) {
+      return { available: false, reason: "This action no longer applies", code: "target-missing" };
+    }
     return sameTarget(commandTarget(confirmation.command, context), confirmation.target)
       ? availability
       : {
@@ -738,8 +758,8 @@ export function ProjectSearchBar({
   }, []);
 
   const handleHistory = (result: HistoryResult) => {
+    if (!history.openResult(result)) return;
     measurement.activated({ kind: "history" });
-    openHistoryResult(result);
     closeAfterActivation();
   };
 
@@ -752,14 +772,12 @@ export function ProjectSearchBar({
   const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
+      if (event.altKey) {
+        setFilter((current) => nextPaletteFilter(current, event.key === "ArrowDown" ? 1 : -1));
+        return;
+      }
       const next = moveActiveRow(rowIds, activeRowId, event.key === "ArrowDown" ? 1 : -1);
       if (next !== null) setChosenRowId(next);
-      return;
-    }
-
-    if (event.key === "Tab") {
-      event.preventDefault();
-      setFilter((current) => nextPaletteFilter(current, event.shiftKey ? -1 : 1));
       return;
     }
 
@@ -888,7 +906,7 @@ export function ProjectSearchBar({
             event.preventDefault();
             const previous = restoreFocusRef.current;
             restoreFocusRef.current = null;
-            if (!closedByActivationRef.current && previous?.isConnected) previous.focus();
+            if (!destinationTakesFocusRef.current && previous?.isConnected) previous.focus();
           }}
         >
           <DialogTitle className="sr-only">Search projects and environments</DialogTitle>
@@ -1107,7 +1125,7 @@ export function ProjectSearchBar({
                 <ShortcutHint keys="Enter" label={activeRow?.kind === "command" ? "Run" : "Open"} />
                 <ShortcutHint keys="Esc" label="Close" />
                 <ShortcutHint keys="↑↓" label="Move" />
-                <ShortcutHint keys="Tab" label="Filter" />
+                <ShortcutHint keys="Alt+↑↓" label="Category" />
               </>
             )}
           </div>

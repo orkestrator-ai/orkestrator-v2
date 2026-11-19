@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { GlobalSettingsHost } from "@/components/layout/GlobalSettingsHost";
+import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
+import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -107,6 +110,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  useGlobalSettingsStore.getState().close();
   portalStore.store.setState(initialPortal);
   appCommandStore(configStore).setState(initialConfig);
   useRemoteWorkspaceStore.setState(initialRemote);
@@ -178,4 +182,41 @@ test("the Self-improvement tab exists only while its experimental switch is on, 
   await waitFor(() =>
     expect(screen.getAllByRole("button", { name: "Self-improvement" }).length).toBeGreaterThan(0),
   );
+});
+
+test("the palette opens Network for its frozen owner after the shown workspace changes", async () => {
+  renderInAppCommandScope(
+    <FederationProvider>
+      <ProjectSearchBar
+        projects={[]}
+        environments={[]}
+        onSelectProject={() => {}}
+        onSelectEnvironment={() => {}}
+      />
+      <GlobalSettingsHost />
+    </FederationProvider>,
+  );
+  act(() => useRemoteWorkspaceStore.getState().open("leaf", {}));
+  fireEvent.click(screen.getByTestId("project-search-trigger"));
+  const input = await screen.findByRole("combobox", { name: "Search projects and environments" });
+  fireEvent.change(input, { target: { value: "allowlist" } });
+  const row = await screen.findByTestId("command-palette-item-settings.network");
+  expect(row.getAttribute("aria-label")).toContain("Leaf");
+  act(() => useRemoteWorkspaceStore.getState().open("other", {}));
+  fireEvent.click(row);
+  await waitFor(() =>
+    expect(screen.getByTestId("settings-scope").textContent).toContain("Machine settings for Leaf"),
+  );
+  expect(
+    workspace.mock.calls.some(
+      ([command, args]) =>
+        command === "invoke_on_node" && args?.nodeId === "leaf" && args?.command === "get_config",
+    ),
+  ).toBe(true);
+  expect(
+    workspace.mock.calls.some(
+      ([command, args]) =>
+        command === "invoke_on_node" && args?.nodeId === "other" && args?.command === "get_config",
+    ),
+  ).toBe(false);
 });

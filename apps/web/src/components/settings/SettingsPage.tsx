@@ -58,7 +58,11 @@ import {
 import { MachineConfigProvider } from "./settings-config";
 import { SettingsMachineStrip } from "./SettingsMachineStrip";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
-import { globalSettingsLabel, isGlobalSettingsSectionEnabled } from "@/lib/settings-catalog";
+import {
+  globalSettingsLabel,
+  isCommandNodeSettingsSection,
+  isGlobalSettingsSectionEnabled,
+} from "@/lib/settings-catalog";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.settings");
@@ -181,20 +185,6 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   },
   { id: "debug", label: globalSettingsLabel("debug"), icon: <Bug className="h-4 w-4" /> },
 ];
-
-/**
- * Sections only the command node has: its machines, the preferences every
- * machine inherits from it, this client's own web server, and the Control
- * MCP server, whose credentials never cross to another node.
- */
-const COMMAND_NODE_SECTIONS: ReadonlySet<GlobalSettingsSection | ""> = new Set([
-  "machines",
-  "review",
-  "messaging",
-  "schedules",
-  "web-client",
-  "mcp",
-]);
 
 interface SettingsPageProps {
   open: boolean;
@@ -343,7 +333,7 @@ export function SettingsPage({
               <SettingsMachineStrip
                 options={resolved.options}
                 selected={resolved.machine}
-                locked={COMMAND_NODE_SECTIONS.has(activeSection)}
+                locked={isCommandNodeSettingsSection(activeSection)}
                 onSelect={choose}
               />
             )
@@ -351,9 +341,16 @@ export function SettingsPage({
       }
     >
       {(activeSection) => {
-        const locked = COMMAND_NODE_SECTIONS.has(activeSection);
+        const locked = isCommandNodeSettingsSection(activeSection);
         const machine = locked ? null : resolved.machine;
         const option = resolved.options.find((candidate) => candidate.nodeId === machine);
+        if (machine && !option) {
+          return (
+            <p className="p-5 text-sm text-muted-foreground" role="status">
+              The selected machine is no longer available.
+            </p>
+          );
+        }
         return (
           <MachineSettings key={machine ?? "command-node"} machine={machine} option={option}>
             <SettingsScopeBanner section={activeSection} machine={option} />

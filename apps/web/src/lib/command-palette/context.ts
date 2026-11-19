@@ -158,6 +158,7 @@ export function buildPaletteContext(sources: PaletteContextSources): PaletteCont
     multiMachine,
     machine: machineView ? paletteMachine(machineView) : null,
     selection,
+    machineMissing: machineGone,
     project,
     environment,
     projectMissing: projectUnresolved && confirmed,

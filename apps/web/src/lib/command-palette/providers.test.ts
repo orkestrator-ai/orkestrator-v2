@@ -127,6 +127,48 @@ describe("tab history provider", () => {
     ).toBe("app.ts");
   });
 
+  test("caps lazy reads even when layouts are empty or tabs are embedded", async () => {
+    let read = 0;
+    const empty = createTabHistoryProvider({
+      machine: () => null,
+      sources: function* () {
+        while (true) {
+          read++;
+          yield null;
+        }
+      },
+      scanLimit: 10,
+    });
+    expect(await empty.search("", new AbortController().signal)).toEqual({
+      rows: [],
+      partial: true,
+    });
+    expect(read).toBe(11);
+
+    const controller = new AbortController();
+    const embedded = createTabHistoryProvider({
+      machine: () => null,
+      sources: () => [
+        {
+          environmentId: "e",
+          environmentName: "worktree",
+          projectId: "p",
+          projectName: "project",
+          tabs: (function* () {
+            for (let index = 0; index < 400; index++) {
+              if (index === 99) queueMicrotask(() => controller.abort());
+              yield tab({ id: String(index), type: "agent-native", embeddedIn: "canvas" });
+            }
+          })(),
+        },
+      ],
+    });
+    await expect(embedded.search("", controller.signal)).rejects.toHaveProperty(
+      "name",
+      "AbortError",
+    );
+  });
+
   test("matches titles and environment names, lists this environment first, and is bounded", async () => {
     const provider = createTabHistoryProvider({
       machine: () => null,

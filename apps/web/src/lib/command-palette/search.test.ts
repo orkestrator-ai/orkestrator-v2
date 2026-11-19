@@ -141,7 +141,7 @@ describe("searchCommands", () => {
 });
 
 describe("palette filters", () => {
-  test("Tab cycles every category and wraps both ways", () => {
+  test("category order wraps both ways", () => {
     expect(nextPaletteFilter("all", 1)).toBe("projects");
     expect(nextPaletteFilter("environments", 1)).toBe("actions");
     expect(nextPaletteFilter("history", 1)).toBe("all");

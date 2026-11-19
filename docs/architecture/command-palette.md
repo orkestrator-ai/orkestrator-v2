@@ -25,7 +25,7 @@ Opening the palette shows a context line, then results in a fixed group order:
 5. **Open tabs** (History): the open conversation, terminal and view tabs on
    the context's machine, searched asynchronously.
 
-Tab and Shift+Tab cycle the category filter (All, Projects, Environments,
+Alt+Down and Alt+Up cycle the category filter (All, Projects, Environments,
 Actions, Settings, History); the Filter menu has the same list plus the
 machine filter, which narrows commands by their target's machine as it
 narrows destinations. An empty query in a command category lists the whole
@@ -65,7 +65,7 @@ which the palette's host builds from the same handlers:
 
 | Commands | Same path as |
 | --- | --- |
-| Start / Stop / Restart environment | The sidebar row's menu: `useEnvironments` handlers for this window's machine, `runFederatedEnvironmentPower` for another machine's (also what `useFederatedEnvironmentActions` calls) |
+| Start / Stop environment | The sidebar row's menu: `useEnvironments` handlers for this window's machine, `runFederatedEnvironmentPower` for another machine's (also what `useFederatedEnvironmentActions` calls) |
 | Environment settings, Rebuild container (keep work) | The row's Settings item: `openMachineWorkspace({ dialog })` |
 | Open changes, Browse files | The Files panel's tabs on the target's node scope |
 | New environment, Repository settings, Open project home / coordinator / Kanban / GitHub | The project's menu and board tabs: `openMachineWorkspace` |
@@ -91,10 +91,10 @@ row's menu makes, built from the row's own fact builders
 (`busy`, `transitioning`, `docker-unavailable`, `not-running`).
 
 An unavailable command stays listed when it matches, with its reason and a
-next step: choose an environment or project (switches the category filter),
+next step: choose an environment or project (clears the query and switches the category filter),
 open Machines or Docker settings, start the environment, or use the
 environment now shown. Enter or a click on such a row follows the next step;
-a next step is never a mutation. Commands that cannot apply at all (Start on
+a power recovery step opens its own confirmation. Commands that cannot apply at all (Start on
 a running container, any container command on a local environment, a Settings
 section whose experimental flag is off) are hidden instead.
 
@@ -134,8 +134,8 @@ backend and their state comes back through the normal snapshots.
 ## Asynchronous results
 
 A provider (`PaletteProvider`) answers a query later. `PaletteQueryRunner`
-runs one request; the History hook makes one runner per (machine, query)
-request and disposes it in the effect cleanup, which aborts the scan and
+runs one request; the History hook makes one runner per query and
+owner snapshot and disposes it in the effect cleanup, which aborts the scan and
 discards any late answer. `providerView` shows `loading` until the answer for
 the current request arrives, so an older query's rows are never shown under a
 newer one. Each provider reports `loading`, `ready`, `partial` (bounded scan)
@@ -150,20 +150,21 @@ runs nothing.
 
 The History provider reads only tab chrome (type, display title, a pull
 request's title, a file's name) from the context machine's pane layouts,
-the context environment first, at most 400 tabs scanned and 20 returned,
+the context environment first, at most 400 layouts and 400 tabs scanned and 20 results returned,
 yielding to input every 100. It never reads transcripts, prompts or file
-contents. Searching message text across past sessions (plan item 11) would be
-another provider behind the same interface.
+contents. The closed-session and message-jump acceptance criterion remains open.
+Plan item 11 needs to supply bounded message search and stable destinations.
 
 ## Keyboard, pointer, touch and focus
 
-Arrow keys move, Enter runs or opens, Tab changes category, Escape backs out.
+Arrow keys move, Enter runs or opens, Alt+Up and Alt+Down change category, and Escape backs out. Tab moves focus
+to controls such as the filter menu and context refresh.
 Every row is a button, so a pointer or touch reaches every command, including
 an unavailable row's next step and the confirmation's buttons. Focus returns
 to where it was when the palette opened (the trigger, a composer, a
-terminal) when it is dismissed; after a result runs, the destination keeps
-focus. Rows show the target chip from the `sm` breakpoint up; the accessible
-name always carries it.
+terminal) when dismissed or after an action without a focus destination.
+Rows show a wrapping target line on narrow screens and a chip from the `sm`
+breakpoint up. The accessible name always carries the target.
 
 ## Recents and privacy
 
@@ -196,3 +197,7 @@ targets are set yet: they wait for a baseline from these entries.
   settings are reachable ("Browser previews").
 - Delete environment: the row's delete dialog carries notices (pull request,
   design) the palette does not reproduce.
+
+Palette Restart stays unavailable until the owning backend can record the full
+operation before stopping the container. On stopped containers its recovery
+opens Start confirmation when Start is available.

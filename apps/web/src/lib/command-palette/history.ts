@@ -27,7 +27,7 @@ export interface HistoryTabSource {
   environmentName: string;
   projectId: string;
   projectName: string;
-  tabs: readonly TabInfo[];
+  tabs: Iterable<TabInfo>;
 }
 
 export interface HistoryResult {
@@ -101,7 +101,7 @@ export function createTabHistoryProvider({
   scanLimit = HISTORY_SCAN_LIMIT,
   resultLimit = HISTORY_RESULT_LIMIT,
 }: {
-  sources: () => readonly HistoryTabSource[];
+  sources: () => Iterable<HistoryTabSource | null>;
   /** The machine the sources are on, read with them. */
   machine: () => PaletteMachine | null;
   scanLimit?: number;
@@ -113,17 +113,24 @@ export function createTabHistoryProvider({
       const owner = machine();
       const rows: HistoryResult[] = [];
       let scanned = 0;
+      let layouts = 0;
       let truncated = false;
+      signal.throwIfAborted();
       outer: for (const source of sources()) {
+        if (++layouts > scanLimit) {
+          truncated = true;
+          break;
+        }
+        if (layouts % HISTORY_CHUNK === 0) await yieldToInput(signal);
+        if (!source) continue;
         for (const tab of source.tabs) {
-          // An embedded tab is shown inside its design canvas, not on its own.
-          if (tab.embeddedIn) continue;
-          if (scanned >= scanLimit) {
+          if (++scanned > scanLimit) {
             truncated = true;
             break outer;
           }
-          scanned += 1;
           if (scanned % HISTORY_CHUNK === 0) await yieldToInput(signal);
+          // Embedded tabs only open inside their design canvas.
+          if (tab.embeddedIn) continue;
           const { title, kind } = paletteTabTitle(tab);
           const score = scoreHaystacks(
             [title, kind, source.environmentName, source.projectName],

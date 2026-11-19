@@ -31,7 +31,11 @@ export function GlobalSettingsHost() {
   const sectionRequest = useGlobalSettingsStore((state) => state.sectionRequest);
 
   useEffect(
-    () => onGlobalSettingsRequest((next) => useGlobalSettingsStore.getState().openSection(next)),
+    () =>
+      onGlobalSettingsRequest((next, machine) => {
+        if (machine !== undefined) useAccountMachineStore.getState().choose(machine);
+        useGlobalSettingsStore.getState().openSection(next);
+      }),
     [],
   );
   useEffect(

@@ -896,6 +896,46 @@ body[data-orkestrator-dev-profile]::before {
 }
 
 /*
+ * A tab whose agent has a turn in flight: a faint wash of the same blue as the
+ * active tab's underline, far weaker than it, breathing slowly. Painted behind
+ * the tab's icon and title (the tab is its own stacking context), so text keeps
+ * its contrast. Opacity is the only animated property, so it stays on the
+ * compositor. Reduced motion keeps the tint and drops the pulse.
+ */
+@keyframes tab-working-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.tab-working-tint {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--color-primary) 11%, transparent);
+  animation: tab-working-pulse 2.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-working-tint {
+    animation: none;
+    opacity: 0.75;
+  }
+}
+
+@media (forced-colors: active) {
+  .tab-working-tint {
+    display: none;
+  }
+}
+
+/*
  * The ring around a working environment's dot: a sweep from a light head through
  * grey to nothing, painted through a ring-shaped mask so the dot inside is left
  * alone. A circle turns as a whole, which the compositor runs without repainting,

@@ -33,6 +33,7 @@ import {
 } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { createSessionKey } from "@/lib/utils";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -74,6 +75,8 @@ interface DraggableTabProps {
   isActive: boolean;
   /** Whether this tab is focused (active tab in the focused pane) */
   isFocused?: boolean;
+  /** The tab's agent has a turn in flight. */
+  isWorking?: boolean;
   onSelect: () => void;
   /** Reload this tab from its authoritative server-side state. */
   onRefresh?: () => void;
@@ -99,6 +102,7 @@ export function DraggableTab({
   index,
   isActive,
   isFocused = false,
+  isWorking: isNativeWorking = false,
   onSelect,
   onRefresh,
   onClose,
@@ -122,6 +126,15 @@ export function DraggableTab({
   const session = Array.from(sessions.values()).find((s) => s.tabId === tab.id);
   const nativeAgentData = getNativeAgentData(tab);
   const owningEnvironmentId = environmentId ?? nativeAgentData?.environmentId;
+  // The tmux chat stays mounted when another tab is selected and rehydrates
+  // from backend status on mount. Subscribe to its busy flag, not its transcript.
+  const tmuxEnvironmentId = tab.claudeTmuxData?.environmentId ?? environmentId;
+  const isTmuxWorking = useClaudeTmuxStore((state) =>
+    tab.type === "claude-tmux" && tmuxEnvironmentId
+      ? state.tabs.get(createClaudeTmuxStateKey(tmuxEnvironmentId, tab.id))?.busy === true
+      : false,
+  );
+  const isWorking = isNativeWorking || isTmuxWorking;
   const tabOrdinal = usePaneLayoutStore((state) => {
     const paneState = owningEnvironmentId ? state.environments.get(owningEnvironmentId) : undefined;
     if (!paneState) return index + 1;
@@ -408,7 +421,7 @@ export function DraggableTab({
       role="tab"
       tabIndex={0}
       aria-selected={isActive}
-      aria-label={isDirty ? `${title}, unsaved changes` : title}
+      aria-label={`${title}${isWorking ? ", working" : ""}${isDirty ? ", unsaved changes" : ""}`}
       aria-haspopup="menu"
       aria-keyshortcuts={canClose ? (isMac ? "Delete Backspace" : "Delete") : undefined}
       // Only the drag instructions: the rest of `attributes` names a button role
@@ -419,6 +432,7 @@ export function DraggableTab({
       onKeyDown={handleKeyDown}
       isActive={isActive}
       isFocused={isFocused}
+      isWorking={isWorking}
       className={cn("cursor-grab active:cursor-grabbing", isDragging && "opacity-50 z-50")}
       onClick={onSelect}
       onMouseEnter={tooltipContent ? tabTooltip.show : undefined}

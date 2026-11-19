@@ -847,3 +847,117 @@ describe("CreateEnvironmentDialog root setup step warning", () => {
     expect(onCreate.mock.calls[0]?.[0].networkAccessMode).toBe("restricted");
   });
 });
+
+describe("CreateEnvironmentDialog remembered Build choice", () => {
+  afterEach(() => {
+    mock.restore();
+  });
+
+  function rememberBuildIntent(lastBuildIntent?: "feature" | "task" | "interactive") {
+    appCommandStore(configStore).setState({
+      config: {
+        ...baseConfig,
+        repositories: {
+          ...baseConfig.repositories,
+          "project-1": {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            ...(lastBuildIntent ? { lastBuildIntent } : {}),
+          },
+        },
+      },
+    });
+  }
+
+  function spyOnPatch() {
+    return spyOn(backend, "patchRepositorySettings").mockImplementation(
+      async () => appCommandStore(configStore).getState().config,
+    );
+  }
+
+  function renderDialog(props: {
+    onCreate?: (options: ClaudeOptions) => Promise<boolean>;
+    onCreateFeatureBuild?: (request: unknown) => Promise<undefined>;
+  }) {
+    renderInAppCommandScope(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => undefined}
+          onCreate={props.onCreate ?? mock(async () => true)}
+          onCreateFeatureBuild={props.onCreateFeatureBuild}
+          projectId="project-1"
+        />
+      </DockerAvailabilityProvider>,
+    );
+  }
+
+  function pressed(name: string): string | null {
+    return screen.getByRole("button", { name }).getAttribute("aria-pressed");
+  }
+
+  test("opens on the choice the project last created with", () => {
+    rememberBuildIntent("interactive");
+    renderDialog({});
+    expect(pressed("Interactive")).toBe("true");
+    expect(pressed("Task")).toBe("false");
+  });
+
+  test("opens on Pipeline when it was last used and this dialog can launch one", () => {
+    rememberBuildIntent("feature");
+    renderDialog({ onCreateFeatureBuild: mock(async () => undefined) });
+    expect(pressed("Pipeline")).toBe("true");
+  });
+
+  test("falls back to Task with nothing remembered or no pipeline launcher", () => {
+    rememberBuildIntent("feature");
+    renderDialog({});
+    expect(pressed("Task")).toBe("true");
+    cleanup();
+    rememberBuildIntent();
+    renderDialog({});
+    expect(pressed("Task")).toBe("true");
+  });
+
+  test("records a changed choice once the environment is created", async () => {
+    rememberBuildIntent("task");
+    const patch = spyOnPatch();
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
+    renderDialog({ onCreate });
+    fireEvent.click(screen.getByRole("button", { name: "Interactive" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ interactionMode: "interactive" });
+    expect(patch).toHaveBeenCalledWith("project-1", { lastBuildIntent: "interactive" }, []);
+  });
+
+  test("records Pipeline after a pipeline launch", async () => {
+    rememberBuildIntent("task");
+    const patch = spyOnPatch();
+    const onCreateFeatureBuild = mock(async (_request: unknown) => undefined);
+    renderDialog({ onCreateFeatureBuild });
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
+    fireEvent.change(screen.getByLabelText(/^Description/), { target: { value: "Remember me" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch).toHaveBeenCalledWith("project-1", { lastBuildIntent: "feature" }, []);
+  });
+
+  test("writes nothing when the choice is unchanged or the create is refused", async () => {
+    rememberBuildIntent("task");
+    const patch = spyOnPatch();
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
+    renderDialog({ onCreate });
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    cleanup();
+
+    const refused = mock(async (_options: ClaudeOptions) => false);
+    renderDialog({ onCreate: refused });
+    fireEvent.click(screen.getByRole("button", { name: "Interactive" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+    await waitFor(() => expect(refused).toHaveBeenCalledTimes(1));
+    await act(async () => undefined);
+    expect(patch).not.toHaveBeenCalled();
+  });
+});

@@ -34,6 +34,7 @@ export function repositorySettingsRevision(config: RepositoryConfig | undefined)
     lastEnvironmentType: _lastEnvironmentType,
     lastEnvironmentAgentSelection: _lastEnvironmentAgentSelection,
     lastBuildNetworkAccessMode: _lastBuildNetworkAccessMode,
+    lastBuildIntent: _lastBuildIntent,
     ...editable
   } = config;
   return digest(editable);

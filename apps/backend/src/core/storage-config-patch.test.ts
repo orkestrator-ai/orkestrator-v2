@@ -224,6 +224,26 @@ describe("patching repository settings", () => {
     });
   });
 
+  test("records the create dialog's Build choice and keeps it through a whole-record save", async () => {
+    await withStorage(async (storage) => {
+      await storage.patchRepositorySettings("p4", { lastBuildIntent: "feature" });
+      await storage.updateRepositorySettings("p4", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        lastBuildIntent: "task",
+      });
+      expect((await storage.loadOwnConfig()).repositories.p4?.lastBuildIntent).toBe("feature");
+
+      await storage.patchRepositorySettings("p4", { lastBuildIntent: "interactive" });
+      expect((await storage.loadOwnConfig()).repositories.p4?.lastBuildIntent).toBe("interactive");
+
+      await expect(
+        storage.patchRepositorySettings("p4", { lastBuildIntent: "later" as never }),
+      ).rejects.toThrow("lastBuildIntent must be feature, task or interactive");
+      expect((await storage.loadOwnConfig()).repositories.p4?.lastBuildIntent).toBe("interactive");
+    });
+  });
+
   test("unsetting a required field falls back to its default", async () => {
     await withStorage(async (storage) => {
       await storage.patchRepositorySettings("p2", { prBaseBranch: "release" });

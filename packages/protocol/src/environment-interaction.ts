@@ -30,6 +30,18 @@ export function isEnvironmentInteractionMode(value: unknown): value is Environme
   return value === "task" || value === "interactive";
 }
 
+/**
+ * The create dialog's three Build choices: `feature` is Pipeline, the others
+ * are a prompt environment's interaction mode. A project remembers the last
+ * one used (`RepositoryConfig.lastBuildIntent`).
+ */
+export const BUILD_INTENTS = ["feature", ...ENVIRONMENT_INTERACTION_MODES] as const;
+export type BuildIntent = (typeof BUILD_INTENTS)[number];
+
+export function isBuildIntent(value: unknown): value is BuildIntent {
+  return value === "feature" || isEnvironmentInteractionMode(value);
+}
+
 export const TASK_INTERACTION_INSTRUCTION =
   "This environment was opened as a task. Complete the request above on your own: do not ask the user questions, ask for confirmation or wait for their input while you work. " +
   "Where something is ambiguous, choose the most reasonable interpretation, state the assumption in your final message and carry on. " +

@@ -103,6 +103,7 @@ import {
   defaultFeatureBuildModels,
   featureBuildIdentity,
   buildIntentInteractionMode,
+  rememberedBuildIntent,
   featureBuildRequest,
   type BuildIntent,
   type FeatureBuildModelState,
@@ -343,6 +344,10 @@ export function CreateEnvironmentDialog({
   const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
   const repoConfig = projectId ? config.repositories[projectId] : undefined;
+  const lastBuildIntent = rememberedBuildIntent(
+    repoConfig?.lastBuildIntent,
+    Boolean(onCreateFeatureBuild),
+  );
 
   const enabledAgentPlatforms = useMemo(
     () =>
@@ -805,6 +810,16 @@ export function CreateEnvironmentDialog({
     };
   }, [catalogRefreshRevision, open, projectId, nodeBackend]);
 
+  // Each opening starts on the Build choice this project last created with.
+  // Declared before the handoff effect, which overrides it with a carried form.
+  /* oxlint-disable react-hooks/exhaustive-deps -- read the remembered choice only when the dialog opens */
+  useEffect(() => {
+    if (!open) return;
+    buildIntentRef.current = lastBuildIntent;
+    setBuildIntent(lastBuildIntent);
+  }, [open]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
+
   // A handoff belongs to this opening. An empty prompt can fall back to the
   // destination's draft, while an empty Feature description stays empty.
   useEffect(() => {
@@ -814,7 +829,8 @@ export function CreateEnvironmentDialog({
     if (!form) return;
     setInitialPrompt(form.feature || form.prompt ? form.prompt : (saved?.prompt ?? ""));
     setEnvironmentName(form.name);
-    const intent = form.feature ? "feature" : (form.interactionMode ?? DEFAULT_PROMPT_INTENT);
+    // A draft that carried no choice keeps the one this opening started on.
+    const intent = form.feature ? "feature" : (form.interactionMode ?? buildIntentRef.current);
     buildIntentRef.current = intent;
     setBuildIntent(intent);
     setFeatureName(form.feature?.name ?? "");
@@ -1542,6 +1558,21 @@ export function CreateEnvironmentDialog({
   const deferredTerminalPrompt =
     buildIntent !== "feature" && terminalAgent && (!launchAgent || !hasOpeningWork);
 
+  // Remember the Build choice for this project's next opening. Best effort:
+  // the environment already exists, so a failed save only loses the default.
+  // The backend announces the config change, and the store resyncs from it.
+  const recordBuildIntent = useCallback(
+    (intent: BuildIntent) => {
+      if (!projectId || repoConfig?.lastBuildIntent === intent) return;
+      Promise.resolve()
+        .then(() => nodeBackend.patchRepositorySettings(projectId, { lastBuildIntent: intent }, []))
+        .catch((error: unknown) =>
+          log.warn("create.build-intent-save-failed", { error: formatLogError(error) }),
+        );
+    },
+    [nodeBackend, projectId, repoConfig?.lastBuildIntent],
+  );
+
   const launchBaseRequest = launchBaseForCreate(launchBase.state);
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -1604,6 +1635,7 @@ export function CreateEnvironmentDialog({
           featureAttemptModelsRef.current = requestModels;
           const started = await onCreateFeatureBuild(request);
           if (started === false) return;
+          recordBuildIntent("feature");
           // A new key only after the request succeeded: a retry of a create
           // whose response was lost has to reuse this one.
           featureRequestIdRef.current = createUuid();
@@ -1642,6 +1674,7 @@ export function CreateEnvironmentDialog({
           portMappings: environmentType === "containerized" ? portMappings : [],
         });
         if (created === false) return;
+        recordBuildIntent(buildIntent);
         // Clear the draft on successful creation and close directly
         // (bypass handleOpenChange which would re-save the draft)
         if (projectId) {
@@ -1693,6 +1726,7 @@ export function CreateEnvironmentDialog({
       validatePortMappings,
       drafts,
       preserveSavedDraft,
+      recordBuildIntent,
     ],
   );
 

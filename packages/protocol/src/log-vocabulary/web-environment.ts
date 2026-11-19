@@ -33,6 +33,8 @@ export const WEB_ENVIRONMENT_LOG_AREAS = defineLogAreas({
         "The create dialog could not read the base branch's tip; the environment resolves its base when it starts.",
       "create.port-mappings-invalid": "Creation was refused: a port is not between 1 and 65535.",
       "create.attachment-read-failed": "A file dropped on the create dialog could not be read.",
+      "create.build-intent-save-failed":
+        "The create dialog could not save the project's last Build choice; the environment was created.",
       "auto-start.failed": "A background start after creating an environment was rejected.",
       "models.pi-seed-failed": "The create dialog could not seed the Pi model catalogue.",
       "models.hydrate-failed":

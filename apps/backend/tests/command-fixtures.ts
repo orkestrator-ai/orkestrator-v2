@@ -607,6 +607,9 @@ export async function createCommandFixtures() {
             ...(current?.lastBuildNetworkAccessMode !== undefined
               ? { lastBuildNetworkAccessMode: current.lastBuildNetworkAccessMode }
               : {}),
+            ...(current?.lastBuildIntent !== undefined
+              ? { lastBuildIntent: current.lastBuildIntent }
+              : {}),
             ...(current?.lastEnvironmentAgentSelection !== undefined
               ? {
                   lastEnvironmentAgentSelection: current.lastEnvironmentAgentSelection,

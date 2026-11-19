@@ -54,6 +54,47 @@ function environment(id: string, projectId: string): Environment {
   };
 }
 
+test("the environment hook forwards the selected worktree base to the API", async () => {
+  const created = environment("env-pinned", "project-1");
+  const create = spyOn(backend, "createEnvironment").mockResolvedValue(created);
+  const base = { branch: "main", commit: "a".repeat(40) };
+  try {
+    const { result } = renderHookInAppCommandScope(() =>
+      useEnvironments(null, { listenForRenameEvents: false }),
+    );
+    await act(async () => {
+      await expect(
+        result.current.createEnvironment(
+          "project-1",
+          "Pinned",
+          undefined,
+          undefined,
+          undefined,
+          "local",
+          undefined,
+          undefined,
+          "/worktrees",
+          base,
+        ),
+      ).resolves.toBe(created);
+    });
+    expect(create).toHaveBeenCalledWith(
+      "project-1",
+      "Pinned",
+      undefined,
+      undefined,
+      undefined,
+      "local",
+      undefined,
+      undefined,
+      "/worktrees",
+      base,
+    );
+  } finally {
+    create.mockRestore();
+  }
+});
+
 describe("cleanupDeletedEnvironmentSubscriptions", () => {
   test("retires the creating window's startup-agent handoff on deletion", () => {
     const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");

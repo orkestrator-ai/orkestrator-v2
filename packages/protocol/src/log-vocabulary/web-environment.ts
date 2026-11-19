@@ -29,6 +29,8 @@ export const WEB_ENVIRONMENT_LOG_AREAS = defineLogAreas({
       "rename.pr-state-cleared": "A rename changed the branch, so stale PR state was cleared.",
       "unread.clear-failed": "An environment's unread work could not be cleared on the backend.",
       "create.failed": "Creating an environment from the dialog failed.",
+      "launch-base.unavailable":
+        "The create dialog could not read the base branch's tip; the environment resolves its base when it starts.",
       "create.port-mappings-invalid": "Creation was refused: a port is not between 1 and 65535.",
       "create.attachment-read-failed": "A file dropped on the create dialog could not be read.",
       "auto-start.failed": "A background start after creating an environment was rejected.",

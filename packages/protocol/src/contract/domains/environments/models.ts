@@ -392,6 +392,9 @@ export const clientEnvironmentFields = {
   /** Last-write-wins timestamp for the aggregate activity snapshot. */
   agentActivityUpdatedAt: optionalString,
   createdFromCommit: optionalString,
+  /** Ordinary worktree launch source. A branch by itself requests resolution at first start. */
+  worktreeBaseBranch: optionalString,
+  worktreeBaseCommit: optionalString,
   /**
    * Where the branch now leaves its target branch, once it has taken in newer
    * target history. Backend-owned (`diff-baseline.ts`); read through

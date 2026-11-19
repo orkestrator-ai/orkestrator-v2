@@ -1,6 +1,13 @@
 import { describe, expect, spyOn, test } from "bun:test";
 
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
+import {
+  baselineTargetBranch,
+  findIntegratedBaseline,
+  localBaselineGit,
+} from "../src/core/diff-baseline";
+import * as remoteGit from "../src/core/git/noninteractive-env";
+import { ProjectGitService } from "../src/core/project-git-service";
 import { createCommandFixtures } from "./command-fixtures";
 
 function renameEntries(logs: LogCapture) {
@@ -46,6 +53,141 @@ function shimTest(name: string, run: () => Promise<void>): void {
 }
 
 describe("Electron backend command registry", () => {
+  shimTest(
+    "a ready Create pin survives persistence and an advance of the default branch",
+    async () => {
+      const checkout = await createGitRepoOnBranch("main");
+      const commit = await gitOutput(checkout, ["rev-parse", "HEAD"]);
+      const { context } = createContext([], {
+        project: { ...(await getLocalProjectForCreate()), gitUrl: checkout, localPath: checkout },
+      });
+      const commands = createCommandRegistry();
+      const created = (await commands.get("create_environment")!(
+        {
+          projectId: "project-1",
+          name: "Pinned before Create",
+          environmentType: "local",
+          worktreeBaseBranch: "main",
+          worktreeBaseCommit: commit,
+        },
+        context,
+      )) as Environment;
+      expect((await context.storage.getEnvironment(created.id))?.worktreeBaseCommit).toBe(commit);
+      await runGit(checkout, ["commit", "--allow-empty", "-m", "Advance main"]);
+      await commands.get("start_environment")!({ environmentId: created.id }, context);
+
+      const running = (await context.storage.getEnvironment(created.id))!;
+      expect(running).toMatchObject({
+        status: "running",
+        createdFromCommit: commit,
+        worktreeBaseBranch: "main",
+      });
+      expect(running.delegationBaseCommit).toBeUndefined();
+      expect(await gitOutput(running.worktreePath!, ["rev-parse", "HEAD"])).toBe(commit);
+    },
+  );
+
+  shimTest(
+    "fast Create shares the dialog fetch, persists its SHA and keeps the PR comparison branch",
+    async () => {
+      const checkout = await createGitRepoOnBranch("main");
+      const remote = await createTempDir("ork-worktree-launch-origin-");
+      await runGit(remote, ["init", "--bare", "-b", "main"]);
+      await runGit(checkout, ["remote", "add", "origin", remote]);
+      await runGit(checkout, ["push", "origin", "main"]);
+      const commit = await gitOutput(checkout, ["rev-parse", "HEAD"]);
+      const repositoryConfig = { defaultBranch: "main", prBaseBranch: "release" };
+      const { context } = createContext([], {
+        project: { ...(await getLocalProjectForCreate()), gitUrl: remote, localPath: checkout },
+        repositoryConfig,
+      });
+      const projectGit = new ProjectGitService(context.storage);
+      context.projectGit = projectGit;
+      const commands = createCommandRegistry();
+      const logs = captureLogs();
+      const allocationDelayMs = 80;
+      const realRun = remoteGit.runRemoteGit;
+      const fetchStarted = Promise.withResolvers<void>();
+      const releaseFetch = Promise.withResolvers<void>();
+      const startRead = Promise.withResolvers<void>();
+      let delayedAllocation = false;
+      const run = spyOn(remoteGit, "runRemoteGit").mockImplementation(
+        async (subcommand, args, options) => {
+          if (subcommand === "fetch") {
+            fetchStarted.resolve();
+            await releaseFetch.promise;
+          } else if (subcommand === "ls-remote" && !delayedAllocation) {
+            delayedAllocation = true;
+            await Bun.sleep(allocationDelayMs);
+          }
+          return realRun(subcommand, args, options);
+        },
+      );
+      const readTip = projectGit.baseBranchTip.bind(projectGit);
+      const read = spyOn(projectGit, "baseBranchTip")
+        .mockImplementationOnce(readTip)
+        .mockImplementationOnce((...args) => {
+          startRead.resolve();
+          return readTip(...args);
+        });
+      let start: Promise<unknown> | undefined;
+      const refresh = projectGit.baseBranchTip("project-1", "main");
+      try {
+        await fetchStarted.promise;
+        const created = (await commands.get("create_environment")?.(
+          {
+            projectId: "project-1",
+            name: "Pinned",
+            environmentType: "local",
+            worktreeBaseBranch: null,
+          },
+          context,
+        )) as Environment;
+        expect(created.worktreeBaseBranch).toBe("main");
+        expect(created.worktreeBaseCommit).toBeUndefined();
+        start = Promise.resolve(
+          commands.get("start_environment")!({ environmentId: created.id }, context),
+        );
+        await startRead.promise;
+        expect((await context.storage.getEnvironment(created.id))?.status).toBe("creating");
+        releaseFetch.resolve();
+        await refresh;
+        await start;
+
+        const running = (await context.storage.getEnvironment(created.id))!;
+        expect(running).toMatchObject({
+          status: "running",
+          createdFromCommit: commit,
+          worktreeBaseCommit: commit,
+        });
+        expect(running.delegationBaseBranch).toBeUndefined();
+        expect(await gitOutput(running.worktreePath!, ["rev-parse", "HEAD"])).toBe(commit);
+        expect(run.mock.calls.filter(([subcommand]) => subcommand === "fetch")).toHaveLength(1);
+        const timing = logs.records().find((record) => record.event === "worktree.created")?.fields;
+        expect(timing?.startPoint).toBe("pinned-commit");
+        expect(
+          Number(timing?.creationToWorktreeReadyMs) - Number(timing?.durationMs),
+        ).toBeGreaterThanOrEqual(allocationDelayMs - 5);
+
+        await runGit(checkout, ["switch", "-c", "release"]);
+        await runGit(checkout, ["commit", "--allow-empty", "-m", "Release update"]);
+        const release = await gitOutput(checkout, ["rev-parse", "HEAD"]);
+        await runGit(running.worktreePath!, ["merge", "--ff-only", "release"]);
+        const target = baselineTargetBranch(running, repositoryConfig);
+        expect(target).toBe("release");
+        expect(
+          await findIntegratedBaseline(localBaselineGit(running.worktreePath!), commit, target!),
+        ).toEqual({ createdFromCommit: commit, commit: release });
+      } finally {
+        releaseFetch.resolve();
+        await Promise.allSettled([refresh, start]);
+        read.mockRestore();
+        run.mockRestore();
+        logs.restore();
+      }
+    },
+  );
+
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing

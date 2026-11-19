@@ -176,8 +176,11 @@ export const ProjectBaseBranchTipSchema = openRecord({
   commit: NullableString,
   ref: Schema.optional(NullableString),
   fetched: optionalBoolean,
+  /** ISO time of the last successful refresh of `origin/<branch>`; absent when unknown. */
+  fetchedAt: optionalString,
   fetchError: optionalString,
   unavailableReason: optionalString,
+  launchEligible: optionalBoolean,
 });
 
 /** `ProjectBaseContainment`: `{ contained: true }` or `{ contained: false, reason }`. */

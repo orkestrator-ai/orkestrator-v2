@@ -141,10 +141,11 @@ function stageAndPublish(resolved, directory, target, payload) {
     existing = openCurrent(target);
     if (existing) {
       const { current, fd } = existing;
-      // Linux exposes the open inode even if the pathname is exchanged.
-      const source = "/proc/" + process.pid + "/fd/" + fd;
+      // Pin both sides of the metadata copy to their open Linux inodes.
+      const descriptors = "/proc/" + process.pid + "/fd/";
       const copied = spawnSync("cp", [
-        "--dereference", "--attributes-only", "--preserve=mode,ownership,xattr", "--", source, temp,
+        "--dereference", "--attributes-only", "--preserve=mode,ownership,xattr",
+        "--", descriptors + fd, descriptors + staged,
       ], { stdio: "ignore", timeout: 15000 });
       const metadata = fs.fstatSync(staged);
       if (copied.status !== 0 || metadata.uid !== current.uid || metadata.gid !== current.gid ||

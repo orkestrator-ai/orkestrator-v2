@@ -62,12 +62,14 @@ export function DeferredToolMessagePart({
     toolExpansionKey(part, partKey, expansionScope, transcriptScope),
   );
   // A mail call is drawn as its message, and a read's message is in the result.
-  const eagerDetails = isPlanTool(part.toolName) || agentMailToolCall(part) !== null;
+  const isPlan = isPlanTool(part.toolName);
+  const eagerDetails = isPlan || agentMailToolCall(part) !== null;
   const wanted = isOpen || eagerDetails;
   const { details, error: loadError } = useToolDetails(part.detailRef, wanted);
   // The whole input, when the projection sent large values as previews.
-  const { details: argsDetails } = useToolDetails(part.toolArgsDetailRef, wanted);
+  const { details: argsDetails, error: argsError } = useToolDetails(part.toolArgsDetailRef, wanted);
   const outputPending = part.detailRef !== undefined && !details;
+  const planArgsPending = isPlan && part.toolArgsDetailRef !== undefined && !argsDetails;
 
   /*
    * The collapsed row shows the part's own metadata and nothing else. Earlier
@@ -85,7 +87,10 @@ export function DeferredToolMessagePart({
     ...(details?.toolOutput !== undefined ? { toolOutput: details.toolOutput } : {}),
     ...(details?.toolError !== undefined ? { toolError: details.toolError } : {}),
     ...(outputPending && loadError ? { toolError: loadError } : {}),
-    ...(outputPending && !loadError && isOpen ? { toolOutput: "Loading tool details…" } : {}),
+    ...(planArgsPending && argsError ? { toolError: argsError } : {}),
+    ...(outputPending && !loadError && isOpen && !isPlan
+      ? { toolOutput: "Loading tool details…" }
+      : {}),
     ...(part.toolDiff || details?.toolDiff
       ? {
           toolDiff: {
@@ -101,7 +106,8 @@ export function DeferredToolMessagePart({
   return (
     <MessagePart
       part={materialized}
-      deferredDetails={outputPending}
+      deferredDetails={outputPending || planArgsPending}
+      planSourcePart={isPlan ? part : undefined}
       partKey={partKey}
       showTextCopy={showTextCopy}
       truncateUserPrompt={truncateUserPrompt}
@@ -203,6 +209,7 @@ function MessagePartContent({
   eagerImagePreview = false,
   partKey,
   deferredDetails = false,
+  planSourcePart,
   embedded = false,
   suppressImageReadPreview = false,
 }: {
@@ -223,6 +230,7 @@ function MessagePartContent({
    * something to show, and a deferred row has nothing until it is expanded.
    */
   deferredDetails?: boolean;
+  planSourcePart?: Extract<NativeMessagePart, { type: "tool-invocation" }>;
   /** Drop individual card chrome when this row already sits in a shared group. */
   embedded?: boolean;
 }) {
@@ -323,8 +331,8 @@ function MessagePartContent({
             toolArgs={part.toolArgs}
             toolOutput={part.toolOutput}
             toolError={part.toolError}
-            toolUseId={part.toolUseId}
-            deferredDetails={deferredDetails}
+            sourcePart={planSourcePart ?? part}
+            deferredDetails={deferredDetails || Boolean(part.detailRef || part.toolArgsDetailRef)}
           />
         );
       }

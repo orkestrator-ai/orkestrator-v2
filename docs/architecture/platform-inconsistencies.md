@@ -132,7 +132,7 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | Questions | full | full (own cards) | partial | partial | partial | full |
 | Approval mode picker | **partial** (`permissionMode`; not browser-qualified) | none | **partial** (`approvalPolicy` + reviewer; not browser-qualified) | none | none | none |
 | Tool approvals | auto-approve by default; **partial** fail-closed cards under `ask`, refusal outside the allow list under `deny` (not browser-qualified) | **fail-closed hooks** | fail-closed | fail-closed cards; CLI `--force` | `--always-approve` | full |
-| Plan-exit UI | plan-approval card | own plan card | `CodexPlanModeCard` | `createPlan` card (current/superseded, copy/export, implement bound to the current plan); `CodexPlanModeCard` when that card is not the latest reply | permission/mode | none |
+| Plan-exit UI | plan-approval card | own plan card | `CodexPlanModeCard` | `createPlan` card (current/superseded, copy/export, implement bound to the current plan); `CodexPlanModeCard` links to the plan when its actions are out of view | permission/mode | none |
 | MCP elicitations | **partial** form and URL cards (not browser-qualified) | **full** | Codex interactions | none | none | none |
 | Interactive TUI overlay | none | **unique** | none | none | none | none |
 | TUI selection prompts | none | **unique** | none | none | none | none |
@@ -508,8 +508,8 @@ cheap to fix relative to vendor protocol work.
 8. Slash menu is wired for every native tab; `slashCommands: false` only empties
    the list.
 9. Attachment capability is UI-only; dispatch does not re-check the table.
-10. `CodexPlanModeCard` (Codex, and Cursor when its plan card is not the latest
-    reply) vs shared `kind === "plan-approval"` card — same product idea, two
+10. `CodexPlanModeCard` (Codex, and Cursor when the plan actions are out of
+    view or the review has no structured plan) vs shared `kind === "plan-approval"` card — same product idea, two
     UIs. Cursor's `createPlan` card (`PlanToolPart`) carries its own
     implementation action, bound to the current plan revision. Not a table bug
     (`plan-mode-card` is not in the table).

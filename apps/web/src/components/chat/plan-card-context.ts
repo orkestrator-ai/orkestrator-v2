@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { PlanRevisionIndex } from "@/lib/plan-revisions";
+import type { PlanRevision, PlanRevisionIndex } from "@/lib/plan-revisions";
 
 /**
  * What the agent tab lets the plan card for its current plan do. Present only
@@ -10,8 +10,9 @@ export interface PlanCardActions {
   /** The only plan these actions apply to. */
   planKey: string;
   pending: boolean;
-  /** Asks the agent to implement the plan identified by `planKey`. */
-  implement: (planKey: string, title: string | undefined) => Promise<void> | void;
+  /** Asks the agent to implement the exact body on the reviewed card. */
+  implement: (revision: PlanRevision, markdown: string) => Promise<void> | void;
+  reportVisibility: (revision: PlanRevision, visible: boolean) => void;
   /** Leaves plan mode without asking for anything. */
   switchToBuild: () => Promise<void> | void;
 }

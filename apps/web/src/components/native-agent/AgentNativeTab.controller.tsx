@@ -3055,6 +3055,7 @@ export function SharedNativeAgentController({
     phase === "idle" &&
     latestIsPlanReview &&
     latestAssistantMessage !== undefined &&
+    transcriptTail.latestAssistantIndex > transcriptTail.lastUserTurnIndex &&
     latestAssistantMessage.id !== dismissedPlanReviewId;
   const latestAssistantMessageId = latestAssistantMessage?.id;
   const composerModelId = composer?.selectedModelId;
@@ -3097,9 +3098,8 @@ export function SharedNativeAgentController({
   );
   const planCards = useAgentPlanCardScope({
     messages,
-    historyComplete: !canLoadEarlierHistory,
-    reviewApplies: showPlanReview,
-    latestAssistantMessageId,
+    historyComplete: !canLoadEarlierHistory && projection?.messageWindow?.truncated !== true,
+    reviewApplies: platform === "cursor" && showPlanReview,
     pending: planTransitionPending,
     switchPlanToBuild,
   });
@@ -3597,6 +3597,7 @@ export function SharedNativeAgentController({
    * an unconditional wrapper would permanently reserve pinned clearance for a tab
    * that has nothing pinned.
    */
+  const reviewPlan = planCards.reviewPlan;
   const pinnedCards: ReactNode[] = [
     resumeSessionReplacement && tabId.startsWith("multi-review-fix:") ? (
       <div
@@ -3607,18 +3608,29 @@ export function SharedNativeAgentController({
         {MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE}
       </div>
     ) : null,
-    // The plan card in the latest reply carries these actions itself; the
-    // pinned card covers a plan with no card (Codex) or one scrolled out of view.
-    showPlanReview && !planCards.actionsOnLatestCard ? (
+    // A structured plan is implemented from its card, where its body is visible.
+    showPlanReview && !planCards.actionsVisible ? (
       <CodexPlanModeCard
         key="plan-review"
         className="mx-0 my-0"
         isSubmitting={planTransitionPending}
         onApproveAndBuild={() =>
-          switchPlanToBuild(
-            planCards.pinnedImplementPrompt ??
-              "The plan is approved. Exit plan mode and implement it.",
-          )
+          switchPlanToBuild("The plan is approved. Exit plan mode and implement it.")
+        }
+        onReviewPlan={
+          reviewPlan
+            ? () => {
+                const index = messages.findIndex((message) => message.id === reviewPlan.messageId);
+                scrollToIndex(
+                  index,
+                  {
+                    rowKey: reviewPlan.messageId,
+                    partId: reviewPlan.partId,
+                  },
+                  "message-link",
+                );
+              }
+            : undefined
         }
         onSwitchToBuild={() => switchPlanToBuild()}
         onDismiss={() => setDismissedPlanReviewId(latestAssistantMessage?.id ?? null)}

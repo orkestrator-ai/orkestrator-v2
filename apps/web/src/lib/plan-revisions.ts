@@ -24,6 +24,7 @@ export interface PlanRevision {
   key: string;
   messageId: string;
   state: PlanRevisionState;
+  partId?: string;
   /** Display title, the same one the card shows. */
   title?: string;
   /**
@@ -36,20 +37,22 @@ export interface PlanRevision {
 
 export interface PlanRevisionIndex {
   byKey: ReadonlyMap<string, PlanRevision>;
+  keyByPart: WeakMap<PlanPart, string>;
+  /** The last plan attempt since the latest user message. */
+  reviewKey?: string;
   /** Key of the current plan, when the loaded transcript has one. */
   currentKey?: string;
   /** Number of finished plans, when the whole conversation is loaded. */
   total?: number;
 }
 
-/**
- * The identity a plan card and the index agree on. A provider call id is
- * stable across streaming and reloads; a part without one falls back to its
- * display row, which holds at most one plan in practice.
- */
-export function planCardKey(toolUseId: string | undefined, messageId: string | undefined): string {
-  if (toolUseId) return `tool:${toolUseId}`;
-  return `message:${messageId ?? ""}`;
+/** Use source identity when available and a display-row path for legacy parts. */
+function planCardKey(part: PlanPart, messageId: string, path: readonly number[]): string {
+  if (part.toolUseId) return `tool:${part.toolUseId}`;
+  if (part.sourcePartId) {
+    return `source:${JSON.stringify([part.sourceMessageId ?? messageId, part.sourcePartId])}`;
+  }
+  return `part:${JSON.stringify([messageId, path])}`;
 }
 
 /** The title a plan card shows: the tool's own title, else the plan's first heading. */
@@ -70,12 +73,16 @@ type PlanPart = Extract<NativeMessagePart, { type: "tool-invocation" }>;
  * wrote are not the session's plan, so only top-level parts and tool groups
  * (which merely bundle the agent's own calls) count.
  */
-function sessionPlanParts(parts: readonly NativeMessagePart[], into: PlanPart[]): void {
-  for (const part of parts) {
-    if (part.type === "tool-invocation") {
-      if (!part.toolDenied && isPlanTool(part.toolName)) into.push(part);
+function sessionPlanParts(
+  parts: readonly NativeMessagePart[],
+  visit: (part: PlanPart, path: number[]) => void,
+  parent: number[] = [],
+): void {
+  for (const [index, part] of parts.entries()) {
+    if (part.type === "tool-invocation" && !part.toolDenied && isPlanTool(part.toolName)) {
+      visit(part, [...parent, index]);
     } else if (part.type === "tool-group") {
-      sessionPlanParts(part.parts, into);
+      sessionPlanParts(part.parts, visit, [...parent, index]);
     }
   }
 }
@@ -85,30 +92,35 @@ export function buildPlanRevisionIndex(
   options: { historyComplete: boolean },
 ): PlanRevisionIndex {
   const entries: Array<{ key: string; messageId: string; part: PlanPart }> = [];
+  const keyByPart = new WeakMap<PlanPart, string>();
+  let reviewKey: string | undefined;
   for (const message of messages) {
+    if (message.role === "user") reviewKey = undefined;
     if (message.role !== "assistant") continue;
-    const parts: PlanPart[] = [];
-    sessionPlanParts(message.parts, parts);
-    for (const part of parts) {
-      entries.push({ key: planCardKey(part.toolUseId, message.id), messageId: message.id, part });
-    }
+    sessionPlanParts(message.parts, (part, path) => {
+      const key = planCardKey(part, message.id, path);
+      keyByPart.set(part, key);
+      entries.push({ key, messageId: message.id, part });
+      reviewKey = key;
+    });
   }
 
   const byKey = new Map<string, PlanRevision>();
   let finished = 0;
   let currentKey: string | undefined;
   for (const { key, messageId, part } of entries) {
+    const identity = { key, messageId, partId: part.toolUseId ?? part.sourcePartId };
     const title = planDisplayTitle(
       part.toolName,
       part.toolTitle,
       extractPlanMarkdown(part.toolArgs, part.toolOutput),
     );
     if (part.toolState === "failure") {
-      byKey.set(key, { key, messageId, state: "failed", title });
+      byKey.set(key, { ...identity, state: "failed", title });
       continue;
     }
     if (part.toolState === "pending") {
-      byKey.set(key, { key, messageId, state: "drafting", title });
+      byKey.set(key, { ...identity, state: "drafting", title });
       continue;
     }
     finished += 1;
@@ -118,8 +130,7 @@ export function buildPlanRevisionIndex(
     }
     currentKey = key;
     byKey.set(key, {
-      key,
-      messageId,
+      ...identity,
       state: "current",
       title,
       ...(options.historyComplete ? { revision: finished } : {}),
@@ -128,18 +139,16 @@ export function buildPlanRevisionIndex(
 
   return {
     byKey,
+    keyByPart,
+    reviewKey,
     ...(currentKey !== undefined ? { currentKey } : {}),
     ...(options.historyComplete && finished > 0 ? { total: finished } : {}),
   };
 }
 
-/**
- * The prompt that asks the agent to implement one specific plan. It names the
- * plan the user acted on, so the transcript records which one was meant.
- */
-export function implementPlanPrompt(title: string | undefined): string {
-  const named = title?.trim().replace(/\s+/g, " ").slice(0, 200);
-  return named
-    ? `The plan "${named}" is approved. Exit plan mode and implement it.`
-    : "The latest plan you proposed is approved. Exit plan mode and implement it.";
+/** Send the exact reviewed body. Cursor does not resolve renderer revision keys. */
+export function implementPlanPrompt(revision: PlanRevision, markdown: string): string {
+  const target =
+    revision.revision === undefined ? "this plan" : `plan revision ${revision.revision}`;
+  return `Exit plan mode and implement ${target} (reference ${JSON.stringify(revision.key)}). Use the reviewed Markdown between the markers.\n\n<<< BEGIN PLAN >>>\n${markdown}\n<<< END PLAN >>>`;
 }

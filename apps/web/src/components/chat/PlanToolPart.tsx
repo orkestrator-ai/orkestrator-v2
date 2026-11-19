@@ -1,5 +1,5 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowRight, Check, Copy, Download, FileText, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -7,9 +7,9 @@ import { Button } from "@/components/ui/button";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { writeText } from "@/lib/native/clipboard";
 import { artifactFilename, downloadText } from "@/lib/chat/artifact-download";
-import { useRichMessageIdentity } from "@/lib/chat/rich-identity";
+import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { extractPlanMarkdown } from "@/lib/plan-tool";
-import { planCardKey, planDisplayTitle, type PlanRevision } from "@/lib/plan-revisions";
+import { planDisplayTitle, type PlanRevision } from "@/lib/plan-revisions";
 import { markdownComponents } from "./NativeMessage.shared";
 import { usePlanCardScope, type PlanCardActions } from "./plan-card-context";
 
@@ -46,8 +46,8 @@ interface PlanToolPartProps {
   toolArgs?: Record<string, unknown>;
   toolOutput?: string;
   toolError?: string;
-  /** Provider call id; with the display row it identifies this plan revision. */
-  toolUseId?: string;
+  /** The original transcript part, before deferred details are materialized. */
+  sourcePart?: Extract<NativeMessagePart, { type: "tool-invocation" }>;
   /** Output exists behind a detail reference and loads with this row. */
   deferredDetails?: boolean;
 }
@@ -59,18 +59,17 @@ export function PlanToolPart({
   toolArgs,
   toolOutput,
   toolError,
-  toolUseId,
+  sourcePart,
   deferredDetails = false,
 }: PlanToolPartProps) {
-  const plan = extractPlanMarkdown(toolArgs, toolOutput);
+  const plan = deferredDetails ? "" : extractPlanMarkdown(toolArgs, toolOutput);
   const namedTitle = planDisplayTitle(toolName, toolTitle, plan);
   const title = namedTitle ?? "Plan";
-  const messageIdentity = useRichMessageIdentity();
   const scope = usePlanCardScope();
-  const key = planCardKey(toolUseId, messageIdentity?.messageId);
-  const revision = scope?.index.byKey.get(key);
+  const key = sourcePart && scope?.index.keyByPart.get(sourcePart);
+  const revision = key ? scope?.index.byKey.get(key) : undefined;
   const total = scope?.index.total;
-  const actions = scope?.actions?.planKey === key ? scope.actions : undefined;
+  const actions = key && scope?.actions?.planKey === key ? scope.actions : undefined;
   const superseded = revision?.state === "superseded";
   const hasBody = plan.trim().length > 0;
   // Outside an agent tab there is no ordering, so the tool state stands alone.
@@ -147,12 +146,12 @@ export function PlanToolPart({
           </div>
         )}
       </div>
-      {actions ? (
+      {actions && revision ? (
         <PlanImplementationFooter
           actions={actions}
-          planKey={key}
-          title={namedTitle}
-          revision={revision?.revision}
+          revision={revision}
+          markdown={plan}
+          canImplement={hasBody && !toolError && toolState !== "failure" && toolState !== "pending"}
         />
       ) : null}
     </section>
@@ -236,23 +235,46 @@ function PlanExportControls({ plan, title }: { plan: string; title: string }) {
 
 function PlanImplementationFooter({
   actions,
-  planKey,
-  title,
   revision,
+  markdown,
+  canImplement,
 }: {
   actions: PlanCardActions;
-  planKey: string;
-  title: string | undefined;
-  revision: number | undefined;
+  revision: PlanRevision;
+  markdown: string;
+  canImplement: boolean;
 }) {
-  const subject = revision !== undefined ? `revision ${revision} of this plan` : "this plan";
+  const footer = useRef<HTMLElement>(null);
+  const { reportVisibility } = actions;
+  useEffect(() => {
+    const element = footer.current;
+    if (!element || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      ([entry]) =>
+        reportVisibility(
+          revision,
+          entry?.isIntersecting === true && entry.intersectionRatio >= 0.99,
+        ),
+      { threshold: 0.99 },
+    );
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      reportVisibility(revision, false);
+    };
+  }, [reportVisibility, revision]);
+  const subject =
+    revision.revision !== undefined ? `revision ${revision.revision} of this plan` : "this plan";
   return (
-    <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-3 py-2">
-      <p className="min-w-[16rem] flex-1 text-xs text-muted-foreground">
+    <footer
+      ref={footer}
+      className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-3 py-2"
+    >
+      <p className="min-w-0 basis-[16rem] flex-1 text-xs text-muted-foreground">
         Implementing switches the session to build mode and asks the agent to implement {subject}.
         The agent's usual permission rules still apply.
       </p>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
           variant="outline"
@@ -266,8 +288,8 @@ function PlanImplementationFooter({
         <Button
           type="button"
           size="sm"
-          onClick={() => void actions.implement(planKey, title)}
-          disabled={actions.pending}
+          onClick={() => void actions.implement(revision, markdown)}
+          disabled={actions.pending || !canImplement}
         >
           {actions.pending ? (
             <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />

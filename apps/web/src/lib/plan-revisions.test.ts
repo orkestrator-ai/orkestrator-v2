@@ -1,18 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
-import {
-  buildPlanRevisionIndex,
-  implementPlanPrompt,
-  planCardKey,
-  planDisplayTitle,
-} from "./plan-revisions";
+import { buildPlanRevisionIndex, implementPlanPrompt, planDisplayTitle } from "./plan-revisions";
 
 function plan(
   toolUseId: string | undefined,
   output: string,
   toolState: "success" | "failure" | "pending" = "success",
   toolTitle?: string,
-): NativeMessagePart {
+): Extract<NativeMessagePart, { type: "tool-invocation" }> {
   return {
     type: "tool-invocation",
     content: "Plan",
@@ -27,13 +22,6 @@ function plan(
 function assistant(id: string, parts: NativeMessagePart[]): NativeMessage {
   return { id, role: "assistant", content: "", createdAt: "2026-11-19T10:00:00.000Z", parts };
 }
-
-describe("planCardKey", () => {
-  test("prefers the provider call id and falls back to the display row", () => {
-    expect(planCardKey("call-1", "message-1")).toBe("tool:call-1");
-    expect(planCardKey(undefined, "message-1")).toBe("message:message-1");
-  });
-});
 
 describe("planDisplayTitle", () => {
   test("uses the tool title, then the first heading", () => {
@@ -124,24 +112,37 @@ describe("buildPlanRevisionIndex", () => {
     expect(index.byKey.has("tool:denied")).toBe(false);
   });
 
-  test("keys a plan without a call id by its row", () => {
-    const index = buildPlanRevisionIndex([assistant("a1", [plan(undefined, "# Row plan")])], {
+  test("distinguishes id-less parts in a row and preserves coalesced source identity", () => {
+    const first = plan(undefined, "# First");
+    const second = plan(undefined, "# Second");
+    const source = {
+      ...plan(undefined, "# Coalesced"),
+      sourceMessageId: "source",
+      sourcePartId: "s1",
+    };
+    const index = buildPlanRevisionIndex([assistant("a1", [first, second, source])], {
       historyComplete: true,
     });
-    expect(index.currentKey).toBe("message:a1");
+    expect(index.byKey.size).toBe(3);
+    expect(index.byKey.get(index.keyByPart.get(first)!)).toMatchObject({ revision: 1 });
+    expect(index.byKey.get(index.keyByPart.get(second)!)).toMatchObject({ revision: 2 });
+    expect(index.keyByPart.get(source)).toBe('source:["source","s1"]');
+    expect(index.byKey.get(index.keyByPart.get(source)!)).toMatchObject({ revision: 3 });
   });
 });
 
 describe("implementPlanPrompt", () => {
-  test("names the plan being implemented", () => {
-    expect(implementPlanPrompt("Split  discovery\n")).toBe(
-      'The plan "Split discovery" is approved. Exit plan mode and implement it.',
+  test("includes the selected revision and exact Markdown for same-title and title-less plans", () => {
+    const bodies = ["# Plan\n\nUse a queue.", "# Plan\n\nUse a stream.", "Write tests.\n"];
+    const index = buildPlanRevisionIndex(
+      bodies.map((body, i) => assistant(`a${i}`, [plan(`p${i}`, body)])),
+      { historyComplete: true },
     );
-  });
-
-  test("falls back to the latest plan when it has no title", () => {
-    expect(implementPlanPrompt(undefined)).toBe(
-      "The latest plan you proposed is approved. Exit plan mode and implement it.",
-    );
+    for (const [i, body] of bodies.entries()) {
+      const key = `tool:p${i}`;
+      const prompt = implementPlanPrompt(index.byKey.get(key)!, body);
+      expect(prompt).toContain(`plan revision ${i + 1} (reference "${key}")`);
+      expect(prompt.endsWith(`<<< BEGIN PLAN >>>\n${body}\n<<< END PLAN >>>`)).toBe(true);
+    }
   });
 });

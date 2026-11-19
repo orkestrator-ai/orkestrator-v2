@@ -580,7 +580,10 @@ export class NativeAgentService {
         this.observeBridgeConnection(agent, environment),
       createProvider: (connection, environmentId, cacheKey) =>
         createNativeAgentProvider(connection, {
-          onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
+          onObservationHint: (providerSessionId) => {
+            this.observations.wakeGroup(cacheKey, "provider-event");
+            options.onPushObservationHint?.(environmentId, connection.agent, providerSessionId);
+          },
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
           planUsage: options.planUsage,
@@ -2674,6 +2677,14 @@ export class NativeAgentService {
   observePushSession(environmentId: string, agent: string, logicalSessionKey: string) {
     return this.projections.observePushSession(
       nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
+    );
+  }
+
+  canWakePushObserverFromBridge(environmentId: string, agent: string): boolean {
+    return (
+      this.providerRegistry
+        .cached(providerCacheKey(environmentId, agent as BuildPipelineAgent))
+        ?.observationStreamLive?.() === true
     );
   }
 

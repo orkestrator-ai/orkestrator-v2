@@ -90,6 +90,8 @@ export interface NodeTerminalTransport {
 
 /** Options of an untyped call. */
 export interface NodeInvokeOptions {
+  /** Cancels the local HTTP wait. Server-side command effects may already have started. */
+  readonly signal?: AbortSignal;
   /**
    * The invoke envelope's contract fields (`domain`, `version`, `critical`),
    * sent next to `command` and `args`. Never the arguments themselves: over

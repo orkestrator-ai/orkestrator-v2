@@ -1160,6 +1160,8 @@ export class OrkestratorBackend {
       },
       {
         changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
+        onPushObservationHint: (environmentId, agent, providerSessionId) =>
+          this.push.nativeSessions.wakeProvider(environmentId, agent, providerSessionId),
         // Never under `bun test`: a title run would use this machine's real
         // agent login. `ORKESTRATOR_SESSION_TITLE_GENERATION=0` turns it off.
         ...(sessionTitleGenerationEnabled(process.env)

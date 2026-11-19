@@ -5,6 +5,7 @@ import { formatNativeSessionPushKey, type PushStamp } from "@orkestrator/protoco
 import { ManualClock, flushMicrotasks } from "@orkestrator/protocol/testing/manual-clock";
 import {
   NATIVE_SESSION_OBSERVE_IDLE_MS,
+  NATIVE_SESSION_OBSERVE_PENDING_MS,
   NATIVE_SESSION_OBSERVE_RESPONSIVE_MS,
   NativeSessionPushTopic,
   type NativeSessionLiveRead,
@@ -79,21 +80,22 @@ describe("NativeSessionPushTopic", () => {
     expect(topic.validKey("garbage")).toBe(false);
   });
 
-  test("the first read is a baseline; later token moves publish the parts that moved", async () => {
+  test("publishes the first authoritative tokens and later changes", async () => {
     const h = harness();
     h.topic.retain(PUSH_KEY);
     await h.advance(0);
     expect(h.reads).toHaveLength(1);
-    expect(h.published).toEqual([]);
-    expect(await h.topic.resolve(PUSH_KEY)).toMatchObject({ status: "ok", revision: 0 });
+    expect(h.published.map((p) => p.parts)).toEqual([["transcript", "state"]]);
+    expect(await h.topic.resolve(PUSH_KEY)).toMatchObject({ status: "ok", revision: 1 });
 
     h.model.transcript = 2;
     await h.advance(NATIVE_SESSION_OBSERVE_IDLE_MS);
     expect(h.reads.at(-1)).toMatchObject({ transcriptToken: "t1", stateToken: "s1:idle" });
-    expect(h.published).toHaveLength(1);
-    expect(h.published[0]!.parts).toEqual(["transcript"]);
-    expect(h.published[0]!.stamp.revision).toBe(1);
-    expect(await h.topic.resolve(PUSH_KEY)).toMatchObject({ status: "ok", revision: 1 });
+    expect(h.published).toHaveLength(2);
+    expect(h.published[1]!.parts).toEqual(["transcript"]);
+    expect(h.published[1]!.stamp.revision).toBe(2);
+    expect(await h.topic.resolve(PUSH_KEY)).toMatchObject({ status: "ok", revision: 2 });
+    h.topic.dispose();
   });
 
   test("a phase change also names discovery, and a running turn is observed at the responsive cadence", async () => {
@@ -103,7 +105,7 @@ describe("NativeSessionPushTopic", () => {
     h.model.phase = "running";
     h.model.state = 2;
     await h.advance(NATIVE_SESSION_OBSERVE_IDLE_MS);
-    expect([...h.published[0]!.parts].sort()).toEqual(["discovery", "state"]);
+    expect([...h.published.at(-1)!.parts].sort()).toEqual(["discovery", "state"]);
     const readsBefore = h.reads.length;
     await h.advance(NATIVE_SESSION_OBSERVE_RESPONSIVE_MS);
     expect(h.reads.length).toBe(readsBefore + 1);
@@ -114,7 +116,7 @@ describe("NativeSessionPushTopic", () => {
     h.topic.retain(PUSH_KEY);
     await h.advance(0);
     await h.advance(60_000);
-    expect(h.published).toEqual([]);
+    expect(h.published).toHaveLength(1);
     // Claude's idle view is qualified only with quietObservation, so it keeps
     // the 1.5 s cadence: 40 reads a minute, the old one-viewer poll.
     expect(h.reads.length).toBeLessThanOrEqual(42);
@@ -140,7 +142,7 @@ describe("NativeSessionPushTopic", () => {
       state: "working",
     });
     await h.advance(0);
-    expect(h.published.map((p) => p.parts)).toEqual([["state"]]);
+    expect(h.published.slice(1).map((p) => p.parts)).toEqual([["state"]]);
     expect(h.wakes).toEqual(["tab-1"]);
 
     h.topic.observeEvent("resource-changed", {
@@ -156,6 +158,45 @@ describe("NativeSessionPushTopic", () => {
     h.topic.observeEvent("resource-changed", { resource: "kanban", id: "env-1" });
     h.topic.observeEvent("terminal-output-x", { data: "..." });
     expect(h.wakes).toHaveLength(2);
+  });
+
+  test("a qualified idle bridge wakes only its observed session and falls back after stream loss", async () => {
+    const clock = new ManualClock();
+    let connected = true;
+    const reads: string[] = [];
+    const topic = new NativeSessionPushTopic({
+      timers: clock,
+      sessionExists: async () => true,
+      canWakeFromBridge: () => connected,
+      publish: () => undefined,
+      readLiveUpdate: async (input) => {
+        reads.push(input.logicalSessionKey);
+        const identity = { providerSessionId: `provider-${input.logicalSessionKey}` };
+        const update = liveUpdate({ transcript: 1, state: 1, phase: "idle" }, input);
+        if (update.state.status === "snapshot") {
+          Object.assign(update.state.value, {
+            identity,
+            turn: { phase: "idle", quietObservation: true },
+          });
+        }
+        return update;
+      },
+    });
+    topic.retain(PUSH_KEY);
+    topic.retain(formatNativeSessionPushKey({ ...KEY, logicalSessionKey: "other" }));
+    await clock.advanceAsync(0);
+    expect(reads).toHaveLength(2);
+    await clock.advanceAsync(5_000);
+    expect(reads).toHaveLength(2);
+    topic.wakeProvider(KEY.environmentId, KEY.agent, `provider-${KEY.logicalSessionKey}`);
+    await clock.advanceAsync(0);
+    expect(reads).toEqual([KEY.logicalSessionKey, "other", KEY.logicalSessionKey]);
+    connected = false;
+    topic.wakeProvider(KEY.environmentId, KEY.agent);
+    await clock.advanceAsync(0);
+    await clock.advanceAsync(3_000);
+    expect(reads).toHaveLength(7);
+    topic.dispose();
   });
 
   test("a missing or unavailable part is announced once, not on every read", async () => {
@@ -175,6 +216,7 @@ describe("NativeSessionPushTopic", () => {
     });
     topic.retain(PUSH_KEY);
     await clock.advanceAsync(0);
+    published.length = 0;
     fail = true;
     await clock.advanceAsync(NATIVE_SESSION_OBSERVE_IDLE_MS);
     await clock.advanceAsync(NATIVE_SESSION_OBSERVE_IDLE_MS);
@@ -183,6 +225,37 @@ describe("NativeSessionPushTopic", () => {
     fail = false;
     await clock.advanceAsync(NATIVE_SESSION_OBSERVE_IDLE_MS);
     expect(published).toEqual([["state"], ["state"]]);
+    topic.dispose();
+  });
+
+  test("a viewer's stale mount snapshot is invalidated while the transcript stays pending", async () => {
+    const clock = new ManualClock();
+    const published: string[][] = [];
+    const model = { transcript: 1, state: 1, phase: "idle" };
+    let pending = true;
+    const topic = new NativeSessionPushTopic({
+      timers: clock,
+      sessionExists: async () => true,
+      publish: (_key, _stamp, parts) => published.push([...parts]),
+      readLiveUpdate: async (input) => ({
+        ...liveUpdate(model, input),
+        ...(pending ? { transcript: { viewVersion: 1, status: "pending" } as const } : {}),
+      }),
+    });
+    topic.retain(PUSH_KEY);
+    expect(await topic.resolve(PUSH_KEY)).toMatchObject({ status: "ok", revision: 0 });
+    // The viewer has already read state 1. The very first observer round sees state 2.
+    model.state = 2;
+    await clock.advanceAsync(0);
+    expect(published).toEqual([["state"]]);
+    model.state = 3;
+    await clock.advanceAsync(NATIVE_SESSION_OBSERVE_PENDING_MS - 1);
+    expect(published).toHaveLength(1);
+    await clock.advanceAsync(1);
+    expect(published).toEqual([["state"], ["state"]]);
+    pending = false;
+    await clock.advanceAsync(NATIVE_SESSION_OBSERVE_PENDING_MS);
+    expect(published).toEqual([["state"], ["state"], ["transcript"]]);
     topic.dispose();
   });
 
@@ -253,7 +326,8 @@ describe("BackendPush end to end", () => {
     // A quiet running turn for ten seconds: one observer read per 500 ms, no frames.
     await clock.advanceAsync(10_000);
     expect(reads.length).toBeLessThanOrEqual(21);
-    expect(frames).toEqual([]);
+    expect(frames.map((f) => f.viewer).sort()).toEqual(["a", "b"]);
+    frames.length = 0;
 
     model.transcript = 2;
     await clock.advanceAsync(NATIVE_SESSION_OBSERVE_RESPONSIVE_MS);
@@ -301,7 +375,8 @@ describe("BackendPush end to end", () => {
       setRevision: 1,
       subscriptions: [{ topic: "native-session", key: PUSH_KEY }],
     });
-    await clock.advanceAsync(0);
+    await clock.advanceAsync(50);
+    written.length = 0;
     // An approval parks the turn: the bridge-side change and its announcement.
     model.state = 2;
     const announcedAt = clock.now() + 100;

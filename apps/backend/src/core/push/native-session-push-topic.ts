@@ -46,6 +46,9 @@ export const NATIVE_SESSION_OBSERVE_PENDING_MS = 250;
 /** After a failed read. */
 export const NATIVE_SESSION_OBSERVE_ERROR_MS = 2_000;
 
+/** Reconcile independently of wake delivery while an idle bridge is known observable. */
+const NATIVE_SESSION_BRIDGE_BACKSTOP_MS = 30_000;
+
 const RESPONSIVE_PHASES = new Set(["running", "blocked", "cancelling", "recovering"]);
 
 export interface NativeSessionLiveRead {
@@ -68,6 +71,7 @@ export interface NativeSessionPushTopicOptions {
    * reads of it must not answer the next read.
    */
   onWake?(key: NativeSessionPushKey): void;
+  canWakeFromBridge?(key: NativeSessionPushKey): boolean;
   /** The session is observed from now until the returned stop is called. */
   observeSession?(key: NativeSessionPushKey): () => void;
   timers?: PushHubTimers;
@@ -86,8 +90,7 @@ interface Observer {
   stateStatus: PartStatus;
   phase: string | undefined;
   quietObservation: boolean;
-  /** Whether a read has set the baseline: the first answer is not a change. */
-  baselined: boolean;
+  providerSessionId?: string;
   quietIndex: number;
   timer: unknown;
   reading: boolean;
@@ -173,7 +176,6 @@ export class NativeSessionPushTopic implements PushTopicProvider {
       stateStatus: "unknown",
       phase: undefined,
       quietObservation: false,
-      baselined: false,
       quietIndex: 0,
       timer: null,
       reading: false,
@@ -239,6 +241,17 @@ export class NativeSessionPushTopic implements PushTopicProvider {
   wake(key: NativeSessionPushKey): void {
     const observer = this.observers.get(formatNativeSessionPushKey(key));
     if (observer) this.wakeObserver(observer);
+  }
+
+  /** A bridge frame is a wake hint. Activity and projections still come from reads. */
+  wakeProvider(environmentId: string, agent: string, providerSessionId?: string): void {
+    for (const observer of this.observers.values()) {
+      if (observer.parsed.environmentId !== environmentId || observer.parsed.agent !== agent)
+        continue;
+      if (providerSessionId !== undefined && observer.providerSessionId !== providerSessionId)
+        continue;
+      this.wakeObserver(observer);
+    }
   }
 
   metrics(): NativeSessionPushTopicMetrics {
@@ -331,13 +344,15 @@ export class NativeSessionPushTopic implements PushTopicProvider {
         parts,
       );
     }
-    this.schedule(observer, observer.wakeAgain ? 0 : this.nextDelay(observer, parts.length > 0));
+    this.schedule(
+      observer,
+      observer.wakeAgain ? 0 : this.nextDelay(observer, update, parts.length > 0),
+    );
   }
 
   /** Applies one answer to the observer and returns the parts that moved. */
   private apply(observer: Observer, update: NativeAgentLiveUpdate): NativeSessionPushPart[] {
     const parts = new Set<NativeSessionPushPart>();
-    const baseline = !observer.baselined;
 
     const transcript = update.transcript;
     const transcriptStatus = partStatus(transcript.status);
@@ -363,25 +378,24 @@ export class NativeSessionPushTopic implements PushTopicProvider {
         const phase = state.value.turn?.phase;
         if (observer.phase !== undefined && phase !== observer.phase) parts.add("discovery");
         observer.phase = phase;
+        observer.providerSessionId = state.value.identity?.providerSessionId;
         observer.quietObservation = state.value.turn?.quietObservation === true;
       }
     } else if (state.status !== "pending") {
       if (stateStatus !== observer.stateStatus) parts.add("state");
       observer.stateToken = undefined;
+      observer.quietObservation = false;
+      observer.providerSessionId = undefined;
     }
     if (stateStatus !== "pending") observer.stateStatus = stateStatus;
 
-    if (observer.transcriptStatus !== "unknown" && observer.stateStatus !== "unknown") {
-      observer.baselined = true;
-    }
-    // The first full answer is what the views already read when they mounted
-    // (and they read once more on their subscription's first answer), so it
-    // announces nothing.
-    return baseline ? [] : Array.from(parts);
+    // The mount read and the observer query can race. Publish even the first
+    // settled answer so a viewer cannot miss a change absorbed by the baseline.
+    return Array.from(parts);
   }
 
-  private nextDelay(observer: Observer, changed: boolean): number {
-    if (observer.transcriptStatus === "pending" || observer.stateStatus === "pending") {
+  private nextDelay(observer: Observer, update: NativeAgentLiveUpdate, changed: boolean): number {
+    if (update.transcript.status === "pending" || update.state.status === "pending") {
       return NATIVE_SESSION_OBSERVE_PENDING_MS;
     }
     if (observer.phase !== undefined && RESPONSIVE_PHASES.has(observer.phase)) {
@@ -392,6 +406,13 @@ export class NativeSessionPushTopic implements PushTopicProvider {
       (NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS as readonly string[]).includes(agent) &&
       (!(NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS as readonly string[]).includes(agent) ||
         observer.quietObservation);
+    if (
+      observer.phase === "idle" &&
+      observer.quietObservation &&
+      observer.providerSessionId !== undefined &&
+      this.options.canWakeFromBridge?.(observer.parsed)
+    )
+      return NATIVE_SESSION_BRIDGE_BACKSTOP_MS;
     if (!qualified || changed) return NATIVE_SESSION_OBSERVE_IDLE_MS;
     const ladder = NATIVE_SESSION_OBSERVE_QUIET_LADDER_MS;
     const delay = ladder[Math.min(observer.quietIndex, ladder.length - 1)]!;
@@ -422,6 +443,7 @@ export function nativeSessionLiveReadInput(input: NativeSessionLiveRead) {
     agent: input.agent as BuildPipelineAgent,
     logicalSessionKey: input.logicalSessionKey,
     viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
+    pushObservation: true,
     liveWindow: { ...DEFAULT_NATIVE_AGENT_LIVE_WINDOW },
     ...(input.transcriptToken === undefined ? {} : { transcriptToken: input.transcriptToken }),
     ...(input.stateToken === undefined ? {} : { stateToken: input.stateToken }),

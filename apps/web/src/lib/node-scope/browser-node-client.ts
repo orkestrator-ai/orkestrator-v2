@@ -178,8 +178,8 @@ export function createBrowserNodeClient(options: BrowserNodeClientOptions): Brow
     if (disposed) return Promise.reject(new Error("This node client is disposed."));
     const wireArgs = args as Record<string, unknown> | undefined;
     // An untyped call stays two arguments, as before.
-    return options?.envelope
-      ? created.invoke<T>(command, wireArgs, { envelope: options.envelope })
+    return options
+      ? created.invoke<T>(command, wireArgs, options)
       : created.invoke<T>(command, wireArgs);
   }
 

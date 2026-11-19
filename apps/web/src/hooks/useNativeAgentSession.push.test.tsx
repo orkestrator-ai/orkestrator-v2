@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test, type Moc
 import { act, cleanup, waitFor } from "@testing-library/react";
 import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
+  NativeAgentDiscoveryUpdate,
   NativeAgentSessionStateUpdate,
   NativeAgentTranscriptUpdate,
   NativeAgentViewIdentity,
@@ -16,6 +17,7 @@ import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
   PUSH_CHANGED_EVENT,
   PUSH_RECOVERY_POLL_MS,
+  PUSH_RESYNC_EVENT,
   PUSH_STREAM_STATE_EVENT,
   type PushSetSubscriptionsArgs,
   type PushSetSubscriptionsResult,
@@ -77,6 +79,17 @@ const setPushSubscriptionsMock = mock(
   }),
 );
 
+let discoveryAvailability: "ready" | "stale" = "ready";
+const getNativeAgentDiscoveryUpdate = mock(async (): Promise<NativeAgentDiscoveryUpdate> => ({
+  viewVersion: 1,
+  status: "snapshot",
+  token: `catalog-${discoveryAvailability}`,
+  value: {
+    identity: identity(),
+    sections: { commands: { availability: discoveryAvailability, revision: 1, value: [] } },
+  },
+}));
+
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentSyncCapabilities: async () => ({
@@ -96,12 +109,7 @@ mock.module("@/lib/backend", () => ({
     },
   }),
   getNativeAgentSessionStateUpdate: getNativeAgentSessionStateUpdateMock,
-  getNativeAgentDiscoveryUpdate: async () => ({
-    viewVersion: 1,
-    status: "unchanged",
-    token: "discovery",
-    identity: identity(),
-  }),
+  getNativeAgentDiscoveryUpdate,
   ensureNativeAgentSession: async () => ({
     providerSessionId: "session-1",
     logicalSessionKey: SESSION_KEY,
@@ -181,6 +189,8 @@ beforeEach(() => {
   resetPushSubscriptionsForTests();
   getNativeAgentSessionStateUpdateMock.mockClear();
   setPushSubscriptionsMock.mockClear();
+  discoveryAvailability = "ready";
+  getNativeAgentDiscoveryUpdate.mockClear();
   appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
@@ -262,6 +272,49 @@ describe("useNativeAgentSession over push", () => {
     await act(() => clock.advance(PUSH_RECOVERY_POLL_MS));
     await waitFor(() => expect(stateReads()).toBeGreaterThanOrEqual(afterSubscribe + 2));
     expect(stateReads()).toBeLessThanOrEqual(afterSubscribe + 3);
+  });
+
+  test("a stale discovery section retries during quiet healthy push", async () => {
+    const { clock } = installFakeReadCoordinator();
+    discoveryAvailability = "stale";
+    await settledSession();
+    await connectPush();
+    await act(() => clock.advance(10));
+    const reads = getNativeAgentDiscoveryUpdate.mock.calls.length;
+    discoveryAvailability = "ready";
+    await act(async () => {
+      // The hook schedules the discovery deadline independently of coordinator time.
+      await Bun.sleep(2_100);
+    });
+    await act(() => clock.advance(10));
+    await waitFor(() =>
+      expect(getNativeAgentDiscoveryUpdate.mock.calls.length).toBeGreaterThan(reads),
+    );
+    expect(pushClientFor().isHealthy("native-session", PUSH_KEY)).toBe(true);
+  });
+
+  test("a missed frame marks the view recovering, and a new producer snapshot clears it", async () => {
+    const { clock } = installFakeReadCoordinator();
+    const view = await settledSession();
+    await connectPush();
+    await act(() => clock.advance(10));
+    const before = stateReads();
+    await act(async () => {
+      emit(PUSH_RESYNC_EVENT, { seq: 12, reason: "topic-reset", topics: "all" });
+      emit(PUSH_STREAM_STATE_EVENT, { state: "disconnected" });
+    });
+    expect(view.result.current.pushRecovering).toBe(true);
+    expect(view.result.current.projection?.turn.phase).toBe("running");
+    await act(async () => {
+      emit(PUSH_STREAM_STATE_EVENT, {
+        state: "connected",
+        offer: { versions: [1], streamId: "stream-bbbbbbbbbbbbbbbb" },
+      });
+    });
+    await waitFor(() => expect(view.result.current.pushRecovering).toBe(false));
+    await act(() => clock.advance(10));
+    await waitFor(() => expect(stateReads()).toBeGreaterThan(before));
+    expect(view.result.current.projection?.turn.phase).toBe("running");
   });
 
   test("a dropped stream returns the view to its old cadence until push is healthy again", async () => {

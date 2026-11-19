@@ -82,8 +82,17 @@ export function createSystemApi(client: BackendClient) {
    */
   async function setPushSubscriptions(
     args: PushSetSubscriptionsArgs,
+    signal?: AbortSignal,
   ): Promise<PushSetSubscriptionsResult> {
-    return system().push_set_subscriptions(args);
+    const api = signal
+      ? systemApi({
+          domains: client.domains,
+          capabilities: client.capabilities,
+          invokeRaw: (command, wireArgs, options) =>
+            client.invokeRaw(command, wireArgs, { ...options, signal }),
+        })
+      : system();
+    return api.push_set_subscriptions(args);
   }
 
   return { getAppVersion, getSystemUsage, getEnvironmentProcessUsage, setPushSubscriptions };

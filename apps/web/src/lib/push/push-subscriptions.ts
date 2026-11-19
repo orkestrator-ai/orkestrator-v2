@@ -49,7 +49,7 @@ const pushSlot = defineScopedSlot<PushSlot>("push-subscriptions", (scope) => {
 
 function attach(scope: NodeScope, slot: PushSlot): PushSubscriptionClient {
   const client = new PushSubscriptionClient({
-    setSubscriptions: (args) => backendForScope(scope).setPushSubscriptions(args),
+    setSubscriptions: (args, signal) => backendForScope(scope).setPushSubscriptions(args, signal),
     onListenerError: (error) => log.error("listener.failed", { error: formatLogError(error) }),
   });
   slot.client = client;
@@ -108,7 +108,8 @@ export function resetPushSubscriptionsForTests(scope: NodeScope = appCommandScop
 }
 
 const noop = () => undefined;
-const never = () => false;
+type SubscriptionState = "healthy" | "recovering" | "polling";
+const polling = (): SubscriptionState => "polling";
 
 /**
  * Subscribes a mounted view to one topic key while `enabled`, calling
@@ -125,7 +126,7 @@ export function usePushSubscription(
   key: string,
   enabled: boolean,
   onChange: (change: PushKeyChange) => void,
-): boolean {
+): SubscriptionState {
   const onChangeRef = useRef(onChange);
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -138,9 +139,10 @@ export function usePushSubscription(
     (listener: () => void) => (enabled ? pushClientFor(scope).onHealthChange(listener) : noop),
     [enabled, scope],
   );
-  const healthy = useCallback(
-    () => (enabled ? (pushSlot(scope).client?.isHealthy(topic, key) ?? false) : false),
-    [enabled, key, scope, topic],
-  );
-  return useSyncExternalStore(subscribe, healthy, never);
+  const state = useCallback((): SubscriptionState => {
+    const client = enabled ? pushSlot(scope).client : null;
+    if (client?.isHealthy(topic, key)) return "healthy";
+    return client?.state() === "recovering" ? "recovering" : "polling";
+  }, [enabled, key, scope, topic]);
+  return useSyncExternalStore(subscribe, state, polling);
 }

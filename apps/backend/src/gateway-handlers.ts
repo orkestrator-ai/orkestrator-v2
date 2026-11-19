@@ -1,3 +1,4 @@
+import { PUSH_SUBSCRIPTION_BODY_BYTES } from "@orkestrator/protocol/push-events";
 import { withRelayController } from "./core/public-api/index.js";
 import { isGlobalConfigEcho, isGlobalConfigWriteCommand } from "./core/nodes/index.js";
 import type { GatewayAuth } from "./gateway-auth.js";
@@ -121,6 +122,10 @@ export class GatewayHandlers {
     const args = body.args;
     if (typeof command !== "string") {
       jsonResponse(response, 400, { error: "Expected command to be a string" });
+      return;
+    }
+    if (command === PUSH_SET_SUBSCRIPTIONS_COMMAND && requestBytes > PUSH_SUBSCRIPTION_BODY_BYTES) {
+      jsonResponse(response, 413, { error: "Push subscription set exceeds the request budget" });
       return;
     }
     // The envelope's contract fields travel next to `command` and `args`

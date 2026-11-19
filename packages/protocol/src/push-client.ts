@@ -72,6 +72,10 @@ export interface PushClientDiagnostics {
   resyncs: number;
   setCalls: number;
   setFailures: number;
+  frameProcessingMs: number;
+  observationSamples: number;
+  observationMs: number;
+  maxObservationMs: number;
   refusals: number;
   /** A recovery read found a change no frame announced, by topic. */
   recoveryFoundChange: Record<string, number>;
@@ -83,10 +87,15 @@ export interface PushClientTimers {
 }
 
 export interface PushSubscriptionClientOptions {
-  setSubscriptions(args: PushSetSubscriptionsArgs): Promise<PushSetSubscriptionsResult>;
+  setSubscriptions(
+    args: PushSetSubscriptionsArgs,
+    signal: AbortSignal,
+  ): Promise<PushSetSubscriptionsResult>;
   timers?: PushClientTimers;
   /** Delay that batches several mounts into one set call. */
   batchMs?: number;
+  requestTimeoutMs?: number;
+  now?: () => number;
   /** First retry after a failed set call; doubles to `maxRetryMs`. */
   retryMs?: number;
   maxRetryMs?: number;
@@ -117,13 +126,16 @@ export class PushSubscriptionClient {
   private readonly healthListeners = new Set<() => void>();
   private readonly timers: PushClientTimers;
   private readonly batchMs: number;
+  private readonly now: () => number;
   private readonly retryMs: number;
   private readonly maxRetryMs: number;
   private stateValue: PushClientState = "connecting";
   private streamId: string | null = null;
   private lastSeq = 0;
   private setRevision = 0;
-  private inFlight = false;
+  private inFlight: AbortController | null = null;
+  private missingRetryTimer: unknown = null;
+  private missingRetryDelay: number;
   private dirty = false;
   private paused = false;
   private sendTimer: unknown = null;
@@ -137,6 +149,10 @@ export class PushSubscriptionClient {
     resyncs: 0,
     setCalls: 0,
     setFailures: 0,
+    frameProcessingMs: 0,
+    observationSamples: 0,
+    observationMs: 0,
+    maxObservationMs: 0,
     refusals: 0,
   };
   private readonly recoveryFoundChange = new Map<string, number>();
@@ -144,9 +160,11 @@ export class PushSubscriptionClient {
   constructor(private readonly options: PushSubscriptionClientOptions) {
     this.timers = options.timers ?? defaultTimers;
     this.batchMs = options.batchMs ?? 0;
+    this.now = options.now ?? (() => performance.now());
     this.retryMs = options.retryMs ?? 1_000;
     this.maxRetryMs = options.maxRetryMs ?? 30_000;
     this.retryDelay = this.retryMs;
+    this.missingRetryDelay = this.retryMs;
   }
 
   state(): PushClientState {
@@ -205,7 +223,7 @@ export class PushSubscriptionClient {
    */
   streamConnected(offer: PushStreamOffer | null): void {
     if (this.stateValue === "closed") return;
-    this.cancelSend();
+    this.resetRequest();
     if (!offer) {
       this.streamId = null;
       this.lastSeq = 0;
@@ -220,7 +238,8 @@ export class PushSubscriptionClient {
       this.resetStatuses();
     }
     this.retryDelay = this.retryMs;
-    this.setState(this.entries.size === 0 && !this.paused ? "live" : "snapshotting");
+    if (this.entries.size === 0 && !this.paused) this.setState("live");
+    else if (this.stateValue !== "recovering") this.setState("snapshotting");
     this.dirty = true;
     this.scheduleSend(0);
   }
@@ -229,6 +248,8 @@ export class PushSubscriptionClient {
   streamDisconnected(): void {
     if (this.stateValue === "closed" || this.stateValue === "unavailable") return;
     if (this.streamId === null) return;
+    this.streamId = null;
+    this.resetRequest();
     this.setState("recovering");
   }
 
@@ -251,6 +272,7 @@ export class PushSubscriptionClient {
   /** A frame from the stream. Returns whether it was a push frame. */
   accept(event: string, payload: unknown): boolean {
     if (event === PUSH_CHANGED_EVENT) {
+      const started = this.now();
       const frame = parsePushChangedPayload(payload);
       if (!frame || !this.acceptSeq(frame.seq)) return true;
       this.counters.framesReceived += 1;
@@ -268,9 +290,11 @@ export class PushSubscriptionClient {
           reason: "frame",
         });
       }
+      this.counters.frameProcessingMs += this.now() - started;
       return true;
     }
     if (event === PUSH_RESYNC_EVENT) {
+      const started = this.now();
       const frame = parsePushResyncPayload(payload);
       if (!frame || !this.acceptSeq(frame.seq)) return true;
       this.counters.resyncs += 1;
@@ -279,6 +303,7 @@ export class PushSubscriptionClient {
         this.emit(entry, { topic: entry.topic, key: entry.key, parts: null, reason: "resync" });
       }
       this.recover();
+      this.counters.frameProcessingMs += this.now() - started;
       return true;
     }
     return false;
@@ -287,6 +312,14 @@ export class PushSubscriptionClient {
   /** A view's recovery-poll read found a change no frame announced (design D8). */
   noteRecoveryReadFoundChange(topic: string): void {
     this.recoveryFoundChange.set(topic, (this.recoveryFoundChange.get(topic) ?? 0) + 1);
+  }
+
+  /** A frame-triggered local read ran through projection application. */
+  noteObservationApplied(elapsedMs: number): void {
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return;
+    this.counters.observationSamples += 1;
+    this.counters.observationMs += elapsedMs;
+    this.counters.maxObservationMs = Math.max(this.counters.maxObservationMs, elapsedMs);
   }
 
   diagnostics(): PushClientDiagnostics {
@@ -300,7 +333,8 @@ export class PushSubscriptionClient {
 
   dispose(): void {
     if (this.stateValue === "closed") return;
-    this.cancelSend();
+    this.resetRequest();
+    this.streamId = null;
     this.entries.clear();
     this.setState("closed");
     this.healthListeners.clear();
@@ -368,36 +402,75 @@ export class PushSubscriptionClient {
     this.sendTimer = null;
   }
 
+  private resetRequest(): void {
+    this.cancelSend();
+    if (this.missingRetryTimer !== null) this.timers.clearTimeout(this.missingRetryTimer);
+    this.missingRetryTimer = null;
+    this.missingRetryDelay = this.retryMs;
+    this.inFlight?.abort();
+    this.inFlight = null;
+  }
+
+  private retryMissing(): void {
+    if (this.missingRetryTimer !== null || this.paused) return;
+    if (!Array.from(this.entries.values()).some((entry) => entry.status === "missing")) {
+      this.missingRetryDelay = this.retryMs;
+      return;
+    }
+    this.missingRetryTimer = this.timers.setTimeout(() => {
+      this.missingRetryTimer = null;
+      if (
+        !this.paused &&
+        Array.from(this.entries.values()).some((entry) => entry.status === "missing")
+      ) {
+        this.markDirty();
+      }
+    }, this.missingRetryDelay);
+    this.missingRetryDelay = Math.min(this.maxRetryMs, this.missingRetryDelay * 2);
+  }
+
   private async send(): Promise<void> {
     const streamId = this.streamId;
     if (!streamId || !this.dirty || this.inFlight || this.stateValue === "closed") return;
     this.dirty = false;
-    this.inFlight = true;
+    const request = new AbortController();
+    this.inFlight = request;
     this.setRevision += 1;
     const setRevision = this.setRevision;
     const sent = this.paused ? [] : Array.from(this.entries.values());
-    if (sent.length > 0 && this.stateValue === "live") this.setState("snapshotting");
     this.counters.setCalls += 1;
     let result: PushSetSubscriptionsResult | null = null;
+    let finishCancelled: () => void = () => undefined;
+    const cancelled = new Promise<null>((resolve) => {
+      finishCancelled = () => resolve(null);
+      request.signal.addEventListener("abort", finishCancelled, { once: true });
+    });
+    const timeout = this.timers.setTimeout(
+      () => request.abort(),
+      this.options.requestTimeoutMs ?? 10_000,
+    );
     try {
-      result = await this.options.setSubscriptions({
-        streamId,
-        setRevision,
-        subscriptions: sent.map((entry) => ({ topic: entry.topic, key: entry.key })),
-      });
+      result = await Promise.race([
+        this.options.setSubscriptions(
+          {
+            streamId,
+            setRevision,
+            subscriptions: sent.map((entry) => ({ topic: entry.topic, key: entry.key })),
+          },
+          request.signal,
+        ),
+        cancelled,
+      ]);
     } catch {
-      this.counters.setFailures += 1;
+      // The current request will retry below.
+    } finally {
+      this.timers.clearTimeout(timeout);
+      request.signal.removeEventListener("abort", finishCancelled);
     }
-    this.inFlight = false;
-    // `dispose` may have run while the call was out.
-    if (this.state() === "closed") return;
-    // A reconnect while the call was out owns the stream now; its own send
-    // (already scheduled or dirty) answers for it.
-    if (this.streamId !== streamId) {
-      this.scheduleSend(0);
-      return;
-    }
+    if (this.inFlight !== request) return;
+    this.inFlight = null;
     if (!result) {
+      this.counters.setFailures += 1;
       this.setState("recovering");
       this.dirty = true;
       const delay = this.retryDelay;
@@ -449,6 +522,7 @@ export class PushSubscriptionClient {
     }
     this.setState("live");
     this.notifyHealth();
+    this.retryMissing();
   }
 
   private emit(entry: Entry, change: PushKeyChange): void {

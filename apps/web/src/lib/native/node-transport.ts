@@ -93,6 +93,7 @@ export interface NodeTransportEnvelope {
 
 /** Options of one command call. */
 export interface NodeTransportInvokeOptions {
+  signal?: AbortSignal;
   /**
    * The invoke envelope's contract fields (plan items 1003 and 2011), sent
    * next to `command` and `args`. Only `domain`, `version` and `critical` are
@@ -1486,7 +1487,7 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
       }
       const ordered = terminalInput.invoke(command, args);
       if (ordered) return ordered as Promise<T>;
-      return invokeImmediately<T>(command, args, undefined, options?.envelope);
+      return invokeImmediately<T>(command, args, options?.signal, options?.envelope);
     },
 
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {

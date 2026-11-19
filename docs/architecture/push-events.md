@@ -93,7 +93,7 @@ The answer is
   show (invariant 12).
 - `push.resync` (`{ seq, reason, topics }`) replaces changes the backend could
   not hold, and consumes a `seq` like any frame.
-- A frame holds at most 64 changes and 16 KiB.
+- A change frame holds at most 64 changes and 16 KiB, including the serialized SSE envelope.
 
 ### Stamps
 
@@ -101,6 +101,10 @@ A key's `generation` is the lifetime of the observer behind it (a new one each
 time a session starts being observed, and after a backend restart);
 `revision` counts the changes it announced. Stamps are compared only within
 one generation of one key.
+
+Subscription sets are limited to 512 entries and a 1 MiB invoke body. Entries
+with over-budget strings are refused before replacement. A refusal leaves
+the existing set in place.
 
 ## Backend
 
@@ -110,13 +114,14 @@ Per connection the hub keeps the set, a contiguous `seq`, and a coalescing
 map of pending changes keyed by subscription that holds the latest stamp and
 the union of parts. Its size follows the subscription count, not the change
 rate. Bounds: 512 entries and 256 KiB; past either, the map is replaced by
-one `push.resync` naming its topics, never a silent drop.
+one `push.resync` naming its topics. The marker stays queued and coalesces
+coverage while the connection is backpressured.
 
 Throttle per key, leading edge: the first change after a quiet period goes
 out within 50 ms (the coalescing window shared by every key of the
-connection), and later changes of the same key wait until 500 ms after its
-previous frame. A key that keeps changing is therefore announced at most twice
-a second per connection, today's poll rate, while a quiet one costs nothing.
+connection), and later transcript changes of the same key wait until 500 ms after its
+previous transcript frame. State changes carrying decisions or completion
+can go out within the coalescing window even during a transcript burst.
 
 While a connection's socket is over the gateway's 1 MiB soft write limit (or
 its replay handshake is still draining) changes wait in the map and the hub
@@ -132,8 +137,8 @@ stops it. The observer:
 
 - reads the session's live update (`get_native_agent_live_update`'s read,
   the same window the view uses) with its own transcript and state tokens;
-- treats its first full answer as the baseline (the views read on mount, and
-  once more on their subscription's first answer);
+- publishes each part's first authoritative answer independently, covering
+  changes that race the viewer's mount read;
 - announces `transcript` or `state` when its token moves, or when the part
   becomes `missing` or `unavailable` (once, not on every read), and
   `discovery` as well when the turn phase changes;
@@ -144,7 +149,10 @@ stops it. The observer:
   read after 2 s;
 - wakes at once on the session's `native-agent-session-activity`
   announcement or `resource-changed` invalidation (the backend's one emit
-  passes every event to the push layer).
+  passes every event to the push layer). A qualified idle Claude or Codex
+  bridge with a live observation stream and a content revision can wake the
+  observer directly and uses a 30 s projection backstop. Running sessions
+  and other bridges keep the responsive or idle cadence.
 
 So a session costs one read per round however many windows view it, and
 nothing on the wire unless it moved. Only mounted, active, visible views
@@ -159,7 +167,11 @@ than 750 ms ago answers the next equivalent read of the same projection epoch
 (`OBSERVED_SETTLED_SHARE_MS`), so the reads the viewers send after a frame
 take the observer's answer instead of starting their own provider read. A
 running read is joined in preference to it; forced and fresh-source reads
-never take it; an epoch change, a wake and the end of observation drop it.
+never take it. Observers also bypass settled sharing and join only source
+work covering their latest wake. An epoch change, a wake and the end of
+observation drop the relevant shares. The shares have a 16 MiB budget and
+expire without another viewer request. Observer work queues when six
+source slots are busy, leaving two slots for foreground reads.
 
 ## Client
 
@@ -184,14 +196,17 @@ re-sends the set, whose answer names what moved. An answer for an older
 `setRevision` is ignored. The first answer for a new key always reads once,
 which covers a change between the view's mount read and the registration.
 Nothing in the client infers that work completed from a stream closing: a
-closed stream only makes keys unhealthy.
+closed stream makes its keys unhealthy and cancels its set request. Each set
+request has a 10 s deadline. Missing keys are retried while subscribed, with
+backoff from 1 s to 30 s, so establishment can complete after the first set.
 
 The live view (`useNativeAgentSession`) subscribes while it is enabled and
 active. A change invalidates its coordinated read (and marks discovery due
 when it names `discovery` or everything). While healthy, its demand is the
-30 s recovery poll with no quiet backoff; a recovery-poll read that finds a
-new projection is counted as `recoveryFoundChange` (a frame that should have
-been sent was not).
+30 s recovery poll with no quiet backoff. Unsettled discovery keeps its 2 s
+or 5 s retry deadline. The session shows a recovery notice while the stream
+or subscription is recovering. A recovery poll that finds a new projection
+is counted as `recoveryFoundChange`.
 
 ## Metrics
 
@@ -206,6 +221,8 @@ themselves are counted with every other event in the stream metrics
 (`push.changed`, `push.resync`). The client keeps its own counters
 (`pushDiagnostics()`): frames, ignored changes, duplicates, `seq` gaps,
 resyncs, set calls, failures, refusals and recovery reads that found a change.
+It also records time spent processing push frames and elapsed time from a
+local invalidation to projection application.
 
 ## Compatibility
 

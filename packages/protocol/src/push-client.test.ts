@@ -21,6 +21,7 @@ const TOPIC = "native-session";
 
 interface PendingCall {
   args: PushSetSubscriptionsArgs;
+  signal: AbortSignal;
   resolve(result: PushSetSubscriptionsResult): void;
   reject(error: Error): void;
 }
@@ -30,9 +31,10 @@ function harness() {
   const calls: PendingCall[] = [];
   const client = new PushSubscriptionClient({
     timers: clock,
-    setSubscriptions: (args) =>
+    now: () => clock.now(),
+    setSubscriptions: (args, signal) =>
       new Promise((resolve, reject) => {
-        calls.push({ args, resolve, reject });
+        calls.push({ args, signal, resolve, reject });
       }),
   });
   const changes: PushKeyChange[] = [];
@@ -229,6 +231,78 @@ describe("PushSubscriptionClient", () => {
     h.frame(1, "k1", 1, ["state"], "g2");
     expect(h.changes).toHaveLength(2);
     expect(h.client.state()).toBe("live");
+  });
+
+  test("a late answer and visibility change cannot make a disconnected stream live", async () => {
+    const h = harness();
+    h.listen("k1");
+    h.client.streamConnected({ versions: [1], streamId: STREAM_A });
+    await h.tick();
+    const oldRequest = h.calls[0]!;
+    h.client.streamDisconnected();
+    expect(oldRequest.signal.aborted).toBe(true);
+    h.client.setPaused(true);
+    h.client.setPaused(false);
+    await h.applyLast({ k1: { generation: "old", revision: 7 } });
+    h.frame(1, "k1", 8);
+    await h.tick();
+    expect(h.calls).toHaveLength(1);
+    expect(h.changes).toEqual([]);
+    expect(h.client.state()).toBe("recovering");
+    expect(h.client.isHealthy(TOPIC, "k1")).toBe(false);
+    h.client.dispose();
+  });
+
+  test("a replacement stream sends while the old transport is still stalled", async () => {
+    const h = harness();
+    h.listen("k1");
+    h.client.streamConnected({ versions: [1], streamId: STREAM_A });
+    await h.tick();
+    h.client.streamDisconnected();
+    h.client.streamConnected({ versions: [1], streamId: STREAM_B });
+    await h.tick();
+    expect(h.calls.map((call) => call.args.streamId)).toEqual([STREAM_A, STREAM_B]);
+    await h.applyLast({ k1: { generation: "new", revision: 1 } });
+    expect(h.client.isHealthy(TOPIC, "k1")).toBe(true);
+    expect(h.changes).toMatchObject([{ reason: "subscribed" }]);
+    h.client.dispose();
+  });
+
+  test("a missing session becomes healthy when its mapping is established", async () => {
+    const h = harness();
+    h.listen("k1");
+    h.listen("ready");
+    h.client.streamConnected({ versions: [1], streamId: STREAM_A });
+    await h.tick();
+    await h.applyLast({ k1: "missing" });
+    expect(h.client.isHealthy(TOPIC, "k1")).toBe(false);
+    h.clock.advance(1_000);
+    await h.tick();
+    expect(h.calls).toHaveLength(2);
+    expect(h.client.isHealthy(TOPIC, "ready")).toBe(true);
+    await h.applyLast({ k1: { generation: "created", revision: 1 } });
+    expect(h.client.isHealthy(TOPIC, "k1")).toBe(true);
+    h.client.dispose();
+  });
+
+  test("reports local frame processing and frame-to-projection measurements separately", async () => {
+    const h = harness();
+    h.client.subscribe(TOPIC, "k1", ({ reason }) => {
+      if (reason === "frame") h.clock.advance(3);
+    });
+    h.client.streamConnected({ versions: [1], streamId: STREAM_A });
+    await h.tick();
+    await h.applyLast({});
+    h.frame(1, "k1", 1);
+    h.client.noteObservationApplied(11);
+    h.client.noteObservationApplied(25);
+    expect(h.client.diagnostics()).toMatchObject({
+      frameProcessingMs: 3,
+      observationSamples: 2,
+      observationMs: 36,
+      maxObservationMs: 25,
+    });
+    h.client.dispose();
   });
 
   test("an unchanged stamp after reconnect costs no read", async () => {

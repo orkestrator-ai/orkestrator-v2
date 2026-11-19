@@ -22,6 +22,8 @@ import type {
 import { relayedNodeEventNodeId } from "@orkestrator/protocol/node-events";
 import { createLogger } from "@orkestrator/protocol/logger";
 
+import { formatPushFrame } from "@orkestrator/protocol/push-events";
+
 const log = createLogger("gateway");
 
 function formatControlFrame(event: string, cursor: string | null, payload: unknown): string {
@@ -199,7 +201,7 @@ export class GatewayEvents {
     payload: unknown,
   ): boolean {
     if (this.ctx.clients.get(client) !== state) return false;
-    const message = formatControlFrame(event, null, payload);
+    const message = formatPushFrame(event, payload);
     const written = this.writeControlFrame(client, event, null, payload, message);
     if (written) this.ctx.metrics.recordEvent(event, Buffer.byteLength(message));
     return written;

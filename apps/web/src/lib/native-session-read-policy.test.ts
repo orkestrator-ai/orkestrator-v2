@@ -204,9 +204,11 @@ describe("NativeDiscoveryReadSchedule", () => {
     for (const availability of ["loading", "stale"] as const) {
       const schedule = settled();
       schedule.observe(view(availability));
+      expect(schedule.followUpAt()).toBe(2_000);
       expect(schedule.claim(1_999, "running")).toBe(false);
       expect(schedule.claim(2_000, "running")).toBe(true);
       schedule.observe(view("ready"));
+      expect(schedule.followUpAt()).toBeNull();
       expect(schedule.claim(4_000, "running")).toBe(false);
     }
   });
@@ -214,6 +216,7 @@ describe("NativeDiscoveryReadSchedule", () => {
   test("an unavailable section waits for the backend's own retry", () => {
     const schedule = settled();
     schedule.observe(view("unavailable"));
+    expect(schedule.followUpAt()).toBe(5_000);
     expect(schedule.claim(4_999, "running")).toBe(false);
     expect(schedule.claim(5_000, "running")).toBe(true);
   });

@@ -180,6 +180,12 @@ export class NativeDiscoveryReadSchedule {
     this.lastReadAt = now;
   }
 
+  /** Deadline for an unsettled or failed discovery read, independent of projection polling. */
+  followUpAt(): number | null {
+    const delay = this.due ? DISCOVERY_SETTLING_READ_MS : this.followUpMs;
+    return delay === null ? null : this.lastReadAt + delay;
+  }
+
   /** The view this schedule's reads now hold, whichever status delivered it. */
   observe(view: NativeAgentDiscoveryView | undefined): void {
     this.followUpMs = view ? discoveryFollowUpMs(view) : null;

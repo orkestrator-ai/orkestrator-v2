@@ -565,6 +565,7 @@ export function SharedNativeAgentController({
     unreadRead,
     sessionStateAvailability,
     sessionStateRefreshing,
+    pushRecovering,
     sessionStateError,
     isDispatching: runtimeIsDispatching,
     connect,
@@ -4222,6 +4223,7 @@ export function SharedNativeAgentController({
       // bare paths instead of pictures.
       containerId={data.containerId}
       connectionState={connectionState}
+      pushRecovering={pushRecovering}
       sessionEstablished={hasEstablishedSession}
       transcriptRefreshing={transcriptRefreshing}
       transcriptSettled={transcriptAvailability === "current" || transcriptAvailability === "empty"}

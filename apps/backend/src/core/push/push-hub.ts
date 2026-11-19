@@ -5,6 +5,8 @@ import {
   PUSH_COALESCE_MS,
   PUSH_KEY_THROTTLE_MS,
   PUSH_LIMITS,
+  NATIVE_SESSION_PUSH_TOPIC,
+  formatPushFrame,
   PUSH_RESYNC_EVENT,
   pushSubscriptionId,
   pushUtf8Bytes,
@@ -109,6 +111,7 @@ interface Connection {
   subscriptions: Map<string, Subscription>;
   pending: Map<string, PendingChange>;
   pendingBytes: number;
+  pendingResync: { reason: PushResyncPayload["reason"]; topics: Set<string> } | null;
   /** When each subscription last went out in a frame; bounded by the set. */
   lastSentAt: Map<string, number>;
   flushTimer: unknown;
@@ -145,7 +148,7 @@ const defaultTimers: PushHubTimers = {
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-/** Fixed per-change overhead of a frame's JSON, beyond its strings. */
+/** Estimated overhead for a pending entry in memory, beyond its strings. */
 const CHANGE_OVERHEAD_BYTES = 96;
 
 function changeBytes(
@@ -216,6 +219,7 @@ export class PushHub {
       subscriptions: new Map(),
       pending: new Map(),
       pendingBytes: 0,
+      pendingResync: null,
       lastSentAt: new Map(),
       flushTimer: null,
       flushAt: null,
@@ -236,6 +240,7 @@ export class PushHub {
     }
     connection.subscriptions.clear();
     connection.pending.clear();
+    connection.pendingResync = null;
     connection.pendingBytes = 0;
     connection.lastSentAt.clear();
   }
@@ -329,6 +334,11 @@ export class PushHub {
         }
       }),
     );
+    if (connection.closed) return { status: "refused", reason: "stream-unknown" };
+    if (connection.setRevision !== args.setRevision) {
+      this.counters.setSuperseded += 1;
+      return { status: "superseded", setRevision: connection.setRevision };
+    }
     for (const { subscription, answer } of resolved) {
       if (answer.status === "ok") {
         answers.push({
@@ -342,7 +352,7 @@ export class PushHub {
       }
       // A key the caller cannot read is not observed for it: its view keeps
       // polling, so observing it here too would only double the work.
-      if (connection.subscriptions.get(subscription.id) === subscription) {
+      if (connection.subscriptions.has(subscription.id)) {
         connection.subscriptions.delete(subscription.id);
         this.dropPending(connection, subscription.id);
         connection.lastSentAt.delete(subscription.id);
@@ -385,7 +395,7 @@ export class PushHub {
       for (const id of Array.from(connection.pending.keys())) {
         if (connection.pending.get(id)?.topic === topic) this.dropPending(connection, id);
       }
-      this.sendResync(connection, "topic-reset", [topic]);
+      this.enqueueResync(connection, "topic-reset", [topic]);
     }
   }
 
@@ -481,6 +491,7 @@ export class PushHub {
     parts: readonly string[] | null,
   ): void {
     if (connection.closed) return;
+    if (connection.pendingResync?.topics.has(topic)) return;
     const boundedParts =
       parts === null || parts.length === 0
         ? null
@@ -524,27 +535,31 @@ export class PushHub {
       const topics = Array.from(new Set(Array.from(connection.pending.values(), (p) => p.topic)));
       connection.pending.clear();
       connection.pendingBytes = 0;
-      this.sendResync(connection, "pending-bound", topics);
+      this.enqueueResync(connection, "pending-bound", topics);
       return;
     }
     this.scheduleFlush(connection);
   }
 
-  /** When the earliest pending change of this connection may go out. */
-  private dueAt(connection: Connection, now: number): number {
-    let due = Number.POSITIVE_INFINITY;
-    for (const id of connection.pending.keys()) {
-      const last = connection.lastSentAt.get(id);
-      const ready = last === undefined ? now : Math.max(now, last + this.keyThrottleMs);
-      if (ready < due) due = ready;
-    }
-    return due;
+  private readyAt(connection: Connection, id: string, change: PendingChange, now: number): number {
+    // A state invalidation can carry an approval or completion. Only transcript
+    // traffic spends this key's transcript throttle.
+    const urgent =
+      change.topic === NATIVE_SESSION_PUSH_TOPIC &&
+      (change.parts === null || change.parts.has("state"));
+    const last = connection.lastSentAt.get(id);
+    return urgent || last === undefined ? now : Math.max(now, last + this.keyThrottleMs);
   }
 
   private scheduleFlush(connection: Connection, minDelayMs = this.coalesceMs): void {
-    if (connection.closed || connection.pending.size === 0) return;
+    if (connection.closed) return;
     const now = this.now();
-    const at = Math.max(now + minDelayMs, this.dueAt(connection, now));
+    let due = connection.pendingResync ? now : Number.POSITIVE_INFINITY;
+    for (const [id, change] of connection.pending) {
+      due = Math.min(due, this.readyAt(connection, id, change, now));
+    }
+    if (!Number.isFinite(due)) return;
+    const at = Math.max(now + minDelayMs, due);
     if (connection.flushTimer !== null && connection.flushAt !== null && connection.flushAt <= at) {
       return;
     }
@@ -566,65 +581,96 @@ export class PushHub {
     connection.flushAt = null;
   }
 
+  private holdFrames(connection: Connection): boolean {
+    if (!connection.sink.backpressured()) return false;
+    this.counters.backpressureHolds += 1;
+    this.scheduleFlush(connection, PUSH_BACKPRESSURE_RETRY_MS);
+    return true;
+  }
+
   private flush(connection: Connection): void {
-    if (connection.closed || connection.pending.size === 0) return;
-    if (connection.sink.backpressured()) {
-      this.counters.backpressureHolds += 1;
-      this.scheduleFlush(connection, PUSH_BACKPRESSURE_RETRY_MS);
-      return;
+    if (connection.closed || this.holdFrames(connection)) return;
+    const recovery = connection.pendingResync;
+    if (recovery) {
+      connection.pendingResync = null;
+      const written = this.writeFrame(connection, PUSH_RESYNC_EVENT, (seq): PushResyncPayload => ({
+        seq,
+        reason: recovery.reason,
+        topics: Array.from(recovery.topics),
+      }));
+      if (!written) return;
+      this.resyncsByReason.set(
+        recovery.reason,
+        (this.resyncsByReason.get(recovery.reason) ?? 0) + 1,
+      );
+      if (connection.pending.size > 0 && this.holdFrames(connection)) return;
     }
     const now = this.now();
-    let batch: PushChange[] = [];
-    let batchBytes = 0;
+    let batch: Array<{ id: string; change: PushChange }> = [];
+    const emptyFrameBytes = () =>
+      pushUtf8Bytes(formatPushFrame(PUSH_CHANGED_EVENT, { seq: connection.seq + 1, changes: [] }));
+    let bytes = emptyFrameBytes();
     const writeBatch = (): boolean => {
       if (batch.length === 0) return true;
+      if (this.holdFrames(connection)) return false;
       const ok = this.writeFrame(connection, PUSH_CHANGED_EVENT, (seq): PushChangedPayload => ({
         seq,
-        changes: batch,
+        changes: batch.map(({ change }) => change),
       }));
-      if (ok) {
-        this.counters.changesSent += batch.length;
-        this.counters.frameBytes += batchBytes;
+      if (!ok) return false;
+      for (const { id, change } of batch) {
+        this.dropPending(connection, id);
+        if (
+          change.parts.length === 0 ||
+          change.parts.includes("transcript") ||
+          change.topic !== NATIVE_SESSION_PUSH_TOPIC
+        )
+          connection.lastSentAt.set(id, now);
       }
+      this.counters.changesSent += batch.length;
       batch = [];
-      batchBytes = 0;
-      return ok;
+      bytes = emptyFrameBytes();
+      return true;
     };
-    for (const [id, pending] of Array.from(connection.pending)) {
-      const last = connection.lastSentAt.get(id);
-      if (last !== undefined && now - last < this.keyThrottleMs) continue;
-      if (
-        batch.length >= this.limits.maxFrameChanges ||
-        batchBytes + pending.bytes > this.limits.maxFrameBytes
-      ) {
-        if (!writeBatch()) return;
-      }
-      this.dropPending(connection, id);
-      connection.lastSentAt.set(id, now);
-      batch.push({
+    for (const [id, pending] of connection.pending) {
+      if (this.readyAt(connection, id, pending, now) > now) continue;
+      const change: PushChange = {
         topic: pending.topic,
         key: pending.key,
         generation: pending.generation,
         revision: pending.revision,
         parts: pending.parts === null ? [] : Array.from(pending.parts),
-      });
-      batchBytes += pending.bytes;
+      };
+      const changeSize = pushUtf8Bytes(JSON.stringify(change));
+      if (
+        batch.length >= this.limits.maxFrameChanges ||
+        bytes + changeSize + Number(batch.length > 0) > this.limits.maxFrameBytes
+      ) {
+        if (!writeBatch()) return;
+      }
+      if (bytes + changeSize > this.limits.maxFrameBytes) {
+        this.dropPending(connection, id);
+        this.enqueueResync(connection, "pending-bound", [pending.topic]);
+        return;
+      }
+      bytes += changeSize + Number(batch.length > 0);
+      batch.push({ id, change });
     }
     if (!writeBatch()) return;
     this.scheduleFlush(connection, 0);
   }
 
-  private sendResync(
+  private enqueueResync(
     connection: Connection,
     reason: PushResyncPayload["reason"],
     topics: string[],
-  ) {
-    this.resyncsByReason.set(reason, (this.resyncsByReason.get(reason) ?? 0) + 1);
-    this.writeFrame(connection, PUSH_RESYNC_EVENT, (seq): PushResyncPayload => ({
-      seq,
-      reason,
-      topics: topics.length === 0 ? "all" : topics,
-    }));
+  ): void {
+    if (!connection.pendingResync) connection.pendingResync = { reason, topics: new Set() };
+    for (const topic of topics) connection.pendingResync.topics.add(topic);
+    for (const [id, pending] of Array.from(connection.pending)) {
+      if (connection.pendingResync.topics.has(pending.topic)) this.dropPending(connection, id);
+    }
+    this.scheduleFlush(connection, 0);
   }
 
   /** Numbers and writes one frame; a refused write means the connection is gone. */
@@ -632,8 +678,9 @@ export class PushHub {
     if (connection.closed) return false;
     const seq = connection.seq + 1;
     let written = false;
+    const payload = build(seq);
     try {
-      written = connection.sink.write(event, build(seq));
+      written = connection.sink.write(event, payload);
     } catch (error) {
       log.warn("frame.write-failed", { error: formatLogError(error) });
     }
@@ -645,6 +692,7 @@ export class PushHub {
       return false;
     }
     this.counters.framesSent += 1;
+    this.counters.frameBytes += pushUtf8Bytes(formatPushFrame(event, payload));
     return true;
   }
 }

@@ -76,6 +76,14 @@ export const PUSH_LIMITS: Readonly<PushLimits> = Object.freeze({
   maxPartBytes: 32,
 });
 
+/** Wire budget for a complete set, including its command envelope. */
+export const PUSH_SUBSCRIPTION_BODY_BYTES = 1024 * 1024;
+
+/** Push frames are connection-local SSE control frames without a replay id. */
+export function formatPushFrame(event: string, payload: unknown): string {
+  return `data: ${JSON.stringify({ event, payload })}\n\n`;
+}
+
 /** Changes arriving together within this window share one frame. */
 export const PUSH_COALESCE_MS = 50;
 /** A key that keeps changing is announced at most this often (leading edge). */

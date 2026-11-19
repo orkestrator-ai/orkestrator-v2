@@ -284,6 +284,8 @@ export interface NativeAgentProgressiveInput {
   forceSnapshot?: boolean;
   /** Confirm a rendered unread result using source work started after this request. */
   freshSource?: boolean;
+  /** Internal push observer source read. */
+  pushObservation?: boolean;
 }
 
 export interface NativeAgentTranscriptUpdateInput extends NativeAgentProgressiveInput {
@@ -302,6 +304,8 @@ export interface NativeAgentLiveUpdateInput {
   stateToken?: string;
   /** Part-level message patches the client can apply (step 14); absent: none. */
   patchVersion?: 2;
+  /** Internal push observer source read. */
+  pushObservation?: boolean;
 }
 
 export interface NativeAgentDiscoveryUpdateInput extends NativeAgentProgressiveInput {
@@ -433,6 +437,11 @@ export function isAgentTurnEndTransition(
 }
 
 export interface NativeAgentServiceOptions {
+  onPushObservationHint?: (
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    providerSessionId?: string,
+  ) => void;
   onConversationRetired?: (
     environmentId: string,
     logicalSessionKey: string,

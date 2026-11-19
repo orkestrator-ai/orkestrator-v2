@@ -84,6 +84,94 @@ describe("observed settled reads", () => {
     expect(r.providerReads()).toBe(6);
   });
 
+  test("observer ticks fetch from the source and share the new value with viewers", async () => {
+    const r = reads();
+    const stop = r.instance.observeSession(SESSION);
+    const observe = () =>
+      r.instance.progressiveReadCovering(KEY, SESSION, 0, false, r.read, false, true);
+    expect(await observe()).toEqual({ value: 1 });
+    expect(await observe()).toEqual({ value: 2 });
+    expect(await r.instance.progressiveReadCovering(KEY, SESSION, 0, false, r.read)).toEqual({
+      value: 2,
+    });
+    expect(r.providerReads()).toBe(2);
+    stop();
+  });
+
+  test("a wake cannot be refilled by an older read, and the observer gets fresh source work", async () => {
+    const r = reads();
+    const stop = r.instance.observeSession(SESSION);
+    const old = Promise.withResolvers<{ value: number }>();
+    const first = r.instance.progressiveReadCovering(KEY, SESSION, 0, false, () => old.promise);
+    r.instance.forgetObservedSettled(SESSION);
+    const observer = r.instance.progressiveReadCovering(
+      KEY,
+      SESSION,
+      0,
+      false,
+      r.read,
+      false,
+      true,
+    );
+    old.resolve({ value: 99 });
+    expect(await first).toEqual({ value: 99 });
+    expect(await observer).toEqual({ value: 1 });
+    expect(await r.instance.progressiveReadCovering(KEY, SESSION, 0, false, r.read)).toEqual({
+      value: 1,
+    });
+    stop();
+  });
+
+  test("queues ten sessions fairly while reserving source slots for foreground work", async () => {
+    const r = reads();
+    const gate = Promise.withResolvers<void>();
+    const started: number[] = [];
+    const stops: Array<() => void> = [];
+    const observed = Array.from({ length: 10 }, (_, index) => {
+      const key = `${SESSION}-${index}`;
+      stops.push(r.instance.observeSession(key));
+      return r.instance.progressiveReadCovering(
+        `${key}\0progressive-v1\0state`,
+        key,
+        0,
+        false,
+        async () => {
+          started.push(index);
+          await gate.promise;
+          return index;
+        },
+        false,
+        true,
+      );
+    });
+    expect(started).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(await r.instance.progressiveReadCovering(KEY, SESSION, 0, false, r.read)).toEqual({
+      value: 1,
+    });
+    gate.resolve();
+    expect(await Promise.all(observed)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(started).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    for (const stop of stops) stop();
+  });
+
+  test("oversized values are not retained and expired values are evicted without a lookup", async () => {
+    const r = reads();
+    const stop = r.instance.observeSession(SESSION);
+    try {
+      await r.instance.progressiveReadCovering(KEY, SESSION, 0, false, async () =>
+        "x".repeat(9 * 1024 * 1024),
+      );
+      expect(r.instance.cacheGauges().observedSettled).toBe(0);
+      await r.instance.progressiveReadCovering(KEY, SESSION, 0, false, r.read);
+      expect(r.instance.cacheGauges().observedSettled).toBe(1);
+      const until = Date.now() + OBSERVED_SETTLED_SHARE_MS + 1_000;
+      while (r.instance.cacheGauges().observedSettled && Date.now() < until) await Bun.sleep(20);
+      expect(r.instance.cacheGauges().observedSettled).toBe(0);
+    } finally {
+      stop();
+    }
+  });
+
   test("a running read is joined in preference to a settled one", async () => {
     const r = reads();
     r.instance.observeSession(SESSION);

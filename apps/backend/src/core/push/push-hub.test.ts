@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   PUSH_CHANGED_EVENT,
+  formatPushFrame,
   PUSH_RESYNC_EVENT,
   type PushChangedPayload,
   type PushResyncPayload,
@@ -196,6 +197,29 @@ describe("PushHub subscriptions", () => {
     expect(h.topic.released).toEqual(["gone"]);
   });
 
+  test("obsolete missing answers leave the latest set intact; current ones release it", async () => {
+    const h = harness();
+    const c = h.open();
+    const older = Promise.withResolvers<PushResolveAnswer>();
+    h.topic.resolve = () => older.promise;
+    const first = h.set("owner", c.streamId, 1, ["k1"]);
+    h.topic.resolve = async () => ({ status: "ok", generation: "g", revision: 0 });
+    expect(await h.set("owner", c.streamId, 2, ["k1"])).toMatchObject({ status: "applied" });
+    older.resolve({ status: "missing" });
+    expect(await first).toEqual({ status: "superseded", setRevision: 2 });
+    h.hub.publish(TOPIC, "k1", { generation: "g", revision: 1 }, ["state"]);
+    h.clock.advance(50);
+    expect(h.changes(c.written)).toHaveLength(1);
+    expect(h.topic.released).toEqual([]);
+
+    h.topic.resolve = async () => ({ status: "missing" });
+    const revoked = await h.set("owner", c.streamId, 3, ["k1"]);
+    expect(revoked).toMatchObject({ status: "applied", subscriptions: [{ status: "missing" }] });
+    expect(h.hub.isObserved(TOPIC, "k1")).toBe(false);
+    expect(h.topic.released).toEqual(["k1"]);
+    h.hub.dispose();
+  });
+
   test("two connections share one observation; it ends with the last subscriber", async () => {
     const h = harness();
     const a = h.open();
@@ -232,15 +256,10 @@ describe("PushHub frames", () => {
     expect(h.changes(c.written)).toEqual([
       { topic: TOPIC, key: "k1", generation: "g", revision: 1, parts: ["transcript"] },
     ]);
-    // A burst during the throttle collapses into one change with the union of parts.
+    // A transcript burst during the throttle collapses into one invalidation.
     for (let revision = 2; revision <= 10; revision += 1) {
       h.clock.advance(20);
-      h.hub.publish(
-        TOPIC,
-        "k1",
-        { generation: "g", revision },
-        revision % 2 ? ["state"] : ["transcript"],
-      );
+      h.hub.publish(TOPIC, "k1", { generation: "g", revision }, ["transcript"]);
     }
     // Now at 230 ms; the key's last frame went at 50 ms, so the next is due at 550 ms.
     h.clock.advance(549 - 230);
@@ -249,7 +268,7 @@ describe("PushHub frames", () => {
     expect(c.written).toHaveLength(2);
     const second = h.changes(c.written)[1]!;
     expect(second.revision).toBe(10);
-    expect([...second.parts].sort()).toEqual(["state", "transcript"]);
+    expect(second.parts).toEqual(["transcript"]);
     expect(h.hub.metrics().changesCoalesced).toBe(8);
     expect(c.written.map((w) => (w.payload as PushChangedPayload).seq)).toEqual([1, 2]);
   });
@@ -273,6 +292,7 @@ describe("PushHub frames", () => {
     await h.set("owner", c.streamId, 1, ["a", "b", "c"]);
     for (const key of ["a", "b", "c"])
       h.hub.publish(TOPIC, key, { generation: "g", revision: 1 }, null);
+    h.clock.advance(0);
     expect(c.written).toEqual([
       {
         event: PUSH_RESYNC_EVENT,
@@ -291,6 +311,7 @@ describe("PushHub frames", () => {
     for (const key of ["k".repeat(100), "j".repeat(100), "i".repeat(100)]) {
       h.hub.publish(TOPIC, key, { generation: "g", revision: 1 }, ["state"]);
     }
+    h.clock.advance(0);
     expect(c.written.map((w) => w.event)).toEqual([PUSH_RESYNC_EVENT]);
   });
 
@@ -309,6 +330,61 @@ describe("PushHub frames", () => {
     h.clock.advance(250);
     expect(h.changes(c.written).map((change) => change.revision)).toEqual([2]);
     expect(h.hub.metrics().backpressureHolds).toBeGreaterThan(0);
+  });
+
+  test("one recovery marker covers a sustained overflow while the stream is pressured", async () => {
+    const h = harness({ limits: { maxPendingEntries: 1 } });
+    const c = h.open();
+    await h.set("owner", c.streamId, 1, ["transcript", "approval"]);
+    c.state.backpressured = true;
+    for (let revision = 1; revision <= 120; revision += 1) {
+      h.hub.publish(TOPIC, "transcript", { generation: "g", revision }, ["transcript"]);
+      h.hub.publish(TOPIC, "approval", { generation: "g", revision }, ["state"]);
+      h.clock.advance(250);
+      expect(h.hub.metrics().pendingEntries).toBeLessThanOrEqual(1);
+    }
+    expect(c.written).toEqual([]);
+    c.state.backpressured = false;
+    h.clock.advance(250);
+    expect(c.written.map((frame) => frame.event)).toEqual([PUSH_RESYNC_EVENT]);
+    h.hub.publish(TOPIC, "transcript", { generation: "g", revision: 121 }, ["transcript"]);
+    h.clock.advance(50);
+    expect(h.changes(c.written).map((change) => change.revision)).toEqual([121]);
+    h.hub.dispose();
+  });
+
+  test("same-session state can be sent during its transcript throttle", async () => {
+    const h = harness();
+    const c = h.open();
+    await h.set("owner", c.streamId, 1, ["session"]);
+    h.hub.publish(TOPIC, "session", { generation: "g", revision: 1 }, ["transcript"]);
+    h.clock.advance(50);
+    h.hub.publish(TOPIC, "session", { generation: "g", revision: 2 }, ["transcript"]);
+    h.hub.publish(TOPIC, "session", { generation: "g", revision: 3 }, ["state"]);
+    h.clock.advance(50);
+    expect(h.changes(c.written).at(-1)).toMatchObject({
+      revision: 3,
+      parts: ["transcript", "state"],
+    });
+    h.hub.dispose();
+  });
+
+  test("escaped keys are batched by their exact serialized SSE bytes", async () => {
+    const maxFrameBytes = 400;
+    const h = harness({ limits: { maxFrameBytes } });
+    const c = h.open();
+    const keys = ['"'.repeat(100), "\u0001".repeat(35), "\\".repeat(100)];
+    await h.set("owner", c.streamId, 1, keys);
+    for (const key of keys) h.hub.publish(TOPIC, key, { generation: "g", revision: 1 }, ["state"]);
+    h.clock.advance(50);
+    const sizes = c.written.map(({ event, payload }) =>
+      Buffer.byteLength(formatPushFrame(event, payload)),
+    );
+    expect(sizes.length).toBeGreaterThan(1);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(maxFrameBytes);
+    expect(h.hub.metrics().frameBytes).toBe(sizes.reduce((sum, size) => sum + size, 0));
+    expect(h.changes(c.written)).toHaveLength(keys.length);
+    h.hub.dispose();
   });
 
   test("a refused write closes the connection and releases its keys", async () => {
@@ -355,6 +431,7 @@ describe("PushHub frames", () => {
     await h.set("owner", a.streamId, 1, ["k1"]);
     await h.set("owner", b.streamId, 1, ["k1"], "other");
     h.hub.resyncTopic(TOPIC);
+    h.clock.advance(0);
     expect(a.written.map((w) => w.event)).toEqual([PUSH_RESYNC_EVENT]);
     expect(b.written).toEqual([]);
   });

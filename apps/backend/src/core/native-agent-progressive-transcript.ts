@@ -1593,6 +1593,7 @@ export class NativeAgentProgressiveTranscript {
             // A recovery read already drained the running read above; it must
             // not take a push-observed session's settled answer either.
             bypassSourceToken,
+            input.pushObservation,
           );
         const projection = await (timer ? timer.covering(cover) : cover());
         if (!projection || this.context.reads.progressiveRequests.get(sessionKey)?.forgotten)
@@ -1602,7 +1603,7 @@ export class NativeAgentProgressiveTranscript {
         else commit();
         return projection.value;
       });
-    if (!cached && !input.forceSnapshot) {
+    if (!cached && !input.forceSnapshot && !input.pushObservation) {
       const persisted = await this.storage.getNativeAgentDisplayTail(sessionKey).catch(() => null);
       if (persisted && persisted.logicalSessionKey === input.logicalSessionKey) {
         const historyComplete = persisted.historyComplete === true;
@@ -1631,7 +1632,12 @@ export class NativeAgentProgressiveTranscript {
         return { viewVersion: 1, status: "snapshot", token, value };
       }
     }
-    if (cached && !input.forceSnapshot && input.knownToken !== cached.token) {
+    if (
+      cached &&
+      !input.forceSnapshot &&
+      !input.pushObservation &&
+      input.knownToken !== cached.token
+    ) {
       void publish().catch(() => undefined);
       const value: NativeAgentTranscriptView = { ...cached.value, freshness: "cached" };
       // This is the path a reader who is behind actually takes, so it gets what

@@ -788,6 +788,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     matchingProgressiveCache?.discovery,
   );
   const [discoverySchedule] = useState(() => new NativeDiscoveryReadSchedule());
+  const [discoveryFollowUpAt, setDiscoveryFollowUpAt] = useState<number | null>(null);
   const syncLiveProjectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(
     (sharedSyncCache?.liveProjection as NativeAgentSessionProjection<TMessage> | undefined) ?? null,
   );
@@ -2296,7 +2297,10 @@ export function useNativeAgentSession<TMessage = unknown>({
               }
               discoverySchedule.observe(progressiveDiscoveryRef.current);
             })
-            .catch(() => discoverySchedule.markDue());
+            .catch(() => discoverySchedule.markDue())
+            .finally(() => {
+              if (stillCurrent()) setDiscoveryFollowUpAt(discoverySchedule.followUpAt());
+            });
         }
 
         await Promise.allSettled([transcriptRead, stateRead]);
@@ -2728,8 +2732,10 @@ export function useNativeAgentSession<TMessage = unknown>({
     agent: platform,
     logicalSessionKey: sessionKey,
   });
+  const pushFrameReceivedAt = useRef<number | null>(null);
   const onPushChange = useCallback(
     (change: PushKeyChange) => {
+      if (change.reason === "frame") pushFrameReceivedAt.current ??= performance.now();
       if (change.parts === null || change.parts.includes("discovery")) {
         discoverySchedule.markDue();
       }
@@ -2737,13 +2743,29 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [discoverySchedule],
   );
-  const pushHealthy = usePushSubscription(
+  const pushSubscriptionState = usePushSubscription(
     scope,
     NATIVE_SESSION_PUSH_TOPIC,
     pushKey,
     enabled && isActive,
     onPushChange,
   );
+  const pushHealthy = pushSubscriptionState === "healthy";
+  useEffect(() => {
+    if (!pushHealthy || !enabled || !isActive || discoveryFollowUpAt === null) return;
+    const timer = setTimeout(
+      () => coordinatedInvalidateRef.current(),
+      Math.max(0, discoveryFollowUpAt - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [discoveryFollowUpAt, enabled, isActive, pushHealthy]);
+  useEffect(
+    () => () => {
+      pushFrameReceivedAt.current = null;
+    },
+    [scope, pushKey, isActive],
+  );
+
   const pushHealthyRef = useRef(pushHealthy);
   useLayoutEffect(() => {
     pushHealthyRef.current = pushHealthy;
@@ -2763,12 +2785,17 @@ export function useNativeAgentSession<TMessage = unknown>({
           // new projection found a change no frame announced (design D8).
           const recovery = context.reason === "interval" && pushHealthyRef.current;
           const before = recovery ? projectionRef.current : null;
+          const receivedAt = pushFrameReceivedAt.current;
+          pushFrameReceivedAt.current = null;
           const result =
             (await refreshRef.current?.(
               context.reason === "interval"
                 ? { manual: false, round }
                 : { manual: false, reconcileAfterInFlight: true, round },
             )) ?? null;
+          if (result && receivedAt !== null) {
+            pushClientFor(scope).noteObservationApplied(performance.now() - receivedAt);
+          }
           if (recovery && before && result && result !== before) {
             pushClientFor(scope).noteRecoveryReadFoundChange(NATIVE_SESSION_PUSH_TOPIC);
           }
@@ -3670,6 +3697,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     unreadRead,
     sessionStateAvailability,
     sessionStateRefreshing,
+    pushRecovering: pushSubscriptionState === "recovering",
     sessionStateError,
     isDispatching,
     refresh,

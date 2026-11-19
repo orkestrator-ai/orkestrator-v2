@@ -1,6 +1,8 @@
 import type { NativeAgentLiveUpdate } from "@orkestrator/protocol/native-agent";
 import {
   PUSH_PROTOCOL_VERSIONS,
+  PUSH_LIMITS,
+  pushUtf8Bytes,
   type PushSetSubscriptionsArgs,
   type PushSetSubscriptionsResult,
 } from "@orkestrator/protocol/push-events";
@@ -47,6 +49,7 @@ export interface PushNativeAgents {
     input: ReturnType<typeof nativeSessionLiveReadInput>,
   ): Promise<NativeAgentLiveUpdate>;
   observePushSession(environmentId: string, agent: string, logicalSessionKey: string): () => void;
+  canWakePushObserverFromBridge?(environmentId: string, agent: string): boolean;
   forgetPushSettled(environmentId: string, agent: string, logicalSessionKey: string): void;
 }
 
@@ -61,20 +64,31 @@ class PushArgumentError extends Error {}
 
 function parseArgs(args: Record<string, unknown>): PushSetSubscriptionsArgs {
   const { streamId, setRevision, subscriptions } = args;
-  if (typeof streamId !== "string") throw new PushArgumentError("streamId must be a string");
+  if (typeof streamId !== "string" || streamId.length > 128) {
+    throw new PushArgumentError("streamId must be a bounded string");
+  }
   if (typeof setRevision !== "number" || !Number.isSafeInteger(setRevision) || setRevision < 0) {
     throw new PushArgumentError("setRevision must be a non-negative integer");
   }
   if (!Array.isArray(subscriptions)) throw new PushArgumentError("subscriptions must be a list");
+  if (subscriptions.length > PUSH_LIMITS.maxSubscriptions) {
+    throw new PushArgumentError("Push subscription set has too many entries");
+  }
   return {
     streamId,
     setRevision,
     subscriptions: subscriptions.map((entry) => {
       const record = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
-      return {
-        topic: typeof record.topic === "string" ? record.topic : "",
-        key: typeof record.key === "string" ? record.key : "",
-      };
+      const topic = typeof record.topic === "string" ? record.topic : "";
+      const key = typeof record.key === "string" ? record.key : "";
+      if (
+        topic.length > 64 ||
+        key.length > PUSH_LIMITS.maxKeyBytes ||
+        pushUtf8Bytes(key) > PUSH_LIMITS.maxKeyBytes
+      ) {
+        throw new PushArgumentError("Push subscription entry exceeds the string budget");
+      }
+      return { topic, key };
     }),
   };
 }
@@ -104,6 +118,9 @@ export class BackendPush implements PushGatewayPort {
         options
           .nativeAgents()
           ?.forgetPushSettled(key.environmentId, key.agent, key.logicalSessionKey),
+      canWakeFromBridge: (key) =>
+        options.nativeAgents()?.canWakePushObserverFromBridge?.(key.environmentId, key.agent) ===
+        true,
       observeSession: (key) =>
         options
           .nativeAgents()

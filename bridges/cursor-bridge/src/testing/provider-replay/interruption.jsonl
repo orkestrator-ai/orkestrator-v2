@@ -1,0 +1,8 @@
+{"replay":1,"bridge":"cursor","scenario":"interruption","source":"synthetic","provider":"@cursor/sdk","providerVersion":"1.4.1","description":"Prose streams and a long shell call starts; the user cancels and the run reports cancelled."}
+{"action":"prompt","text":"Run the full test suite"}
+{"frame":{"type":"step-started"}}
+{"frame":{"type":"text-delta","text":"Starting the suite."}}
+{"frame":{"type":"tool-call-started","callId":"call-test","modelCallId":"m1","toolCall":{"type":"shell","args":{"command":"bun test"}}}}
+{"frame":{"type":"shell-output-delta","callId":"call-test","event":{"case":"stdout","value":{"data":"running 412 tests\n"}}}}
+{"action":"observe","label":"mid-turn"}
+{"action":"interrupt"}

@@ -263,6 +263,8 @@ import { useConversationScrollTarget } from "./useConversationScrollTarget";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
+import { PlanCardScopeContext } from "@/components/chat/plan-card-context";
+import { useAgentPlanCardScope } from "./AgentNativeTab.plan-card";
 import {
   completedTurnElapsedSeconds,
   findLatestBackendTurnElapsedSeconds,
@@ -3130,20 +3132,22 @@ export function SharedNativeAgentController({
     phase === "idle" &&
     latestIsPlanReview &&
     latestAssistantMessage !== undefined &&
+    transcriptTail.latestAssistantIndex > transcriptTail.lastUserTurnIndex &&
     latestAssistantMessage.id !== dismissedPlanReviewId;
   const latestAssistantMessageId = latestAssistantMessage?.id;
   const composerModelId = composer?.selectedModelId;
   const composerReasoningId = composer?.selectedReasoningId;
   const composerFastModeEnabled = composer?.fastModeEnabled;
+  // With a prompt, asks the agent to implement; without one, only leaves plan mode.
   const switchPlanToBuild = useCallback(
-    async (implement: boolean) => {
+    async (implementPrompt?: string) => {
       if (planTransitionPending) return;
       setPlanTransitionPending(true);
       try {
         await updateControls({ mode: "build" });
         setDismissedPlanReviewId(latestAssistantMessageId ?? null);
-        if (implement) {
-          const outcome = await send("The plan is approved. Exit plan mode and implement it.", {
+        if (implementPrompt) {
+          const outcome = await send(implementPrompt, {
             model: composerModelId,
             reasoningEffort: composerReasoningId,
             mode: "build",
@@ -3169,6 +3173,13 @@ export function SharedNativeAgentController({
       updateControls,
     ],
   );
+  const planCards = useAgentPlanCardScope({
+    messages,
+    historyComplete: !canLoadEarlierHistory && projection?.messageWindow?.truncated !== true,
+    reviewApplies: platform === "cursor" && showPlanReview,
+    pending: planTransitionPending,
+    switchPlanToBuild,
+  });
 
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
@@ -3685,6 +3696,7 @@ export function SharedNativeAgentController({
    * an unconditional wrapper would permanently reserve pinned clearance for a tab
    * that has nothing pinned.
    */
+  const reviewPlan = planCards.reviewPlan;
   const pinnedCards: ReactNode[] = [
     resumeSessionReplacement && tabId.startsWith("multi-review-fix:") ? (
       <div
@@ -3695,13 +3707,31 @@ export function SharedNativeAgentController({
         {MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE}
       </div>
     ) : null,
-    showPlanReview ? (
+    // A structured plan is implemented from its card, where its body is visible.
+    showPlanReview && !planCards.actionsVisible ? (
       <CodexPlanModeCard
         key="plan-review"
         className="mx-0 my-0"
         isSubmitting={planTransitionPending}
-        onApproveAndBuild={() => switchPlanToBuild(true)}
-        onSwitchToBuild={() => switchPlanToBuild(false)}
+        onApproveAndBuild={() =>
+          switchPlanToBuild("The plan is approved. Exit plan mode and implement it.")
+        }
+        onReviewPlan={
+          reviewPlan
+            ? () => {
+                const index = messages.findIndex((message) => message.id === reviewPlan.messageId);
+                scrollToIndex(
+                  index,
+                  {
+                    rowKey: reviewPlan.messageId,
+                    partId: reviewPlan.partId,
+                  },
+                  "message-link",
+                );
+              }
+            : undefined
+        }
+        onSwitchToBuild={() => switchPlanToBuild()}
         onDismiss={() => setDismissedPlanReviewId(latestAssistantMessage?.id ?? null)}
       />
     ) : null,
@@ -4810,7 +4840,11 @@ export function SharedNativeAgentController({
                     turnActive={isTurnActive}
                     containment={<EnvironmentContainmentTag environmentId={data.environmentId} />}
                   />
-                  <div className="min-h-0 flex-1">{chatShell}</div>
+                  <div className="min-h-0 flex-1">
+                    <PlanCardScopeContext.Provider value={planCards.scope}>
+                      {chatShell}
+                    </PlanCardScopeContext.Provider>
+                  </div>
                   {floatingNotices && agentPrompts.length > 0 ? (
                     <HumanPromptBanner prompts={agentPrompts} />
                   ) : null}

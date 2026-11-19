@@ -14,6 +14,7 @@ import {
   readQueuedAttachmentTranscript,
   recordQueuedAttachmentSteer,
 } from "./queued-attachment-transcript";
+import { CursorPlanCardFixture } from "./CursorPlanCardFixture";
 import { NativeDockNoticeFixture } from "./NativeDockNoticeFixture";
 import { AutoPipelineFixture, installAutoPipelineFixture } from "./AutoPipelineFixture";
 import {
@@ -2323,6 +2324,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/review-validation-output") {
     return <ReviewValidationOutputFixture />;
   }
+  if (window.location.pathname === "/cursor-plan-card") return <CursorPlanCardFixture />;
   if (window.location.pathname === "/native-dock-notice") return <NativeDockNoticeFixture />;
   if (window.location.pathname === "/native-refresh-shimmer") {
     return <NativeRefreshShimmerFixture />;

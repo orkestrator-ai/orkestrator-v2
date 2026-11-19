@@ -131,6 +131,7 @@ const AUTHENTICATION_PATTERNS: readonly RegExp[] = [
 ];
 
 const BILLING_PATTERNS: readonly RegExp[] = [
+  /\bpayment or usage credits are required\b/i,
   /\bcredit balance is too low\b/i,
   /\bbilling[_ ](?:error|issue|problem|details)\b/i,
   /\b(?:update|add|check) (?:your )?(?:billing|payment method)\b/i,
@@ -185,7 +186,8 @@ const UNAVAILABLE_PATTERNS: readonly RegExp[] = [
  * Text classification, most specific first. A usage limit is checked before
  * a rate limit because Claude's and Codex's plan refusals mention "limit" in
  * ways the rate-limit wording also matches; the usage-limit match is the one
- * the account auto-switch already acts on, so both must agree.
+ * the account auto-switch already acts on. ACP also forwards Grok's normalized
+ * exhausted-credit refusal, which offers the same remedies.
  */
 function classifyText(text: string): ProviderFailureClassification | null {
   const usage = classifyUsageLimitError(text);
@@ -195,7 +197,9 @@ function classifyText(text: string): ProviderFailureClassification | null {
   if (BILLING_PATTERNS.some((pattern) => pattern.test(text))) {
     return { reason: "billing", signal: "text" };
   }
-  if (usage) return { reason: "usage-limit", signal: "text", ...usage };
+  if (usage || /\bGrok Build usage balance is exhausted\b/i.test(text)) {
+    return { reason: "usage-limit", signal: "text", ...usage };
+  }
   if (CONTEXT_PATTERNS.some((pattern) => pattern.test(text))) {
     return { reason: "context-exhausted", signal: "text" };
   }
@@ -312,11 +316,14 @@ export function providerFailurePresentation(
 export const PROVIDER_FAILURE_RETRY_PROMPT =
   "The previous turn ended with an error. Please try again: continue the request from where it stopped, without repeating work or tool calls that already completed.";
 
+/** Reserved for conditional provider failure recovery, including journal replays. */
+export const PROVIDER_FAILURE_RETRY_ID_PREFIX = "failure-retry:";
+
 /**
  * The request id a Retry action dispatches under, derived from the failure it
  * answers. Pressing Retry twice, or on two mounted views of the same failure,
  * reaches the backend's dispatch journal with one id and runs one turn.
- * `occurredAt` keeps two failures with the same text apart.
+ * The row identity and `occurredAt` identify one occurrence.
  */
 export function providerFailureRetryRequestId(failureId: string, occurredAt: string): string {
   let hash = 0x811c9dc5;
@@ -329,5 +336,5 @@ export function providerFailureRetryRequestId(failureId: string, occurredAt: str
     second ^= char.codePointAt(0)!;
     second = Math.imul(second, 0x811c9dc5) >>> 0;
   }
-  return `failure-retry:${hash.toString(16).padStart(8, "0")}${second.toString(16).padStart(8, "0")}`;
+  return `${PROVIDER_FAILURE_RETRY_ID_PREFIX}${hash.toString(16).padStart(8, "0")}${second.toString(16).padStart(8, "0")}`;
 }

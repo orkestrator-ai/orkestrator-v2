@@ -548,6 +548,7 @@ export interface SessionState {
    * turn's SDK API error code settles it (`claudeFailureReason`). Set and
    * cleared with `error`.
    */
+  failedTurn?: { id: string; occurredAt: string; resetsAt?: string };
   failureReason?: import("@orkestrator/protocol/provider-failures").ProviderFailureReason;
   /**
    * Set beside `status: "error"` when a bridge restart cut the last turn short:

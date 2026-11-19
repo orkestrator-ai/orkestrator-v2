@@ -248,6 +248,9 @@ const FocusHairlineFixture = lazy(async () => {
   fixture.installFocusHairlineFixture();
   return { default: fixture.FocusHairlineFixture };
 });
+const ProviderFailureFixture = lazy(async () => ({
+  default: (await import("./ProviderFailureFixture")).ProviderFailureFixture,
+}));
 const MailTilesFixture = lazy(async () => ({
   default: (await import("./MailTilesFixture")).MailTilesFixture,
 }));
@@ -2034,6 +2037,13 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/coordinator-pane-tree") return <CoordinatorPaneTreeFixture />;
   if (window.location.pathname === "/add-project") return <AddProjectDialogFixture />;
+  if (window.location.pathname === "/provider-failure") {
+    return (
+      <Suspense fallback={null}>
+        <ProviderFailureFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/mail-tiles") {
     return (
       <Suspense fallback={null}>

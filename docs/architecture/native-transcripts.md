@@ -403,8 +403,10 @@ The reason comes from the provider's structured code when it gave one, and from
 the error text otherwise. The Claude bridge translates the SDK's API error code
 and the Codex bridge app-server's `codexErrorInfo` into `failureReason`, sent
 beside `error` on the session snapshot only while the turn is failed. The
-backend puts it on the terminal error row as `failure.reason`, with the reset
-time of a quota window the provider reported used up (`failure.resetsAt`). The
+backend puts it on the terminal error row as `failure.reason`, or on its
+matching status part when both describe the same failure. A reset comes from the
+window named by the refusal, or from a single exhausted window when that is the
+only reported candidate (`failure.resetsAt`). The
 text classifier is permanent: Cursor, Grok, OpenCode and Pi have no code, and
 neither do older bridges or rows recorded before the field. Claude's failure
 text is often only "Claude ended the turn on an API error.", so its code is
@@ -415,7 +417,11 @@ host offers only those it can perform, on the transcript's last row only. A
 usage limit and a billing refusal offer no retry. Retry sends one continuation
 prompt through the tab's ordinary submit path under a request id derived from
 the failure row (`providerFailureRetryRequestId`), so two presses run one turn,
-and it is disabled while the composer holds a draft or sending is held. Change
+and it is disabled while the composer holds a draft or sending is held. Retry
+runs the normal send preflight. The backend checks the current failure and
+provider session under the dispatch lease before journaling the request. Find
+temporarily reveals matching text in Details and restores the user's prior
+choice when Find closes. Change
 model opens the composer's model picker. Sign-in is the platform's own control
 (Claude's recovery card, OpenCode's credential action). A reset time is shown
 only when the provider stated one as a time; otherwise the provider's own words

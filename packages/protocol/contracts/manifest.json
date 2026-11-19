@@ -70,7 +70,7 @@
       "min": 1
     },
     "native-sessions": {
-      "version": 4,
+      "version": 5,
       "min": 1
     },
     "node-files": {
@@ -2401,12 +2401,13 @@
         "attachments",
         "command",
         "executionProfileId",
+        "failureSessionId",
         "images",
         "interactionPolicy",
         "requestId",
         "schema"
       ],
-      "argsDigest": "sha256:079b8898d504246ade15f9dbe94f2c425b698ecdba2ac140cf800e3783e50013",
+      "argsDigest": "sha256:de675dfa94d30d8d8ce5025512f85bbeb79d46d5ecf53232b1bf0c5e055a035b",
       "resultDigest": "sha256:93b752f7664cdedd2e7a6bec3e1faa47dffda408a2e2c3b0aa2e800346d08c70"
     },
     "dispatch_native_agent_prompt": {
@@ -2419,12 +2420,13 @@
         "attachments",
         "command",
         "executionProfileId",
+        "failureSessionId",
         "images",
         "interactionPolicy",
         "requestId",
         "schema"
       ],
-      "argsDigest": "sha256:079b8898d504246ade15f9dbe94f2c425b698ecdba2ac140cf800e3783e50013",
+      "argsDigest": "sha256:de675dfa94d30d8d8ce5025512f85bbeb79d46d5ecf53232b1bf0c5e055a035b",
       "resultDigest": "sha256:9798d1f17189206fae5b6bd5171b1bf745dc90d5234ab95133c3757bb043bd68"
     },
     "docker_cleanup_execute": {

@@ -231,6 +231,7 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
     session.abortController = turn.beforeStartup.abortController;
     session.error = turn.beforeStartup.error;
     session.errorCode = turn.beforeStartup.errorCode;
+    session.failedTurn = turn.beforeStartup.failedTurn;
     session.failureReason = turn.beforeStartup.failureReason;
     session.interruption = turn.beforeStartup.interruption;
     session.interruptedRequestId = turn.beforeStartup.interruptedRequestId;
@@ -293,11 +294,18 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
     session.status = "error";
     session.turnStartedAt = undefined;
     session.error = failure;
+    session.failedTurn = {
+      id: turn.promptUuid,
+      occurredAt: new Date().toISOString(),
+      ...(usageLimited && turn.rejectedRateLimitResetsAt
+        ? { resetsAt: turn.rejectedRateLimitResetsAt }
+        : {}),
+    };
     // The provider's own refusal, so the backend need not match the wording.
     session.errorCode = turn.rateLimitRejected && !killedBy ? USAGE_LIMIT_ERROR_CODE : undefined;
     session.failureReason = killedBy
       ? undefined
-      : claudeFailureReason(turn.apiErrorCode, turn.rateLimitRejected);
+      : claudeFailureReason(turn.apiErrorCode, usageLimited);
     session.interruption = killedBy ? "restart" : undefined;
     session.interruptedRequestId = killedBy ? turn.dispatchRequestId : undefined;
     session.abortController = undefined;

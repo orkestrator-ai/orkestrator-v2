@@ -140,6 +140,7 @@ function endClaudeRuntime(
     session.status = "error";
     session.error = claudeProcessKilledMessage(killedBy);
     session.errorCode = undefined;
+    session.failedTurn = undefined;
     session.failureReason = undefined;
     session.interruption = "restart";
     // The latest turn the SDK took, which is what the mark names after a
@@ -196,6 +197,7 @@ function releaseOrphanedForeground(runtime: ClaudeRuntime, error: unknown): void
   session.status = "error";
   session.error = error instanceof Error ? error.message : String(error);
   session.errorCode = undefined;
+  session.failedTurn = undefined;
   session.failureReason = undefined;
   eventEmitter.emit({ type: "session.error", sessionId, data: { error: session.error } });
 }

@@ -337,6 +337,7 @@ export interface NativeImagePart extends NativeBasePart {
  */
 export interface NativeStatusPart extends NativeBasePart {
   type: "status";
+  failure?: import("@orkestrator/protocol/provider-failures").ProviderFailureDescriptor;
 }
 
 export interface NativeToolGroupPart extends NativeBasePart {

@@ -17,6 +17,7 @@ import {
   INTERACTIVE_RUNTIME_METADATA_RETRY_MS,
   INTERACTIVE_RUNTIME_METADATA_TTL_MS,
   MAX_TRACKED_INTERACTION_SESSIONS,
+  normalizeProviderRateLimits,
   normalizeProviderRuntimeSummary,
   setBoundedMapEntry,
 } from "../agent-provider-runtime.js";
@@ -329,6 +330,7 @@ export async function readHttpBridgeSessionState(input: {
     input.agent === "claude" || input.agent === "pi"
       ? claudeTurnActivityFromPayload(payload)
       : undefined;
+  const rateLimits = normalizeProviderRateLimits(payload.rateLimits);
   const turnRunId = status === "running" ? bridgeSnapshotTurnRunId(payload) : undefined;
   return {
     status,
@@ -389,6 +391,7 @@ export async function readHttpBridgeSessionState(input: {
     ...(typeof payload.completionBlockedByBackgroundTasks === "boolean"
       ? { completionBlockedByBackgroundTasks: payload.completionBlockedByBackgroundTasks }
       : {}),
+    ...(rateLimits.length > 0 ? { rateLimits } : {}),
     ...bridgeSessionErrorFields(payload),
   };
 }

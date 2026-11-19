@@ -688,6 +688,8 @@ export interface ProviderInteractiveSnapshot {
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;
   error?: string;
+  /** Identity and provider-reported timing for this failed turn. */
+  failedTurn?: { id: string; occurredAt: string; resetsAt?: string };
   /**
    * The provider-neutral reason for `error`, when the bridge translated one
    * from the provider's own code. Absent: `error`'s text classifies it.

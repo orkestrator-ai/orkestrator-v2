@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { AlertCircle, ChevronRight, Clock, RotateCcw, Sparkles } from "lucide-react";
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -9,6 +9,10 @@ import {
   type ProviderFailureReason,
 } from "@orkestrator/protocol/provider-failures";
 import { Button } from "@/components/ui/button";
+import { useFindReveal } from "@/lib/chat/rich-markdown/find-reveal";
+import { richBlockViewKey, useRichTranscriptScope } from "@/lib/chat/rich-identity";
+import { useRichViewField } from "@/stores/richContentViewStore";
+import { RichSearchMirror } from "./rich/RichMarkdownBlocks.shared";
 import { formatProviderFailureReset } from "@/lib/provider-failure";
 import { cn } from "@/lib/utils";
 import { useProviderFailureActions } from "./provider-failure-actions";
@@ -27,6 +31,7 @@ interface ProviderFailureAlertProps {
   platform?: AgentPlatform;
   /** The failure row's id and time; the actions apply to one exact failure. */
   failureId?: string;
+  partId?: string;
   occurredAt?: string;
   timestampLabel?: string;
   /**
@@ -51,6 +56,7 @@ export function ProviderFailureAlert({
   failure,
   platform,
   failureId,
+  partId,
   occurredAt,
   timestampLabel,
   signIn,
@@ -58,8 +64,16 @@ export function ProviderFailureAlert({
   now,
 }: ProviderFailureAlertProps) {
   const detailsId = useId();
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [renderedAt] = useState(() => Date.now());
+  const scope = useRichTranscriptScope();
+  const detailsKey = richBlockViewKey(
+    scope,
+    failureId ?? detailsId,
+    partId ?? "",
+    "failure-details",
+  );
+  const [userOpened, setUserOpened] = useRichViewField(detailsKey, "open", false);
+  const { revealed, endReveal } = useFindReveal(detailsKey);
+  const detailsOpen = userOpened || revealed;
   const actions = useProviderFailureActions(failureId);
   const classification = classifyProviderFailure({
     reason: failure?.reason,
@@ -74,10 +88,26 @@ export function ProviderFailureAlert({
     retry: Boolean(actions.retry && failureId && occurredAt),
     "change-model": Boolean(actions.changeModel),
   });
-  const resetTime = formatProviderFailureReset(classification.resetsAt, now ?? renderedAt);
+  const deadline = classification.resetsAt;
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (now !== undefined || !deadline) return;
+    const expiresAt = Date.parse(deadline);
+    function refreshClock() {
+      const current = Date.now();
+      setClock(current);
+      // Timers in browsers are bounded by a signed 32-bit delay.
+      if (current < expiresAt) {
+        timer = setTimeout(refreshClock, Math.min(2_147_483_647, expiresAt - current));
+      }
+    }
+    let timer = setTimeout(refreshClock, 0);
+    return () => clearTimeout(timer);
+  }, [deadline, now]);
+  const resetTime = formatProviderFailureReset(deadline, now ?? clock);
   const resetLine = resetTime
     ? `The limit resets at ${resetTime}.`
-    : classification.resetHint
+    : !deadline && classification.resetHint
       ? `${agentLabel ?? "The provider"} says it resets ${classification.resetHint}.`
       : undefined;
   const details = text.trim();
@@ -155,12 +185,15 @@ export function ProviderFailureAlert({
               </div>
             ) : null}
             {details ? (
-              <div className="mt-2">
+              <div className="mt-2" data-rich-block-key={detailsKey}>
                 <button
                   type="button"
                   aria-expanded={detailsOpen}
                   aria-controls={detailsId}
-                  onClick={() => setDetailsOpen((open) => !open)}
+                  onClick={() => {
+                    setUserOpened(!detailsOpen);
+                    if (revealed) endReveal();
+                  }}
                   className="inline-flex items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground"
                 >
                   <ChevronRight
@@ -175,7 +208,11 @@ export function ProviderFailureAlert({
                   data-agent-chat-search-content="true"
                   className="mt-1 max-h-64 overflow-auto rounded border border-border/60 bg-background/60 p-2 font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-words"
                 >
-                  {details}
+                  {detailsOpen ? (
+                    details
+                  ) : (
+                    <RichSearchMirror text={details} revealKey={detailsKey} />
+                  )}
                 </div>
               </div>
             ) : null}

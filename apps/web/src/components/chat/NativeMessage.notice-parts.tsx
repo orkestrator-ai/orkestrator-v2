@@ -248,6 +248,8 @@ function TurnFailureStatusPart({ part }: { part: Extract<NativeMessagePart, { ty
   return (
     <ProviderFailureAlert
       text={part.content}
+      failure={part.failure}
+      partId={part.sourcePartId ?? part.content}
       platform={platform}
       placement="inline"
       {...(row ? { failureId: row.messageId, occurredAt: row.createdAt } : {})}

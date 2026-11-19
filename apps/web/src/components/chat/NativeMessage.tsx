@@ -193,7 +193,7 @@ export const NativeMessage = memo(function NativeMessage({
     return (
       <ProviderFailureAlert
         text={message.content}
-        failure={message.failure}
+        failure={openCodeAuthProvider ? { reason: "authentication" } : message.failure}
         platform={platform}
         failureId={message.id}
         occurredAt={message.createdAt}

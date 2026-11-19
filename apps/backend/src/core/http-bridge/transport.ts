@@ -20,6 +20,7 @@ import {
   type ProviderActivityObservation,
   type ProviderAgent,
   type ProviderSendOptions,
+  type ProviderSessionStateSnapshot,
   ProviderSessionFailedError,
   type ProviderTurnInterruption,
   BridgePolicyWideningRefusedError,
@@ -362,10 +363,26 @@ export function sessionSnapshotBudget(
 export function bridgeSessionErrorFields(payload: Record<string, unknown>): {
   error?: string;
   failureReason?: ProviderFailureReason;
+  failedTurn?: ProviderSessionStateSnapshot["failedTurn"];
 } {
   if (typeof payload.error !== "string") return {};
   const failureReason = providerFailureReason(payload.failureReason);
-  return { error: payload.error, ...(failureReason ? { failureReason } : {}) };
+  const raw = asRecord(payload.failedTurn);
+  const id = raw?.id;
+  const occurredAt = normalizedFailureTime(raw?.occurredAt);
+  const resetsAt = normalizedFailureTime(raw?.resetsAt);
+  return {
+    error: payload.error,
+    ...(failureReason ? { failureReason } : {}),
+    ...(typeof id === "string" && id.length > 0 && id.length <= 512 && occurredAt
+      ? { failedTurn: { id, occurredAt, ...(resetsAt ? { resetsAt } : {}) } }
+      : {}),
+  };
+}
+
+function normalizedFailureTime(value: unknown): string | undefined {
+  const ms = typeof value === "string" && value.length <= 64 ? Date.parse(value) : NaN;
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
 }
 
 export function throwExplainedTurnFailure(

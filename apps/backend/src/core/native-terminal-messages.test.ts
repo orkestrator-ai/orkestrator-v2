@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { providerFailureRetryRequestId } from "@orkestrator/protocol/provider-failures";
 import { nativeTerminalMessages } from "./native-terminal-messages.js";
 
 test("terminal rows use a stable real turn time, falling back to the epoch when unavailable", () => {
@@ -22,11 +23,11 @@ test("the session error's row carries the bridge's structured failure reason", (
   expect(nativeTerminalMessages({ error: "x" })[0]).not.toHaveProperty("failure");
 });
 
-test("a usage limit's row carries the earliest reset of a window the provider reported used up", () => {
+test("a usage limit prefers the rejecting window and omits an ambiguous reset", () => {
   const now = Date.parse("2026-11-19T10:00:00.000Z");
-  const [row] = nativeTerminalMessages({
+  const input = {
     error: "You've hit your limit",
-    failureReason: "usage-limit",
+    failureReason: "usage-limit" as const,
     rateLimits: [
       { label: "Weekly", usedPercent: 100, resetsAt: "2026-11-21T00:00:00.000Z" },
       { label: "5-hour", usedPercent: 100, resetsAt: "2026-11-19T12:00:00.000Z" },
@@ -34,8 +35,17 @@ test("a usage limit's row carries the earliest reset of a window the provider re
       { label: "Past", usedPercent: 100, resetsAt: "2026-11-19T09:00:00.000Z" },
     ],
     now,
+  };
+  expect(nativeTerminalMessages(input)[0]?.failure).toEqual({ reason: "usage-limit" });
+  const [row] = nativeTerminalMessages({
+    ...input,
+    failedTurn: {
+      id: "turn-1",
+      occurredAt: new Date(now).toISOString(),
+      resetsAt: "2026-11-21T00:00:00.000Z",
+    },
   });
-  expect(row?.failure).toEqual({ reason: "usage-limit", resetsAt: "2026-11-19T12:00:00.000Z" });
+  expect(row?.failure).toEqual({ reason: "usage-limit", resetsAt: "2026-11-21T00:00:00.000Z" });
   // A window time is attached only to a usage limit.
   const [other] = nativeTerminalMessages({
     error: "Overloaded",
@@ -44,4 +54,17 @@ test("a usage limit's row carries the earliest reset of a window the provider re
     now,
   });
   expect(other?.failure).toEqual({ reason: "provider-unavailable" });
+});
+
+test("byte-identical failure text yields one stable retry ID per occurrence", () => {
+  const failure = (id: string, occurredAt: string) =>
+    nativeTerminalMessages({ error: "API error", failedTurn: { id, occurredAt } })[0]!;
+  const first = failure("turn-1", "2026-11-19T10:00:00.000Z");
+  const second = failure("turn-2", "2026-11-19T10:00:01.000Z");
+  expect(failure("turn-1", first.createdAt)).toEqual(first);
+  expect(second.id).not.toBe(first.id);
+  expect(second.createdAt).not.toBe(first.createdAt);
+  expect(providerFailureRetryRequestId(second.id, second.createdAt)).not.toBe(
+    providerFailureRetryRequestId(first.id, first.createdAt),
+  );
 });

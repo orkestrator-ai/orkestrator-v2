@@ -4,7 +4,7 @@
  * offered, on the latest failure only.
  */
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { ProviderFailureAlert } from "./ProviderFailureAlert";
@@ -64,7 +64,7 @@ describe("ProviderFailureAlert", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(details.hidden).toBe(false);
+    expect(screen.getByText("raw provider message").hidden).toBe(false);
   });
 
   test("a usage limit shows a verified reset time and offers no retry", () => {
@@ -85,6 +85,22 @@ describe("ProviderFailureAlert", () => {
     expect(screen.getByText("Usage limit reached")).toBeTruthy();
     expect(screen.getByText(/The limit resets at/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+  });
+
+  test("an open alert removes the reset line once its deadline passes", async () => {
+    // The provider supplies an epoch cutoff, with no further snapshot update.
+    // Epoch seconds keep the real wait at most two seconds.
+    const resetSeconds = Math.floor(Date.now() / 1000) + 2;
+    render(<ProviderFailureAlert text={`usage limit reached|${resetSeconds}`} platform="claude" />);
+    expect(screen.getByText(/The limit resets at/)).toBeTruthy();
+    await waitFor(
+      () => {
+        expect(screen.queryByText(/The limit resets at|Claude Code says it resets/i) === null).toBe(
+          true,
+        );
+      },
+      { timeout: 3_000 },
+    );
   });
 
   test("a usage limit with only the provider's words quotes them as its words", () => {

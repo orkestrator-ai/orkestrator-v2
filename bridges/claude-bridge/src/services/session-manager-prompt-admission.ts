@@ -217,6 +217,7 @@ export async function applyPromptPlanMode(
       session.turnStartedAt = beforeStartup.turnStartedAt;
       session.error = beforeStartup.error;
       session.errorCode = beforeStartup.errorCode;
+      session.failedTurn = beforeStartup.failedTurn;
       session.failureReason = beforeStartup.failureReason;
       session.interruption = beforeStartup.interruption;
       session.interruptedRequestId = beforeStartup.interruptedRequestId;
@@ -241,6 +242,7 @@ export function beginPromptActivity(admission: PromptAdmission): void {
   const { session, sessionId } = admission;
   session.error = undefined;
   session.errorCode = undefined;
+  session.failedTurn = undefined;
   session.failureReason = undefined;
   // This turn is the continuation of one a restart cut short, if there was one.
   session.interruption = undefined;

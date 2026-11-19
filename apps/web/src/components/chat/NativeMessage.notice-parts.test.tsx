@@ -11,8 +11,13 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
+import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
+import { ProviderFailureActionsContext } from "./provider-failure-actions";
 import { NativeMessage } from "./NativeMessage";
-import type { NativeMessagePart } from "@/lib/chat/native-message-types";
+import type {
+  NativeMessage as MessageRow,
+  NativeMessagePart,
+} from "@/lib/chat/native-message-types";
 import { newSessionState } from "../../../../../bridges/cursor-bridge/src/agent-session";
 import {
   applyInteractionUpdate,
@@ -160,6 +165,37 @@ describe("StatusPart", () => {
     expect(
       container.querySelector("[data-provider-failure]")?.getAttribute("data-provider-failure"),
     ).toBe("context-exhausted");
+  });
+
+  test("a deduplicated Codex status renders the provider's quota reason without Retry", () => {
+    const row: MessageRow = {
+      id: "codex-failure",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-11-19T10:00:00.000Z",
+      parts: [part("status", { severity: "error", content: "It failed." })],
+    };
+    const [stitched] = withNativeTerminalMessages(
+      [row],
+      [
+        {
+          ...row,
+          id: "native-terminal:error:fixture",
+          role: "system",
+          content: "It failed.",
+          failure: { reason: "usage-limit" },
+        },
+      ],
+    );
+    renderInAppCommandScope(
+      <ProviderFailureActionsContext.Provider
+        value={{ actionableFailureId: row.id, retry: mock(() => {}) }}
+      >
+        <NativeMessage message={stitched!} platform="codex" />
+      </ProviderFailureActionsContext.Provider>,
+    );
+    expect(screen.getAllByRole("group", { name: "Usage limit reached" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
   });
 
   test("an empty status is no row at all, not an empty one", () => {

@@ -25,7 +25,7 @@ export interface NativeTerminalMessage {
   failure?: ProviderFailureDescriptor;
 }
 
-/** The earliest reset among the provider-reported windows that are used up. */
+/** A reset can be inferred only when a single reported window is exhausted. */
 function exhaustedWindowReset(
   windows: readonly NativeAgentRateLimitWindow[] | undefined,
   now: number,
@@ -34,10 +34,8 @@ function exhaustedWindowReset(
   const resets = exhaustedUsageWindows(
     windows.map((window) => ({ ...window, window: window.label })),
     now,
-  )
-    .flatMap((window) => (window.resetsAt ? [window.resetsAt] : []))
-    .sort((left, right) => Date.parse(left) - Date.parse(right));
-  return resets[0];
+  );
+  return resets.length === 1 ? resets[0]?.resetsAt : undefined;
 }
 
 /**
@@ -51,6 +49,8 @@ export function nativeTerminalMessages(input: {
   error?: string;
   /** The bridge's structured reason for `error`. */
   failureReason?: ProviderFailureReason;
+  failedTurn?: { id: string; occurredAt: string; resetsAt?: string };
+  failureRequestId?: string;
   /** Provider-reported quota windows, for a usage limit's reset time. */
   rateLimits?: readonly NativeAgentRateLimitWindow[];
   stopNotice?: string;
@@ -60,7 +60,8 @@ export function nativeTerminalMessages(input: {
   const notices = input.notices ?? [];
   const resetsAt =
     input.error && input.failureReason === "usage-limit"
-      ? exhaustedWindowReset(input.rateLimits, input.now ?? Date.now())
+      ? (input.failedTurn?.resetsAt ??
+        exhaustedWindowReset(input.rateLimits, input.now ?? Date.now()))
       : undefined;
   const sessionFailure: ProviderFailureDescriptor | undefined =
     input.failureReason || resetsAt
@@ -83,8 +84,12 @@ export function nativeTerminalMessages(input: {
   ];
   const seen = new Set<string>();
   return terminal.flatMap((notice) => {
+    const failedTurn =
+      notice.kind === "error" && notice.message === input.error ? input.failedTurn : undefined;
+    const occurrenceId =
+      failedTurn?.id ?? (notice.kind === "error" ? input.failureRequestId : undefined);
     const id = `${NATIVE_TERMINAL_MESSAGE_ID_PREFIX}${notice.kind}:${createHash("sha256")
-      .update(notice.message)
+      .update(occurrenceId ? JSON.stringify([occurrenceId, notice.message]) : notice.message)
       .digest("hex")
       .slice(0, 16)}`;
     if (seen.has(id)) return [];
@@ -98,9 +103,10 @@ export function nativeTerminalMessages(input: {
         // Use a stable real time when available so auth cards can reject a
         // sign-in completed before this failure. The sentinel is only a fallback.
         createdAt:
-          input.turnStartedAt && Number.isFinite(input.turnStartedAt)
+          failedTurn?.occurredAt ??
+          (input.turnStartedAt && Number.isFinite(input.turnStartedAt)
             ? new Date(input.turnStartedAt).toISOString()
-            : "1970-01-01T00:00:00.000Z",
+            : "1970-01-01T00:00:00.000Z"),
         ...(sessionFailure && notice.kind === "error" && notice.message === input.error
           ? { failure: sessionFailure }
           : {}),

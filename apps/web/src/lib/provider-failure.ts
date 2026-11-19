@@ -1,5 +1,8 @@
 import { NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-agent";
-import { NATIVE_TERMINAL_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-terminal-rows";
+import {
+  NATIVE_TERMINAL_ERROR_MESSAGE_ID_PREFIX,
+  rowReportsProviderFailure,
+} from "@orkestrator/protocol/native-terminal-rows";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 /**
@@ -20,10 +23,9 @@ export function isProviderFailureRow(message: Pick<NativeMessage, "id">): boolea
  * the backend then adds no terminal row of its own).
  */
 export function messageReportsProviderFailure(
-  message: Pick<NativeMessage, "id" | "parts">,
+  message: Pick<NativeMessage, "id" | "parts" | "role">,
 ): boolean {
-  if (isProviderFailureRow(message)) return true;
-  return message.parts.some((part) => part.type === "status" && part.severity === "error");
+  return rowReportsProviderFailure(message);
 }
 
 /**

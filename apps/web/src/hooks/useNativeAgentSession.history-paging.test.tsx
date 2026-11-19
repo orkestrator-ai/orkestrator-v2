@@ -5,8 +5,9 @@
  * history cursor, and `loadEarlierMessages` pages behind it through
  * `get_native_agent_message_page`. These cases cover the paging engine itself:
  * how much a page may ask for, a cursor chain, a rotated paging epoch, a page
- * a mutation supersedes, a page the client budget only partly accepts, and a
- * global history eviction. They moved here from the retired sync-v1-only
+ * a mutation or a new session generation supersedes, a page that outlives
+ * tail reads (in flight before it, or streaming past it), a page the client
+ * budget only partly accepts, and a global history eviction. They moved here from the retired sync-v1-only
  * suite; the joined-cursor mint and the part-level head merges are covered in
  * `useNativeAgentSession.progressive.test.tsx`.
  */
@@ -52,7 +53,9 @@ const identity: NativeAgentViewIdentity = {
 
 const realBackendSnapshot = { ...realBackend };
 
-let transcriptUpdates: Array<() => NativeAgentTranscriptUpdate<TestMessage>> = [];
+let transcriptUpdates: Array<
+  () => NativeAgentTranscriptUpdate<TestMessage> | Promise<NativeAgentTranscriptUpdate<TestMessage>>
+> = [];
 let transcriptCalls: Array<{ knownToken?: string; forceSnapshot?: boolean }> = [];
 let messagePages: Array<
   () => NativeAgentMessagePage<TestMessage> | Promise<NativeAgentMessagePage<TestMessage>>
@@ -75,7 +78,9 @@ const getNativeAgentTranscriptUpdateMock = mock(
     return next();
   },
 );
-let stateUpdates: Array<() => NativeAgentSessionStateUpdate> = [];
+let stateUpdates: Array<
+  () => NativeAgentSessionStateUpdate | Promise<NativeAgentSessionStateUpdate>
+> = [];
 const getNativeAgentSessionStateUpdateMock = mock(async (input: { knownToken?: string }) => {
   const next = stateUpdates.shift();
   if (next) return next();
@@ -439,6 +444,189 @@ describe("useNativeAgentSession history paging", () => {
       appCommandStore(nativeAgentProjectionStore).getState().projections.get(SESSION_KEY) ?? null,
     ).toBeNull();
     expect(syncCache()?.historyMessages ?? []).toEqual([]);
+  });
+
+  test("a tail read already in flight when the page is requested still lands", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const tailGate = Promise.withResolvers<void>();
+    transcriptUpdates = [
+      async () => {
+        await tailGate.promise;
+        return tail("transcript-2", [...liveTail, message("m5")]);
+      },
+    ];
+    let reading: Promise<unknown> = Promise.resolve();
+    act(() => {
+      reading = result.current.refresh({ manual: false });
+    });
+    await waitFor(() => expect(transcriptCalls.length).toBeGreaterThanOrEqual(2));
+
+    const release = await holdPage(result, [message("m1"), message("m2")]);
+    // The page request must not have cancelled the tail read before it.
+    await act(async () => {
+      tailGate.resolve();
+      await reading;
+    });
+    expect(ids(result.current.projection)).toEqual(["m3", "m4", "m5"]);
+
+    await release();
+
+    expect(ids(result.current.projection)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+  });
+
+  // The ticket's success check: a page held for longer than many poll
+  // intervals while the agent keeps streaming lands on one click, with each
+  // row once, in order, ahead of everything the stream added meanwhile.
+  test("a slow page lands on one click while the live tail streams past it", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const release = await holdPage(result, [message("m1"), message("m2")]);
+    // Six polls, each streaming one row in. The live window keeps two rows, so
+    // the rows it drops age out into the held history; each view names the
+    // provider's cursor before its own first row, which the tab ignores while
+    // it holds a cursor of its own further back.
+    const streamed = [...liveTail];
+    for (let index = 5; index <= 10; index += 1) {
+      streamed.push(message(`m${index}`));
+      const window = streamed.slice(-2);
+      transcriptUpdates = [() => tail(`transcript-${index}`, window)];
+      await act(async () => {
+        await result.current.refresh({ manual: false });
+      });
+    }
+    expect(ids(result.current.projection)).toEqual(streamed.map(({ id }) => id));
+
+    await release();
+
+    const shown = ids(result.current.projection)!;
+    expect(shown).toEqual(["m1", "m2", ...streamed.map(({ id }) => id)]);
+    expect(new Set(shown).size).toBe(shown.length);
+    expect(messagePageCalls.map(({ before }) => before)).toEqual(["cursor-before-m3"]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBeUndefined();
+  });
+
+  test("a page that lands on a new session generation is discarded", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const release = await holdPage(result, [message("m1"), message("m2")]);
+    // The runtime restarted. Its view names the same epoch and the same cursor
+    // string, so only the generation tells the page it was read elsewhere.
+    transcriptUpdates = [
+      () =>
+        tail("transcript-2", liveTail, {
+          identity: { ...identity, sourceGeneration: "generation-2" },
+        }),
+    ];
+    await act(async () => {
+      await result.current.refresh({ manual: false });
+    });
+    expect(result.current.projection?.generation).toBe("generation-2");
+
+    await release();
+
+    expect(ids(result.current.projection)).toEqual(["m3", "m4"]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+  });
+
+  test("a late page cannot replace a new runtime's state while its transcript is pending", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const transcript = Promise.withResolvers<NativeAgentTranscriptUpdate<TestMessage>>();
+    const stateGate = Promise.withResolvers<void>();
+    const restarted = { ...identity, sourceGeneration: "generation-2" };
+    transcriptUpdates = [() => transcript.promise];
+    stateUpdates = [
+      async () => {
+        await stateGate.promise;
+        return {
+          viewVersion: 1,
+          status: "snapshot",
+          token: "state-2",
+          value: {
+            identity: restarted,
+            connection: "connected",
+            turn: { phase: "running" },
+            interactions: [],
+            composerControls: [
+              { id: "plan-mode", kind: "toggle", label: "Plan mode", value: true },
+            ],
+            capabilities: nativeAgentCapabilities("codex"),
+            notices: [],
+          },
+        };
+      },
+    ];
+    let reading: Promise<unknown> = Promise.resolve();
+    act(() => {
+      reading = result.current.refresh({ manual: false });
+    });
+    await waitFor(() => expect(transcriptCalls).toHaveLength(2));
+    try {
+      const release = await holdPage(result, [message("m1"), message("m2")]);
+      await act(async () => stateGate.resolve());
+      await waitFor(() => expect(result.current.projection?.generation).toBe("generation-2"));
+      await release();
+      expect(result.current.projection?.generation).toBe("generation-2");
+      expect(result.current.projection?.turn.phase).toBe("running");
+      expect(result.current.projection?.composerControls[0]?.id).toBe("plan-mode");
+      expect(ids(result.current.projection)).toEqual(["m3", "m4"]);
+      await act(async () => {
+        await result.current.loadEarlierMessages();
+      });
+      expect(messagePageCalls).toHaveLength(1);
+    } finally {
+      await act(async () => {
+        stateGate.resolve();
+        transcript.resolve(
+          tail("transcript-2", liveTail, { identity: restarted, cursor: "new-cursor" }),
+        );
+        await reading;
+      });
+    }
+    messagePages = [() => page([message("m1")])];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+    expect(messagePageCalls.map(({ before }) => before)).toEqual([
+      "cursor-before-m3",
+      "new-cursor",
+    ]);
+  });
+
+  test("a delayed tail applies live rows and reconciles a conflicting paged row", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const transcript = Promise.withResolvers<NativeAgentTranscriptUpdate<TestMessage>>();
+    transcriptUpdates = [() => transcript.promise];
+    let reading: Promise<unknown> = Promise.resolve();
+    act(() => {
+      reading = result.current.refresh({ manual: false });
+    });
+    await waitFor(() => expect(transcriptCalls).toHaveLength(2));
+    messagePages = [() => page([message("m1", "completed"), message("m2")])];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    const history = Promise.withResolvers<NativeAgentMessagePage<TestMessage>>();
+    messagePages = [() => history.promise];
+    await act(async () => {
+      transcript.resolve(
+        tail("transcript-2", [message("m4"), message("m5")], {
+          revisedMessages: [message("m1", "running"), message("m3", "updated")],
+        }),
+      );
+      await reading;
+    });
+    try {
+      expect(ids(result.current.projection)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+      expect(result.current.projection?.messages[0]?.text).toBe("completed");
+      expect(result.current.projection?.messages[2]?.text).toBe("updated");
+      await waitFor(() => expect(messagePageCalls).toHaveLength(2));
+    } finally {
+      await act(async () => {
+        history.resolve(
+          page([message("m1", "confirmed"), message("m2"), message("m3", "updated")]),
+        );
+      });
+    }
+    expect(result.current.projection?.messages[0]?.text).toBe("confirmed");
   });
 
   test("a row a poll revised while an overlapping page was in flight keeps its revision", async () => {

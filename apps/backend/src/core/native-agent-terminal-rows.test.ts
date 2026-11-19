@@ -7,6 +7,11 @@
  * the same rule (`@orkestrator/protocol/native-terminal-rows`).
  */
 import { describe, expect, test } from "bun:test";
+import {
+  classifyProviderFailure,
+  providerFailureRetryRequestId,
+  PROVIDER_FAILURE_RETRY_PROMPT,
+} from "@orkestrator/protocol/provider-failures";
 import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
@@ -22,6 +27,126 @@ const userRow = {
 };
 
 describe("native terminal rows", () => {
+  test("both projections keep one Codex error with its structured quota reason", async () => {
+    const assistant = {
+      ...userRow,
+      role: "assistant" as const,
+      id: "codex-failed",
+      content: "",
+      parts: [{ type: "status", severity: "error", content: "It failed." }],
+    };
+    const snapshot = {
+      status: "error",
+      phase: "error",
+      error: "It failed.",
+      failureReason: "usage-limit",
+    } as const;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ ...snapshot, messages: [userRow, assistant] }),
+      sessionStateSnapshot: async () => snapshot,
+      transcriptSnapshot: async () => ({ messages: [userRow, assistant], freshness: "current" }),
+    });
+    await withService(
+      { prefix: "terminal-codex-failure-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-failure",
+        };
+        await service.ensureSession(identity);
+        const full = await service.getProjection(identity);
+        const state = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        const transcript = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+        });
+        if (state.status !== "snapshot" || transcript.status !== "snapshot")
+          throw new Error("expected snapshots");
+        for (const messages of [
+          full?.messages,
+          withNativeTerminalMessages(transcript.value.messages, state.value.terminalMessages),
+        ]) {
+          expect(messages).toHaveLength(2);
+          const last = messages?.at(-1) as {
+            parts: Array<{ content: string; failure?: { reason: string } }>;
+          };
+          expect(last.parts).toHaveLength(1);
+          expect(
+            classifyProviderFailure({
+              text: last.parts[0]?.content,
+              reason: last.parts[0]?.failure?.reason,
+            }).reason,
+          ).toBe("usage-limit");
+        }
+      },
+    );
+  });
+
+  test("each failed Claude occurrence allows one Retry and refuses stale views after a later turn", async () => {
+    const occurredAt = "2026-11-19T10:00:00.000Z";
+    let failedId: string | undefined = "failure-1";
+    const stub = createProviderStub("claude", {
+      sessionStateSnapshot: async () =>
+        failedId
+          ? {
+              status: "error",
+              phase: "error",
+              error: "It failed.",
+              failedTurn: { id: failedId, occurredAt },
+            }
+          : { status: "idle", phase: "idle" },
+      transcriptSnapshot: async () => ({ messages: [userRow], freshness: "current" }),
+    });
+    await withService(
+      { prefix: "terminal-retry-guard-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:tab-retry",
+        };
+        const session = await service.ensureSession(identity);
+        const retry = async () => {
+          const state = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+          if (state.status !== "snapshot") throw new Error("expected a snapshot");
+          const row = state.value.terminalMessages?.[0] as { id: string; createdAt: string };
+          return {
+            ...identity,
+            requestId: providerFailureRetryRequestId(row.id, row.createdAt),
+            failureSessionId: session.providerSessionId,
+            prompt: PROVIDER_FAILURE_RETRY_PROMPT,
+          };
+        };
+        const first = await retry();
+        expect(await service.dispatchIntent(first)).toMatchObject({ outcome: "accepted" });
+        expect(await service.dispatchIntent(first)).toMatchObject({ outcome: "accepted" });
+        failedId = "failure-2";
+        const second = await retry();
+        expect(second.requestId).not.toBe(first.requestId);
+        expect(await service.dispatchIntent(second)).toMatchObject({ outcome: "accepted" });
+        expect(stub.send).toHaveBeenCalledTimes(2);
+
+        failedId = "failure-3";
+        const stale = await retry();
+        failedId = undefined;
+        expect(
+          await service.dispatchIntent({
+            ...identity,
+            requestId: "newer-turn",
+            prompt: "New work",
+          }),
+        ).toMatchObject({ outcome: "accepted" });
+        expect(await service.dispatchIntent(stale)).toMatchObject({
+          outcome: "rejected",
+          error: "That failure is no longer current. No retry was sent.",
+        });
+        expect(stub.send).toHaveBeenCalledTimes(3);
+      },
+    );
+  });
+
   test.each(["claude", "codex", "cursor", "grok", "pi"] as const)(
     "a failed %s turn's reason reaches the progressive state view",
     async (agent) => {

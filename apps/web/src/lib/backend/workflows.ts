@@ -642,6 +642,7 @@ export function createWorkflowsApi(client: BackendClient) {
     phase?: "build" | "review" | "verify" | "rework" | "pr" | "resolve-conflicts";
     prompt: string;
     requestId: string;
+    failureSessionId?: string;
     images?: Array<{ filename: string; data: string }>;
     attachments?: Array<{
       type: "image" | "file";

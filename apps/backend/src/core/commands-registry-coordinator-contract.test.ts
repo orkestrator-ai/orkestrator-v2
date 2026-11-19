@@ -73,7 +73,9 @@ test("coordinator and project Git handlers receive every key they read", async (
   ] as never);
 
   await run("fetch_project_git", { projectId: "p1", force: true });
-  expect(fetch.mock.calls[0]).toEqual(["p1", true] as never);
+  expect(fetch.mock.calls[0]).toEqual(["p1", true, "manual"] as never);
+  await run("fetch_project_git", { projectId: "p1" });
+  expect(fetch.mock.calls[1]).toEqual(["p1", false, "background"] as never);
 
   await run("get_project_base_branch_tip", { projectId: "p1", branch: "dev" });
   expect(baseBranchTip.mock.calls[0]).toEqual(["p1", "dev"] as never);

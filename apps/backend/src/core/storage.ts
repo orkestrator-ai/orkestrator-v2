@@ -583,6 +583,7 @@ export class StorageService {
     options: {
       completionAttention?: boolean;
       completionOutcome?: AgentActivityCompletionOutcome;
+      hasWaitingNativeTab?: boolean;
     } = {},
   ): Promise<Environment> {
     return this.repos.projects.setEnvironmentAgentActivity(

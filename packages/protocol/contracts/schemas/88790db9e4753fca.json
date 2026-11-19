@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:88790db9e4753fcabc5af6a4cb491cb8345fc46e6794c446a715ef82094236f8",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {},
+        "includePending": {},
+        "projectId": {}
+      },
+      "type": "object"
+    }
+  }
+}

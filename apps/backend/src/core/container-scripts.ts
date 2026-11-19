@@ -1,3 +1,4 @@
+import { EDITOR_FILE_MISSING_MESSAGE } from "@orkestrator/protocol/file-write-precondition";
 /**
  * Shell and Node scripts the backend runs inside environment containers, and
  * the sentinels they print. Stateless; shared by setup, the terminal commands,
@@ -229,7 +230,10 @@ function main() {
   const canonicalRoot = fs.realpathSync(root);
   let openedTarget = target;
   if (editorRead) {
-    openedTarget = fs.realpathSync(target);
+    try { openedTarget = fs.realpathSync(target); } catch (error) {
+      if (error.code === "ENOENT") fail(${JSON.stringify(EDITOR_FILE_MISSING_MESSAGE)});
+      throw error;
+    }
     if (!inside(canonicalRoot, openedTarget)) fail("File is outside the container workspace");
   } else {
     let current = root;
@@ -239,7 +243,7 @@ function main() {
     }
     if (!inside(canonicalRoot, fs.realpathSync(target))) fail("File is outside the container workspace");
   }
-  const fd = fs.openSync(openedTarget, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  const fd = fs.openSync(openedTarget, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     const initial = fs.fstatSync(fd);
     const assertStablePath = (opened) => {

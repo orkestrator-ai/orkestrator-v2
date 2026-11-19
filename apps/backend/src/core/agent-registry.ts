@@ -3,6 +3,7 @@ import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent
 import { resolveTabDisplayName } from "@orkestrator/protocol/agent-mail";
 import {
   summarizeAgentRegistry,
+  type AgentPendingInteractionSummary,
   type AgentRegistryEntry,
   type AgentRegistrySnapshot,
   type AgentTabState,
@@ -13,6 +14,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentGoalSummary } from "@orkestrator/protocol/native-agent-goal";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
+import { runtimeTimeoutTimers, type TimeoutTimers } from "@orkestrator/protocol/timers";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import type { CoordinatorsStorage, StorageService } from "./storage.js";
 
@@ -32,7 +34,23 @@ export interface AgentRegistrySources {
     agent: AgentPlatform,
     logicalSessionKey: string,
   ) => Promise<NativeAgentGoalSummary | undefined>;
+  /**
+   * What a waiting native tab waits on. Asked only when a snapshot requests
+   * it (`includePending`) and only for a tab `native` reports `waiting`, so a
+   * plain snapshot still never reaches a provider. The reader is the bounded,
+   * cached pending-interactions read `attention.list` uses: it never starts a
+   * bridge, hydrates a transcript or re-attaches an idle session.
+   */
+  pending?: (
+    environmentId: string,
+    agent: AgentPlatform,
+    logicalSessionKey: string,
+  ) => Promise<AgentPendingInteractionSummary | undefined>;
 }
+
+/** One shared provider budget for the entire snapshot. */
+const PENDING_READ_TIMEOUT_MS = 2_000;
+const PENDING_READ_CONCURRENCY = 8;
 
 const WORKFLOW_TAB_TYPES = new Set(["claude-build", "multi-review"]);
 
@@ -85,10 +103,12 @@ export class AgentRegistry {
       "loadProjects" | "loadEnvironments" | "loadPaneLayoutsForReconciliation"
     > & { coordinators: Pick<CoordinatorsStorage, "listCoordinatorWorkspaces"> },
     private readonly sources: AgentRegistrySources = {},
+    private readonly timers: TimeoutTimers = runtimeTimeoutTimers,
   ) {}
 
   async snapshot(
     filter: { projectId?: string; environmentId?: string } = {},
+    options: { includePending?: boolean } = {},
   ): Promise<AgentRegistrySnapshot> {
     const [projects, environments, layouts, coordinators] = await Promise.all([
       this.storage.loadProjects(),
@@ -98,6 +118,8 @@ export class AgentRegistry {
     ]);
     const projectIds = new Set(projects.map((project) => project.id));
     const entries: AgentRegistryEntry[] = [];
+    const pendingEntries: Array<{ entry: AgentRegistryEntry; agent: AgentPlatform; key: string }> =
+      [];
     for (const environment of environments) {
       if (environment.deletionRequestedAt || !projectIds.has(environment.projectId)) continue;
       if (filter.projectId && environment.projectId !== filter.projectId) continue;
@@ -117,7 +139,10 @@ export class AgentRegistry {
             kind === "native" && agent
               ? await this.sources.goal?.(environment.id, agent, logicalSessionKey)
               : undefined;
-          entries.push({
+          const state = running
+            ? this.observe(kind, environment.id, tab.id, agent, logicalSessionKey)
+            : "stopped";
+          const entry: AgentRegistryEntry = {
             projectId: environment.projectId,
             environmentId: environment.id,
             environmentName: environment.name,
@@ -133,11 +158,13 @@ export class AgentRegistry {
               displayTitle: typeof tab.displayTitle === "string" ? tab.displayTitle : null,
             }),
             tabOrdinal,
-            state: running
-              ? this.observe(kind, environment.id, tab.id, agent, logicalSessionKey)
-              : "stopped",
+            state,
             ...(goal ? { goal } : {}),
-          });
+          };
+          entries.push(entry);
+          if (options.includePending && state === "waiting" && kind === "native" && agent) {
+            pendingEntries.push({ entry, agent, key: logicalSessionKey });
+          }
         }
       }
     }
@@ -173,11 +200,50 @@ export class AgentRegistry {
         });
       }
     }
+    await this.readPending(pendingEntries);
     return {
       generatedAt: new Date().toISOString(),
       entries,
       environments: summarizeAgentRegistry(entries),
     };
+  }
+
+  /** Read at most eight pending tabs at a time, retaining the results that meet the deadline. */
+  private async readPending(
+    entries: Array<{ entry: AgentRegistryEntry; agent: AgentPlatform; key: string }>,
+  ): Promise<void> {
+    const read = this.sources.pending;
+    if (!read || entries.length === 0) return;
+    let next = 0;
+    let expired = false;
+    const worker = async () => {
+      while (!expired && next < entries.length) {
+        const { entry, agent, key } = entries[next++]!;
+        try {
+          const pending = await read(entry.environmentId, agent, key);
+          if (!expired && pending) entry.pending = pending;
+        } catch {
+          // An unavailable tab does not prevent other tabs from reporting.
+        }
+      }
+    };
+    let timer: unknown;
+    const deadline = new Promise<void>((resolve) => {
+      timer = this.timers.setTimeout(() => {
+        expired = true;
+        resolve();
+      }, PENDING_READ_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([
+        deadline,
+        Promise.all(
+          Array.from({ length: Math.min(PENDING_READ_CONCURRENCY, entries.length) }, worker),
+        ),
+      ]);
+    } finally {
+      this.timers.clearTimeout(timer);
+    }
   }
 
   private observe(

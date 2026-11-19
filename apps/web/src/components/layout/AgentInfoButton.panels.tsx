@@ -23,6 +23,8 @@ import {
 import { cn } from "@/lib/utils";
 import type { AgentRateLimitWindow, ContextUsageSnapshot } from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { ContinuationExplanation } from "./AgentInfoContinuation";
 import type {
   NativeAgentAccountUsageWindow,
   NativeAgentMcpServer,
@@ -1197,6 +1199,7 @@ export function UsagePanel({
   accountLabel,
   accountEmail,
   planWindows,
+  continuation,
 }: {
   usage: AgentInfoUsageSnapshot | undefined;
   modelId: string | undefined;
@@ -1218,6 +1221,17 @@ export function UsagePanel({
    * session whose provider does not report them (a coordinator conversation).
    */
   planWindows?: NativeAgentAccountUsageWindow[];
+  /**
+   * The session's platform and state, for explaining the next continuation.
+   * Absent where the panel is not describing one live conversation.
+   */
+  continuation?: {
+    provider: AgentPlatform | undefined;
+    running: boolean;
+    canCompact: boolean;
+    resolvedModelId?: string;
+    nowMs?: number;
+  };
 }) {
   const displayedRateLimits = rateLimits ?? usage?.rateLimits;
   const reportedModelId = usage?.modelId ?? modelId;
@@ -1236,11 +1250,22 @@ export function UsagePanel({
       />
     ) : null;
 
+  const continuationSection = continuation ? (
+    <ContinuationExplanation
+      {...continuation}
+      turns={usage?.turns}
+      selectedModelId={modelId}
+      contextCompacted={usage?.contextCompacted}
+      contextTokens={usage?.occupancyUnknown || usage?.estimated ? undefined : usage?.usedTokens}
+    />
+  ) : null;
+
   if (!usage) {
     if (account) {
       return (
         <div className="space-y-4">
           {account}
+          {continuationSection}
           <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">
             <span
               className={cn("truncate", !reportedModelId && "text-[11px] font-medium")}
@@ -1253,15 +1278,24 @@ export function UsagePanel({
         </div>
       );
     }
-    return (
+    const empty = (
       <div className="rounded-lg border border-dashed border-border/70 px-4 py-5 text-sm text-muted-foreground">
         Usage will appear after this session reports its first token snapshot.
       </div>
+    );
+    return continuationSection ? (
+      <div className="space-y-4">
+        {empty}
+        {continuationSection}
+      </div>
+    ) : (
+      empty
     );
   }
 
   const used = Math.max(0, usage.usedTokens);
   const contextWindow =
+    !usage.occupancyUnknown &&
     usage.totalTokens !== undefined &&
     Number.isFinite(usage.totalTokens) &&
     usage.percentUsed !== undefined &&
@@ -1337,6 +1371,8 @@ export function UsagePanel({
           />
         ) : null}
       </div>
+
+      {continuationSection}
 
       {/*
        * Account standing sits below the session's own counters: the context

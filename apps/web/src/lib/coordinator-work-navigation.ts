@@ -16,6 +16,7 @@ import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import { requestPaneTabActivation } from "@/lib/pane-layout-authoritative";
 import { openPullRequestUrl } from "@/lib/pull-request-opener";
 import { openConversationTab } from "@/lib/web-annotations/navigation";
+import { requestInteractionFocus } from "./native-interaction-navigation";
 import { paneLayoutStore, type PaneLayoutState } from "@/stores/paneLayoutStore";
 import type { StoreApi } from "zustand/vanilla";
 import { uiStore } from "@/stores/uiStore";
@@ -171,6 +172,16 @@ export function openCoordinatorWorkTarget(
 ): void {
   switch (target.type) {
     case "worker-tab":
+      requestInteractionFocus(
+        scope,
+        target.tabId && target.interactionId
+          ? {
+              environmentId: target.environmentId,
+              tabId: target.tabId,
+              interactionId: target.interactionId,
+            }
+          : null,
+      );
       selectEnvironment(scope, target.projectId, target.environmentId);
       if (target.tabId) {
         const state = navigationState(scope);

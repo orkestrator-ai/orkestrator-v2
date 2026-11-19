@@ -24,7 +24,8 @@ import {
 
 /** The keys each handler read before (2026-11-07); every handler was lenient. */
 const HANDLER_KEYS: Record<string, readonly string[]> = {
-  get_agent_registry: ["projectId", "environmentId"],
+  // `includePending` was added on 2026-11-19 for the sidebar's waiting line.
+  get_agent_registry: ["projectId", "environmentId", "includePending"],
   list_agent_mailboxes: [
     "projectId",
     "environmentId",

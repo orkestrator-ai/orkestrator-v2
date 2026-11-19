@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { FileText } from "lucide-react";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
@@ -22,6 +22,7 @@ interface MarkdownEditorTabProps {
   isActive: boolean;
   isSaving: boolean;
   onSave: SaveFile;
+  editorHandle?: Ref<TiptapMarkdownEditorHandle>;
 }
 
 export function MarkdownEditorTab({
@@ -35,12 +36,16 @@ export function MarkdownEditorTab({
   isActive,
   isSaving,
   onSave,
+  editorHandle,
 }: MarkdownEditorTabProps) {
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ||
     DEFAULT_TERMINAL_APPEARANCE;
   const markdown = useFileDirtyStore(
     (state) => state.dirtyFiles.get(tabId)?.content ?? initialContent,
+  );
+  const documentRevision = useFileDirtyStore(
+    (state) => state.dirtyFiles.get(tabId)?.documentRevision,
   );
   const setContent = useFileDirtyStore((state) => state.setContent);
   const [initialAssessment] = useState(() => assessMarkdownForRichEditing(markdown));
@@ -49,6 +54,13 @@ export function MarkdownEditorTab({
   );
   const [parseError, setParseError] = useState<string | null>(initialAssessment.reason);
   const editorRef = useRef<TiptapMarkdownEditorHandle>(null);
+  useImperativeHandle(
+    editorHandle,
+    () => ({
+      flushPendingChanges: () => editorRef.current?.flushPendingChanges() ?? null,
+    }),
+    [],
+  );
   const handledNavigationRequestIdRef = useRef(navigationRequestId);
 
   useEffect(() => {
@@ -121,6 +133,7 @@ export function MarkdownEditorTab({
       }
     >
       <TiptapMarkdownEditor
+        key={documentRevision}
         ref={editorRef}
         markdown={markdown}
         fontFamily={terminalAppearance.fontFamily}

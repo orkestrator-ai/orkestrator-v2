@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
-import type { NativeAgentNotice } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentNotice,
+  NativeAgentRateLimitWindow,
+} from "@orkestrator/protocol/native-agent";
 import { NATIVE_TERMINAL_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-terminal-rows";
+import { exhaustedUsageWindows } from "@orkestrator/protocol/agent-usage-limits";
+import type {
+  ProviderFailureDescriptor,
+  ProviderFailureReason,
+} from "@orkestrator/protocol/provider-failures";
 
 export interface NativeTerminalMessage {
   id: string;
@@ -8,6 +16,26 @@ export interface NativeTerminalMessage {
   content: string;
   parts: [{ type: "text"; content: string }];
   createdAt: string;
+  /**
+   * What the provider said about the failure, beside the session error's own
+   * row only: its structured reason and, for a usage limit, the reset time of
+   * the window it reported exhausted. The renderer classifies the text itself
+   * (`@orkestrator/protocol/provider-failures`) when this is absent.
+   */
+  failure?: ProviderFailureDescriptor;
+}
+
+/** A reset can be inferred only when a single reported window is exhausted. */
+function exhaustedWindowReset(
+  windows: readonly NativeAgentRateLimitWindow[] | undefined,
+  now: number,
+): string | undefined {
+  if (!windows?.length) return undefined;
+  const resets = exhaustedUsageWindows(
+    windows.map((window) => ({ ...window, window: window.label })),
+    now,
+  );
+  return resets.length === 1 ? resets[0]?.resetsAt : undefined;
 }
 
 /**
@@ -19,10 +47,29 @@ export interface NativeTerminalMessage {
 export function nativeTerminalMessages(input: {
   notices?: readonly NativeAgentNotice[];
   error?: string;
+  /** The bridge's structured reason for `error`. */
+  failureReason?: ProviderFailureReason;
+  failedTurn?: { id: string; occurredAt: string; resetsAt?: string };
+  failureRequestId?: string;
+  /** Provider-reported quota windows, for a usage limit's reset time. */
+  rateLimits?: readonly NativeAgentRateLimitWindow[];
   stopNotice?: string;
   turnStartedAt?: number;
+  now?: number;
 }): NativeTerminalMessage[] {
   const notices = input.notices ?? [];
+  const resetsAt =
+    input.error && input.failureReason === "usage-limit"
+      ? (input.failedTurn?.resetsAt ??
+        exhaustedWindowReset(input.rateLimits, input.now ?? Date.now()))
+      : undefined;
+  const sessionFailure: ProviderFailureDescriptor | undefined =
+    input.failureReason || resetsAt
+      ? {
+          ...(input.failureReason ? { reason: input.failureReason } : {}),
+          ...(resetsAt ? { resetsAt } : {}),
+        }
+      : undefined;
   const terminal: Array<{ kind: "error" | "stopped"; message: string }> = [
     ...notices.flatMap((notice) =>
       notice.kind === "error" || notice.kind === "stopped"
@@ -37,8 +84,12 @@ export function nativeTerminalMessages(input: {
   ];
   const seen = new Set<string>();
   return terminal.flatMap((notice) => {
+    const failedTurn =
+      notice.kind === "error" && notice.message === input.error ? input.failedTurn : undefined;
+    const occurrenceId =
+      failedTurn?.id ?? (notice.kind === "error" ? input.failureRequestId : undefined);
     const id = `${NATIVE_TERMINAL_MESSAGE_ID_PREFIX}${notice.kind}:${createHash("sha256")
-      .update(notice.message)
+      .update(occurrenceId ? JSON.stringify([occurrenceId, notice.message]) : notice.message)
       .digest("hex")
       .slice(0, 16)}`;
     if (seen.has(id)) return [];
@@ -52,9 +103,13 @@ export function nativeTerminalMessages(input: {
         // Use a stable real time when available so auth cards can reject a
         // sign-in completed before this failure. The sentinel is only a fallback.
         createdAt:
-          input.turnStartedAt && Number.isFinite(input.turnStartedAt)
+          failedTurn?.occurredAt ??
+          (input.turnStartedAt && Number.isFinite(input.turnStartedAt)
             ? new Date(input.turnStartedAt).toISOString()
-            : "1970-01-01T00:00:00.000Z",
+            : "1970-01-01T00:00:00.000Z"),
+        ...(sessionFailure && notice.kind === "error" && notice.message === input.error
+          ? { failure: sessionFailure }
+          : {}),
       },
     ];
   });

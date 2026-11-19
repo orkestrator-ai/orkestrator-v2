@@ -92,7 +92,7 @@ export function isGitScope(scope: MeasurementScope): scope is GitScope {
   return (GIT_SCOPES as readonly string[]).includes(scope);
 }
 
-type GitRunner = (args: string[]) => Promise<string>;
+export type GitRunner = (args: string[]) => Promise<string>;
 
 /**
  * `committed-net`'s baseline version: `committed:<head>@<base>`. The part
@@ -113,7 +113,7 @@ export function committedHead(baselineVersion: string | null | undefined): strin
  * configuration runs nothing; `neutralize` blanks every driver so a Git scope
  * never executes a repository-configured program.
  */
-async function configuredFilterDrivers(
+export async function configuredFilterDrivers(
   git: GitRunner,
 ): Promise<{ names: Set<string>; neutralize: string[] }> {
   const output = await git(["config", "-z", "--get-regexp", "^filter\\."]).catch(() => "");
@@ -132,7 +132,7 @@ async function configuredFilterDrivers(
 }
 
 /** Paths whose `filter` attribute names a configured external driver. */
-async function filteredPaths(
+export async function filteredPaths(
   git: GitRunner,
   drivers: ReadonlySet<string>,
   paths: readonly string[],

@@ -131,6 +131,7 @@ export interface NativeAgentLaunchActivityReconcilerHost {
   ): void;
   /** Drop a stopped environment's outstanding requests from every cached view. */
   withdrawEnvironmentInteractions(environmentId: string): void;
+  forgetPendingInteractions(sessionKey: string): void;
   /**
    * Answer the requests of a session seen `waiting` that an Orkestrator
    * permission rule covers (todo 0723 (retired)), so a rule applies with no tab mounted
@@ -1180,11 +1181,17 @@ export class NativeAgentLaunchActivityReconciler {
       if (failedEnvironments.has(environment.id)) continue;
       const hasRegisteredSessions = sessionsByEnvironment.has(environment.id);
       const previous = environment.agentActivitySources?.["native-agent"];
-      if (!hasRegisteredSessions && !previous) continue;
-      const desiredState = isEnvironmentReadyForAgents(environment)
-        ? aggregateAgentActivityState(activityByEnvironment.get(environment.id) ?? {})
-        : "idle";
-      if (previous?.state === desiredState) continue;
+      if (!hasRegisteredSessions && !previous && !environment.hasWaitingNativeTab) continue;
+      const sources = isEnvironmentReadyForAgents(environment)
+        ? (activityByEnvironment.get(environment.id) ?? {})
+        : {};
+      const desiredState = aggregateAgentActivityState(sources);
+      const hasWaitingNativeTab = Object.values(sources).some(({ state }) => state === "waiting");
+      if (
+        previous?.state === desiredState &&
+        (environment.hasWaitingNativeTab === true) === hasWaitingNativeTab
+      )
+        continue;
       await this.storage
         .setEnvironmentAgentActivity(
           environment.id,
@@ -1194,6 +1201,7 @@ export class NativeAgentLaunchActivityReconciler {
           undefined,
           false,
           {
+            hasWaitingNativeTab,
             completionAttention:
               !attentionRecordedEnvironments.has(environment.id) &&
               (!hasRegisteredSessions || environmentsWithUnknownSessions.has(environment.id)),
@@ -1468,11 +1476,19 @@ export class NativeAgentLaunchActivityReconciler {
     });
     const resumedForegroundTurn =
       state === "working" && currentObservation?.readyForInput === true && readyForInput !== true;
-    const changedQuietContent =
+    const contentChanged =
       contentRevision !== undefined &&
       currentObservation?.contentRevision !== undefined &&
-      currentObservation.contentRevision !== contentRevision &&
-      (state === "idle" || readyForInput === true);
+      currentObservation.contentRevision !== contentRevision;
+    const waitingContentChanged = state === "waiting" && contentChanged;
+    if (
+      (previous !== state && (previous === "waiting" || state === "waiting")) ||
+      waitingContentChanged
+    ) {
+      this.host.forgetPendingInteractions(session.key);
+    }
+    const changedQuietContent =
+      contentChanged && (state === "idle" || readyForInput === true || state === "waiting");
     if (previous === state && (resumedForegroundTurn || changedQuietContent)) {
       /*
        * The view of a session whose turn is over changed without a

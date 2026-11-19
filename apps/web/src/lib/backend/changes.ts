@@ -9,6 +9,8 @@ import type {
   ChangesPrepareRestoreResult,
   ChangesRefreshResult,
   ChangesResolveLiveDetailResult,
+  ChangesStageHunkRequest,
+  ChangesStageHunkResult,
   ChangeTrackingCapabilities,
   ChangeViewResult,
   DiffDisplayOptions,
@@ -191,6 +193,17 @@ export function createChangesApi(client: BackendClient) {
     });
   }
 
+  /** Stage or unstage one reviewed hunk; the backend verifies the index first. */
+  async function stageChangeHunk(
+    request: ChangesStageHunkRequest,
+  ): Promise<ChangesStageHunkResult> {
+    return api().changes_stage_hunk({
+      diffIdentityId: request.diffIdentityId,
+      action: request.action,
+      hunk: { ...request.hunk },
+    });
+  }
+
   async function measureLegacyToolPayload(input: {
     toolName?: string;
     filePath?: string;
@@ -214,6 +227,7 @@ export function createChangesApi(client: BackendClient) {
     refreshChanges,
     prepareChangeRestore,
     applyChangeRestore,
+    stageChangeHunk,
     measureLegacyToolPayload,
   };
 }
@@ -232,5 +246,6 @@ export const {
   refreshChanges,
   prepareChangeRestore,
   applyChangeRestore,
+  stageChangeHunk,
   measureLegacyToolPayload,
 } = createChangesApi(commandBackendClient);

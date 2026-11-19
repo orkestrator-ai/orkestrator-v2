@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { formatSampleTime, useMachineSystemUsage } from "@/hooks/useSystemUsage";
 import { machineTextClass } from "@/lib/federation/machine-colors";
@@ -8,6 +8,7 @@ import type { NodeScope, NodeScopeTier } from "@/lib/node-scope/node-scope";
 import { useScopesWithCommandFallback, useSignal } from "@/lib/node-scope/providers";
 import { constantSignal } from "@/lib/node-scope/signal";
 import { cn } from "@/lib/utils";
+import type { MachineView } from "@/lib/federation/aggregate";
 import { useFederation } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
 
@@ -37,11 +38,7 @@ function Readings() {
       inMachineOrder(views, (machine) => machine.connectionId, machineOrder, portalState.selfId),
     [machineOrder, portalState.selfId, views],
   );
-  // A machine shown in this window's tree is read on its own scope, the read
-  // the title bar's meters join while it is shown (plan item 5002). Each
-  // reading uses that scope only while its tier is live (below).
-  const { windowScope } = useScopesWithCommandFallback();
-  const scopes = useSignal(windowScope.nodeScopes);
+  const scopeOf = useMachineScopeLookup();
   if (machines.length < 2) return null;
   return (
     <>
@@ -59,19 +56,67 @@ function Readings() {
             colorToken={machine.colorToken}
             bound={machine.bound}
             connected={machine.bound || machine.transport === "connected"}
-            scope={
-              machine.bound
-                ? null
-                : (scopes.find(
-                    (scope) => scope.role === "leaf" && scope.nodeId === machine.backendId,
-                  ) ?? null)
-            }
+            scope={scopeOf(machine)}
           />
         ))}
       </div>
       <span aria-hidden="true" className="mx-2 h-3 w-px self-center bg-border/50" />
     </>
   );
+}
+
+/**
+ * The node scope each machine's CPU is read on: a machine shown in this
+ * window's tree is read on its own scope, the read the title bar's meters join
+ * while it is shown (plan item 5002); every other machine through the command
+ * node. `useMachineCpu` uses the scope only while its tier is live.
+ */
+export function useMachineScopeLookup(): (
+  machine: Pick<MachineView, "bound" | "backendId">,
+) => NodeScope | null {
+  const { windowScope } = useScopesWithCommandFallback();
+  const scopes = useSignal(windowScope.nodeScopes);
+  return useCallback(
+    (machine) =>
+      machine.bound
+        ? null
+        : (scopes.find((scope) => scope.role === "leaf" && scope.nodeId === machine.backendId) ??
+          null),
+    [scopes],
+  );
+}
+
+/**
+ * One machine's current CPU percentage, or null while it is unreachable, has
+ * no sample yet, or its sample has gone stale: never an old figure.
+ */
+export function useMachineCpu({
+  nodeId,
+  bound,
+  connected,
+  scope,
+}: {
+  nodeId: BackendId;
+  bound: boolean;
+  connected: boolean;
+  scope: NodeScope | null;
+}): { cpu: number | null; sampledAt: string | null } {
+  // A scope's reads pause while it is not shown (warm, suspended), and the
+  // window keeps the scope of every machine opened in it. Reading a hidden
+  // machine on its own scope would leave its figure stale ("—") until it is
+  // shown again, so only a live scope is read on; any other machine is read
+  // through the command node, which keeps polling.
+  const tier = useSignal(scope?.tier ?? NO_SCOPE_TIER);
+  const shownScope = scope && !scope.disposed && tier === "live" ? scope : null;
+  const usage = useMachineSystemUsage({
+    nodeId,
+    bound,
+    intervalMs: MACHINE_CPU_POLL_INTERVAL_MS,
+    active: connected,
+    scope: shownScope,
+  });
+  const cpu = connected && usage.sample && !usage.stale ? usage.sample.cpuPercent : null;
+  return { cpu, sampledAt: cpu === null ? null : usage.sampledAt };
 }
 
 const MachineCpuReading = memo(function MachineCpuReading({
@@ -89,24 +134,10 @@ const MachineCpuReading = memo(function MachineCpuReading({
   connected: boolean;
   scope: NodeScope | null;
 }) {
-  // A scope's reads pause while it is not shown (warm, suspended), and the
-  // window keeps the scope of every machine opened in it. Reading a hidden
-  // machine on its own scope would leave its figure stale ("—") until it is
-  // shown again, so only a live scope is read on; any other machine is read
-  // through the command node, which keeps polling.
-  const tier = useSignal(scope?.tier ?? NO_SCOPE_TIER);
-  const shownScope = scope && !scope.disposed && tier === "live" ? scope : null;
-  const usage = useMachineSystemUsage({
-    nodeId,
-    bound,
-    intervalMs: MACHINE_CPU_POLL_INTERVAL_MS,
-    active: connected,
-    scope: shownScope,
-  });
-  const cpu = usage.sample && !usage.stale ? usage.sample.cpuPercent : null;
+  const { cpu, sampledAt } = useMachineCpu({ nodeId, bound, connected, scope });
   const reading = cpu === null ? "—" : `${Math.round(cpu)}%`;
   const label = `${name} CPU usage: ${cpu === null ? "unavailable" : reading}`;
-  const sampleTime = cpu === null ? null : formatSampleTime(usage.sampledAt);
+  const sampleTime = cpu === null ? null : formatSampleTime(sampledAt);
   return (
     <span
       role="img"

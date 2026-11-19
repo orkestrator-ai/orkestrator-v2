@@ -58,11 +58,11 @@ export interface ProjectCardDetails {
 }
 
 /**
- * The header of a project in the sidebar, for this window's machine and other
- * machines alike: the drag handle and name, the environment count, the hover
- * card, the context menu, the project home's activity, the
- * "+" button and the chevron. `SortableProjectGroup` and `RemoteProjectGroup`
- * only supply the facts and actions.
+ * The header of a project in the single-machine sidebar: the drag handle and
+ * name, the environment count, the hover card, the context menu, the project
+ * home's activity, the "+" button and the chevron. `SortableProjectGroup`
+ * supplies the facts and actions. The multi-machine list has repository
+ * headings instead (`RepositoryEnvironmentList`).
  */
 export function ProjectGroupHeader({
   projectName,

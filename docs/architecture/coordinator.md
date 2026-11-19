@@ -660,10 +660,10 @@ on `self` and on each node:
 
 ### Reaching a leaf's coordinator
 
-A command node's window reaching a leaf's project shows the leaf's
-coordinator directly when the sidebar is grouped by machine or project.
-Grouped by repository, or in the compact sidebar, it leads to the command node's
-coordinator for that repository instead, when the command node has one
+A command node's window reaching a leaf's project from the repository list
+(the sidebar's full list) or the compact sidebar leads to the command node's
+coordinator for that repository, when the command node has one; sorted by
+activity it shows the leaf's coordinator directly
 ([command-nodes.md](command-nodes.md#leaf-mode)).
 
 ### Tickets on other machines

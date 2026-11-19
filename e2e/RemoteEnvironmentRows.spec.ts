@@ -1,5 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
+// Another machine's environment rows in the repository list (design EL01),
+// apps/web/src/test/RemoteEnvironmentRowsFixture.tsx: projects p (a, b, c and
+// a project home) and q (d) on Remote, each a heading of its own.
+
 const rows = (page: Page) =>
   page
     .getByTestId("federated-environment-row")
@@ -23,7 +27,7 @@ async function drag(page: Page, from: string, to: string) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/remote-machine-tree");
+  await page.goto("/remote-environment-rows");
   await expectRows(page, ["a", "b", "c", "d"]);
 });
 
@@ -49,7 +53,7 @@ test("cross-project and no-op drops never submit a reorder", async ({ page }) =>
 });
 
 test("truncated summaries have no drag handles and preserve owner order", async ({ page }) => {
-  await page.goto("/remote-machine-tree?truncated=1");
+  await page.goto("/remote-environment-rows?truncated=1");
   await expectRows(page, ["a", "b", "c", "d"]);
   await expect(page.getByRole("button", { name: /^Reorder / })).toHaveCount(0);
   await expect(page.getByTestId("calls")).toHaveText("[]");
@@ -111,32 +115,10 @@ test("overlapping drops survive unmount and finish with the latest owner and dis
   await expectRows(page, ["c", "b", "a", "d"]);
 });
 
-test("dragging a project writes the new project order to its own machine", async ({ page }) => {
-  const projects = page.getByTestId("federated-project");
-  await expect(projects).toHaveCount(2);
-  // Aim at the expanded project's header, above its environment rows.
-  const handle = (await page
-    .getByRole("button", { name: "Open q on Remote", exact: true })
-    .boundingBox())!;
-  const target = (await page
-    .getByRole("button", { name: "Open p on Remote", exact: true })
-    .boundingBox())!;
-  await page.mouse.move(handle.x + 10, handle.y + handle.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(handle.x + 20, handle.y + handle.height / 2, { steps: 3 });
-  await page.mouse.move(target.x + 10, target.y + target.height / 2, { steps: 10 });
-  await page.mouse.up();
-  await expect(page.getByTestId("arrangements")).toHaveText(
-    '[{"projectIds":["q","p"],"folders":{}}]',
-  );
-  await expect(projects.first()).toContainText("q");
-  await expect(page.getByTestId("calls")).toHaveText("[]");
-});
-
 test("row accessibility retains activity and PR status and deleting without hover warns about its PR", async ({
   page,
 }, testInfo) => {
-  await page.goto("/remote-machine-tree?accessible-state=1");
+  await page.goto("/remote-environment-rows?accessible-state=1");
   const row = page.getByRole("button", { name: "b, on Remote, Idle", exact: true });
   await expect(row).toHaveAccessibleDescription("New completed activity. Pull request open");
   expect(await row.ariaSnapshot()).toContain('button "b, on Remote, Idle"');
@@ -155,7 +137,7 @@ test("row accessibility retains activity and PR status and deleting without hove
 test("remote failed deletion shows one complete failure message and a Retry action", async ({
   page,
 }, testInfo) => {
-  await page.goto("/remote-machine-tree?delete-failed=1");
+  await page.goto("/remote-environment-rows?delete-failed=1");
   const failure = page.getByText("Deletion failed. Retry on the owning machine.", { exact: true });
   await expect(failure).toBeVisible();
   await expect(
@@ -172,12 +154,12 @@ test("remote failed deletion shows one complete failure message and a Retry acti
 test("a slow remote delete says how long it has run and which step it is on", async ({
   page,
 }, testInfo) => {
-  await page.goto("/remote-machine-tree?delete-slow");
+  await page.goto("/remote-environment-rows?delete-slow");
   await expect(page.getByText("Still deleting after 5 min", { exact: true })).toBeVisible();
   await page.screenshot({
     path: `output/visual-previews/remote-delete-slow-before-${testInfo.project.name}.png`,
   });
-  await page.goto("/remote-machine-tree?delete-slow=worktree");
+  await page.goto("/remote-environment-rows?delete-slow=worktree");
   await expect(
     page.getByText("Still deleting after 5 min: removing the worktree", { exact: true }),
   ).toBeVisible();

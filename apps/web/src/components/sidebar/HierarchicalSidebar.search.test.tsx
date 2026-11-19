@@ -10,8 +10,8 @@ import {
 } from "@orkestrator/protocol/federation";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { FederationProvider } from "@/components/federation/FederationProvider";
-import { projectFolderKey } from "@/lib/project-folders";
-import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
+import { repositoryCollapseKey } from "@/components/federation/useRevealMachineProject";
+import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { environmentStore, projectStore, uiStore } from "@/stores";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
@@ -26,12 +26,9 @@ import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
 import { appCommandStore } from "@/test/app-command-store";
 
-/** A project's header button, found through its "+" button, which names project and machine. */
-async function findProjectHeading(project: string, machine: string): Promise<HTMLElement> {
-  const add = await screen.findByRole("button", {
-    name: `New environment in ${project} on ${machine}`,
-  });
-  return add.parentElement!.querySelector("button")!;
+/** A repository heading of the multi-machine list, which opens the repository on a machine. */
+function findRepositoryHeading(label: string, machine: string): Promise<HTMLElement> {
+  return screen.findByRole("button", { name: `Open ${label} on ${machine}` });
 }
 
 const initialView = useMachineViewStore.getState();
@@ -40,7 +37,9 @@ const initialProjects = appCommandStore(projectStore).getState();
 const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 const key = projectKey(projectRef("bk_mbp3" as BackendId, "tg"));
-const folderKey = sidebarFolderKey("bk_mbp3", projectFolderKey("Scrapers"));
+const REPOSITORY = "github.com/acme/telegram-scraper";
+const repositoryFolder = repositoryCollapseKey(REPOSITORY);
+const unrelatedFolder = repositoryCollapseKey("github.com/acme/other");
 
 beforeEach(() => {
   if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
@@ -65,7 +64,6 @@ afterEach(() => {
 });
 
 for (const { mode, offline } of [
-  { mode: "machine", offline: false },
   { mode: "activity", offline: false },
   { mode: "repository", offline: true },
   { mode: "repository", offline: false },
@@ -97,11 +95,10 @@ for (const { mode, offline } of [
       environmentSortMode: mode === "activity" ? "activity" : "project",
     });
     useMachineViewStore.setState({
-      grouping: mode === "repository" ? "repository" : "machine",
-      machineFilter: SELF_NODE_ID,
-      collapsedMachines: ["bk_mbp3"],
-      collapsedProjectKeys: [key],
-      collapsedFolderKeys: [folderKey],
+      grouping: "repository",
+      // Only this window's machine is shown, and the repository is collapsed.
+      machineFilter: [SELF_NODE_ID],
+      collapsedFolderKeys: [repositoryFolder, unrelatedFolder],
       revealedProject: null,
       recentKeys: [],
     });
@@ -111,7 +108,7 @@ for (const { mode, offline } of [
       </FederationProvider>,
     );
     expectDomAbsent(
-      screen.queryByRole("button", { name: "New environment in telegram-scraper on mbp3" }),
+      screen.queryByRole("button", { name: "Open acme/telegram-scraper on mbp3" }),
       "hidden project",
     );
     fireEvent.click(screen.getByTestId("project-search-trigger"));
@@ -122,18 +119,29 @@ for (const { mode, offline } of [
     });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    const button = await findProjectHeading("telegram-scraper", "mbp3");
-    // Shown in the central region, as a click on the row opens it.
-    await waitFor(() => expect(button.getAttribute("aria-current")).toBe("page"));
-    expect(button.closest("[data-project]")?.getAttribute("data-project")).toBe(key);
-    expect(button.closest("[data-project]")?.getAttribute("data-revealed")).toBe("true");
+    if (offline) {
+      // The repository list hides a machine that is not connected, so there is
+      // no heading to highlight; its project still opens in its workspace.
+      await waitFor(() => expect(useRemoteWorkspaceStore.getState().active).not.toBeNull());
+      expectDomAbsent(
+        screen.queryByRole("button", { name: "Open acme/telegram-scraper on mbp3" }),
+        "disconnected machine's heading",
+      );
+    } else {
+      const button = await findRepositoryHeading("acme/telegram-scraper", "mbp3");
+      // Shown in the central region, as a click on the heading opens it.
+      await waitFor(() => expect(button.getAttribute("aria-current")).toBe("page"));
+      expect(button.closest("[data-project-folder]")?.getAttribute("data-project-folder")).toBe(
+        REPOSITORY,
+      );
+      expect(button.closest("[data-revealed]")?.getAttribute("data-revealed")).toBe("true");
+    }
     expectDomAbsent(screen.queryByRole("dialog"), "palette after selection");
     const view = useMachineViewStore.getState();
-    expect(view.machineFilter).toBe("all");
-    expect(view.grouping).toBe(mode === "repository" && !offline ? "repository" : "machine");
-    expect(view.collapsedMachines).not.toContain("bk_mbp3");
-    expect(view.collapsedProjectKeys).not.toContain(key);
-    expect(view.collapsedFolderKeys).not.toContain(folderKey);
+    expect(view.machineFilter).toEqual([]);
+    expect(view.grouping).toBe("repository");
+    expect(view.collapsedFolderKeys).toEqual([unrelatedFolder]);
+    expect(view.revealedProject?.key).toBe(key);
     expect(view.recentKeys[0]).toBe(key);
     expect(useUIChromeStore.getState().environmentSortMode).toBe("project");
     expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
@@ -145,20 +153,14 @@ for (const { mode, offline } of [
       projectId: "tg",
       environmentId: null,
     });
-    const request = useRemoteWorkspaceStore.getState().requests.bk_mbp3?.request;
-    expect(request).toBeDefined();
-    if (mode === "repository" && !offline) {
-      // Repository grouping lands on Home, so it must not send a landing tab.
-      expect(request).toEqual({ projectId: "tg" });
-      expect(request).not.toHaveProperty("boardTab");
-    } else {
-      // The coordinator is only the landing tab: the project's last tab wins.
-      expect(request).toEqual({ projectId: "tg", landingTab: "coordinator" });
-    }
+    // The repository list lands on Home, so no landing tab is sent.
+    expect(useRemoteWorkspaceStore.getState().requests.bk_mbp3?.request).toEqual({
+      projectId: "tg",
+    });
   });
 }
 
-for (const mode of ["machine", "project", "repository", "activity"] as const) {
+for (const mode of ["repository", "activity"] as const) {
   test(`search opens a hidden remote environment without changing ${mode} view or local data`, async () => {
     const localProject: Project = {
       id: "local",
@@ -186,7 +188,6 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
     };
     installDesktopFake({
       list: connectionList([remoteConnection("mbp3", "mbp3", "teal")]),
-      layout: { projectFolders: { [key]: "Merged scrapers" } },
       datasets: {
         mbp3: {
           projects: [
@@ -216,15 +217,10 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
       environmentSortMode: mode === "activity" ? "activity" : "project",
       activitySortOrder: "oldest",
     });
-    const mergedFolder = sidebarFolderKey("project", projectFolderKey("Merged scrapers"));
-    const repositoryFolder = sidebarFolderKey("repository", "github.com/acme/telegram-scraper");
-    const unrelatedFolder = sidebarFolderKey("bk_other", projectFolderKey("Other"));
     useMachineViewStore.setState({
-      grouping: mode === "activity" ? "repository" : mode,
-      machineFilter: SELF_NODE_ID,
-      collapsedMachines: ["bk_mbp3", "bk_other"],
-      collapsedProjectKeys: [key, "unrelated-project"],
-      collapsedFolderKeys: [folderKey, mergedFolder, repositoryFolder, unrelatedFolder],
+      grouping: "repository",
+      machineFilter: [SELF_NODE_ID],
+      collapsedFolderKeys: [repositoryFolder, unrelatedFolder],
       revealedProject: null,
       recentKeys: [],
     });
@@ -258,10 +254,8 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
       environmentId: "run",
     });
     const view = useMachineViewStore.getState();
-    expect(view.grouping).toBe(mode === "activity" ? "repository" : mode);
-    expect(view.machineFilter).toBe("all");
-    expect(view.collapsedMachines).toEqual(["bk_other"]);
-    expect(view.collapsedProjectKeys).toEqual(["unrelated-project"]);
+    expect(view.grouping).toBe("repository");
+    expect(view.machineFilter).toEqual([]);
     expect(view.collapsedFolderKeys).toEqual([unrelatedFolder]);
     expect(view.revealedProject).toBeNull();
     expect(view.recentKeys.slice(0, 2)).toEqual([

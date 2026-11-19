@@ -106,11 +106,13 @@ describe("portal sidebar layout", () => {
         projectOrder: [],
         projectFolders: {},
         repositoryOrder: [],
+        environmentOrder: {},
       });
       await storage.nodes.updatePortalLayout({ machineOrder: ["bk_b", "bk_a"] });
       const layout = await storage.nodes.updatePortalLayout({
         projectOrder: ['["bk_a","project","p"]'],
         projectFolders: { '["bk_a","project","p"]': "Work" },
+        environmentOrder: { "github.com/o/r": ['["bk_a","environment","e"]'] },
       });
       expect(layout).toEqual({
         revision: 2,
@@ -118,6 +120,7 @@ describe("portal sidebar layout", () => {
         projectOrder: ['["bk_a","project","p"]'],
         projectFolders: { '["bk_a","project","p"]': "Work" },
         repositoryOrder: [],
+        environmentOrder: { "github.com/o/r": ['["bk_a","environment","e"]'] },
       });
       expect(await new StorageService(dataDir).nodes.getPortalLayout()).toEqual(layout);
     } finally {

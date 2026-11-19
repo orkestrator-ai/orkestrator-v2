@@ -11,7 +11,6 @@ import {
 } from "@orkestrator/protocol/federation";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { mockToastInfo, resetSonnerMocks } from "../../../../../tests/mocks/sonner";
-import { projectFolderKey } from "@/lib/project-folders";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
   SELF_NODE_ID,
@@ -20,17 +19,18 @@ import {
   remoteConnection,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
-import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
+import { useMachineViewStore } from "@/stores/machineViewStore";
 import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
-import { MergedProjectList, RemoteMachineSection } from "./FederatedSidebarSections";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { FederationEffects } from "./FederationEffects";
 import { FederationProvider } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
-import { useRevealMachineProject } from "./useRevealMachineProject";
+import { NO_BOUND_ROWS } from "./federation-ui-test-fixture";
+import { RepositoryEnvironmentList } from "./RepositoryEnvironmentList";
+import { repositoryCollapseKey, useRevealMachineProject } from "./useRevealMachineProject";
 import { appCommandStore } from "@/test/app-command-store";
 
 const INITIAL_REMOTE_STATE = useRemoteWorkspaceStore.getState();
@@ -44,10 +44,16 @@ const captured: {
   machines: ReturnType<typeof useMachineViews>;
 } = { reveal: null, machines: [] };
 
-function projectRow() {
-  return Array.from(document.querySelectorAll("[data-project]")).find(
-    (row) => row.getAttribute("data-project") === key,
+/** The project's repository entry (a project with no repository is its own). */
+function projectRow(groupKey = key) {
+  return Array.from(document.querySelectorAll("[data-project-folder]")).find(
+    (row) => row.getAttribute("data-project-folder") === groupKey,
   );
+}
+
+/** Whether the entry's heading is highlighted as revealed. */
+function isRevealed(row: Element | undefined): boolean {
+  return row?.querySelector("[data-revealed]")?.getAttribute("data-revealed") === "true";
 }
 
 function Harness() {
@@ -59,26 +65,15 @@ function Harness() {
     captured.reveal = reveal;
     captured.machines = machines;
   });
-  if (sort === "activity") return null;
-  if (grouping !== "machine") {
-    return (
-      <MergedProjectList
-        machines={machines}
-        shownIds={new Set(machines.filter(isMachineShown).map((m) => m.connectionId))}
-        mode={grouping === "compact" ? "repository" : grouping}
-        renderBoundProject={() => null}
-        onBoundEnvironmentDragEnd={() => {}}
-      />
-    );
-  }
+  // The activity list and compact show no repository headings.
+  if (sort === "activity" || grouping === "compact") return null;
   return (
-    <>
-      {machines
-        .filter((machine) => !machine.bound)
-        .map((machine) => (
-          <RemoteMachineSection key={machine.connectionId} machine={machine} />
-        ))}
-    </>
+    <RepositoryEnvironmentList
+      machines={machines}
+      shownIds={new Set(machines.filter(isMachineShown).map((m) => m.connectionId))}
+      ordering="machine"
+      bound={NO_BOUND_ROWS}
+    />
   );
 }
 
@@ -130,30 +125,27 @@ describe("useRevealMachineProject", () => {
     act(() => captured.reveal!(machine, "tg"));
   }
 
-  test("expands its machine, folder and project, clears a hiding filter and highlights it", async () => {
+  test("expands its repository, clears a filter hiding its machine and highlights it", async () => {
     useMachineViewStore.setState({
-      machineFilter: "bk_other",
-      collapsedMachines: ["bk_mbp3"],
-      collapsedProjectKeys: [key],
-      collapsedFolderKeys: [sidebarFolderKey("bk_mbp3", projectFolderKey("Scrapers"))],
+      // Only this window's machine is shown.
+      machineFilter: [SELF_NODE_ID],
+      collapsedFolderKeys: [repositoryCollapseKey(key)],
     });
     await revealIn();
     const views = useMachineViewStore.getState();
-    expect(views.machineFilter).toBe("all");
-    expect(views.collapsedMachines).not.toContain("bk_mbp3");
-    expect(views.collapsedProjectKeys).not.toContain(key);
+    expect(views.machineFilter).toEqual([]);
     expect(views.collapsedFolderKeys).toEqual([]);
     expect(views.recentKeys[0]).toBe(key);
     expect(views.revealedProject?.key).toBe(key);
-    const row = await waitFor(() => {
-      const found = Array.from(document.querySelectorAll("[data-project]")).find(
-        (candidate) => candidate.getAttribute("data-project") === key,
-      );
-      if (!found) throw new Error("project row not rendered");
-      return found;
-    });
-    expect(row.getAttribute("data-revealed")).toBe("true");
+    await waitFor(() => expect(isRevealed(projectRow())).toBe(true));
     expect(mockToastInfo).not.toHaveBeenCalled();
+  });
+
+  test("keeps a filter that already shows its machine", async () => {
+    useMachineViewStore.setState({ machineFilter: ["bk_mbp3"] });
+    await revealIn();
+    expect(useMachineViewStore.getState().machineFilter).toEqual(["bk_mbp3"]);
+    await waitFor(() => expect(isRevealed(projectRow())).toBe(true));
   });
 
   test("this window's own selections are recorded as recent and end the highlight", async () => {
@@ -176,101 +168,66 @@ describe("useRevealMachineProject", () => {
     expect(useMachineViewStore.getState().revealedProject).toBeNull();
   });
 
-  test("reveals a compact project paired with activity sort in the machine list", async () => {
+  test("reveals a compact project paired with activity sort in the repository list", async () => {
     useUIChromeStore.setState({ environmentSortMode: "activity" });
     useMachineViewStore.setState({ grouping: "compact" });
     await revealIn();
     expect(useUIChromeStore.getState().environmentSortMode).toBe("project");
-    expect(useMachineViewStore.getState().grouping).toBe("machine");
-    expect(projectRow()?.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe(
-      "true",
-    );
+    expect(useMachineViewStore.getState().grouping).toBe("repository");
+    await waitFor(() => expect(isRevealed(projectRow())).toBe(true));
     expect(mockToastInfo).not.toHaveBeenCalled();
   });
 
-  for (const grouping of ["project", "repository"] as const) {
-    test(`reveals a connected project inside collapsed merged ${grouping} folders`, async () => {
-      uninstallDesktopFake();
-      installDesktopFake({
-        list: connectionList([MBP3]),
-        layout: { projectFolders: { [key]: "Merged scrapers" } },
-        datasets: {
-          mbp3: {
-            projects: [
-              {
-                id: "tg",
-                name: "telegram-scraper",
-                folder: "Scrapers",
-                gitUrl: "https://github.com/acme/telegram-scraper.git",
-              },
-            ],
-            environments: {},
-          },
+  test("reveals a connected project inside its collapsed repository", async () => {
+    uninstallDesktopFake();
+    installDesktopFake({
+      list: connectionList([MBP3]),
+      datasets: {
+        mbp3: {
+          projects: [
+            {
+              id: "tg",
+              name: "telegram-scraper",
+              gitUrl: "https://github.com/acme/telegram-scraper.git",
+            },
+          ],
+          environments: {},
         },
-      });
-      const machineFolder = sidebarFolderKey("bk_mbp3", projectFolderKey("Scrapers"));
-      const mergedFolder = sidebarFolderKey("project", projectFolderKey("Merged scrapers"));
-      const repositoryFolder = sidebarFolderKey("repository", "github.com/acme/telegram-scraper");
-      const unrelatedFolder = sidebarFolderKey(grouping, "unrelated");
-      useMachineViewStore.setState({
-        grouping,
-        collapsedMachines: ["bk_mbp3"],
-        collapsedProjectKeys: [key],
-        collapsedFolderKeys: [machineFolder, mergedFolder, repositoryFolder, unrelatedFolder],
-      });
-      renderHarness();
-      const machine = await waitFor(() => {
-        const found = captured.machines.find((candidate) => candidate.name === "mbp3");
-        if (!found || found.projects.length === 0) throw new Error("mbp3 not loaded");
-        return found;
-      });
-      expect(machine.transport).toBe("connected");
-      expectDomAbsent(projectRow() ?? null, "project hidden inside collapsed merged folder");
-      act(() => captured.reveal!(machine, "tg"));
-      const views = useMachineViewStore.getState();
-      expect(views.grouping).toBe(grouping);
-      expect(views.collapsedMachines).not.toContain("bk_mbp3");
-      expect(views.collapsedProjectKeys).not.toContain(key);
-      expect(views.collapsedFolderKeys).toEqual([unrelatedFolder]);
-      expect(views.recentKeys[0]).toBe(key);
-      await waitFor(() => expect(projectRow()?.getAttribute("data-revealed")).toBe("true"));
-      expect(projectRow()?.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe(
-        "true",
-      );
-      expect(useUIChromeStore.getState().environmentSortMode).toBe("project");
-      expect(mockToastInfo).not.toHaveBeenCalled();
+      },
     });
-
-    test(`immediately shows an offline project from ${grouping} grouping`, async () => {
-      uninstallDesktopFake();
-      installDesktopFake({
-        list: connectionList([{ ...MBP3, transport: "unreachable" }]),
-        datasets: {
-          mbp3: {
-            projects: [{ id: "tg", name: "telegram-scraper", folder: "Scrapers" }],
-            environments: {},
-          },
-        },
-      });
-      useMachineViewStore.setState({
-        grouping,
-        collapsedMachines: ["bk_mbp3"],
-        collapsedProjectKeys: [key],
-      });
-      await revealIn();
-      expect(useMachineViewStore.getState().grouping).toBe("machine");
-      const row = projectRow();
-      expect(row?.getAttribute("data-revealed")).toBe("true");
-      expect(row?.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe("true");
+    const repository = "github.com/acme/telegram-scraper";
+    const unrelatedFolder = repositoryCollapseKey("unrelated");
+    useMachineViewStore.setState({
+      collapsedFolderKeys: [repositoryCollapseKey(repository), unrelatedFolder],
     });
-  }
+    renderHarness();
+    const machine = await waitFor(() => {
+      const found = captured.machines.find((candidate) => candidate.name === "mbp3");
+      if (!found || found.projects.length === 0) throw new Error("mbp3 not loaded");
+      return found;
+    });
+    expect(machine.transport).toBe("connected");
+    await waitFor(() => expect(projectRow(repository)).toBeDefined());
+    expect(isRevealed(projectRow(repository))).toBe(false);
+    act(() => captured.reveal!(machine, "tg"));
+    const views = useMachineViewStore.getState();
+    expect(views.grouping).toBe("repository");
+    expect(views.collapsedFolderKeys).toEqual([unrelatedFolder]);
+    expect(views.recentKeys[0]).toBe(key);
+    await waitFor(() => expect(isRevealed(projectRow(repository))).toBe(true));
+    expect(useUIChromeStore.getState().environmentSortMode).toBe("project");
+    expect(mockToastInfo).not.toHaveBeenCalled();
+  });
 
   test("another remote selection removes the row highlight with no local selection", async () => {
     appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
     openMachineWorkspace({ connectionId: "bk_other", projectId: "other", title: "Other" });
     await revealIn();
-    const row = projectRow()!;
-    expect(row.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe("true");
+    const row = await waitFor(() => {
+      const found = projectRow();
+      if (!isRevealed(found)) throw new Error("project not revealed");
+      return found!;
+    });
     act(() =>
       openMachineWorkspace({
         connectionId: "bk_other",
@@ -280,7 +237,7 @@ describe("useRevealMachineProject", () => {
       }),
     );
     expect(useMachineViewStore.getState().revealedProject).toBeNull();
-    expect(row.getAttribute("data-revealed")).not.toBe("true");
+    expect(isRevealed(row)).toBe(false);
     expectDomAbsent(row.querySelector("[aria-current]"), "revealed project current marker");
   });
 });

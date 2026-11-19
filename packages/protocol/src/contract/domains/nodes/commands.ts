@@ -102,6 +102,7 @@ export const updatePortalLayoutCommand = defineCommand({
     projectOrder: optionalUnknown,
     projectFolders: optionalUnknown,
     repositoryOrder: optionalUnknown,
+    environmentOrder: optionalUnknown,
   }),
   result: PortalLayoutSchema,
   critical: [],

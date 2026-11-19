@@ -1,20 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import { portalStore } from "@/lib/portal/portal-store";
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { GLOBAL_SETTINGS_REQUEST_EVENT, takeMachineUpdateRequest } from "@/lib/settings-navigation";
 import { mockToastError, resetSonnerMocks } from "../../../../../tests/mocks/sonner";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
-import { MachineSectionHeader } from "./FederatedSidebarSections";
 import { machineView } from "./federation-ui-test-fixture";
+import { MachineTiles } from "./MachineTiles";
 import { reportFederatedActionError } from "./useFederatedEnvironmentActions";
 import { viewFromNodeSummary } from "./useMachineViews";
 
 /**
- * Plan item 5006: the machine header shows a node's version when it differs
- * from the command node's, with the domains it lacks, and leads to its
- * update; a typed incompatibility error leads there too.
+ * Plan item 5006: a machine's tile names its version in its tooltip when it
+ * differs from the command node's, with the domains it lacks, and marks a
+ * machine whose update is offered with an amber dot; a typed incompatibility
+ * error leads to the update.
  */
 
 const INITIAL_PORTAL_STATE = portalStore.getState();
@@ -41,57 +43,51 @@ afterEach(() => {
   resetSonnerMocks();
 });
 
-function header(
-  release: { version: string | null; domains: Record<string, never> | null } | object,
-) {
-  render(<MachineSectionHeader machine={machineView({ release: release as never })} />);
-  return screen.getByTestId("machine-section-header");
+function tile(release: { version: string | null; domains: Record<string, never> | null } | object) {
+  renderInAppCommandScope(<MachineTiles machines={[machineView({ release: release as never })]} />);
+  return screen.getByTestId("machine-tile");
 }
 
-describe("the machine header", () => {
+/** The tooltip's lines between the machine's CPU and whether it is shown. */
+function versionLines(element: HTMLElement): string[] {
+  return (element.getAttribute("title") ?? "").split("\n").slice(2, -1);
+}
+
+describe("the machine tile", () => {
   test("shows nothing for a machine on the command node's version", () => {
-    const element = header(COMMAND_RELEASE);
-    expectDomAbsent(within(element).queryByTestId("machine-version-skew"));
+    const element = tile(COMMAND_RELEASE);
+    expectDomAbsent(screen.queryByTestId("machine-tile-update"));
+    expect(versionLines(element)).toEqual([]);
   });
 
   test("shows nothing while the version is unknown, or from a command node without one", () => {
-    expectDomAbsent(
-      within(header({ version: null, domains: null })).queryByTestId("machine-version-skew"),
-    );
+    expect(versionLines(tile({ version: null, domains: null }))).toEqual([]);
+    expectDomAbsent(screen.queryByTestId("machine-tile-update"));
     cleanup();
     portalStore.store.setState({ commandRelease: null });
-    expectDomAbsent(
-      within(header({ version: "2.38.0", domains: {} })).queryByTestId("machine-version-skew"),
-    );
+    expect(versionLines(tile({ version: "2.38.0", domains: {} }))).toEqual([]);
+    expectDomAbsent(screen.queryByTestId("machine-tile-update"));
   });
 
-  test("an older machine shows its version and the domains it lacks, and opens its update", () => {
-    const element = header({ version: "2.38.0", domains: { git: { min: 1, max: 1 } } });
-    const skew = within(element).getByRole("button", { name: /^Update Machine A\./ });
-    expect(skew.getAttribute("data-relation")).toBe("older");
-    expect(skew.textContent).toBe("2.38.0· lacks nodes, terminals");
-    expect(skew.getAttribute("aria-label")).toBe(
-      "Update Machine A. Machine A runs Orkestrator 2.38.0, older than the command node's 2.40.0. It lacks nodes, terminals.",
-    );
-    fireEvent.click(skew);
-    expect(takeMachineUpdateRequest()).toBe("bk_a");
-    expect(settingsRequests).toEqual(["machines"]);
+  test("an older machine names its version and the domains it lacks, and is marked for update", () => {
+    const element = tile({ version: "2.38.0", domains: { git: { min: 1, max: 1 } } });
+    expect(versionLines(element)).toEqual([
+      "Machine A runs Orkestrator 2.38.0, older than the command node's 2.40.0. It lacks nodes, terminals.",
+    ]);
+    expect(screen.getByTestId("machine-tile-update")).toBeTruthy();
   });
 
   test("a pre-contract machine says it predates contracts", () => {
-    const skew = within(header({ version: "2.30.0", domains: null })).getByTestId(
-      "machine-version-skew",
-    );
-    expect(skew.textContent).toBe("2.30.0· predates contracts");
-    expect(skew.getAttribute("title")).toContain("It predates domain contracts.");
+    const element = tile({ version: "2.30.0", domains: null });
+    expect(element.getAttribute("title")).toContain("It predates domain contracts.");
+    expect(screen.getByTestId("machine-tile-update")).toBeTruthy();
   });
 
-  test("a newer machine shows its version without offering an update", () => {
-    const element = header({ version: "2.41.0", domains: COMMAND_RELEASE.domains });
-    const skew = within(element).getByTestId("machine-version-skew");
-    expect(skew.tagName).toBe("SPAN");
-    expect(skew.getAttribute("data-relation")).toBe("newer");
-    expectDomAbsent(within(element).queryByRole("button", { name: /^Update/ }));
+  test("a newer machine names its version without offering an update", () => {
+    const element = tile({ version: "2.41.0", domains: COMMAND_RELEASE.domains });
+    expect(versionLines(element)).toHaveLength(1);
+    expect(versionLines(element)[0]).toContain("2.41.0");
+    expectDomAbsent(screen.queryByTestId("machine-tile-update"));
   });
 
   test("a node summary supplies the release; a disconnected one has none to compare", () => {

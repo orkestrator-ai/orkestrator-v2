@@ -61,7 +61,7 @@ command nodes span all connected nodes.
 | Machine name, colour token, profile revision | That backend (`backend-profile` store) | Cache and display; edit with compare-and-swap |
 | Saved machines, routes, SSH settings, encrypted tokens | Desktop native catalogue (the hosted browser keeps none) | The renderer sees safe summaries only |
 | SSH processes, host-key trust, prompts | Desktop main process (`apps/desktop/electron/ssh/`) | React never spawns SSH or builds argv |
-| Machine filter, grouping, collapsed sections, recently used | Client presentation (`machineViewStore`) | Persisted locally, by machine identity |
+| Machine filter, sidebar view, environment ordering, collapsed sections, recently used | Client presentation (`machineViewStore`) | Persisted locally, by machine identity |
 | Environment-local tabs and layouts | Owning backend (unchanged) | Rendered in the window's tree, on that machine's node scope |
 
 ## Components
@@ -778,32 +778,86 @@ has at least one other node),
 `HierarchicalSidebar` replaces the switch-and-reload `ServerConnectionSwitcher`
 with `MachinesFilter`:
 
-- The filter offers **All machines** (the default), each machine, and
-  **Manage connections…**. It also shows connected/total (`2/3`) and a label
-  such as `2 connected · 1 unavailable`. It never says "all caught up" while a
-  machine is missing (`connectivitySummary`).
+- The filter (`machineViewStore.machineFilter`) is a set of machines; empty
+  shows them all. Its menu offers **All machines** (the default) and a
+  checkbox per machine, then **Manage connections…**. Unfiltered, the trigger
+  shows connected/total (`2/3`); filtered it names the one machine or "N
+  machines" and shows shown/total (`2/7`). The menu's label reads such as
+  `2 connected · 1 unavailable`, never "all caught up" while a machine is
+  missing (`connectivitySummary`). A filter persists across reloads; a stored
+  single machine or `"all"` from before 2.39 is read as a one-machine set or
+  as all (`sanitizePersisted`).
+- **Machine tiles** (`MachineTiles`, design EL01) sit between the search bar
+  and the list: one rounded square per machine, in machine order, its top half
+  the machine's colour with three dark initials (`machineInitials`: omarchy-hp
+  → OHP, beelink2 → BE2, mini → MIN), its bottom half a darker shade with the
+  CPU percentage in white (`useMachineCpu`, the title bar's coordinated read).
+  A machine that is not connected or has no current sample is dimmed and
+  shows "—", never an old figure. A tile is a toggle button whose name gives
+  the machine, its CPU and "shown" or "hidden"; its tooltip adds the status and
+  any version skew (an amber dot marks an update on offer). The tiles drive
+  the same filter as the menu (`toggleMachineFilter`): with every machine
+  shown a click shows only that machine, which stays highlighted while the
+  others fade; after that each click adds or removes one machine, and turning
+  off the last one shows every machine again, so the list is never empty.
+  Dragging a tile (8 px before a press becomes a drag) reorders the machines
+  (`PortalLayout.machineOrder`); Settings > Machines reorders them by keyboard.
+  The tiles wrap rather than scroll, so a 390 px phone overlay fits them.
 - Changing the filter is presentation only. It never closes a transport or
   a node scope.
-- Grouping options are **By machine** (the bound machine's full tree, then
-  `RemoteMachineSection` per other machine, in that backend's order), **By
-  project** (instances with machine badges; equal names stay separate) and
-  **By repository**. **By activity** gives one list across the selected machines,
-  with an **Order** radio group. The projections live in `aggregate.ts` and never
-  merge records.
-- **Compact** is one more group-by mode, also offered in a window that names no
-  machines (whose menu calls its ordinary list **Full list**). See
-  [Compact sidebar](#compact-sidebar).
+- **The full list** (`RepositoryEnvironmentList`, design EL01) has one heading
+  per repository and every environment listed flat beneath it, whichever
+  machine it is on; each row's status marker carries its machine's colour.
+  There are no per-machine or per-project sub-headings. A project that
+  reports no repository is a heading of its own. A machine the filter hides,
+  or that is not connected, takes its rows with it; its entries keep their
+  place for when it is back. Notices for a listed machine (unknown outcomes, a
+  truncated list) sit above the list. The projections live in
+  `environment-list.ts` and `aggregate.ts` and never merge records. Earlier
+  builds offered **By machine**, **By project** and **By repository**
+  groupings here; a stored grouping from them opens this list.
+- **Ordering** ("Order environments" in the sort menu, only with more than one
+  machine; `machineViewStore.environmentOrdering`): **By machine** (the
+  default) lists each machine's environments together in machine order, each
+  in its machine's own order; a drag moves a row only within its own run (one
+  project on one machine), is refused outside it, and is written to the owner
+  (`reorder_environments`). **Manual** keeps one order per repository on the
+  command node (`PortalLayout.environmentOrder`, keyed by repository identity,
+  entries by environment key), so it survives restarts and is shared by every
+  client; a row can go anywhere in its repository. Until the user arranges a
+  repository it is the by-machine order; a new environment goes after the
+  last one of its own machine there; a drag among the rows a filter shows
+  leaves hidden machines' rows in their slots (`placeShown`). Switching back
+  to By machine keeps the manual order for next time. Repository headings are
+  dragged to reorder repositories (`repositoryOrder`).
+- **Sorting** keeps **By project** (the list above) and **By activity**, one
+  list across the selected machines, with an **Order** radio group.
+- **Compact** is the other sidebar view, also offered in a window that names
+  no machines; the menu's **Sidebar view** section offers **Full list** and
+  **Compact**. See [Compact sidebar](#compact-sidebar).
 - Repository grouping uses only a sanitized `host/owner/name` hint derived
   from the project's Git URL (`repositoryHint`), or an explicit mapping
   argument. Names, paths and branches never group projects.
-- A repository heading's tile shows `repositoryIcon`: the command node's icon
+- A repository heading is a 32 px tile in `repositoryTileColor` (the command
+  node's colour while it has a copy, else the colour of the machine it opens
+  the coordinator on), `owner/` muted then the repository name, and the
+  subtitle "N machines · N environments", or only "N machines" when it has no
+  environments. The tile shows `repositoryIcon`: the command node's icon
   for its copy of the repository (none means the house, even when another
   machine has one), else, when the command node has no copy, the first icon in
-  machine order. Right-clicking the heading opens its menu, which acts on the
-  member the heading opens and names its machine: Open Coordinator (absent where
-  the coordinator is gated), Open board, Open repo on GitHub, Repository
-  settings, New environment and Expand/Collapse. Settings and New environment
-  are disabled while that machine is not writable, as on a project header.
+  machine order. Its members' project-home activity buttons follow the name.
+  A **+** button labelled "New environment in <repository>" sits where the
+  chevron was, always visible, and opens the New Environment dialog of the
+  member the heading opens (this window's own dialog for its own copy).
+  Collapsing is in the context menu (Expand/Collapse) and on the keyboard:
+  Left collapses and Right expands the focused heading. Right-clicking the
+  heading opens its menu, which acts on the member the heading opens and
+  names its machine: Open Coordinator (absent where the coordinator is
+  gated), Open board, Open repo on GitHub, Repository settings, New
+  environment, New environment on each other machine with a copy, Copy to
+  Machine…, Expand/Collapse and Delete project on that machine. Settings,
+  creation, copying and deletion are disabled while that machine is not
+  writable, as on a project header.
 - A project's page reopens on the tab it was last left on (Home, Coordinator,
   Kanban, Linear and so on). Each node's `uiStore` keeps the last tab per
   project (`projectBoardTabs`, newest first, at most 200, persisted with its
@@ -903,12 +957,12 @@ with `MachinesFilter`:
 Compact (`grouping: "compact"`, persisted like the other modes) makes the
 sidebar one large icon wide (56px), listing only top-level repositories.
 
-- **The list** is `compactRepositories`: the "by repository" tree, one icon per
+- **The list** is `compactRepositories`: the repository list's tree, one icon per
   group, so a repository on several machines is one icon. A project that reports
   no repository is its own icon. A window that names no machines lists its own
   projects, folders flattened away. Every connected machine counts: the machine
-  filter's control is not on screen, so it does not apply here (it is kept for
-  the other modes).
+  filter's controls are not on screen, so it does not apply here (it is kept for
+  the full list).
 - **An icon** reuses `CommandNodeHomeIcon` (`repositoryIcon`, as a repository
   heading has; a repository with none shows the house tile) inside
   `CoordinatorActivityIcon`. Its outline is `repositoryTileColor`,
@@ -934,18 +988,17 @@ sidebar one large icon wide (56px), listing only top-level repositories.
   search bar is not mounted, so ⌘K does nothing and is not held for later. The
   footer actions stay, stacked. A multi-selection is cleared, having no rows.
 - **Sorting by activity** does not replace compact, which lists no environments.
-  Both are kept: `groupingBeforeCompact` is what leaving compact restores there.
+  Both are kept: leaving compact with the activity sort returns to the activity
+  list.
 - **The phone layout's** overlay has no compact form. It falls back to the
   repository list (or activity list when sorted by activity), and the choice is
   kept for desktop widths. The grouping another node's workspace follows
   (`useWindowGrouping`) is the displayed list's.
 
-**Rotating modes.** ⌘⇧D / Ctrl+Shift+D (`rotate-sidebar-grouping`) walks **By
-machine → By project → By repository → Compact** and back
-(`nextSidebarView`). It skips what would change nothing: the merged modes while
-no other machine is shown, and compact in the phone layout. Sorted by activity,
-when the groupings are not on screen, it moves between the activity list and
-compact.
+**Rotating views.** ⌘⇧D / Ctrl+Shift+D (`rotate-sidebar-grouping`) moves
+between the full list and compact (`nextSidebarView`), keeping the sort, so
+sorted by activity it moves between the activity list and compact. The phone
+layout has no compact, so there it does nothing.
 
 **Width.** `useSidebarPanelMotion` moves the panel between full, compact and
 hidden, so showing and hiding animate too and the panel stays mounted. `index.css`
@@ -980,12 +1033,13 @@ component with two thin adapters:
 | Row frame (grip, selection, offline dimming) | `SortableEnvironmentRowFrame`, `activityRowClassName` | `SortableEnvironmentItem` | `RemoteSortableEnvironmentItem` |
 | Delete confirmation | `EnvironmentDeleteDialog` | through `EnvironmentRow` | through `EnvironmentRow` |
 | Attention line (what a waiting agent needs) | `EnvironmentAttentionLine`, `environmentRowModel` | `EnvironmentItem` (`LOCAL_AGENT_SUMMARY_SOURCE`) | `RemoteEnvironmentItem` (`nodeAgentSummarySource`) |
-| Project header | `ProjectGroupHeader` | `SortableProjectGroup` | `RemoteProjectGroup` |
+| Project header (single-machine list) | `ProjectGroupHeader` | `SortableProjectGroup` | none: the multi-machine list has repository headings only |
+| Repository heading and its rows | `SortableProjectFolder`, `RepositoryEnvironmentList` | `BoundEnvironmentRendering` (`HierarchicalSidebar`) | `RemoteSortableEnvironmentItem` |
 | Project home activity | `ProjectHomeActivityButton`, `projectHomeStatus` | `ProjectHomeActivity` | `RemoteProjectHomeActivity` |
 | Compact icon status | `compactRepositoryStatus`, `projectHomeStatus` | `useCompactStatuses` | `remoteMemberFacts` |
 | Activity list | `ActivityEnvironmentList`, `compareActivity` | `HierarchicalSidebar` | `FederatedActivityList` |
-| Empty project list | `SidebarEmptyState` | `HierarchicalSidebar` | `MergedProjectList`, `RemoteMachineBody` |
-| Drag card | `SidebarDragOverlay` | `HierarchicalSidebar` | `MergedProjectList`, `RemoteMachineTree` |
+| Empty project list | `SidebarEmptyState` | `HierarchicalSidebar` | `RepositoryEnvironmentList` |
+| Drag card | `SidebarDragOverlay` | `HierarchicalSidebar` | `RepositoryEnvironmentList` |
 
 The adapters only gather facts (from this window's stores, or from
 `NodeEnvironmentSummary`/`NodeProjectSummary`, which for a warm or live node
@@ -1014,10 +1068,10 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   address", "Copy initial prompt", "Merge PR", the clickable port, the
   design-canvas deletion notice) are absent. "Merge PR" opens this window's
   action-bar merge dialog for the environment (`mergePrRequestStore`), so it
-  exists only where that dialog can act. A section of a machine that has never been
-  reached says "Not available yet.", a state its own sidebar cannot have.
-- A machine header shows the machine's version when it differs from the
-  command node's, with the domains it lacks, and leads to its update
+  exists only where that dialog can act.
+- A machine tile's tooltip gives the machine's version when it differs from
+  the command node's, with the domains it lacks, and an amber dot marks an
+  update on offer, which the machines menu and Settings > Machines start
   (`MachineView.release`, which every adapter supplies from the command
   node's summaries; see
   [Keeping the fleet current](host-updates.md#keeping-the-fleet-current)).
@@ -1109,18 +1163,17 @@ environments..." field open the same dialog, so they behave identically.
   marked offline/stale/loading when it is. Both reset when the dialog closes.
 - **Choosing a row.** This machine's rows select as before. Another machine's
   project is selected in the sidebar, not opened (`useRevealMachineProject`):
-  it is recorded as recent, its machine section, folder (by machine, by
-  project and by repository) and project are expanded, a sidebar machine
-  filter that hides it is cleared, and the row is highlighted
-  (`machineViewStore.revealedProject`) and scrolled into view until something
-  else is selected. When the current layout cannot show it (sorted by
-  activity, or a merged list hiding a disconnected machine), selection switches
-  to the by-machine project view immediately. Another machine's environment
+  it is recorded as recent, its repository is expanded, a sidebar machine
+  filter that hides its machine is cleared, and its repository heading is
+  highlighted (`machineViewStore.revealedProject`) and scrolled into view until
+  something else is selected. Sorted by activity, the sidebar returns to the
+  repository list first. A disconnected machine's projects are not in the
+  list, so nothing is highlighted for them. Another machine's environment
   opens on that machine (`openMachineWorkspace`), as its sidebar row does.
 - **Offline, stale and loading machines** keep their last-known rows, greyed
   (`opacity-60`) with an offline/stale/loading label, and can still be
-  chosen: a project is revealed in the by-machine sidebar, which keeps its
-  last-known tree; an environment opens as from the sidebar. While a machine
+  chosen: a project is revealed in the repository list where it can be; an
+  environment opens as from the sidebar. While a machine
   in scope is unavailable, loading or truncated the dialog (including empty-query
   recents) says "Results may be incomplete".
 

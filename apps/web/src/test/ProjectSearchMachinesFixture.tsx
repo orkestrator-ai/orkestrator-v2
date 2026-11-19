@@ -8,11 +8,8 @@ import {
 } from "@orkestrator/protocol/node-summaries";
 import { useRevealMachineProject } from "@/components/federation/useRevealMachineProject";
 import { useMachineViews } from "@/components/federation/useMachineViews";
-import {
-  FederatedActivityList,
-  MergedProjectList,
-  RemoteMachineSection,
-} from "@/components/federation/FederatedSidebarSections";
+import { FederatedActivityList } from "@/components/federation/FederatedSidebarSections";
+import { RepositoryEnvironmentList } from "@/components/federation/RepositoryEnvironmentList";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
@@ -153,10 +150,17 @@ function install() {
   return true;
 }
 
+const NO_BOUND_ROWS = {
+  renderEnvironment: () => null,
+  selectedEnvironmentId: null,
+  onDragEnd: () => {},
+  onCreate: () => {},
+};
+
 function SearchContent() {
   const reveal = useRevealMachineProject();
   const machines = useMachineViews();
-  const grouping = useMachineViewStore((state) => state.grouping);
+  const ordering = useMachineViewStore((state) => state.environmentOrdering);
   const sort = useUIChromeStore((state) => state.environmentSortMode);
   const [selected, setSelected] = useState<string | null>(null);
   const opened = useRemoteWorkspaceStore((state) => state.active);
@@ -169,19 +173,15 @@ function SearchContent() {
         Sidebar view
         <select
           aria-label="Sidebar view"
-          value={sort === "activity" ? "activity" : grouping}
+          value={sort === "activity" ? "activity" : "repository"}
           onChange={(event) => {
             const mode = event.target.value;
             useUIChromeStore
               .getState()
               .setEnvironmentSortMode(mode === "activity" ? "activity" : "project");
-            if (mode === "machine" || mode === "project" || mode === "repository")
-              useMachineViewStore.getState().setGrouping(mode);
           }}
         >
-          <option value="machine">By machine</option>
-          <option value="project">By project</option>
-          <option value="repository">By repository</option>
+          <option value="repository">Full list</option>
           <option value="activity">By activity</option>
         </select>
       </label>
@@ -198,19 +198,14 @@ function SearchContent() {
       <aside aria-label="Machine projects">
         {sort === "activity" ? (
           <FederatedActivityList machines={machines} renderBoundRow={() => null} />
-        ) : grouping === "machine" ? (
-          machines
-            .filter((machine) => !machine.bound)
-            .map((machine) => <RemoteMachineSection key={machine.connectionId} machine={machine} />)
         ) : (
-          <MergedProjectList
+          <RepositoryEnvironmentList
             machines={machines}
             shownIds={
               new Set(machines.filter(isMachineShown).map((machine) => machine.connectionId))
             }
-            mode={grouping === "compact" ? "repository" : grouping}
-            renderBoundProject={() => null}
-            onBoundEnvironmentDragEnd={() => {}}
+            ordering={ordering}
+            bound={NO_BOUND_ROWS}
           />
         )}
       </aside>

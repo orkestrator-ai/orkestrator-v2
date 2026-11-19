@@ -31,6 +31,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
 import { capabilitiesApi } from "@/lib/backend/capabilities";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
@@ -63,6 +64,19 @@ const STATUS_RANK = [
   "ready",
   "unsupported",
 ];
+
+/** A name the authoring command accepts: lower-case letters, digits and dashes. */
+function authoredName(...candidates: string[]): string {
+  for (const candidate of candidates) {
+    const name = candidate
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64);
+    if (/^[a-z0-9][a-z0-9-]*$/.test(name)) return name;
+  }
+  return "package";
+}
 
 function worst(cells: CapabilityAvailabilityCell[]): CapabilityAvailabilityCell | undefined {
   return [...cells].sort(
@@ -102,6 +116,7 @@ export function PackageDetail({
   const [testResult, setTestResult] = useState<CapabilityVerification | null>(null);
   const [useOnSetup, setUseOnSetup] = useState("");
   const [file, setFile] = useState<{ path: string; content: string } | null>(null);
+  const [editing, setEditing] = useState<{ path: string; content: string } | null>(null);
   const detail = state.data;
 
   const machineNames = useMemo(
@@ -164,6 +179,12 @@ export function PackageDetail({
       )
     : [];
   const hasMcp = pkg.kinds.includes("mcp-server");
+  // Authored single-file packages are edited here; the edit is a new revision of the same package.
+  const editable =
+    pkg.source.kind === "managed" &&
+    detail.files.length === 1 &&
+    detail.components.length === 1 &&
+    ["skill", "command", "prompt", "subagent"].includes(detail.components[0]!.kind);
 
   return (
     <div className="space-y-6" data-testid="capability-package-detail">
@@ -310,11 +331,67 @@ export function PackageDetail({
           View activity
         </Button>
       </div>
-      {pkg.source.kind === "managed" ? (
-        <p className="text-xs text-muted-foreground">
-          To edit this package, create it again with the same name from Add → Create new; the new
-          revision is proposed as an update.
-        </p>
+      {editable ? (
+        <div className="space-y-2">
+          {editing ? (
+            <>
+              <Textarea
+                aria-label={`Edit ${editing.path}`}
+                rows={10}
+                className="font-mono text-[11px]"
+                value={editing.content}
+                onChange={(event) => setEditing({ ...editing, content: event.target.value })}
+              />
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setEditing(null)} disabled={busy}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      const component = detail.components[0]!;
+                      const inspection = await capabilitiesApi.authorCapabilityPackage({
+                        managedId: (pkg.source as { managedId: string }).managedId,
+                        kind: component.kind as "skill" | "command" | "prompt" | "subagent",
+                        name: authoredName(pkg.displayName, component.name),
+                        ...(pkg.description ? { description: pkg.description } : {}),
+                        content: editing.content,
+                      });
+                      const result = await capabilitiesApi.previewCapabilityChange({
+                        kind: "add-to-setup",
+                        inspectionId: inspection.inspectionId,
+                        setupId: pkg.assignedSetupIds[0] ?? "my-setup",
+                      });
+                      setEditing(null);
+                      setPreview(result.operation);
+                    })
+                  }
+                >
+                  Preview the new revision
+                </Button>
+              </div>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  const source = await capabilitiesApi.readCapabilityFile(
+                    packageId,
+                    detail.files[0]!.path,
+                  );
+                  setEditing({ path: source.path, content: source.content });
+                })
+              }
+            >
+              Edit source
+            </Button>
+          )}
+        </div>
       ) : null}
       {error ? (
         <p className="text-xs text-rose-300" role="alert">

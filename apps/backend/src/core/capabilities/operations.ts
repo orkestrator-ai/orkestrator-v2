@@ -270,7 +270,11 @@ export function applyChangeToState(
         ...setup.packageSelections.filter((entry) => entry.packageId !== inspection.packageId),
         selection,
       ].slice(0, CAPABILITY_LIMITS.maxSelectionsPerSetup);
-      if (change.kind === "add-to-setup") {
+      // A new revision of a package already in the setup keeps its exceptions unless new ones are given.
+      if (
+        change.kind === "add-to-setup" &&
+        (change.excludedProviders !== undefined || change.excludedMachines !== undefined)
+      ) {
         const exclusions = new Set(
           setup.exclusions.filter((entry) => !entry.endsWith(`|${inspection.packageId}`)),
         );

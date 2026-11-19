@@ -506,6 +506,65 @@ describe("setups", () => {
   });
 });
 
+describe("editing and rollback", () => {
+  test("editing an authored package is a new revision of the same package; rollback restores the previous one", async () => {
+    const { command, leafA } = await fleet();
+    const first = await command.service.authorPackage({
+      kind: "skill",
+      name: "tone",
+      content: "Be brief.",
+    });
+    const add = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: first.inspectionId, excludedProviders: ["pi"] },
+    });
+    await command.service.applyChange({
+      operationId: add.operation.id,
+      approvedDigest: add.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    const managedId = (first.source as { managedId: string }).managedId;
+
+    const edited = await command.service.authorPackage({
+      kind: "skill",
+      name: "tone",
+      content: "Be brief and kind.",
+      managedId,
+    });
+    expect(edited.packageId).toBe(first.packageId);
+    expect(edited.existing?.artifactDigest).toBe(first.artifactDigest);
+    const update = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: edited.inspectionId },
+    });
+    expect(update.operation.targets.some((target) => target.action === "update")).toBe(true);
+    await command.service.applyChange({
+      operationId: update.operation.id,
+      approvedDigest: update.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    expect(await fs.readFile(skillFile(leafA, ".claude", "tone"), "utf8")).toContain(
+      "Be brief and kind.",
+    );
+    const setups = await command.service.listSetups();
+    expect(setups.setups[0]!.exclusions).toContain(`provider:pi|${first.packageId}`);
+
+    const detail = await command.service.getPackage({ packageId: first.packageId });
+    expect(detail.previousRevisions[0]?.artifactDigest).toBe(first.artifactDigest);
+    const rollback = await command.service.rollbackPackage({
+      packageId: first.packageId,
+      toRevision: first.revision,
+    });
+    await command.service.applyChange({
+      operationId: rollback.operation.id,
+      approvedDigest: rollback.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    expect(await fs.readFile(skillFile(leafA, ".claude", "tone"), "utf8")).not.toContain("kind");
+    expect((await command.service.getPackage({ packageId: first.packageId })).package.pinned).toBe(
+      true,
+    );
+  });
+});
+
 describe("session launch", () => {
   test("a required component the session's policy denies blocks the launch; the manifest is frozen otherwise", async () => {
     const { command } = await fleet();

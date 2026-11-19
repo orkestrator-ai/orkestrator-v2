@@ -12,6 +12,7 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 4. **Package registries and signed team manifests**: open.
 5. **Command-node handover of capability state**: open.
 6. **Native plugin lifecycle beyond Claude**: open (depends on 1).
+7. **Container delivery through portable inputs**: open.
 
 ### 1. Live provider conformance for capability installs
 
@@ -120,6 +121,24 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
   - **Bridge plugin loading for OpenCode and Pi.**
     - Pros: full lifecycle.
     - Cons: security review of in-process extensions.
+
+### 7. Container delivery through portable inputs
+
+**Problem.** The executor writes into this machine's provider homes. A container environment receives provider resources only through its staged portable inputs, so a capability added after the container was created reaches it only on a rebuild, and the Capabilities page does not yet show a container's installed revision or offer the refresh.
+
+**Context.** `portable-inputs.ts` stages provider resources and shared skills into containers with bounded copies and withholds credentials; `describeCapabilitySupport` already reports native plugin lifecycles as unsupported in a container.
+
+**Investigation.** The container's inputs revision label (`DOCKER_LABEL_INPUTS_REVISION`) can carry the manifest digest; the environment card can compare it with the environment's current effective manifest and offer the existing rebuild action.
+
+**Decisions.**
+
+- **Delivery.**
+  - **Stage the effective manifest's artifacts into the portable inputs and compare digests on the environment card (recommended).**
+    - Pros: reuses the bounded staging and the rebuild flow; no writes into a running container.
+    - Cons: a change needs a rebuild of the inputs.
+  - **Write into running containers with `docker exec`.**
+    - Pros: immediate.
+    - Cons: a second writer inside the container boundary; conflicts with the in-container firewall and ownership rules.
 
 ## Related
 

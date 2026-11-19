@@ -230,6 +230,14 @@ never used for "Ready".
 - **Project and environment settings**: the same resolver, with project and
   environment toolkit assignments, and Write to / Import from the repository.
 
+## Editing authored packages
+
+A package authored in Orkestrator (one skill, command, prompt or subagent) has
+**Edit source** on its detail page. The edit is inspected like any source and
+becomes a new revision of the same package, applied through the same preview
+and approval; its exceptions are kept and the previous revision is available
+for rollback.
+
 ## Updates and rollback
 
 `refresh_capability_updates` (and a six-hour timer) asks each Git package's
@@ -284,6 +292,8 @@ at its locked revision, and fails the whole import if a digest differs.
 
 Live conformance runs against each pinned provider binary, isolated provider
 homes per session (exclusive claims are reported as not enforceable instead),
-merging local changes, a package registry, signed team manifests and
-organisation policy editing in the UI are not implemented; see
+merging local changes, a package registry, signed team manifests,
+organisation policy editing in the UI and delivery into existing containers
+(they receive capabilities through their portable inputs on a rebuild) are
+not implemented; see
 [8314](../todo/cross-cutting/8314-agent-capabilities-follow-ups.md).

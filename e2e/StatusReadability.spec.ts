@@ -13,7 +13,7 @@ test("status labels are readable and fit the transcript", async ({ page }, testI
     .getByTestId("muted-color")
     .evaluate((element) => getComputedStyle(element).color);
   for (const name of [
-    /1\/4 complete \(1 cancelled\)/,
+    "1/4 complete (1 canceled)",
     "1 task tracked +2 more",
     "no tasks",
     "Task list is empty.",
@@ -27,26 +27,11 @@ test("status labels are readable and fit the transcript", async ({ page }, testI
     "text-decoration-line",
     "line-through",
   );
-  for (const status of ["in progress", "cancelled"]) {
+  for (const status of ["in progress", "canceled"]) {
     const badge = page.getByText(status, { exact: true });
     await expect(badge).toHaveCSS("font-size", "11px");
     await expect(badge).toBeInViewport({ ratio: 1 });
   }
-
-  const group = page.getByRole("button", { name: /^Show 3 tool calls:/ });
-  await expect(group).toHaveAttribute("aria-expanded", "false");
-  await expect(group.getByText("1 failed", { exact: true })).toBeVisible();
-  await expect(group.getByTitle("3 tool calls")).toBeVisible();
-  const duration = group.getByTitle(/^First call started to last call finished:/);
-  await expect(duration).toHaveCSS("font-size", "11px");
-  await expect(duration).toHaveCSS("color", mutedColor);
-  expect(
-    await duration.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      const row = element.closest("button")!.getBoundingClientRect();
-      return bounds.left >= row.left && bounds.right <= row.right;
-    }),
-  ).toBe(true);
 
   await expect(page.getByRole("img", { name: "Not verified yet" })).toHaveCSS("color", mutedColor);
 
@@ -67,4 +52,37 @@ test("status labels are readable and fit the transcript", async ({ page }, testI
   await expect(page.getByRole("status")).toHaveText("Waiting for setup scripts to complete...");
   await page.reload();
   await expect(page.getByRole("button", { name: "Retry setup", exact: true })).toBeEnabled();
+});
+
+test("folded tool count and duration match and fit with their icons", async ({ page }) => {
+  await page.goto("/status-readability");
+  const group = page.getByRole("button", { name: /^(Show|Fold) 3 tool calls:/ });
+  await expect(group).toHaveAttribute("aria-expanded", "false");
+  await expect(group.getByText("1 failed", { exact: true })).toBeVisible();
+  await expect(group).toBeInViewport({ ratio: 1 });
+
+  const mutedColor = await page
+    .getByTestId("muted-color")
+    .evaluate((element) => getComputedStyle(element).color);
+  const count = group.getByTitle("3 tool calls");
+  const duration = group.getByTitle(/^First call started to last call finished:/);
+  await expect(count.locator("svg.lucide-wrench")).toBeVisible();
+  await expect(duration.locator("svg.lucide-timer[aria-hidden='true']")).toBeVisible();
+  for (const stat of [count, duration]) {
+    await expect(stat).toHaveCSS("font-size", "11px");
+    await expect(stat).toHaveCSS("color", mutedColor);
+    expect(
+      await stat.evaluate((element) => {
+        const row = element.closest("button")!.getBoundingClientRect();
+        const content = document.createRange();
+        content.selectNodeContents(element);
+        const bounds = content.getBoundingClientRect();
+        return bounds.left >= row.left && bounds.right <= row.right;
+      }),
+    ).toBe(true);
+  }
+
+  await group.press("Enter");
+  await expect(group).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTitle("Ran for 250ms").locator("svg.lucide-timer")).toHaveCount(3);
 });

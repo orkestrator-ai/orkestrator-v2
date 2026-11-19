@@ -57,8 +57,10 @@ function replayAgent(runs: ReplayRun[]): SDKAgent {
         status: "running" as const,
         supports: () => true,
         unsupportedReason: () => undefined,
-        async *stream() {
+        async *stream(): AsyncGenerator<never> {
+          // Held open until the run settles; this agent streams no messages.
           await outcome;
+          yield* [];
         },
         conversation: async () => [],
         wait: async () => ({ id: `replay-run-${runs.length}`, ...(await outcome) }),

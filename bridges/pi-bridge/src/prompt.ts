@@ -10,6 +10,7 @@ import {
  * journal of every request id it has taken and refuses to reuse one whose
  * outcome a previous bridge process could not record.
  */
+import { replayRecorder } from "./replay-recorder.js";
 import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
@@ -242,6 +243,7 @@ export async function dispatchPrompt(
   clearTurnUsage(state);
   state.turnEntryOffset = readEntryCount(session);
   let run: Promise<void>;
+  replayRecorder?.prompt(state.id);
   try {
     run = session.prompt(text, {
       ...(input.images.length > 0 ? { images: input.images.map(toImageContent) } : {}),

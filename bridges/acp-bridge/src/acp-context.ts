@@ -2,6 +2,7 @@ import {
   createBridgeDiagnostics,
   type BridgeRunDiagnostics,
 } from "@orkestrator/protocol/node/bridge-diagnostics";
+import { createProviderReplayRecorderFromEnv } from "@orkestrator/protocol/node/provider-replay-recorder";
 import { loadBridgeCredential } from "@orkestrator/protocol/node/bridge-credential";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -704,6 +705,20 @@ export const agentRuntime: {
     : never;
 } = {};
 
+/**
+ * The opt-in provider-traffic recorder: null unless
+ * `ORKESTRATOR_PROVIDER_RECORD_DIR` and `ORKESTRATOR_PROVIDER_RECORD_CONFIRM=1`
+ * are both set (`@orkestrator/protocol/node/provider-replay-recorder`). It
+ * keeps every stdout line an agent writes, byte for byte, one file per agent
+ * process; `tests/conformance/provider-replay/README.md` turns one into a
+ * fixture.
+ */
+const replayRecorder = createProviderReplayRecorderFromEnv({
+  bridge: "acp",
+  provider: providerConfig.id,
+  providerVersion: () => agentRuntime.version,
+});
+
 export interface AgentMcpConnection {
   url: string;
   token: string;
@@ -977,6 +992,10 @@ export class AcpProcess {
   #terminating: Promise<void> | undefined;
   #terminationOutcome?: "resolved" | "rejected";
   readonly #stdoutFramer = new JsonlLineFramer(MAX_LINE_BYTES);
+  /** One recording per agent process: its pid is the key, never content. */
+  get #replayKey(): string {
+    return `process-${this.child.pid ?? "unknown"}`;
+  }
   onUpdate: (params: JsonObject) => void = unattachedUpdate;
   /**
    * The latest `available_commands_update` that arrived before a session
@@ -1170,6 +1189,7 @@ export class AcpProcess {
   ): Promise<unknown> {
     if (this.#closed) return Promise.reject(new Error(`${provider} ACP process is not running`));
     const id = this.#nextId++;
+    if (method === "session/prompt") replayRecorder?.prompt(this.#replayKey);
     this.#diagnostics?.count("requestsSent");
     this.#diagnostics?.tool(String(id), method, "started");
     return new Promise((resolvePromise, reject) => {
@@ -1271,6 +1291,7 @@ export class AcpProcess {
 
   #acceptLine(line: string): void {
     if (!line.trim()) return;
+    replayRecorder?.rawLine(this.#replayKey, line);
     this.#diagnostics?.streamEvent();
     let message: JsonObject;
     try {

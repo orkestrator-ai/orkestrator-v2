@@ -66,18 +66,47 @@ const FILES_PER_BODY_PAGE = 20;
 export const LIVE_FILE_REPRESENTATION_ID = "git-baseline-vs-worktree-bytes-v1";
 /** committed-net: the baseline blob against HEAD's blob, both read with `git cat-file`. */
 export const COMMITTED_FILE_REPRESENTATION_ID = "git-baseline-vs-head-bytes-v1";
+/** unstaged: the index entry's blob against the working-tree bytes. */
+export const INDEX_FILE_REPRESENTATION_ID = "git-index-vs-worktree-bytes-v1";
+/** staged: HEAD's blob against the index entry's blob. */
+export const STAGED_FILE_REPRESENTATION_ID = "git-head-vs-index-bytes-v1";
+
+/**
+ * `readBaseline`'s revision for the index: `git cat-file blob :<path>` reads
+ * the stage-0 entry.
+ */
+const INDEX_REVISION = "";
 
 /**
  * Live rows a file body can be resolved for: the environment's own
- * measurement, and the two Git scopes that split it at HEAD. Their
- * `baselineVersion` ends in the before side's commit (`…@<oid>`).
+ * measurement, the two Git scopes that split it at HEAD (their
+ * `baselineVersion` ends in the before side's commit, `…@<oid>`), and the
+ * index scopes, whose index side is read at resolve time and bound into the
+ * identity like any other endpoint.
  */
 const LIVE_DETAIL_SCOPES: ReadonlySet<string> = new Set([
   "environment-net",
   "uncommitted-net",
   "committed-net",
+  "staged",
+  "unstaged",
 ]);
-type LiveDetailScope = "environment-net" | "uncommitted-net" | "committed-net";
+type LiveDetailScope =
+  "environment-net" | "uncommitted-net" | "committed-net" | "staged" | "unstaged";
+
+/** The representation a live file identity of `scope` compares. */
+function liveRepresentationId(scope: LiveDetailScope): string {
+  switch (scope) {
+    case "committed-net":
+      return COMMITTED_FILE_REPRESENTATION_ID;
+    case "unstaged":
+      return INDEX_FILE_REPRESENTATION_ID;
+    case "staged":
+      return STAGED_FILE_REPRESENTATION_ID;
+    default:
+      return LIVE_FILE_REPRESENTATION_ID;
+  }
+}
 
 function err(
   code: "not-found" | "body-expired" | "invalid-request" | "stale-revision",
@@ -401,17 +430,22 @@ export class DiffBodyService {
     const pathId = row?.new_path ?? row?.path_id ?? input.pathId;
     if (!pathId)
       return { kind: "error", error: { code: "not-found", reasonKey: "changes.error.not-found" } };
-    // A capped Git scope has no row for most of its files, and cannot say
-    // whether this path is one of them.
-    if (
-      scope !== "environment-net" &&
-      !row &&
-      measurement?.completeness.reasons.includes(FILE_ROWS_CAPPED_REASON)
-    )
-      return {
-        kind: "error",
-        error: { code: "not-found", reasonKey: `changes.reason.${FILE_ROWS_CAPPED_REASON}` },
-      };
+    // A missing row proves an empty comparison only when the scan covered the path.
+    if (scope !== "environment-net" && !row && measurement) {
+      const cap = measurement.completeness.reasons.find(
+        (reason) => reason === FILE_ROWS_CAPPED_REASON || reason === "untracked-scan-capped",
+      );
+      if (cap)
+        return { kind: "error", error: { code: "not-found", reasonKey: `changes.reason.${cap}` } };
+      if (scope === "staged" || scope === "unstaged") {
+        const freshness = this.deps.projections.getFreshness(input.resourceKey);
+        const reasonKey =
+          freshness?.observationState === "fresh" && !freshness.stale
+            ? "changes.reason.empty-index-scope"
+            : `changes.reason.${freshness?.unavailableReason ?? "scan-failed"}`;
+        return { kind: "error", error: { code: "not-found", reasonKey } };
+      }
+    }
     // A Git scope's rows are Git's view; a path Git measures through a filter
     // program has no raw-byte body that would match it.
     if (scope !== "environment-net" && (!row || row.reason === "git-filter-unsupported"))
@@ -441,20 +475,31 @@ export class DiffBodyService {
     const owner = this.deps.registry.owner(identity);
     // Claim the fence before reading, so a takeover during the read is seen.
     owner.ownerFence();
-    const baseline = measurement?.baselineVersion?.split("@")[1] ?? null;
-    // committed-net's after side is HEAD's blob, never the working tree.
+    // The before side's revision: the index for `unstaged`, otherwise the
+    // immutable commit the projection compared against.
+    const baseline =
+      scope === "unstaged"
+        ? INDEX_REVISION
+        : (measurement?.baselineVersion?.split("@")[1] ?? null) || null;
+    // committed-net's after side is HEAD's blob and staged's is the index
+    // entry; neither is ever the working tree.
     const afterCommit =
-      scope === "committed-net" ? committedHead(measurement?.baselineVersion) : null;
+      scope === "committed-net"
+        ? committedHead(measurement?.baselineVersion)
+        : scope === "staged"
+          ? INDEX_REVISION
+          : null;
     if (scope === "committed-net" && !afterCommit)
       return {
         kind: "error",
         error: { code: "stale-revision", reasonKey: "changes.error.stale-revision" },
       };
+    const afterFromGit = afterCommit !== null;
     // Current side: read through the owner's executor (host or container).
     const deleted = row?.status === "deleted";
     const signal = new AbortController().signal;
     const [current] =
-      deleted || afterCommit
+      deleted || afterFromGit
         ? [null]
         : await owner.executor.fetch(
             [pathId],
@@ -468,7 +513,7 @@ export class DiffBodyService {
             signal,
           );
     let afterBlob: string | null = null;
-    if (afterCommit && !deleted) {
+    if (afterCommit !== null && !deleted) {
       const bytes = await this.readBaseline(target, afterCommit, pathId);
       if (bytes) afterBlob = (await this.deps.store.put("blob", bytes)).id;
     } else if (
@@ -481,7 +526,7 @@ export class DiffBodyService {
     // Baseline side: the immutable commit the projection compared against.
     let beforeBlob: string | null = null;
     const added = row?.status === "added";
-    if (!added && baseline && oldPathId) {
+    if (!added && baseline !== null && oldPathId) {
       const bytes = await this.readBaseline(target, baseline, oldPathId);
       if (bytes) beforeBlob = (await this.deps.store.put("blob", bytes)).id;
     }
@@ -539,9 +584,7 @@ export class DiffBodyService {
       baselineVersion: measurement?.baselineVersion ?? null,
       origin: "captured-endpoints" as const,
       algorithmPolicyId: RAW_LINES_ALGORITHM_ID,
-      representationPolicyId: afterCommit
-        ? COMMITTED_FILE_REPRESENTATION_ID
-        : LIVE_FILE_REPRESENTATION_ID,
+      representationPolicyId: liveRepresentationId(scope),
       effectClaim: "workspace-observed" as const,
       finality: "provisional" as const,
       boundary: { before: "not-applicable" as const, after: "running-observation" as const },
@@ -554,7 +597,7 @@ export class DiffBodyService {
         files: beforeBytes && afterBytes ? ("complete" as const) : ("partial" as const),
         reasons: [
           "live-file-detail",
-          ...(baseline ? [] : ["baseline-mutable-ref", "baseline-unavailable"]),
+          ...(baseline !== null ? [] : ["baseline-mutable-ref", "baseline-unavailable"]),
           ...(beforeBytes ? [] : ["baseline-unreadable"]),
           ...(afterBytes ? [] : ["current-unreadable"]),
         ],
@@ -594,9 +637,7 @@ export class DiffBodyService {
       scope,
       measurementId: sealed.measurementId,
       algorithmPolicyId: RAW_LINES_ALGORITHM_ID,
-      representationPolicyId: afterCommit
-        ? COMMITTED_FILE_REPRESENTATION_ID
-        : LIVE_FILE_REPRESENTATION_ID,
+      representationPolicyId: liveRepresentationId(scope),
       rendererPolicyId: HUNK_RENDERER_POLICY_ID,
       whitespacePolicy: "preserve",
       kind: "file",
@@ -605,17 +646,26 @@ export class DiffBodyService {
         : beforeBlob
           ? {
               state: "present",
-              snapshotId: `gitref:${baseline}`,
+              snapshotId:
+                baseline === INDEX_REVISION ? `gitindex:${captureId}` : `gitref:${baseline}`,
               pathId: oldPathId ?? pathId,
               blobId: beforeBlob,
             }
-          : { state: "unknown", reason: baseline ? "baseline-unreadable" : "baseline-mutable-ref" },
+          : {
+              state: "unknown",
+              reason: baseline !== null ? "baseline-unreadable" : "baseline-mutable-ref",
+            },
       after: deleted
         ? { state: "absent" }
         : afterBlob
           ? {
               state: "present",
-              snapshotId: afterCommit ? `gitref:${afterCommit}` : captureId,
+              snapshotId:
+                afterCommit === INDEX_REVISION
+                  ? `gitindex:${captureId}`
+                  : afterCommit
+                    ? `gitref:${afterCommit}`
+                    : captureId,
               pathId,
               blobId: afterBlob,
             }
@@ -651,11 +701,12 @@ export class DiffBodyService {
     pathId: string,
   ): Promise<Uint8Array | null> {
     const path = Buffer.from(decodePath(pathId)).toString();
+    const object = oid === "" ? `:0:${path}` : `${oid}:${path}`;
     try {
       if (target.kind === "local") {
         const result = await runCommandBuffer(
           "git",
-          [...SAFE_GIT_CONFIG, "-C", target.worktreePath, "cat-file", "blob", `${oid}:${path}`],
+          [...SAFE_GIT_CONFIG, "-C", target.worktreePath, "cat-file", "blob", object],
           {
             timeoutMs: 20_000,
             env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
@@ -674,7 +725,7 @@ export class DiffBodyService {
           ...SAFE_GIT_CONFIG,
           "cat-file",
           "blob",
-          `${oid}:${path}`,
+          object,
         ],
         { timeoutMs: 20_000 },
       );

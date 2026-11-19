@@ -16,6 +16,27 @@ import {
 import { MAX_NATIVE_AGENT_DRIFT_KINDS } from "@orkestrator/protocol/native-agent";
 
 describe("normalizeProviderContextUsage", () => {
+  test("keeps compaction invalidation and valid cache timing alongside historical turns", () => {
+    expect(
+      normalizeProviderContextUsage({
+        usedTokens: 0,
+        occupancyUnknown: true,
+        contextCompacted: true,
+        turns: [
+          { turnId: "old", cacheAccessNotBefore: "invalid" },
+          { turnId: "newer", cacheAccessNotBefore: "2026-11-19T10:00:00Z" },
+        ],
+      }),
+    ).toMatchObject({
+      occupancyUnknown: true,
+      contextCompacted: true,
+      turns: [
+        { turnId: "old" },
+        { turnId: "newer", cacheAccessNotBefore: "2026-11-19T10:00:00.000Z" },
+      ],
+    });
+  });
+
   test("preserves a bounded provider-formatted credit balance", () => {
     expect(
       normalizeProviderContextUsage({

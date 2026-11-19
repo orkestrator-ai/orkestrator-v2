@@ -694,6 +694,8 @@ export class NativeAgentService {
         ),
       withdrawEnvironmentInteractions: (environmentId) =>
         this.withdrawEnvironmentInteractions(environmentId),
+      forgetPendingInteractions: (sessionKey) =>
+        this.interactions.forgetPendingInteractions(sessionKey),
       ...(this.permissionRules
         ? {
             applyPermissionRules: (session, provider) =>

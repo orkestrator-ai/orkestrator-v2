@@ -7,13 +7,17 @@
  * carries the SHA-256 of the content the editor loaded; the backend compares
  * it with the file as it is now and refuses the write with
  * `FILE_WRITE_CONFLICT_MESSAGE` when they differ or the file is gone. An
- * explicit overwrite is a save without the precondition.
+ * explicit overwrite is a save without the precondition. An absent precondition
+ * publishes only if no directory entry exists at the destination.
  */
 import { sha256Hex } from "./graphs/sha256.js";
 
-export interface FileWritePrecondition {
-  /** Lower-case hex SHA-256 of the UTF-8 content the editor loaded. */
-  sha256: string;
+export type FileWritePrecondition = { sha256: string } | { absent: true };
+
+export const EDITOR_FILE_MISSING_MESSAGE = "editor-file-missing: The file no longer exists";
+
+export function isEditorFileMissing(error: unknown): boolean {
+  return String(error).includes("editor-file-missing:");
 }
 
 /** Stable prefix: the error crosses the command transport as a message only. */
@@ -31,6 +35,12 @@ export function fileContentSha256(content: string): string {
 /** Validate a precondition from a command argument; absent means "no check". */
 export function parseFileWritePrecondition(value: unknown): FileWritePrecondition | undefined {
   if (value === undefined || value === null) return undefined;
+  if (
+    typeof value === "object" &&
+    Object.keys(value).length === 1 &&
+    (value as { absent?: unknown }).absent === true
+  )
+    return { absent: true };
   if (
     typeof value !== "object" ||
     Array.isArray(value) ||

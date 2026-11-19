@@ -24,7 +24,11 @@ import {
 } from "@/stores/diffCommentsStore";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ChangeHunksView, type ChangeHunksAnnotations } from "./ChangeHunksView";
+import {
+  ChangeHunksView,
+  type ChangeHunksAnnotations,
+  type HunkNavigationProps,
+} from "./ChangeHunksView";
 
 /**
  * Review comments on a backend-rendered diff (`diffCommentsStore`).
@@ -293,7 +297,8 @@ export function CommentableHunks({
   file,
   mode,
   context,
-}: {
+  ...navigation
+}: HunkNavigationProps & {
   file: ChangeDiffFileBody;
   mode: "unified" | "split";
   context: DiffCommentContext;
@@ -487,6 +492,7 @@ export function CommentableHunks({
         mode={mode}
         maxHeightClass="max-h-none"
         annotations={annotations}
+        {...navigation}
       />
     </>
   );

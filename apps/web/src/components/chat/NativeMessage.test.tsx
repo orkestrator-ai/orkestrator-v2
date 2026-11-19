@@ -7194,6 +7194,25 @@ describe("NativeMessage shell command changes", () => {
 });
 
 describe("OpenCode error-row authentication recovery", () => {
+  test.each([
+    "Model request failed (HTTP 403): API key not valid. Please pass a valid API key.",
+    "Missing credentials for provider",
+  ])("shows sign-in for %s", (content) => {
+    renderInAppCommandScope(
+      <NativeMessage
+        platform="opencode"
+        message={makeMessage([], {
+          id: `${ERROR_MESSAGE_PREFIX}openai-failure`,
+          content,
+          modelId: "openai/gpt-test",
+        })}
+      />,
+    );
+    expect(screen.getByRole("group", { name: "Sign-in needed" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in to openai again" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+  });
+
   afterEach(cleanup);
 
   test.each([undefined, "container-1"])(

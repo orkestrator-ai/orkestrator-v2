@@ -28,7 +28,13 @@ export type WorkspaceDialog = (typeof WORKSPACE_DIALOGS)[number];
 /** Work on one node, opened where it runs. */
 export type WorkspaceWorkTarget =
   /** A worker environment, at the delegated tab when known. */
-  | { type: "worker-tab"; projectId: string; environmentId: string; tabId?: string }
+  | {
+      type: "worker-tab";
+      projectId: string;
+      environmentId: string;
+      tabId?: string;
+      interactionId?: string;
+    }
   /** A build pipeline's tab; the environment may not exist yet. */
   | { type: "build"; projectId: string; pipelineId: string; environmentId?: string }
   | { type: "review"; projectId: string; environmentId: string; workflowId: string }

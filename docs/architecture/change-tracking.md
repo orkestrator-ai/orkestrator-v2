@@ -140,6 +140,7 @@ Backend services (one composition root, `service.ts`):
 | `DiffBodyService` | `diff-bodies.ts` | Immutable bodies, live detail resolution |
 | `ChangeHandoffSerializer` | `handoff.ts` | Agent handoff text |
 | `ChangeRestoreService` | `restore.ts` | Conditional restore |
+| `HunkStagingService` | `hunk-staging.ts` | Stages or unstages one reviewed hunk against a verified index ([Hunk staging](#hunk-staging)) |
 | `ChangeRetentionService` | `retention.ts`, `reachability-cache.ts`, `ledger-retirement.ts`, `deleted-environment-reconcile.ts` | Reachability GC, quotas, per-manifest object ids between passes, environment purges (including the startup reconcile of environments deleted before purges were recorded) and age-based ledger retention |
 | `ChangeTrackingPolicyRegistry` | `policy-registry.ts` | Every budget and cadence |
 | shared physical work | `shared-physical-work.ts` | Alias scan joins, refcounted watchers |
@@ -418,13 +419,14 @@ Commands (`commands-registry-changes.ts`):
 | `changes_get_tool_presentations` | Tool presentations and summary projections for transcript rows |
 | `changes_get_history` | Persisted turns of a thread, paged; no worktree scan |
 | `changes_get_thread` | The thread's current segment resource |
-| `changes_resolve_live_detail` | Live row of `environment-net`, `uncommitted-net` or `committed-net` → immutable file identity, or `stale-revision`; `committed-net` reads `HEAD`'s blob, never the working tree, and Git-filtered rows are refused |
+| `changes_resolve_live_detail` | Live row of `environment-net`, `uncommitted-net`, `committed-net`, `unstaged` or `staged` → immutable file identity, or `stale-revision`; `committed-net` reads `HEAD`'s blob, never the working tree; `unstaged` binds the index entry's blob against the working file and `staged` `HEAD`'s blob against the index entry's (both recompute their scope first, and answer `not-found` for a path with no change in it); Git-filtered rows are refused |
 | `changes_get_diff` | Backend-rendered hunks for a diff identity; `body-expired` never falls back to disk |
 | `changes_refresh` | Fenced refresh; settles only on a pass started after the request |
 | `changes_get_handoff` | Backend-serialized handoff text |
 | `changes_prepare_restore` / `changes_apply_restore` | Conditional restore |
+| `changes_stage_hunk` | Stage one hunk of a reviewed live file identity, or unstage one of a `staged` identity, only against the exact index (and working file) it compared ([Hunk staging](#hunk-staging)); `git` domain since version 2 |
 | `changes_get_diagnostics` | Content-free operator diagnostics |
-| `changes_get_capabilities` | What this backend offers (history, restore, Git scopes, volume); clients gate actions on it |
+| `changes_get_capabilities` | What this backend offers (history, restore, Git scopes, volume, `hunkStaging`); clients gate actions on it |
 | `changes_measure_legacy_payload` | Backend measurement of a legacy transcript payload (rows recorded before evidence existed) |
 
 Events: `change-projection-changed` carries `projection`, `deleted`, `reset`
@@ -449,6 +451,10 @@ renderer (no line counting, diffing, provider-tool classification, provider
 SDKs or two-buffer diff editors) and keeps the portable contracts free of
 platform and provider imports.
 
+The file editor's save-conflict comparison is the sole exception for
+two-buffer editors. It renders a disk snapshot beside the live, editable draft
+with Monaco. That comparison supplies no change statistics or projections.
+
 ### Surfaces
 
 | Surface | Resource |
@@ -459,7 +465,7 @@ platform and provider imports.
 | Thread header and turn list | `thread-net`, `turn-net`, `provider-turn-diff` and `operation-volume` as separate lines (`ThreadChangesHeader.tsx`, `TurnChangesHistory.tsx`) |
 | Edit and shell rows | `CanonicalToolPresentation` roles (payload, effect, observation) with backend hunks (`NativeMessage.change-parts.tsx`); legacy rows measured by `changes_measure_legacy_payload` |
 | Claude tmux transcript | the backend reading the JSONL stamps each `tool_use`'s path and payload sides on the line (`toolDiffs`, `tmux-transcript-tool-diffs.ts`); the store never interprets tool inputs, and counts come from `changes_measure_legacy_payload` |
-| Diff tab | historical `DiffIdentity` or explicit live current-file target; backend hunks, split/unified, whitespace view (`DiffViewerTab.tsx`) |
+| Diff tab | historical `DiffIdentity` or explicit live current-file target; backend hunks, split/unified, whitespace view, previous/next change and file with a position counter and keyboard shortcuts (`]`/`[`, `}`/`{`, Alt+↑/↓, `diff-hunk-navigation.ts`); a live file can switch to its unstaged or staged diff and stage or unstage one hunk at a time (`DiffNavigationBar.tsx`, `useHunkStaging.ts`) |
 | Diff review comments | comments on a diff tab's lines and hunks, pinned to the `DiffIdentity` on screen with the lines they quote, sent to an agent chat as one queued correction request (see [Diff review comments](#diff-review-comments)) |
 | Restore | preview/apply dialog gated by the capability and the projection's `restore` action (`RestoreChangesButton.tsx`) |
 | Agent handoff | The backend writes the same serializer's text per tool call when it builds the handoff (`agentHandoffChangeSummaries`, `agent-handoffs.ts`); unmeasured calls say "changes: not measured" |
@@ -708,6 +714,52 @@ preview, and pressing Restore again sends the same idempotency key, which
 answers `changes.restore.in-progress` while the apply runs and the recorded
 outcome after it. Returning an operation id at once and polling it was
 therefore not built.
+
+## Hunk staging
+
+`changes_stage_hunk` (`hunk-staging.ts`) writes one reviewed hunk to the Git
+index and nothing else: no other hunk, no other index entry and never the
+working tree. The client sends the diff identity it displayed, the action and
+the hunk's index and line ranges. The identity binds both sides' exact bytes,
+so the backend re-renders the same hunks from them (the default renderer
+budget, whitespace kept) and refuses with `stale-revision`
+(`changes.staging.hunk-changed`) unless the hunk at that index has exactly
+those ranges.
+
+| Action | Identity | Verified immediately before writing | New index blob |
+| --- | --- | --- | --- |
+| stage | `unstaged` (index → working file), or `uncommitted-net` / `environment-net` (commit → working file) | the path's stage-0 entry holds the identity's before bytes, and the working file its after bytes | before bytes with the hunk's region replaced by the after side's |
+| unstage | `staged` (`HEAD` → index) | the entry holds the identity's after bytes and the current HEAD blob holds its before bytes | after bytes with the hunk's region put back to the before side's |
+
+The splice works on raw lines, so every byte outside the hunk, line endings
+included, is the index's own. A failed check answers `precondition-failed`
+with the reason: `changes.staging.worktree-changed`,
+`changes.staging.index-changed`, or `changes.staging.index-mismatch` when a
+commit-based diff is not against the index because the file already has
+staged changes (the client offers the `unstaged` view for that). Nothing is
+merged or retried: an old displayed hunk is never applied to a moved index
+or file.
+
+Only same-path, regular (`100644`/`100755`), text, modified files qualify.
+New, deleted and renamed files (`whole-file`), binaries, symlinks and
+submodules, a conflicted entry, a cut-off last hunk and non-UTF-8 paths are
+refused. Before staging, the backend inspects Git conversion attributes and
+line-ending settings. Paths with a filter or encoding attribute, suspected
+built-in conversion, or inconclusive inspection are refused. Blob hashing
+always uses `--no-filters`.
+
+The backend writes the spliced blob, acquires Git's index lock and copies
+the current index. It validates the reviewed entry under that lock and
+updates the copy with `update-index --cacheinfo`, preserving the entry mode.
+It revalidates the runtime owner and the relevant endpoint using HEAD or a
+bounded, confined working-file read, then publishes the new index with an
+atomic rename. Git writers must acquire the same lock. Working files and
+refs can still change independently of the index lock after their final
+check. A replaced runtime is reported as `owner-replaced`.
+
+The backend refreshes the environment's demanded Git scopes and publishes
+a path-specific invalidation for both index views. The receipt carries
+the action and path ID.
 
 ## Retention and backup
 

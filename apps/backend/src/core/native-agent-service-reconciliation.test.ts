@@ -550,6 +550,54 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("publishes waiting native work alongside a working sibling on the same provider", async () => {
+    let activity: ProviderActivityObservation = { state: "waiting", contentRevision: "g:1" };
+    const invalidations = mock();
+    const { provider } = createProviderStub("codex", {
+      observeActivity: async (sessionId) =>
+        sessionId === "waiting-provider" ? activity : { state: "working" },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-waiting-sibling-",
+        provider: async () => provider,
+        onObservationInvalidation: invalidations,
+      },
+      async ({ storage, service }) => {
+        for (const [logicalSessionKey, providerSessionId] of [
+          ["working-tab", "working-provider"],
+          ["waiting-tab", "waiting-provider"],
+        ] as const) {
+          await storage.adoptNativeAgentSession({
+            key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey,
+            providerSessionId,
+          });
+        }
+        await service.reconcileAgentActivity();
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "working",
+          hasWaitingNativeTab: true,
+        });
+        activity = { state: "waiting", contentRevision: "g:2" };
+        await service.reconcileAgentActivity();
+        expect(invalidations).toHaveBeenCalledTimes(1);
+        expect(invalidations.mock.calls[0]?.[0]).toMatchObject({
+          providerSessionId: "waiting-provider",
+          state: "waiting",
+          cause: "content-revision",
+        });
+        activity = { state: "idle", contentRevision: "g:3" };
+        await service.reconcileAgentActivity();
+        const environment = await storage.getEnvironment("env-1");
+        expect(environment?.agentActivityState).toBe("working");
+        expect(environment?.hasWaitingNativeTab).toBeUndefined();
+      },
+    );
+  });
+
   test("records async-question attention while its tab is inactive", async () => {
     const { provider, observeActivity } = createProviderStub("codex", {
       observeActivity: async () => ({

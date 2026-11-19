@@ -90,6 +90,7 @@ import {
   normalizeProviderReadiness,
   bridgeSnapshotTurnRunId,
   bridgeSnapshotTurnRunIdField,
+  bridgeSessionErrorFields,
   fetchSessionSnapshot,
   readProviderActivityObservation,
   resolvePromptAttachments,
@@ -885,7 +886,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             ? { runtimeHealthAuthoritative: cachedMetadata.runtimeHealthAuthoritative }
             : {}),
         ...(codexNotices.length > 0 ? { notices: codexNotices } : {}),
-        ...(typeof payload.error === "string" ? { error: payload.error } : {}),
+        ...bridgeSessionErrorFields(payload),
       };
     }
     let executionProfiles: NativeAgentComposerState["executionProfiles"] =
@@ -1001,7 +1002,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(typeof payload.completionBlockedByBackgroundTasks === "boolean"
         ? { completionBlockedByBackgroundTasks: payload.completionBlockedByBackgroundTasks }
         : {}),
-      ...(typeof payload.error === "string" ? { error: payload.error } : {}),
+      ...bridgeSessionErrorFields(payload),
     };
   }
 

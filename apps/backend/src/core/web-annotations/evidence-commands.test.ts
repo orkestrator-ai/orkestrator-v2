@@ -112,12 +112,10 @@ describe("container evidence commands", () => {
         },
         context,
       );
-    await write({ sha256: fileContentSha256("loaded") });
-    expect(await readFile(target, "utf8")).toBe("edited");
     await rm(path.join(workspace, "src"), { recursive: true });
     let conflict: unknown;
     try {
-      await write({ sha256: fileContentSha256("edited") });
+      await write({ sha256: fileContentSha256("loaded") });
     } catch (error) {
       conflict = error;
     }

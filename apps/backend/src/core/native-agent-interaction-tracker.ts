@@ -25,6 +25,17 @@ export interface NativeAgentInteractionTrackerHost {
   ): NativeAgentSessionProjection | null;
 }
 
+interface PendingInteractionRead {
+  environmentId: string;
+  withdrawn: boolean;
+  invalidated: boolean;
+  result: Promise<AgentInteractionRequest[] | null>;
+}
+
+function liveInteractions(requests: readonly AgentInteractionRequest[]): AgentInteractionRequest[] {
+  return requests.filter((request) => request.state === "pending" || request.state === "answering");
+}
+
 /**
  * Pending approvals and questions of one native session, read on demand
  * through a short-lived per-session cache. An interaction is answered (or
@@ -38,10 +49,7 @@ export class NativeAgentInteractionTracker {
     { at: number; environmentId: string; requests: AgentInteractionRequest[] }
   >();
   /** Reads in flight; a stop marks its environment's results inadmissible. */
-  private readonly activePendingInteractionReads = new Set<{
-    environmentId: string;
-    withdrawn: boolean;
-  }>();
+  private readonly activePendingInteractionReads = new Map<string, PendingInteractionRead>();
 
   private readonly storage: StorageService;
 
@@ -60,8 +68,23 @@ export class NativeAgentInteractionTracker {
   }
 
   /** Drop one session's cached read, after an interaction was answered or held. */
-  forgetPendingInteractions(key: string): void {
+  forgetPendingInteractions(key: string, input?: NativeAgentProjectionInput): void {
     this.pendingInteractionReads.delete(key);
+    const read = this.activePendingInteractionReads.get(key);
+    if (read) {
+      read.invalidated = true;
+      this.activePendingInteractionReads.delete(key);
+    }
+    if (input) {
+      this.storage.announceNativeAgentSessionProjection(
+        input.environmentId,
+        "pending-interactions",
+        {
+          agent: input.agent,
+          logicalSessionKey: input.logicalSessionKey,
+        },
+      );
+    }
   }
 
   /**
@@ -73,7 +96,7 @@ export class NativeAgentInteractionTracker {
     for (const [key, entry] of Array.from(this.pendingInteractionReads)) {
       if (entry.environmentId === environmentId) this.pendingInteractionReads.delete(key);
     }
-    for (const read of this.activePendingInteractionReads) {
+    for (const read of this.activePendingInteractionReads.values()) {
       if (read.environmentId === environmentId) read.withdrawn = true;
     }
   }
@@ -92,20 +115,34 @@ export class NativeAgentInteractionTracker {
       input.agent,
       input.logicalSessionKey,
     );
-    const live = (requests: readonly AgentInteractionRequest[]) =>
-      requests.filter((request) => request.state === "pending" || request.state === "answering");
     const cached = this.pendingInteractionReads.get(key);
-    if (cached && cached.at > this.host.now() - 10_000) return live(cached.requests);
+    if (cached && cached.at > this.host.now() - 10_000) return liveInteractions(cached.requests);
+    const existing = this.activePendingInteractionReads.get(key);
+    if (existing && !existing.withdrawn) return existing.result;
+    const read: PendingInteractionRead = {
+      environmentId: input.environmentId,
+      withdrawn: false,
+      invalidated: false,
+      result: Promise.resolve().then(() => this.readPending(input, key, read)),
+    };
+    this.activePendingInteractionReads.set(key, read);
+    return read.result;
+  }
+
+  private async readPending(
+    input: NativeAgentProjectionInput,
+    key: string,
+    read: PendingInteractionRead,
+  ): Promise<AgentInteractionRequest[] | null> {
     const fallback = () => {
+      if (read.invalidated) return null;
       const projection = this.host.cachedProjectionSnapshot(
         input.environmentId,
         input.agent,
         input.logicalSessionKey,
       );
-      return projection?.interactions ? live(projection.interactions) : null;
+      return projection?.interactions ? liveInteractions(projection.interactions) : null;
     };
-    const read = { environmentId: input.environmentId, withdrawn: false };
-    this.activePendingInteractionReads.add(read);
     try {
       const session = await this.storage.getNativeAgentSession(key);
       if (!session) return null;
@@ -114,8 +151,8 @@ export class NativeAgentInteractionTracker {
       const snapshot = await provider.interactions.listPendingInteractions(
         session.providerSessionId,
       );
-      if (read.withdrawn) return fallback();
-      if (!cached && this.pendingInteractionReads.size >= 128) {
+      if (read.invalidated || read.withdrawn) return fallback();
+      if (!this.pendingInteractionReads.has(key) && this.pendingInteractionReads.size >= 128) {
         const oldest = this.pendingInteractionReads.keys().next().value;
         if (oldest !== undefined) this.pendingInteractionReads.delete(oldest);
       }
@@ -124,11 +161,13 @@ export class NativeAgentInteractionTracker {
         environmentId: input.environmentId,
         requests: snapshot.requests,
       });
-      return live(snapshot.requests);
+      return liveInteractions(snapshot.requests);
     } catch {
       return fallback();
     } finally {
-      this.activePendingInteractionReads.delete(read);
+      if (this.activePendingInteractionReads.get(key) === read) {
+        this.activePendingInteractionReads.delete(key);
+      }
     }
   }
 }

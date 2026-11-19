@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   AlertCircle,
   AlignJustify,
@@ -8,21 +16,27 @@ import {
   FileText,
   FileX,
   Loader2,
+  Minus,
+  Plus,
   RefreshCw,
 } from "lucide-react";
 import {
   FILE_ROWS_CAPPED_REASON,
   type ChangeMeasurement,
 } from "@orkestrator/protocol/change-measurements";
-import type {
-  ChangeDiffFileBody,
-  ChangeError,
-  ChangeFileStatus,
-  DiffDisplayOptions,
-  DiffIdentity,
+import {
+  changeResourceKey,
+  parseChangeResourceKey,
+  type ChangeDiffFileBody,
+  type ChangeDiffHunk,
+  type ChangeError,
+  type ChangeFileStatus,
+  type DiffDisplayOptions,
+  type DiffIdentity,
 } from "@orkestrator/protocol/change-resources";
 import { cn } from "@/lib/utils";
 import { backendForScope } from "@/lib/backend/scope-backend";
+import { getChangeTrackingCapabilities } from "@/lib/backend/changes";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { changeLabel, changeReason, formatFileCount, formatLineCount } from "@/lib/changes/labels";
 import { useChangeContentGeneration, useChangeProjection } from "@/hooks/useChangeProjection";
@@ -42,6 +56,15 @@ import {
 import { DiffCommentTray } from "@/components/changes/DiffCommentTray";
 import { liveCommentPathKey, useDiffCommentsStore } from "@/stores/diffCommentsStore";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
+import { DiffNavigationBar, type DiffScopeChoice } from "./DiffNavigationBar";
+import {
+  hunkLayout,
+  isEditableTarget,
+  navigate,
+  navigationCommandForKey,
+  type DiffNavigationCommand,
+} from "./diff-hunk-navigation";
+import { hunkStagingKey, useHunkStaging } from "./useHunkStaging";
 
 /**
  * Backend-rendered diff tab (docs/architecture/change-tracking.md).
@@ -57,6 +80,13 @@ import type { ChangeDiffTarget } from "@/types/paneLayout";
  * With an environment, lines and hunks take review comments
  * (`DiffComments.tsx`), which the environment's comment tray sends to an
  * agent as one correction request.
+ * Every body can be stepped through hunk by hunk and file by file (buttons
+ * and keyboard, `diff-hunk-navigation.ts`). A live file on a backend with
+ * hunk staging can also be shown as its unstaged (index → working tree) or
+ * staged (HEAD → index) diff, and one reviewed hunk at a time staged or
+ * unstaged. The backend applies it only against the exact index and file
+ * the reviewed identity compared (`changes_stage_hunk`); afterwards the tab
+ * resolves a fresh identity.
  */
 
 interface DiffViewerTabProps {
@@ -87,6 +117,7 @@ type BodyState =
       key: string;
       kind: "body";
       identityId: string;
+      resourceKey?: string;
       identity: DiffIdentity;
       measurement: ChangeMeasurement | null;
       provenanceLabelKey: string | null;
@@ -131,7 +162,33 @@ function formatBaselineVersion(version: string): string {
   return `${shortRef}@${FULL_OID.test(oid) ? oid.slice(0, 7) : oid}`;
 }
 
-function unavailableCopy(error: ChangeError, live: boolean): { title: string; detail: string } {
+/** Live scopes a file can be switched between, and how the switch names them. */
+const SCOPE_CHOICE_LABELS: Record<string, string> = {
+  "environment-net": "All changes",
+  "uncommitted-net": "Uncommitted",
+  unstaged: "Unstaged",
+  staged: "Staged",
+};
+
+/** Scopes whose diff stages into the index, and the one that unstages from it. */
+const STAGE_FROM_SCOPES = new Set(["environment-net", "uncommitted-net", "unstaged"]);
+
+function unavailableCopy(
+  error: ChangeError,
+  live: boolean,
+  scope?: string,
+): { title: string; detail: string } {
+  if (live && error.reasonKey === "changes.reason.empty-index-scope") {
+    return scope === "staged"
+      ? {
+          title: "No staged changes in this file",
+          detail: "Nothing in this file is staged. Switch to Unstaged to stage changes.",
+        }
+      : {
+          title: "No unstaged changes in this file",
+          detail: "Every change in this file is staged. Switch to Staged to review or unstage it.",
+        };
+  }
   switch (error.code) {
     case "body-expired":
       return {
@@ -140,6 +197,9 @@ function unavailableCopy(error: ChangeError, live: boolean): { title: string; de
           "The recorded file contents were removed by retention. The counts recorded for this change are unchanged.",
       };
     case "not-found":
+      if (error.reasonKey.startsWith("changes.reason.")) {
+        return { title: "Diff unavailable", detail: changeReason(error.reasonKey) };
+      }
       return live
         ? {
             title: "No current changes for this file",
@@ -219,11 +279,68 @@ export function DiffViewerTab({
 
   const isLive = target.kind === "live";
   const historicalIdentityId = target.kind === "historical" ? target.diffIdentityId : null;
-  const liveResourceKey = target.kind === "live" ? target.resourceKey : null;
+
+  // Hunk staging, and the unstaged/staged views it works from, need a backend
+  // that offers them; an older one keeps today's single comparison.
+  const [hunkStagingSupported, setHunkStagingSupported] = useState(false);
+  useEffect(() => {
+    let current = true;
+    void getChangeTrackingCapabilities(backendScope).then((capabilities) => {
+      if (current) setHunkStagingSupported(capabilities?.hunkStaging === true);
+    });
+    return () => {
+      current = false;
+    };
+  }, [backendScope]);
+
+  const targetResourceKey = target.kind === "live" ? target.resourceKey : null;
+  const scopeChoices = useMemo((): DiffScopeChoice[] | null => {
+    if (!hunkStagingSupported || !targetResourceKey) return null;
+    const parts = parseChangeResourceKey(targetResourceKey);
+    if (
+      !parts ||
+      parts.ownerKind !== "environment" ||
+      parts.selector !== "live" ||
+      !(parts.scope in SCOPE_CHOICE_LABELS)
+    ) {
+      return null;
+    }
+    const scopes =
+      parts.scope === "staged" || parts.scope === "unstaged"
+        ? (["unstaged", "staged"] as const)
+        : ([parts.scope, "unstaged", "staged"] as const);
+    return scopes.map((scope) => ({
+      resourceKey:
+        scope === parts.scope
+          ? targetResourceKey
+          : changeResourceKey({
+              scope,
+              ownerKind: "environment",
+              ownerId: parts.ownerId,
+              selector: "live",
+            }),
+      label: SCOPE_CHOICE_LABELS[scope]!,
+    }));
+  }, [hunkStagingSupported, targetResourceKey]);
+  // The comparison picked for this target; another target starts on its own.
+  const [scopeChoice, setScopeChoice] = useState<{ target: string; resourceKey: string } | null>(
+    null,
+  );
+  const liveResourceKey =
+    targetResourceKey !== null &&
+    scopeChoice?.target === targetResourceKey &&
+    scopeChoices?.some((choice) => choice.resourceKey === scopeChoice.resourceKey)
+      ? scopeChoice.resourceKey
+      : targetResourceKey;
+  // A row pins the target's own resource; another comparison follows the file.
+  const scopeOverridden = liveResourceKey !== targetResourceKey;
+  const liveScope = liveResourceKey
+    ? (parseChangeResourceKey(liveResourceKey)?.scope ?? null)
+    : null;
   const livePathId = target.kind === "live" ? target.pathId : undefined;
   const livePath = target.kind === "live" ? target.path : undefined;
-  const liveRowId = target.kind === "live" ? target.rowId : undefined;
-  const liveRevision = target.kind === "live" ? target.revision : undefined;
+  const liveRowId = target.kind === "live" && !scopeOverridden ? target.rowId : undefined;
+  const liveRevision = target.kind === "live" && !scopeOverridden ? target.revision : undefined;
   const liveKey = liveResourceKey
     ? [liveResourceKey, livePathId ?? "", livePath ?? "", liveRowId ?? "", liveRevision ?? ""].join(
         "\0",
@@ -364,7 +481,7 @@ export function DiffViewerTab({
   const bodySeqRef = useRef(0);
   const display = ignoreWhitespace ? IGNORE_WHITESPACE : undefined;
   const bodyKey = identityId
-    ? `${identityId}\0${ignoreWhitespace ? "ignore" : "preserve"}\0${bodyRetry}`
+    ? `${identityId}\0${liveResourceKey ?? ""}\0${ignoreWhitespace ? "ignore" : "preserve"}\0${bodyRetry}`
     : null;
 
   useEffect(() => {
@@ -380,6 +497,7 @@ export function DiffViewerTab({
               key: bodyKey,
               kind: "body",
               identityId,
+              resourceKey: liveResourceKey ?? undefined,
               identity: result.identity,
               measurement: result.measurement,
               provenanceLabelKey: result.provenanceLabelKey ?? null,
@@ -397,7 +515,7 @@ export function DiffViewerTab({
           setBody({ key: bodyKey, kind: "failed", message: errorMessage(error) });
         },
       );
-  }, [backendScope, bodyKey, display, identityId]);
+  }, [backendScope, bodyKey, display, identityId, liveResourceKey]);
 
   const loadMore = useCallback(() => {
     if (body?.kind !== "body" || !body.nextCursor || body.loadingMore) return;
@@ -436,6 +554,26 @@ export function DiffViewerTab({
   }, [backendScope, body, display]);
 
   const reload = useCallback(() => setReloadCount((count) => count + 1), []);
+  const staging = useHunkStaging(backendScope, reload);
+  const dismissStaging = staging.dismiss;
+  const reloadByUser = useCallback(() => {
+    dismissStaging();
+    reload();
+  }, [dismissStaging, reload]);
+
+  // ---------------------------------------------------------------------------
+  // Hunk and file navigation
+  // ---------------------------------------------------------------------------
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [activePosition, setActivePosition] = useState<number | null>(null);
+  const [scrollTarget, setScrollTarget] = useState<{ position: number; seq: number } | null>(null);
+  useEffect(() => {
+    if (!scrollTarget) return;
+    const element = bodyRef.current?.querySelector<HTMLElement>(
+      `[data-hunk-position="${scrollTarget.position}"]`,
+    );
+    element?.scrollIntoView?.({ block: "start" });
+  }, [scrollTarget]);
 
   // A live view tells the comment store what content each path shows now, so
   // a comment written on earlier content reads as outdated.
@@ -447,14 +585,128 @@ export function DiffViewerTab({
     for (const file of observedBody.files)
       observeLiveContent(
         environmentId,
-        liveCommentPathKey(liveResourceKey ?? undefined, file.pathId),
+        liveCommentPathKey(observedBody.resourceKey, file.pathId),
         contentKey,
       );
-  }, [environmentId, liveResourceKey, observeLiveContent, observedBody]);
+  }, [environmentId, observeLiveContent, observedBody]);
 
   // ---------------------------------------------------------------------------
   // Rendering
   // ---------------------------------------------------------------------------
+  const fallbackTitle = filePath ?? target.title;
+  const shownBody = body?.kind === "body" ? body : null;
+  const bodyIsCurrent = body !== null && body.key === bodyKey;
+  const refreshing =
+    (isLive && liveResolution !== null && currentResolution === null) ||
+    (identityId !== null && !bodyIsCurrent);
+
+  const shownFiles = shownBody?.files;
+  const layout = useMemo(() => hunkLayout(shownFiles ?? []), [shownFiles]);
+  const hunkCount = layout.positions.length;
+  // Nothing picked yet means the first hunk; a body that shrank keeps the last.
+  const position = hunkCount === 0 ? null : Math.min(activePosition ?? 0, hunkCount - 1);
+  const activeHunk = position === null ? null : (layout.positions[position] ?? null);
+
+  const runNavigation = (command: DiffNavigationCommand) => {
+    const next = navigate(layout, position, command);
+    if (next === null) return;
+    setActivePosition(next);
+    setScrollTarget((previous) => ({ position: next, seq: (previous?.seq ?? 0) + 1 }));
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!isActive || isEditableTarget(event.target)) return;
+    const command = navigationCommandForKey(event);
+    if (!command) return;
+    event.preventDefault();
+    runNavigation(command);
+  };
+
+  // Stage from an index or workspace diff, unstage from the staged diff.
+  const identityForStaging = shownBody?.identity ?? null;
+  const stagingAction: "stage" | "unstage" | null =
+    hunkStagingSupported &&
+    isLive &&
+    !ignoreWhitespace &&
+    identityForStaging?.kind === "file" &&
+    identityForStaging.before.state === "present" &&
+    identityForStaging.after.state === "present" &&
+    identityForStaging.before.pathId === identityForStaging.after.pathId
+      ? identityForStaging.scope === "staged"
+        ? "unstage"
+        : STAGE_FROM_SCOPES.has(identityForStaging.scope)
+          ? "stage"
+          : null
+      : null;
+  // A workspace diff (not the unstaged one) keeps showing a staged change.
+  const stagingNote =
+    stagingAction === "stage" && liveScope !== "unstaged"
+      ? " It stays in this view, which does not compare against the index; switch to Staged to see it."
+      : "";
+
+  const hunkActions = (file: ChangeDiffFileBody, fileIndex: number) => {
+    if (
+      !stagingAction ||
+      !shownBody ||
+      file.fileKind !== "text" ||
+      file.status !== "modified" ||
+      file.bodyAvailability !== "available"
+    ) {
+      return undefined;
+    }
+    const identity = shownBody.identity;
+    return (hunk: ChangeDiffHunk, hunkIndex: number) => {
+      const number = (layout.fileStarts[fileIndex] ?? 0) + hunkIndex + 1;
+      const pending = staging.pendingKey === hunkStagingKey(identity.id, hunkIndex);
+      const cut = file.truncated && hunkIndex === file.hunks.length - 1;
+      const verb = stagingAction === "stage" ? "Stage" : "Unstage";
+      return (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+          disabled={!isActive || staging.pendingKey !== null || cut || refreshing}
+          aria-label={`${verb} change ${number}`}
+          title={
+            cut
+              ? changeReason("changes.staging.truncated")
+              : stagingAction === "stage"
+                ? "Stage this change: write it to the Git index, leaving every other change as it is"
+                : "Unstage this change: take it out of the Git index, leaving the working file as it is"
+          }
+          onClick={() => {
+            if (!isActive || cut || refreshing) return;
+            void staging.stage(
+              {
+                diffIdentityId: identity.id,
+                action: stagingAction,
+                hunk: {
+                  index: hunkIndex,
+                  oldStart: hunk.oldStart,
+                  oldLines: hunk.oldLines,
+                  newStart: hunk.newStart,
+                  newLines: hunk.newLines,
+                },
+              },
+              `change ${number}`,
+              stagingNote,
+            );
+          }}
+        >
+          {pending ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : stagingAction === "stage" ? (
+            <Plus className="h-3 w-3" />
+          ) : (
+            <Minus className="h-3 w-3" />
+          )}
+          {verb}
+        </Button>
+      );
+    };
+  };
+
   const shell = (
     children: ReactNode,
     testId = "diff-viewer",
@@ -463,7 +715,12 @@ export function DiffViewerTab({
     <div
       data-testid={testId}
       inert={!isActive}
-      className={cn("absolute inset-0 flex flex-col", !isActive && "pointer-events-none opacity-0")}
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+      className={cn(
+        "absolute inset-0 flex flex-col outline-none",
+        !isActive && "pointer-events-none opacity-0",
+      )}
       style={{ backgroundColor: terminalAppearance.backgroundColor }}
     >
       {children}
@@ -483,13 +740,6 @@ export function DiffViewerTab({
     </div>
   );
 
-  const fallbackTitle = filePath ?? target.title;
-  const shownBody = body?.kind === "body" ? body : null;
-  const bodyIsCurrent = body !== null && body.key === bodyKey;
-  const refreshing =
-    (isLive && liveResolution !== null && currentResolution === null) ||
-    (identityId !== null && !bodyIsCurrent);
-
   const headerProps = {
     target,
     fallbackTitle,
@@ -498,20 +748,53 @@ export function DiffViewerTab({
     onDiffModeChange: setDiffMode,
     ignoreWhitespace,
     onToggleWhitespace: () => setIgnoreWhitespace((value) => !value),
-    onReload: isLive ? reload : undefined,
+    onReload: isLive ? reloadByUser : undefined,
     onSwitchToFileView: isLive ? onSwitchToFileView : undefined,
     refreshing,
   };
+
+  const chrome = (headerBody: Extract<BodyState, { kind: "body" }> | null) => (
+    <>
+      <DiffHeader {...headerProps} body={headerBody} />
+      <DiffNavigationBar
+        isMobile={isMobile}
+        scopeChoices={scopeChoices}
+        activeScope={liveResourceKey}
+        onScopeChange={(resourceKey) => {
+          if (!targetResourceKey) return;
+          staging.dismiss();
+          setActivePosition(null);
+          setScopeChoice({ target: targetResourceKey, resourceKey });
+        }}
+        hunkCount={headerBody ? hunkCount : null}
+        activePosition={position}
+        file={
+          headerBody && headerBody.files.length > 1 && activeHunk
+            ? {
+                index: activeHunk.fileIndex,
+                count: headerBody.files.length,
+                hasPrevious: navigate(layout, position, "previous-file") !== position,
+                hasNext: navigate(layout, position, "next-file") !== position,
+              }
+            : null
+        }
+        onNavigate={runNavigation}
+        feedback={staging.feedback}
+        onDismissFeedback={staging.dismiss}
+        onReload={isLive ? reloadByUser : undefined}
+      />
+    </>
+  );
 
   // Live resolution failed for the current target.
   if (isLive && currentResolution && currentResolution.kind !== "identity") {
     const copy =
       currentResolution.kind === "unavailable"
-        ? unavailableCopy(currentResolution.error, true)
+        ? unavailableCopy(currentResolution.error, true, liveScope ?? undefined)
         : { title: "Failed to load diff", detail: currentResolution.message };
     return shell(
       <>
-        <DiffHeader {...headerProps} body={null} />
+        {chrome(null)}
         {centered(
           <>
             <AlertCircle className="h-8 w-8 text-muted-foreground" />
@@ -533,11 +816,11 @@ export function DiffViewerTab({
   if (bodyIsCurrent && body.kind !== "body") {
     const copy =
       body.kind === "unavailable"
-        ? unavailableCopy(body.error, isLive)
+        ? unavailableCopy(body.error, isLive, liveScope ?? undefined)
         : { title: "Failed to load diff", detail: body.message };
     return shell(
       <>
-        <DiffHeader {...headerProps} body={null} />
+        {chrome(null)}
         {centered(
           <>
             <AlertCircle
@@ -573,7 +856,7 @@ export function DiffViewerTab({
   if (!shownBody) {
     return shell(
       <>
-        <DiffHeader {...headerProps} body={null} />
+        {chrome(null)}
         {centered(
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Loader2 className="h-6 w-6 animate-spin" />
@@ -589,7 +872,7 @@ export function DiffViewerTab({
         environmentId,
         identity: shownBody.identity,
         source: isLive ? "live" : "historical",
-        resourceKey: liveResourceKey ?? undefined,
+        resourceKey: shownBody.resourceKey,
       }
     : null;
   const inlineDraftKeys = commentContext
@@ -598,13 +881,23 @@ export function DiffViewerTab({
   const singleFile = shownBody.identity.kind === "file" && shownBody.files.length <= 1;
   return shell(
     <>
-      <DiffHeader {...headerProps} body={shownBody} />
-      <div data-testid="diff-viewer-body" className="min-h-0 flex-1 overflow-auto">
+      {chrome(shownBody)}
+      <div ref={bodyRef} data-testid="diff-viewer-body" className="min-h-0 flex-1 overflow-auto">
         {shownBody.files.length === 0 && (
           <p className="px-3 py-2 text-xs text-muted-foreground">No file changes.</p>
         )}
         {shownBody.files.map((file, index) => {
           const { path, renamedFrom } = filePathLabel(file);
+          const positionOffset = layout.fileStarts[index] ?? undefined;
+          const hunksProps = {
+            file,
+            mode: effectiveMode,
+            positionOffset,
+            activeHunkIndex: activeHunk?.fileIndex === index ? activeHunk.hunkIndex : null,
+            onSelectHunk: (hunkIndex: number) =>
+              setActivePosition((positionOffset ?? 0) + hunkIndex),
+            renderHunkActions: hunkActions(file, index),
+          };
           return (
             <section
               key={`${file.pathId}:${index}`}
@@ -621,9 +914,9 @@ export function DiffViewerTab({
                 </div>
               )}
               {commentContext ? (
-                <CommentableHunks file={file} mode={effectiveMode} context={commentContext} />
+                <CommentableHunks {...hunksProps} context={commentContext} />
               ) : (
-                <ChangeHunksView file={file} mode={effectiveMode} maxHeightClass="max-h-none" />
+                <ChangeHunksView {...hunksProps} maxHeightClass="max-h-none" />
               )}
             </section>
           );
@@ -712,7 +1005,12 @@ function DiffHeader({
   const scopeKey = measurement?.scope ?? identity?.scope ?? null;
   const baseline = measurement?.baselineVersion ?? null;
   const beforeLabel = baseline ? formatBaselineVersion(baseline) : "Before";
-  const afterLabel = isLive ? "Current workspace file" : "After";
+  // The staged diff's after side is the index entry, not the working file.
+  const afterLabel = isLive
+    ? identity?.scope === "staged"
+      ? "Staged version (index)"
+      : "Current workspace file"
+    : "After";
   // A live comparison is titled with its full baseline ("vs <commit>"), as the
   // Files panel names it; a historical one with both endpoints.
   const endpointTitle = isLive

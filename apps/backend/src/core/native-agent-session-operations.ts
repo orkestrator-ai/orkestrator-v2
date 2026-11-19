@@ -800,7 +800,7 @@ export class NativeAgentSessionOperations {
       input.resolution,
     );
     // Observers must re-read instead of reporting an answered question as pending.
-    this.host.interactions.forgetPendingInteractions(resolved.key);
+    this.host.interactions.forgetPendingInteractions(resolved.key, input);
     void this.host.projections.refreshProjectionState(input).catch(() => undefined);
     return outcome;
   }
@@ -832,7 +832,7 @@ export class NativeAgentSessionOperations {
       input.interactionId,
       input.choice,
     );
-    this.host.interactions.forgetPendingInteractions(resolved.key);
+    this.host.interactions.forgetPendingInteractions(resolved.key, input);
     void this.host.projections.refreshProjectionState(input).catch(() => undefined);
     return result;
   }

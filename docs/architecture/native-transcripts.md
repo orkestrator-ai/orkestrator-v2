@@ -146,13 +146,22 @@ offers no control for it (a click that finds no cursor retires the control).
 history, so it shows the live window plus one page (up to 200 rows and
 1 MiB), and again whenever the transcript's head comes within 800 px of the
 viewport. It pages from the cursor the tab holds
-(`canLoadEarlierAutomatically`), which is always a direct one. A background poll that lands
-while a page is in flight does not retire it: the page merges into the live
-tail current when it lands, and is dropped only when a mutation, a later page,
-a read that replaced its cursor (a rotated history, a collapse to the live
-tail) or a read that found the session gone superseded it. A held row that a
-poll revised while the page was in flight keeps the poll's copy; the page
-refreshes only held rows still as it found them. A page that leaves the head where it was (superseded, or
+(`canLoadEarlierAutomatically`), which is always a direct one. A page has its
+own request identity (`native-history-page-fence.ts`), separate from the
+live-tail reads: requesting one does not cancel a tail read already in flight,
+and a background poll that lands while a page is in flight does not retire
+it. The page merges into the live tail current when it lands, after checking
+that it is still the newest page, that no mutation took over the transcript,
+that session state and the live tail agree on the generation, and that the
+generation, paging epoch and cursor it was fetched behind are unchanged.
+A page is dropped when a mutation, a later
+page, a new session generation, a read that replaced its epoch or cursor (a
+rotated history, a collapse to the live tail) or a read that found the
+session gone supersedes it. A held row that a poll revised while the page
+was in flight keeps the poll's copy. If a poll instead arrives after a page
+and carries a conflicting revision, the client keeps the displayed copy,
+applies the live tail, and reconciles the held history with a fresh read.
+A page that leaves the head where it was (superseded, or
 failed) is retried once; after a second
 it stops until the head moves some other way. Those two pages per head count
 for the whole session, even if the head moved in between, so a transcript that
@@ -387,6 +396,45 @@ states: OpenCode's inline error row, or the error `status` line Codex and Pi
 put on a failed turn's last row. A kept stop result is consumed by the full
 read the stop answers with, so it is not on the state view. The transcript
 view, its tokens and the restart preview stay the provider's rows only.
+
+### Failure presentation
+
+Every failed turn renders through one component, `ProviderFailureAlert`: the
+backend's terminal error row, a provider's inline error row (`error-…`) and the
+error `status` line Codex, Pi and a Claude startup failure put on a reply. It
+names a normalised reason (`@orkestrator/protocol/provider-failures`):
+authentication, usage limit, rate limit, billing, model unavailable,
+conversation too long, provider unavailable, or a plain turn failure. One table
+gives each reason its title and explanation, whichever provider failed, and
+the provider's own message stays under Details.
+
+The reason comes from the provider's structured code when it gave one, and from
+the error text otherwise. The Claude bridge translates the SDK's API error code
+and the Codex bridge app-server's `codexErrorInfo` into `failureReason`, sent
+beside `error` on the session snapshot only while the turn is failed. The
+backend puts it on the terminal error row as `failure.reason`, or on its
+matching status part when both describe the same failure. A reset comes from the
+window named by the refusal, or from a single exhausted window when that is the
+only reported candidate (`failure.resetsAt`). The
+text classifier is permanent: Cursor, Grok, OpenCode and Pi have no code, and
+neither do older bridges or rows recorded before the field. Claude's failure
+text is often only "Claude ended the turn on an API error.", so its code is
+what names the reason.
+
+Each reason lists candidate remedies (sign in, retry, change model), and the
+host offers only those it can perform, on the transcript's last row only. A
+usage limit and a billing refusal offer no retry. Retry sends one continuation
+prompt through the tab's ordinary submit path under a request id derived from
+the failure row (`providerFailureRetryRequestId`), so two presses run one turn,
+and it is disabled while the composer holds a draft or sending is held. Retry
+runs the normal send preflight. The backend checks the current failure and
+provider session under the dispatch lease before journaling the request. Find
+temporarily reveals matching text in Details and restores the user's prior
+choice when Find closes. Change
+model opens the composer's model picker. Sign-in is the platform's own control
+(Claude's recovery card, OpenCode's credential action). A reset time is shown
+only when the provider stated one as a time; otherwise the provider's own words
+are quoted as its words.
 
 ### One request per round
 

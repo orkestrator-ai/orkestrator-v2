@@ -16,6 +16,9 @@ import { cn } from "@/lib/utils";
  * A host can annotate the rows (`annotations`): a control beside each line
  * and hunk header, and content after them, such as review comments. Without
  * it the view is read-only.
+ * A viewer that navigates between hunks passes `positionOffset` (each hunk
+ * header then carries `data-hunk-position`, its place in the viewer's order),
+ * the selected `activeHunkIndex`, and optional per-hunk actions.
  */
 
 export interface ChangeHunksAnnotations {
@@ -78,30 +81,69 @@ function lineText(line: ChangeDiffLine | null): string {
   return `${prefix}${line.text}`;
 }
 
+export interface HunkNavigationProps {
+  /** Navigation position of this file's first hunk; enables `data-hunk-position`. */
+  positionOffset?: number;
+  /** The hunk (index within this file) navigation has selected. */
+  activeHunkIndex?: number | null;
+  /** A hunk header was clicked. */
+  onSelectHunk?: (hunkIndex: number) => void;
+  /** Controls shown at the end of a hunk's header (stage, unstage). */
+  renderHunkActions?: (hunk: ChangeDiffHunk, hunkIndex: number) => ReactNode;
+}
+
+function HunkHeader({
+  hunk,
+  hunkIndex,
+  positionOffset,
+  activeHunkIndex,
+  onSelectHunk,
+  renderHunkActions,
+  commentAction,
+}: HunkNavigationProps & { hunk: ChangeDiffHunk; hunkIndex: number; commentAction?: ReactNode }) {
+  const active = activeHunkIndex === hunkIndex;
+  const actions = renderHunkActions?.(hunk, hunkIndex);
+  return (
+    <div
+      data-testid="change-hunk-header"
+      data-hunk-position={positionOffset !== undefined ? positionOffset + hunkIndex : undefined}
+      aria-current={active ? "location" : undefined}
+      onClick={onSelectHunk ? () => onSelectHunk(hunkIndex) : undefined}
+      className={cn(
+        "flex scroll-mt-1 items-center gap-2 bg-blue-500/10 py-0.5",
+        commentAction ? "group/diff-line relative pl-7 pr-3" : "px-3",
+        active && "bg-blue-500/20 ring-1 ring-inset ring-primary/60",
+        onSelectHunk && "cursor-pointer",
+      )}
+    >
+      {commentAction && <span onClick={(event) => event.stopPropagation()}>{commentAction}</span>}
+      <span className="min-w-0 flex-1 truncate text-blue-400">{hunk.header}</span>
+      {actions && (
+        <span
+          className="flex shrink-0 items-center gap-1 font-sans"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {actions}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function ChangeHunksView({
   file,
   mode = "unified",
   maxHeightClass = "max-h-64",
   annotations,
+  ...navigation
 }: {
   file: ChangeDiffFileBody;
   mode?: "unified" | "split";
   maxHeightClass?: string;
   annotations?: ChangeHunksAnnotations;
-}) {
+} & HunkNavigationProps) {
   // Annotated rows leave a gutter for the line control.
   const gutterPadding = annotations?.lineAction ? "pl-7 pr-3" : "px-3";
-  const hunkHeader = (header: string, hunkIndex: number) => (
-    <div
-      className={cn(
-        "group/diff-line relative py-0.5 bg-blue-500/10 text-blue-400",
-        annotations?.hunkAction ? "pl-7 pr-3" : "px-3",
-      )}
-    >
-      {annotations?.hunkAction?.(hunkIndex)}
-      {header}
-    </div>
-  );
   const split = useMemo(
     () => (mode === "split" ? file.hunks.map(splitRows) : null),
     [file.hunks, mode],
@@ -126,7 +168,12 @@ export function ChangeHunksView({
         <pre className="text-xs font-mono">
           {file.hunks.map((hunk, hunkIndex) => (
             <Fragment key={hunkIndex}>
-              {hunkHeader(hunk.header, hunkIndex)}
+              <HunkHeader
+                hunk={hunk}
+                hunkIndex={hunkIndex}
+                {...navigation}
+                commentAction={annotations?.hunkAction?.(hunkIndex)}
+              />
               {annotations?.afterHeader?.(hunkIndex)}
               {hunk.lines.map((line, index) => (
                 <Fragment key={index}>
@@ -150,7 +197,12 @@ export function ChangeHunksView({
         <div className="text-xs font-mono">
           {split.map((rows, hunkIndex) => (
             <Fragment key={hunkIndex}>
-              {hunkHeader(file.hunks[hunkIndex]!.header, hunkIndex)}
+              <HunkHeader
+                hunk={file.hunks[hunkIndex]!}
+                hunkIndex={hunkIndex}
+                {...navigation}
+                commentAction={annotations?.hunkAction?.(hunkIndex)}
+              />
               {annotations?.afterHeader?.(hunkIndex)}
               {rows.map((row, index) => {
                 const left = row.left?.type === "add" ? null : row.left;

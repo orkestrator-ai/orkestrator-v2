@@ -3292,6 +3292,28 @@ describe("persisted session routes", () => {
       mockGetSession.mockImplementation(defaultGetSession);
     });
 
+    test("reports a failureReason only beside the failure it names", async () => {
+      const failed = {
+        id: "s-1",
+        title: "Failed",
+        status: "error" as "error" | "idle",
+        error: "Claude ended the turn on an API error.",
+        failureReason: "billing" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+      };
+      mockGetSession.mockImplementation(() => failed as ReturnType<typeof mockGetSession>);
+
+      expect(await jsonBody(await app.request("/session/s-1"))).toMatchObject({
+        status: "error",
+        failureReason: "billing",
+      });
+
+      failed.status = "idle";
+      expect(await jsonBody(await app.request("/session/s-1"))).not.toHaveProperty("failureReason");
+      mockGetSession.mockImplementation(defaultGetSession);
+    });
+
     test("reports a read-only turn's missing command sandbox past the turn (todo 0190 (retired))", async () => {
       const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
       const review = {

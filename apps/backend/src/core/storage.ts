@@ -473,6 +473,11 @@ export class StorageService {
     return this.repos.projects.getEnvironmentsByProject(projectId);
   }
 
+  /** Current row for synchronous checks inside a credential dispatch transaction. */
+  readEnvironmentRow(environmentId: string): Environment | null {
+    return this.repos.projects.readEnvironmentRow(environmentId);
+  }
+
   getEnvironment(environmentId: string): Promise<Environment | null> {
     return this.repos.projects.getEnvironment(environmentId);
   }
@@ -1069,6 +1074,11 @@ export class StorageService {
     update: (journal: AgentInteractionResolutionJournal) => AgentInteractionResolutionJournal,
   ): Promise<AgentInteractionResolutionJournal> {
     return this.repos.nativeAgentSessions.updateAgentInteractionResolutionJournal(update);
+  }
+
+  /** Current row for synchronous checks inside a credential dispatch transaction. */
+  peekNativeAgentSession(key: string): PersistedNativeAgentSession | undefined {
+    return this.repos.nativeAgentSessions.peekNativeAgentSession(key);
   }
 
   getNativeAgentSession(key: string): Promise<PersistedNativeAgentSession | null> {

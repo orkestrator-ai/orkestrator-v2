@@ -75,6 +75,10 @@ export interface StartCredentialRunOptions {
   timeoutMs: number;
   /** Parent of a worktree run's private directory (inside the data directory). */
   runRoot: string;
+  /** Recheck the binding after materialization, before the command can start. */
+  beforeSpawn?: () => Promise<unknown>;
+  /** Synchronously claims the durable reservation immediately before spawn. */
+  onDispatch?: () => void;
   /** Test seam: the process spawner. */
   spawnProcess?: typeof spawn;
 }
@@ -159,12 +163,28 @@ async function runStep(
   });
 }
 
+/** A per-run ticket gates file staging and the daemon's eventual workload start. */
+const CONTAINER_PREPARE_SCRIPT = 'umask 077; mkdir -p "$1" && : > "$1/ready"';
+const CONTAINER_FILE_SCRIPT =
+  'umask 077; exec 9< "$1" && flock -x 9 && [ -f "$1/ready" ] && cat > "$1/$2"';
+const CONTAINER_START_SCRIPT = `dir=$1; file=$2
+exec 9< "$dir" && flock -x 9 && [ -f "$dir/ready" ] || exit 125
+ps -o pgid= -p $$ > "$file" || exit 125
+rm -f "$dir/ready" || exit 125
+exec 9<&-
+exec bash -lc "$3"`;
+
 /**
  * Ends every process of a container run (by process group and by its
  * identity variable) and removes its private directory. True when both are
  * confirmed.
  */
 const CONTAINER_CLEANUP_SCRIPT = `file=$1; identity=$2; dir=$3
+# The daemon can start an exec after its host client has gone. Close admission
+# under the same lock the workload uses to publish its identity.
+if [ -d "$dir" ]; then
+  (flock -x 9 && rm -f "$dir/ready") 9< "$dir" 2>/dev/null || [ ! -e "$dir" ] || exit 1
+fi
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   group=""
   if [ -f "$file" ]; then read -r group < "$file"; fi
@@ -182,7 +202,7 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
       live="$live $pid"
     fi
   done
-  if [ -z "$live" ]; then rm -rf "$dir" "$file"; [ ! -e "$dir" ]; exit $?; fi
+  if [ -z "$live" ]; then rm -rf "$dir" "$file"; [ ! -e "$dir" ] && [ ! -e "$file" ]; exit $?; fi
   if [ "$attempt" -lt 4 ]; then kill -TERM $live 2>/dev/null; else kill -KILL $live 2>/dev/null; fi
   sleep 0.1
 done
@@ -277,38 +297,48 @@ export function startCredentialRun(options: StartCredentialRunOptions): Credenti
     if (!child) return;
     if (container) {
       // The docker client is not the workload; end the workload inside.
-      void runStep(
-        spawnProcess,
-        [
-          "docker",
-          "exec",
-          "-u",
-          "node",
-          containerId,
-          "sh",
-          "-c",
-          CONTAINER_CLEANUP_SCRIPT,
-          "orkestrator-credential-cleanup",
-          containerPidFile,
-          options.id,
-          containerDir,
-        ],
-        options.launch.env,
-      ).finally(() => child?.kill("SIGKILL"));
+      void cleanupMaterialized()
+        .finally(() => child?.kill("SIGKILL"))
+        .catch(() => undefined);
       return;
     }
     termThenKill();
   };
 
   const result = (async (): Promise<CredentialRunResult> => {
+    // Give the owner a chance to register cancellation before setup starts.
+    await Promise.resolve();
     const env: NodeJS.ProcessEnv = { ...options.launch.env };
     const fileValues = options.bindings.filter((entry) => entry.binding.kind === "file");
     let argv: string[];
     try {
       if (container) {
         if (!containerId) throw Object.assign(new Error("no container"), { code: "no-container" });
+        const prepared = await runStep(
+          spawnProcess,
+          [
+            "docker",
+            "exec",
+            "-u",
+            "node",
+            containerId,
+            "sh",
+            "-c",
+            CONTAINER_PREPARE_SCRIPT,
+            "orkestrator-credential-prepare",
+            containerDir,
+          ],
+          options.launch.env,
+        );
+        if (!prepared)
+          throw Object.assign(new Error("container run preparation failed"), {
+            code: "container-setup",
+          });
         // Private files first: written from stdin, never from an argument.
         for (const entry of fileValues) {
+          if (terminateRequested) break;
+          await options.beforeSpawn?.();
+          if (terminateRequested) break;
           const ok = await runStep(
             spawnProcess,
             [
@@ -320,7 +350,7 @@ export function startCredentialRun(options: StartCredentialRunOptions): Credenti
               containerId,
               "sh",
               "-c",
-              'umask 077 && mkdir -p "$1" && cat > "$1/$2"',
+              CONTAINER_FILE_SCRIPT,
               "orkestrator-credential-file",
               containerDir,
               entry.binding.name,
@@ -345,8 +375,9 @@ export function startCredentialRun(options: StartCredentialRunOptions): Credenti
           containerId,
           "bash",
           "-c",
-          'mkdir -p "$(dirname "$1")" && ps -o pgid= -p $$ > "$1"; exec bash -lc "$2"',
+          CONTAINER_START_SCRIPT,
           "orkestrator-credential-run",
+          containerDir,
           containerPidFile,
           options.command,
         ];
@@ -355,6 +386,9 @@ export function startCredentialRun(options: StartCredentialRunOptions): Credenti
           await fs.mkdir(options.runRoot, { recursive: true, mode: 0o700 });
           await fs.mkdir(localDir, { mode: 0o700 });
           for (const entry of fileValues) {
+            if (terminateRequested) break;
+            await options.beforeSpawn?.();
+            if (terminateRequested) break;
             const file = path.join(localDir, entry.binding.name);
             const handle = await fs.open(file, "wx", 0o600);
             try {
@@ -370,6 +404,8 @@ export function startCredentialRun(options: StartCredentialRunOptions): Credenti
         }
         argv = [options.launch.shell ?? "/bin/sh", "-lc", options.command];
       }
+      if (!terminateRequested) await options.beforeSpawn?.();
+      if (!terminateRequested) options.onDispatch?.();
     } catch (error) {
       resolveStarted(false);
       const cleanup = await cleanupMaterialized();
@@ -503,11 +539,9 @@ export function startCredentialRun(options: StartCredentialRunOptions): Credenti
     return confirmed ? "confirmed" : "unconfirmed";
   }
 
-  void result.finally(() => options.launch.release?.());
-
   return {
     started,
-    result,
+    result: result.finally(() => options.launch.release?.()),
     cancel(options = {}) {
       cancelled = true;
       if (options.hard && !container && child) {

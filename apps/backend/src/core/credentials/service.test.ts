@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { CREDENTIAL_TIMING } from "@orkestrator/protocol/agent-credentials";
+import { CREDENTIAL_LIMITS, CREDENTIAL_TIMING } from "@orkestrator/protocol/agent-credentials";
 import type { CredentialCaller } from "./access.js";
 import {
   createCredentialHarness,
@@ -345,7 +345,7 @@ describe("authorization at every use", () => {
     expect(result.state).toBe("succeeded");
   });
 
-  test("a read-only coordinator gets trusted GET requests only", async () => {
+  test("a read-only coordinator cannot use the command or host HTTPS runner", async () => {
     const h = await harness();
     h.runtimes.set("env-1", {
       runtime: { kind: "coordinator", isolation: "read-only" },
@@ -359,13 +359,14 @@ describe("authorization at every use", () => {
         bindingName: "TOKEN",
       }),
     ).rejects.toThrow("UNSUPPORTED_RUNTIME");
-    const request = await h.service.requestAccess(h.caller, {
-      label: "API",
-      purpose: "read",
-      use: "http",
-      hosts: ["api.example.com"],
-    });
-    expect(request.http?.methods).toEqual(["GET", "HEAD"]);
+    await expect(
+      h.service.requestAccess(h.caller, {
+        label: "API",
+        purpose: "read",
+        use: "http",
+        hosts: ["api.example.com"],
+      }),
+    ).rejects.toThrow("POLICY_DENIED");
   });
 
   test("simultaneous uses cannot exceed the use limit", async () => {
@@ -852,5 +853,467 @@ describe("lifecycle", () => {
     const snapshot = h.service.tabSnapshot({ environmentId: "env-1" });
     expect(snapshot.requests).toHaveLength(0);
     expect(snapshot.grants).toHaveLength(0);
+  });
+});
+
+async function savedGrant(
+  h: CredentialHarness,
+  use: "command" | "http",
+  maxUses?: number,
+  value = TEST_SECRET,
+) {
+  const connection = await h.service.createConnection({
+    name: "Fixture service",
+    value,
+    httpHosts: ["api.example.com:00443", "api.example.com:08443"],
+  });
+  const request = await h.service.requestAccess(h.caller, {
+    label: "Fixture service",
+    purpose: "Read fixture data",
+    ...(use === "command"
+      ? { use, bindingName: "TOKEN" }
+      : { use, hosts: ["api.example.com:443", "api.example.com:8443"] }),
+  });
+  const { grant } = await h.service.approve({
+    requestId: request.id,
+    revision: request.revision,
+    source: { kind: "connection", connectionId: connection.id },
+    maxUses,
+  });
+  return { grant, connection };
+}
+
+function changePolicy(h: CredentialHarness, settings: Parameters<typeof interactivePolicy>[0]) {
+  const key = "env-1\0tab-1";
+  h.sessions.set(key, { ...h.sessions.get(key)!, policy: interactivePolicy(settings) });
+}
+
+function replaceConversation(h: CredentialHarness) {
+  const key = "env-1\0tab-1";
+  h.sessions.set(key, { ...h.sessions.get(key)!, providerSessionId: "replacement" });
+}
+
+function holdSavedRead(h: CredentialHarness) {
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const read = h.vault.get.bind(h.vault);
+  h.vault.get = async (id) => {
+    entered.resolve();
+    await resume.promise;
+    return read(id);
+  };
+  return { entered: entered.promise, release: () => resume.resolve() };
+}
+
+describe("credential policy and dispatch", () => {
+  test.each([
+    ["approval refusal", { approvals: "deny" }, "POLICY_DENIED"],
+    ["shell capability", { capabilityPolicy: { deny: ["shell"] } }, "POLICY_DENIED"],
+    ["shell mutation", { capabilityPolicy: { deny: ["shell.mutate"] } }, "POLICY_DENIED"],
+    ["shell tool", { toolPolicy: { deny: ["shell"] } }, "POLICY_DENIED"],
+    ["Bash tool", { toolPolicy: { deny: ["Bash"] } }, "POLICY_DENIED"],
+    [
+      "provider sandbox",
+      { sandbox: "provider", networkAccess: "restricted" },
+      "UNSUPPORTED_RUNTIME",
+    ],
+    ["network restriction", { networkAccess: "restricted" }, "POLICY_DENIED"],
+    [
+      "network capability",
+      { capabilityPolicy: { deny: [], extendedDeny: ["network"] } },
+      "POLICY_DENIED",
+    ],
+  ] as const)("%s applies at request and use", async (_name, policy, code) => {
+    const h = await harness();
+    const grant = await grantCommand(h);
+    changePolicy(h, policy as Parameters<typeof interactivePolicy>[0]);
+    await expect(
+      h.service.requestAccess(h.caller, {
+        label: "Fixture",
+        purpose: "Read",
+        use: "command",
+        bindingName: "TOKEN",
+      }),
+    ).rejects.toThrow(code);
+    await expect(
+      h.service.runCommand(h.caller, { grantId: grant.id, command: "true" }),
+    ).rejects.toThrow(code);
+    expect(spawner.spawned).toHaveLength(0);
+  });
+
+  test("restricted containers cannot send HTTPS from the host", async () => {
+    let sends = 0;
+    const h = await harness({
+      fetch: async () => {
+        sends++;
+        return new Response("ok");
+      },
+    });
+    const runtime = {
+      runtime: { kind: "container", isolation: "shared-container" },
+      identity: "container:fixture",
+    } as const;
+    h.runtimes.set("env-1", { ...runtime, networkAccess: "full" });
+    const { grant } = await savedGrant(h, "http");
+    h.runtimes.set("env-1", { ...runtime, networkAccess: "restricted" });
+    await expect(
+      h.service.requestAccess(h.caller, {
+        label: "Fixture",
+        purpose: "Read",
+        use: "http",
+        hosts: ["api.example.com"],
+      }),
+    ).rejects.toThrow("POLICY_DENIED");
+    await expect(
+      h.service.httpRequest(h.caller, {
+        grantId: grant.id,
+        method: "GET",
+        url: "https://api.example.com",
+      }),
+    ).rejects.toThrow("POLICY_DENIED");
+    expect(sends).toBe(0);
+  });
+
+  test.each(["command", "http"] as const)(
+    "%s rechecks binding after reading a saved value",
+    async (use) => {
+      let sends = 0;
+      const h = await harness({
+        fetch: async () => {
+          sends++;
+          return new Response("ok");
+        },
+      });
+      const { grant } = await savedGrant(h, use, 1);
+      const read = holdSavedRead(h);
+      const call =
+        use === "command"
+          ? h.service.runCommand(h.caller, { grantId: grant.id, command: "true" })
+          : h.service.httpRequest(h.caller, {
+              grantId: grant.id,
+              method: "GET",
+              url: "https://api.example.com",
+            });
+      const failure = call.catch((error: unknown) => error);
+      await read.entered;
+      if (use === "http") replaceConversation(h);
+      else
+        h.runtimes.set("env-1", { ...h.runtimes.get("env-1")!, identity: "worktree:/replacement" });
+      read.release();
+      expect(await failure).toMatchObject({ code: "SCOPE_MISMATCH" });
+      expect(sends + spawner.spawned.length).toBe(0);
+      expect(h.storage.credentialRecordStore().getGrant(grant.id)).toMatchObject({
+        state: "invalidated",
+        uses: 0,
+      });
+    },
+  );
+
+  test("the dispatch transaction refuses a runtime that changed after async preflight", async () => {
+    const h = await harness();
+    const grant = await grantCommand(h, { maxUses: 1 });
+    h.host.dispatchBinding = () => ({
+      session: h.sessions.get("env-1\0tab-1")!,
+      runtime: { ...h.runtimes.get("env-1")!, identity: "worktree:/replacement" },
+    });
+    const result = await h.service.runCommand(h.caller, { grantId: grant.id, command: "true" });
+    expect(result).toMatchObject({
+      state: "cancelled_before_start",
+      error: expect.stringContaining("SCOPE_MISMATCH"),
+    });
+    expect(spawner.spawned).toHaveLength(0);
+    expect(h.storage.credentialRecordStore().getGrant(grant.id)).toMatchObject({
+      state: "invalidated",
+      uses: 0,
+    });
+  });
+
+  test("the monotonic deadline still applies after a saved value is read", async () => {
+    const h = await harness();
+    const { grant } = await savedGrant(h, "command", 1);
+    const read = holdSavedRead(h);
+    const pending = h.service.runCommand(h.caller, { grantId: grant.id, command: "true" });
+    await read.entered;
+    h.clock.monotonic += CREDENTIAL_TIMING.grantMaxLifetimeMs + 1;
+    read.release();
+    expect(await pending).toMatchObject({
+      state: "cancelled_before_start",
+      error: expect.stringContaining("expired"),
+    });
+    expect(spawner.spawned).toHaveLength(0);
+  });
+
+  test("a different launch target releases the fence without spawning", async () => {
+    const h = await harness();
+    const grant = await grantCommand(h, { maxUses: 1 });
+    let releases = 0;
+    h.setLaunch({
+      target: "worktree",
+      cwd: "/replacement",
+      env: {},
+      release: () => {
+        releases++;
+      },
+    });
+    await expect(
+      h.service.runCommand(h.caller, { grantId: grant.id, command: "true" }),
+    ).rejects.toThrow("SCOPE_MISMATCH");
+    expect(spawner.spawned).toHaveLength(0);
+    expect(releases).toBe(1);
+  });
+
+  test("a synchronous setup failure refunds the use and releases the launch fence", async () => {
+    const h = await harness({ runRoot: null as unknown as string });
+    const grant = await grantCommand(h, { maxUses: 1 });
+    let released = false;
+    h.setLaunch({
+      target: "worktree",
+      cwd: h.worktree,
+      env: {},
+      release: () => {
+        released = true;
+      },
+    });
+    const result = await h.service.runCommand(h.caller, { grantId: grant.id, command: "true" });
+    expect(result.state).toBe("cancelled_before_start");
+    expect(released).toBe(true);
+    expect(spawner.spawned).toHaveLength(0);
+    expect(h.service.overview().grants[0]?.uses).toBe(0);
+  });
+
+  test("rejects malformed Unicode before approving a value", async () => {
+    const h = await harness();
+    const request = await h.service.requestAccess(h.caller, {
+      label: "Fixture",
+      purpose: "Read",
+      use: "command",
+      bindingName: "TOKEN",
+    });
+    await expect(
+      h.service.approve({
+        requestId: request.id,
+        revision: request.revision,
+        source: { kind: "value", value: "invalid\uD800" },
+      }),
+    ).rejects.toThrow("well-formed Unicode");
+    expect(h.service.overview().grants).toHaveLength(0);
+  });
+
+  test("an idempotent retry can cancel its reservation before the vault answers", async () => {
+    const h = await harness();
+    const { grant } = await savedGrant(h, "command", 1);
+    const read = holdSavedRead(h);
+    const input = { grantId: grant.id, command: "true", idempotencyKey: "same", waitMs: 0 };
+    const original = h.service.runCommand(h.caller, input);
+    await read.entered;
+    const retry = await h.service.runCommand(h.caller, input);
+    expect(retry.state).toBe("reserved");
+    expect((await h.service.cancelOperation(h.caller, retry.id)).state).toBe(
+      "cancelled_before_start",
+    );
+    read.release();
+    expect((await original).state).toBe("cancelled_before_start");
+    expect(spawner.spawned).toHaveLength(0);
+    expect(h.service.overview().grants[0]?.uses).toBe(0);
+  });
+
+  test.each(["command", "http"] as const)(
+    "shutdown cancels a %s reservation waiting on the vault",
+    async (use) => {
+      let sent = false;
+      const h = await harness({
+        fetch: async () => {
+          sent = true;
+          return new Response("ok");
+        },
+      });
+      const { grant } = await savedGrant(h, use, 1);
+      const read = holdSavedRead(h);
+      const pending =
+        use === "command"
+          ? h.service.runCommand(h.caller, { grantId: grant.id, command: "true" })
+          : h.service.httpRequest(h.caller, {
+              grantId: grant.id,
+              method: "GET",
+              url: "https://api.example.com",
+            });
+      await read.entered;
+      h.service.stop();
+      read.release();
+      expect((await pending).state).toBe("cancelled_before_start");
+      expect(spawner.spawned).toHaveLength(0);
+      expect(sent).toBe(false);
+    },
+  );
+
+  test("recovery refunds a saved reservation exactly once and cleans its recorded container", async () => {
+    const h = await harness();
+    const { grant } = await savedGrant(h, "command", 1);
+    const read = holdSavedRead(h);
+    const pending = h.service.runCommand(h.caller, { grantId: grant.id, command: "true" });
+    await read.entered;
+    const store = h.storage.credentialRecordStore();
+    const [reserved] = store.listOperations();
+    store.transaction((rows) =>
+      rows.putOperation({
+        ...reserved!,
+        internal: { ...reserved!.internal, containerId: "fixture-container" },
+      }),
+    );
+    const restarted = h.restart();
+    await restarted.reconcileStartup();
+    await restarted.reconcileStartup();
+    read.release();
+    expect((await pending).state).toBe("cancelled_before_start");
+    expect(store.getGrant(grant.id)?.uses).toBe(0);
+    expect(
+      spawner.spawned.map(
+        (call) =>
+          call.args.includes("fixture-container") &&
+          call.args.includes("orkestrator-credential-cleanup"),
+      ),
+    ).toEqual([true]);
+  });
+
+  test("retained output and idempotent replay stay with the originating conversation", async () => {
+    const h = await harness();
+    const grant = await grantCommand(h);
+    const input = { grantId: grant.id, command: "true", idempotencyKey: "keep" };
+    const run = await h.service.runCommand(h.caller, input);
+    expect((await h.service.getOperation(h.caller, run.id, 0)).stdout?.text).toContain("ran:true");
+    replaceConversation(h);
+    await expect(h.service.getOperation(h.caller, run.id, 0)).rejects.toThrow("SCOPE_MISMATCH");
+    await expect(h.service.runCommand(h.caller, input)).rejects.toThrow("SCOPE_MISMATCH");
+    expect(spawner.spawned).toHaveLength(1);
+  });
+
+  test("history pressure preserves an approved grant's original idempotency key", async () => {
+    const h = await harness();
+    const grant = await grantCommand(h);
+    const input = { grantId: grant.id, command: "true", idempotencyKey: "first" };
+    const first = await h.service.runCommand(h.caller, input);
+    const store = h.storage.credentialRecordStore();
+    const record = store.getOperation(first.id)!;
+    store.transaction((rows) => {
+      for (let index = 0; index < CREDENTIAL_LIMITS.maxRecordsPerEnvironment; index++) {
+        rows.putOperation({
+          ...record,
+          id: `later-${index}`,
+          createdAt: record.createdAt + index + 1,
+          internal: { ...record.internal, idempotencyKey: null },
+        });
+      }
+    });
+    expect(store.listOperations()).toHaveLength(CREDENTIAL_LIMITS.maxRecordsPerEnvironment);
+    expect((await h.service.runCommand(h.caller, input)).id).toBe(first.id);
+    expect(spawner.spawned).toHaveLength(1);
+  });
+});
+
+describe("trusted HTTPS regressions", () => {
+  test("resolves every address before sending to an approved public hostname", async () => {
+    let sends = 0;
+    const h = await harness({
+      fetch: async () => {
+        sends++;
+        return new Response("ok");
+      },
+      resolveHttpAddress: async () => [{ address: "1.1.1.1" }, { address: "::ffff:127.0.0.1" }],
+    });
+    const { grant } = await savedGrant(h, "http", 1);
+    await expect(
+      h.service.httpRequest(h.caller, {
+        grantId: grant.id,
+        method: "GET",
+        url: "https://api.example.com",
+      }),
+    ).rejects.toThrow("public addresses");
+    expect(sends).toBe(0);
+    expect(h.service.overview().grants[0]?.uses).toBe(0);
+  });
+
+  test("accepts canonical HTTPS ports for approved and configured hosts", async () => {
+    const seen: string[] = [];
+    const h = await harness({
+      fetch: async (url: URL) => {
+        seen.push(url.host);
+        return new Response("ok");
+      },
+    });
+    const { grant, connection } = await savedGrant(h, "http");
+    expect(connection.httpHosts).toEqual(["api.example.com", "api.example.com:8443"]);
+    for (const port of ["00443", "08443"]) {
+      const result = await h.service.httpRequest(h.caller, {
+        grantId: grant.id,
+        method: "GET",
+        url: `https://api.example.com:${port}/`,
+      });
+      expect(result.state).toBe("succeeded");
+    }
+    expect(seen).toEqual(connection.httpHosts);
+  });
+
+  test("rejects a multiline direct header before sending or consuming a use", async () => {
+    let sends = 0;
+    const h = await harness({
+      fetch: async () => {
+        sends++;
+        return new Response("ok");
+      },
+    });
+    const { grant } = await savedGrant(h, "http", 1, "line 1\nline 2");
+    await expect(
+      h.service.httpRequest(h.caller, {
+        grantId: grant.id,
+        method: "POST",
+        url: "https://api.example.com",
+      }),
+    ).rejects.toThrow("INVALID_INPUT");
+    expect(sends).toBe(0);
+    expect(h.service.overview().grants[0]?.uses).toBe(0);
+  });
+
+  test("drops a partial value at the raw response boundary after earlier redactions", async () => {
+    const fragment = TEST_SECRET.slice(0, -4);
+    const limit = CREDENTIAL_LIMITS.httpResponseBodyMaxBytes + TEST_SECRET.length * 3 + 16;
+    const earlier = TEST_SECRET.repeat(20);
+    const body = earlier + "x".repeat(limit - earlier.length - fragment.length) + TEST_SECRET;
+    const h = await harness({ fetch: async () => new Response(body) });
+    const { grant } = await savedGrant(h, "http");
+    const result = await h.service.httpRequest(h.caller, {
+      grantId: grant.id,
+      method: "GET",
+      url: "https://api.example.com",
+    });
+    expect(result.http?.bodyTruncated).toBe(true);
+    expect(result.http?.body).toContain("[redacted]");
+    expect(result.http?.body).not.toContain(fragment);
+    expect(result.http?.body).not.toContain("orkcanary-credential");
+  });
+
+  test("waiting readers wake on HTTP settlement", async () => {
+    const sending = Promise.withResolvers<void>();
+    const response = Promise.withResolvers<Response>();
+    const h = await harness({
+      fetch: async () => {
+        sending.resolve();
+        return response.promise;
+      },
+    });
+    const { grant } = await savedGrant(h, "http");
+    const work = h.service.httpRequest(h.caller, {
+      grantId: grant.id,
+      method: "GET",
+      url: "https://api.example.com",
+    });
+    await sending.promise;
+    const [operation] = h.service.overview().operations;
+    const waiting = h.service.getOperation(h.caller, operation!.id, 30_000);
+    // Let the waiting read subscribe before releasing the answer.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    response.resolve(new Response("ok"));
+    expect((await work).state).toBe("succeeded");
+    const fast = await Promise.race([waiting, Bun.sleep(500).then(() => null)]);
+    expect(fast?.state).toBe("succeeded");
   });
 });

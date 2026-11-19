@@ -8,7 +8,12 @@ import {
   type CredentialConnection,
 } from "@orkestrator/protocol/agent-credentials";
 import type { CredentialContext } from "./context.js";
-import { publicRecord, type CredentialRows, type StoredConnection } from "./records.js";
+import {
+  publicRecord,
+  type CredentialRows,
+  type RetiredVaultEntry,
+  type StoredConnection,
+} from "./records.js";
 import { newCredentialEntryId } from "./vault.js";
 
 /**
@@ -74,13 +79,35 @@ export function connectionAllowsProject(
 }
 
 type Ended = { environments: string[]; grantIds: string[] };
+const MAX_TRACKED_VAULT_ENTRIES = CREDENTIAL_LIMITS.maxConnections * 2;
+
+function assertVaultCapacity(rows: CredentialRows, connectionCount: number): void {
+  if (rows.countRetiredEntries() + connectionCount >= MAX_TRACKED_VAULT_ENTRIES) {
+    throw new CredentialError(
+      "STORE_UNAVAILABLE",
+      "The vault has pending removals. Try again after cleanup.",
+    );
+  }
+}
+
 const NOTHING_ENDED: Ended = { environments: [], grantIds: [] };
 
 export class CredentialConnections {
+  private cleanupSweep: Promise<void> | undefined;
+  private cleanupCursor = 0;
+  private recoveryCursor = 0;
+  private readonly cleaning = new Map<string, Promise<boolean>>();
+
   constructor(private readonly context: CredentialContext) {}
 
   list(): CredentialConnection[] {
-    return this.context.records.listConnections().map((record) => publicRecord(record));
+    const awaitingCleanup = new Set(
+      this.context.records.listRetiredEntries().map((entry) => entry.connectionId),
+    );
+    return this.context.records.listConnections().map((record) => ({
+      ...publicRecord(record),
+      ...(awaitingCleanup.has(record.id) ? { cleanupPending: true } : {}),
+    }));
   }
 
   /** Connections a project may use, ready ones first. */
@@ -150,7 +177,12 @@ export class CredentialConnections {
     };
     try {
       this.context.records.transaction((rows) => {
-        if (rows.connections().some((existing) => existing.name === name)) {
+        const existingConnections = rows.connections();
+        assertVaultCapacity(rows, existingConnections.length);
+        if (existingConnections.length >= CREDENTIAL_LIMITS.maxConnections) {
+          throw new CredentialError("REQUEST_LIMIT", "At most 200 connections can be saved.");
+        }
+        if (existingConnections.some((existing) => existing.name === name)) {
           throw new CredentialError("INVALID_INPUT", `A connection named ${name} already exists.`);
         }
         rows.putConnection(record);
@@ -218,14 +250,14 @@ export class CredentialConnections {
       throw new CredentialError("REQUEST_NOT_FOUND", "That connection no longer exists.");
     }
     const entryId = await this.storeValue(input.value);
-    let previousEntry: string | null = null;
-    let result: { next: StoredConnection; ended: Ended };
+    let result: { next: StoredConnection; ended: Ended; retired: RetiredVaultEntry };
     try {
       result = this.context.records.transaction((rows) => {
         const current = rows.connection(input.id);
         if (!current)
           throw new CredentialError("REQUEST_NOT_FOUND", "That connection no longer exists.");
-        previousEntry = current.internal.entryId;
+        assertVaultCapacity(rows, rows.connections().length);
+        const retired = rows.retireVaultEntry(current);
         const next: StoredConnection = {
           ...current,
           storage: this.context.vault.kind,
@@ -238,6 +270,7 @@ export class CredentialConnections {
         rows.putConnection(next);
         return {
           next,
+          retired,
           ended: this.endConnectionGrants(rows, current.id, "The connection's value was replaced."),
         };
       });
@@ -245,40 +278,95 @@ export class CredentialConnections {
       await this.context.vault.delete(entryId).catch(() => undefined);
       throw error;
     }
-    if (previousEntry) await this.context.vault.delete(previousEntry).catch(() => undefined);
     this.afterGrantsEnded(result.ended);
     this.context.announce("connections");
-    return publicRecord(result.next);
+    await this.cleanRetiredEntry(result.retired);
+    const cleanupPending = this.context.records.listRetiredEntries(input.id).length > 0;
+    return { ...publicRecord(result.next), ...(cleanupPending ? { cleanupPending } : {}) };
   }
 
   /** Removes the connection and its value. Its grants end at once. */
-  async delete(id: string): Promise<{ deleted: boolean }> {
+  async delete(id: string): Promise<{ deleted: boolean; cleanupPending?: boolean }> {
     const result = this.context.records.transaction((rows) => {
       const current = rows.connection(id);
       if (!current) return null;
+      rows.retireVaultEntry(current);
       rows.deleteConnection(id);
-      return {
-        entryId: current.internal.entryId,
-        ended: this.endConnectionGrants(rows, id, "The connection was deleted."),
-      };
+      return this.endConnectionGrants(rows, id, "The connection was deleted.");
     });
-    if (!result) return { deleted: false };
-    await this.context.vault.delete(result.entryId).catch(() => undefined);
-    this.afterGrantsEnded(result.ended);
-    this.context.announce("connections");
-    return { deleted: true };
+    if (result) {
+      this.afterGrantsEnded(result);
+      this.context.announce("connections");
+    }
+    const entries = this.context.records.listRetiredEntries(id);
+    if (!entries.length) return { deleted: result !== null };
+    for (const entry of entries) await this.cleanRetiredEntry(entry);
+    return this.context.records.listRetiredEntries(id).length
+      ? { deleted: false, cleanupPending: true }
+      : { deleted: true };
   }
 
-  /** Marks a connection whose value the vault no longer returns at `entryId`. */
-  markUnavailable(id: string, entryId: string): void {
-    this.context.records.transaction((rows) => {
-      const current = rows.connection(id);
-      if (!current || current.status === "unavailable" || current.internal.entryId !== entryId) {
-        return;
-      }
-      rows.putConnection({ ...current, status: "unavailable", updatedAt: this.context.now() });
+  async readValue(id: string, entryId: string): Promise<string | null> {
+    const connection = this.context.records.getConnection(id);
+    if (!connection || connection.internal.entryId !== entryId) return null;
+    const vault = this.context.vaultFor(connection.storage);
+    if (!vault) return null;
+    const value = await vault.get(entryId);
+    // Older versions could mark a connection unavailable after reading the wrong vault.
+    if (value !== null && connection.status === "unavailable" && !this.context.isStopped) {
+      this.context.records.transaction((rows) => {
+        const current = rows.connection(id);
+        if (current?.internal.entryId === entryId)
+          rows.putConnection({ ...current, status: "ready" });
+      });
+      this.context.announce("connections");
+    }
+    return value;
+  }
+
+  cleanRetiredEntries(): Promise<void> {
+    this.cleanupSweep ??= this.runCleanupSweep().finally(() => {
+      this.cleanupSweep = undefined;
     });
-    this.context.announce("connections");
+    return this.cleanupSweep;
+  }
+
+  private async runCleanupSweep(): Promise<void> {
+    const entries = this.context.records.listRetiredEntries();
+    if (entries.length) {
+      const start = this.cleanupCursor % entries.length;
+      const count = Math.min(entries.length, 8);
+      this.cleanupCursor = start + count;
+      for (let offset = 0; offset < count && !this.context.isStopped; offset++) {
+        await this.cleanRetiredEntry(entries[(start + offset) % entries.length]!);
+      }
+    }
+    // Recover status left by an older backend once its original vault answers.
+    const unavailable = this.context.records
+      .listConnections()
+      .filter((entry) => entry.status === "unavailable");
+    if (!unavailable.length || this.context.isStopped) return;
+    const next = unavailable[this.recoveryCursor++ % unavailable.length]!;
+    await this.readValue(next.id, next.internal.entryId).catch(() => undefined);
+  }
+
+  private cleanRetiredEntry(entry: RetiredVaultEntry): Promise<boolean> {
+    const inFlight = this.cleaning.get(entry.id);
+    if (inFlight) return inFlight;
+    const vault = this.context.vaultFor(entry.storage);
+    if (!vault) return Promise.resolve(false);
+    const removal = vault
+      .delete(entry.id)
+      .then(() => {
+        if (this.context.isStopped) return false;
+        this.context.records.transaction((rows) => rows.confirmVaultRemoval(entry.id));
+        this.context.announce("connections");
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => this.cleaning.delete(entry.id));
+    this.cleaning.set(entry.id, removal);
+    return removal;
   }
 
   noteUsed(id: string): void {

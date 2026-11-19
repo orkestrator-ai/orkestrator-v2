@@ -2,31 +2,34 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
-  CREDENTIAL_HTTP_METHODS,
   CREDENTIAL_LIMITS,
-  CREDENTIAL_READ_ONLY_HTTP_METHODS,
   CREDENTIAL_TIMING,
   CredentialError,
+  credentialValueProblem,
+  normalizeCredentialHosts,
   type CredentialOperationRecord,
   type CredentialOperationState,
   type CredentialUse,
 } from "@orkestrator/protocol/agent-credentials";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import {
-  grantUnusableReason,
-  deniesShell,
-  type CredentialAccess,
-  type CredentialCaller,
-} from "./access.js";
+import { grantUnusableReason, type CredentialAccess, type CredentialCaller } from "./access.js";
 import { connectionAllowsProject, type CredentialConnections } from "./connections.js";
 import type { CredentialContext } from "./context.js";
 import {
+  materializeCredentialHeaders,
   prepareCredentialHttpRequest,
   sendCredentialHttpRequest,
   type CredentialHttpAnswer,
   type CredentialHttpInput,
 } from "./http-operation.js";
-import { publicRecord, type StoredGrant, type StoredOperation } from "./records.js";
+import { assertCredentialPolicy } from "./policy.js";
+import { resolvePublicAddress } from "./public-https.js";
+import {
+  publicRecord,
+  type CredentialRows,
+  type StoredGrant,
+  type StoredOperation,
+} from "./records.js";
 import type { RedactionValue } from "./redaction.js";
 import {
   cleanupContainerRun,
@@ -85,12 +88,14 @@ function boundedWait(value: number | undefined): number {
   return Math.min(Math.max(0, Math.round(value)), CREDENTIAL_TIMING.waitMaxMs);
 }
 
-function isReadOnly(grant: StoredGrant, policyId: string | undefined): boolean {
-  return grant.runtime.kind === "coordinator" || policyId === "coordinator-read-only";
+function refundUse(rows: CredentialRows, grantId: string): void {
+  const grant = rows.grant(grantId);
+  if (grant && grant.uses > 0) rows.putGrant({ ...grant, uses: grant.uses - 1 });
 }
 
 export class CredentialOperations {
   private readonly running = new Map<string, { cancel(options?: { hard?: boolean }): void }>();
+  private stopped = false;
   private readonly results = new Map<string, Partial<CredentialOperationView>>();
 
   constructor(
@@ -110,12 +115,9 @@ export class CredentialOperations {
     caller: CredentialCaller,
     grantId: string,
     kind: CredentialUse,
-  ): Promise<{
-    grant: StoredGrant;
-    readOnly: boolean;
-    approvals: string | null;
-    shellDenied: boolean;
-  }> {
+    reservation?: StoredOperation,
+  ): Promise<{ grant: StoredGrant; agent: string | null }> {
+    this.assertAcceptingWork();
     const grant = this.context.records.getGrant(grantId);
     if (
       !grant ||
@@ -125,8 +127,8 @@ export class CredentialOperations {
     ) {
       throw new CredentialError("GRANT_NOT_FOUND", "No such grant for this tab.");
     }
-    const unusable = grantUnusableReason(this.context, grant);
-    if (unusable) throw unusable;
+    const unusable = grantUnusableReason(this.context, grant, reservation !== undefined);
+    if (unusable && !reservation) throw unusable;
     if (grant.use !== kind) {
       throw new CredentialError(
         "SCOPE_MISMATCH",
@@ -139,45 +141,72 @@ export class CredentialOperations {
       this.context.host.session(caller.environmentId, caller.tabId),
       this.context.host.runtime(caller.environmentId),
     ]);
-    const end = (reason: string) => {
-      this.access.endGrants(
-        (candidate) => candidate.id === grant.id,
-        "invalidated",
-        reason,
-        grant.environmentId,
+    if (
+      (session?.providerSessionId ?? null) !== grant.internal.providerSessionId ||
+      (session && session.logicalSessionKey !== grant.internal.logicalSessionKey)
+    ) {
+      this.invalidateBinding(
+        grant,
+        "This tab started a new conversation; grants of the earlier one ended.",
+        reservation,
       );
-      return new CredentialError("SCOPE_MISMATCH", reason);
-    };
-    if ((session?.providerSessionId ?? null) !== grant.internal.providerSessionId) {
-      throw end("This tab started a new conversation; grants of the earlier one ended.");
     }
     if (!runtime || runtime.identity !== grant.internal.runtimeIdentity) {
-      throw end(
+      this.invalidateBinding(
+        grant,
         "The environment's runtime changed (rebuilt, moved or stopped); request access again.",
+        reservation,
       );
     }
+    if (unusable) throw unusable;
     if (grant.source.kind === "connection") {
       const connection = this.context.records.getConnection(grant.source.connectionId);
       // The value version is pinned; the policy is checked as it is now (a
       // policy change also ends grants when it is saved). A rename changes
       // neither.
       if (!connection || connection.valueVersion !== grant.internal.valueVersion) {
-        throw end("The saved connection's value changed or was removed; request access again.");
+        this.invalidateBinding(
+          grant,
+          "The saved connection's value changed or was removed; request access again.",
+        );
       }
       if (!connectionAllowsProject(connection, grant.projectId)) {
-        throw end("The saved connection is no longer available to this project.");
+        this.invalidateBinding(
+          grant,
+          "The saved connection is no longer available to this project.",
+        );
       }
-      if (grant.http && grant.http.hosts.some((host) => !connection.httpHosts.includes(host))) {
-        throw end("The saved connection no longer allows these hosts.");
+      if (
+        grant.http &&
+        (normalizeCredentialHosts(grant.http.hosts) ?? grant.http.hosts).some(
+          (host) => !normalizeCredentialHosts(connection.httpHosts)?.includes(host),
+        )
+      ) {
+        this.invalidateBinding(grant, "The saved connection no longer allows these hosts.");
       }
     }
-    const policy = session?.policy ?? null;
-    return {
-      grant,
-      readOnly: isReadOnly(grant, policy?.id),
-      approvals: policy?.approvals ?? null,
-      shellDenied: policy ? deniesShell(policy) : false,
-    };
+    assertCredentialPolicy(kind, session, runtime, grant.command);
+    return { grant, agent: session?.agent ?? null };
+  }
+
+  private invalidateBinding(
+    grant: StoredGrant,
+    reason: string,
+    reservation?: StoredOperation,
+  ): never {
+    if (reservation) this.cancelBeforeStart(reservation, `SCOPE_MISMATCH: ${reason}`);
+    this.access.endGrants(
+      (candidate) => candidate.id === grant.id,
+      "invalidated",
+      reason,
+      grant.environmentId,
+    );
+    throw new CredentialError("SCOPE_MISMATCH", reason);
+  }
+
+  private assertAcceptingWork(): void {
+    if (this.stopped)
+      throw new CredentialError("POLICY_DENIED", "The credential service is stopping.");
   }
 
   /**
@@ -194,6 +223,7 @@ export class CredentialOperations {
     print: string,
     summary: string,
   ): { operation: StoredOperation; existing: boolean } {
+    this.assertAcceptingWork();
     return this.context.records.transaction((rows) => {
       const grant = rows.grant(grantId);
       if (!grant) throw new CredentialError("GRANT_NOT_FOUND", "No such grant for this tab.");
@@ -226,6 +256,15 @@ export class CredentialOperations {
           "Four credential operations are already running in this tab; wait for one to finish.",
         );
       }
+      if (
+        operations.length >= CREDENTIAL_LIMITS.maxRecordsPerEnvironment &&
+        !operations.some((operation) => rows.operationCanBePruned(operation))
+      ) {
+        throw new CredentialError(
+          "REQUEST_LIMIT",
+          "Credential operation history is full. End unused grants or wait for them to expire.",
+        );
+      }
       rows.putGrant({ ...grant, uses: grant.uses + 1 });
       const operation: StoredOperation = {
         id: randomUUID(),
@@ -240,12 +279,63 @@ export class CredentialOperations {
         internal: {
           idempotencyKey: idempotencyKey ?? null,
           fingerprint: print,
+          scope: {
+            projectId: grant.projectId,
+            providerSessionId: grant.internal.providerSessionId,
+          },
           bootId: this.context.bootId,
         },
       };
       rows.putOperation(operation);
       return { operation, existing: false };
     });
+  }
+
+  /** Claims the reserved operation and rechecks the grant in the same write. */
+  private dispatch(operation: StoredOperation, agent: string | null): void {
+    try {
+      this.claimDispatch(operation, agent);
+    } catch (error) {
+      if (error instanceof CredentialError && error.code === "SCOPE_MISMATCH") {
+        const grant = this.context.records.getGrant(operation.grantId);
+        if (grant) this.invalidateBinding(grant, error.message, operation);
+      }
+      throw error;
+    }
+  }
+
+  private claimDispatch(operation: StoredOperation, agent: string | null): void {
+    this.assertAcceptingWork();
+    const started = this.context.records.transaction((rows) => {
+      const current = rows.operation(operation.id);
+      if (current?.state !== "reserved") return false;
+      const grant = rows.grant(operation.grantId);
+      if (!grant) throw new CredentialError("ACCESS_EXPIRED", "The grant ended.");
+      const unusable = grantUnusableReason(this.context, grant, true);
+      if (unusable) throw unusable;
+      const binding = this.context.host.dispatchBinding?.(grant.environmentId, grant.tabId, agent);
+      if (binding) {
+        const { session, runtime } = binding;
+        if (
+          !runtime ||
+          runtime.identity !== grant.internal.runtimeIdentity ||
+          !session ||
+          session.providerSessionId !== grant.internal.providerSessionId ||
+          session.logicalSessionKey !== grant.internal.logicalSessionKey
+        ) {
+          throw new CredentialError(
+            "SCOPE_MISMATCH",
+            "The conversation or runtime changed before dispatch.",
+          );
+        }
+        assertCredentialPolicy(grant.use, session, runtime, grant.command);
+      }
+      rows.putOperation({ ...current, state: "running", startedAt: this.context.now() });
+      return true;
+    });
+    if (!started)
+      throw new CredentialError("ACCESS_EXPIRED", "The operation was cancelled before dispatch.");
+    this.context.announce(operation.environmentId);
   }
 
   private update(id: string, patch: Partial<StoredOperation>): StoredOperation | null {
@@ -267,15 +357,25 @@ export class CredentialOperations {
    * A use that ended before anything ran gives its use back: nothing could
    * have happened, so counting it would only shorten the grant.
    */
-  private cancelBeforeStart(operation: StoredOperation, error: string): StoredOperation {
+  private cancelBeforeStart(
+    operation: StoredOperation,
+    error: string,
+    cleanup: StoredOperation["cleanup"] = "none",
+    spawnFailed = false,
+  ): StoredOperation {
     const next = this.context.records.transaction((rows) => {
       const current = rows.operation(operation.id);
-      if (!current || current.state !== "reserved") return current;
-      const grant = rows.grant(operation.grantId);
-      if (grant && grant.uses > 0) rows.putGrant({ ...grant, uses: grant.uses - 1 });
+      if (
+        !current ||
+        (current.state !== "reserved" && !(spawnFailed && current.state === "running"))
+      ) {
+        return current;
+      }
+      refundUse(rows, operation.grantId);
       const updated: StoredOperation = {
         ...current,
         state: "cancelled_before_start",
+        cleanup,
         finishedAt: this.context.now(),
         error,
       };
@@ -292,13 +392,8 @@ export class CredentialOperations {
       const value =
         grant.source.kind === "temporary"
           ? await this.context.temporary.get(grant.internal.entryId)
-          : await this.context.vault.get(grant.internal.entryId);
-      if (value === null && grant.source.kind === "connection") {
-        // Only when the connection still points at this entry: a value
-        // replaced a moment ago leaves the old entry gone, not the connection.
-        this.connections.markUnavailable(grant.source.connectionId, grant.internal.entryId);
-      }
-      return value;
+          : await this.connections.readValue(grant.source.connectionId, grant.internal.entryId);
+      return value !== null && credentialValueProblem(value) === null ? value : null;
     } catch (error) {
       log.warn("vault.read-failed", { error: formatLogError(error) });
       return null;
@@ -395,27 +490,11 @@ export class CredentialOperations {
       input.waitMs,
     );
     if (replayed) return replayed;
-    const authorized = await this.authorize(caller, input.grantId, "command");
-    const { grant } = authorized;
-    if (authorized.readOnly) {
-      throw new CredentialError("UNSUPPORTED_RUNTIME", "A read-only session cannot run commands.");
-    }
-    if (authorized.approvals === "deny" || authorized.shellDenied) {
-      throw new CredentialError(
-        "POLICY_DENIED",
-        "This session's execution policy does not allow running commands.",
-      );
-    }
+    const { grant } = await this.authorize(caller, input.grantId, "command");
     if (grant.command !== undefined && grant.command !== input.command) {
       throw new CredentialError(
         "SCOPE_MISMATCH",
         "This grant allows only the exact command that was approved.",
-      );
-    }
-    if (authorized.approvals === "ask" && grant.command === undefined) {
-      throw new CredentialError(
-        "POLICY_DENIED",
-        "This session asks before running commands, so only an approved exact command can run.",
       );
     }
     const { operation, existing } = this.reserve(
@@ -426,11 +505,15 @@ export class CredentialOperations {
       print,
       summarizeCommand(input.command),
     );
-    if (!existing) await this.startCommand(operation, grant, input.command, timeoutMs);
+    if (!existing) {
+      this.context.announce(operation.environmentId);
+      await this.startCommand(caller, operation, grant, input.command, timeoutMs);
+    }
     return this.wait(caller, operation.id, boundedWait(input.waitMs));
   }
 
   private async startCommand(
+    caller: CredentialCaller,
     operation: StoredOperation,
     grant: StoredGrant,
     command: string,
@@ -441,48 +524,69 @@ export class CredentialOperations {
       this.cancelBeforeStart(operation, "The credential value is unavailable.");
       return;
     }
+    if (this.context.records.getOperation(operation.id)?.state !== "reserved") return;
     let launch;
+    let handle;
     try {
+      await this.authorize(caller, grant.id, "command", operation);
+      if (this.context.records.getOperation(operation.id)?.state !== "reserved") return;
       launch = await this.context.host.launch(grant.environmentId, grant.tabId);
+      const { agent } = await this.authorize(caller, grant.id, "command", operation);
+      const identity =
+        launch.target === "container"
+          ? `container:${launch.containerId}`
+          : `worktree:${launch.cwd}`;
+      if (identity !== grant.internal.runtimeIdentity) {
+        this.invalidateBinding(
+          grant,
+          "The environment's runtime changed before launch.",
+          operation,
+        );
+      }
+      if (this.context.records.getOperation(operation.id)?.state !== "reserved") {
+        launch.release?.();
+        return;
+      }
+      if (!grant.binding) throw new CredentialError("SCOPE_MISMATCH", "The grant has no binding.");
+      if (launch.target === "container" && launch.containerId) {
+        this.update(operation.id, {
+          internal: { ...operation.internal, containerId: launch.containerId },
+        });
+      }
+      handle = startCredentialRun({
+        id: operation.id,
+        launch,
+        command,
+        bindings: [{ binding: grant.binding, value }],
+        redaction: this.redaction(grant, value),
+        timeoutMs,
+        runRoot: this.context.runRoot,
+        beforeSpawn: () => this.authorize(caller, grant.id, "command", operation),
+        onDispatch: () => this.dispatch(operation, agent),
+        ...(this.context.spawnProcess ? { spawnProcess: this.context.spawnProcess } : {}),
+      });
     } catch (error) {
+      launch?.release?.();
       this.cancelBeforeStart(
         operation,
-        error instanceof Error ? error.message.slice(0, 300) : "Unavailable",
+        error instanceof CredentialError ? error.message : "The command could not be prepared.",
       );
+      if (
+        error instanceof CredentialError &&
+        (error.code === "SCOPE_MISMATCH" ||
+          error.code === "UNSUPPORTED_RUNTIME" ||
+          (error.code === "POLICY_DENIED" && !this.stopped))
+      )
+        throw error;
       return;
     }
-    // Recheck after the awaits: a revocation in between wins.
-    const current = this.context.records.getGrant(grant.id);
-    if (!current || current.state !== "active" || current.expiresAt <= this.context.now()) {
-      launch.release?.();
-      this.cancelBeforeStart(operation, "The grant ended before the command started.");
-      return;
-    }
-    if (grant.binding === undefined) {
-      launch.release?.();
-      this.cancelBeforeStart(operation, "The grant has no binding.");
-      return;
-    }
-    const handle = startCredentialRun({
-      id: operation.id,
-      launch,
-      command,
-      bindings: [{ binding: grant.binding, value }],
-      redaction: this.redaction(grant, value),
-      timeoutMs,
-      runRoot: this.context.runRoot,
-      ...(this.context.spawnProcess ? { spawnProcess: this.context.spawnProcess } : {}),
-    });
-    this.running.set(operation.id, { cancel: (options) => handle.cancel(options) });
-    this.update(operation.id, {
-      state: "running",
-      startedAt: this.context.now(),
-      // Kept so a later process can clean up a container run this one leaves.
-      ...(launch.target === "container" && launch.containerId
-        ? { internal: { ...operation.internal, containerId: launch.containerId } }
-        : {}),
-    });
-    if (grant.source.kind === "connection") this.connections.noteUsed(grant.source.connectionId);
+    this.running.set(operation.id, { cancel: handle.cancel });
+    void handle.started
+      .then((started) => {
+        if (started && grant.source.kind === "connection")
+          this.connections.noteUsed(grant.source.connectionId);
+      })
+      .catch(() => undefined);
     void handle.result
       .then((result) => this.finishCommand(operation, result))
       .catch((error: unknown) => {
@@ -498,7 +602,8 @@ export class CredentialOperations {
         this.running.delete(operation.id);
         this.context.notify(operation.id);
         this.settleUsedUp(grant.id);
-      });
+      })
+      .catch(() => undefined);
   }
 
   /**
@@ -525,6 +630,7 @@ export class CredentialOperations {
           operation.internal.idempotencyKey === idempotencyKey,
       );
     if (!existing) return null;
+    await this.owned(caller, existing.id);
     if (existing.internal.fingerprint !== print) {
       throw new CredentialError(
         "IDEMPOTENCY_CONFLICT",
@@ -535,16 +641,24 @@ export class CredentialOperations {
   }
 
   private finishCommand(operation: StoredOperation, result: CredentialRunResult): void {
-    if (result.spawnError) {
-      // Nothing ran: the use is given back, as for any start that never happened.
-      this.context.records.transaction((rows) => {
-        const grant = rows.grant(operation.grantId);
-        if (grant && grant.uses > 0) rows.putGrant({ ...grant, uses: grant.uses - 1 });
-      });
+    const current = this.context.records.getOperation(operation.id);
+    if (!current) return;
+    if (current.state === "cancelled_before_start") {
+      this.update(operation.id, { cleanup: result.cleanup });
+      return;
     }
-    const state: CredentialOperationState = result.spawnError
-      ? "cancelled_before_start"
-      : result.timedOut || result.cancelled || result.exitCode === null
+    if (current.state !== "running" && current.state !== "reserved") return;
+    if (result.spawnError) {
+      this.cancelBeforeStart(
+        current,
+        `The command could not start (${result.spawnError}).`,
+        result.cleanup,
+        true,
+      );
+      return;
+    }
+    const state: CredentialOperationState =
+      result.timedOut || result.cancelled || result.exitCode === null
         ? "outcome_unknown"
         : result.exitCode === 0
           ? "succeeded"
@@ -556,15 +670,13 @@ export class CredentialOperations {
       exitCode: result.exitCode,
       ...(result.timedOut ? { timedOut: true } : {}),
       cleanup: result.cleanup,
-      ...(result.spawnError
-        ? { error: `The command could not start (${result.spawnError}).` }
-        : result.cancelled
-          ? { error: "Cancelled." }
-          : result.timedOut
-            ? { error: "Stopped at its deadline." }
-            : result.signal
-              ? { error: `Ended by ${result.signal}.` }
-              : {}),
+      ...(result.cancelled
+        ? { error: "Cancelled." }
+        : result.timedOut
+          ? { error: "Stopped at its deadline." }
+          : result.signal
+            ? { error: `Ended by ${result.signal}.` }
+            : {}),
     });
   }
 
@@ -585,14 +697,9 @@ export class CredentialOperations {
     });
     const replayed = await this.replay(caller, input.grantId, input.idempotencyKey, print);
     if (replayed) return replayed;
-    const authorized = await this.authorize(caller, input.grantId, "http");
-    const { grant } = authorized;
+    const { grant } = await this.authorize(caller, input.grantId, "http");
     if (!grant.http) throw new CredentialError("SCOPE_MISMATCH", "This grant has no HTTP policy.");
-    const prepared = prepareCredentialHttpRequest(
-      input,
-      grant.http,
-      authorized.readOnly ? CREDENTIAL_READ_ONLY_HTTP_METHODS : CREDENTIAL_HTTP_METHODS,
-    );
+    const prepared = prepareCredentialHttpRequest(input, grant.http);
     const { operation, existing } = this.reserve(
       caller,
       grant.id,
@@ -602,31 +709,47 @@ export class CredentialOperations {
       prepared.summary,
     );
     if (existing) return this.wait(caller, operation.id, CREDENTIAL_TIMING.waitDefaultMs);
+    this.context.announce(operation.environmentId);
     const value = await this.resolveValue(grant);
     if (value === null) {
       return this.view(this.cancelBeforeStart(operation, "The credential value is unavailable."));
     }
-    const current = this.context.records.getGrant(grant.id);
-    if (!current || current.state !== "active" || current.expiresAt <= this.context.now()) {
-      return this.view(
-        this.cancelBeforeStart(operation, "The grant ended before the request was sent."),
-      );
+    if (this.context.records.getOperation(operation.id)?.state !== "reserved") {
+      return this.wait(caller, operation.id, 0);
     }
     const controller = new AbortController();
-    this.running.set(operation.id, { cancel: () => controller.abort() });
-    this.update(operation.id, { state: "running", startedAt: this.context.now() });
-    if (grant.source.kind === "connection") this.connections.noteUsed(grant.source.connectionId);
+    let release: (() => void) | undefined;
+    let dispatched = false;
     try {
+      await this.authorize(caller, grant.id, "http", operation);
+      if (this.context.records.getOperation(operation.id)?.state !== "reserved") {
+        return this.wait(caller, operation.id, 0);
+      }
+      const headers = materializeCredentialHeaders(prepared, grant.http, value);
+      const address = await resolvePublicAddress(
+        prepared.url.hostname,
+        this.context.resolveHttpAddress,
+      );
+      if (!address) {
+        throw new CredentialError(
+          "POLICY_DENIED",
+          "The approved hostname does not resolve exclusively to public addresses.",
+        );
+      }
+      release = await this.context.host.beginUse?.(grant.environmentId, grant.tabId);
+      const { agent } = await this.authorize(caller, grant.id, "http", operation);
+      this.dispatch(operation, agent);
+      dispatched = true;
+      this.running.set(operation.id, { cancel: () => controller.abort() });
       const outcome = await sendCredentialHttpRequest(
         prepared,
-        grant.http,
-        value,
+        headers,
         this.redaction(grant, value),
-        {
-          ...(this.context.fetch ? { fetch: this.context.fetch } : {}),
-          signal: controller.signal,
-        },
+        { fetch: this.context.fetch, address, signal: controller.signal },
       );
+      if (grant.source.kind === "connection" && outcome.kind !== "not-sent") {
+        this.connections.noteUsed(grant.source.connectionId);
+      }
       const safe = prepared.method === "GET" || prepared.method === "HEAD";
       if (outcome.kind === "answered") {
         this.keep(operation.id, { http: outcome.answer });
@@ -648,17 +771,40 @@ export class CredentialOperations {
           error: `No answer arrived (${outcome.reason}).`,
         });
       }
+    } catch (error) {
+      if (dispatched) {
+        this.update(operation.id, {
+          state: "outcome_unknown",
+          finishedAt: this.context.now(),
+          error: "The request failed unexpectedly.",
+        });
+      } else {
+        this.cancelBeforeStart(
+          operation,
+          error instanceof CredentialError ? error.message : "The request could not be prepared.",
+        );
+        if (
+          error instanceof CredentialError &&
+          (error.code === "SCOPE_MISMATCH" ||
+            error.code === "INVALID_INPUT" ||
+            error.code === "POLICY_DENIED") &&
+          !this.stopped
+        )
+          throw error;
+      }
     } finally {
+      release?.();
       this.running.delete(operation.id);
+      this.context.notify(operation.id);
       this.settleUsedUp(grant.id);
     }
-    const finished = this.context.records.getOperation(operation.id);
-    return finished ? this.view(finished) : this.view(operation);
+    return this.wait(caller, operation.id, 0);
   }
 
   // --- Reading, waiting, cancelling ---------------------------------------------
 
-  private owned(caller: CredentialCaller, operationId: string): StoredOperation {
+  private async owned(caller: CredentialCaller, operationId: string): Promise<StoredOperation> {
+    const session = await this.context.host.session(caller.environmentId, caller.tabId);
     const operation = this.context.records.getOperation(operationId);
     if (
       !operation ||
@@ -666,6 +812,25 @@ export class CredentialOperations {
       operation.tabId !== caller.tabId
     ) {
       throw new CredentialError("REQUEST_NOT_FOUND", "No such credential operation for this tab.");
+    }
+    const grant = operation.internal.scope
+      ? null
+      : this.context.records.getGrant(operation.grantId);
+    const scope =
+      operation.internal.scope ??
+      (grant && {
+        projectId: grant.projectId,
+        providerSessionId: grant.internal.providerSessionId,
+      });
+    if (
+      !scope ||
+      scope.projectId !== caller.projectId ||
+      scope.providerSessionId !== (session?.providerSessionId ?? null)
+    ) {
+      throw new CredentialError(
+        "SCOPE_MISMATCH",
+        "This operation belongs to another conversation or project.",
+      );
     }
     return operation;
   }
@@ -675,31 +840,51 @@ export class CredentialOperations {
     operationId: string,
     waitMs: number,
   ): Promise<CredentialOperationView> {
-    this.owned(caller, operationId);
+    await this.owned(caller, operationId);
     await this.context.waitFor(operationId, waitMs, () => {
       const current = this.context.records.getOperation(operationId);
       return !current || (FINAL_STATES.has(current.state) && !this.running.has(operationId));
     });
-    return this.view(this.owned(caller, operationId));
+    return this.view(await this.owned(caller, operationId));
   }
 
-  cancel(caller: CredentialCaller, operationId: string): CredentialOperationView {
-    const operation = this.owned(caller, operationId);
+  async cancel(caller: CredentialCaller, operationId: string): Promise<CredentialOperationView> {
+    const operation = await this.owned(caller, operationId);
     this.running.get(operationId)?.cancel();
-    return this.view(operation);
+    return this.view(this.cancelBeforeStart(operation, "Cancelled before dispatch."));
   }
 
-  /** Stops the running work of ended grants. */
+  private cancelOperation(operation: StoredOperation, reason: string): void {
+    this.running.get(operation.id)?.cancel();
+    if (operation.state === "reserved") this.cancelBeforeStart(operation, reason);
+  }
+
+  /** Stops pending and running work of ended grants. */
   cancelForGrants(grantIds: readonly string[]): void {
     const ids = new Set(grantIds);
     for (const operation of this.context.records.listOperations()) {
-      if (ids.has(operation.grantId)) this.running.get(operation.id)?.cancel();
+      if (ids.has(operation.grantId))
+        this.cancelOperation(operation, "The grant ended before dispatch.");
+    }
+  }
+
+  /** Another backend can revoke a grant or cancel its reservation in the shared database. */
+  reconcileRunning(): void {
+    for (const [id, entry] of this.running) {
+      const operation = this.context.records.getOperation(id);
+      const grant = operation && this.context.records.getGrant(operation.grantId);
+      if (
+        !grant ||
+        grantUnusableReason(this.context, grant, true) ||
+        operation?.state === "cancelled_before_start"
+      )
+        entry.cancel();
     }
   }
 
   cancelEnvironment(environmentId: string): void {
     for (const operation of this.context.records.listOperations(environmentId)) {
-      this.running.get(operation.id)?.cancel();
+      this.cancelOperation(operation, "The environment ended before dispatch.");
     }
   }
 
@@ -716,6 +901,7 @@ export class CredentialOperations {
       for (const operation of rows.operations()) {
         if (operation.internal.bootId === this.context.bootId) continue;
         if (operation.state === "reserved") {
+          refundUse(rows, operation.grantId);
           rows.putOperation({
             ...operation,
             state: "cancelled_before_start",
@@ -723,6 +909,10 @@ export class CredentialOperations {
             error: "Orkestrator restarted before it started.",
           });
           environments.add(operation.environmentId);
+          reconciled.push(operation.id);
+          if (operation.internal.containerId) {
+            containerRuns.push({ id: operation.id, containerId: operation.internal.containerId });
+          }
         } else if (operation.state === "running") {
           rows.putOperation({
             ...operation,
@@ -763,7 +953,14 @@ export class CredentialOperations {
 
   /** Shutdown: running commands are killed at once, not after a grace period. */
   stop(): void {
+    if (this.stopped) return;
+    this.stopped = true;
     for (const entry of this.running.values()) entry.cancel({ hard: true });
+    for (const operation of this.context.records.listOperations()) {
+      if (operation.state === "reserved" && operation.internal.bootId === this.context.bootId) {
+        this.cancelBeforeStart(operation, "The credential service stopped before dispatch.");
+      }
+    }
   }
 
   overview(limit = 50): CredentialOperationRecord[] {

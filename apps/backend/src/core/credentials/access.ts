@@ -1,8 +1,8 @@
+import { assertCredentialPolicy } from "./policy.js";
 import { randomUUID } from "node:crypto";
 import {
   CREDENTIAL_HTTP_METHODS,
   CREDENTIAL_LIMITS,
-  CREDENTIAL_READ_ONLY_HTTP_METHODS,
   CREDENTIAL_TIMING,
   CredentialError,
   clampCredentialGrantLifetime,
@@ -154,6 +154,7 @@ function methods(value: unknown): CredentialHttpMethod[] | undefined {
 export function grantUnusableReason(
   context: CredentialContext,
   grant: StoredGrant,
+  reserved = false,
 ): CredentialError | null {
   if (grant.state === "revoked")
     return new CredentialError("ACCESS_REVOKED", "This grant was revoked.");
@@ -166,7 +167,7 @@ export function grantUnusableReason(
   if (now >= grant.expiresAt || (sameBoot && elapsed >= grant.internal.lifetimeMs)) {
     return new CredentialError("ACCESS_EXPIRED", "This grant has expired. Request access again.");
   }
-  if (grant.maxUses !== null && grant.uses >= grant.maxUses) {
+  if (!reserved && grant.maxUses !== null && grant.uses >= grant.maxUses) {
     return new CredentialError("USE_LIMIT", "This grant has no uses left. Request access again.");
   }
   if (grant.source.kind === "temporary" && !sameBoot) {
@@ -210,6 +211,8 @@ export class CredentialAccess {
     caller: CredentialCaller,
     input: CredentialRequestInput,
   ): Promise<CredentialRequestRecord> {
+    if (this.context.isStopped)
+      throw new CredentialError("POLICY_DENIED", "The credential service is stopping.");
     const label = text(input.label, CREDENTIAL_LIMITS.labelMaxChars, "label");
     const purpose = text(input.purpose, CREDENTIAL_LIMITS.purposeMaxChars, "purpose");
     if (input.use !== "command" && input.use !== "http") {
@@ -217,18 +220,16 @@ export class CredentialAccess {
     }
     const use: CredentialUse = input.use;
     const { session, runtime } = await this.bindingContext(caller);
-    const readOnly =
-      runtime.runtime.kind === "coordinator" || session?.policy?.id === "coordinator-read-only";
+    if (!session?.providerSessionId) {
+      throw new CredentialError(
+        "UNSUPPORTED_RUNTIME",
+        "The tab has no conversation to bind a credential to.",
+      );
+    }
     let requestBinding: CredentialBinding | undefined;
     let command: string | undefined;
     let http: CredentialHttpPolicy | undefined;
     if (use === "command") {
-      if (readOnly) {
-        throw new CredentialError(
-          "UNSUPPORTED_RUNTIME",
-          "A read-only session cannot run commands with credentials; ask for use http with GET.",
-        );
-      }
       requestBinding = binding(input.bindingKind, input.bindingName);
       if (input.command !== undefined) {
         if (typeof input.command !== "string" || !input.command.trim()) {
@@ -239,46 +240,23 @@ export class CredentialAccess {
         }
         command = input.command;
       }
-      const policy = session?.policy ?? null;
-      if (policy && (policy.approvals === "deny" || deniesShell(policy))) {
-        throw new CredentialError(
-          "POLICY_DENIED",
-          "This session's execution policy does not allow running commands.",
-        );
-      }
-      if (policy?.approvals === "ask" && !command) {
-        throw new CredentialError(
-          "POLICY_DENIED",
-          "This session asks before running commands, so a command credential request must name the exact command.",
-        );
-      }
+      assertCredentialPolicy(use, session, runtime, command);
     } else {
+      assertCredentialPolicy(use, session, runtime);
       const requested = methods(input.methods);
       http = {
         auth: httpAuth(input.authScheme, input.authHeader, input.authUsername),
         hosts: hosts(input.hosts),
-        ...(readOnly
-          ? {
-              methods: (requested ?? [...CREDENTIAL_READ_ONLY_HTTP_METHODS]).filter((method) =>
-                CREDENTIAL_READ_ONLY_HTTP_METHODS.includes(method),
-              ),
-            }
-          : requested
-            ? { methods: requested }
-            : {}),
+        ...(requested ? { methods: requested } : {}),
       };
-      if (http.methods && http.methods.length === 0) {
-        throw new CredentialError(
-          "POLICY_DENIED",
-          "A read-only session may only use GET and HEAD.",
-        );
-      }
     }
     const suggested =
       typeof input.suggestedConnection === "string"
         ? sanitizeCredentialText(input.suggestedConnection, CREDENTIAL_LIMITS.nameMaxChars)
         : "";
     const now = this.context.now();
+    if (this.context.isStopped)
+      throw new CredentialError("POLICY_DENIED", "The credential service is stopping.");
     const record: StoredRequest = {
       id: randomUUID(),
       revision: 1,
@@ -296,10 +274,9 @@ export class CredentialAccess {
       createdAt: now,
       expiresAt: now + CREDENTIAL_TIMING.requestWaitMs,
       internal: {
-        agent: session?.agent ?? null,
-        logicalSessionKey:
-          session?.logicalSessionKey ?? `env-${caller.environmentId}:${caller.tabId}`,
-        providerSessionId: session?.providerSessionId ?? null,
+        agent: session.agent,
+        logicalSessionKey: session.logicalSessionKey,
+        providerSessionId: session.providerSessionId,
         runtimeIdentity: runtime.identity,
       },
     };
@@ -398,9 +375,11 @@ export class CredentialAccess {
       );
     }
 
+    assertCredentialPolicy(request.use, session, runtime, request.command);
+
     let http: CredentialHttpPolicy | undefined;
     if (request.use === "http" && request.http) {
-      const confirmed = input.hosts === undefined ? request.http.hosts : hosts(input.hosts);
+      const confirmed = hosts(input.hosts ?? request.http.hosts);
       http = { ...request.http, hosts: confirmed };
     }
 
@@ -420,14 +399,10 @@ export class CredentialAccess {
           "That connection is not available to this project.",
         );
       }
-      if (connection.status !== "ready") {
-        throw new CredentialError(
-          "VALUE_UNAVAILABLE",
-          "That connection's value is unavailable; replace it in Settings.",
-        );
-      }
       if (http) {
-        const outside = http.hosts.filter((host) => !connection.httpHosts.includes(host));
+        const outside = http.hosts.filter(
+          (host) => !normalizeCredentialHosts(connection.httpHosts)?.includes(host),
+        );
         if (outside.length) {
           throw new CredentialError(
             "SCOPE_MISMATCH",
@@ -670,6 +645,29 @@ export class CredentialAccess {
     );
   }
 
+  conversationRetired(
+    environmentId: string,
+    tabId: string,
+    retiredProviderSessionId: string,
+  ): void {
+    for (const request of this.context.records.listRequests(environmentId)) {
+      if (
+        request.tabId === tabId &&
+        request.state === "pending" &&
+        request.internal.providerSessionId === retiredProviderSessionId
+      ) {
+        this.cancelRequest(request.id, "The tab started a new conversation.");
+      }
+    }
+    this.endGrants(
+      (grant) =>
+        grant.tabId === tabId && grant.internal.providerSessionId === retiredProviderSessionId,
+      "invalidated",
+      "The tab started a new conversation.",
+      environmentId,
+    );
+  }
+
   /** A tab closed: its pending requests are cancelled and its grants end. */
   tabClosed(environmentId: string, tabId: string): void {
     for (const request of this.context.records.listRequests(environmentId)) {
@@ -693,16 +691,6 @@ export class CredentialAccess {
     }
   }
 }
-
-function deniesShell(policy: NonNullable<CredentialSessionInfo["policy"]>): boolean {
-  const denied = new Set<string>([
-    ...(policy.capabilityPolicy?.deny ?? []),
-    ...(policy.capabilityPolicy?.extendedDeny ?? []),
-  ]);
-  return denied.has("shell") || denied.has("shell.mutate");
-}
-
-export { deniesShell };
 
 function parseMaxUses(value: unknown): number | null {
   if (value === undefined || value === null) return null;

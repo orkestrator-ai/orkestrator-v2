@@ -1,11 +1,19 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type {
   CredentialConnection,
   CredentialRequestRecord,
   CredentialTabSnapshot,
 } from "@orkestrator/protocol/agent-credentials";
-import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { useCredentialSnapshot } from "@/hooks/useCredentialSnapshot";
+import { dispatchResourceChange } from "@/lib/resource-sync";
+import { portalStore } from "@/lib/portal/portal-store";
+import {
+  cleanupNodeScopes,
+  FakeNodeClient,
+  renderInNodeScope,
+  renderInAppCommandScope,
+} from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 
 const approveCredentialRequest = mock(async (_choice: unknown, _machine?: unknown) => ({
@@ -26,6 +34,7 @@ const { CredentialRequestCard, pendingCredentialRequests } =
   await import("./CredentialRequestCard");
 
 afterEach(() => {
+  cleanupNodeScopes();
   cleanup();
   approveCredentialRequest.mockReset();
   declineCredentialRequest.mockReset();
@@ -183,4 +192,64 @@ describe("CredentialRequestCard", () => {
     expect(pendingCredentialRequests(snapshot, now).map((each) => each.id)).toEqual(["a"]);
     expect(pendingCredentialRequests(null)).toEqual([]);
   });
+});
+
+test("a refreshed remote snapshot clears a removed choice and routes the next approval to that node", async () => {
+  const pending = request({ suggestedConnection: "Existing" });
+  const existing = connection({ id: "existing", name: "Existing" });
+  const removed = connection({ id: "chosen", name: "Chosen" });
+  let snapshot: CredentialTabSnapshot = {
+    requests: [pending],
+    connections: [existing, removed],
+    grants: [],
+    vault: VAULT,
+  };
+  const client = new FakeNodeClient({ invoke: { get_credential_snapshot: () => snapshot } });
+  const invokeOnNode = spyOn(portalStore, "invokeOnNode").mockResolvedValue({
+    request: pending,
+    grant: {},
+  });
+  function RemoteCard() {
+    const { snapshot } = useCredentialSnapshot(pending.environmentId, pending.tabId);
+    return snapshot ? (
+      <CredentialRequestCard
+        request={pending}
+        connections={snapshot.connections}
+        vault={snapshot.vault}
+      />
+    ) : null;
+  }
+  try {
+    const { scope } = renderInNodeScope(<RemoteCard />, { client, role: "leaf" });
+    const select = (await screen.findByRole("combobox", {
+      name: "Saved credential to use",
+    })) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: removed.id } });
+    expect(select.value).toBe(removed.id);
+    snapshot = { ...snapshot, connections: [existing] };
+    dispatchResourceChange({ resource: "credential", id: "connections", revision: 1 }, scope);
+    const allow = screen.getByRole("button", { name: "Allow" }) as HTMLButtonElement;
+    await waitFor(() => expect(allow.disabled).toBe(true));
+    expect(select.value).toBe("");
+    snapshot = { ...snapshot, connections: [existing, removed] };
+    dispatchResourceChange({ resource: "credential", id: "connections", revision: 2 }, scope);
+    await waitFor(() => expect(select.options.length).toBe(3));
+    expect(allow.disabled).toBe(true);
+    fireEvent.change(select, { target: { value: existing.id } });
+    fireEvent.click(allow);
+    await waitFor(() => expect(invokeOnNode).toHaveBeenCalledTimes(1));
+    expect(invokeOnNode).toHaveBeenCalledWith(
+      client.nodeId,
+      "approve_credential_request",
+      expect.objectContaining({
+        requestId: pending.id,
+        source: { kind: "connection", connectionId: existing.id },
+      }),
+    );
+    expect(client.calls("get_credential_snapshot")).toHaveLength(3);
+    expect(client.calls("approve_credential_request")).toHaveLength(0);
+    expect(approveCredentialRequest).toHaveBeenCalledTimes(0);
+  } finally {
+    invokeOnNode.mockRestore();
+  }
 });

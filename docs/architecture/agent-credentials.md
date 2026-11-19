@@ -52,9 +52,10 @@ sequenceDiagram
 
 ## Model
 
-Four records, all metadata, in four database stores (`credential-connections`,
+Four user-facing records, all metadata, in four database stores (`credential-connections`,
 and `credential-requests`, `credential-grants`, `credential-operations`, each
-owned by its environment). Values are never in the database.
+owned by its environment). A separate `credential-vault-cleanup` store tracks
+retired vault entries awaiting removal. Values are never in the database.
 
 - **Connection** (a saved credential): name, description, the projects that
   may ask for it (`null` = every project on this machine), the hosts a trusted
@@ -78,8 +79,10 @@ owned by its environment). Values are never in the database.
   summary (the command's first line, or `METHOD host/path`). Output is kept in
   memory only (the last 128 operations), never in the database or a log.
 
-Each environment keeps at most 400 records per store; the oldest *settled*
-ones go first. Open records are never pruned.
+An environment's operation history holds up to 400 rows. The oldest settled
+rows go first, except keyed operations whose grants are active. If all rows are
+open or protect active grants' idempotency keys, new operations wait for
+capacity. Open requests and grants also stay in their stores until settled.
 
 ## Authorization at every use
 
@@ -105,8 +108,10 @@ same checks, in `CredentialOperations.authorize`:
 6. One transaction rechecks the grant, applies the idempotency key and the
    per-tab bound (four open operations), counts the use and records the
    operation. Concurrent calls cannot exceed the use limit.
-7. The value is read only now, after admission. The grant is checked once more
-   right before the process starts.
+7. The value is read after admission. Dispatch rechecks both expiry clocks,
+   the current conversation, the runtime and the policy. It atomically claims
+   the reservation before spawning or sending. Cancellation, shutdown or a
+   scope change during preparation can end a reservation and refund its use.
 
 An ambiguous outcome is never retried automatically: a timeout or a lost
 connection after sending is `outcome_unknown`. A use that ended before
@@ -120,10 +125,14 @@ A credential grant never widens what the session may already do:
 
 | Session | `command` use | `http` use |
 | --- | --- | --- |
-| Interactive, `approvals: auto-approve` | Any command in the tab's workspace, or one exact command | Any method allowed by the grant |
+| Interactive, `approvals: auto-approve` | Any command in the tab's workspace, or one exact command, subject to the rows below | Any method allowed by the grant and network policy |
 | Interactive, `approvals: ask` | Only an exact command the person approved on the card | As above |
-| `approvals: deny`, or `shell`/`shell.mutate` denied | Refused | As above |
-| Coordinator (read-only) | Refused | `GET` and `HEAD` only |
+| `approvals: deny`, or shell denied by capability or tool policy | Refused | As above |
+| Provider sandbox | Refused because the runner cannot apply the provider sandbox | Refused if networking is restricted |
+| Restricted network in a worktree | Refused | Refused |
+| Restricted network enforced by the container firewall | Runs inside the firewall under the command rules above | Refused |
+| Network capability denied | Refused | Refused |
+| Coordinator (read-only) | Refused | Refused under the coordinator's network policy |
 
 ## Running a command
 
@@ -145,7 +154,9 @@ isolation variables, or in the container as `node` in `/workspace`.
   (10 minutes by default, 60 at most) or is cancelled, the whole group is
   ended, so a background descendant does not keep the value. A container run
   is tagged with `ORKESTRATOR_CREDENTIAL_RUN` and ended by process group and
-  tag inside the container. A worktree run's private files live under
+  tag inside the container. Startup and cleanup acquire the same per-run lock.
+  Cleanup closes admission before it checks for processes, so a queued Docker
+  exec that arrives after cancellation cannot start the command. A worktree run's private files live under
   `<data dir>/credentials/runs/<operation>/` and are removed afterwards.
 - A tool call waits up to 45 seconds (110 at most) and then answers `running`
   with the operation id; `get_credential_operation` collects the result, so a
@@ -158,11 +169,14 @@ enters agent-controlled execution. The grant (approved by the person, and for
 a saved credential bounded by its configured hosts) fixes the hosts and how
 the credential is presented: bearer token, a named header, or basic auth. The
 request must be `https` to one of those hosts exactly (port included), with no
-user info. The agent may not set `Authorization`, `Cookie`, `Host`, hop-by-hop
+user info. The default HTTPS port and numeric port spelling are canonicalized.
+The backend checks every address returned by DNS and connects directly to a
+validated public address. TLS and HTTP still use the approved hostname.
+The agent may not set `Authorization`, `Cookie`, `Host`, hop-by-hop
 headers or the credential's own header. Redirects are returned, not followed,
 so a credential never reaches a host nobody approved. The answer carries the
 status, a short list of safe headers (no `set-cookie`) and up to 128 KiB of
-body, all filtered.
+body, all filtered. A truncated body drops the suffix still held by the filter.
 
 ## Output boundary
 
@@ -182,8 +196,11 @@ credential."
 
 ## Storage
 
-`vault.ts`. A saved value is written under a random entry id (never derived
-from the value), read back and compared before anything refers to it.
+`vault.ts`. A saved value is written under a random entry id, read back and compared before
+anything refers to it. Reads and deletion use the vault recorded for that
+entry, even if the backend chose a different default on restart. Replacing
+or deleting a connection ends its grants immediately. Physical removal is
+retried from a durable cleanup record until the original vault confirms it.
 
 | Backend | Where values go |
 | --- | --- |
@@ -215,7 +232,7 @@ only (`credentials/tools.ts`):
 | `run_with_credential` | Runs a command with the grant. |
 | `http_request_with_credential` | Sends one trusted HTTPS request with the grant. |
 | `get_credential_operation` | The state and filtered output of a use, waiting for it to finish. |
-| `cancel_credential_operation` | Stops a running command. |
+| `cancel_credential_operation` | Cancels a reservation or requests cancellation of a running operation. |
 
 Stable error codes (`CREDENTIAL_ERROR_CODES`) lead every refusal:
 `GRANT_NOT_FOUND`, `ACCESS_EXPIRED`, `SCOPE_MISMATCH`, `POLICY_DENIED`,
@@ -229,7 +246,7 @@ In the `config` domain (since version 2; adding commands does not bump it):
 | Command | Access | Notes |
 | --- | --- | --- |
 | `get_credential_snapshot` | workspace | One environment's or tab's requests and grants, and the connections its project may use. The card's read. |
-| `get_credential_overview` | workspace | Settings' read: connections, active grants, recent operations. |
+| `get_credential_overview` | workspace | Settings' read: connections, active grants, recent operations. Grants stay revocable while a reserved or running operation holds their last use. |
 | `approve_credential_request` | admin | Takes the value (or a connection id). `lifetimeMs`, `maxUses` and `hosts` are critical. |
 | `decline_credential_request` | admin | |
 | `revoke_credential_grant` | workspace | Only takes access away. |
@@ -314,8 +331,8 @@ Each records the choice, the alternatives considered and why.
   reference must be delivered and recovered (after a lost answer, a
   compaction, a restart) and it narrows nothing: the tab credential already
   authenticates the caller per tab, and a copied id fails every other scope.
-- **Why:** same authority, simpler recovery. A copied id is useless outside its
-  tab, conversation and runtime.
+- **Why:** same authority, simpler recovery. A copied grant id is useless outside its tab, conversation and runtime.
+  Retained operation results and replay are scoped to the originating project and conversation.
 
 ### 4. Ways to use a credential: runner and trusted HTTP; no provider-shell injection
 

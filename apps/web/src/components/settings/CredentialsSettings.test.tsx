@@ -5,6 +5,7 @@ import type {
   CredentialGrantRecord,
   CredentialOverview,
 } from "@orkestrator/protocol/agent-credentials";
+import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 
@@ -77,6 +78,7 @@ const { CredentialsSettings } = await import("./CredentialsSettings");
 
 afterEach(() => {
   cleanup();
+  resetResourceSync();
   resetOverview();
   createCredentialConnection.mockClear();
   deleteCredentialConnection.mockClear();
@@ -145,4 +147,34 @@ describe("CredentialsSettings", () => {
     const add = screen.getByRole("button", { name: /Add credential/u }) as HTMLButtonElement;
     expect(add.disabled).toBe(true);
   });
+});
+
+test("refreshes the Revoke control while the last use is still running", async () => {
+  overview = { ...overview, grants: [] };
+  const { scope } = renderInAppCommandScope(<CredentialsSettings />);
+  await screen.findByText("No agent holds a credential grant.");
+  overview = {
+    ...overview,
+    grants: [{ ...grant, uses: 1, maxUses: 1 }],
+    operations: [
+      {
+        id: "run",
+        grantId: grant.id,
+        environmentId: grant.environmentId,
+        tabId: grant.tabId,
+        kind: "command",
+        state: "running",
+        summary: "Read fixture",
+        createdAt: 2,
+        cleanup: "none",
+      },
+    ],
+  };
+  dispatchResourceChange({ resource: "credential", id: grant.environmentId, revision: 1 }, scope);
+  await screen.findByText(/used 1 of 1 time/u);
+  const revoke = screen.getByRole("button", { name: "Revoke" });
+  overview = { ...overview, grants: [] };
+  fireEvent.click(revoke);
+  await waitFor(() => expect(revokeCredentialGrant).toHaveBeenCalledTimes(1));
+  await screen.findByText("No agent holds a credential grant.");
 });

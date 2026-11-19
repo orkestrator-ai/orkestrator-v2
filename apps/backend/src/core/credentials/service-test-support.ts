@@ -26,6 +26,7 @@ export interface CredentialHarness {
   dataDir: string;
   worktree: string;
   caller: CredentialCaller;
+  host: CredentialHost;
   sessions: Map<string, CredentialSessionInfo | null>;
   runtimes: Map<string, CredentialRuntimeInfo | null>;
   clock: { now: number; monotonic: number };
@@ -113,6 +114,7 @@ export async function createCredentialHarness(
       now: () => clock.now,
       monotonic: () => clock.monotonic,
       sweepIntervalMs: 0,
+      resolveHttpAddress: async () => [{ address: "1.1.1.1" }],
       ...options,
       ...overrides,
     });
@@ -127,6 +129,7 @@ export async function createCredentialHarness(
     dataDir,
     worktree,
     caller,
+    host,
     sessions,
     runtimes,
     clock,

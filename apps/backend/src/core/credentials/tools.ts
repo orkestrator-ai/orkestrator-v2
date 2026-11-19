@@ -283,10 +283,12 @@ export function registerCredentialTools(
     "cancel_credential_operation",
     {
       title: "Stop a credential operation",
-      description: "Stops a running run_with_credential command (its whole process group).",
+      description:
+        "Cancels a reserved operation before dispatch, or requests cancellation of a running command or HTTPS request.",
       inputSchema: toolInput(Schema.Struct({ operationId: str({ min: 1, max: 100 }) })),
       annotations: { readOnlyHint: false, idempotentHint: true, ...NO_HINTS },
     },
-    async ({ operationId }) => result(operationView(host.cancelOperation(caller, operationId))),
+    async ({ operationId }) =>
+      result(operationView(await host.cancelOperation(caller, operationId))),
   );
 }

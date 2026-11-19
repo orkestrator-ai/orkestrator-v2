@@ -1,4 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
+import { EventEmitter } from "node:events";
+import { startCredentialRun } from "./runner.js";
 import type { CredentialCaller } from "./access.js";
 import {
   createCredentialHarness,
@@ -166,5 +171,199 @@ describe("real command runs", () => {
       waitMs: 20_000,
     });
     expect(result.stdout?.text).toBe("present\n");
+  });
+});
+
+async function waitForCommand(h: CredentialHarness, grantId: string) {
+  const started = await h.service.runCommand(h.caller, {
+    grantId,
+    command: "printf ready > ready; exec sleep 30",
+    waitMs: 0,
+  });
+  const ready = Bun.file(`${h.worktree}/ready`);
+  for (let attempt = 0; attempt < 100 && !(await ready.exists()); attempt++) await Bun.sleep(10);
+  expect(await ready.exists()).toBe(true);
+  return started;
+}
+
+describe("credential cancellation while a real command runs", () => {
+  test("the cancellation API stops the command", async () => {
+    const h = await harness();
+    const grant = await grantCommand(h);
+    const run = await waitForCommand(h, grant.id);
+    await h.service.cancelOperation(h.caller, run.id);
+    const done = await h.service.getOperation(h.caller, run.id, 4_000);
+    expect(done).toMatchObject({
+      state: "outcome_unknown",
+      error: "Cancelled.",
+      cleanup: "confirmed",
+    });
+  });
+
+  test("retiring a conversation cancels its running grant without another tool call", async () => {
+    const h = await harness();
+    const grant = await grantCommand(h);
+    const run = await waitForCommand(h, grant.id);
+    const key = "env-1\0tab-1";
+    const oldSession = h.sessions.get(key)!;
+    h.sessions.set(key, { ...oldSession, providerSessionId: "replacement" });
+    h.service.conversationRetired(
+      h.caller.environmentId,
+      oldSession.logicalSessionKey,
+      oldSession.providerSessionId!,
+    );
+    expect(h.service.overview().grants).toEqual([]);
+    const records = h.storage.credentialRecordStore();
+    for (
+      let attempt = 0;
+      attempt < 100 && records.getOperation(run.id)?.state === "running";
+      attempt++
+    )
+      await Bun.sleep(10);
+    expect(records.getOperation(run.id)).toMatchObject({
+      state: "outcome_unknown",
+      error: "Cancelled.",
+    });
+    await expect(h.service.getOperation(h.caller, run.id, 0)).rejects.toThrow("SCOPE_MISMATCH");
+  });
+
+  test("an in-flight one-use grant remains in Settings and a second backend can revoke it", async () => {
+    const h = await harness();
+    const connection = await h.service.createConnection({ name: "Revocable", value: TEST_SECRET });
+    const request = await h.service.requestAccess(h.caller, {
+      label: "Revocable",
+      purpose: "Read fixture",
+      use: "command",
+      bindingName: "TOKEN",
+    });
+    const { grant } = await h.service.approve({
+      requestId: request.id,
+      revision: request.revision,
+      maxUses: 1,
+      source: { kind: "connection", connectionId: connection.id },
+    });
+    const run = await waitForCommand(h, grant.id);
+    expect(h.service.listCallerGrants(h.caller)).toEqual([]);
+    const other = h.restart();
+    expect(other.overview().grants).toMatchObject([{ id: grant.id, uses: 1, maxUses: 1 }]);
+    expect(other.revokeGrant(grant.id)?.state).toBe("revoked");
+    h.service.sweep();
+    expect(await h.service.getOperation(h.caller, run.id, 4_000)).toMatchObject({
+      state: "outcome_unknown",
+      error: "Cancelled.",
+      cleanup: "confirmed",
+    });
+  });
+});
+
+/** Opt-in. Uses a disposable, networkless container from an explicitly supplied image. */
+const image = process.env.ORKESTRATOR_TEST_DOCKER_IMAGE;
+
+describe.skipIf(!image)("credential runner in a real container", () => {
+  let containerId: string;
+  const exec = (...args: string[]) =>
+    spawnSync("docker", ["exec", "-u", "node", containerId, ...args], {
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+
+  beforeAll(() => {
+    const run = spawnSync(
+      "docker",
+      [
+        "run",
+        "--pull=never",
+        "-d",
+        "--rm",
+        "--network",
+        "none",
+        "--entrypoint",
+        "sleep",
+        image!,
+        "180",
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    expect(run.status).toBe(0);
+    containerId = run.stdout.trim();
+    expect(containerId).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  afterAll(() => {
+    if (/^[a-f0-9]{64}$/u.test(containerId)) {
+      spawnSync("docker", ["rm", "--force", containerId], { stdio: "ignore", timeout: 10_000 });
+    }
+  });
+
+  const launch = () => ({
+    target: "container" as const,
+    containerId,
+    cwd: "/tmp",
+    env: process.env,
+  });
+
+  test("confirmed cancellation closes admission before a delayed exec reaches the container", async () => {
+    const id = randomUUID();
+    const queued = Promise.withResolvers<[string, string[]]>();
+    const spawner = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
+      if (!args.includes("orkestrator-credential-run")) return spawn(command, args, options);
+      // Represent a daemon-owned exec that can start after the client disconnects.
+      const client = Object.assign(new EventEmitter(), {
+        pid: fakePid(1),
+        stdout: null,
+        stderr: null,
+        kill: () => {
+          client.emit("exit", null, "SIGKILL");
+          client.emit("close", null, "SIGKILL");
+          return true;
+        },
+      });
+      queueMicrotask(() => {
+        client.emit("spawn");
+        queued.resolve([command, args]);
+      });
+      return client;
+    }) as typeof spawn;
+    const marker = `/tmp/credential-qa-${id}`;
+    const run = startCredentialRun({
+      id,
+      launch: launch(),
+      command: `touch "${marker}"`,
+      bindings: [],
+      redaction: [],
+      timeoutMs: 10_000,
+      runRoot: "/unused",
+      spawnProcess: spawner,
+    });
+    const [command, args] = await queued.promise;
+    run.cancel();
+    expect(await run.result).toMatchObject({ cancelled: true, cleanup: "confirmed" });
+    // Release the queued exec only after the cleanup acknowledgement.
+    expect(spawnSync(command, args, { timeout: 10_000, stdio: "ignore" }).status).toBe(125);
+    expect(exec("test", "!", "-e", marker).status).toBe(0);
+    expect(exec("test", "!", "-e", `/tmp/orkestrator-credentials/${id}`).status).toBe(0);
+  });
+
+  test("cleanup stops a detached tagged descendant and removes the bound file", async () => {
+    const id = randomUUID();
+    const run = startCredentialRun({
+      id,
+      launch: launch(),
+      command:
+        'test -s "$FIXTURE_FILE" || exit 1; setsid sleep 60 </dev/null >/dev/null 2>&1 & echo "$!"',
+      bindings: [{ binding: { kind: "file", name: "FIXTURE_FILE" }, value: "synthetic fixture" }],
+      redaction: [],
+      timeoutMs: 10_000,
+      runRoot: "/unused",
+    });
+    const result = await run.result;
+    expect(result).toMatchObject({ exitCode: 0, cleanup: "confirmed" });
+    const pid = result.stdout.text.trim();
+    expect(pid).toMatch(/^\d+$/u);
+    expect(
+      exec("sh", "-c", 'test ! -e "/proc/$1/stat" || grep -q ") Z " "/proc/$1/stat"', "check", pid)
+        .status,
+    ).toBe(0);
+    expect(exec("test", "!", "-e", `/tmp/orkestrator-credentials/${id}`).status).toBe(0);
   });
 });

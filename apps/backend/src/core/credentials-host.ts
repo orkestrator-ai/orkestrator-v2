@@ -1,3 +1,4 @@
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { stat } from "node:fs/promises";
 import {
   coordinatorConversationIdFromRuntimeId,
@@ -14,7 +15,15 @@ import {
   resolveLocalShellPath,
   terminalEnv,
 } from "./commands-terminal.js";
-import type { CredentialHost, CredentialLaunch } from "./credentials/index.js";
+import type {
+  CredentialHost,
+  CredentialLaunch,
+  CredentialRuntimeInfo,
+  CredentialSessionInfo,
+} from "./credentials/index.js";
+import type { Environment, PersistedNativeAgentSession } from "./models.js";
+import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
 
 /**
@@ -40,23 +49,10 @@ export function createCredentialHost(context: CommandContext): CredentialHost {
           candidate.environmentId === environmentId &&
           candidate.logicalSessionKey === logicalSessionKey,
       );
-      if (!session) return null;
-      return {
-        agent: session.agent,
-        logicalSessionKey,
-        providerSessionId: session.providerSessionId || null,
-        policy:
-          session.policy ??
-          (session.executionPolicy === "coordinator-read-only"
-            ? {
-                id: "coordinator-read-only",
-                sandbox: "provider",
-                approvals: "deny",
-                projectResources: false,
-                networkAccess: "restricted",
-              }
-            : null),
-      };
+      const environment = session?.policy
+        ? null
+        : await context.storage.getEnvironment(environmentId);
+      return sessionInfo(session, environment);
     },
 
     async runtime(environmentId) {
@@ -73,25 +69,47 @@ export function createCredentialHost(context: CommandContext): CredentialHost {
         const project = await context.storage.getProject(workspace.projectId);
         return {
           runtime: { kind: "coordinator", isolation: "read-only" },
+          networkAccess: "restricted",
           identity: `coordinator:${project?.localPath ?? workspace.projectId}`,
         };
       }
-      const environment = await context.storage.getEnvironment(environmentId);
-      if (!environment || environment.deletionRequestedAt) return null;
-      if (environment.environmentType === "local") {
-        return environment.worktreePath
-          ? {
-              runtime: { kind: "worktree", isolation: "trusted-local" },
-              identity: `worktree:${environment.worktreePath}`,
-            }
-          : null;
+      return runtimeInfo(await context.storage.getEnvironment(environmentId));
+    },
+
+    dispatchBinding(environmentId, tabId, agent) {
+      context.runtime.environments.assertNotDeleting(environmentId);
+      context.runtime.environments.fence.assertAcceptsAgentWork(environmentId);
+      const environment = context.storage.readEnvironmentRow(environmentId);
+      const session = isAgentPlatform(agent)
+        ? context.storage.peekNativeAgentSession(
+            nativeAgentSessionStorageKey(environmentId, agent, `env-${environmentId}:${tabId}`),
+          )
+        : undefined;
+      if (environment?.tabTeardownIntents?.[tabId]) return { session: null, runtime: null };
+      return { session: sessionInfo(session, environment), runtime: runtimeInfo(environment) };
+    },
+
+    async beginUse(environmentId, tabId) {
+      const release = context.runtime.environments.fence.beginAgentWork(environmentId);
+      try {
+        const environment = await context.storage.getEnvironment(environmentId);
+        context.runtime.environments.assertNotDeleting(environmentId);
+        context.runtime.environments.fence.assertAcceptsAgentWork(environmentId);
+        if (
+          !environment ||
+          environment.deletionRequestedAt ||
+          environment.tabTeardownIntents?.[tabId] ||
+          environment.worktreeMove ||
+          environment.lifecycleOperation ||
+          environment.status === "stopping"
+        ) {
+          throw new CredentialLaunchError("The environment or tab is changing.");
+        }
+        return release;
+      } catch (error) {
+        release();
+        throw error;
       }
-      return environment.containerId
-        ? {
-            runtime: { kind: "container", isolation: "shared-container" },
-            identity: `container:${environment.containerId}`,
-          }
-        : null;
     },
 
     async launch(environmentId, tabId) {
@@ -160,4 +178,55 @@ export function createCredentialHost(context: CommandContext): CredentialHost {
       }
     },
   };
+}
+
+function sessionInfo(
+  session: PersistedNativeAgentSession | undefined,
+  environment: Environment | null,
+): CredentialSessionInfo | null {
+  if (!session) return null;
+  return {
+    agent: session.agent,
+    logicalSessionKey: session.logicalSessionKey,
+    providerSessionId: session.providerSessionId || null,
+    policy:
+      session.policy ??
+      (session.executionPolicy === "coordinator-read-only"
+        ? {
+            id: "coordinator-read-only",
+            sandbox: "provider",
+            approvals: "deny",
+            projectResources: false,
+            networkAccess: "restricted",
+          }
+        : environment
+          ? resolveEnvironmentExecutionPolicy(environment, session.origin)
+          : null),
+  };
+}
+
+function runtimeInfo(environment: Environment | null): CredentialRuntimeInfo | null {
+  if (
+    !environment ||
+    environment.deletionRequestedAt ||
+    environment.worktreeMove ||
+    environment.lifecycleOperation ||
+    environment.status === "stopping"
+  )
+    return null;
+  if (environment.environmentType === "local") {
+    return environment.worktreePath
+      ? {
+          runtime: { kind: "worktree", isolation: "trusted-local" },
+          identity: `worktree:${environment.worktreePath}`,
+        }
+      : null;
+  }
+  return environment.containerId && environment.status === "running"
+    ? {
+        runtime: { kind: "container", isolation: "shared-container" },
+        networkAccess: environment.networkAccessMode,
+        identity: `container:${environment.containerId}`,
+      }
+    : null;
 }

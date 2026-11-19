@@ -5,6 +5,7 @@ import {
   CREDENTIAL_LIMITS,
   CREDENTIAL_TIMING,
   credentialValueProblem,
+  normalizeCredentialHosts,
   type CredentialConnection,
   type CredentialRequestRecord,
   type CredentialTabSnapshot,
@@ -49,7 +50,9 @@ function errorMessage(error: unknown): string {
 }
 
 function hostsCovered(connection: CredentialConnection, hosts: readonly string[]): boolean {
-  return hosts.every((host) => connection.httpHosts.includes(host));
+  const allowed = normalizeCredentialHosts(connection.httpHosts);
+  const requested = normalizeCredentialHosts(hosts);
+  return Boolean(allowed && requested?.every((host) => allowed.includes(host)));
 }
 
 export interface CredentialRequestCardProps {
@@ -89,12 +92,12 @@ export function CredentialRequestCard({
   const [chosenConnectionId, setConnectionId] = useState<string>(
     suggested?.id ?? usable[0]?.id ?? "",
   );
-  // The connection list is re-read on every change: a choice that is no
-  // longer offered falls back to the first one offered (or to a value).
   const connectionId = usable.some((each) => each.id === chosenConnectionId)
     ? chosenConnectionId
-    : (suggested?.id ?? usable[0]?.id ?? "");
-  const mode = usable.length === 0 ? "value" : chosenMode;
+    : "";
+  if (chosenConnectionId && !connectionId) setConnectionId("");
+  const mode = chosenMode;
+  const showSavedChoice = usable.length > 0 || mode === "connection";
   const [value, setValue] = useState("");
   const [save, setSave] = useState(false);
   const [saveName, setSaveName] = useState(request.suggestedConnection ?? request.label);
@@ -238,30 +241,37 @@ export function CredentialRequestCard({
 
         <fieldset className="space-y-2" disabled={busy}>
           <legend className="sr-only">Credential to use</legend>
-          {usable.length > 0 ? (
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name={`credential-source-${request.id}`}
-                checked={mode === "connection"}
-                onChange={() => setMode("connection")}
-              />
-              <span>Saved credential</span>
+          {showSavedChoice ? (
+            <div className="flex items-center gap-2">
+              <label className="flex shrink-0 items-center gap-2">
+                <input
+                  type="radio"
+                  name={`credential-source-${request.id}`}
+                  checked={mode === "connection"}
+                  onChange={() => setMode("connection")}
+                />
+                <span>Saved credential</span>
+              </label>
               <NativeSelect
                 size="sm"
-                aria-label="Saved credential"
+                aria-label="Saved credential to use"
                 wrapperClassName="min-w-0 flex-1"
                 value={connectionId}
-                disabled={mode !== "connection"}
+                disabled={mode !== "connection" || usable.length === 0}
                 onChange={(event) => setConnectionId(event.target.value)}
               >
+                {!connectionId ? (
+                  <option value="" disabled>
+                    Choose a saved credential
+                  </option>
+                ) : null}
                 {usable.map((connection) => (
                   <option key={connection.id} value={connection.id}>
                     {connection.name}
                   </option>
                 ))}
               </NativeSelect>
-            </label>
+            </div>
           ) : null}
           {missingHostConnections ? (
             <p className="text-muted-foreground">
@@ -270,7 +280,7 @@ export function CredentialRequestCard({
             </p>
           ) : null}
           <label className="flex items-center gap-2">
-            {usable.length > 0 ? (
+            {showSavedChoice ? (
               <input
                 type="radio"
                 name={`credential-source-${request.id}`}

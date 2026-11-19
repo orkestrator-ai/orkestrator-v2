@@ -93,12 +93,12 @@ export class FileCredentialVault implements CredentialVault {
     const temporary = path.join(this.directory, `.${entryId}.${randomUUID()}.tmp`);
     const handle = await fs.open(temporary, "wx", 0o600);
     try {
-      await handle.writeFile(value, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    try {
+      try {
+        await handle.writeFile(value, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
       await fs.rename(temporary, target);
     } catch (error) {
       await fs.rm(temporary, { force: true });
@@ -130,7 +130,12 @@ export class FileCredentialVault implements CredentialVault {
     await fs.chmod(this.directory, 0o700);
     for (const entry of await fs.readdir(this.directory).catch(() => [] as string[])) {
       if (entry.startsWith(".") && entry.endsWith(".tmp")) {
-        await fs.rm(path.join(this.directory, entry), { force: true }).catch(() => undefined);
+        const candidate = path.join(this.directory, entry);
+        const stat = await fs.lstat(candidate).catch(() => null);
+        // A second backend may be preparing the same vault while a write is live.
+        if (stat && Date.now() - stat.mtimeMs > 60 * 60_000) {
+          await fs.rm(candidate, { force: true }).catch(() => undefined);
+        }
       }
     }
   }
@@ -196,7 +201,13 @@ export class KeychainCredentialVault implements CredentialVault {
 
   async delete(entryId: string): Promise<void> {
     assertEntryId(entryId);
-    await withTimeout(this.secrets.delete({ service: this.service, name: entryId }), "delete");
+    const deleted = await withTimeout(
+      this.secrets.delete({ service: this.service, name: entryId }),
+      "delete",
+    );
+    if (!deleted && (await this.get(entryId)) !== null) {
+      throw new CredentialVaultError("The keychain did not remove the credential.");
+    }
   }
 
   /** Writes, reads back and removes a probe entry; false when the keychain cannot be used. */
@@ -237,9 +248,11 @@ export async function openCredentialVault(options: {
   dataDir: string;
   preference: CredentialVaultPreference;
   secrets?: BunSecrets | null;
-}): Promise<{ vault: CredentialVault; status: CredentialVaultStatus }> {
-  const fileVault = () =>
-    new FileCredentialVault(path.join(options.dataDir, "credentials", "vault"));
+}): Promise<{
+  vault: CredentialVault;
+  status: CredentialVaultStatus;
+  vaults?: Partial<Record<CredentialVaultKind, CredentialVault>>;
+}> {
   if (options.preference === "memory") {
     return {
       vault: new MemoryCredentialVault(),
@@ -250,38 +263,40 @@ export async function openCredentialVault(options: {
       },
     };
   }
+  const file = new FileCredentialVault(path.join(options.dataDir, "credentials", "vault"));
+  const secrets = options.secrets === undefined ? bunSecrets() : options.secrets;
+  const keychain = secrets ? new KeychainCredentialVault(options.dataDir, secrets) : undefined;
+  const vaults = { file, ...(keychain ? { keychain } : {}) };
   const fileStatus = (detail: string): CredentialVaultStatus => ({
     durable: "file",
     canSave: true,
     detail,
   });
   if (options.preference === "file") {
-    const vault = fileVault();
-    await vault.prepare();
+    await file.prepare();
     return {
-      vault,
+      vault: file,
+      vaults,
       status: fileStatus(
         "Saved values are kept in owner-only files in this machine's data directory. They are not encrypted.",
       ),
     };
   }
-  const secrets = options.secrets === undefined ? bunSecrets() : options.secrets;
-  if (secrets) {
-    const keychain = new KeychainCredentialVault(options.dataDir, secrets);
-    if (await keychain.probe()) {
-      return {
-        vault: keychain,
-        status: {
-          durable: "keychain",
-          canSave: true,
-          detail: "Saved values are kept in this machine's system keychain.",
-        },
-      };
-    }
+  if (keychain && (await keychain.probe())) {
+    return {
+      vault: keychain,
+      vaults,
+      status: {
+        durable: "keychain",
+        canSave: true,
+        detail: "Saved values are kept in this machine's system keychain.",
+      },
+    };
   }
   if (options.preference === "keychain") {
     return {
       vault: new MemoryCredentialVault(),
+      vaults,
       status: {
         durable: "memory",
         canSave: false,
@@ -290,10 +305,10 @@ export async function openCredentialVault(options: {
       },
     };
   }
-  const vault = fileVault();
-  await vault.prepare();
+  await file.prepare();
   return {
-    vault,
+    vault: file,
+    vaults,
     status: fileStatus(
       "No system keychain is available, so saved values are kept in owner-only files in this machine's data directory. They are not encrypted.",
     ),

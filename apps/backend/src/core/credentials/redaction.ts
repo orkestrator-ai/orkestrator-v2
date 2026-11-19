@@ -118,9 +118,13 @@ export class StreamingRedactor {
 }
 
 /** Filters a whole text at once, then applies the shape-based detector. */
-export function redactCredentialText(text: string, values: readonly RedactionValue[]): string {
+export function redactCredentialText(
+  text: string,
+  values: readonly RedactionValue[],
+  complete = true,
+): string {
   const redactor = new StreamingRedactor(values);
-  return redactSecrets(redactor.push(text) + redactor.flush());
+  return redactSecrets(redactor.push(text) + (complete ? redactor.flush() : ""));
 }
 
 /**

@@ -1,12 +1,20 @@
+import { validateHeaderName, validateHeaderValue } from "node:http";
 import {
   CREDENTIAL_FORBIDDEN_HEADERS,
   CREDENTIAL_HTTP_METHODS,
   CREDENTIAL_LIMITS,
   CREDENTIAL_TIMING,
   CredentialError,
+  normalizeCredentialHost,
+  normalizeCredentialHosts,
   type CredentialHttpMethod,
   type CredentialHttpPolicy,
 } from "@orkestrator/protocol/agent-credentials";
+import {
+  sendPinnedHttps,
+  type CredentialFetch,
+  type CredentialHttpResponse,
+} from "./public-https.js";
 import { redactCredentialText, type RedactionValue } from "./redaction.js";
 
 /**
@@ -67,14 +75,13 @@ const RETURNED_HEADERS = [
 export function prepareCredentialHttpRequest(
   input: CredentialHttpInput,
   policy: CredentialHttpPolicy,
-  allowedMethods: readonly CredentialHttpMethod[],
 ): PreparedHttpRequest {
   const method = input.method.toUpperCase() as CredentialHttpMethod;
   if (!(CREDENTIAL_HTTP_METHODS as readonly string[]).includes(method)) {
     throw new CredentialError("INVALID_INPUT", `Method ${input.method} is not supported.`);
   }
   const policyMethods = policy.methods ?? CREDENTIAL_HTTP_METHODS;
-  if (!policyMethods.includes(method) || !allowedMethods.includes(method)) {
+  if (!policyMethods.includes(method)) {
     throw new CredentialError("POLICY_DENIED", `This grant does not allow ${method} requests.`);
   }
   let url: URL;
@@ -89,13 +96,14 @@ export function prepareCredentialHttpRequest(
   if (url.username || url.password) {
     throw new CredentialError("INVALID_INPUT", "The URL must not contain user information.");
   }
-  const host = url.port ? `${url.hostname.toLowerCase()}:${url.port}` : url.hostname.toLowerCase();
-  if (!policy.hosts.includes(host)) {
+  const host = normalizeCredentialHost(url.host);
+  if (!host || !normalizeCredentialHosts(policy.hosts)?.includes(host)) {
     throw new CredentialError(
       "SCOPE_MISMATCH",
-      `This grant does not allow requests to ${host}; it allows ${policy.hosts.join(", ") || "no hosts"}.`,
+      `This grant does not allow requests to ${url.host}; it allows ${policy.hosts.join(", ") || "no hosts"}.`,
     );
   }
+  url.host = host;
   url.hash = "";
   const headers: Record<string, string> = {};
   const credentialHeader =
@@ -153,6 +161,26 @@ export function credentialHeaders(
   }
 }
 
+export function materializeCredentialHeaders(
+  prepared: PreparedHttpRequest,
+  policy: CredentialHttpPolicy,
+  value: string,
+): Record<string, string> {
+  const headers = { ...prepared.headers, ...credentialHeaders(policy, value) };
+  try {
+    for (const [name, content] of Object.entries(headers)) {
+      validateHeaderName(name);
+      validateHeaderValue(name, content);
+    }
+  } catch {
+    throw new CredentialError(
+      "INVALID_INPUT",
+      "The credential cannot be represented in the approved HTTP header.",
+    );
+  }
+  return headers;
+}
+
 export type CredentialHttpOutcome =
   | { kind: "answered"; answer: CredentialHttpAnswer }
   /** The request certainly did not reach the service (DNS, refused, TLS setup). */
@@ -185,34 +213,28 @@ function failureCode(error: unknown): string {
 }
 
 async function readBounded(
-  response: Response,
+  response: CredentialHttpResponse,
   maxBytes: number,
 ): Promise<{ text: string; truncated: boolean }> {
   if (!response.body) return { text: "", truncated: false };
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const buffer = Buffer.allocUnsafe(maxBytes);
   let size = 0;
   let truncated = false;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const room = maxBytes - size;
-      if (value.byteLength > room) {
-        chunks.push(value.subarray(0, room));
-        size += room;
-        truncated = true;
-        break;
-      }
-      chunks.push(value);
-      size += value.byteLength;
+  // Breaking the iterator cancels the response stream (including a node socket).
+  for await (const value of response.body) {
+    const room = maxBytes - size;
+    const count = Math.min(room, value.byteLength);
+    buffer.set(value.subarray(0, count), size);
+    size += count;
+    if (value.byteLength > room) {
+      truncated = true;
+      break;
     }
-  } finally {
-    if (truncated) await reader.cancel().catch(() => undefined);
-    else reader.releaseLock();
   }
-  const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
-  return { text: new TextDecoder("utf-8", { fatal: false }).decode(buffer), truncated };
+  return {
+    text: new TextDecoder().decode(buffer.subarray(0, size), { stream: truncated }),
+    truncated,
+  };
 }
 
 /** Bytes beyond the body limit to read so a value at the cut is filtered whole. */
@@ -230,37 +252,40 @@ function filterMargin(redaction: readonly RedactionValue[]): number {
 /** Cuts filtered text to the body limit. */
 function boundedBody(text: string, truncated: boolean): { body: string; bodyTruncated: boolean } {
   const limit = CREDENTIAL_LIMITS.httpResponseBodyMaxBytes;
-  if (Buffer.byteLength(text, "utf8") <= limit) return { body: text, bodyTruncated: truncated };
-  let cut = text.slice(0, limit);
-  while (Buffer.byteLength(cut, "utf8") > limit) cut = cut.slice(0, -1);
-  return { body: cut, bodyTruncated: true };
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.byteLength <= limit) return { body: text, bodyTruncated: truncated };
+  return {
+    body: new TextDecoder().decode(buffer.subarray(0, limit), { stream: true }),
+    bodyTruncated: true,
+  };
 }
 
 /** Sends the request. Never throws: every failure is an outcome. */
 export async function sendCredentialHttpRequest(
   prepared: PreparedHttpRequest,
-  policy: CredentialHttpPolicy,
-  value: string,
+  materializedHeaders: Record<string, string>,
   redaction: readonly RedactionValue[],
-  options: { fetch?: typeof fetch; timeoutMs?: number; signal?: AbortSignal } = {},
+  options: { fetch?: CredentialFetch; address: string; signal: AbortSignal },
 ): Promise<CredentialHttpOutcome> {
-  const doFetch = options.fetch ?? fetch;
+  if (options.signal.aborted) {
+    return { kind: "not-sent", reason: "No authorized destination." };
+  }
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    options.timeoutMs ?? CREDENTIAL_TIMING.httpTimeoutMs,
-  );
+  const timer = setTimeout(() => controller.abort(), CREDENTIAL_TIMING.httpTimeoutMs);
   const onAbort = () => controller.abort();
-  options.signal?.addEventListener("abort", onAbort, { once: true });
-  let response: Response;
+  options.signal.addEventListener("abort", onAbort, { once: true });
+  if (options.signal.aborted) onAbort();
+  let response: CredentialHttpResponse;
   try {
-    response = await doFetch(prepared.url, {
+    const init = {
       method: prepared.method,
-      headers: { ...prepared.headers, ...credentialHeaders(policy, value) },
+      headers: materializedHeaders,
       ...(prepared.body !== undefined ? { body: prepared.body } : {}),
-      redirect: "manual",
       signal: controller.signal,
-    });
+    };
+    response = options.fetch
+      ? await options.fetch(prepared.url, { ...init, redirect: "manual" })
+      : await sendPinnedHttps(prepared.url, options.address, init);
   } catch (error) {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", onAbort);
@@ -269,16 +294,13 @@ export async function sendCredentialHttpRequest(
     return { kind: "unknown", reason: controller.signal.aborted ? "timeout" : code };
   }
   try {
-    const body =
-      prepared.method === "HEAD"
-        ? { text: "", truncated: false }
-        : await readBounded(
-            response,
-            // Read past the limit by the longest encoded form of the value, so
-            // a value cut by the limit is still whole when it is filtered;
-            // the text is cut to the limit only after filtering.
-            CREDENTIAL_LIMITS.httpResponseBodyMaxBytes + filterMargin(redaction),
-          );
+    const body = await readBounded(
+      response,
+      // Read past the limit by the longest encoded form of the value, so
+      // a value cut by the limit is still whole when it is filtered;
+      // the text is cut to the limit only after filtering.
+      CREDENTIAL_LIMITS.httpResponseBodyMaxBytes + filterMargin(redaction),
+    );
     const headers: Record<string, string> = {};
     for (const name of RETURNED_HEADERS) {
       const header = response.headers.get(name);
@@ -290,7 +312,7 @@ export async function sendCredentialHttpRequest(
         status: response.status,
         statusText: redactCredentialText(response.statusText, redaction).slice(0, 200),
         headers,
-        ...boundedBody(redactCredentialText(body.text, redaction), body.truncated),
+        ...boundedBody(redactCredentialText(body.text, redaction, !body.truncated), body.truncated),
       },
     };
   } catch {

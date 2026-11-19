@@ -229,10 +229,12 @@ export function CredentialsSettings() {
           machine,
         );
       } else if (form.mode === "replace" && form.connection) {
-        await backend.replaceCredentialConnectionValue(
+        const replaced = await backend.replaceCredentialConnectionValue(
           { id: form.connection.id, value: form.value },
           machine,
         );
+        if (replaced.cleanupPending)
+          toast.info("Removal of the previous value is pending. Orkestrator will retry.");
       }
       setForm(null);
       await reload();
@@ -304,6 +306,11 @@ export function CredentialsSettings() {
                   <div className="min-w-0 flex-[1_1_16rem] space-y-0.5">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">{connection.name}</span>
+                      {connection.cleanupPending ? (
+                        <span className="text-xs text-muted-foreground">
+                          Previous value removal pending
+                        </span>
+                      ) : null}
                       {connection.status !== "ready" ? (
                         <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
                           Value unavailable
@@ -608,9 +615,11 @@ export function CredentialsSettings() {
                 const target = confirmDelete;
                 setConfirmDelete(null);
                 if (target) {
-                  void act(target.id, "delete the credential", () =>
-                    backend.deleteCredentialConnection(target.id, machine),
-                  );
+                  void act(target.id, "delete the credential", async () => {
+                    const result = await backend.deleteCredentialConnection(target.id, machine);
+                    if (result.cleanupPending)
+                      toast.info("Access ended. Orkestrator will retry removing the saved value.");
+                  });
                 }
               }}
             >

@@ -27,7 +27,7 @@ import { publicRecord } from "./records.js";
 const log = createLogger("credentials");
 
 /** Default expiry sweep period. Every use checks expiry itself. */
-const SWEEP_INTERVAL_MS = 15_000;
+const SWEEP_INTERVAL_MS = 5_000;
 /** Settled requests a tab snapshot still shows (declined, expired, …). */
 const RECENT_SETTLED_MS = 10 * 60_000;
 
@@ -93,13 +93,18 @@ export class CredentialService {
     this.stopped = true;
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.sweepTimer = null;
-    this.operations.stop();
     this.context.wakeAll();
+    this.operations.stop();
   }
 
   sweep(): void {
+    if (this.stopped) return;
     try {
       this.access.sweep();
+      this.operations.reconcileRunning();
+      void this.connections.cleanRetiredEntries().catch((error: unknown) => {
+        log.warn("sweep.failed", { error: formatLogError(error) });
+      });
     } catch (error) {
       log.warn("sweep.failed", { error: formatLogError(error) });
     }
@@ -185,12 +190,22 @@ export class CredentialService {
   }
 
   overview(): CredentialOverview {
+    const busy = new Set(
+      this.context.records
+        .listOperations()
+        .filter((operation) => operation.state === "reserved" || operation.state === "running")
+        .map((operation) => operation.grantId),
+    );
     return {
       vault: this.context.vaultStatus,
       connections: this.connections.list(),
       grants: this.context.records
         .listGrants()
-        .filter((grant) => grantUnusableReason(this.context, grant) === null)
+        .filter((grant) => {
+          const open = busy.has(grant.id);
+          const reason = grantUnusableReason(this.context, grant, open);
+          return reason === null || (open && reason.code === "VALUE_UNAVAILABLE");
+        })
         .sort((left, right) => right.issuedAt - left.issuedAt)
         .map((grant) => publicRecord(grant)),
       operations: this.operations.overview(),
@@ -226,6 +241,21 @@ export class CredentialService {
   }
 
   // --- Lifecycle ------------------------------------------------------------------
+
+  conversationRetired(
+    environmentId: string,
+    logicalSessionKey: string,
+    providerSessionId: string,
+  ): void {
+    const prefix = `env-${environmentId}:`;
+    if (!this.stopped && logicalSessionKey.startsWith(prefix)) {
+      this.access.conversationRetired(
+        environmentId,
+        logicalSessionKey.slice(prefix.length),
+        providerSessionId,
+      );
+    }
+  }
 
   tabClosed(environmentId: string, tabId: string): void {
     this.access.tabClosed(environmentId, tabId);

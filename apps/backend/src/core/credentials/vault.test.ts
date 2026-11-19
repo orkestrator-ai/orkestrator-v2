@@ -1,7 +1,15 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { CREDENTIAL_LIMITS } from "@orkestrator/protocol/agent-credentials";
+import {
+  createCredentialHarness,
+  fakeSpawner,
+  TEST_SECRET,
+  type CredentialHarness,
+} from "./service-test-support.js";
+import type { CredentialService } from "./service.js";
 import {
   credentialVaultPreference,
   FileCredentialVault,
@@ -12,6 +20,7 @@ import {
 } from "./vault.js";
 
 const directories: string[] = [];
+const harnesses: CredentialHarness[] = [];
 
 async function tempDir(): Promise<string> {
   const directory = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-credential-vault-"));
@@ -20,6 +29,7 @@ async function tempDir(): Promise<string> {
 }
 
 afterEach(async () => {
+  for (const harness of harnesses.splice(0)) await harness.close();
   await Promise.all(
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
@@ -66,6 +76,25 @@ describe("FileCredentialVault", () => {
     await vault.put(entryId, "value-1234");
     await fs.chmod(path.join(directory, `${entryId}.secret`), 0o644);
     await expect(vault.get(entryId)).rejects.toThrow("unexpected permissions");
+  });
+
+  test("removes a private temporary file after a sync failure", async () => {
+    const directory = path.join(await tempDir(), "vault");
+    const vault = new FileCredentialVault(directory);
+    const openFile = fs.open.bind(fs);
+    const open = spyOn(fs, "open").mockImplementation(async (...args) => {
+      const file = await openFile(...args);
+      spyOn(file, "sync").mockRejectedValue(new Error("fixture sync failure"));
+      return file;
+    });
+    try {
+      await expect(vault.put(newCredentialEntryId(), TEST_SECRET)).rejects.toThrow(
+        "fixture sync failure",
+      );
+      expect(await fs.readdir(directory)).toEqual([]);
+    } finally {
+      open.mockRestore();
+    }
   });
 
   test("rejects entry ids that could name another path", async () => {
@@ -142,5 +171,133 @@ describe("credentialVaultPreference", () => {
         "agent-test",
       ),
     ).toBe("keychain");
+  });
+});
+
+async function approveSaved(h: CredentialHarness, service: CredentialService, id: string) {
+  const request = await service.requestAccess(h.caller, {
+    label: "Fixture service",
+    purpose: "Read fixture",
+    use: "command",
+    bindingName: "TOKEN",
+  });
+  const { grant } = await service.approve({
+    requestId: request.id,
+    revision: request.revision,
+    source: { kind: "connection", connectionId: id },
+  });
+  return grant;
+}
+
+describe("saved connections across vault selection", () => {
+  test("reads and deletes from each recorded vault after the default changes", async () => {
+    const spawner = fakeSpawner();
+    const h = await createCredentialHarness({ spawnProcess: spawner.spawnProcess });
+    harnesses.push(h);
+    const outage = { fail: false };
+    const secrets = fakeSecrets(outage);
+    const initial = await openCredentialVault({ dataDir: h.dataDir, preference: "auto", secrets });
+    const keychain = h.restart({
+      vault: initial.vault,
+      vaults: initial.vaults,
+      vaultStatus: initial.status,
+    });
+    const inKeychain = await keychain.createConnection({
+      name: "Keychain fixture",
+      value: TEST_SECRET,
+    });
+    const grant = await approveSaved(h, keychain, inKeychain.id);
+    outage.fail = true;
+    const fallback = await openCredentialVault({ dataDir: h.dataDir, preference: "auto", secrets });
+    const file = h.restart({
+      vault: fallback.vault,
+      vaults: fallback.vaults,
+      vaultStatus: fallback.status,
+    });
+    const inFile = await file.createConnection({ name: "File fixture", value: TEST_SECRET });
+    expect([inKeychain.storage, inFile.storage]).toEqual(["keychain", "file"]);
+    expect(await file.runCommand(h.caller, { grantId: grant.id, command: "true" })).toMatchObject({
+      state: "cancelled_before_start",
+    });
+    expect(file.overview().connections.find(({ id }) => id === inKeychain.id)?.status).toBe(
+      "ready",
+    );
+    outage.fail = false;
+    expect((await file.runCommand(h.caller, { grantId: grant.id, command: "true" })).state).toBe(
+      "succeeded",
+    );
+    expect(await file.deleteConnection(inKeychain.id)).toEqual({ deleted: true });
+    expect(secrets.items.size).toBe(0);
+
+    const reopened = await openCredentialVault({ dataDir: h.dataDir, preference: "auto", secrets });
+    const after = h.restart({
+      vault: reopened.vault,
+      vaults: reopened.vaults,
+      vaultStatus: reopened.status,
+    });
+    const fileGrant = await approveSaved(h, after, inFile.id);
+    expect(
+      (await after.runCommand(h.caller, { grantId: fileGrant.id, command: "true" })).state,
+    ).toBe("succeeded");
+    expect(await after.deleteConnection(inFile.id)).toEqual({ deleted: true });
+    expect(await fs.readdir(path.join(h.dataDir, "credentials", "vault"))).toEqual([]);
+  });
+
+  test("replacement and deletion retain and retry physical cleanup across restart", async () => {
+    const h = await createCredentialHarness();
+    harnesses.push(h);
+    const connection = await h.service.createConnection({ name: "Fixture", value: TEST_SECRET });
+    const grant = await approveSaved(h, h.service, connection.id);
+    const remove = spyOn(h.vault, "delete").mockRejectedValue(
+      new Error("fixture vault unavailable"),
+    );
+    const records = h.storage.credentialRecordStore();
+    try {
+      expect(
+        await h.service.replaceConnectionValue({ id: connection.id, value: "replacement value" }),
+      ).toMatchObject({
+        cleanupPending: true,
+        valueVersion: 2,
+      });
+      expect(records.getGrant(grant.id)?.state).toBe("invalidated");
+      expect(await h.service.deleteConnection(connection.id)).toEqual({
+        deleted: false,
+        cleanupPending: true,
+      });
+      expect(h.service.overview().connections).toEqual([]);
+      expect(records.listRetiredEntries(connection.id)).toHaveLength(2);
+      expect(h.vault.size()).toBe(2);
+    } finally {
+      remove.mockRestore();
+    }
+    const restarted = h.restart();
+    await restarted.connections.cleanRetiredEntries();
+    expect(records.listRetiredEntries(connection.id)).toEqual([]);
+    expect(h.vault.size()).toBe(0);
+    expect(await restarted.deleteConnection(connection.id)).toEqual({ deleted: false });
+  });
+
+  test("concurrent inserts cannot exceed capacity and losing writes are cleaned up", async () => {
+    const h = await createCredentialHarness();
+    harnesses.push(h);
+    for (let index = 0; index < CREDENTIAL_LIMITS.maxConnections - 1; index++) {
+      await h.service.createConnection({ name: `Fixture ${index}`, value: TEST_SECRET });
+    }
+    const both = Promise.withResolvers<void>();
+    let writes = 0;
+    const put = h.vault.put.bind(h.vault);
+    h.vault.put = async (id, value) => {
+      await put(id, value);
+      writes++;
+      if (writes === 2) both.resolve();
+      await both.promise;
+    };
+    const outcomes = await Promise.allSettled([
+      h.service.createConnection({ name: "Last 1", value: TEST_SECRET }),
+      h.service.createConnection({ name: "Last 2", value: TEST_SECRET }),
+    ]);
+    expect(outcomes.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
+    expect(h.vault.size()).toBe(CREDENTIAL_LIMITS.maxConnections);
+    expect(h.service.overview().connections).toHaveLength(CREDENTIAL_LIMITS.maxConnections);
   });
 });

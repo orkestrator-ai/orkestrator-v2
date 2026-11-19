@@ -131,7 +131,7 @@ export function createCredentialsApi(client: BackendClient) {
   function deleteCredentialConnection(
     id: string,
     machine?: AccountMachine,
-  ): Promise<{ deleted: boolean }> {
+  ): Promise<{ deleted: boolean; cleanupPending?: boolean }> {
     return on(machine).delete_credential_connection({ id });
   }
 

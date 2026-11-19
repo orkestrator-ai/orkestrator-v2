@@ -42,7 +42,6 @@ export interface CredentialHttpPolicy {
 export const CREDENTIAL_HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] as const;
 export type CredentialHttpMethod = (typeof CREDENTIAL_HTTP_METHODS)[number];
 /** Methods a read-only (coordinator) session may use. */
-export const CREDENTIAL_READ_ONLY_HTTP_METHODS: readonly CredentialHttpMethod[] = ["GET", "HEAD"];
 
 export const CREDENTIAL_LIMITS = Object.freeze({
   /** Largest value accepted, in UTF-8 bytes. */
@@ -122,6 +121,8 @@ export interface CredentialConnection {
   createdAt: number;
   updatedAt: number;
   lastUsedAt?: number;
+  /** A retired value is awaiting removal from its vault. */
+  cleanupPending?: boolean;
   /** `unavailable`: the vault no longer holds the value (locked, deleted outside Orkestrator). */
   status: "ready" | "unavailable";
 }
@@ -393,14 +394,20 @@ export function credentialHeaderNameProblem(header: string): string | null {
 
 /** A host as stored: lower case, no scheme or path. Null when it is not a host name. */
 export function normalizeCredentialHost(value: string): string | null {
-  const host = value.trim().toLowerCase().replace(/\.$/u, "");
-  if (!host || host.length > CREDENTIAL_LIMITS.hostMaxChars + 6 || !HOST.test(host)) return null;
-  // IP literals and single-label hosts reach machines on the local network,
-  // which is not what a service credential is for.
-  if (/^\d+(?:\.\d+){3}(?::\d+)?$/u.test(host) || !host.includes(".")) return null;
-  const port = host.split(":")[1];
-  if (port !== undefined && (Number(port) < 1 || Number(port) > 65_535)) return null;
-  return host;
+  const input = value
+    .trim()
+    .toLowerCase()
+    .replace(/\.(?=:|$)/u, "");
+  if (!input || input.length > CREDENTIAL_LIMITS.hostMaxChars + 6 || !HOST.test(input)) return null;
+  const [name, port] = input.split(":");
+  if (!name?.includes(".") || (port !== undefined && Number(port) < 1)) return null;
+  try {
+    const url = new URL(`https://${input}`);
+    // WHATWG URL also canonicalizes abbreviated and non-decimal IPv4 literals.
+    return /^\d+(?:\.\d+){3}$/u.test(url.hostname) ? null : url.host;
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeCredentialHosts(values: readonly string[]): string[] | null {
@@ -419,6 +426,7 @@ const encoder = new TextEncoder();
 /** Why a value cannot be stored or used, or null. Exact bytes: nothing is trimmed. */
 export function credentialValueProblem(value: unknown): string | null {
   if (typeof value !== "string") return "The value must be text.";
+  if (/[\uD800-\uDFFF]/u.test(value)) return "The value must contain well-formed Unicode.";
   if ([...value].length < CREDENTIAL_LIMITS.valueMinChars) {
     return `Values shorter than ${CREDENTIAL_LIMITS.valueMinChars} characters cannot be filtered from output.`;
   }

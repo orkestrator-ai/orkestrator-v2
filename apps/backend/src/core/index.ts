@@ -1137,6 +1137,21 @@ export class OrkestratorBackend {
         signInGuidance: (environmentId, agent) =>
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
+        onConversationRetired: (environmentId, logicalSessionKey, retiredProviderSessionId) => {
+          try {
+            this.credentials?.conversationRetired(
+              environmentId,
+              logicalSessionKey,
+              retiredProviderSessionId,
+            );
+          } catch (error) {
+            log.warn("notice.failed", {
+              step: "credential-conversation-retired",
+              environmentId,
+              error: formatLogError(error),
+            });
+          }
+        },
         // A view-only invalidation for an idle session whose content changed:
         // same channel and stamp sequence as transitions, so a client re-reads
         // that view (or every view after a gap). Deliberately nothing else
@@ -2119,18 +2134,11 @@ export class OrkestratorBackend {
     );
   }
 
-  /**
-   * Startup work only the lease holder may do: operations a previous process
-   * left unresolved are settled by exact Docker identity (an unreachable
-   * daemon leaves them for the next attempt), and leftovers are swept.
-   * `writer` is the lease to write with: a lease won late is not exposed on
-   * the context until this settles (`ReclaimingRegistryWriter`). Runs once
-   * per start (`registryWriterStartup`).
-   */
+  /** Opens the saved credential vault and starts the credential service. */
   private async startCredentials(): Promise<void> {
     if (this.credentials) return;
     const dataDir = this.context.storage.getDataDir();
-    const { vault, status } = await openCredentialVault({
+    const { vault, vaults, status } = await openCredentialVault({
       dataDir,
       preference: credentialVaultPreference(
         process.env,
@@ -2141,6 +2149,7 @@ export class OrkestratorBackend {
     const service = new CredentialService({
       records: this.context.storage.credentialRecordStore(),
       vault,
+      vaults,
       vaultStatus: status,
       host: createCredentialHost(this.context),
       runRoot: path.join(dataDir, "credentials", "runs"),
@@ -2151,6 +2160,14 @@ export class OrkestratorBackend {
     service.start();
   }
 
+  /**
+   * Startup work only the lease holder may do: operations a previous process
+   * left unresolved are settled by exact Docker identity (an unreachable
+   * daemon leaves them for the next attempt), and leftovers are swept.
+   * `writer` is the lease to write with: a lease won late is not exposed on
+   * the context until this settles (`ReclaimingRegistryWriter`). Runs once
+   * per start (`registryWriterStartup`).
+   */
   private async runWriterStartupWork(writer: RegistryWriter): Promise<void> {
     const recoveryContext = {
       storage: this.context.storage,

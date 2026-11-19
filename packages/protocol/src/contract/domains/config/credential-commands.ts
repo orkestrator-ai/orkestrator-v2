@@ -212,7 +212,10 @@ export const deleteCredentialConnectionCommand = defineCommand({
   access: "admin",
   read: false,
   args: Schema.Struct({ id: Schema.String }),
-  result: Schema.Struct({ deleted: Schema.Boolean }),
+  result: Schema.Struct({
+    deleted: Schema.Boolean,
+    cleanupPending: Schema.optionalKey(Schema.Boolean),
+  }),
   critical: [],
 });
 

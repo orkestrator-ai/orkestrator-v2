@@ -4,6 +4,7 @@ import {
   type CredentialGrantRecord,
   type CredentialOperationRecord,
   type CredentialRequestRecord,
+  type CredentialVaultKind,
 } from "@orkestrator/protocol/agent-credentials";
 import type { StorageDatabase, StoreRows } from "../storage-database.js";
 import {
@@ -11,6 +12,7 @@ import {
   CREDENTIAL_GRANTS_STORE,
   CREDENTIAL_OPERATIONS_STORE,
   CREDENTIAL_REQUESTS_STORE,
+  CREDENTIAL_VAULT_CLEANUP_STORE,
 } from "./layout.js";
 
 /**
@@ -27,6 +29,12 @@ import {
 
 export interface StoredConnection extends CredentialConnection {
   internal: { entryId: string };
+}
+
+export interface RetiredVaultEntry {
+  id: string;
+  connectionId: string;
+  storage: CredentialVaultKind;
 }
 
 export interface StoredRequest extends CredentialRequestRecord {
@@ -60,6 +68,7 @@ export interface StoredOperation extends CredentialOperationRecord {
   internal: {
     idempotencyKey: string | null;
     fingerprint: string;
+    scope?: { projectId: string; providerSessionId: string | null };
     bootId: string;
     /** A local run's private directory, removed when it ends. */
     runDirectory?: string;
@@ -70,6 +79,7 @@ export interface StoredOperation extends CredentialOperationRecord {
 }
 
 type CredentialStore =
+  | typeof CREDENTIAL_VAULT_CLEANUP_STORE
   | typeof CREDENTIAL_CONNECTIONS_STORE
   | typeof CREDENTIAL_REQUESTS_STORE
   | typeof CREDENTIAL_GRANTS_STORE
@@ -83,6 +93,8 @@ function storeRows(database: StorageDatabase, store: CredentialStore): StoreRows
   switch (store) {
     case CREDENTIAL_CONNECTIONS_STORE:
       return database.rows(CREDENTIAL_CONNECTIONS_STORE);
+    case CREDENTIAL_VAULT_CLEANUP_STORE:
+      return database.rows(CREDENTIAL_VAULT_CLEANUP_STORE);
     case CREDENTIAL_REQUESTS_STORE:
       return database.rows(CREDENTIAL_REQUESTS_STORE);
     case CREDENTIAL_GRANTS_STORE:
@@ -152,6 +164,14 @@ function parseOperation(raw: unknown): StoredOperation | null {
     return null;
   }
   return raw as unknown as StoredOperation;
+}
+
+function parseRetiredEntry(raw: unknown): RetiredVaultEntry | null {
+  return isRecord(raw) &&
+    hasStrings(raw, ["id", "connectionId"]) &&
+    (raw.storage === "keychain" || raw.storage === "file" || raw.storage === "memory")
+    ? (raw as unknown as RetiredVaultEntry)
+    : null;
 }
 
 /** The client view of a record: everything except `internal`. */
@@ -228,6 +248,10 @@ export class CredentialRecordStore {
 
   getConnection(id: string): StoredConnection | null {
     return this.get(CREDENTIAL_CONNECTIONS_STORE, id, parseConnection);
+  }
+
+  listRetiredEntries(connectionId?: string): RetiredVaultEntry[] {
+    return this.list(CREDENTIAL_VAULT_CLEANUP_STORE, parseRetiredEntry, connectionId);
   }
 
   // --- Requests ---------------------------------------------------------------
@@ -334,6 +358,24 @@ export class CredentialRows {
     return this.rows(CREDENTIAL_CONNECTIONS_STORE).delete(id);
   }
 
+  countRetiredEntries(): number {
+    return this.rows(CREDENTIAL_VAULT_CLEANUP_STORE).list().length;
+  }
+
+  retireVaultEntry(connection: StoredConnection): RetiredVaultEntry {
+    const record = {
+      id: connection.internal.entryId,
+      connectionId: connection.id,
+      storage: connection.storage,
+    };
+    this.rows(CREDENTIAL_VAULT_CLEANUP_STORE).put(record.id, JSON.stringify(record));
+    return record;
+  }
+
+  confirmVaultRemoval(entryId: string): void {
+    this.rows(CREDENTIAL_VAULT_CLEANUP_STORE).delete(entryId);
+  }
+
   request(id: string): StoredRequest | null {
     return this.read(CREDENTIAL_REQUESTS_STORE, id, parseRequest);
   }
@@ -387,10 +429,17 @@ export class CredentialRows {
       );
   }
 
+  operationCanBePruned(operation: StoredOperation): boolean {
+    return (
+      SETTLED_OPERATION.has(operation.state) &&
+      (!operation.internal.idempotencyKey || this.grant(operation.grantId)?.state !== "active")
+    );
+  }
+
   putOperation(record: StoredOperation): void {
     this.rows(CREDENTIAL_OPERATIONS_STORE).put(record.id, JSON.stringify(record));
     this.prune(CREDENTIAL_OPERATIONS_STORE, record.environmentId, parseOperation, (item) =>
-      SETTLED_OPERATION.has(item.state),
+      this.operationCanBePruned(item),
     );
   }
 

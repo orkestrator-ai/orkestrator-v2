@@ -3,8 +3,10 @@ import type { spawn } from "node:child_process";
 import type {
   CredentialRuntime,
   CredentialVaultStatus,
+  CredentialVaultKind,
 } from "@orkestrator/protocol/agent-credentials";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import type { CredentialFetch } from "./public-https.js";
 import type { CredentialRecordStore } from "./records.js";
 import type { CredentialLaunch } from "./runner.js";
 import { MemoryCredentialVault, type CredentialVault } from "./vault.js";
@@ -24,6 +26,8 @@ export interface CredentialRuntimeInfo {
   runtime: CredentialRuntime;
   /** Container id, worktree path or coordinator checkout. A change ends grants. */
   identity: string;
+  /** The container firewall is authoritative even for older session records. */
+  networkAccess?: "restricted" | "full";
 }
 
 /**
@@ -33,6 +37,17 @@ export interface CredentialRuntimeInfo {
 export interface CredentialHost {
   session(environmentId: string, tabId: string): Promise<CredentialSessionInfo | null>;
   runtime(environmentId: string): Promise<CredentialRuntimeInfo | null>;
+  /** Reads authoritative rows inside the dispatch transaction. */
+  dispatchBinding?(
+    environmentId: string,
+    tabId: string,
+    agent: string | null,
+  ): {
+    session: CredentialSessionInfo | null;
+    runtime: CredentialRuntimeInfo | null;
+  };
+  /** Pins the runtime while a trusted request is prepared and sent. */
+  beginUse?(environmentId: string, tabId: string): Promise<() => void>;
   /** Where a tab's credential commands run; throws a user-facing error when they cannot. */
   launch(environmentId: string, tabId: string): Promise<CredentialLaunch>;
 }
@@ -41,6 +56,7 @@ export interface CredentialServiceOptions {
   records: CredentialRecordStore;
   /** Where saved connections' values live. */
   vault: CredentialVault;
+  vaults?: Partial<Record<CredentialVaultKind, CredentialVault>>;
   vaultStatus: CredentialVaultStatus;
   host: CredentialHost;
   /** Parent of worktree runs' private directories (inside the data directory). */
@@ -48,7 +64,8 @@ export interface CredentialServiceOptions {
   now?: () => number;
   monotonic?: () => number;
   bootId?: string;
-  fetch?: typeof fetch;
+  fetch?: CredentialFetch;
+  resolveHttpAddress?: (hostname: string) => Promise<readonly { address: string }[]>;
   spawnProcess?: typeof spawn;
   /** How often expiry is swept (ms); 0 disables the timer (tests drive `sweep`). */
   sweepIntervalMs?: number;
@@ -60,6 +77,7 @@ type Waiter = () => void;
 export class CredentialContext {
   readonly records: CredentialRecordStore;
   readonly vault: CredentialVault;
+  private readonly vaults: CredentialServiceOptions["vaults"];
   readonly vaultStatus: CredentialVaultStatus;
   /** Temporary values: this process only, gone on restart. */
   readonly temporary = new MemoryCredentialVault();
@@ -68,7 +86,8 @@ export class CredentialContext {
   readonly now: () => number;
   readonly monotonic: () => number;
   readonly bootId: string;
-  readonly fetch: typeof fetch | undefined;
+  readonly fetch: CredentialFetch | undefined;
+  readonly resolveHttpAddress: CredentialServiceOptions["resolveHttpAddress"];
   readonly spawnProcess: typeof spawn | undefined;
   private readonly waiters = new Map<string, Set<Waiter>>();
   private stopped = false;
@@ -76,6 +95,7 @@ export class CredentialContext {
   constructor(options: CredentialServiceOptions) {
     this.records = options.records;
     this.vault = options.vault;
+    this.vaults = options.vaults;
     this.vaultStatus = options.vaultStatus;
     this.host = options.host;
     this.runRoot = options.runRoot;
@@ -83,7 +103,16 @@ export class CredentialContext {
     this.monotonic = options.monotonic ?? (() => performance.now());
     this.bootId = options.bootId ?? randomUUID();
     this.fetch = options.fetch;
+    this.resolveHttpAddress = options.resolveHttpAddress;
     this.spawnProcess = options.spawnProcess;
+  }
+
+  get isStopped(): boolean {
+    return this.stopped;
+  }
+
+  vaultFor(kind: CredentialVaultKind): CredentialVault | undefined {
+    return kind === this.vault.kind ? this.vault : this.vaults?.[kind];
   }
 
   /** Wakes everyone waiting on `key` (a request or operation id). */

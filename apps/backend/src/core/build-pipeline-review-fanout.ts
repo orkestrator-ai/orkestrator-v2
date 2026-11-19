@@ -823,8 +823,8 @@ export class BuildPipelineReviewFanout {
               if (pending.length > 0) pipeline.pendingResultConsumptions = pending;
               else delete pipeline.pendingResultConsumptions;
             },
-            closeResult: (requestId: string) =>
-              this.deps.workflowResults!.close(requestId, "superseded"),
+            closeResult: (requestId: string, successorRequestId?: string) =>
+              this.deps.workflowResults!.close(requestId, "superseded", successorRequestId),
             resultRefusals: (requestId: string) =>
               workflowResultRefusals(this.deps.workflowResults, requestId),
           }
@@ -1792,7 +1792,7 @@ export class BuildPipelineReviewFanout {
     }
     await mailbox.settle(pipeline.environmentId, tabId, claim.messageIds, "accepted");
     if (oldRequestId && worker.resultTransport === "tool-v1")
-      await this.deps.workflowResults?.close(oldRequestId, "superseded");
+      await this.deps.workflowResults?.close(oldRequestId, "superseded", requestId);
     return true;
   }
 
@@ -1816,7 +1816,11 @@ export class BuildPipelineReviewFanout {
     if (consolidation.resultTransport === "tool-v1") consolidation.resultSubmission = "preparing";
     await this.save(pipeline);
     if (consolidation.resultTransport === "tool-v1") {
-      await this.deps.workflowResults?.close(previousRequestId, "superseded");
+      await this.deps.workflowResults?.close(
+        previousRequestId,
+        "superseded",
+        consolidation.requestId,
+      );
     }
   }
 
@@ -1856,7 +1860,11 @@ export class BuildPipelineReviewFanout {
     consolidation.state = "prepared";
     delete consolidation.idleResultPolls;
     if (previousTransport === "tool-v1") {
-      await this.deps.workflowResults?.close(previousRequestId, "superseded");
+      await this.deps.workflowResults?.close(
+        previousRequestId,
+        "superseded",
+        consolidation.requestId,
+      );
     }
     await this.save(pipeline);
     return { kind: "working" };

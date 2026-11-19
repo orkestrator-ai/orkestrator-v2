@@ -2035,19 +2035,8 @@ export class BuildPipelineSupervisor {
     ) {
       return false;
     }
-    const binding = await this.ctx.options.workflowResults
-      ?.binding(
-        { environmentId: pipeline.environmentId, projectId: pipeline.projectId },
-        previousRequestId,
-      )
-      .catch(() => null);
-    const resultKind = binding?.kind;
-    if (
-      !resultKind ||
-      this.ctx.workflowResultKind(phase, resultKind === "validation-plan") !== resultKind
-    ) {
-      return false;
-    }
+    const resultKind = await this.ctx.boundWorkflowResultKind(pipeline, session);
+    if (!resultKind) return false;
     const finalText = await provider
       .messages(session.sdkSessionId, { limit: LAST_ASSISTANT_TEXT_READ_LIMIT })
       .then(lastAssistantText, () => undefined);
@@ -2120,7 +2109,7 @@ export class BuildPipelineSupervisor {
     delete pipeline.stallWarning;
     await this.ctx.save(pipeline, pipeline.backendRevision);
     if (session.resultTransport === "tool-v1" && previousRequestId) {
-      await this.ctx.options.workflowResults?.close(previousRequestId, "superseded");
+      await this.ctx.options.workflowResults?.close(previousRequestId, "superseded", requestId);
     }
     await this.dispatchPending(pipeline, provider);
   }

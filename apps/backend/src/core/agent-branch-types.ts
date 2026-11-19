@@ -192,7 +192,7 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   stageResultConsumption?(requestId: string): void;
   finishResultConsumption?(requestId: string): void;
   beforeResult?(branch: B): Promise<boolean>;
-  closeResult?(requestId: string): Promise<void>;
+  closeResult?(requestId: string, successorRequestId?: string): Promise<void>;
   /** Calls the slot's tools refused before validation (`WorkflowResultService.refusals`). */
   resultRefusals?(requestId: string): WorkflowResultRefusals | undefined;
   /** Persists the owner's record. The runner serializes every call. */

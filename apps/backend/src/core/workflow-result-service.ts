@@ -86,6 +86,8 @@ interface DeliveryCounters {
   refusedCalls?: number;
   /** Why the newest refused call was refused, bounded and without an excerpt. */
   lastRefusal?: string;
+  /** Diagnostics from earlier slots in the same session. Status remains slot-local. */
+  priorDelivery?: WorkflowResultRefusals;
 }
 
 /** Bound on the remembered reason of the newest refused call. */
@@ -95,7 +97,7 @@ const MAX_REFUSAL_REASON_CHARS = 600;
 export interface WorkflowResultRefusals {
   /** Calls refused before validation. */
   count: number;
-  /** Validation and submission calls that were processed, for the same slot. */
+  /** Validation and submission calls that were processed in the same result turn sequence. */
   processed: number;
   lastReason?: string;
 }
@@ -469,7 +471,7 @@ export class WorkflowResultService {
     this.index = null;
   }
 
-  /** Counters exist only for slots the store knows, so a caller cannot grow them. */
+  /** Bounded counters for known slots and their internally assigned successors. */
   private counters(resultKey: string): DeliveryCounters {
     let counters = this.deliveryCounters.get(resultKey);
     if (!counters) {
@@ -508,7 +510,7 @@ export class WorkflowResultService {
       return;
     }
     const counters = this.counters(resultKey);
-    counters.refusedCalls = (counters.refusedCalls ?? 0) + 1;
+    counters.refusedCalls = Math.min((counters.refusedCalls ?? 0) + 1, Number.MAX_SAFE_INTEGER);
     counters.lastRefusal =
       reason.length > MAX_REFUSAL_REASON_CHARS
         ? `${reason.slice(0, MAX_REFUSAL_REASON_CHARS - 1)}…`
@@ -516,14 +518,24 @@ export class WorkflowResultService {
     this.metrics.recordRefusedCall(entry.kind);
   }
 
-  /** The refused calls of a slot still open, or undefined when there were none. */
+  /** The refused calls of this slot and any it replaced in the same session. */
   refusals(resultKey: string): WorkflowResultRefusals | undefined {
+    const summary = this.deliverySummary(resultKey);
+    return summary?.count ? summary : undefined;
+  }
+
+  private deliverySummary(resultKey: string): WorkflowResultRefusals | undefined {
     const counters = this.deliveryCounters.get(resultKey);
-    if (!counters?.refusedCalls) return undefined;
+    if (!counters) return undefined;
+    const prior = counters.priorDelivery;
+    const lastReason = counters.lastRefusal ?? prior?.lastReason;
     return {
-      count: counters.refusedCalls,
-      processed: counters.validationCalls + counters.submissionCalls,
-      ...(counters.lastRefusal !== undefined ? { lastReason: counters.lastRefusal } : {}),
+      count: Math.min((prior?.count ?? 0) + (counters.refusedCalls ?? 0), Number.MAX_SAFE_INTEGER),
+      processed: Math.min(
+        (prior?.processed ?? 0) + counters.validationCalls + counters.submissionCalls,
+        Number.MAX_SAFE_INTEGER,
+      ),
+      ...(lastReason !== undefined ? { lastReason } : {}),
     };
   }
 
@@ -1775,7 +1787,15 @@ export class WorkflowResultService {
     );
   }
 
-  async close(resultKey: string, lifecycle: "cancelled" | "superseded"): Promise<void> {
+  /**
+   * Retires a slot. A same-session follow-up can inherit its bounded delivery
+   * summary under its fresh key, even before that key is prepared.
+   */
+  async close(
+    resultKey: string,
+    lifecycle: "cancelled" | "superseded",
+    successorResultKey?: string,
+  ): Promise<void> {
     this.mutateEntry<void>(
       resultKey,
       (entry) => {
@@ -1801,7 +1821,18 @@ export class WorkflowResultService {
         // The overwritten row may have held an accepted payload or context.
         return { result: undefined, entry, removesContent: true };
       },
-      { afterCommit: () => this.forgetDelivery(resultKey) },
+      {
+        afterCommit: () => {
+          const summary =
+            lifecycle === "superseded" && successorResultKey
+              ? this.deliverySummary(resultKey)
+              : undefined;
+          this.forgetDelivery(resultKey);
+          if (successorResultKey && summary && (summary.count || summary.processed)) {
+            this.counters(successorResultKey).priorDelivery = summary;
+          }
+        },
+      },
     );
   }
 

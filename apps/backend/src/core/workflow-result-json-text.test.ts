@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
 import { callToolInProcess } from "./mcp-in-process.js";
+import {
+  CONSOLIDATED_REVIEW_EXAMPLE,
+  CONSOLIDATED_REVIEW_EXAMPLE_SOURCE_IDS,
+} from "./review-consolidation-example.js";
 import { decodeJsonTextResult, findJsonTextFault } from "./workflow-result-json-text.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import {
@@ -90,12 +94,24 @@ describe("decodeJsonTextResult", () => {
     expect(decoded.summary).toContain(
       `the \`}\` at character ${brace} already closed the top-level value right after its field \`testCoverageGaps\``,
     );
-    expect(decoded.summary).toContain("one closing `}` or `]` too many");
+    expect(decoded.summary).toContain(`one closing \`}\` too many at or before character ${brace}`);
     expect(decoded.summary).toContain("pass the result as a JSON object");
     // The excerpt shows the text around the fault; the summary does not.
     expect(decoded.message).toContain('⟪HERE⟫,"verdict":');
     expect(decoded.summary).not.toContain("⟪HERE⟫");
     expect(decoded.summary).not.toContain("The suite did not run.");
+  });
+
+  test.each([
+    ['{"a":1} ]', 8, "Remove the extra `]` at character 8."],
+    ['{"a":1} {"b":2}', 8, "Pass exactly one JSON object."],
+    ['{"a":1} "second"', 8, "Pass exactly one JSON object."],
+    ["[1],2]", 3, "remove the extra one so the items that follow stay inside the top-level value"],
+  ] as const)("gives focused advice for trailing data in %s", (text, offset, advice) => {
+    expect(findJsonTextFault(text)).toMatchObject({
+      offset,
+      advice: expect.stringContaining(advice),
+    });
   });
 
   test("a payload cut short names the brackets still open, innermost first", () => {
@@ -116,6 +132,9 @@ describe("decodeJsonTextResult", () => {
       ['{"a":"x\ny"}', "unescaped control character"],
       ['{"a":"x\\qy"}', "invalid escape `\\q`"],
       ["{'a':1}", "where a quoted field name was expected"],
+      ['{"a":{"b":1,c:2}}', "where a quoted field name was expected, inside `$.a`"],
+      ['{"a":{"b":1,"c', "inside `$.a`, is never closed"],
+      ['{"a":{"b":1,"c":"value', "inside `$.a.c`, is never closed"],
       ['{"a" 1}', "where `:` was expected after the field name `$.a`"],
       ['{"a":undefined}', "where a value of `$.a` was expected"],
       ['{"a":"never closed}', "is never closed"],
@@ -253,9 +272,111 @@ describe("result tools take a result sent as JSON text", () => {
     expect(service.refusals(resultKey)).toBeUndefined();
   });
 
+  test("superseding keeps one bounded summary without changing the successor's call status", async () => {
+    const successor = crypto.randomUUID();
+    const refusal = "a".repeat(1_000);
+    service.recordRefusedCall(scope, resultKey, refusal);
+    await service.close(resultKey, "superseded", successor);
+    await service.close(resultKey, "superseded", successor);
+    await service.prepare({
+      ...scope,
+      resultKey: successor,
+      kind: "review-report",
+      provider: "claude",
+    });
+    expect(service.refusals(resultKey)).toBeUndefined();
+    expect(service.refusals(successor)).toEqual({
+      count: 1,
+      processed: 0,
+      lastReason: `${refusal.slice(0, 599)}…`,
+    });
+    const status = await service.status(scope, successor);
+    expect(status?.lifecycle).toBe("open");
+    expect(status?.delivery?.refusedCalls).toBeUndefined();
+    expect(await service.validate(scope, successor, report)).toMatchObject({ ok: true });
+    expect(service.refusals(successor)?.processed).toBe(1);
+    await service.close(successor, "cancelled");
+    expect(service.refusals(successor)).toBeUndefined();
+  });
+
   test("another scope cannot add refusals to a slot", () => {
     service.recordRefusedCall({ ...scope, projectId: "other" }, resultKey, "refused");
     expect(service.refusals(resultKey)).toBeUndefined();
+  });
+
+  test.each(["direct", "validated digest"] as const)(
+    "scoped consolidation accepts JSON text by %s",
+    async (mode) => {
+      const key = crypto.randomUUID();
+      await service.prepare({
+        ...scope,
+        resultKey: key,
+        kind: "consolidated-review",
+        provider: "claude",
+        context: {
+          type: "consolidated-review",
+          sources: {
+            [CONSOLIDATED_REVIEW_EXAMPLE_SOURCE_IDS.issue]: "issue",
+            [CONSOLIDATED_REVIEW_EXAMPLE_SOURCE_IDS.coverageGap]: "coverage-gap",
+          },
+        },
+      });
+      const consolidationTools = () => {
+        const server = new McpServer({ name: "consolidation-json-text", version: "1.0.0" });
+        registerWorkflowResultTools(server, service, {
+          ...scope,
+          workflowResultKey: key,
+          kind: "consolidated-review",
+        });
+        return server;
+      };
+      const result = JSON.stringify(CONSOLIDATED_REVIEW_EXAMPLE);
+      let input: Record<string, unknown> = { resultKey: key, result };
+      if (mode === "validated digest") {
+        const checked = await callToolInProcess(
+          consolidationTools,
+          "validate_workflow_result",
+          input,
+        );
+        expect(checked.isError).toBe(false);
+        const validatedDigest = checked.structuredContent?.validatedDigest;
+        expect(validatedDigest).toMatch(/^[a-f0-9]{64}$/);
+        input = { resultKey: key, validatedDigest };
+      }
+      const accepted = await callToolInProcess(
+        consolidationTools,
+        "submit_consolidated_review",
+        input,
+      );
+      expect(accepted.isError).toBe(false);
+      expect(await service.structured(key)).toMatchObject({
+        ok: true,
+        value: { reviewSummary: CONSOLIDATED_REVIEW_EXAMPLE.reviewSummary },
+      });
+    },
+  );
+
+  test("the authenticated broker's per-kind submit tool accepts JSON text", async () => {
+    const key = crypto.randomUUID();
+    await service.initializeCapabilityIdentity();
+    await service.prepare({
+      ...scope,
+      resultKey: key,
+      kind: "review-report",
+      provider: "opencode",
+    });
+    const capability = service.capabilityToken(scope, key);
+    const accepted = await callToolInProcess(
+      () => {
+        const server = new McpServer({ name: "broker-json-text-submit", version: "1.0.0" });
+        registerWorkflowResultBrokerTools(server, service, scope);
+        return server;
+      },
+      "submit_review_report",
+      { resultKey: key, capability, result: JSON.stringify(report) },
+    );
+    expect(accepted.isError).toBe(false);
+    expect(await service.structured(key)).toMatchObject({ ok: true, value: report });
   });
 });
 
@@ -300,6 +421,7 @@ describe("the broker's validation tool takes JSON text", () => {
     });
     expect(broken.isError).toBe(true);
     expect(broken.text).toContain("at character 7");
+    expect(broken.text).toContain("Remove the extra `}` at character 7.");
     expect(validated).toHaveLength(1);
     expect(refused).toHaveLength(1);
   });

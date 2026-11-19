@@ -5,7 +5,7 @@ import {
 import type { WorkflowResultRefusals, WorkflowResultService } from "./workflow-result-service.js";
 
 /**
- * The refused calls of an open slot, from a service that may predate
+ * The refused calls associated with an open slot, from a service that may predate
  * `refusals` (test doubles): undefined when there is nothing to report.
  */
 export function workflowResultRefusals(
@@ -54,8 +54,8 @@ export function missingWorkflowResultMessage(input: {
     const { count, processed, lastReason } = input.refusals;
     const refused =
       processed === 0
-        ? `called ${toolName} (or its validation tool) ${count === 1 ? "once" : `${count} times`} for its latest result key, and the input check refused every call before validation`
-        : `made ${calls(count)} to ${toolName} (or its validation tool) for its latest result key that the input check refused before validation`;
+        ? `called ${toolName} (or its validation tool) ${count === 1 ? "once" : `${count} times`}, and the input check refused every call before validation`
+        : `made ${calls(count)} to ${toolName} (or its validation tool) that the input check refused before validation`;
     return `${subject} ${refused}, so no ${resultLabel} was accepted${lastReason ? `. The last refusal: ${lastReason}` : ""}`;
   }
   if (input.finalText !== undefined && looksLikeJsonObject(input.finalText)) {
@@ -100,7 +100,7 @@ export function workflowResultReminderPrompt(input: {
     input.submission === "correcting"
       ? `Your last submission was rejected. Correct only the problems it reported and submit again.`
       : refusals
-        ? `The input check refused your ${calls(refusals.count)} before validation, so nothing was received.${lastReason ? ` The last refusal said: ${lastReason}` : ""} Sending the same arguments again is refused the same way: fix exactly the point the refusal names, and pass \`result\` as a JSON object, not as a string.`
+        ? `The input check refused your ${calls(refusals.count)} before validation. Those calls targeted \`${toolName}\` or its validation tool.${lastReason ? ` The last refusal said: ${lastReason}` : ""} Sending the same arguments again is refused the same way: fix exactly the point the refusal names, and pass \`result\` as a JSON object, not as a string.`
         : input.finalText !== undefined && looksLikeJsonObject(input.finalText)
           ? `You wrote the ${resultLabel} as reply text. Reply text is not read; pass it to \`${toolName}\` instead.`
           : `No call to \`${toolName}\` was accepted.`;

@@ -54,6 +54,9 @@ type Frame =
 
 const NUMBER = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const TRAILING_OBJECT_FIELD =
+  /,[ \t\r\n]*"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[\da-fA-F]{4}))*"[ \t\r\n]*:/y;
+const TRAILING_ARRAY_ITEM = /,[ \t\r\n]*(?:["{[]|-?\d|true|false|null)/y;
 
 function describeValue(value: unknown): string {
   if (value === null) return "null";
@@ -143,9 +146,11 @@ function quote(char: string | undefined): string {
   return `\`${JSON.stringify(char).slice(1, -1)}\``;
 }
 
-function pathOf(stack: readonly Frame[]): string {
+function pathOf(stack: readonly Frame[], omitLastKey = false): string {
   let path = "$";
-  for (const frame of stack) {
+  const length = omitLastKey ? stack.length - 1 : stack.length;
+  for (let index = 0; index < length; index++) {
+    const frame = stack[index]!;
     if (frame.kind === "array") path += `[${frame.index}]`;
     else if (frame.key !== undefined)
       path += IDENTIFIER.test(frame.key) ? `.${frame.key}` : `[${JSON.stringify(frame.key)}]`;
@@ -171,7 +176,7 @@ export function findJsonTextFault(text: string): JsonTextFault | null {
   };
 
   /** Reads a string at `pos` (which holds `"`); returns its value or a fault. */
-  const readString = (): string | JsonTextFault => {
+  const readString = (readingKey = false): string | JsonTextFault => {
     const start = pos;
     let value = "";
     pos += 1;
@@ -228,7 +233,7 @@ export function findJsonTextFault(text: string): JsonTextFault | null {
     }
     return {
       offset: start,
-      problem: `the string that starts here, inside \`${pathOf(stack)}\`, is never closed`,
+      problem: `the string that starts here, inside \`${pathOf(stack, readingKey)}\`, is never closed`,
       advice: 'A `"` inside a string must be written as `\\"`.',
     };
   };
@@ -279,19 +284,31 @@ export function findJsonTextFault(text: string): JsonTextFault | null {
   const trailing = (closer: { char: string; offset: number; lastKey?: string } | null) => {
     skipWhitespace();
     if (pos >= text.length) return null;
-    if (!closer) {
+    const char = text[pos];
+    if (char === "}" || char === "]") {
       return {
         offset: pos,
-        problem: "more text follows a complete JSON value",
-        advice: "Pass exactly one JSON object.",
+        problem: `an extra ${quote(char)} follows a complete JSON value`,
+        advice: `Remove the extra ${quote(char)} at character ${pos}.`,
       };
     }
-    const after =
-      closer.lastKey !== undefined ? ` right after its field \`${closer.lastKey}\`` : "";
+    if (closer) {
+      const fieldOrItem = closer.char === "}" ? TRAILING_OBJECT_FIELD : TRAILING_ARRAY_ITEM;
+      fieldOrItem.lastIndex = pos;
+      if (fieldOrItem.test(text)) {
+        const after =
+          closer.lastKey !== undefined ? ` right after its field \`${closer.lastKey}\`` : "";
+        return {
+          offset: pos,
+          problem: `more text follows, but the \`${closer.char}\` at character ${closer.offset} already closed the top-level value${after}`,
+          advice: `There may be one closing \`${closer.char}\` too many at or before character ${closer.offset}: remove the extra one so the ${closer.char === "}" ? "fields" : "items"} that follow stay inside the top-level value.`,
+        };
+      }
+    }
     return {
       offset: pos,
-      problem: `more text follows, but the \`${closer.char}\` at character ${closer.offset} already closed the top-level value${after}`,
-      advice: `There is one closing \`}\` or \`]\` too many at or before character ${closer.offset}: remove the extra one so the fields that follow stay inside the top-level object.`,
+      problem: "more text follows a complete JSON value",
+      advice: "Pass exactly one JSON object.",
     };
   };
 
@@ -333,7 +350,7 @@ export function findJsonTextFault(text: string): JsonTextFault | null {
         case "key-or-end":
         case "key": {
           if (char === '"') {
-            const key = readString();
+            const key = readString(true);
             if (typeof key !== "string") return key;
             top.key = key;
             top.state = "colon";
@@ -349,7 +366,7 @@ export function findJsonTextFault(text: string): JsonTextFault | null {
             problem:
               char === "}"
                 ? `a comma after \`${pathOf(stack)}\` is followed by \`}\` instead of another field`
-                : `${quote(char)} appears where a quoted field name was expected, inside \`${pathOf(stack)}\``,
+                : `${quote(char)} appears where a quoted field name was expected, inside \`${pathOf(stack, true)}\``,
             ...(char === "}" ? { advice: "Remove the trailing comma." } : {}),
           };
         }

@@ -142,10 +142,11 @@ function harness(
             await options.results?.consume(requestId);
             consumed.push(requestId);
           },
-          closeResult: async (requestId: string) => {
-            await options.results?.close(requestId, "superseded");
+          closeResult: async (requestId: string, successorRequestId?: string) => {
+            await options.results?.close(requestId, "superseded", successorRequestId);
             closed.push(requestId);
           },
+          resultRefusals: (requestId: string) => options.results?.refusals(requestId),
         }
       : {}),
     pollGate: {
@@ -168,6 +169,41 @@ function harness(
 }
 
 describe("reviewer idle-result grace under wakeups", () => {
+  test("a reviewer reminder reports refused calls and a silent reminder retains the evidence", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "ork-review-refusal-"));
+    const results = new WorkflowResultService(dataDir);
+    try {
+      await results.prepare({
+        resultKey: "review-request",
+        kind: "review-report",
+        ...scope,
+        provider: "claude",
+      });
+      results.recordRefusedCall(scope, "review-request", "Reviewer refusal");
+      const time = new ManualTime(0);
+      const { reviewer, runner, sent } = harness(() => "periodic", time, {
+        toolTransport: true,
+        results,
+      });
+      await runner.advanceReviewers([reviewer]);
+      time.jump(10_000);
+      await runner.advanceReviewers([reviewer]);
+      await runner.advanceReviewers([reviewer]);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.prompt).toContain("The last refusal said: Reviewer refusal");
+      time.jump(10_000);
+      await runner.advanceReviewers([reviewer]);
+      time.jump(10_000);
+      await runner.advanceReviewers([reviewer]);
+      expect(reviewer.status).toBe("failed");
+      expect(reviewer.error).toContain("called submit_review_report (or its validation tool) once");
+      expect(reviewer.error).toContain("The last refusal: Reviewer refusal");
+    } finally {
+      results.closeStorage();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test.each(["preparing", "correcting"] as const)(
     "a reminder supersedes a retained schema repair and consumes its fresh result (%s)",
     async (submission) => {

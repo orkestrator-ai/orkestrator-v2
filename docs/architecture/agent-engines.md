@@ -2016,8 +2016,9 @@ broker's `validate_workflow_result`) lets a string through its input check
 - Text that does not parse is refused as correctable `invalid_result` feedback
   that spends no correction budget. The refusal gives the character offset,
   line and column, the field path there, what was expected, and a short
-  excerpt. When the root object closes early it names the closing bracket and
-  the last field before it. `JSON.parse` gives no position under Bun, so a
+  excerpt. When fields appear after the root object has closed, it names the
+  closing bracket and the last field before it. A trailing bracket is reported
+  at its own position. `JSON.parse` gives no position under Bun, so a
   small scanner of its own finds the fault, and runs only on text
   `JSON.parse` already refused.
 
@@ -2030,9 +2031,11 @@ scope; the attempt-scoped tools record input-check refusals through
 `toolInput(..., { onRefused })`. (The broker records only refusals after its
 capability check, because its input check runs before authentication.)
 `get_workflow_result_status` reports `delivery.refusedCalls` with a hint that
-quotes the newest reason. The result reminder quotes it too, and when the step
-still fails, `missingWorkflowResultMessage` says how many calls were refused
-rather than that the tool was never called.
+quotes the newest reason for the current slot. When an automatic follow-up replaces a
+slot in the same session, its refusal summary carries over in memory. The
+reminder and terminal error can therefore report the total and newest reason
+across those keys. Graph steps carry this evidence separately for each output
+port and report it for the required port named in the diagnostic.
 
 **Follow-up turns.** A Multi Review reviewer, and the preparation,
 consolidation and Fix steps, each get two bounded follow-up turns in the same

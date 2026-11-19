@@ -2723,7 +2723,7 @@ test.each(["recovers", "exhausted"] as const)(
   },
 );
 
-test("Address Findings gets one result reminder in its existing session and fails after a second miss", async () => {
+test("Address Findings reports refusals across the one reminder in its existing session", async () => {
   const provider = new Provider(false);
   provider.statusValue = "running";
   const environmentId = "env-address-findings-result-reminder";
@@ -2733,6 +2733,12 @@ test("Address Findings gets one result reminder in its existing session and fail
     async (context) => {
       const { service, snapshot, workflowResults } = context;
       const first = await startFollowUpStep("address-findings", context, environmentId, true);
+      const scope = { environmentId, projectId: "project-1" };
+      workflowResults!.recordRefusedCall(
+        scope,
+        first.activeRequest!.requestId,
+        "First Address Findings refusal",
+      );
       provider.statusValue = "idle";
       const reminded = await advanceUntil(
         service,
@@ -2751,6 +2757,11 @@ test("Address Findings gets one result reminder in its existing session and fail
           first.activeRequest!.requestId,
         ),
       ).toMatchObject({ lifecycle: "superseded" });
+      await service.advanceNow(first.id);
+      expect(provider.sends.get(requestId)!.prompt).toContain(
+        "The last refusal said: First Address Findings refusal",
+      );
+      workflowResults!.recordRefusedCall(scope, requestId, "Newest Address Findings refusal");
       const failed = await advanceUntil(
         service,
         snapshot,
@@ -2764,7 +2775,10 @@ test("Address Findings gets one result reminder in its existing session and fail
         "submit_address_findings_result",
       );
       expect(provider.sends.get(requestId)!.options.workflowResultKey).toBe(requestId);
-      expect(failed.error).toContain("without calling submit_address_findings_result");
+      expect(failed.error).toContain(
+        "called submit_address_findings_result (or its validation tool) 2 times",
+      );
+      expect(failed.error).toContain("The last refusal: Newest Address Findings refusal");
       expect(provider.sends.size).toBe(2);
     },
     { toolMode: true },

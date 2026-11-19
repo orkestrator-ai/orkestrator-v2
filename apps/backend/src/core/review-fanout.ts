@@ -451,7 +451,7 @@ export interface ReviewFanoutHost {
   stageResultConsumption?(requestId: string): void;
   finishResultConsumption?(requestId: string): void;
   beforeResult?(reviewer: ReviewerRecord): Promise<boolean>;
-  closeResult?(requestId: string): Promise<void>;
+  closeResult?(requestId: string, successorRequestId?: string): Promise<void>;
   /** Calls the slot's tools refused before validation (`WorkflowResultService.refusals`). */
   resultRefusals?(requestId: string): WorkflowResultRefusals | undefined;
   /**
@@ -819,7 +819,10 @@ function reviewBranchHost(host: ReviewFanoutHost): AgentBranchHost<ReviewerRecor
         }
       : {}),
     ...(host.closeResult
-      ? { closeResult: (requestId: string) => host.closeResult!(requestId) }
+      ? {
+          closeResult: (requestId: string, successorRequestId?: string) =>
+            host.closeResult!(requestId, successorRequestId),
+        }
       : {}),
     ...(host.resultRefusals
       ? { resultRefusals: (requestId: string) => host.resultRefusals!(requestId) }

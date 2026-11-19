@@ -248,7 +248,7 @@ describe("calls refused before validation", () => {
       refusals: { count: 2, processed: 0, lastReason: reason },
     });
     expect(message).toStartWith(
-      "The consolidation model called submit_consolidated_review (or its validation tool) 2 times for its latest result key, and the input check refused every call before validation",
+      "The consolidation model called submit_consolidated_review (or its validation tool) 2 times, and the input check refused every call before validation",
     );
     expect(message).toContain(`The last refusal: ${reason}`);
     expect(message).not.toContain("finished without calling");

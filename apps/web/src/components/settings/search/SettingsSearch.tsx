@@ -13,6 +13,7 @@ import {
   formatSettingValue,
   presentSetting,
   type SettingPresentation,
+  type SourceNames,
 } from "@/lib/settings-catalog/provenance";
 import {
   SETTING_SCOPE_LABELS,
@@ -21,7 +22,7 @@ import {
 } from "@/lib/settings-catalog/scope";
 import { searchSettings, type SettingSearchResult } from "@/lib/settings-catalog/search";
 import { SETTINGS_SECTION_LABELS } from "@/lib/settings-catalog/sections";
-import type { SettingDescriptor } from "@/lib/settings-catalog/types";
+import type { SettingDescriptor, SettingScope } from "@/lib/settings-catalog/types";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 import { isWindowMachine } from "../account-machine";
@@ -78,11 +79,11 @@ export function SettingsSearchField({
         />
         <Input
           id={id}
-          type="search"
+          type="text"
           role="searchbox"
           aria-label="Search settings"
           aria-controls={query || modifiedView ? SETTINGS_SEARCH_RESULTS_ID : undefined}
-          placeholder="Search settings"
+          placeholder="Search"
           autoComplete="off"
           spellCheck={false}
           value={query}
@@ -338,12 +339,9 @@ export function SettingsSearchResults({
               ? (descriptor.availability?.reason ?? "This section is turned off.")
               : descriptor.availability?.reason;
             const scope = settingScope(descriptor);
-            const scopeText =
-              scope === "machine" && explain
-                ? `${SETTING_SCOPE_LABELS.machine}: ${explain.names.machine}`
-                : scope !== "window" && explain?.names.commandNode
-                  ? `${SETTING_SCOPE_LABELS[scope]}: ${explain.names.commandNode}`
-                  : SETTING_SCOPE_LABELS[scope];
+            const scopeText = explain
+              ? describeScope(scope, explain.names)
+              : SETTING_SCOPE_LABELS[scope];
             return (
               <li key={descriptor.id} className="flex flex-wrap items-start gap-3 p-3">
                 <button
@@ -425,6 +423,22 @@ export function SettingsSearchResults({
       )}
     </section>
   );
+}
+
+/** "Machine setting · Laptop", "Preference · Studio, inherited by every machine"… */
+export function describeScope(scope: SettingScope, names: SourceNames): string {
+  const commandNode = names.commandNode ?? names.machine;
+  if (!names.federated) return scope === "window" ? "This window only" : `On ${names.machine}`;
+  switch (scope) {
+    case "machine":
+      return `Machine setting · ${names.machine}`;
+    case "inherited":
+      return `Preference · ${commandNode}, inherited by every machine`;
+    case "command-node":
+      return `Command node · ${commandNode}`;
+    case "window":
+      return "This window only";
+  }
 }
 
 /** Whether opening `descriptor` would leave the shared form while it holds an unsavable edit. */

@@ -108,6 +108,8 @@ export interface SourceNames {
   readonly machine: string;
   /** The command node, when it is named. */
   readonly commandNode: string | null;
+  /** Whether this window works with several machines; otherwise inheritance is not mentioned. */
+  readonly federated?: boolean;
 }
 
 /** "Set on Studio", "Inherited from Studio", "Default · nothing stored on Studio"… */
@@ -124,7 +126,9 @@ export function describeSource(
     case "command-node":
       return `Inherited from ${commandNode}`;
     case "command-node-self":
-      return `Set on ${names.machine}; machines it controls inherit it`;
+      return names.federated
+        ? `Set on ${names.machine}; machines it controls inherit it`
+        : `Set on ${names.machine}`;
     case "controller":
       return "Inherited from the command node this machine follows";
     case "default":

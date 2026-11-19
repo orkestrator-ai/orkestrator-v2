@@ -617,14 +617,16 @@ function SettingsExplainScope({
   children: React.ReactNode;
 }) {
   const commandNode = useCommandNode();
+  const { enabled: federated } = useFederation();
   const { config } = useSettingsConfig();
   const commandNodeName = commandNode?.name ?? null;
   const names = useMemo(
     () => ({
       machine: machineName ?? commandNodeName ?? "this machine",
       commandNode: commandNodeName,
+      federated,
     }),
-    [machineName, commandNodeName],
+    [machineName, commandNodeName, federated],
   );
   return (
     <SettingsExplainProvider

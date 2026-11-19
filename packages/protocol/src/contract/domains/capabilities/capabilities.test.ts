@@ -67,7 +67,7 @@ describe("capabilities domain", () => {
     });
     expect(Result.isSuccess(decoded)).toBe(true);
     if (Result.isSuccess(decoded))
-      expect((decoded.success as Record<string, unknown>).newer).toBe("kept");
+      expect((decoded.success as unknown as Record<string, unknown>).newer).toBe("kept");
   });
 
   it("has a current and a legacy adapter, and one content-free event", () => {

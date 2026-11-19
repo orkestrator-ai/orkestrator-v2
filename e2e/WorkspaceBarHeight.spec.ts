@@ -85,7 +85,7 @@ for (const width of [1280, 900]) {
     await expect(tabs).toBeVisible();
     // The tab list once capped itself at 48rem and scrolled within it, so nine
     // tabs a few pixels wider than the cap drew a scrollbar beneath the row.
-    // The row alone scrolls, with its scrollbar hidden.
+    // The surrounding tab scroller hides its scrollbar.
     const geometry = await tabs.evaluate((element) => ({
       overflowX: getComputedStyle(element).overflowX,
       scrollWidth: element.scrollWidth,

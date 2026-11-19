@@ -1,5 +1,6 @@
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
+import type { ProjectBoardTab } from "@/stores/uiStore";
 
 /**
  * What the window asks another node's workspace to show when it opens it
@@ -9,9 +10,12 @@ import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environme
  * applies it on the node's scope once that scope has what it needs.
  */
 
-/** Explicit board navigation overrides a node's default project landing tab. */
-export type WorkspaceBoardTab =
-  "home" | "coordinator" | "kanban" | "github" | "linear" | "features";
+/**
+ * Explicit board navigation overrides a node's default project landing tab.
+ * Any of the project page's tabs, so switching machines from the project page
+ * (`ProjectMachineSwitcher`) lands on the tab it was on.
+ */
+export type WorkspaceBoardTab = ProjectBoardTab;
 
 /**
  * A dialog of the node, opened over what the request selects: the project's

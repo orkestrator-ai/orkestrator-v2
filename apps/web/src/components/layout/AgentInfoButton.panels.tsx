@@ -23,6 +23,8 @@ import {
 import { cn } from "@/lib/utils";
 import type { AgentRateLimitWindow, ContextUsageSnapshot } from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { ContinuationExplanation } from "./AgentInfoContinuation";
 import type {
   NativeAgentAccountUsageWindow,
   NativeAgentMcpServer,
@@ -1197,6 +1199,7 @@ export function UsagePanel({
   accountLabel,
   accountEmail,
   planWindows,
+  continuation,
 }: {
   usage: AgentInfoUsageSnapshot | undefined;
   modelId: string | undefined;
@@ -1218,6 +1221,16 @@ export function UsagePanel({
    * session whose provider does not report them (a coordinator conversation).
    */
   planWindows?: NativeAgentAccountUsageWindow[];
+  /**
+   * The session's platform and state, for explaining the next continuation.
+   * Absent where the panel is not describing one live conversation.
+   */
+  continuation?: {
+    provider: AgentPlatform | undefined;
+    running: boolean;
+    canCompact: boolean;
+    nowMs?: number;
+  };
 }) {
   const displayedRateLimits = rateLimits ?? usage?.rateLimits;
   const reportedModelId = usage?.modelId ?? modelId;
@@ -1337,6 +1350,17 @@ export function UsagePanel({
           />
         ) : null}
       </div>
+
+      {continuation ? (
+        <ContinuationExplanation
+          provider={continuation.provider}
+          turns={usage.turns}
+          contextTokens={usage.occupancyUnknown ? undefined : usage.usedTokens}
+          running={continuation.running}
+          canCompact={continuation.canCompact}
+          nowMs={continuation.nowMs}
+        />
+      ) : null}
 
       {/*
        * Account standing sits below the session's own counters: the context

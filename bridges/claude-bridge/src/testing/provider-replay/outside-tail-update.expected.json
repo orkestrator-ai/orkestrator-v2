@@ -1,0 +1,293 @@
+[
+  {
+    "label": "after-result",
+    "activity": "working",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Survey the repository and keep going",
+        "textLength": 36,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Survey the repository and keep going"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Agent",
+            "toolState": "success",
+            "outputLength": 34
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "While that runs, here is the first observation.",
+        "textLength": 47,
+        "parts": [
+          {
+            "type": "text",
+            "text": "While that runs, here is the first observation."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "And a second one.",
+        "textLength": 17,
+        "parts": [
+          {
+            "type": "text",
+            "text": "And a second one."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  },
+  {
+    "label": "after-subagent-progress",
+    "activity": "working",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Survey the repository and keep going",
+        "textLength": 36,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Survey the repository and keep going"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Agent",
+            "toolState": "success",
+            "outputLength": 34
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "Read",
+            "toolState": "success",
+            "outputLength": 17,
+            "parentTask": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "While that runs, here is the first observation.",
+        "textLength": 47,
+        "parts": [
+          {
+            "type": "text",
+            "text": "While that runs, here is the first observation."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "And a second one.",
+        "textLength": 17,
+        "parts": [
+          {
+            "type": "text",
+            "text": "And a second one."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": [
+        1
+      ]
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  },
+  {
+    "label": "after-notification",
+    "activity": "working",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Survey the repository and keep going",
+        "textLength": 36,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Survey the repository and keep going"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Agent",
+            "toolState": "success",
+            "outputLength": 34
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "Read",
+            "toolState": "success",
+            "outputLength": 17,
+            "parentTask": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "While that runs, here is the first observation.",
+        "textLength": 47,
+        "parts": [
+          {
+            "type": "text",
+            "text": "While that runs, here is the first observation."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "And a second one.",
+        "textLength": 17,
+        "parts": [
+          {
+            "type": "text",
+            "text": "And a second one."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": [
+        1
+      ]
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Survey the repository and keep going",
+        "textLength": 36,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Survey the repository and keep going"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Agent",
+            "toolState": "success",
+            "outputLength": 34
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "Read",
+            "toolState": "success",
+            "outputLength": 17,
+            "parentTask": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "While that runs, here is the first observation.",
+        "textLength": 47,
+        "parts": [
+          {
+            "type": "text",
+            "text": "While that runs, here is the first observation."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "And a second one.",
+        "textLength": 17,
+        "parts": [
+          {
+            "type": "text",
+            "text": "And a second one."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The survey finished.",
+        "textLength": 20,
+        "parts": [
+          {
+            "type": "text",
+            "text": "The survey finished."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 3,
+      "revisedOutsideTail": [
+        1
+      ]
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  }
+]

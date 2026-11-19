@@ -1,0 +1,50 @@
+[
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "drift": {
+      "unknownEvents": 3,
+      "unknownKinds": [
+        "block:future_block",
+        "future_frame_type",
+        "system:future_system_subtype"
+      ]
+    },
+    "rows": [
+      {
+        "role": "user",
+        "text": "Say hello",
+        "textLength": 9,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Say hello"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Hello.",
+        "textLength": 6,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Hello."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  }
+]

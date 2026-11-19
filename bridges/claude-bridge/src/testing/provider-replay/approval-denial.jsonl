@@ -1,0 +1,12 @@
+{"replay":1,"bridge":"claude","scenario":"approval-denial","source":"synthetic","provider":"@anthropic-ai/claude-agent-sdk","providerVersion":"0.3.326","description":"Under an ask policy the CLI asks to run Bash; the user denies it, the CLI reports the refusal as the tool result and answers without it."}
+{"action":"prompt","text":"Delete the build directory","policy":"ask"}
+{"frame":{"type":"system","subtype":"init","session_id":"$derived","claude_code_version":"2.1.326","model":"claude-sonnet-4-6","cwd":"/replay/workspace","tools":["Read","Bash","Agent"],"mcp_servers":[],"slash_commands":[],"permissionMode":"default","apiKeySource":"none","output_style":"default","uuid":"00000000-0000-4000-8000-0000000000b0"}}
+{"frame":{"type":"assistant","message":{"id":"msg-deny-1","model":"claude-sonnet-4-6","role":"assistant","content":[{"type":"tool_use","id":"toolu_bash_1","name":"Bash","input":{"command":"rm -rf build","description":"Remove the build directory"}}]},"parent_tool_use_id":null,"uuid":"00000000-0000-4000-8000-0000000000b1"}}
+{"frame":{"type":"control_request","request_id":"perm-bash-1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"toolu_bash_1","input":{"command":"rm -rf build","description":"Remove the build directory"},"permission_suggestions":[]}}}
+{"action":"observe","label":"parked"}
+{"action":"answer","decision":"deny"}
+{"frame":{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_bash_1","is_error":true,"content":"The user doesn't want to proceed with this tool use. The tool use was rejected."}]},"parent_tool_use_id":null,"uuid":"00000000-0000-4000-8000-0000000000b2"}}
+{"frame":{"type":"assistant","message":{"id":"msg-deny-2","model":"claude-sonnet-4-6","role":"assistant","content":[{"type":"text","text":"Understood, I left the build directory in place."}]},"parent_tool_use_id":null,"uuid":"00000000-0000-4000-8000-0000000000b3"}}
+{"frame":{"type":"result","subtype":"success","duration_ms":12,"duration_api_ms":10,"is_error":false,"num_turns":2,"result":"done","total_cost_usd":0,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"modelUsage":{},"permission_denials":[],"uuid":"00000000-0000-4000-8000-0000000000bf"}}
+{"action":"settle"}
+{"action":"end"}

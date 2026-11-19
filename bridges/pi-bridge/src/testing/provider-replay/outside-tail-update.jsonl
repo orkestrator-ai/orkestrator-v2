@@ -1,0 +1,17 @@
+{"replay":1,"bridge":"pi","scenario":"outside-tail-update","source":"synthetic","provider":"@earendil-works/pi-coding-agent","providerVersion":"1.5.2","description":"A long bash call starts in the first response; two later responses push its row out of the live tail before its result arrives and revises that row."}
+{"action":"prompt","text":"Build, then summarise while it runs"}
+{"frame":{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"timestamp":1767225600000}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Starting the build."}}}
+{"frame":{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"stopReason":"toolUse","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"timestamp":1767225601000}}}
+{"frame":{"type":"tool_execution_start","toolCallId":"call-build","toolName":"bash","args":{"command":"bun run build"}}}
+{"frame":{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"timestamp":1767225600000}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Meanwhile, the first note."}}}
+{"frame":{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"stopReason":"stop","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"timestamp":1767225601000}}}
+{"frame":{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"timestamp":1767225600000}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"And the second note."}}}
+{"frame":{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"stopReason":"stop","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"timestamp":1767225601000}}}
+{"action":"observe","label":"before-result"}
+{"frame":{"type":"tool_execution_end","toolCallId":"call-build","toolName":"bash","result":{"content":[{"type":"text","text":"built in 3s\n"}]},"isError":false,"durationMs":3000}}
+{"action":"observe","label":"after-result"}
+{"frame":{"type":"agent_settled","aborted":false}}
+{"action":"end"}

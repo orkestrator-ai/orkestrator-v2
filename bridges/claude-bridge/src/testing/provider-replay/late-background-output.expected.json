@@ -1,0 +1,118 @@
+[
+  {
+    "label": "after-result",
+    "activity": "working",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Survey the repository in the background",
+        "textLength": 39,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Survey the repository in the background"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Agent",
+            "toolState": "success",
+            "outputLength": 34
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The survey is running in the background.",
+        "textLength": 40,
+        "parts": [
+          {
+            "type": "text",
+            "text": "The survey is running in the background."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Survey the repository in the background",
+        "textLength": 39,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Survey the repository in the background"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Agent",
+            "toolState": "success",
+            "outputLength": 34
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The survey is running in the background.",
+        "textLength": 40,
+        "parts": [
+          {
+            "type": "text",
+            "text": "The survey is running in the background."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The survey finished: nothing unusual.",
+        "textLength": 37,
+        "parts": [
+          {
+            "type": "text",
+            "text": "The survey finished: nothing unusual."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  }
+]

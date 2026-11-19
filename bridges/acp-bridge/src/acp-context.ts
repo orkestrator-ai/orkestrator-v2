@@ -2,9 +2,10 @@ import {
   createBridgeDiagnostics,
   type BridgeRunDiagnostics,
 } from "@orkestrator/protocol/node/bridge-diagnostics";
+import { createProviderReplayRecorderFromEnv } from "@orkestrator/protocol/node/provider-replay-recorder";
 import { loadBridgeCredential } from "@orkestrator/protocol/node/bridge-credential";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
 import {
   DEFAULT_CAPACITY_RETRY_POLICY,
@@ -704,6 +705,20 @@ export const agentRuntime: {
     : never;
 } = {};
 
+/**
+ * The opt-in provider-traffic recorder: null unless
+ * `ORKESTRATOR_PROVIDER_RECORD_DIR` and `ORKESTRATOR_PROVIDER_RECORD_CONFIRM=1`
+ * are both set (`@orkestrator/protocol/node/provider-replay-recorder`). It
+ * keeps every stdout line an agent writes, byte for byte, one file per agent
+ * process; `tests/conformance/provider-replay/README.md` turns one into a
+ * fixture.
+ */
+export const replayRecorder = createProviderReplayRecorderFromEnv({
+  bridge: "acp",
+  provider: providerConfig.id,
+  providerVersion: () => agentRuntime.version,
+});
+
 export interface AgentMcpConnection {
   url: string;
   token: string;
@@ -977,6 +992,8 @@ export class AcpProcess {
   #terminating: Promise<void> | undefined;
   #terminationOutcome?: "resolved" | "rejected";
   readonly #stdoutFramer = new JsonlLineFramer(MAX_LINE_BYTES);
+  /** A new stream even when the OS recycles a child PID. */
+  readonly #replayKey = replayRecorder ? randomUUID() : "";
   onUpdate: (params: JsonObject) => void = unattachedUpdate;
   /**
    * The latest `available_commands_update` that arrived before a session
@@ -1170,6 +1187,7 @@ export class AcpProcess {
   ): Promise<unknown> {
     if (this.#closed) return Promise.reject(new Error(`${provider} ACP process is not running`));
     const id = this.#nextId++;
+    if (method === "session/prompt") replayRecorder?.prompt(this.#replayKey, id);
     this.#diagnostics?.count("requestsSent");
     this.#diagnostics?.tool(String(id), method, "started");
     return new Promise((resolvePromise, reject) => {
@@ -1271,6 +1289,7 @@ export class AcpProcess {
 
   #acceptLine(line: string): void {
     if (!line.trim()) return;
+    replayRecorder?.rawLine(this.#replayKey, line);
     this.#diagnostics?.streamEvent();
     let message: JsonObject;
     try {
@@ -1281,6 +1300,7 @@ export class AcpProcess {
       void this.#terminateChild("rejected");
       return;
     }
+    if (!isObject(message) || Array.isArray(message)) return;
     if (typeof message.id === "number" && ("result" in message || "error" in message)) {
       this.#diagnostics?.activity("response");
       this.#diagnostics?.count("responsesReceived");

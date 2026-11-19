@@ -1,0 +1,13 @@
+{"replay":1,"bridge":"claude","scenario":"resume","source":"synthetic","provider":"@anthropic-ai/claude-agent-sdk","providerVersion":"0.3.326","description":"A persisted rollout (prompt, tool call, tool result, answer) is materialized by a successor process, then continued with a new prompt."}
+{"frame":{"type":"user","uuid":"00000000-0000-4000-8000-000000000201","session_id":"11111111-2222-4333-8444-555555555555","message":{"role":"user","content":[{"type":"text","text":"Read the config"}]},"parent_tool_use_id":null,"timestamp":"2026-07-01T00:00:00.000Z"}}
+{"frame":{"type":"assistant","uuid":"00000000-0000-4000-8000-000000000202","session_id":"11111111-2222-4333-8444-555555555555","message":{"id":"msg-resume-1","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"tool_use","id":"toolu_resume_read","name":"Read","input":{"file_path":"/replay/workspace/config.json"}}]},"parent_tool_use_id":null,"timestamp":"2026-07-01T00:00:01.000Z"}}
+{"frame":{"type":"user","uuid":"00000000-0000-4000-8000-000000000203","session_id":"11111111-2222-4333-8444-555555555555","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_resume_read","content":"{\"debug\":false}"}]},"parent_tool_use_id":null,"timestamp":"2026-07-01T00:00:02.000Z"}}
+{"frame":{"type":"assistant","uuid":"00000000-0000-4000-8000-000000000204","session_id":"11111111-2222-4333-8444-555555555555","message":{"id":"msg-resume-2","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"Debug is off."}]},"parent_tool_use_id":null,"timestamp":"2026-07-01T00:00:03.000Z"}}
+{"action":"resume"}
+{"action":"observe","label":"resumed"}
+{"action":"prompt","text":"Turn it on"}
+{"frame":{"type":"system","subtype":"init","session_id":"11111111-2222-4333-8444-555555555555","claude_code_version":"2.1.326","model":"claude-sonnet-4-6","cwd":"/replay/workspace","tools":["Read","Edit"],"mcp_servers":[],"slash_commands":[],"permissionMode":"default","apiKeySource":"none","output_style":"default","uuid":"00000000-0000-4000-8000-000000000205"}}
+{"frame":{"type":"assistant","message":{"id":"msg-resume-3","model":"claude-sonnet-4-6","role":"assistant","content":[{"type":"text","text":"Debug is now on."}]},"parent_tool_use_id":null,"session_id":"11111111-2222-4333-8444-555555555555","uuid":"00000000-0000-4000-8000-000000000206"}}
+{"frame":{"type":"result","subtype":"success","duration_ms":12,"duration_api_ms":10,"is_error":false,"num_turns":2,"result":"done","total_cost_usd":0,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"modelUsage":{},"permission_denials":[],"uuid":"00000000-0000-4000-8000-0000000000bf"}}
+{"action":"settle"}
+{"action":"end"}

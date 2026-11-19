@@ -1,0 +1,38 @@
+[
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Reply with exactly: Replay fixture ready. Do not use any tools.",
+        "textLength": 63,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Reply with exactly: Replay fixture ready. Do not use any tools."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Replay fixture ready.",
+        "textLength": 21,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Replay fixture ready."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  }
+]

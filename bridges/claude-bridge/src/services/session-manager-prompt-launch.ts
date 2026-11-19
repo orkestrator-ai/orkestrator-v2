@@ -1,4 +1,5 @@
 import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { replayRecorder } from "./replay-recorder.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
@@ -77,6 +78,7 @@ async function consumeClaudeRuntime(
   try {
     for await (const message of frames) {
       if (runtime.abortController.signal.aborted) break;
+      replayRecorder?.frame(runtime.session.id, message);
       noteClaudeRuntimeFrame(runtime);
       const turn = routeClaudeFrame(runtime, message);
       try {

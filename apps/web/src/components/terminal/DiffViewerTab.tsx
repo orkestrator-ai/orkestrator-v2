@@ -47,6 +47,14 @@ import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { Button } from "@/components/ui/button";
 import { TruncatedPath } from "@/components/ui/truncated-path";
 import { ChangeHunksView } from "@/components/changes/ChangeHunksView";
+import { diffContentKey } from "@/lib/changes/diff-comment-freshness";
+import {
+  CommentableHunks,
+  diffCommentDraftKey,
+  type DiffCommentContext,
+} from "@/components/changes/DiffComments";
+import { DiffCommentTray } from "@/components/changes/DiffCommentTray";
+import { liveCommentPathKey, useDiffCommentsStore } from "@/stores/diffCommentsStore";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 import { DiffNavigationBar, type DiffScopeChoice } from "./DiffNavigationBar";
 import {
@@ -69,6 +77,9 @@ import { hunkStagingKey, useHunkStaging } from "./useHunkStaging";
  * immutable identity and resolves again whenever the backend says the file's
  * content may have changed.
  *
+ * With an environment, lines and hunks take review comments
+ * (`DiffComments.tsx`), which the environment's comment tray sends to an
+ * agent as one correction request.
  * Every body can be stepped through hunk by hunk and file by file (buttons
  * and keyboard, `diff-hunk-navigation.ts`). A live file on a backend with
  * hunk staging can also be shown as its unstaged (index → working tree) or
@@ -82,6 +93,8 @@ interface DiffViewerTabProps {
   target: ChangeDiffTarget;
   /** Tab path, used only as a label when the backend names no path. */
   filePath?: string;
+  /** The environment whose workspace this diff is of; enables review comments. */
+  environmentId?: string;
   isActive: boolean;
   /** Offered for live targets: opens the current file in the editor. */
   onSwitchToFileView?: () => void;
@@ -104,6 +117,7 @@ type BodyState =
       key: string;
       kind: "body";
       identityId: string;
+      resourceKey?: string;
       identity: DiffIdentity;
       measurement: ChangeMeasurement | null;
       provenanceLabelKey: string | null;
@@ -246,6 +260,7 @@ function filePathLabel(file: Pick<ChangeDiffFileBody, "oldPathDisplay" | "newPat
 export function DiffViewerTab({
   target,
   filePath,
+  environmentId,
   isActive,
   onSwitchToFileView,
 }: DiffViewerTabProps) {
@@ -466,7 +481,7 @@ export function DiffViewerTab({
   const bodySeqRef = useRef(0);
   const display = ignoreWhitespace ? IGNORE_WHITESPACE : undefined;
   const bodyKey = identityId
-    ? `${identityId}\0${ignoreWhitespace ? "ignore" : "preserve"}\0${bodyRetry}`
+    ? `${identityId}\0${liveResourceKey ?? ""}\0${ignoreWhitespace ? "ignore" : "preserve"}\0${bodyRetry}`
     : null;
 
   useEffect(() => {
@@ -482,6 +497,7 @@ export function DiffViewerTab({
               key: bodyKey,
               kind: "body",
               identityId,
+              resourceKey: liveResourceKey ?? undefined,
               identity: result.identity,
               measurement: result.measurement,
               provenanceLabelKey: result.provenanceLabelKey ?? null,
@@ -499,7 +515,7 @@ export function DiffViewerTab({
           setBody({ key: bodyKey, kind: "failed", message: errorMessage(error) });
         },
       );
-  }, [backendScope, bodyKey, display, identityId]);
+  }, [backendScope, bodyKey, display, identityId, liveResourceKey]);
 
   const loadMore = useCallback(() => {
     if (body?.kind !== "body" || !body.nextCursor || body.loadingMore) return;
@@ -558,6 +574,21 @@ export function DiffViewerTab({
     );
     element?.scrollIntoView?.({ block: "start" });
   }, [scrollTarget]);
+
+  // A live view tells the comment store what content each path shows now, so
+  // a comment written on earlier content reads as outdated.
+  const observeLiveContent = useDiffCommentsStore((state) => state.observeLiveContent);
+  const observedBody = isLive && body?.kind === "body" && body.key === bodyKey ? body : null;
+  useEffect(() => {
+    if (!environmentId || !observedBody) return;
+    const contentKey = diffContentKey(observedBody.identity);
+    for (const file of observedBody.files)
+      observeLiveContent(
+        environmentId,
+        liveCommentPathKey(observedBody.resourceKey, file.pathId),
+        contentKey,
+      );
+  }, [environmentId, observeLiveContent, observedBody]);
 
   // ---------------------------------------------------------------------------
   // Rendering
@@ -676,7 +707,11 @@ export function DiffViewerTab({
     };
   };
 
-  const shell = (children: ReactNode, testId = "diff-viewer") => (
+  const shell = (
+    children: ReactNode,
+    testId = "diff-viewer",
+    inlineDraftKeys?: ReadonlySet<string>,
+  ) => (
     <div
       data-testid={testId}
       inert={!isActive}
@@ -689,6 +724,13 @@ export function DiffViewerTab({
       style={{ backgroundColor: terminalAppearance.backgroundColor }}
     >
       {children}
+      {environmentId && (
+        <DiffCommentTray
+          environmentId={environmentId}
+          isActive={isActive}
+          inlineDraftKeys={inlineDraftKeys}
+        />
+      )}
     </div>
   );
 
@@ -825,6 +867,17 @@ export function DiffViewerTab({
     );
   }
 
+  const commentContext: DiffCommentContext | null = environmentId
+    ? {
+        environmentId,
+        identity: shownBody.identity,
+        source: isLive ? "live" : "historical",
+        resourceKey: shownBody.resourceKey,
+      }
+    : null;
+  const inlineDraftKeys = commentContext
+    ? new Set(shownBody.files.map((file) => diffCommentDraftKey(file.pathId, commentContext)))
+    : undefined;
   const singleFile = shownBody.identity.kind === "file" && shownBody.files.length <= 1;
   return shell(
     <>
@@ -835,6 +888,16 @@ export function DiffViewerTab({
         )}
         {shownBody.files.map((file, index) => {
           const { path, renamedFrom } = filePathLabel(file);
+          const positionOffset = layout.fileStarts[index] ?? undefined;
+          const hunksProps = {
+            file,
+            mode: effectiveMode,
+            positionOffset,
+            activeHunkIndex: activeHunk?.fileIndex === index ? activeHunk.hunkIndex : null,
+            onSelectHunk: (hunkIndex: number) =>
+              setActivePosition((positionOffset ?? 0) + hunkIndex),
+            renderHunkActions: hunkActions(file, index),
+          };
           return (
             <section
               key={`${file.pathId}:${index}`}
@@ -850,17 +913,11 @@ export function DiffViewerTab({
                   <span className="shrink-0 opacity-70">{STATUS_TEXT[file.status]}</span>
                 </div>
               )}
-              <ChangeHunksView
-                file={file}
-                mode={effectiveMode}
-                maxHeightClass="max-h-none"
-                positionOffset={layout.fileStarts[index] ?? undefined}
-                activeHunkIndex={activeHunk?.fileIndex === index ? activeHunk.hunkIndex : null}
-                onSelectHunk={(hunkIndex) =>
-                  setActivePosition((layout.fileStarts[index] ?? 0) + hunkIndex)
-                }
-                renderHunkActions={hunkActions(file, index)}
-              />
+              {commentContext ? (
+                <CommentableHunks {...hunksProps} context={commentContext} />
+              ) : (
+                <ChangeHunksView {...hunksProps} maxHeightClass="max-h-none" />
+              )}
             </section>
           );
         })}
@@ -885,6 +942,8 @@ export function DiffViewerTab({
         )}
       </div>
     </>,
+    "diff-viewer",
+    inlineDraftKeys,
   );
 }
 

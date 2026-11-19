@@ -328,6 +328,9 @@ function CreateEnvironmentFixture() {
       <CreateEnvironmentDialog
         open={open}
         onOpenChange={setOpen}
+        projectId={
+          window.location.search.includes("launchBase=") ? "launch-base-fixture" : undefined
+        }
         onCreate={async (options) => {
           window.lastCreateEnvironmentOptions = options;
         }}
@@ -335,6 +338,32 @@ function CreateEnvironmentFixture() {
       />
     </main>
   );
+}
+
+function installLaunchBaseFixture(state: string) {
+  window.orkestrator = {
+    invoke: async <T,>(command: string, args?: { retry?: boolean }) => {
+      if (command !== "get_project_base_branch_tip") throw new Error(`Unknown command: ${command}`);
+      if (state === "resolving") return new Promise<T>(() => {});
+      if (state === "unavailable") {
+        return {
+          branch: "main",
+          commit: null,
+          launchEligible: false,
+          unavailableReason: "The project's origin remote is missing",
+        } as T;
+      }
+      const fresh = state === "fresh" || args?.retry;
+      return {
+        branch: "main",
+        ref: state === "local" ? "main" : "origin/main",
+        commit: (fresh ? "a1" : "c3").repeat(20),
+        launchEligible: true,
+        fetched: fresh === true,
+        ...(state === "stale" && !fresh ? { fetchError: "Remote unavailable" } : {}),
+      } as T;
+    },
+  } as Window["orkestrator"];
 }
 
 /** Installed before the fixture renders. */
@@ -2425,6 +2454,8 @@ if (window.location.pathname === "/diff-base") installDiffBaseFixture();
 if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
 if (window.location.pathname === "/status-readability") installStatusReadabilityFixture();
 if (window.location.pathname === "/tab-styles") installTabStylesFixture();
+const launchBaseState = new URLSearchParams(window.location.search).get("launchBase");
+if (window.location.pathname === "/" && launchBaseState) installLaunchBaseFixture(launchBaseState);
 // The app's window scope and command scope, as `App.tsx` mounts them: a
 // per-node store hook outside a provider throws in a development renderer.
 createRoot(document.getElementById("root")!).render(

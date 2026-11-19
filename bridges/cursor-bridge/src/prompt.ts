@@ -6,6 +6,7 @@
  * journal of every request id it has taken and refuses to reuse one whose
  * outcome a previous bridge process could not record.
  */
+import { replayRecorder } from "./replay-recorder.js";
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
@@ -180,6 +181,7 @@ export async function dispatchPrompt(
   await commandChanges.ready;
   turnEvidence.set(state, evidence);
   evidence.start();
+  replayRecorder?.prompt(state.id);
   const send = () =>
     agent.send(
       { text, ...(images.length > 0 ? { images } : {}) },
@@ -194,6 +196,7 @@ export async function dispatchPrompt(
         // and never awaited by us: every branch of `applyInteractionUpdate` is
         // synchronous, so a large transcript cannot back-pressure the agent.
         onDelta: ({ update }) => {
+          replayRecorder?.frame(state.id, update);
           if (!turnStillOwned(state, promptSequence)) return;
           diagnostics?.delta(update);
           // Detached and total over any payload, so it can neither stall the
@@ -402,10 +405,12 @@ export async function followRun(
   const terminal = run.wait().then(
     (result) => {
       diagnostics?.terminalSettled("resolved");
+      replayRecorder?.action(state.id, "cursor-terminal", { result });
       return result;
     },
     (error) => {
       diagnostics?.terminalSettled("rejected");
+      replayRecorder?.action(state.id, "cursor-terminal", { rejection: errorText(error) });
       throw error;
     },
   );

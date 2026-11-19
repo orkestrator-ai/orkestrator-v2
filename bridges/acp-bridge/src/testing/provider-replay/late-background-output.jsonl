@@ -1,0 +1,8 @@
+{"replay":1,"bridge":"acp","scenario":"late-background-output","source":"synthetic","provider":"grok","providerVersion":"1.0.88","description":"A command is still running when session/prompt returns end_turn; its completion update arrives afterwards and settles the card."}
+{"action":"prompt","text":"Start the dev server"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-1","content":{"type":"text","text":"Starting the server in the background."}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"tool_call","toolCallId":"call-serve","title":"bun run dev","kind":"execute","status":"pending","rawInput":{"command":"bun run dev"}}}}}
+{"frame":{"jsonrpc":"2.0","id":"$prompt","result":{"stopReason":"end_turn"}}}
+{"action":"settle"}
+{"action":"observe","label":"after-result"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-serve","status":"completed","content":[{"type":"content","content":{"type":"text","text":"Server stopped"}}],"rawOutput":{"output":"Server stopped"}}}}}

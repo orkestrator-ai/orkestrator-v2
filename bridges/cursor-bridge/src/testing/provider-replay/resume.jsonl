@@ -1,0 +1,13 @@
+{"replay":1,"bridge":"cursor","scenario":"resume","source":"synthetic","provider":"@cursor/sdk","providerVersion":"1.4.1","description":"A completed turn, a bridge restart that loads the published state, then a second turn on the restored session."}
+{"action":"prompt","text":"What is in the README?"}
+{"frame":{"type":"step-started"}}
+{"frame":{"type":"text-delta","text":"It describes a replay fixture."}}
+{"frame":{"type":"turn-ended","usage":{"inputTokens":10,"outputTokens":20,"cacheReadTokens":0,"cacheWriteTokens":0}}}
+{"action":"end","status":"finished","result":"It describes a replay fixture."}
+{"action":"restart"}
+{"action":"observe","label":"restarted"}
+{"action":"prompt","text":"And the licence?"}
+{"frame":{"type":"step-started"}}
+{"frame":{"type":"text-delta","text":"MIT."}}
+{"frame":{"type":"turn-ended","usage":{"inputTokens":10,"outputTokens":20,"cacheReadTokens":0,"cacheWriteTokens":0}}}
+{"action":"end","status":"finished","result":"MIT."}

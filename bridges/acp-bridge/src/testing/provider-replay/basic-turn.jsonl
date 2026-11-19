@@ -1,0 +1,10 @@
+{"replay":1,"bridge":"acp","scenario":"basic-turn","source":"synthetic","provider":"grok","providerVersion":"1.0.88","description":"Thinking, prose and an execute tool call in one response, then a closing answer; session/prompt returns end_turn."}
+{"action":"prompt","text":"List the workspace"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_thought_chunk","messageId":"resp-1","content":{"type":"text","text":"Listing files first."}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-1","content":{"type":"text","text":"Let me look."}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"tool_call","toolCallId":"call-ls","title":"ls -1","kind":"execute","status":"pending","rawInput":{"command":"ls -1"}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-ls","status":"completed","content":[{"type":"content","content":{"type":"text","text":"README.md\\nsrc"}}],"rawOutput":{"output":"README.md\\nsrc"}}}}}
+{"action":"observe","label":"after-tool"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-2","content":{"type":"text","text":"The workspace holds a README and a src directory."}}}}}
+{"frame":{"jsonrpc":"2.0","id":"$prompt","result":{"stopReason":"end_turn"}}}
+{"action":"settle"}

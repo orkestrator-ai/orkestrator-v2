@@ -1,0 +1,6 @@
+{"replay":1,"bridge":"cursor","source":"recorded","provider":"@cursor/sdk","providerVersion":"1.4.1","scenario":"interruption","description":"Captured Cursor SDK shell start and cancelled run.wait result. Text and run identifiers were omitted."}
+{"action":"prompt","text":"Run sleep 12."}
+{"frame":{"type":"tool-call-started","callId":"recorded-tool","toolCall":{"type":"shell","args":{"command":"sleep 12","timeout":20000}},"modelCallId":"recorded-model-call"}}
+{"action":"observe","label":"mid-turn"}
+{"action":"interrupt","awaitProvider":true}
+{"action":"cursor-terminal","result":{"status":"cancelled"}}

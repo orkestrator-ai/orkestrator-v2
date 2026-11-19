@@ -1,0 +1,48 @@
+[
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "drift": {
+      "unknownEvents": 2,
+      "unknownKinds": ["future-update", "tool:futureTool"]
+    },
+    "rows": [
+      {
+        "role": "user",
+        "text": "Say hello",
+        "textLength": 9,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Say hello"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Hello.",
+        "textLength": 6,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "futureTool",
+            "toolState": "success",
+            "outputLength": 2
+          },
+          {
+            "type": "text",
+            "text": "Hello."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  }
+]

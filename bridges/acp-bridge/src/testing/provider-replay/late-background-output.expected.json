@@ -1,0 +1,94 @@
+[
+  {
+    "label": "after-result",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "dispatch": "dispatched",
+      "turn": {
+        "state": "completed"
+      }
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Start the dev server",
+        "textLength": 20,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Start the dev server"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the server in the background.",
+        "textLength": 38,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the server in the background."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "execute",
+            "toolState": "failure",
+            "error": true
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "dispatch": "dispatched",
+      "turn": {
+        "state": "completed"
+      }
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Start the dev server",
+        "textLength": 20,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Start the dev server"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the server in the background.",
+        "textLength": 38,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the server in the background."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "execute",
+            "toolState": "success",
+            "outputLength": 14
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  }
+]

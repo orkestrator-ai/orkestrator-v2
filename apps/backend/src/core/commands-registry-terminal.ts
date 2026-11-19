@@ -22,8 +22,10 @@ import {
   getTerminalSessionCommand,
   getTerminalStateSnapshotCommand,
   launchTerminalJobCommand,
+  claimTerminalSizeCommand,
   listTerminalSessionsCommand,
   localTerminalResizeCommand,
+  releaseTerminalSizeCommand,
   localTerminalWriteCommand,
   startLocalTerminalSessionCommand,
   startTerminalSessionCommand,
@@ -32,6 +34,7 @@ import {
   terminalSnapshotFailedCommand,
   terminalWriteCommand,
 } from "@orkestrator/protocol/contract/domains/terminals";
+import { parseTerminalSizeClientId } from "@orkestrator/protocol/terminal-size-ownership";
 import {
   checkContainerWorkspacePathsCommand,
   copyExternalFileCommand,
@@ -335,6 +338,38 @@ function snapshotResponse<T>(
 
 function refreshRequested(value: unknown): boolean {
   return value === true;
+}
+
+/**
+ * One size update or claim of a container or local PTY, through the session's
+ * size owner (`terminal-size-ownership.ts`). A client that does not own the
+ * size has its update refused in band (`applied: false`) rather than as an
+ * error, because the PTY is there and a failure would read as a dead
+ * terminal. The owner resending the size it last set (a claim repeated while
+ * typing) changes nothing, so the PTY and its history are left alone.
+ */
+function resizeTerminalSession(
+  runtime: CommandContext["runtime"],
+  args: { sessionId: string; cols?: unknown; rows?: unknown; clientId?: unknown },
+  claim: boolean,
+): { delivered: boolean; applied?: boolean; owned?: boolean } {
+  const id = args.sessionId;
+  const terminalProcess = runtime.terminals.process(id);
+  if (!terminalProcess) return { delivered: false };
+  const cols = asTerminalDimension(args.cols, 80);
+  const rows = asTerminalDimension(args.rows, 24);
+  const decision = runtime.terminals.sizeOwnership.decide(
+    id,
+    parseTerminalSizeClientId(args.clientId),
+    claim,
+    { cols, rows },
+    () => terminalProcess.resize(cols, rows),
+  );
+  if (!decision.apply) return { delivered: true, applied: false, owned: false };
+  if (!decision.unchanged) {
+    resizeTerminalHistoryBestEffort(runtime.terminals.history, id, cols, rows);
+  }
+  return { delivered: true, applied: true, owned: decision.owned };
 }
 
 function resizeTerminalHistoryBestEffort(
@@ -649,14 +684,21 @@ export function registerTerminalCommands(
     runtime.terminals.recordInputActivity(id, terminalData, context);
     return { delivered: true };
   });
-  register(terminalResizeCommand, ({ sessionId: id, cols, rows }, { runtime }) => {
-    const terminalProcess = runtime.terminals.process(id);
-    if (!terminalProcess) return { delivered: false };
-    const resolvedCols = asTerminalDimension(cols, 80);
-    const resolvedRows = asTerminalDimension(rows, 24);
-    terminalProcess.resize(resolvedCols, resolvedRows);
-    resizeTerminalHistoryBestEffort(runtime.terminals.history, id, resolvedCols, resolvedRows);
-    return { delivered: true };
+  register(terminalResizeCommand, (args, { runtime }) =>
+    resizeTerminalSession(runtime, args, false),
+  );
+  register(claimTerminalSizeCommand, (args, { runtime }) =>
+    resizeTerminalSession(runtime, args, true),
+  );
+  register(releaseTerminalSizeCommand, ({ clientId, sessionId, disconnected }, { runtime }) => {
+    const owner = parseTerminalSizeClientId(clientId);
+    if (owner === null) return { released: 0 };
+    return {
+      released: runtime.terminals.sizeOwnership.release(owner, {
+        ...(typeof sessionId === "string" ? { sessionId } : {}),
+        disconnected: disconnected === true,
+      }),
+    };
   });
   register(detachTerminalCommand, ({ sessionId }, { runtime }) => {
     runtime.terminals.explicitlyCloseSession(sessionId);
@@ -947,15 +989,9 @@ export function registerTerminalCommands(
     runtime.terminals.recordInputActivity(id, terminalData, context);
     return { delivered: true };
   });
-  register(localTerminalResizeCommand, ({ sessionId: id, cols, rows }, { runtime }) => {
-    const terminalProcess = runtime.terminals.process(id);
-    if (!terminalProcess) return { delivered: false };
-    const resolvedCols = asTerminalDimension(cols, 80);
-    const resolvedRows = asTerminalDimension(rows, 24);
-    terminalProcess.resize(resolvedCols, resolvedRows);
-    resizeTerminalHistoryBestEffort(runtime.terminals.history, id, resolvedCols, resolvedRows);
-    return { delivered: true };
-  });
+  register(localTerminalResizeCommand, (args, { runtime }) =>
+    resizeTerminalSession(runtime, args, false),
+  );
   register(closeLocalTerminalSessionCommand, ({ sessionId }, { runtime }) => {
     runtime.terminals.explicitlyCloseSession(sessionId);
   });

@@ -422,6 +422,24 @@ function persistedSystemNoticePart(
  * the CLI may echo its own interruption marker, and one interruption is one
  * row. The rollout keeps the marker, so a reload rebuilds this same row.
  */
+function settleInterruptedTools(
+  messages: readonly NormalizedMessage[],
+  onChanged?: (message: NormalizedMessage) => void,
+): void {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "user") break;
+    let changed = false;
+    for (const part of message.parts) {
+      if (part.type !== "tool-invocation" || part.toolState !== "pending") continue;
+      part.toolState = "failure";
+      part.toolError = INTERRUPTED_NOTICE_TEXT;
+      changed = true;
+    }
+    if (changed) onChanged?.(message);
+  }
+}
+
 export function appendInterruptedNotice(session: SessionState, sessionId: string): void {
   const last = session.messages.at(-1);
   if (
@@ -432,6 +450,10 @@ export function appendInterruptedNotice(session: SessionState, sessionId: string
   ) {
     return;
   }
+  settleInterruptedTools(session.messages, (message) => {
+    markTranscriptChanged(session);
+    eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
+  });
   const createdAt = new Date().toISOString();
   const part = interruptedNoticePart(createdAt);
   const message: NormalizedMessage = {
@@ -1627,6 +1649,7 @@ export function normalizePersistedSessionMessages(
   const messages: NormalizedMessage[] = [];
   for (const entry of parsed) {
     entry.notices.forEach((part, index) => {
+      if (part.content === INTERRUPTED_NOTICE_TEXT) settleInterruptedTools(messages);
       const message: NormalizedMessage = {
         // Stable across rehydrations so a client holding the row keeps it.
         // Never an `sdkUuid`: a notice is not a record a fork can address.

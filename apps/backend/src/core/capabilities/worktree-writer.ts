@@ -59,6 +59,7 @@ import {
 import {
   CAPABILITY_LOCATION_INDEX,
   CAPABILITY_MARKER_FILE,
+  recoverLocationReplacements,
   removeManagedPath,
 } from "./security.js";
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
@@ -305,6 +306,7 @@ export async function applyWorktreePlan(
     keep: readonly WorktreeEntry[];
     knownEnvironment(environmentId: string): boolean;
     fence?: () => Promise<void>;
+    writeHeld?: () => Promise<boolean>;
   },
 ): Promise<NodePlanResult[]> {
   const entryOf = (target: NodePlanTarget): WorktreeEntry => ({
@@ -363,6 +365,7 @@ export async function applyWorktreePlan(
       artifacts: deps.artifacts,
       homes: deps.homes,
       locate,
+      ...(input.writeHeld ? { writeHeld: input.writeHeld } : {}),
       ...(deps.projectMcp ? { mcp: projectMcpInstaller(deps.projectMcp, mcpContext) } : {}),
       ...(deps.now ? { now: deps.now } : {}),
     });
@@ -431,6 +434,7 @@ export async function managedWorktreeEntries(
       }
       continue;
     }
+    await recoverLocationReplacements(directory);
     const children = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
     for (const child of children.slice(0, MAX_REPORTED_PER_LOCATION)) {
       if (!child.isDirectory()) continue;

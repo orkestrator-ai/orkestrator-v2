@@ -171,6 +171,7 @@ export class CapabilityService {
       storage: deps.storage,
       artifacts: this.artifacts,
       homes: deps.homes,
+      ...(deps.busyProviders ? { busyProviders: deps.busyProviders } : {}),
       ...(deps.mcp ? { mcp: deps.mcp } : {}),
       ...(deps.claudePlugins ? { claudePlugins: deps.claudePlugins } : {}),
       ...(deps.now ? { now: deps.now } : {}),
@@ -270,7 +271,7 @@ export class CapabilityService {
     this.setups = new CapabilitySetupCommands(context, this.reads);
     this.updates = new CapabilityUpdateCommands(context, this.reads, this.changes);
     this.preflight = new CapabilityPreflight(context);
-    this.executorHandlers = new CapabilityExecutorHandlers(context);
+    this.executorHandlers = new CapabilityExecutorHandlers(context, this.preflight);
   }
 
   private now(): string {
@@ -292,8 +293,24 @@ export class CapabilityService {
   start(): void {
     if (this.disposed) return;
     this.reconciler.start();
+    const pruneStaged = () =>
+      void this.artifacts
+        .pruneStaged()
+        .catch((error: unknown) =>
+          log.warn("updates.check-failed", { error: formatLogError(error, { message: false }) }),
+        );
+    const prunePrivate = () =>
+      void this.preflight.prunePrivatePlugins().catch((error: unknown) =>
+        log.warn("service.launch-record-failed", {
+          error: formatLogError(error, { message: false }),
+        }),
+      );
     if (!this.updateTimer) {
+      pruneStaged();
+      prunePrivate();
       this.updateTimer = setInterval(() => {
+        pruneStaged();
+        prunePrivate();
         void this.refreshUpdates({}).catch((error: unknown) =>
           log.warn("updates.check-failed", { error: formatLogError(error, { message: false }) }),
         );
@@ -589,6 +606,14 @@ export class CapabilityService {
   /** Non-destructive checks, with the user's consent, of each component's bytes on a machine. */
   verify(args: Record<string, unknown>): Promise<CapabilityVerification> {
     return this.preflight.verify(args);
+  }
+
+  async forgetEnvironmentLaunches(environmentId: string): Promise<void> {
+    const nodeId = await this.deps.selfId();
+    this.deps.storage.capabilities.forgetCapabilityLaunches(
+      ({ target }) => target.nodeId === nodeId && target.environmentId === environmentId,
+    );
+    await this.preflight.prunePrivatePlugins();
   }
 
   /** Launch preflight for a native agent session: resolves the frozen effective manifest. */

@@ -40,6 +40,7 @@ import { sha256 } from "./planning.js";
 import type { CapabilityState } from "./types.js";
 
 export type CapabilityChange =
+  | { kind: "add-to-setup"; packageId: string; setupId: string; expectedArtifactDigest?: string }
   | {
       kind: "add-to-setup";
       inspectionId: string;
@@ -115,6 +116,13 @@ export function parseCapabilityChange(value: unknown): CapabilityChange {
   const record = value as Record<string, unknown>;
   switch (record.kind) {
     case "add-to-setup": {
+      if (record.packageId !== undefined) {
+        return {
+          kind: "add-to-setup",
+          packageId: requireText(record, "packageId"),
+          setupId: requireText(record, "setupId"),
+        };
+      }
       const excludedProviders = asStringArray(record.excludedProviders)?.map((provider) => {
         if (!(AGENT_PLATFORMS as readonly string[]).includes(provider)) {
           throw new CapabilityError("invalid-request", "An excluded provider is unknown.");
@@ -244,6 +252,22 @@ export function applyChangeToState(
   switch (change.kind) {
     case "add-to-setup":
     case "adopt": {
+      if ("packageId" in change) {
+        const pkg = state.packages[change.packageId];
+        if (!pkg) throw new CapabilityError("not-found", "The package is not in the library.");
+        if (pkg.artifactDigest !== change.expectedArtifactDigest)
+          throw new CapabilityError("conflict", "The package changed since the preview.");
+        const setup = touchSetup(change.setupId);
+        if (setup.packageSelections.some((entry) => entry.packageId === pkg.id))
+          throw new CapabilityError("conflict", "This setup already includes the package.");
+        if (setup.packageSelections.length >= CAPABILITY_LIMITS.maxSelectionsPerSetup)
+          throw new CapabilityError("too-large", "The setup has too many selections.");
+        setup.packageSelections.push({
+          packageId: pkg.id,
+          version: pkg.pinned ? pkg.revision : "latest",
+        });
+        return { packageIds: [pkg.id], setupId: setup.id, addedComponentIds: pkg.componentIds };
+      }
       const inspection = state.inspections[change.inspectionId];
       if (!inspection) {
         throw new CapabilityError("conflict", "The inspection expired; inspect the source again.");

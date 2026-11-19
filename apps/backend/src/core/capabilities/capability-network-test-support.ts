@@ -46,6 +46,8 @@ export interface CapabilityNode {
   applyCalls: Array<{ key: string; action: string; digest?: string }>;
   /** Answer `false` to make the leaf believe its command node is away. */
   reachable: boolean;
+  sessionEvidence?: import("@orkestrator/protocol/capability-evidence").CapabilitySessionEvidenceRead;
+  busyWorktrees?: ReadonlySet<string>;
   /** Fail the next handover stage call of this part (a dropped transfer). */
   failNextStage?: "artifact" | "state";
   /** This machine's own environments (its environment store). */
@@ -116,6 +118,7 @@ export async function addCapabilityNode(
   } as unknown as CapabilityNode;
   const service = node.service;
   const scoped: ScopedTargetSources = {
+    writeHeld: async ({ environmentId }) => entry.busyWorktrees?.has(environmentId ?? "") ?? false,
     environments: async () => entry.environments,
     containerDelivery: async (environmentId) => entry.containers.get(environmentId) ?? null,
   };
@@ -142,6 +145,7 @@ export async function addCapabilityNode(
     },
     requestLaunch: (payload) => node.emit(CAPABILITY_LAUNCH_REQUESTED_EVENT, payload),
     controllerReachable,
+    sessionEvidence: async () => entry.sessionEvidence ?? { state: "none" },
     scoped,
     remoteEnvironments: async (nodeId) => entry.remoteEnvironments.get(nodeId) ?? null,
   });

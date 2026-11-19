@@ -3,11 +3,12 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { CapabilityArtifactStore } from "./artifact-store.js";
+import { CapabilityArtifactStore, STAGED_ARTIFACT_TTL_MS } from "./artifact-store.js";
 import {
   CapabilityError,
   confinedPath,
   readPackageTree,
+  recoverLocationReplacements,
   replaceDirectoryAtomically,
   treeDigest,
   validatePackageFiles,
@@ -99,6 +100,19 @@ describe("writing", () => {
     ).toThrow("Two files");
   });
 
+  test("recovers an interrupted replacement before observing the location", async () => {
+    await write("skills/.review.orkestrator-retired/SKILL.md", "old");
+    await write("skills/.review.orkestrator-retired/.orkestrator-capability.json", "{}");
+    await recoverLocationReplacements(path.join(root, "skills"));
+    expect(await fs.readFile(path.join(root, "skills/review/SKILL.md"), "utf8")).toBe("old");
+    await replaceDirectoryAtomically(
+      path.join(root, "skills/review"),
+      validatePackageFiles([{ path: "SKILL.md", content: Buffer.from("new") }]),
+    );
+    await recoverLocationReplacements(path.join(root, "skills"));
+    expect(await fs.readFile(path.join(root, "skills/review/SKILL.md"), "utf8")).toBe("new");
+  });
+
   test("a directory is replaced whole, never through a link", async () => {
     const destination = path.join(root, "skills", "review");
     await replaceDirectoryAtomically(
@@ -151,6 +165,20 @@ describe("artifact store", () => {
     );
     const digest = await store.put(files);
     expect((await store.get(digest)).map((file) => file.path)).toEqual(["SKILL.md"]);
+  });
+
+  test("expires abandoned chunks and preserves recent uploads after restart", async () => {
+    const expired = "a".repeat(64);
+    const recent = "b".repeat(64);
+    const store = new CapabilityArtifactStore(root);
+    await store.stageChunk(`sha256:${expired}`, 0, 5, "expired");
+    await store.stageChunk(`sha256:${recent}`, 0, 5, "recent");
+    const staging = path.join(root, "capability-artifacts", ".staging");
+    const now = Date.now();
+    const old = new Date(now - STAGED_ARTIFACT_TTL_MS - 1_000);
+    await fs.utimes(path.join(staging, expired), old, old);
+    await new CapabilityArtifactStore(root).pruneStaged(now);
+    expect(await fs.readdir(staging)).toEqual([recent]);
   });
 
   test("a bundle that does not match the named digest is refused", async () => {

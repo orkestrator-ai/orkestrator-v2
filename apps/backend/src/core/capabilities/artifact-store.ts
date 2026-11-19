@@ -27,6 +27,7 @@ import {
   type PackageFile,
 } from "./security.js";
 
+export const STAGED_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1_000;
 const DIGEST = /^sha256:([0-9a-f]{64})$/;
 
 export interface ArtifactBundleFile {
@@ -37,6 +38,8 @@ export interface ArtifactBundleFile {
 
 export class CapabilityArtifactStore {
   private readonly root: string;
+  private stagingTail: Promise<unknown> = Promise.resolve();
+  private pendingChunks = 0;
 
   constructor(dataDir: string) {
     this.root = path.join(dataDir, "capability-artifacts");
@@ -105,6 +108,27 @@ export class CapabilityArtifactStore {
     return entries.filter((name) => /^[0-9a-f]{64}$/.test(name)).map((name) => `sha256:${name}`);
   }
 
+  /** Reclaims abandoned uploads without racing a chunk write or assembly. */
+  pruneStaged(now = Date.now()): Promise<void> {
+    return this.serializeStaging(async () => {
+      const root = path.join(this.root, ".staging");
+      const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !/^[0-9a-f]{64}$/.test(entry.name)) continue;
+        const directory = path.join(root, entry.name);
+        const stat = await fs.lstat(directory).catch(() => null);
+        if (stat && now - stat.mtimeMs >= STAGED_ARTIFACT_TTL_MS)
+          await fs.rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
+
+  private serializeStaging<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.stagingTail.then(work);
+    this.stagingTail = next.catch(() => undefined);
+    return next;
+  }
+
   // --- Transfer --------------------------------------------------------------
 
   /** `files` as a transfer bundle, cut into chunks of at most `artifactChunkBytes`. */
@@ -158,12 +182,41 @@ export class CapabilityArtifactStore {
     if (data.length > CAPABILITY_LIMITS.artifactChunkBytes) {
       throw new CapabilityError("too-large", "A chunk is larger than the transfer limit.");
     }
+    if (this.pendingChunks >= 16)
+      throw new CapabilityError(
+        "source-unavailable",
+        "Artifact staging is busy. Retry the transfer.",
+      );
+    this.pendingChunks++;
+    try {
+      return await this.serializeStaging(() =>
+        this.storeChunk(digest, match[1]!, index, count, data),
+      );
+    } finally {
+      this.pendingChunks--;
+    }
+  }
+
+  private async storeChunk(
+    digest: string,
+    hex: string,
+    index: number,
+    count: number,
+    data: string,
+  ): Promise<{ complete: boolean; missing: number[] }> {
     if (await this.has(digest)) return { complete: true, missing: [] };
-    const staging = path.join(this.root, ".staging", match[1]!);
+    const staging = path.join(this.root, ".staging", hex);
     await fs.mkdir(staging, { recursive: true });
     await fs.writeFile(path.join(staging, `${index}-of-${count}`), data);
+    const now = new Date();
+    await fs.utimes(staging, now, now);
+    const names = await fs.readdir(staging);
+    for (const name of names) {
+      if (/^\d+-of-\d+$/.test(name) && !name.endsWith(`-of-${count}`))
+        await fs.unlink(path.join(staging, name));
+    }
     const present = new Set(
-      (await fs.readdir(staging))
+      names
         .map((name) => /^(\d+)-of-(\d+)$/.exec(name))
         .filter((m): m is RegExpExecArray => m !== null && Number(m[2]) === count)
         .map((m) => Number(m[1])),

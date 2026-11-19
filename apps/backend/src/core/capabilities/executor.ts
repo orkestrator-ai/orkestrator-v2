@@ -21,6 +21,7 @@
  * marketplace (`provider-adapters/claude-plugins.ts`); other providers'
  * plugins are unsupported.
  */
+import { beginCapabilityWrite, RUNNING_WORK_HOLD_REASON } from "./running-work.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -55,6 +56,7 @@ import {
   CapabilityError,
   removeManagedPath,
   replaceDirectoryAtomically,
+  recoverDirectoryReplacement,
   treeDigest,
   writeFileAtomically,
   type PackageFile,
@@ -133,7 +135,20 @@ export interface McpInstaller {
   }>;
 }
 
+class RunningWorkHold extends Error {}
+
+export function queuedCapabilityWrite(target: NodePlanTarget): NodePlanResult {
+  return {
+    key: target.key,
+    status: "queued-until-idle",
+    verification: "requested",
+    reason: RUNNING_WORK_HOLD_REASON,
+  };
+}
+
 export interface CapabilityExecutorDeps {
+  busyProviders?: () => Promise<readonly AgentPlatform[]>;
+  writeHeld?: () => Promise<boolean>;
   storage: { capabilities: CapabilitiesStorage };
   artifacts: CapabilityArtifactStore;
   homes: () => CapabilityHomes;
@@ -296,15 +311,37 @@ export class CapabilityExecutor {
     const results: NodePlanResult[] = [];
     for (const target of targets) {
       const lockKey = target.locationId ?? `${target.kind}:${target.provider ?? ""}`;
+      const readers = this.deps.locate
+        ? (this.deps.locate(target.locationId ?? "")?.location.readBy ??
+          (target.provider ? [target.provider] : []))
+        : (capabilityLocation(target.locationId ?? "")?.readBy ??
+          (target.provider ? [target.provider] : []));
+      const checkWrite = async () => {
+        await fence?.();
+        if (await this.deps.writeHeld?.().catch(() => true)) throw new RunningWorkHold();
+        if (!this.deps.busyProviders) return;
+        const busy = await this.deps.busyProviders().catch(() => readers);
+        if (readers.some((reader) => busy.includes(reader))) throw new RunningWorkHold();
+      };
       results.push(
-        await this.withLock(lockKey, () =>
-          this.applyOne(target, fence).catch((error: unknown) => ({
-            key: target.key,
-            status: "failed" as const,
-            verification: "requested" as const,
-            reason: boundedReason(error),
-          })),
-        ),
+        await this.withLock(lockKey, async () => {
+          const finish = beginCapabilityWrite(readers);
+          if (!finish) return queuedCapabilityWrite(target);
+          try {
+            return await this.applyOne(target, checkWrite);
+          } catch (error) {
+            return error instanceof RunningWorkHold
+              ? queuedCapabilityWrite(target)
+              : {
+                  key: target.key,
+                  status: "failed",
+                  verification: "requested",
+                  reason: boundedReason(error),
+                };
+          } finally {
+            finish();
+          }
+        }),
       );
     }
     return results;
@@ -351,6 +388,7 @@ export class CapabilityExecutor {
     const { location, directory } = this.locate(target.locationId);
     const name = installName(target.componentName, target.pathOrKey, location.layout);
     const entry = location.layout === "file" ? `${name}.md` : name;
+    if (location.layout === "directory") recoverDirectoryReplacement(path.join(directory, entry));
 
     if (target.action === "remove")
       return this.removeFileComponent(target, location.layout, directory, entry, fence);

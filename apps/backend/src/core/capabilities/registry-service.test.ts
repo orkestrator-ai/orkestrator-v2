@@ -4,7 +4,7 @@
  * SQLite store and provider home) and an in-memory registry served by an
  * injected fetch. No network.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -427,6 +427,40 @@ describe("signed team manifests", () => {
     await configureRegistry(importer);
     return { exporter, importer, exported };
   }
+
+  test("rechecks signing policy after reading the cached revision", async () => {
+    const { importer, exported } = await signedExport();
+    const preview = await importer.service.previewImport({
+      intent: exported.intent,
+      lock: exported.lock,
+    });
+    expect(preview.valid).toBe(true);
+    const read = importer.service.artifacts.get.bind(importer.service.artifacts);
+    const started = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const get = spyOn(importer.service.artifacts, "get").mockImplementation(async (digest) => {
+      started.resolve();
+      await resume.promise;
+      return read(digest);
+    });
+    const importing = importer.service.importSetup({ previewId: preview.previewId });
+    try {
+      await Promise.race([
+        started.promise,
+        importing.then(() => {
+          throw new Error("The import returned before reading the artifact.");
+        }),
+      ]);
+      await importer.service.registries.setManifestPolicy({ requireSignedManifests: true });
+    } finally {
+      resume.resolve();
+      get.mockRestore();
+    }
+    await expect(importing).rejects.toThrow("requires manifests signed by a trusted key");
+    expect(
+      Object.keys((await importer.storage.capabilities.loadCapabilityState()).packages),
+    ).toEqual([]);
+  });
 
   test("signer, trust and policy are shown and enforced on import preview", async () => {
     const { exporter, importer, exported } = await signedExport();

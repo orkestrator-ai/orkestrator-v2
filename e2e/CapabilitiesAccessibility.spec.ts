@@ -292,6 +292,39 @@ test("the update inbox asks for review before approval, and rollback previews fi
   });
 });
 
+test("adding a library package to another setup previews before applying", async ({
+  page,
+}, info) => {
+  const settings = await openSettings(page);
+  await settings.getByRole("button", { name: /^docs-search/ }).click();
+  const detail = settings.getByTestId("capability-package-detail");
+  await detail.getByRole("combobox", { name: "Use on a setup" }).selectOption("frontend");
+  const visualDir = process.env.ORKESTRATOR_CAPABILITY_VISUALS;
+  if (visualDir)
+    await page.screenshot({
+      path: `${visualDir}/package-assignment-review-${info.project.name}.png`,
+    });
+  await detail.getByRole("button", { name: "Add", exact: true }).click();
+  const preview = page.getByRole("dialog", { name: "Review the plan" });
+  await expect(preview.getByRole("region", { name: "Planned changes" })).toBeVisible();
+  expect((await calls(page, "preview_capability_change"))[0]?.args.change).toMatchObject({
+    kind: "add-to-setup",
+    packageId: "git:org/agent-tools#docs-search",
+    setupId: "frontend",
+  });
+  expect(await calls(page, "set_capability_setup")).toHaveLength(0);
+  expect(await calls(page, "apply_capability_change")).toHaveLength(0);
+  if (visualDir)
+    await page.screenshot({
+      path: `${visualDir}/package-assignment-review-approval-${info.project.name}.png`,
+    });
+  await expect(preview.getByRole("button", { name: "Approve and apply" })).toBeDisabled();
+  await preview.getByRole("checkbox", { name: /I reviewed/ }).check();
+  await preview.getByRole("button", { name: "Approve and apply" }).click();
+  await expect(preview).toBeHidden();
+  expect(await calls(page, "apply_capability_change")).toHaveLength(1);
+});
+
 test("fleet delivery opens an approval preview before applying", async ({ page }, info) => {
   const settings = await openSettings(page);
   await settings.getByRole("tab", { name: "Setups" }).click();
@@ -479,7 +512,7 @@ test("the session chip changes toolkits without a restart and announces its test
     "polite",
   );
   await expect(chip.getByTestId("capability-chip-announcement")).toHaveText(
-    "2 of 2 checks found the files in place.",
+    "2 of 2 checks found the files in place. None is confirmed loaded by the session yet.",
   );
   expect(await horizontalOverflow(page)).toEqual([]);
 });

@@ -46,6 +46,7 @@ export interface RuntimeProof {
   detail: string;
   source: RuntimeObservation["source"];
   generation?: string;
+  receiptId?: string;
 }
 
 /** The installed skill name a Claude query lists for a session-private skill. */
@@ -192,6 +193,7 @@ export function gradeGrokDiscovery(input: {
       componentId: receipt.componentId,
       level: "advertised",
       status: "installed-next-session",
+      receiptId: receipt.id,
       detail: `Grok${input.version ? ` ${input.version}` : ""} lists this skill from its installed directory; it loads in the next Grok session.`,
       source: "provider-config",
     });

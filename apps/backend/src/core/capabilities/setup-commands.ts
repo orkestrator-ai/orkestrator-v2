@@ -15,6 +15,10 @@ import {
   type CapabilityUpdatePolicy,
 } from "@orkestrator/protocol/capability-resources";
 import type { CapabilitySetupList } from "@orkestrator/protocol/capability-resources-api";
+import {
+  canonicalCapabilityJson,
+  expandCapabilitySetup,
+} from "@orkestrator/protocol/capability-resources-resolve";
 
 import type { CapabilityLibraryReads } from "./library-reads.js";
 import { newCorrelationId, recordActivity } from "./operations.js";
@@ -121,6 +125,32 @@ export class CapabilitySetupCommands {
           "Preview this toolkit's delivery to the fleet before changing its scope.",
         );
       }
+      const fleetRoot = (setup: CapabilitySetup) =>
+        setup.builtIn || (setup.machineSelectors.length > 0 && !setup.targetSelectors?.length);
+      const allSetups = new Map(Object.entries(state.setups));
+      allSetups.set(id, next);
+      const deliversToFleet =
+        fleetRoot(next) ||
+        Array.from(allSetups.values()).some(
+          (root) =>
+            fleetRoot(root) &&
+            expandCapabilitySetup(root.id, allSetups).order.some((setup) => setup.id === id),
+        );
+      const oldSelections = new Set(
+        existing?.packageSelections.map((selection) => canonicalCapabilityJson(selection)),
+      );
+      if (
+        deliversToFleet &&
+        (next.packageSelections.some(
+          (selection) => !oldSelections.has(canonicalCapabilityJson(selection)),
+        ) ||
+          next.parentSetupIds.some((parent) => !existing?.parentSetupIds.includes(parent)))
+      ) {
+        throw new CapabilityError(
+          "approval-required",
+          "Preview this toolkit's delivery to the fleet before adding packages.",
+        );
+      }
       state.setups[id] = next;
       recordActivity(state, {
         ...(actor ? { actor } : {}),
@@ -149,11 +179,18 @@ export class CapabilitySetupCommands {
       if (expected !== setup.revision)
         throw new CapabilityError("conflict", "Someone else changed this setup; reload it.");
       delete state.setups[setupId];
+      const now = this.ctx.now();
       for (const other of Object.values(state.setups)) {
+        if (!other.parentSetupIds.includes(setupId)) continue;
         other.parentSetupIds = other.parentSetupIds.filter((parent) => parent !== setupId);
+        other.revision++;
+        other.updatedAt = now;
       }
       for (const assignment of Object.values(state.assignments)) {
+        if (!assignment.setupIds.includes(setupId)) continue;
         assignment.setupIds = assignment.setupIds.filter((id) => id !== setupId);
+        assignment.revision++;
+        assignment.updatedAt = now;
       }
       recordActivity(state, {
         ...(actor ? { actor } : {}),

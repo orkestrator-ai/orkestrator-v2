@@ -117,6 +117,24 @@ describe("leaf launch authority", () => {
     await expect(gram.cap.preflightSession(launch("s2"))).rejects.toThrow("cannot have");
   });
 
+  test("a required copy changed while waiting for the controller blocks the launch", async () => {
+    const { desktop, gram } = await fleet();
+    await addSkill(desktop, "docs", "Write docs.", { required: true });
+    const read = gram.cap.observeSelf.bind(gram.cap);
+    let reads = 0;
+    const observe = spyOn(gram.cap, "observeSelf").mockImplementation(async () => {
+      const result = await read();
+      if (++reads === 1) await fs.writeFile(skillFile(gram, ".claude", "docs"), "Changed.");
+      return result;
+    });
+    try {
+      await expect(gram.cap.preflightSession(launch("s1"))).rejects.toThrow("cannot have");
+      expect(reads).toBe(2);
+    } finally {
+      observe.mockRestore();
+    }
+  });
+
   test("an unreachable command node: a recent matching cached answer stands in, otherwise required fails closed", async () => {
     const { desktop, gram } = await fleet();
     await addSkill(desktop, "docs", "Write docs.", { required: true });

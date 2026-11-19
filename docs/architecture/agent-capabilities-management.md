@@ -88,6 +88,8 @@ through `updateStore`, so every compare-and-swap is one SQLite transaction; and
 `capability-executor`, this machine's accepted epoch and applied plan keys.
 Package bytes live in `<data dir>/capability-artifacts/<sha256>/`, never in a
 row. Both stores are part of the database, so the existing backups cover them.
+Incomplete transfers expire after 24 hours without a chunk. The executor
+serializes chunk writes and expiry so cleanup cannot remove an active assembly.
 
 ### Authority
 
@@ -303,9 +305,13 @@ review), whose boundary admits no skill frontmatter hooks or tool grants.
 - **Frozen at launch.** The directory is named by its content and recorded at
   launch; a setup change later never alters what a running session loads. A
   turn re-stages a pruned directory from the artifact cache and refuses to run
-  when the recorded bytes cannot be reproduced. Private-plugin records survive diagnostic retention
-  and stay on the machine running the session through handover. Unreferenced
-  directories are pruned after an hour.
+  when the recorded bytes cannot be reproduced. Private-plugin records survive
+  diagnostic retention and stay on the machine running the session through
+  handover. Environment deletion and graph-run retention release their launch
+  records. Closing a tab retains the record with its conversation. Periodic
+  cleanup removes unreferenced directories after the one-hour grace period.
+  A continued graph step keeps its provider conversation and sends the plugin
+  approved for the receiving activation.
 - **Never a substitute for a copy the provider already reads.** When any
   receipt or observed item for the component exists on the target (a drifted
   or older shared copy, a worktree copy), the launch is judged on that copy as
@@ -674,7 +680,10 @@ Catalogue names are insufficient to identify the installed revision.
   generation is the query's), and `observed-in-use` once the agent invoked its
   skill. A load that did not include that directory is reported as failed. A
   shared copy the query lists by name is `advertised` at most: a name cannot
-  prove which bytes loaded.
+  prove which bytes loaded. For a leaf session the command node requests proof
+  from the owning backend, which grades it using the launch it actually recorded.
+  The same read identifies the worktree or staged container incarnation for
+  scoped checks. A container chip uses the manifest staged for that incarnation.
 - **Grok.** `grok inspect --json` is Grok's own discovery for the machine. A
   listed `SKILL.md` inside a receipt's installed directory, whose bytes the
   inventory just matched, is `advertised` for the next Grok session. Grok has
@@ -682,8 +691,8 @@ Catalogue names are insufficient to identify the installed revision.
 - **Everything else** keeps the receipt's level: present files are
   "installed; not runtime-verified".
 
-Each grade found is kept as a runtime observation (source, generation and
-time; bounded by `CAPABILITY_LIMITS.maxObservations`).
+Local grades are kept as runtime observations (source, generation and time,
+bounded by `CAPABILITY_LIMITS.maxObservations`).
 
 ### Running work
 
@@ -696,18 +705,19 @@ its manifest, and looks again every 15 seconds. When the work ends, the
 **latest** desired revision is applied, not each queued step. Work in flight
 is the activity each local environment persists (`agentActivityState`, fed by
 the native-agent, graph-run, build-pipeline and terminal observers); the
-providers are the native sessions in those environments (terminal-only Claude
-work holds Claude; a working environment with no identifiable session holds
-every provider). Containerized environments are not counted: their agents
-read their own staged copies. Each machine reports its own busy providers in
-its observation (`CapabilityInventory.busyProviders`); a machine running a
-build from before this field reports none, so nothing is held there.
+providers are the native sessions in those environments. Waiting for a
+permission or an answer continues to hold the copy. Terminal-only Claude
+work holds Claude. An environment with no identifiable provider conservatively
+adds all providers to the machine's hold. Containerized environments use their
+own staged copies.
 
-So a graph run, scheduled job or turn never gains, loses or changes a shared
-skill, command, MCP server or plugin while it works. Between turns an idle
-interactive session does see a machine-wide change on its next turn (the chip
-reports the newer manifest); only its private plugin stays frozen for the
-whole session.
+Each machine reports its busy providers in `CapabilityInventory.busyProviders`
+and checks again when admitting the write. Native and graph dispatch coordinate
+startup with writes through the owning backend. Worktree and added-account
+copies also check activity and retry held work. A terminal started outside
+that backend is visible only after its activity is reported. Between turns an
+idle interactive session can see a machine-wide change on its next turn. Its
+private plugin stays frozen.
 
 ## Runtime connection points
 
@@ -745,8 +755,10 @@ whole session.
   entrypoint copies into that provider's home (`claude-config/skills`,
   `agents-skills`, `codex-home/prompts`, ...; Cursor's skills and commands are
   not staged), bounded (5,000 files, 64 MiB), from verified artifacts only, with
-  the executor's markers. Managed host skills enter through this plan. A host
-  item with the same name that Orkestrator did not write is kept and reported. The record (per component: revision, digest,
+  the executor's markers. Managed host files enter through this plan. Portable
+  input copying skips managed directories and flat entries named in ownership
+  indexes. A host item with the same name that Orkestrator did not write is
+  kept and reported. The record (per component: revision, digest,
   staged or why not) lands in the revision's `manifest.json`, its digest on the
   container's label. The environment card shows "installed revision X ·
   current Y" from `get_capability_environment_delivery`. It offers the existing

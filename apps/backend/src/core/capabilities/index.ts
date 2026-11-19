@@ -18,6 +18,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
+import { DEFAULT_AGENT_ACCOUNT_ID } from "@orkestrator/protocol/agent-accounts";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { UNRESTRICTED_CAPABILITY_CEILING } from "@orkestrator/protocol/capability-resources-resolve";
 import type { McpMutation } from "@orkestrator/protocol/mcp-management";
@@ -464,6 +465,13 @@ export function createCapabilityService(
           }),
     },
     mcp: mcpManagementInstaller(() => context.mcpManagement),
+    sessionAccountHome: async ({ environmentId, provider }) => {
+      if (!environmentId || (provider !== "claude" && provider !== "codex")) return undefined;
+      const account = context.runtime.localServers.launchedAccountId(
+        `${provider}:${environmentId}`,
+      );
+      return account === DEFAULT_AGENT_ACCOUNT_ID ? undefined : account;
+    },
     // Runtime proof: the session's own no-touch report (`runtime-proof.ts`).
     sessionEvidence: async ({ environmentId, provider, sessionKey }) =>
       context.nativeAgents

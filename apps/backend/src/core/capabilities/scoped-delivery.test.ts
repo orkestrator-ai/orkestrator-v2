@@ -36,6 +36,7 @@ interface Fixture {
   environments: ScopedEnvironment[];
   failEnvironmentList?: boolean;
   accounts: ScopedAccount[];
+  busyScopes?: ReadonlySet<string>;
   container: { evidence: ContainerDeliveryEvidence | null };
 }
 
@@ -81,6 +82,8 @@ async function makeFixture(): Promise<Fixture> {
       providers: async () => AGENT_PLATFORMS.map((provider) => ({ provider, available: true })),
     },
     scoped: {
+      writeHeld: async ({ environmentId, account }) =>
+        fixture.busyScopes?.has(environmentId ?? account?.accountId ?? "") ?? false,
       environments: async () => {
         if (fixture.failEnvironmentList) throw new Error("environment list unavailable");
         return fixture.environments;
@@ -110,7 +113,7 @@ async function repository(fixture: Fixture): Promise<{ main: string; worktree: s
 
 async function addToSetup(
   fixture: Fixture,
-  input: { kind: "skill" | "command"; name: string; content: string },
+  input: { kind: "skill" | "command"; name: string; content: string; managedId?: string },
   setupId: string,
   required = false,
 ): Promise<string> {
@@ -119,6 +122,7 @@ async function addToSetup(
     name: input.name,
     description: `${input.name} ${input.kind}`,
     content: input.content,
+    ...(input.managedId ? { managedId: input.managedId } : {}),
   });
   const preview = await fixture.service.previewChange({
     change: {
@@ -166,6 +170,38 @@ describe("project setups in a local worktree", () => {
     );
     expect(collisions.get(entry.key)).toContain("Git could not verify");
     expect(await exists(path.join(worktree, ".claude", "skills", "review"))).toBe(false);
+  });
+
+  test("a busy worktree keeps its copy until the turn settles", async () => {
+    const fixture = await makeFixture();
+    const { worktree } = await repository(fixture);
+    fixture.environments = [
+      { id: "env-a", projectId: "proj-1", environmentType: "local", worktreePath: worktree },
+    ];
+    const toolkit = await fixture.service.setSetup({ setup: { name: "Project review" } });
+    await addToSetup(
+      fixture,
+      { kind: "skill", name: "review", content: "Original.", managedId: "test-held-review" },
+      toolkit.id,
+    );
+    await fixture.service.assignSetup({
+      scope: "project",
+      scopeId: "proj-1",
+      setupIds: [toolkit.id],
+    });
+    await settle(fixture);
+    const skill = path.join(worktree, ".claude/skills/review/SKILL.md");
+    expect(await fs.readFile(skill, "utf8")).toContain("Original.");
+    fixture.busyScopes = new Set(["env-a"]);
+    await addToSetup(
+      fixture,
+      { kind: "skill", name: "review", content: "New revision.", managedId: "test-held-review" },
+      toolkit.id,
+    );
+    expect(await fs.readFile(skill, "utf8")).toContain("Original.");
+    fixture.busyScopes = new Set();
+    await settle(fixture);
+    expect(await fs.readFile(skill, "utf8")).toContain("New revision.");
   });
 
   test("an unavailable environment list preserves existing worktree receipts", async () => {
@@ -620,7 +656,7 @@ describe("added accounts", () => {
     const fixture = await makeFixture();
     await addToSetup(
       fixture,
-      { kind: "skill", name: "review", content: "Review." },
+      { kind: "skill", name: "review", content: "Review.", managedId: "test-account-review" },
       MY_SETUP_ID,
       true,
     );
@@ -660,6 +696,26 @@ describe("added accounts", () => {
     expect(
       (await fixture.service.preflightSession({ ...launch, sessionKey: "a3" }))?.launchBlockers,
     ).toEqual([]);
+    const componentId = own!.componentId;
+    const checked = await fixture.service.verify({
+      target: { nodeId: NODE, provider: "claude", environmentId: "env-1", sessionId: "a3" },
+      componentIds: [componentId],
+      consent: true,
+    });
+    expect(checked.checks).toEqual([expect.objectContaining({ componentId, level: "present" })]);
+
+    fixture.busyScopes = new Set(["acct-1"]);
+    await addToSetup(
+      fixture,
+      { kind: "skill", name: "review", content: "Updated.", managedId: "test-account-review" },
+      MY_SETUP_ID,
+    );
+    await settle(fixture);
+    const accountSkill = path.join(accountHome, "skills/review/SKILL.md");
+    expect(await fs.readFile(accountSkill, "utf8")).toContain("Review.");
+    fixture.busyScopes = new Set();
+    await settle(fixture);
+    expect(await fs.readFile(accountSkill, "utf8")).toContain("Updated.");
     // Nothing of the account's login was read into or out of a provider home.
     expect(await fs.readFile(path.join(accountHome, ".credentials.json"), "utf8")).toBe(
       '{"token":"account-only"}',
@@ -724,6 +780,25 @@ describe("launch deliveries for targets with their own copies", () => {
         digest: record.items[0]!.digest!,
       },
     ]);
+    const target = { nodeId: NODE, provider: "claude", environmentId: "env-c" };
+    const checked = await fixture.service.verify({
+      target: { ...target, sessionId: "c1" },
+      componentIds: [record.items[0]!.componentId],
+      consent: true,
+    });
+    expect(checked.checks).toEqual([expect.objectContaining({ level: "present" })]);
+    const installed = await fixture.service.getSessionView({ target, sessionKey: "c1" });
+    expect(installed.effective?.target.environmentIncarnation).toBe("ctr-1");
+    expect(installed.effective?.manifestDigest).toBe(record.digest);
+    fixture.environments = [
+      { id: "env-c", projectId: "proj-1", environmentType: "containerized", containerId: "ctr-2" },
+    ];
+    const stale = await fixture.service.verify({
+      target: { ...target, sessionId: "c1" },
+      componentIds: [record.items[0]!.componentId],
+      consent: true,
+    });
+    expect(stale.checks).toEqual([expect.objectContaining({ level: "requested" })]);
     // The host itself does read the edited copy.
     await expect(
       fixture.service.preflightSession({

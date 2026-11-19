@@ -292,6 +292,15 @@ export class CapabilityImportCommands {
           "The library changed after this preview; review the import again.",
         );
       }
+      if (
+        current.settings.requireSignedManifests === true &&
+        current.imports[previewId]?.signatureStatus !== "trusted"
+      ) {
+        throw new CapabilityError(
+          "approval-required",
+          "This installation now requires manifests signed by a trusted key; preview the import again.",
+        );
+      }
       const now = this.ctx.now();
       // A package locked at several revisions keeps each one, so every setup's pin resolves.
       addImportedPackages(current, fetched, record.projectId ? "project" : "managed", now);

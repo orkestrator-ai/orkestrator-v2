@@ -11,7 +11,7 @@
  * the backend chose, so no caller can name a destination.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { constants as fsConstants, promises as fs } from "node:fs";
+import { constants as fsConstants, lstatSync, promises as fs, renameSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -254,11 +254,44 @@ export function validatePackageFiles(
   return files.sort(byPath);
 }
 
-/**
- * Writes `files` into a fresh sibling of `destination`, then swaps it into
- * place: the old copy is renamed aside and removed only after the new one is
- * in place, so a crash leaves either the old or the new tree, never a mix.
- */
+const RETIRED_DIRECTORY_SUFFIX = ".orkestrator-retired";
+
+function retiredDirectory(destination: string): string {
+  return path.join(
+    path.dirname(destination),
+    `.${path.basename(destination)}${RETIRED_DIRECTORY_SUFFIX}`,
+  );
+}
+
+/** Restores the previous copy if the process stopped between the two renames. */
+export function recoverDirectoryReplacement(destination: string): void {
+  const retired = retiredDirectory(destination);
+  const previous = lstatSync(retired, { throwIfNoEntry: false });
+  if (!previous) return;
+  if (!previous.isDirectory())
+    throw new CapabilityError("unsafe-content", "The retired capability path is not a directory.");
+  if (!lstatSync(destination, { throwIfNoEntry: false })) renameSync(retired, destination);
+}
+
+/** Repairs a missing installation before directory observations enumerate entries. */
+export async function recoverLocationReplacements(directory: string): Promise<void> {
+  const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (
+      !entry.isDirectory() ||
+      !entry.name.startsWith(".") ||
+      !entry.name.endsWith(RETIRED_DIRECTORY_SUFFIX)
+    )
+      continue;
+    const name = entry.name.slice(1, -RETIRED_DIRECTORY_SUFFIX.length);
+    if (!name || name === "." || name === "..") continue;
+    const marker = path.join(directory, entry.name, CAPABILITY_MARKER_FILE);
+    if (!(await fs.lstat(marker).catch(() => null))?.isFile()) continue;
+    recoverDirectoryReplacement(path.join(directory, name));
+  }
+}
+
+/** Publishes a complete tree and leaves a recoverable old copy until publication. */
 export async function replaceDirectoryAtomically(
   destination: string,
   files: readonly PackageFile[],
@@ -268,7 +301,8 @@ export async function replaceDirectoryAtomically(
   await fs.mkdir(parent, { recursive: true });
   const token = randomBytes(6).toString("hex");
   const staging = path.join(parent, `.${path.basename(destination)}.orkestrator-new-${token}`);
-  const retired = path.join(parent, `.${path.basename(destination)}.orkestrator-old-${token}`);
+  const retired = retiredDirectory(destination);
+  recoverDirectoryReplacement(destination);
   await fs.mkdir(staging, { recursive: false });
   try {
     for (const file of files) {
@@ -285,21 +319,33 @@ export async function replaceDirectoryAtomically(
         flag: "wx",
       });
     }
-    const existing = await fs.lstat(destination).catch(() => null);
-    if (existing?.isSymbolicLink()) {
+    // Keep the two renames adjacent so an in-process observer cannot see the gap.
+    recoverDirectoryReplacement(destination);
+    const existing = lstatSync(destination, { throwIfNoEntry: false });
+    if (existing && !existing.isDirectory()) {
       throw new CapabilityError(
         "unsafe-content",
         "The installation path is a symbolic link; Orkestrator does not write through links.",
       );
     }
-    if (existing) await fs.rename(destination, retired);
+    // A previous publication may have stopped after making the new copy live.
+    if (lstatSync(retired, { throwIfNoEntry: false })) {
+      const discard = `${retired}-${token}`;
+      renameSync(retired, discard);
+      void fs.rm(discard, { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (existing) renameSync(destination, retired);
     try {
-      await fs.rename(staging, destination);
+      renameSync(staging, destination);
     } catch (error) {
-      if (existing) await fs.rename(retired, destination).catch(() => undefined);
+      recoverDirectoryReplacement(destination);
       throw error;
     }
-    if (existing) await fs.rm(retired, { recursive: true, force: true });
+    if (existing) {
+      const discard = `${retired}-${token}`;
+      renameSync(retired, discard);
+      await fs.rm(discard, { recursive: true, force: true });
+    }
   } finally {
     await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
   }

@@ -14,6 +14,7 @@ import type { CommandContext } from "../commands-context.js";
 import { DOCKER_LABEL_CAPABILITIES_DIGEST, DOCKER_LABEL_INPUTS_REVISION } from "../constants.js";
 import { containerLabel } from "../portable-input-status.js";
 import { readInputsManifest } from "../portable-inputs.js";
+import { activeCapabilityEnvironment, busyHostProviders } from "./running-work.js";
 import { readContainerCapabilityDelivery } from "./container-staging.js";
 import type { ScopedAccount, ScopedEnvironment, ScopedTargetSources } from "./scoped-delivery.js";
 
@@ -40,6 +41,12 @@ export function remoteScopedEnvironments(
 
 export function capabilityScopedSources(context: CommandContext): ScopedTargetSources {
   return {
+    writeHeld: async ({ environmentId, account }) => {
+      if (environmentId) {
+        return activeCapabilityEnvironment(context, environmentId);
+      }
+      return account !== undefined && (await busyHostProviders(context)).includes(account.provider);
+    },
     environments: async () =>
       (await context.storage.loadEnvironments()).map((environment) => ({
         id: environment.id,

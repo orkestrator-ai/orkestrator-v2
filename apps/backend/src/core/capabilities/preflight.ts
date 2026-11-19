@@ -26,7 +26,7 @@ import {
 
 import { verifyLaunchDeliveries, withBlockers } from "./launch-authority.js";
 import { sha256 } from "./planning.js";
-import { revisionComponent } from "./scoped-delivery.js";
+import { revisionComponent, scopedRequiredDelivery } from "./scoped-delivery.js";
 import {
   pruneSessionPlugins,
   sessionPluginForTurn,
@@ -45,7 +45,12 @@ import {
   type RuntimeProof,
 } from "./runtime-proof.js";
 import { CapabilityError } from "./security.js";
-import { parseTarget, stringList } from "./service-args.js";
+import { asRecord, parseTarget, stringList } from "./service-args.js";
+import {
+  inspectCapabilitySession,
+  localCapabilitySessionTarget,
+  matchingCapabilityLaunch,
+} from "./session-inspection.js";
 import type { CapabilityServiceContext } from "./service-context.js";
 import type {
   CapabilityLaunchDelivery,
@@ -85,25 +90,41 @@ export class CapabilityPreflight {
       );
     }
     const selfId = await this.ctx.deps.selfId();
-    const target = parseTarget(args.target, selfId);
+    const requested = parseTarget(args.target, selfId);
     const componentIds = stringList(args.componentIds, 200);
-    const inventory = await this.ctx.observeNode(target.nodeId);
     const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
+    const { target, launch, evidence, remote } = await inspectCapabilitySession(
+      this.ctx,
+      state,
+      requested,
+      componentIds,
+    );
     const local = target.nodeId === selfId;
-    const launch = target.sessionId ? state.launches[target.sessionId] : undefined;
+    const inventory =
+      target.environmentIncarnation === undefined
+        ? await this.ctx.observeNode(target.nodeId).catch(() => undefined)
+        : undefined;
+    const remoteProofs = new Map(remote?.checks.map((check) => [check.componentId, check]));
     // What the provider itself reported: never inferred from what was sent.
     const proofs = local
       ? await this.sessionProofs(target, launch, componentIds, state)
       : new Map<string, RuntimeProof>();
     const checks: CapabilityVerification["checks"] = [];
     const matching = new Set<string>();
-    const grokReceipts: InstallationReceipt[] = [];
+    const grokReceipts = new Map<number, InstallationReceipt>();
     for (const componentId of componentIds) {
       const receipts = Object.values(state.receipts).filter(
         (receipt) =>
           receipt.nodeId === target.nodeId &&
           receipt.componentId === componentId &&
-          receipt.providers.includes(target.provider),
+          receipt.providers.includes(target.provider) &&
+          receipt.environmentId === undefined &&
+          receipt.accountHomeId === undefined &&
+          (!target.accountHomeId ||
+            (evidence?.account !== undefined &&
+              [undefined, "linked", "missing"].includes(
+                evidence.account.entries[receipt.locationId],
+              ))),
       );
       const privateItem = launch?.privatePlugin?.items.find(
         (entry) => entry.componentId === componentId,
@@ -123,6 +144,73 @@ export class CapabilityPreflight {
         );
         continue;
       }
+      const remoteProof = remoteProofs.get(componentId);
+      if (remoteProof) {
+        checks.push(remoteProof);
+        continue;
+      }
+      const staged = evidence?.container?.record?.items.find(
+        (item) =>
+          item.componentId === componentId &&
+          item.providers.includes(target.provider) &&
+          item.status === "staged",
+      );
+      const scopedReceipt = Object.values(state.receipts).find(
+        (receipt) =>
+          receipt.nodeId === target.nodeId &&
+          receipt.providers.includes(target.provider) &&
+          receipt.componentId === componentId &&
+          ((evidence?.project && receipt.environmentId === evidence.project.environmentId) ||
+            (evidence?.account &&
+              receipt.accountHomeId === evidence.account.accountHomeId &&
+              evidence.account.entries[receipt.locationId] === "private")),
+      );
+      const component = state.components[componentId];
+      const frozen = launch?.packages.find(
+        (pkg) => pkg.id === (component?.packageId ?? staged?.packageId),
+      );
+      const revision =
+        staged?.packageDigest ??
+        scopedReceipt?.packageDigest ??
+        frozen?.artifactDigest ??
+        (component ? state.packages[component.packageId]?.artifactDigest : undefined);
+      const scoped = revision
+        ? scopedRequiredDelivery({
+            state,
+            target,
+            ...(evidence ? { evidence } : {}),
+            component: { id: componentId, name: component?.name ?? componentId },
+            digest: revision,
+          })
+        : undefined;
+      if (scoped?.kind === "verified") {
+        checks.push({
+          componentId,
+          level: "present",
+          status: "installed-next-session",
+          detail: "The files match the revision delivered to this target.",
+        });
+        if (scoped.exclusive || receipts.length === 0) continue;
+      } else if (scopedReceipt) {
+        checks.push({
+          componentId,
+          level: "requested",
+          status: "drifted",
+          detail: "The scoped copy could not be verified against its receipt.",
+        });
+        if (receipts.length === 0) continue;
+      } else if (scoped?.kind === "refused" || target.environmentIncarnation !== undefined) {
+        checks.push({
+          componentId,
+          level: "requested",
+          status: "pending",
+          detail:
+            scoped?.kind === "refused"
+              ? scoped.reason
+              : "No matching revision was staged into this container.",
+        });
+        continue;
+      }
       if (receipts.length === 0) {
         checks.push({
           componentId,
@@ -134,13 +222,16 @@ export class CapabilityPreflight {
       }
       for (const receipt of receipts) {
         const item = inventory?.items.find(
-          (entry) => entry.componentId === componentId && entry.locationId === receipt.locationId,
+          (entry) =>
+            entry.componentId === componentId &&
+            entry.locationId === receipt.locationId &&
+            entry.packageId === receipt.packageId,
         );
         const effective = effectiveReceiptStatus(receipt);
         const matches = item && !item.drifted && item.digest === receipt.digest;
         if (matches) {
           matching.add(receipt.id);
-          if (target.provider === "grok") grokReceipts.push(receipt);
+          if (target.provider === "grok") grokReceipts.set(checks.length, receipt);
         }
         const fileKind =
           !receipt.locationId.startsWith("mcp:") && !receipt.locationId.startsWith("plugin:");
@@ -171,11 +262,12 @@ export class CapabilityPreflight {
         });
       }
     }
-    if (local && grokReceipts.length > 0) {
-      const grok = await this.grokProofs(grokReceipts, matching, state);
-      for (const check of checks) {
+    if (local && grokReceipts.size > 0) {
+      const grok = await this.grokProofs(Array.from(grokReceipts.values()), matching, state);
+      for (const [index, receipt] of grokReceipts) {
+        const check = checks[index]!;
         const proof = grok.get(check.componentId);
-        if (!proof || check.status === "drifted") continue;
+        if (!proof || proof.receiptId !== receipt.id) continue;
         check.level = strongerLevel(check.level, proof.level);
         check.detail = proof.detail;
         proofs.set(check.componentId, proof);
@@ -183,6 +275,64 @@ export class CapabilityPreflight {
     }
     this.recordObservations(target, proofs);
     return { target, checks, verifiedAt: this.ctx.now() };
+  }
+
+  /** Read-only session evidence for this machine's command node. */
+  async inspectOwnedSession(environmentId: unknown, value: unknown) {
+    const args = asRecord(value, "capabilitySession");
+    const selfId = await this.ctx.deps.selfId();
+    const requested = parseTarget(args.requested, selfId);
+    if (
+      !requested.sessionId ||
+      !requested.environmentId ||
+      requested.environmentId !== environmentId ||
+      requested.nodeId !== selfId
+    ) {
+      throw new CapabilityError("invalid-request", "The session does not belong to this target.");
+    }
+    const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
+    const launch = matchingCapabilityLaunch(state, requested);
+    const target = await localCapabilitySessionTarget(this.ctx, requested, launch);
+    const frozen =
+      launch?.target.environmentIncarnation === target.environmentIncarnation ? launch : undefined;
+    const privateIds = new Set(frozen?.privatePlugin?.items.map((item) => item.componentId));
+    const componentIds = stringList(args.componentIds, 200).filter((id) => privateIds.has(id));
+    const [scoped, account, proofs] = await Promise.all([
+      this.ctx.remoteScoped.leafReport(target),
+      target.accountHomeId
+        ? this.ctx.scoped.readEvidence(target).then((item) => item?.account)
+        : undefined,
+      componentIds.length > 0
+        ? this.sessionProofs(target, frozen, componentIds, state)
+        : new Map<string, RuntimeProof>(),
+    ]);
+    const checks = componentIds.map((componentId) => {
+      const proof = proofs.get(componentId);
+      return {
+        componentId,
+        level: proof?.level ?? "present",
+        status: proof?.status ?? "installed-next-session",
+        detail: proof?.detail ?? "Delivered to this session alone. Loading is unconfirmed.",
+      };
+    });
+    return {
+      target,
+      scoped,
+      checks,
+      ...(account
+        ? { account: { entries: account.entries, observed: Object.fromEntries(account.observed) } }
+        : {}),
+    };
+  }
+
+  async prunePrivatePlugins(): Promise<void> {
+    const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
+    const referenced = new Set(
+      Object.values(state.launches).flatMap(({ privatePlugin }) =>
+        privatePlugin ? [privatePlugin.digest] : [],
+      ),
+    );
+    await pruneSessionPlugins(sessionPluginsRoot(this.ctx.deps.dataDir), referenced);
   }
 
   /** A Claude session's own report, graded (`runtime-proof.ts`); empty without one. */
@@ -501,7 +651,6 @@ export class CapabilityPreflight {
     }
     const staged = await this.stagePrivateDelivery(effective);
     effective = staged.effective;
-    let referenced: Set<string> | undefined;
     try {
       this.ctx.deps.storage.capabilities.mutateCapabilityState((state) => {
         state.launches[input.sessionKey] = {
@@ -517,11 +666,6 @@ export class CapabilityPreflight {
           ...(staged.record ? { privatePlugin: staged.record } : {}),
           launchedAt: this.ctx.now(),
         };
-        referenced = new Set(
-          Object.values(state.launches).flatMap((launch) =>
-            launch.privatePlugin ? [launch.privatePlugin.digest] : [],
-          ),
-        );
         return { result: undefined, changed: true };
       });
     } catch (error) {
@@ -534,9 +678,6 @@ export class CapabilityPreflight {
           "The session's private capabilities could not be recorded. Retry the launch.",
         );
       }
-    }
-    if (referenced) {
-      void pruneSessionPlugins(sessionPluginsRoot(this.ctx.deps.dataDir), referenced);
     }
     return effective;
   }

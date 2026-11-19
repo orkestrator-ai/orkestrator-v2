@@ -7,12 +7,16 @@
 import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
 
 import { parseNodePlanTargets } from "./executor.js";
+import type { CapabilityPreflight } from "./preflight.js";
 import { asText } from "./service-args.js";
 import type { CapabilityServiceContext } from "./service-context.js";
 import { assertDistributableArtifact } from "./source-inspection.js";
 
 export class CapabilityExecutorHandlers {
-  constructor(private readonly ctx: CapabilityServiceContext) {}
+  constructor(
+    private readonly ctx: CapabilityServiceContext,
+    private readonly preflight: CapabilityPreflight,
+  ) {}
 
   private admit(args: Record<string, unknown>): void {
     this.ctx.executor.admitEpoch(asText(args.controllerId, "controllerId"), Number(args.epoch));
@@ -52,6 +56,17 @@ export class CapabilityExecutorHandlers {
   /** `get_capability_node_environment_observation`: this machine's worktrees, for its command node. */
   async observeEnvironments(args: Record<string, unknown>) {
     this.admit(args);
+    if (Array.isArray(args.environments) && args.environments.length === 1) {
+      const entry = args.environments[0];
+      if (entry && typeof entry === "object" && entry.capabilitySession) {
+        await this.fence(args)();
+        const capabilitySession = await this.preflight.inspectOwnedSession(
+          entry.environmentId,
+          entry.capabilitySession,
+        );
+        return { environments: [], capabilitySession };
+      }
+    }
     return this.ctx.remoteScoped.observeForController(args);
   }
 

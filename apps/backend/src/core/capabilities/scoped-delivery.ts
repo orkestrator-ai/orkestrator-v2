@@ -100,6 +100,8 @@ export interface ScopedAccount {
 
 /** What this machine knows about its worktrees, accounts and containers. */
 export interface ScopedTargetSources {
+  /** Live admission for a worktree or an added account home. */
+  writeHeld?(scope: { environmentId?: string; account?: ScopedAccount }): Promise<boolean>;
   /** This machine's environments; absent where the backend has none. */
   environments?(): Promise<ScopedEnvironment[]>;
   /** This machine's added accounts. */
@@ -479,6 +481,7 @@ export interface ScopedPassIO {
 }
 
 export interface ScopedPassInput {
+  writeHeld?: () => Promise<boolean>;
   nodeId: string;
   scope: { environmentId?: string; accountHomeId?: string };
   desired: ScopedInstallation[];
@@ -544,7 +547,7 @@ export async function observeScopedReceipts(
 export async function runScopedPass(
   deps: Pick<ScopedDeliveryDeps, "storage" | "artifacts" | "homes" | "now">,
   input: ScopedPassInput,
-): Promise<{ changed: boolean; unknown?: boolean }> {
+): Promise<{ changed: boolean; unknown?: boolean; held?: boolean }> {
   const now = () => (deps.now ?? (() => new Date().toISOString()))();
   const io = input.io ?? localScopedIO(deps, input);
   let state = await deps.storage.capabilities.loadCapabilityState();
@@ -755,6 +758,14 @@ export async function runScopedPass(
     for (const result of results) {
       const target = byKey.get(result.key);
       if (!target) continue;
+      if (result.status === "queued-until-idle") {
+        const receipt = current.receipts[result.key];
+        if (receipt) {
+          delete receipt.outcomeUnknown;
+          delete receipt.pendingWrite;
+        }
+        continue;
+      }
       if (target.action === "remove") {
         if (result.status === "ready") {
           delete current.receipts[result.key];
@@ -800,7 +811,11 @@ export async function runScopedPass(
     });
     return { result: undefined, changed: true };
   });
-  return { changed: true, ...(unknown ? { unknown: true } : {}) };
+  return {
+    changed: true,
+    ...(unknown ? { unknown: true } : {}),
+    ...(results.some((result) => result.status === "queued-until-idle") ? { held: true } : {}),
+  };
 }
 
 /** A receipt with bytes on disk to compare, or an unanswered write to settle. */
@@ -842,6 +857,7 @@ function localScopedIO(
         artifacts: deps.artifacts,
         homes: deps.homes,
         locate,
+        ...(input.writeHeld ? { writeHeld: input.writeHeld } : {}),
         ...(mcp ? { mcp } : {}),
         ...(deps.now ? { now: deps.now } : {}),
       });
@@ -1193,9 +1209,10 @@ export class ScopedCapabilityDelivery {
   }
 
   /** Every local worktree and added account on this machine. */
-  runAll(): Promise<void> {
+  runAll(): Promise<{ recheck: boolean }> {
     return this.serialized(async () => {
       let changed = false;
+      let recheck = false;
       const failed = (error: unknown) => {
         log.warn("delivery.scope-failed", { error: formatLogError(error, { message: false }) });
         return false as const;
@@ -1216,13 +1233,22 @@ export class ScopedCapabilityDelivery {
       ]);
       for (const environment of environments) {
         if (environment.environmentType !== "local") continue;
-        changed = (await this.deliverProject(environment, known).catch(failed)) || changed;
+        const pass = await this.deliverProject(environment, known).catch(failed);
+        if (pass) {
+          changed ||= pass.changed;
+          recheck ||= Boolean(pass.held);
+        }
       }
       if (listed) changed = (await this.forgetGoneEnvironments(known)) || changed;
       for (const account of accounts) {
-        changed = (await this.deliverAccount(account).catch(failed)) || changed;
+        const pass = await this.deliverAccount(account).catch(failed);
+        if (pass) {
+          changed ||= pass.changed;
+          recheck ||= Boolean(pass.held);
+        }
       }
       if (changed) this.deps.changed?.();
+      return { recheck };
     });
   }
 
@@ -1233,7 +1259,8 @@ export class ScopedCapabilityDelivery {
       const environment = environments.find((entry) => entry.id === environmentId);
       if (!environment || environment.environmentType !== "local") return;
       const known = new Set(environments.map((entry) => entry.id));
-      if (await this.deliverProject(environment, known)) this.deps.changed?.();
+      const pass = await this.deliverProject(environment, known);
+      if (pass && pass.changed) this.deps.changed?.();
     });
   }
 
@@ -1285,7 +1312,7 @@ export class ScopedCapabilityDelivery {
   private async deliverProject(
     environment: ScopedEnvironment,
     known: ReadonlySet<string>,
-  ): Promise<boolean> {
+  ): Promise<{ changed: boolean; held?: boolean } | false> {
     const worktree = environment.worktreePath;
     if (!worktree) return false;
     const stat = await fs.stat(worktree).catch(() => null);
@@ -1361,9 +1388,12 @@ export class ScopedCapabilityDelivery {
       knownEnvironment,
       await projectMcpExcludeFiles(mcpContext, writable),
     );
-    const { changed } = await runScopedPass(this.deps, {
+    const pass = await runScopedPass(this.deps, {
       nodeId,
       scope: { environmentId: environment.id },
+      ...(this.deps.writeHeld
+        ? { writeHeld: () => this.deps.writeHeld!({ environmentId: environment.id }) }
+        : {}),
       desired: installations,
       locate,
       worktree,
@@ -1386,10 +1416,12 @@ export class ScopedCapabilityDelivery {
       knownEnvironment,
       await projectMcpExcludeFiles(mcpContext, []),
     );
-    return changed;
+    return pass;
   }
 
-  private async deliverAccount(account: ScopedAccount): Promise<boolean> {
+  private async deliverAccount(
+    account: ScopedAccount,
+  ): Promise<{ changed: boolean; held?: boolean } | false> {
     const nodeId = await this.deps.selfId();
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const evidence = await accountHomeEvidence(account.provider, account.home, this.deps.homes());
@@ -1407,14 +1439,15 @@ export class ScopedCapabilityDelivery {
     // A directory that is linked again is the host's: its copies are the host's to remove.
     const privateLocate = (locationId: string) =>
       evidence[locationId] === "private" ? locate(locationId) : undefined;
-    const { changed } = await runScopedPass(this.deps, {
+    const pass = await runScopedPass(this.deps, {
       nodeId,
       scope: { accountHomeId },
+      ...(this.deps.writeHeld ? { writeHeld: () => this.deps.writeHeld!({ account }) } : {}),
       desired,
       locate: privateLocate,
       removeFiles: Object.values(evidence).some((entry) => entry === "private"),
     });
-    return changed;
+    return pass;
   }
 
   /**
@@ -1552,6 +1585,25 @@ export class ScopedCapabilityDelivery {
   /** Display names for the "Where available" rows of scoped copies, from the last pass. */
   scopeNames(): ReadonlyMap<string, string> {
     return new Map([...this.remoteNames, ...this.names]);
+  }
+
+  /** Inspects the current target without staging or starting anything. */
+  async readEvidence(target: CapabilityTarget): Promise<ScopedEvidence | undefined> {
+    if (!target.environmentId && !target.accountHomeId) return undefined;
+    if (target.environmentIncarnation !== undefined && target.environmentId) {
+      return { container: (await this.deps.containerDelivery?.(target.environmentId)) ?? null };
+    }
+    const [environments, accounts] = await Promise.all([
+      target.environmentId ? this.deps.environments?.() : undefined,
+      target.accountHomeId ? this.deps.accounts?.() : undefined,
+    ]);
+    return this.evidenceFor(
+      target,
+      environments?.find((entry) => entry.id === target.environmentId),
+      accounts?.find(
+        (entry) => entry.accountId === target.accountHomeId && entry.provider === target.provider,
+      ),
+    );
   }
 
   /** Evidence for one launch target (worktree or account); containers come from staging. */

@@ -1,3 +1,4 @@
+import { beginCapabilityTurn } from "./capabilities/running-work.js";
 import {
   PROVIDER_FAILURE_RETRY_ID_PREFIX,
   providerFailureRetryRequestId,
@@ -1353,8 +1354,12 @@ export class NativeAgentPromptDispatch {
        * queues behind that same lock, so it cannot remove the record mid-dispatch
        * and leave a confirmed turn unattributed.
        */
-      await this.host.assertEnvironmentLive(input.environmentId);
+      const dispatchEnvironment = await this.host.assertEnvironmentLive(input.environmentId);
       this.host.providerRegistry.beginDispatch(provider);
+      const releaseCapabilityTurn =
+        dispatchEnvironment?.environmentType === "containerized"
+          ? undefined
+          : await beginCapabilityTurn(input.agent);
       try {
         let preparation: PromptDispatchPreparation = { dispatch: true };
         const result = await this.host.storage.dispatchNativeAgentPromptOnce(
@@ -1622,6 +1627,7 @@ export class NativeAgentPromptDispatch {
         }
         return result.session;
       } finally {
+        releaseCapabilityTurn?.();
         this.host.providerRegistry.endDispatch(provider);
       }
     } finally {

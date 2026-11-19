@@ -930,6 +930,20 @@ function answer(command: string, args: Record<string, unknown>): unknown {
           ),
         };
       }
+      if ((args.change as { packageId?: string }).packageId === "git:org/agent-tools#docs-search") {
+        return {
+          replayed: false,
+          operation: operation(
+            "op-assign-docs",
+            "add-to-setup",
+            [
+              target("assign-docs", "bk_desk", "claude", MCP, "install", "pending"),
+              target("assign-offline", "bk_build", "claude", MCP, "install", "offline"),
+            ],
+            ["Starts the docs-search MCP server."],
+          ),
+        };
+      }
       if ((args.change as { kind?: string }).kind === "use-toolkit-on-fleet") {
         return {
           replayed: false,

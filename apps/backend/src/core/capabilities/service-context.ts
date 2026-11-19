@@ -76,6 +76,9 @@ export interface CapabilityServiceDeps {
    * Runtime proof (`runtime-proof.ts`): a running session's own report of
    * what it loaded and invoked, read without touching the session.
    */
+  sessionAccountHome?(
+    target: import("@orkestrator/protocol/capability-resources").CapabilityTarget,
+  ): Promise<string | undefined>;
   sessionEvidence?(input: {
     environmentId: string;
     provider: AgentPlatform;

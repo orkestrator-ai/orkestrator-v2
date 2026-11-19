@@ -222,6 +222,16 @@ export class CapabilitiesRepository {
     };
   }
 
+  forgetCapabilityLaunches(
+    matches: (launch: CapabilityState["launches"][string]) => boolean,
+  ): void {
+    this.mutateCapabilityState((state) => {
+      const removed = Object.entries(state.launches).filter(([, launch]) => matches(launch));
+      for (const [key] of removed) delete state.launches[key];
+      return { result: undefined, changed: removed.length > 0 };
+    });
+  }
+
   mutateCapabilityExecutorState<T>(mutate: (state: CapabilityExecutorState) => T): T {
     let result!: T;
     this.context.updateStore<Record<string, unknown>, void>(
@@ -255,6 +265,7 @@ export type CapabilitiesStorage = Pick<
   CapabilitiesRepository,
   | "loadCapabilityState"
   | "mutateCapabilityState"
+  | "forgetCapabilityLaunches"
   | "loadCapabilityExecutorState"
   | "mutateCapabilityExecutorState"
 >;

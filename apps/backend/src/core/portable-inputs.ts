@@ -28,7 +28,8 @@ import {
 } from "@orkestrator/protocol/login-snapshots";
 import { claudeContainerPluginSettings } from "@orkestrator/protocol/node/claude-plugin-set";
 import { SHARED_SKILLS_INPUT } from "@orkestrator/protocol/container-recovery";
-import { CAPABILITY_MARKER_FILE } from "./capabilities/security.js";
+import { readLocationIndex } from "./capabilities/native-ownership.js";
+import { CAPABILITY_LOCATION_INDEX, CAPABILITY_MARKER_FILE } from "./capabilities/security.js";
 import { claudeContainerConfig } from "./claude-container-config.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 import { platformDescriptorClone, type DescriptorClone } from "./portable-inputs-clone.js";
@@ -59,9 +60,10 @@ import { platformDescriptorClone, type DescriptorClone } from "./portable-inputs
  * version 5 adds the shared `~/.agents/skills` and stages a linked skill;
  * version 6 stages `.claude.json` through `claudeContainerConfig`; version 7
  * leaves a skill's oversized files out instead of the whole skill, and its
- * credential guard ignores example and placeholder values.
+ * credential guard ignores example and placeholder values. Version 8 leaves
+ * managed flat resources to the container capability plan.
  */
-export const PORTABLE_INPUT_SPEC_VERSION = 7;
+export const PORTABLE_INPUT_SPEC_VERSION = 8;
 
 export type InputLimits = {
   fileBytes: number;
@@ -823,6 +825,12 @@ async function listTree(
       if (!relative && exclude.includes(name)) continue;
       const child = relative ? `${relative}/${name}` : name;
       const stat = await lstat(path.join(root, child));
+      if (name === CAPABILITY_LOCATION_INDEX && !stat.isFile()) throw new Skip("unreadable");
+      if (name === CAPABILITY_MARKER_FILE || name === CAPABILITY_LOCATION_INDEX) {
+        entries.push({ relative: child, kind: "file", size: 0 });
+        if (entries.length > maxEntries) throw new Skip("too-many-entries");
+        continue;
+      }
       if (stat.isSymbolicLink()) {
         symlinks += 1;
         continue;
@@ -1066,22 +1074,26 @@ class ProviderCopier {
     )
       return;
     const listed = await listTree(source, this.limits.directoryEntries, exclude);
-    // Some providers copy an entire configuration tree containing a skills directory.
-    const managedSkills = new Set(
-      listed.entries.flatMap((entry) => {
-        const segments = entry.relative.split("/");
-        return segments.at(-1) === CAPABILITY_MARKER_FILE && segments.at(-3) === "skills"
-          ? [segments.slice(0, -1).join("/")]
-          : [];
-      }),
-    );
-    const stagedEntries = managedSkills.size
-      ? listed.entries.filter((entry) => {
-          const segments = entry.relative.split("/");
-          const skillRoot = segments.indexOf("skills");
-          return skillRoot < 0 || !managedSkills.has(segments.slice(0, skillRoot + 2).join("/"));
-        })
-      : listed.entries;
+    // Whole provider configuration trees may contain both ownership formats.
+    const managed = new Set<string>();
+    for (const entry of listed.entries) {
+      const name = path.posix.basename(entry.relative);
+      const parent = path.posix.dirname(entry.relative);
+      if (name === CAPABILITY_MARKER_FILE) managed.add(parent);
+      if (name !== CAPABILITY_LOCATION_INDEX) continue;
+      managed.add(entry.relative);
+      await assertNoSymlinkAncestry(source, entry.relative);
+      const index = await readLocationIndex(path.join(source, parent), { strict: true });
+      for (const name of Object.keys(index.files)) {
+        managed.add(path.posix.join(parent, name));
+      }
+    }
+    const stagedEntries = listed.entries.filter(({ relative }) => {
+      for (let entry = relative; entry !== "."; entry = path.posix.dirname(entry)) {
+        if (managed.has(entry)) return false;
+      }
+      return !managed.has(".");
+    });
     const skipped = new Map<SkipReason, number>();
     const leaveOut = (reason: SkipReason, count = 1) =>
       skipped.set(reason, (skipped.get(reason) ?? 0) + count);
@@ -1172,9 +1184,18 @@ class ProviderCopier {
       if (!stat) return;
       if (stat.isSymbolicLink()) throw new Skip("symlink");
       if (!stat.isDirectory()) throw new Skip("not-regular");
-      const names = (await readdir(directory))
+      const listed = await readdir(directory);
+      const index = listed.includes(CAPABILITY_LOCATION_INDEX)
+        ? await readLocationIndex(directory, { strict: true })
+        : undefined;
+      const names = listed
         .sort()
-        .filter((name) => !(spec.exclude ?? []).includes(name));
+        .filter(
+          (name) =>
+            name !== CAPABILITY_LOCATION_INDEX &&
+            !Object.hasOwn(index?.files ?? {}, name) &&
+            !(spec.exclude ?? []).includes(name),
+        );
       if (names.length > this.limits.directoryEntries) throw new Skip("too-many-entries");
       for (const name of names) {
         try {

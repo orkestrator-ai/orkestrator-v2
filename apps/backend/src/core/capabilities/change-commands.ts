@@ -269,7 +269,12 @@ export class CapabilityChangeCommands {
           };
       }
     }
-    if (change.kind === "add-to-setup" || change.kind === "adopt") {
+    if (change.kind === "add-to-setup" && "packageId" in change) {
+      const pkg = state.packages[change.packageId];
+      if (!pkg) throw new CapabilityError("not-found", "The package is not in the library.");
+      change = { ...change, expectedArtifactDigest: pkg.artifactDigest };
+    }
+    if ("inspectionId" in change) {
       const inspection = state.inspections[change.inspectionId];
       if (!inspection)
         throw new CapabilityError("conflict", "The inspection expired; inspect the source again.");
@@ -279,7 +284,7 @@ export class CapabilityChangeCommands {
     if (change.kind === "use-toolkit-on-fleet") {
       reasons.push("This toolkit will be used on every enrolled machine.");
     }
-    if (change.kind === "add-to-setup") {
+    if (change.kind === "add-to-setup" && "inspectionId" in change) {
       const inspection = state.inspections[change.inspectionId];
       if (inspection?.adoption) reasons.push(...this.ctx.drift.adoptionReasons(state, inspection));
     }

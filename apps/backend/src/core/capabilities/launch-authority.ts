@@ -673,9 +673,12 @@ export class LeafLaunchAuthority {
       this.deps.request && (await this.deps.controllerReachable().catch(() => false))
         ? await this.ask(request, key, inventory, report)
         : null;
+    const [latestInventory, latestReport] = await Promise.all([
+      this.deps.observeSelf().catch(() => undefined),
+      this.deps.scopedReport?.(request.target, request.relativeWorktree).catch(() => undefined),
+    ]);
     if (answered) {
-      // The command node judged our report; check the bytes did not move since.
-      const local = this.localDeliveryCheck(answered.answer, inventory, report);
+      const local = this.localDeliveryCheck(answered.answer, latestInventory, latestReport);
       return {
         effective: withBlockers(
           { ...answered.answer.effective, target: request.target },
@@ -686,7 +689,7 @@ export class LeafLaunchAuthority {
         ...privateFields(answered.answer),
       };
     }
-    return this.fromCache(request, key, inventory, report);
+    return this.fromCache(request, key, latestInventory, latestReport);
   }
 
   private ask(

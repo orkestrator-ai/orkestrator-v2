@@ -104,7 +104,7 @@ export interface CapabilityReconcilerDeps {
    * machine is not enrolled): worktree and account-home deliveries
    * (`scoped-delivery.ts`), which follow their own assignments.
    */
-  afterSelfPass?(): Promise<void>;
+  afterSelfPass?(): Promise<{ recheck: boolean } | void>;
   /**
    * After every pass over another machine: project setups in that machine's
    * worktrees (`scoped-remote.ts`). `recheck` asks for another observation
@@ -198,7 +198,8 @@ export class CapabilityReconciler {
   private async runAfterSelfPass(): Promise<void> {
     if (this.disposed || !this.deps.afterSelfPass) return;
     try {
-      await this.deps.afterSelfPass();
+      const pass = await this.deps.afterSelfPass();
+      if (pass?.recheck) this.scheduleRecheck(await this.deps.selfId());
     } catch (error) {
       log.warn("reconcile.scoped-failed", { error: formatLogError(error, { message: false }) });
     }
@@ -461,7 +462,7 @@ export class CapabilityReconciler {
       driftKeys,
       busyProviders,
     });
-    const heldForRunningWork = plan.planned.some(
+    let heldForRunningWork = plan.planned.some(
       (target) => target.action === "skip" && target.status === "queued-until-idle",
     );
 
@@ -601,6 +602,15 @@ export class CapabilityReconciler {
         if (prior) current.receipts[key] = prior;
         else delete current.receipts[key];
       }
+      for (const planned of plan.planned) {
+        if (planned.action !== "keep") continue;
+        const installation = desiredByKey.get(planned.key);
+        const receipt = current.receipts[planned.key];
+        if (!installation || !receipt || receipt.packageDigest !== installation.digest) continue;
+        receipt.providers = installation.providers;
+        receipt.alsoVisibleTo = installation.alsoVisibleTo;
+        receipt.references = installation.references;
+      }
       for (const result of results) {
         const target = byKey.get(result.key);
         if (!target) continue;
@@ -608,6 +618,10 @@ export class CapabilityReconciler {
           status: result.status,
           ...(result.reason ? { reason: result.reason } : {}),
         });
+        if (result.status === "queued-until-idle") {
+          heldForRunningWork = true;
+          continue;
+        }
         if (target.action === "remove") {
           if (result.status === "ready") {
             delete current.receipts[result.key];
@@ -678,7 +692,8 @@ export class CapabilityReconciler {
         return (
           planned?.toDigest === target.toDigest &&
           (target.action === "remove"
-            ? planned?.action === "remove" && planned.fromDigest === target.fromDigest
+            ? (planned?.action === "remove" || planned?.status === "queued-until-idle") &&
+              planned.fromDigest === target.fromDigest
             : planned !== undefined && planned.action !== "remove")
         );
       });

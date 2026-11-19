@@ -34,6 +34,8 @@ import { capabilityLiveSemantics } from "@orkestrator/protocol/capability-resour
 import { operationSnapshot, type CapabilityOperationRecord } from "./operations.js";
 import { supportFor } from "./planning.js";
 import { assignmentSetups } from "./resolution.js";
+import { scopedRequiredDelivery } from "./scoped-delivery.js";
+import { inspectCapabilitySession } from "./session-inspection.js";
 import { effectiveReceiptStatus } from "./runtime-evidence.js";
 import { CapabilityError } from "./security.js";
 import {
@@ -195,9 +197,13 @@ export class CapabilityLibraryReads {
    */
   async getSessionView(args: Record<string, unknown>): Promise<CapabilitySessionView> {
     const sessionKey = asText(args.sessionKey, "sessionKey");
-    const target = parseTarget(args.target, await this.ctx.deps.selfId());
+    const requested = parseTarget(args.target, await this.ctx.deps.selfId());
     const sessionRunning = args.sessionRunning === true;
     const state = await this.loadState();
+    const { target, launch, evidence } = await inspectCapabilitySession(this.ctx, state, {
+      ...requested,
+      sessionId: sessionKey,
+    });
     const assigned = assignmentSetups(state, "session", sessionKey);
     // The session's own policy, as its projection reports it: it can only narrow.
     const privatelyDeliverable = new Set<string>();
@@ -207,6 +213,7 @@ export class CapabilityLibraryReads {
       ceiling: parseCeiling(args.ceiling),
       forLaunch: true,
       verifyOptionalDelivery: false,
+      ...(evidence ? { scopedEvidence: evidence } : {}),
       ...(state.machines[target.nodeId]?.inventory
         ? { launchInventory: state.machines[target.nodeId]!.inventory! }
         : {}),
@@ -218,11 +225,36 @@ export class CapabilityLibraryReads {
     const matrix = supportFor(state.machines[target.nodeId]?.inventory, target.provider);
     const components: CapabilitySessionView["components"] = [];
     const catalogue = new Map(Object.entries(state.components));
+    const container = evidence?.container;
+    if (
+      container?.containerId === target.environmentIncarnation &&
+      container?.record &&
+      container.record.digest === container.labelDigest
+    ) {
+      const staged = new Map<string, EffectiveAgentResources["resolvedPackages"][number]>();
+      for (const item of container.record.items) {
+        if (item.status !== "staged" || !item.providers.includes(target.provider)) continue;
+        const key = `${item.packageId}|${item.packageDigest}`;
+        const pkg = staged.get(key) ?? {
+          id: item.packageId,
+          artifactDigest: item.packageDigest,
+          components: [],
+        };
+        if (!pkg.components.includes(item.componentId)) pkg.components.push(item.componentId);
+        staged.set(key, pkg);
+      }
+      effective.resolvedPackages = [...staged.values()];
+      effective.manifestDigest = container.record.digest;
+    }
     for (const pkg of effective.resolvedPackages) {
       const record = state.packages[pkg.id];
       const revision =
         record && capabilityRevisionComponents(record, pkg.artifactDigest, catalogue);
-      for (const component of revision ?? []) {
+      const stagedComponents =
+        target.environmentIncarnation === undefined
+          ? []
+          : pkg.components.flatMap((id) => (state.components[id] ? [state.components[id]!] : []));
+      for (const component of revision ?? stagedComponents) {
         const componentId = component.id;
         if (!pkg.components.includes(componentId)) continue;
         const receipt = Object.values(state.receipts).find(
@@ -230,10 +262,25 @@ export class CapabilityLibraryReads {
             entry.nodeId === target.nodeId &&
             entry.componentId === componentId &&
             entry.packageDigest === pkg.artifactDigest &&
-            entry.providers.includes(target.provider),
+            entry.providers.includes(target.provider) &&
+            target.environmentIncarnation === undefined &&
+            entry.environmentId === undefined &&
+            entry.accountHomeId === undefined &&
+            (!target.accountHomeId ||
+              (evidence?.account !== undefined &&
+                [undefined, "linked", "missing"].includes(
+                  evidence.account.entries[entry.locationId],
+                ))),
         );
+        const scoped = scopedRequiredDelivery({
+          state,
+          target,
+          ...(evidence ? { evidence } : {}),
+          component,
+          digest: pkg.artifactDigest,
+        });
         // Delivered to this session alone (`session-delivery.ts`): at launch, or already.
-        const launched = state.launches[sessionKey]?.privatePlugin?.items.some(
+        const launched = launch?.privatePlugin?.items.some(
           (entry) =>
             entry.packageId === pkg.id &&
             entry.componentId === componentId &&
@@ -241,11 +288,12 @@ export class CapabilityLibraryReads {
         );
         const privately =
           !receipt && (launched || (!sessionRunning && privatelyDeliverable.has(componentId)));
-        const status = receipt
-          ? effectiveReceiptStatus(receipt).status
-          : privately
+        const status =
+          scoped.kind === "verified" || privately
             ? "installed-next-session"
-            : "pending";
+            : receipt
+              ? effectiveReceiptStatus(receipt).status
+              : "pending";
         components.push({
           componentId,
           name: component.name,
@@ -307,7 +355,6 @@ export class CapabilityLibraryReads {
               )
             ? "ready"
             : "next-session";
-    const launch = state.launches[sessionKey];
     return {
       sessionKey,
       setupIds: labelIds,

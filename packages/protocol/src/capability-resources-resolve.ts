@@ -581,6 +581,8 @@ export function compareCapabilityRevisions(
         ...escalationOf(previous, component),
         ...(bytesChanged &&
         (component.kind === "hook" ||
+          (["command", "prompt", "subagent"].includes(component.kind) &&
+            capabilityRiskRank(component.risk) >= capabilityRiskRank("executable")) ||
           (component.kind === "native-plugin" &&
             capabilityRiskRank(component.risk) >= capabilityRiskRank("executable")))
           ? { escalation: "Changes files that an executable component may use." }

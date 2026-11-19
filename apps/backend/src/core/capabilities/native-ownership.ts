@@ -33,6 +33,8 @@ import {
   CAPABILITY_MARKER_FILE,
   CapabilityError,
   readPackageTree,
+  recoverDirectoryReplacement,
+  recoverLocationReplacements,
   sha256Hex,
   treeDigest,
   writeFileAtomically,
@@ -137,15 +139,29 @@ async function readJson(file: string): Promise<unknown> {
   }
 }
 
-export async function readLocationIndex(directory: string): Promise<LocationIndex> {
+export async function readLocationIndex(
+  directory: string,
+  options: { strict?: boolean } = {},
+): Promise<LocationIndex> {
   const value = (await readJson(
     path.join(directory, CAPABILITY_LOCATION_INDEX),
   )) as Partial<LocationIndex> | null;
+  if (
+    options.strict &&
+    (value?.formatVersion !== 1 ||
+      !value.files ||
+      typeof value.files !== "object" ||
+      Array.isArray(value.files))
+  ) {
+    throw new CapabilityError("unsafe-content", "The capability ownership index is unreadable.");
+  }
   const files: LocationIndex["files"] = {};
   if (value && typeof value.files === "object" && value.files !== null) {
     for (const [name, entry] of Object.entries(value.files)) {
       const marker = parseMarker(entry);
       if (marker && isSafeCapabilitySegment(name)) files[name] = marker;
+      else if (options.strict)
+        throw new CapabilityError("unsafe-content", "The capability ownership index is invalid.");
     }
   }
   return { formatVersion: 1, files };
@@ -202,7 +218,9 @@ export async function installedDigest(
 ): Promise<string | null> {
   try {
     if (location.layout === "directory") {
-      const files = await readPackageTree(path.join(directory, entry));
+      const destination = path.join(directory, entry);
+      recoverDirectoryReplacement(destination);
+      const files = await readPackageTree(destination);
       return treeDigest(files);
     }
     const target = path.join(directory, entry);
@@ -222,6 +240,7 @@ export async function listLocation(
   limit = 500,
 ): Promise<LocatedItem[]> {
   const directory = locationDirectory(location.id, homes);
+  if (location.layout === "directory") await recoverLocationReplacements(directory);
   const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
   const index = location.layout === "file" ? await readLocationIndex(directory) : null;
   const items: LocatedItem[] = [];

@@ -510,6 +510,8 @@ export interface GraphAgentWorldOptions {
   runId?: string;
   environmentType?: "local" | "containerized";
   assertAgentToolsReachable?: GraphAgentWiringInput["assertAgentToolsReachable"];
+  capabilityPreflight?: GraphAgentWiringInput["capabilityPreflight"];
+  capabilitySessionPlugins?: GraphAgentWiringInput["capabilitySessionPlugins"];
   /** Replaces the fake repository's Git (item 403 adds worktrees on top of it). */
   git?: (repo: FakeGraphRepo) => EnvironmentGit;
   /** Isolated branch worktrees for the agent executor (item 403). */
@@ -600,6 +602,12 @@ export async function graphAgentWorld(
         agentTools,
         toolResultsEnabled: () => world.toolResults,
         assertAgentToolsReachable: options.assertAgentToolsReachable,
+        ...(options.capabilityPreflight
+          ? { capabilityPreflight: options.capabilityPreflight }
+          : {}),
+        ...(options.capabilitySessionPlugins
+          ? { capabilitySessionPlugins: options.capabilitySessionPlugins }
+          : {}),
         environmentGit: options.git ? options.git(repo) : repo.git,
         ...(options.branchWorktrees ? { branchWorktrees: options.branchWorktrees(world) } : {}),
         workspaceProbe: repo.probe,

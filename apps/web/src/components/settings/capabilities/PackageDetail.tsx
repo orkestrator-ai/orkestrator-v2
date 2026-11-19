@@ -277,17 +277,12 @@ export function PackageDetail({
             disabled={!useOnSetup || busy}
             onClick={() =>
               void run(async () => {
-                const setup = setups.find((entry) => entry.id === useOnSetup)!;
-                await capabilitiesApi.setCapabilitySetup(
-                  {
-                    ...setup,
-                    packageSelections: [
-                      ...setup.packageSelections,
-                      { packageId, version: pkg.pinned ? pkg.revision : "latest" },
-                    ],
-                  },
-                  setup.revision,
-                );
+                const result = await capabilitiesApi.previewCapabilityChange({
+                  kind: "add-to-setup",
+                  packageId,
+                  setupId: useOnSetup,
+                });
+                setPreview(result.operation);
                 setUseOnSetup("");
               })
             }

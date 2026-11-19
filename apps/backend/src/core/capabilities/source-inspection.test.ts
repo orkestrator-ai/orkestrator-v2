@@ -1,4 +1,7 @@
-import { compareCapabilityRevisions } from "@orkestrator/protocol/capability-resources-resolve";
+import {
+  capabilityUpdateApproval,
+  compareCapabilityRevisions,
+} from "@orkestrator/protocol/capability-resources-resolve";
 import { describe, expect, test } from "bun:test";
 
 import { assertFetchableRepo, inspectFiles } from "./source-inspection.js";
@@ -16,6 +19,20 @@ const files = (entries: Record<string, string>, executable: string[] = []) =>
 const source = { kind: "managed" as const, managedId: "m1" };
 
 describe("inspection", () => {
+  test("an edited inline command is reviewed again under trusted auto-update", () => {
+    const before = inspectFiles(source, files({ "commands/review.md": "Review !`git status`." }));
+    const after = inspectFiles(source, files({ "commands/review.md": "Review !`git diff`." }));
+    const changes = compareCapabilityRevisions(
+      before.components,
+      after.components,
+      () => before.artifactDigest !== after.artifactDigest,
+    );
+    expect(capabilityUpdateApproval("trusted-auto", changes, true)).toMatchObject({
+      autoApply: false,
+      requiresApproval: true,
+    });
+  });
+
   test.each(["hooks: {}", '"allowed-tools": []'])(
     "rejects unsupported capability frontmatter (%s)",
     (setting) => {

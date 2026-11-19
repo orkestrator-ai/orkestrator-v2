@@ -102,6 +102,26 @@ describe("busy providers", () => {
     ).toEqual(["codex"]);
   });
 
+  test("waiting turns and stale unattended sources continue to hold their provider", () => {
+    expect(
+      busyProvidersFrom(
+        [
+          {
+            id: "waiting",
+            agentActivityState: "waiting",
+            agentActivitySources: { "native-agent": { state: "waiting" } },
+          },
+          {
+            id: "stale",
+            agentActivityState: "working",
+            agentActivitySources: { "claude-tmux": { state: "working", stale: true } },
+          },
+        ],
+        [{ environmentId: "waiting", agent: "codex" }],
+      ),
+    ).toEqual(["claude", "codex"]);
+  });
+
   test("terminal Claude work holds Claude; working without a known session holds everyone", () => {
     expect(
       busyProvidersFrom(
@@ -115,9 +135,15 @@ describe("busy providers", () => {
         [],
       ),
     ).toEqual(["claude"]);
-    expect(busyProvidersFrom([{ id: "a", agentActivityState: "working" }], [])).toEqual([
-      ...AGENT_PLATFORMS,
-    ]);
+    expect(
+      busyProvidersFrom(
+        [
+          { id: "a", agentActivityState: "working" },
+          { id: "b", agentActivityState: "idle" },
+        ],
+        [],
+      ),
+    ).toEqual([...AGENT_PLATFORMS]);
   });
 });
 
@@ -167,6 +193,14 @@ describe("running work holds shared writes", () => {
     });
     await service.reconciler.idle();
     expect(await exists(claudeCopy)).toBe(true);
+    const operation = await service.getOperation({ operationId: preview.operation.id });
+    expect(operation.targets).toContainEqual(
+      expect.objectContaining({
+        action: "remove",
+        locationId: "claude-user-skills",
+        status: "queued-until-idle",
+      }),
+    );
     busy = [];
     await service.reconciler.reconcileNode(NODE, "test");
     await service.reconciler.idle();

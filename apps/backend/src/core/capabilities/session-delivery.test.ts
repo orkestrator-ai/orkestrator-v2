@@ -661,6 +661,24 @@ describe("session launch on a leaf", () => {
       await fs.readFile(path.join(directory!, "skills", "leaf-private", "SKILL.md"), "utf8"),
     ).toContain("Leaf only.");
 
+    gram.sessionEvidence = {
+      state: "evidence",
+      generation: 1,
+      loadedAt: "2026-11-19T10:01:00.000Z",
+      plugins: [{ name: "orkestrator-session", path: directory! }],
+      skills: ["orkestrator-session:leaf-private"],
+      usedSkills: [],
+    };
+    const componentId = effective!.resolvedPackages[0]!.components[0]!;
+    const verified = await desktop.cap.verify({
+      target: { nodeId: gram.id, provider: "claude", environmentId: "env-1", sessionId: "s1" },
+      componentIds: [componentId],
+      consent: true,
+    });
+    expect(verified.checks).toEqual([
+      expect.objectContaining({ componentId, level: "load-confirmed" }),
+    ]);
+
     // Recorded on the leaf, and never written to its shared provider homes.
     expect(
       (await gram.storage.capabilities.loadCapabilityState()).launches.s1?.privatePlugin?.items,
@@ -670,5 +688,15 @@ describe("session launch on a leaf", () => {
         path.join(gram.home, ".claude", "skills", "leaf-private", "SKILL.md"),
       ).exists(),
     ).toBe(false);
+    const old = new Date(0);
+    await fs.utimes(directory!, old, old);
+    await gram.cap.forgetEnvironmentLaunches("unrelated");
+    expect(await Bun.file(path.join(directory!, "skills/leaf-private/SKILL.md")).exists()).toBe(
+      true,
+    );
+    await gram.cap.forgetEnvironmentLaunches("env-1");
+    expect(await Bun.file(path.join(directory!, "skills/leaf-private/SKILL.md")).exists()).toBe(
+      false,
+    );
   });
 });

@@ -509,7 +509,7 @@ export class CapabilityDriftWorkflow {
 
   /** Apply-time check: the machine still has exactly the bytes the preview was made from. */
   async assertAdoptionCurrent(state: CapabilityState, change: CapabilityChange): Promise<void> {
-    if (change.kind !== "add-to-setup") return;
+    if (change.kind !== "add-to-setup" || !("inspectionId" in change)) return;
     const adoption = state.inspections[change.inspectionId]?.adoption;
     if (!adoption) return;
     const drift = state.drift[adoption.driftId];

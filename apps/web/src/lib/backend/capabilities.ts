@@ -45,6 +45,7 @@ import { capabilitiesOn } from "@/lib/node-scope/domains/capabilities";
 import { commandBackendClient, type BackendClient } from "./client";
 
 export type CapabilityChangeInput =
+  | { kind: "add-to-setup"; packageId: string; setupId: string }
   | { kind: "use-toolkit-on-fleet"; setupId: string; expectedRevision: number }
   | {
       kind: "add-to-setup";

@@ -95,6 +95,7 @@ export interface RemoteScopedDeps {
   now?: () => string;
   // Executor side: this machine's own environments, containers and their MCP management.
   environments?(): Promise<ScopedEnvironment[]>;
+  writeHeld?: ScopedDeliveryDeps["writeHeld"];
   containerDelivery?: ScopedDeliveryDeps["containerDelivery"];
   projectMcp?(environmentId: string): McpInstaller | undefined;
   git?: GitRunner;
@@ -366,7 +367,7 @@ export class RemoteScopedDelivery {
           },
         });
         changed = pass.changed || changed;
-        recheck = pass.unknown === true || recheck;
+        recheck ||= pass.unknown === true || pass.held === true;
       } catch (error) {
         log.warn("reconcile.scoped-failed", { error: formatLogError(error, { message: false }) });
       }
@@ -616,6 +617,9 @@ export class RemoteScopedDelivery {
           keep,
           knownEnvironment: (id) => local.known.has(id),
           ...(fence ? { fence } : {}),
+          ...(this.deps.writeHeld
+            ? { writeHeld: () => this.deps.writeHeld!({ environmentId }) }
+            : {}),
         },
       );
       return { found: true, results };

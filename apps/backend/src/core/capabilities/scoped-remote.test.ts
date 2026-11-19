@@ -85,7 +85,7 @@ async function fleet() {
 
 async function addToSetup(
   command: CapabilityNode,
-  input: { kind: "skill" | "command"; name: string; content: string },
+  input: { kind: "skill" | "command"; name: string; content: string; managedId?: string },
   setupId: string,
 ): Promise<string> {
   const inspection = await command.cap.authorPackage({
@@ -93,6 +93,7 @@ async function addToSetup(
     name: input.name,
     description: `${input.name} ${input.kind}`,
     content: input.content,
+    ...(input.managedId ? { managedId: input.managedId } : {}),
   });
   const preview = await command.cap.previewChange({
     change: { kind: "add-to-setup", inspectionId: inspection.inspectionId, setupId },
@@ -208,6 +209,29 @@ describe("project setups in a worktree on another machine", () => {
         (receipt) => receipt.environmentId === "env-g",
       ),
     ).toEqual([]);
+  });
+
+  test("a busy remote worktree keeps its current revision", async () => {
+    const { desktop, gram, worktree, toolkit } = await fleet();
+    await addToSetup(
+      desktop,
+      { kind: "skill", name: "review", content: "Original.", managedId: "test-held-review" },
+      toolkit.id,
+    );
+    await desktop.cap.assignSetup({ scope: "project", scopeId: "proj-g", setupIds: [toolkit.id] });
+    await reconcile(desktop);
+    const skill = path.join(worktree, ".claude/skills/review/SKILL.md");
+    gram.busyWorktrees = new Set(["env-g"]);
+    await addToSetup(
+      desktop,
+      { kind: "skill", name: "review", content: "Latest.", managedId: "test-held-review" },
+      toolkit.id,
+    );
+    await reconcile(desktop);
+    expect(await fs.readFile(skill, "utf8")).toContain("Original.");
+    gram.busyWorktrees = new Set();
+    await reconcile(desktop);
+    expect(await fs.readFile(skill, "utf8")).toContain("Latest.");
   });
 
   test("local changes are kept, and a lost answer is observed before anything is sent again", async () => {
@@ -386,6 +410,25 @@ describe("a launch in a worktree on a leaf", () => {
         locationId: "project-claude-skills",
       }),
     ]);
+
+    const componentId = recorded!.deliveries![0]!.componentId;
+    const target = { nodeId: gram.id, environmentId: "env-g", sessionId: "s1", provider: "claude" };
+    const checked = await desktop.cap.verify({
+      target,
+      componentIds: [componentId],
+      consent: true,
+    });
+    expect(checked.checks).toContainEqual(
+      expect.objectContaining({ componentId, level: "present" }),
+    );
+    const wrong = await desktop.cap.verify({
+      target: { ...target, environmentId: "another-worktree" },
+      componentIds: [componentId],
+      consent: true,
+    });
+    expect(wrong.checks).toContainEqual(
+      expect.objectContaining({ componentId, level: "requested" }),
+    );
 
     await fs.writeFile(skill, "Edited on the leaf.");
     await expect(gram.cap.preflightSession({ ...launch, sessionKey: "s2" })).rejects.toThrow(

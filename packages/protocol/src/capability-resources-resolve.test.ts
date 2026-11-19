@@ -308,6 +308,16 @@ describe("approvals", () => {
     expect(capabilityUpdateApproval("trusted-auto", quiet, false).autoApply).toBe(false);
   });
 
+  test("changes to inline executable Markdown require approval even from a trusted source", () => {
+    const command = {
+      ...component("p", "command", "review"),
+      risk: "executable" as const,
+      executes: ["shell (inline ! command)"],
+    };
+    const changed = compareCapabilityRevisions([command], [command], () => true);
+    expect(capabilityUpdateApproval("trusted-auto", changed, true).requiresApproval).toBe(true);
+  });
+
   test("ceiling denial covers hooks and subagents", () => {
     expect(ceilingDenial(hook, new Set(["shell"]), null)).toContain("hook");
     expect(ceilingDenial(component("p", "subagent", "x"), new Set(["subagents"]), null)).toContain(

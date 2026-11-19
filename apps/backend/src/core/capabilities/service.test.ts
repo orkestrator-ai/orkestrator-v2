@@ -28,6 +28,7 @@ interface Node {
   storage: StorageService;
   service: CapabilityService;
   connected: boolean;
+  busyProviders?: import("@orkestrator/protocol/agent-platforms").AgentPlatform[];
   /** Throw after a successful apply, as a dropped link would. */
   loseNextApplyAnswer: boolean;
   beforeStage?: () => Promise<void>;
@@ -117,6 +118,7 @@ async function makeNode(id: string, others: () => Node[], isCommand: boolean): P
     isAuthority: () => isCommand,
     emit: () => undefined,
     homes: () => testCapabilityHomes(home),
+    busyProviders: async () => node.busyProviders ?? [],
     inventory: {
       providers: async () => AGENT_PLATFORMS.map((provider) => ({ provider, available: true })),
     },
@@ -188,6 +190,35 @@ describe("add once, use wherever compatible", () => {
     expect(
       Object.keys((await command.storage.capabilities.loadCapabilityState()).operations),
     ).toHaveLength(0);
+  });
+
+  test("assigning a library package to My setup needs an approved target preview", async () => {
+    const { command, leafA } = await fleet();
+    const toolkit = await command.service.setSetup({ setup: { name: "Private tools" } });
+    const { inspection } = await addSkill(command, "review", "Review the change.", toolkit.id);
+    const state = await command.storage.capabilities.loadCapabilityState();
+    const mySetup = state.setups[MY_SETUP_ID]!;
+    await expect(
+      command.service.setSetup({
+        setup: {
+          ...mySetup,
+          packageSelections: [{ packageId: inspection.packageId, version: "latest" }],
+        },
+        expectedRevision: mySetup.revision,
+      }),
+    ).rejects.toThrow("Preview this toolkit");
+    const { operation } = await command.service.previewChange({
+      change: { kind: "add-to-setup", setupId: MY_SETUP_ID, packageId: inspection.packageId },
+    });
+    const file = skillFile(leafA, ".claude", "review");
+    expect(await Bun.file(file).exists()).toBe(false);
+    expect(operation.targets.some((target) => target.target.nodeId === leafA.id)).toBe(true);
+    await command.service.applyChange({
+      operationId: operation.id,
+      approvedDigest: operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    expect(await fs.readFile(file, "utf8")).toContain("Review the change.");
   });
 
   test("a populated toolkit reaches the fleet only after approval", async () => {
@@ -436,6 +467,28 @@ describe("remote safety", () => {
     expect(await fs.readFile(skillFile(leafB, ".claude", "docs"), "utf8")).toContain(
       "Version two.",
     );
+  });
+
+  test("the owning executor holds a write when a turn starts during staging", async () => {
+    const { command, leafA } = await fleet();
+    leafA.beforeStage = async () => {
+      leafA.busyProviders = ["claude"];
+    };
+    const { applied } = await addSkill(command, "race", "Take notes.");
+    const file = skillFile(leafA, ".claude", "race");
+    expect(await Bun.file(file).exists()).toBe(false);
+    const operation = await command.service.getOperation({ operationId: applied.operation.id });
+    expect(operation.targets).toContainEqual(
+      expect.objectContaining({
+        locationId: "claude-user-skills",
+        status: "queued-until-idle",
+        target: expect.objectContaining({ nodeId: leafA.id }),
+      }),
+    );
+    delete leafA.beforeStage;
+    leafA.busyProviders = [];
+    await command.service.reconciler.reconcileNode(leafA.id, "idle");
+    expect(await fs.readFile(file, "utf8")).toContain("Take notes.");
   });
 
   test("rechecks desired state after staging before dispatching the write", async () => {
@@ -835,6 +888,34 @@ describe("setups", () => {
         expectedRevision: created.revision,
       }),
     ).rejects.toThrow("Someone else changed");
+  });
+
+  test("deleting a parent advances the child and assignment revisions", async () => {
+    const { command } = await fleet();
+    const parent = await command.service.setSetup({ setup: { name: "Parent" } });
+    const child = await command.service.setSetup({
+      setup: { name: "Child", parentSetupIds: [parent.id] },
+    });
+    const assignment = await command.service.assignSetup({
+      scope: "session",
+      scopeId: "s1",
+      setupIds: [parent.id],
+    });
+    await command.service.deleteSetup({ setupId: parent.id, expectedRevision: parent.revision });
+    await expect(
+      command.service.setSetup({
+        setup: { ...child, name: "Stale" },
+        expectedRevision: child.revision,
+      }),
+    ).rejects.toThrow("changed");
+    await expect(
+      command.service.assignSetup({
+        scope: "session",
+        scopeId: "s1",
+        setupIds: [],
+        expectedRevision: assignment.revision,
+      }),
+    ).rejects.toThrow("changed");
   });
 
   test("My setup cannot be deleted; a toolkit can", async () => {

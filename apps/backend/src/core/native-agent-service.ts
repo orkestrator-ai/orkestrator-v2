@@ -2949,6 +2949,10 @@ export class NativeAgentService {
     return provider.capabilityEvidence(session.providerSessionId, options);
   }
 
+  capabilityActivity(sessionKey: string): string | undefined {
+    return this.launches.observedActivity(sessionKey)?.state;
+  }
+
   private trackScan(task: Promise<void>): Promise<void> {
     const tracked = task.finally(() => {
       this.scanTasks.delete(tracked);

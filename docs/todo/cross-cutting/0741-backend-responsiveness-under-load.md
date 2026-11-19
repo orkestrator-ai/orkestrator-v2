@@ -713,6 +713,19 @@ stall is inconclusive, so task 6 remains open pending live evidence.
   `StorageDatabase.rows()`. So a snapshot is never older than a `load` made
   at the same moment.
 
+  **Follow-up (2026-11-19).** Under concurrent agents some tab writes almost
+  every call, so a read rarely finds the read model current, and a rebuild
+  still sorts every row and walks every message. Per-mailbox row reads were
+  added beside the read model for the reads that name a mailbox or an
+  environment: the inbox, a read message, the caller's identity (the pull-tab
+  lookups, which now read one environment's key range), one environment's
+  directory (the MCP handshake) and a delivery status (a bounded, verified
+  location hint). Acknowledge, seen and discard commit one mailbox row. The
+  project directory, sent lists, inject sweep and summaries stay on the read
+  model. See [storage.md](../../architecture/storage.md) for the design and
+  `apps/backend/scripts/agent-mail-store-bench.ts` (`…AfterWriteMs`) for the
+  measurement.
+
 ### Task 5: share one frozen snapshot rather than hand out copies
 
 - **Chose:** freeze the snapshot deeply and share it, so that mutating it

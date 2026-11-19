@@ -110,8 +110,28 @@ which any writer in any process bumps. A rebuild reads the serialized rows
 from the connection's revision-validated cache (`loadStoreSerialized`) and
 re-parses only rows whose serialized value changed, so an unchanged store
 costs one revision query and a send re-parses about three rows instead of
-every mailbox. Read-modify-write paths still take a mutable copy with `load()`
-inside `enqueue`. The 32 MiB limit is checked on the serialized rows the save
+every mailbox. Reads that name one mailbox or one environment skip the
+read model altogether, because any write anywhere moves the revision and a
+rebuild walks every message: an inbox (`getAgentMailMailbox`), a read
+message, a caller's identity (`listAgentMailPullTabIds`,
+`resolveUniqueAgentMailPullTabId`), one environment's directory (the agent
+MCP handshake) and a delivery status read rows by key through
+`AgentMailStore.mailbox`, `environmentMailboxes` and `messageStatus`
+(`loadStoreRowsSerialized`: named keys, or the `environmentId\0` key range,
+since every mailbox id is `environmentId\0tabId`). They parse only those rows,
+reusing the read model's or an earlier keyed read's parse of an unchanged
+value (`storage-agent-mail-keyed-rows.ts`, bounded to 512 rows and 8 Mi
+characters), and check the envelope's version once per committed revision.
+A status read finds the message's mailbox from a bounded location hint learnt
+from rows this process parsed or wrote, verified against the row, then its
+counterpart row; a miss searches the whole store. A store held whole, buffered
+by `atomically` or with an unreadable row reads through `snapshot()` as
+before. Acknowledge, seen and discard change one message of one mailbox, so
+they read that mailbox by key and commit its row alone (`saveRows` with
+`revision: "next"` and the queue derived from the committed one), falling back
+to `load()` and `save()` where the store cannot take a row write. Other
+read-modify-write paths still take a mutable copy with `load()` inside
+`enqueue`. The 32 MiB limit is checked on the serialized rows the save
 writes anyway (`maxBytes` on `saveSensitiveJson`), not by serializing the
 store a second time. Deleting an environment's mail plans its change from
 `snapshot()` under the lease and commits only the rows it changes

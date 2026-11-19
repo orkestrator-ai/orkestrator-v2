@@ -22,6 +22,14 @@ import {
   type StoreRow,
 } from "./storage-database-rows.js";
 import {
+  readSelectionHeader,
+  restrictCompanionFiles,
+  rowBytesExpression,
+  selectSerializedRows,
+  type RowSelection,
+  type SelectedStoreRows,
+} from "./storage-database-queries.js";
+import {
   instrumentSqliteConnection,
   storageDatabaseName,
   type SlowStorageOperations,
@@ -50,7 +58,7 @@ const log = createLogger("storage");
  */
 
 export { STORAGE_DATABASE_FILE };
-export { applyArrayRowUpdate };
+export { applyArrayRowUpdate, rowBytesExpression };
 
 /**
  * The change-tracking ledger's own database file, beside
@@ -335,18 +343,6 @@ function sleep(ms: number): Promise<void> {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function restrictCompanionFiles(databasePath: string): void {
-  for (const suffix of ["-wal", "-shm", "-journal"]) {
-    const companion = `${databasePath}${suffix}`;
-    try {
-      if (fs.lstatSync(companion).isFile()) fs.chmodSync(companion, 0o600);
-    } catch (error) {
-      // Another backend closing the database removes its WAL and SHM.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
 }
 
 export class StorageDatabase {
@@ -873,6 +869,42 @@ export class StorageDatabase {
           return value.find((item) => isPlainRecord(item) && item[field] === key);
         }
         return isPlainRecord(value) ? value[key] : undefined;
+      })
+      .deferred();
+  }
+
+  /**
+   * Selected rows of one collection and the committed revision, in one read
+   * snapshot, without filling the cache; see `selectSerializedRows` and
+   * `readSelectionHeader` (`documentKnownAt`).
+   */
+  readStoreRowsSerialized(
+    store: string,
+    collection: string,
+    selection: RowSelection,
+    options: { documentKnownAt?: number } = {},
+  ): SelectedStoreRows | null {
+    this.timing.store = store;
+    return this.db
+      .transaction((): SelectedStoreRows | null => {
+        const header = readSelectionHeader(this.db, store, options.documentKnownAt);
+        if (!header) return null;
+        const { revision, document } = header;
+        if (header.mode !== "rows") return { revision, mode: "document", document, rows: [] };
+        this.observe?.("read");
+        const cached = this.pendingCache?.has(store)
+          ? this.pendingCache.get(store)
+          : this.cache.get(store);
+        const known = cached?.revision === header.revision && cached.mode === "rows";
+        const selected = selectSerializedRows(
+          this.db,
+          store,
+          collection,
+          selection,
+          known ? cached.rows : null,
+        );
+        this.fetched(selected.fetched);
+        return { revision, mode: "rows", document, rows: selected.rows };
       })
       .deferred();
   }
@@ -1964,20 +1996,5 @@ export class StorageDatabase {
       holderAgeMs,
       waitedMs,
     });
-  }
-}
-
-/**
- * The SQL for a row value's UTF-8 length. `octet_length` (SQLite 3.43) reads the
- * length from the record header, so sizing a value never reads its overflow
- * pages. Bun on macOS loads the system library, which varies with the macOS
- * version, so the slower cast stays as the fallback.
- */
-export function rowBytesExpression(db: Pick<Database, "query">): string {
-  try {
-    db.query("SELECT octet_length('')").get();
-    return "octet_length(value)";
-  } catch {
-    return "length(CAST(value AS BLOB))";
   }
 }

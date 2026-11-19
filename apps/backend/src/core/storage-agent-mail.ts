@@ -54,8 +54,10 @@ import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import {
   AgentMailStore,
+  cloneMailValue,
   exceedsThreadHops,
   findMessage,
+  isQueuedForInject,
   metadataMessage,
   type AgentMailSender,
   type PersistedAgentMailStore,
@@ -357,8 +359,7 @@ export class AgentMailRepository {
     ) {
       return true;
     }
-    const store = await this.store.snapshot();
-    const mailbox = store.mailboxes[agentMailboxId(workerEnvironmentId, workerTabId)];
+    const mailbox = await this.store.mailbox(agentMailboxId(workerEnvironmentId, workerTabId));
     if (!mailbox) return false;
     return mailbox.messages.some(
       (message) =>
@@ -376,8 +377,7 @@ export class AgentMailRepository {
     tabId: string,
     messageId: string,
   ): Promise<AgentMailMessage> {
-    const store = await this.store.snapshot();
-    const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
+    const mailbox = await this.store.mailbox(agentMailboxId(environmentId, tabId));
     const message = mailbox?.messages.find((candidate) => candidate.id === messageId);
     if (!message)
       throw new AgentMailError("message-not-found", "Message not found in this mailbox");
@@ -1177,20 +1177,46 @@ export class AgentMailRepository {
     messageId: string,
     mutation: (message: AgentMailMessage) => boolean,
   ): Promise<AgentMailMessage> {
+    const mailboxId = agentMailboxId(environmentId, tabId);
     return this.store.enqueue(async () => {
-      const store = await this.store.load();
-      const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
-      const message = mailbox?.messages.find((candidate) => candidate.id === messageId);
-      if (!mailbox || !message)
+      // Changes one message of one mailbox, so it reads and commits that
+      // mailbox's row alone; the whole-store copy is the fallback.
+      const committed = await this.store.mailbox(mailboxId);
+      if (!committed?.messages.some((candidate) => candidate.id === messageId))
         throw new AgentMailError("message-not-found", "Message not found in this mailbox");
+      const mailbox = cloneMailValue(committed);
+      const message = mailbox.messages.find((candidate) => candidate.id === messageId)!;
       if (!mutation(message)) return message;
       message.revision += 1;
       mailbox.revision += 1;
-      store.revision += 1;
-      await this.store.save(store);
-      this.context.changes.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      const stillQueued = isQueuedForInject(message);
+      const saved = this.store.saveRows({
+        rows: [{ collection: "mailboxes", key: mailboxId, value: mailbox }],
+        revision: "next",
+        pendingInject: (queue) =>
+          stillQueued
+            ? queue
+            : queue.filter(
+                (entry) => entry.mailboxId !== mailboxId || entry.messageId !== messageId,
+              ),
+      });
+      let changed = message;
+      if (!saved) {
+        const store = await this.store.load();
+        const whole = store.mailboxes[mailboxId];
+        const current = whole?.messages.find((candidate) => candidate.id === messageId);
+        if (!whole || !current)
+          throw new AgentMailError("message-not-found", "Message not found in this mailbox");
+        if (!mutation(current)) return current;
+        current.revision += 1;
+        whole.revision += 1;
+        store.revision += 1;
+        await this.store.save(store);
+        changed = current;
+      }
+      this.context.changes.announce("agent-mail", mailboxId, mailbox.projectId);
       this.context.changes.announce("agent-mail-summary", "all");
-      return message;
+      return changed;
     });
   }
 
@@ -1237,6 +1263,8 @@ export class AgentMailRepository {
   }
 
   async getAgentMailStatus(messageId: string): Promise<AgentMailMessageSummary> {
+    const keyed = await this.store.messageStatus(messageId);
+    if (keyed) return keyed;
     const store = await this.store.snapshot();
     const located = findMessage(store, messageId);
     if (located) return metadataMessage(located.message);

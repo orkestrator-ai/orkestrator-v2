@@ -11,7 +11,11 @@ import { benchOption as option, createAgentMailBenchFixture } from "./agent-mail
  * `send_message` (directory, send, recipient mailbox), `message_status`, the
  * inject sweep and the UI summary, and two writes (send and acknowledge).
  * `readAfterWriteMs` is an inbox read that follows a send, so it never finds
- * the store unchanged. Each figure is the mean milliseconds per call and the
+ * the store unchanged; the other `…AfterWriteMs` figures are the reads an
+ * agent's mail call or MCP handshake makes (identity, its environment's
+ * directory, a sent message's status), each after another tab's send, and
+ * exclude the send itself (`sendMs`). Raise `--messages` to see how retained
+ * mail affects them. Each figure is the mean milliseconds per call and the
  * CPU milliseconds per call. Figures are machine- and load-specific; compare
  * runs on one host only. Todo 0741 records measured runs.
  */
@@ -42,6 +46,23 @@ async function measure(operation: (index: number) => Promise<unknown>) {
     ms: round(wall / iterations),
     cpuMs: round((cpu.user + cpu.system) / 1_000 / iterations),
   };
+}
+
+/** {@link measure} of `operation` alone, each call made right after a send. */
+async function measureAfterSend(operation: (index: number) => Promise<unknown>) {
+  let wall = 0;
+  let cpu = 0;
+  for (let index = 0; index < iterations + 5; index += 1) {
+    await send(index);
+    const cpuBefore = process.cpuUsage();
+    const started = performance.now();
+    await operation(index);
+    if (index < 5) continue;
+    wall += performance.now() - started;
+    const used = process.cpuUsage(cpuBefore);
+    cpu += (used.user + used.system) / 1_000;
+  }
+  return { ms: round(wall / iterations), cpuMs: round(cpu / iterations) };
 }
 
 const env = (index: number) => `env-${index % environments}`;
@@ -83,6 +104,20 @@ try {
       const message = await send(index);
       await storage.getAgentMailMailbox(message.toEnvironmentId, message.toTabId, { limit: 50 });
     }),
+    identityAfterWriteMs: await measureAfterSend((index) =>
+      storage.listAgentMailPullTabIds(env(index + 3)),
+    ),
+    directoryAfterWriteMs: await measureAfterSend((index) =>
+      storage.listAgentMailboxes({
+        environmentId: env(index + 3),
+        currentEnvironmentId: env(index + 3),
+        limit: 200,
+      }),
+    ),
+    inboxAfterWriteMs: await measureAfterSend((index) =>
+      storage.getAgentMailMailbox(env(index + 3), tab(index), { unreadOnly: true, limit: 50 }),
+    ),
+    statusAfterWriteMs: await measureAfterSend(() => storage.getAgentMailStatus(sent.id)),
   };
   fixture.log(JSON.stringify({ environments, tabs, messages, iterations, ...results }));
 } finally {

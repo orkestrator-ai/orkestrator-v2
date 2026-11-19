@@ -222,7 +222,8 @@ provider's mode decides the observer's timer
   small `{ unchanged: true }` bridge request while the state revision stands
   (`http-bridge/state-revision.ts`); the side routes (questions, plan
   approvals, interactions, approvals, Codex `/config`, Pi `/queue`) are read
-  only after it moved, and Pi's composer only when its own revision moved.
+  after it moves. If Pi's queue read fails, the next state read retries it even
+  at the same revision. Pi's composer still uses its own revision.
 - A connect, a gap (`replay.required`, Codex's sessionless
   `session.reconcile-required`) or a lost stream wakes every observer of that
   provider at once; each re-reads and, if the stream is no longer live with
@@ -440,9 +441,9 @@ part is `output`.
 native tab):
 
 - Expanding a call that is running (`toolState: "pending"`) reads its tail
-  and subscribes to its key; the row keeps the tail until it is collapsed,
-  through completion. A settled call expanded later reads its details as
-  before, and so do rows outside a live tab (reviews, exports).
+  and subscribes to its key. An arriving file diff switches the expanded row
+  to its detail read. A settled call expanded later and rows outside live
+  tabs (reviews, exports) also use the detail read.
 - Each frame reads `range` from the held end and appends. Behind by more than
   128 KiB it reads the tail again rather than every byte between.
 - The row holds at most 512 KiB of output, dropping older text from the front.
@@ -450,7 +451,9 @@ native tab):
   which reads 64 KiB `before` the held start and prepends it, until the row
   holds its bound.
 - Without a healthy subscription it polls every 2 s while the call runs (30 s
-  recovery poll while healthy); a completed call drops its subscription.
+  recovery poll while healthy). The row keeps reading until it has the final
+  byte of a completed call, then drops its subscription. Transient read errors
+  preserve the held output for the next push or poll.
 - Collapsing releases the subscription, stops its timers and drops the text.
   An answer the node cannot serve (`missing`, `expired`, or `unknown-command`
   from an older node) falls back to the row's detail read.
@@ -490,8 +493,10 @@ window:
   polling cadence; a set they send meanwhile waits up to 8 s for a stream and
   is then answered `unavailable`.
 - **Release.** A key leaves the union when its last downstream subscriber
-  drops it or closes; the node is sent the smaller union, and once nothing is
-  held the hold ends.
+  drops it or closes. Closing a leaf scope sends an empty set on the owning
+  command stream. The controller sends the smaller union and retries a failed
+  final empty union with backoff until it is acknowledged or the upstream
+  stream closes.
 - **Bounds.** The union stays within the node's own limits (512 keys,
   16 topics); a key past them is answered `denied` / `limit`. `stop()` (with
   `NodePortal.stop`) releases every hold and answers every waiting set
@@ -515,8 +520,10 @@ whether the subscription is healthy.
 
 Ordering rules (design D5): a frame is applied whatever the state of the set
 call; a change for a key not in the set, or at or below the stamp the client
-holds, is ignored; a duplicate `seq` is ignored; a gap applies the frame and
-re-sends the set, whose answer names what moved. An answer for an older
+holds, is ignored; a duplicate `seq` is ignored. A gap invalidates all parts
+of subscribed keys, then applies the frame and re-sends the set. The next frame
+and the set answer can carry equal stamps even if the missing frame named
+another part of that key. An answer for an older
 `setRevision` is ignored. The first answer for a new key always reads once,
 which covers a change between the view's mount read and the registration.
 Nothing in the client infers that work completed from a stream closing: a
@@ -673,7 +680,7 @@ tokens, with a healthy subscription:
 - **Dropped stream:** the view returns to the 500 ms cadence, then
   re-subscribes on reconnect.
 - **Duplicate frame:** ignored, and it costs no read.
-- **`seq` gap:** one re-sent set, whose answer names the move.
+- **`seq` gap:** an immediate full invalidation and one re-sent set.
 - **Backend restart:** a new gateway and push layer start over the same
   storage, and every subscription answers a new generation. Nothing is left
   in the old layer. Run against both bridges. With a revisions bridge, the

@@ -18,6 +18,9 @@ import {
   conditionalSnapshotOf,
   EnvironmentHydrationBatchSchema,
   FileDraftSchema,
+  PromptQueueEditBeginSchema,
+  PromptQueueEditFinishSchema,
+  PromptQueueEditRenewSchema,
   PromptQueueRemovalSchema,
   PromptQueueSchema,
 } from "./schemas.js";
@@ -117,6 +120,71 @@ export const movePromptQueueMessageCommand = defineCommand({
   }),
   result: NullablePromptQueue,
   critical: [],
+});
+
+/**
+ * Starts editing a queued prompt in place (`prompt-queue-edit.ts`): grants a
+ * lease that keeps the backend from delivering it until the edit finishes.
+ * The item keeps its id and position. `takeOver` replaces another client's
+ * unexpired lease; an expired one is taken over without it.
+ */
+export const beginPromptQueueMessageEditCommand = defineCommand({
+  domain: nativeSessionsDomain,
+  name: "begin_prompt_queue_message_edit",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({
+    queueKey: Schema.String,
+    environmentId: Schema.String,
+    messageId: Schema.String,
+    takeOver: Schema.optionalKey(Schema.Boolean),
+  }),
+  result: PromptQueueEditBeginSchema,
+  critical: [],
+});
+
+/** Extends an in-place edit's lease; answers a conflict when it no longer holds. */
+export const renewPromptQueueMessageEditCommand = defineCommand({
+  domain: nativeSessionsDomain,
+  name: "renew_prompt_queue_message_edit",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({
+    queueKey: Schema.String,
+    environmentId: Schema.String,
+    messageId: Schema.String,
+    leaseId: Schema.String,
+  }),
+  result: PromptQueueEditRenewSchema,
+  critical: [],
+});
+
+/**
+ * Ends an in-place edit. `commit` replaces the item's text and attachments
+ * together (absent `attachments` removes them) and releases the lease;
+ * `cancel` releases it unchanged. A lease taken over, an item removed or
+ * changed since the edit began answers `conflict` and changes nothing.
+ */
+export const finishPromptQueueMessageEditCommand = defineCommand({
+  domain: nativeSessionsDomain,
+  name: "finish_prompt_queue_message_edit",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({
+    queueKey: Schema.String,
+    environmentId: Schema.String,
+    messageId: Schema.String,
+    leaseId: Schema.String,
+    outcome: Schema.Literals(["commit", "cancel"]),
+    text: Schema.optionalKey(Schema.String),
+    attachments: optionalUnknown,
+  }),
+  result: PromptQueueEditFinishSchema,
+  // A receiver that ignored either would commit a different prompt from the one edited.
+  critical: ["text", "attachments"],
 });
 
 /** Clears a queue's dispatch error so its head is sent again. */
@@ -313,6 +381,9 @@ export const PROMPT_COMMANDS = [
   enqueuePromptQueueMessageCommand,
   removePromptQueueMessageCommand,
   movePromptQueueMessageCommand,
+  beginPromptQueueMessageEditCommand,
+  renewPromptQueueMessageEditCommand,
+  finishPromptQueueMessageEditCommand,
   retryPromptQueueDispatchCommand,
   getComposeDraftCommand,
   saveComposeDraftCommand,

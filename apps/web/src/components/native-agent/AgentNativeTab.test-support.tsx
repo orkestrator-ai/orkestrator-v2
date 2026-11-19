@@ -4,6 +4,7 @@
  * split by topic so that `bun test --parallel` can spread it across workers; the
  * tests themselves are unchanged.
  */
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { afterAll, afterEach, beforeEach, expect, mock } from "bun:test";
 import { isValidElement, memo, useEffect, type ReactNode } from "react";
@@ -197,6 +198,29 @@ export const steerNativeAgentQueuedPromptMock = mock(
 export const enqueuePromptQueueMessageMock = mock(async () => {});
 export const removePromptQueueMessageMock = mock(async () => {});
 const movePromptQueueMessageMock = mock(async () => {});
+/**
+ * In-place edits of queued prompts. By default the node predates them, so
+ * editing falls back to loading the prompt into the composer; a test of the
+ * in-place edit installs its own implementations.
+ */
+const editCommandUnknown = (command: string) => async (): Promise<never> => {
+  throw new Error(unknownBackendCommandMessage(command));
+};
+export const beginPromptQueueMessageEditMock = mock(
+  editCommandUnknown("begin_prompt_queue_message_edit") as (
+    input: Record<string, unknown>,
+  ) => Promise<unknown>,
+);
+export const renewPromptQueueMessageEditMock = mock(
+  editCommandUnknown("renew_prompt_queue_message_edit") as (
+    input: Record<string, unknown>,
+  ) => Promise<unknown>,
+);
+export const finishPromptQueueMessageEditMock = mock(
+  editCommandUnknown("finish_prompt_queue_message_edit") as (
+    input: Record<string, unknown>,
+  ) => Promise<unknown>,
+);
 export const dismissNativeAgentSuggestedPromptMock = mock(async () =>
   sessionProjectionMock({ agent: "claude", environmentId: "env-1" }),
 );
@@ -894,6 +918,9 @@ export async function installAgentNativeTabFixture() {
     enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
     removePromptQueueMessage: removePromptQueueMessageMock,
     movePromptQueueMessage: movePromptQueueMessageMock,
+    beginPromptQueueMessageEdit: beginPromptQueueMessageEditMock,
+    renewPromptQueueMessageEdit: renewPromptQueueMessageEditMock,
+    finishPromptQueueMessageEdit: finishPromptQueueMessageEditMock,
     dismissNativeAgentSuggestedPrompt: dismissNativeAgentSuggestedPromptMock,
     updateNativeAgentControls: updateNativeAgentControlsMock,
   }));
@@ -1001,6 +1028,18 @@ export async function installAgentNativeTabFixture() {
     enqueuePromptQueueMessageMock.mockClear();
     removePromptQueueMessageMock.mockClear();
     movePromptQueueMessageMock.mockClear();
+    beginPromptQueueMessageEditMock.mockReset();
+    beginPromptQueueMessageEditMock.mockImplementation(
+      editCommandUnknown("begin_prompt_queue_message_edit"),
+    );
+    renewPromptQueueMessageEditMock.mockReset();
+    renewPromptQueueMessageEditMock.mockImplementation(
+      editCommandUnknown("renew_prompt_queue_message_edit"),
+    );
+    finishPromptQueueMessageEditMock.mockReset();
+    finishPromptQueueMessageEditMock.mockImplementation(
+      editCommandUnknown("finish_prompt_queue_message_edit"),
+    );
     dismissNativeAgentSuggestedPromptMock.mockClear();
     updateNativeAgentControlsMock.mockClear();
     // Reset, not cleared: a failed test can leave queued once-implementations.

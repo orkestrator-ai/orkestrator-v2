@@ -44,7 +44,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 The area fields are `kanban` (`KanbanStorage`), `linear` (`LinearStorage`), `coordinators`
 (`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
 `nodes` (`NodesStorage`), `machineLoadHistory` (`MachineLoadHistoryStorage`), `previewServices` (`PreviewServicesStorage`),
-`agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
+`agentAccounts` (`AgentAccountsStorage`), `promptQueueEdits` (`PromptQueueEditsStorage`), `graphTemplates`
 (`GraphTemplatesStorage`), `graphRuns` (`GraphRunsStorage`), `graphEffects`
 (`GraphEffectsStorage`), `clientState` (`ClientStateStorage`), `setupApprovals`
 (`SetupApprovalsStorage`), `environmentIsolation` (`EnvironmentIsolationStorage`), `suborks` (`SuborksStorage`), `watchedPullRequests`
@@ -71,6 +71,7 @@ the change journal.
 | `NativeAgentDeliveries` | `storage-native-deliveries.ts` | The dispatch and steer journals on a session record, and a queued steer's reservation and settlement in the prompt queue |
 | `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, row reads and row writes, and the restore of claims older backends left on disk |
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
+| `PromptQueueEditsRepository` | `storage-prompt-queue-edits.ts` | In-place edits of queued prompts, reached as `storage.promptQueueEdits`: the edit lease (`editLeases` on the queue row) that the dispatch and steer reservations respect, its renewal, and the commit of text and attachments together ([native-agent-service.md](native-agent-service.md#editing-a-queued-prompt-in-place)) |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
 | `AgentMailRepository` | `storage-agent-mail.ts` | Agent mail: sending, replies, per-message state, conversations, deletion and retention (an environment's deletion is planned in `storage-agent-mail-deletion.ts`) |

@@ -43,10 +43,10 @@ const ENCODED = new Set([
 ]);
 
 describe("native-sessions definitions", () => {
-  it("defines the domain's 81 commands once each, since version 1", () => {
+  it("defines the domain's 84 commands once each, since version 1", () => {
     const names = NATIVE_SESSIONS_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(81);
-    expect(new Set(names).size).toBe(81);
+    expect(names).toHaveLength(84);
+    expect(new Set(names).size).toBe(84);
     expect(nativeSessionsDomain).toMatchObject({ name: "native-sessions", version: 4, min: 1 });
     for (const def of NATIVE_SESSIONS_COMMANDS) {
       expect(def.domain).toBe(nativeSessionsDomain);

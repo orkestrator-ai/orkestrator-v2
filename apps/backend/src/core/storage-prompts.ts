@@ -1,6 +1,7 @@
 import { Data } from "effect";
 import { hasErrorCode } from "@orkestrator/protocol/contract/ipc-error";
 import { sessionGoal } from "@orkestrator/protocol/native-agent-goal";
+import { promptQueueEditLease } from "@orkestrator/protocol/prompt-queue-edit";
 import { nativeAgentJobReceiptIsActive } from "./models.js";
 import { promptQueueMessageFingerprint } from "./storage-record-upgrades.js";
 import * as shared from "./storage-shared.js";
@@ -743,6 +744,9 @@ export class PromptsRepository {
           if (previous.inFlight) return { result: previous.inFlight };
           const message = previous.messages[0];
           if (!isRecord(message) || !isNonBlankString(message.id)) return { result: null };
+          // Someone is editing the head (`prompt-queue-edit.ts`). It is held,
+          // not skipped: the items behind it wait so the order never changes.
+          if (promptQueueEditLease(previous, message.id)) return { result: null };
           const inFlight = {
             message,
             requestId: isNonBlankString(message.requestId) ? message.requestId : message.id,

@@ -1,6 +1,9 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import {
+  beginPromptQueueMessageEditCommand,
+  finishPromptQueueMessageEditCommand,
+  renewPromptQueueMessageEditCommand,
   createAgentHandoffCommand,
   deleteAgentHandoffCommand,
   deleteComposeDraftCommand,
@@ -147,6 +150,54 @@ export function registerPromptCommands(
         asString(messageId, "messageId"),
         asString(direction, "direction") as "up" | "down",
       ),
+  );
+  // In-place edits (`@orkestrator/protocol/prompt-queue-edit`): the lease
+  // keeps the item from being delivered while someone is editing it.
+  register(
+    beginPromptQueueMessageEditCommand,
+    ({ queueKey, environmentId, messageId, takeOver }, { storage }) =>
+      storage.promptQueueEdits.beginPromptQueueMessageEdit(
+        {
+          queueKey: asString(queueKey, "queueKey"),
+          environmentId: asString(environmentId, "environmentId"),
+          messageId: asString(messageId, "messageId"),
+        },
+        { takeOver: takeOver === true },
+      ),
+  );
+  register(
+    renewPromptQueueMessageEditCommand,
+    ({ queueKey, environmentId, messageId, leaseId }, { storage }) =>
+      storage.promptQueueEdits.renewPromptQueueMessageEdit({
+        queueKey: asString(queueKey, "queueKey"),
+        environmentId: asString(environmentId, "environmentId"),
+        messageId: asString(messageId, "messageId"),
+        leaseId: asString(leaseId, "leaseId"),
+      }),
+  );
+  register(
+    finishPromptQueueMessageEditCommand,
+    async (
+      { queueKey, environmentId, messageId, leaseId, outcome, text, attachments },
+      { storage, nativeAgents },
+    ) => {
+      const key = asString(queueKey, "queueKey");
+      const result = await storage.promptQueueEdits.finishPromptQueueMessageEdit(
+        {
+          queueKey: key,
+          environmentId: asString(environmentId, "environmentId"),
+          messageId: asString(messageId, "messageId"),
+          leaseId: asString(leaseId, "leaseId"),
+        },
+        outcome === "commit"
+          ? { outcome, text: asString(text, "text"), attachments }
+          : { outcome: "cancel" },
+      );
+      // The held item may be the head: let the queue move on now rather than
+      // on the next sweep.
+      if (result.status !== "conflict") nativeAgents?.notifyPromptQueueChanged?.(key);
+      return result;
+    },
   );
   register(retryPromptQueueDispatchCommand, ({ queueKey }, { storage }) =>
     storage.retryPromptQueueDispatch(asString(queueKey, "queueKey")),

@@ -54,6 +54,7 @@ const unreferenced = {
 };
 
 let queueItems: unknown[] = [];
+let queueEditing: Array<{ messageId: string; leaseId: string; expiresAt: string }> = [];
 let running = true;
 let deliveredMessages: NativeMessage[] = [];
 
@@ -85,7 +86,7 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
       composer: { provider: true, model: true, reasoning: true, speed: true, mode: true },
       actions: { steer: true },
     },
-    queue: { items: queueItems },
+    queue: { items: queueItems, ...(queueEditing.length > 0 ? { editing: queueEditing } : {}) },
     revision: 1,
     generation: "generation-1",
   } as NativeAgentSessionProjection<NativeMessage>;
@@ -109,6 +110,38 @@ const removePromptQueueMessageMock = mock(
     return {};
   },
 );
+// A minimal backend for in-place edits: one lease, committed into `queueItems`.
+const beginPromptQueueMessageEditMock = mock(async (input: { messageId: string }) => {
+  const message = queueItems.find((item) => (item as { id: string }).id === input.messageId);
+  if (!message) return { status: "refused", reason: "missing", queue: null };
+  const lease = {
+    messageId: input.messageId,
+    leaseId: `lease-${input.messageId}`,
+    acquiredAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    baseFingerprint: "0".repeat(64),
+  };
+  queueEditing = [
+    { messageId: lease.messageId, leaseId: lease.leaseId, expiresAt: lease.expiresAt },
+  ];
+  return { status: "editing", lease, message, queue: null };
+});
+const finishPromptQueueMessageEditMock = mock(async (input: Record<string, unknown>) => {
+  queueEditing = [];
+  if (input.outcome === "commit") {
+    queueItems = queueItems.map((item) =>
+      (item as { id: string }).id === input.messageId
+        ? {
+            ...(item as Record<string, unknown>),
+            text: input.text,
+            ...(input.attachments ? { attachments: input.attachments } : {}),
+          }
+        : item,
+    );
+    return { status: "committed", queue: null };
+  }
+  return { status: "released", queue: null };
+});
 const performNativeAgentSessionActionMock = mock(
   async (_input: { action: { kind: string; text?: string } }) => ({ outcome: "applied" as const }),
 );
@@ -168,6 +201,14 @@ mock.module("@/lib/backend", () => ({
   performNativeAgentSessionAction: performNativeAgentSessionActionMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
   removePromptQueueMessage: removePromptQueueMessageMock,
+  beginPromptQueueMessageEdit: (input: { messageId: string }) =>
+    beginPromptQueueMessageEditMock(input),
+  renewPromptQueueMessageEdit: async () => ({
+    status: "renewed",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }),
+  finishPromptQueueMessageEdit: (input: Record<string, unknown>) =>
+    finishPromptQueueMessageEditMock(input),
   steerNativeAgentQueuedPrompt: steerNativeAgentQueuedPromptMock,
   refreshNativeAgentCommands: async (input: { agent: AgentPlatform }) => ({
     outcome: "reread" as const,
@@ -269,6 +310,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   queueItems = [];
+  queueEditing = [];
   running = true;
   deliveredMessages = [];
   resetSonnerMocks();
@@ -277,6 +319,8 @@ afterEach(() => {
   dispatchNativeAgentIntentMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
   removePromptQueueMessageMock.mockClear();
+  beginPromptQueueMessageEditMock.mockClear();
+  finishPromptQueueMessageEditMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
   steerNativeAgentQueuedPromptMock.mockClear();
   appCommandStore(environmentStore).setState({ environments: [] });
@@ -380,29 +424,51 @@ test("/steer carries an attachment as its path-reference block", async () => {
   expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
 });
 
-test("editing a queued message with attachments and sending it again keeps one path block", async () => {
+test("editing a queued message with attachments in place keeps one path block and the draft", async () => {
   queueItems = [referenced];
   const tabId = "tab-edit-round-trip";
   const input = await renderTab(tabId);
+  // Something the user is writing in the composer, which the edit must not touch.
+  await act(async () => {
+    setDraft(tabId, { text: "my unsent draft" });
+  });
 
   await act(async () => {
     fireEvent.click(
       within(queueRow(referenced.id)).getByRole("button", { name: /^Edit queued prompt/ }),
     );
   });
-  await waitFor(() => expect(removePromptQueueMessageMock).toHaveBeenCalledTimes(1));
-  await waitFor(() => expect(draft(tabId)?.text).toBe("Compare against this screenshot"));
-  expect(draft(tabId)?.attachments).toMatchObject([
-    { type: "image", path: shotPath, name: "shot.png" },
-  ]);
+  await waitFor(() => expect(beginPromptQueueMessageEditMock).toHaveBeenCalledTimes(1));
+  const editor = await screen.findByRole("textbox", { name: "Queued prompt 1 text" });
+  // The transport block is hidden; the file shows as an attachment.
+  expect((editor as HTMLTextAreaElement).value).toBe("Compare against this screenshot");
+  expect(screen.getByRole("button", { name: "Remove attachment shot.png" })).toBeTruthy();
 
   await act(async () => {
-    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(editor, { target: { value: "Compare against this screenshot, please" } });
   });
-  await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1));
-  const [, , queued] = enqueuePromptQueueMessageMock.mock.calls[0]!;
-  expect(queued.text).toBe(referenced.text);
-  expect(queued.text.split(BLOCK_OPEN).length - 1).toBe(1);
+  await act(async () => {
+    fireEvent.keyDown(editor, { key: "Enter", metaKey: true });
+  });
+  await waitFor(() => expect(finishPromptQueueMessageEditMock).toHaveBeenCalledTimes(1));
+  const [commit] = finishPromptQueueMessageEditMock.mock.calls[0]!;
+  expect(commit).toMatchObject({ messageId: referenced.id, outcome: "commit" });
+  expect(commit.text).toBe(
+    buildInitialPromptWithAttachmentReferences("Compare against this screenshot, please", [
+      { name: "shot.png", path: shotPath },
+    ]),
+  );
+  expect((commit.text as string).split(BLOCK_OPEN).length - 1).toBe(1);
+  expect(commit.attachments).toEqual([shot]);
+
+  // In place: never removed, never re-queued, and the draft is as it was.
+  expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
+  expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+  expect(draft(tabId)?.text).toBe("my unsent draft");
+  await waitFor(() => expect(input.textContent).toContain("my unsent draft"));
+  await waitFor(() =>
+    expect(screen.queryByRole("textbox", { name: "Queued prompt 1 text" }) === null).toBe(true),
+  );
 });
 
 test("a successful path-only steer renders its attachment live and from a fresh snapshot", async () => {

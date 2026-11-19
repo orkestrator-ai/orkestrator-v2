@@ -221,6 +221,42 @@ catalogue reads, drains progressive reads and display tails, waits for every
 tracked scan, then loops until launch tasks, queue drains and recovery tasks are
 all gone before shutting the provider registry down and clearing caches.
 
+## Editing a queued prompt in place
+
+A person can edit a queued prompt where it stands, from any client, without
+touching a composer draft (`@orkestrator/protocol/prompt-queue-edit`,
+`storage-prompt-queue-edits.ts`). The item keeps its id, its position, its
+request id and its settings; only its text and attachments change, and they
+change together.
+
+- `begin_prompt_queue_message_edit` grants a backend-issued lease, stored on
+  the queue row as `editLeases`, with the item's fingerprint. A live lease
+  held by another client refuses with `held-elsewhere` unless the caller asks
+  to take it over; an expired one is taken over without asking. Annotation
+  requests, goal turns and slash commands are `frozen` and keep the composer
+  edit.
+- While a lease names an item, `reservePromptQueueHeadForDispatch` and the
+  steer reservation (`reservePromptQueueSteer`) leave it alone, in the same
+  row transaction under the queue lease. A held head blocks the items behind
+  it: it is never skipped, so the order cannot change because someone is
+  typing. The dispatcher, the tmux drainer and the keyed scheduler
+  (`nativeQueueObligation`) stop at a held head without touching the provider.
+- The editing client renews every 20 seconds; a lease lasts 60. A lease that
+  runs out is never released silently: it keeps holding the item, and the
+  row reads "edit unfinished" until someone edits it again (taking it over)
+  or releases it unchanged.
+- `finish_prompt_queue_message_edit` commits or cancels. A commit whose lease
+  was taken over (`lease-lost`), whose item left the queue (`missing`) or was
+  rewritten under the lease (`changed`) changes nothing and answers the
+  conflict with the item as it now stands; the editor keeps the person's text
+  and offers to write it over or discard it. Finishing announces the queue,
+  which wakes its drain.
+- A lease follows its item through moves and leaves with it on removal
+  (`nextPromptQueue`). Committing a rejected head clears its dispatch error
+  exactly as any other change to it does; cancelling keeps it.
+- The renderer falls back to the composer edit when the node answers
+  `unknown-command` (a node from before these commands).
+
 ## Invariants the split keeps
 
 - Every queue and cache keeps its byte and count bound, and the bound lives

@@ -8,9 +8,19 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
-import { AlertCircle, CornerDownRight, ImageIcon, Paperclip, Pencil, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  CornerDownRight,
+  ImageIcon,
+  LockOpen,
+  Paperclip,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 import { queuedPromptDisplay, type QueuedPromptAttachment } from "@/lib/chat/queued-prompt-text";
+import type { QueuedPromptEditState } from "@/lib/prompt-queue-edit";
 import { cn } from "@/lib/utils";
 
 export interface NativeComposeQueuedPrompt {
@@ -32,8 +42,18 @@ export interface NativeComposeQueuedPrompt {
    * Absent when there is no live turn to steer or this prompt cannot be steered.
    */
   onSteer?: () => void | Promise<void>;
-  /** Load this prompt back into the composer. Absent when it cannot be edited here. */
+  /**
+   * Edit this prompt: in place where the surface supports it, otherwise by
+   * loading it back into the composer. Absent when it cannot be edited here.
+   */
   onEdit?: () => void | Promise<void>;
+  /**
+   * Whether an in-place edit holds this prompt back from delivery
+   * (`@/lib/prompt-queue-edit`). Absent when none does.
+   */
+  editState?: QueuedPromptEditState;
+  /** Release an unfinished edit unchanged so the prompt can be sent. */
+  onRelease?: () => void | Promise<void>;
   /** Remove this prompt from the queue. Absent when it needs the dialog to confirm. */
   onRemove?: () => void | Promise<void>;
 }
@@ -45,6 +65,8 @@ export interface NativeComposeQueueState {
   onOpen?: () => void;
   /** Queued prompts in run order: the first one is sent next. */
   items: readonly NativeComposeQueuedPrompt[];
+  /** The in-place editor for the prompt this client is editing, shown above the list. */
+  editor?: ReactNode;
 }
 
 export interface QueuedPromptStackHandle {
@@ -52,13 +74,31 @@ export interface QueuedPromptStackHandle {
   enter: () => boolean;
 }
 
-type QueuedPromptAction = "steer" | "edit" | "remove";
+type QueuedPromptAction = "steer" | "edit" | "release" | "remove";
 
 const ACTION_KEYS = {
   steer: "onSteer",
   edit: "onEdit",
+  release: "onRelease",
   remove: "onRemove",
 } as const satisfies Record<QueuedPromptAction, keyof NativeComposeQueuedPrompt>;
+
+const EDIT_STATE_LABELS: Record<QueuedPromptEditState, string> = {
+  local: "Editing",
+  elsewhere: "Editing elsewhere",
+  review: "Edit unfinished",
+};
+
+const EDIT_TITLES: Record<QueuedPromptEditState | "none", string> = {
+  none: "Edit queued prompt",
+  local: "Edit queued prompt",
+  elsewhere: "Take over editing from the other device",
+  review: "Review the unfinished edit",
+};
+
+function hasActions(item: NativeComposeQueuedPrompt): boolean {
+  return Boolean(item.onSteer || item.onEdit || item.onRelease || item.onRemove);
+}
 
 /** A keyboard-started action whose prompt may leave the queue, taking focus with it. */
 interface PendingFocus {
@@ -122,7 +162,9 @@ interface QueuedPromptStackProps {
 /**
  * Every queued prompt as a strip on top of the composer, the next to run
  * nearest the input. Each strip can steer its own prompt into the running
- * turn, load it back into the composer, or drop it.
+ * turn, edit it (in place, in the editor shown above the list, where the
+ * surface supports that; otherwise by loading it back into the composer), or
+ * drop it.
  *
  * Actionable rows form a roving tab stop. The composer hands focus in with
  * ArrowUp from its first line; ArrowUp and ArrowDown move between strips,
@@ -141,9 +183,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
     const hintId = useId();
     const { items, length } = queue;
     // Run order; index 0 sits nearest the input.
-    const actionable = items
-      .filter((item) => item.onSteer || item.onEdit || item.onRemove)
-      .map((item) => item.id);
+    const actionable = items.filter(hasActions).map((item) => item.id);
     const tabStopId =
       activeId !== null && actionable.includes(activeId) ? activeId : (actionable[0] ?? null);
 
@@ -174,7 +214,8 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
         if (after.settled && focusIsLost()) focusRow(after.id);
         return;
       }
-      // Edit loads the replacement draft after removing the queue item.
+      // A composer edit loads the replacement draft after removing the queue
+      // item; an in-place edit keeps the item and focuses its editor.
       if (after.action === "edit" && !after.settled) return;
       pendingFocusRef.current = null;
       if (!focusIsLost()) return;
@@ -191,11 +232,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
     ) => {
       // If only the focused action disappeared, prefer another action on its row.
       if (focusRow(after.id)) return;
-      const live = new Set(
-        current
-          .filter((item) => item.onSteer || item.onEdit || item.onRemove)
-          .map((item) => item.id),
-      );
+      const live = new Set(current.filter(hasActions).map((item) => item.id));
       const index = after.order.indexOf(after.id);
       const later = after.order.slice(index + 1).find((id) => live.has(id));
       const earlier = after.order
@@ -224,7 +261,13 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
     // Which prompts and actions are available, not the array identity, which a
     // provider tab rebuilds on every render.
     const queueSignature = JSON.stringify(
-      items.map((item) => [item.id, !!item.onSteer, !!item.onEdit, !!item.onRemove]),
+      items.map((item) => [
+        item.id,
+        !!item.onSteer,
+        !!item.onEdit,
+        !!item.onRelease,
+        !!item.onRemove,
+      ]),
     );
     useEffect(() => {
       onQueueChange();
@@ -320,6 +363,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
             </button>
           ) : null}
         </div>
+        {queue.editor}
         <span id={hintId} className="sr-only">
           Up and Down arrows move between queued prompts. Escape returns to the prompt input.
         </span>
@@ -347,6 +391,20 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
               display.text || display.attachments.map((attachment) => attachment.name).join(", ");
             const text = (
               <span className="flex min-w-0 items-center gap-1.5">
+                {item.editState ? (
+                  <span
+                    data-testid="compose-queue-item-edit-state"
+                    data-edit-state={item.editState}
+                    className={cn(
+                      "shrink-0 rounded px-1 py-px text-[10px] font-medium",
+                      item.editState === "review"
+                        ? "bg-failure/15 text-failure"
+                        : "bg-primary-fill/15 text-foreground",
+                    )}
+                  >
+                    {EDIT_STATE_LABELS[item.editState]}
+                  </span>
+                ) : null}
                 {display.text ? (
                   <span className="min-w-0 truncate text-muted-foreground" title={display.text}>
                     {display.text}
@@ -410,11 +468,26 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
                     onClick={() => void run(item, "edit")}
                     aria-disabled={pending || undefined}
                     aria-busy={pending}
-                    aria-label={`Edit queued prompt ${position}`}
-                    title="Edit queued prompt"
+                    aria-label={`${EDIT_TITLES[item.editState ?? "none"]} ${position}`}
+                    title={EDIT_TITLES[item.editState ?? "none"]}
                     className={cn(actionClass, "hover:text-foreground")}
                   >
                     <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                ) : null}
+                {item.onRelease ? (
+                  <button
+                    type="button"
+                    tabIndex={tabIndex}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => void run(item, "release")}
+                    aria-disabled={pending || undefined}
+                    aria-busy={pending}
+                    aria-label={`Release queued prompt ${position} unchanged`}
+                    title="Release the unfinished edit and send this prompt as it is"
+                    className={cn(actionClass, "hover:text-foreground")}
+                  >
+                    <LockOpen className="h-3.5 w-3.5" aria-hidden="true" />
                   </button>
                 ) : null}
                 {item.onRemove ? (

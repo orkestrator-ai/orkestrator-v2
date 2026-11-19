@@ -9,7 +9,7 @@
  * (`api.get_native_agent_session(args)`), plus the domain's two capability
  * reads:
  *
- * - **Versions 4, 3, 2 and 1** (a node whose hello advertises `native-sessions`): calls are
+ * - **Versions 5, 4, 3, 2 and 1** (a node whose hello advertises `native-sessions`): calls are
  *   typed by their definitions, carry the envelope (version and the critical
  *   keys the arguments hold), and results are decoded with the command's
  *   schema. Both capability commands are folded into the version: every
@@ -36,7 +36,7 @@ import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "../../../native-agent-ob
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "../../../native-agent-transcript-patch.js";
 import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
 import type { ArgsOf, ResultOf } from "../../command.js";
-import { incompatibility } from "../../errors.js";
+import { incompatibility, UnsupportedFieldError } from "../../errors.js";
 import {
   getAgentHandoffCapabilitiesCommand,
   getNativeAgentSyncCapabilitiesCommand,
@@ -108,9 +108,27 @@ function commandApi(
   return api as NativeSessionsCommandApi;
 }
 
-function currentApi(call: CommandCall): NativeSessionsApi {
+function checkFailureRetry(args: unknown): void {
+  if (
+    args &&
+    typeof args === "object" &&
+    "failureSessionId" in args &&
+    args.failureSessionId !== undefined
+  ) {
+    throw new UnsupportedFieldError({
+      message: "This machine needs an update before it can retry a failed turn.",
+      domain: nativeSessionsDomain.name,
+      field: "failureSessionId",
+    });
+  }
+}
+
+function currentApi(call: CommandCall, guardedFailureRetry = false): NativeSessionsApi {
   return Object.freeze({
-    ...commandApi((command, args) => call(command, args as ArgsOf<typeof command>)),
+    ...commandApi(async (command, args) => {
+      if (!guardedFailureRetry) checkFailureRetry(args);
+      return call(command, args as ArgsOf<typeof command>);
+    }),
     handoffCapabilities: async () => NATIVE_SESSIONS_HANDOFF_CAPABILITIES,
     syncCapabilities: async () => NATIVE_SESSIONS_SYNC_CAPABILITIES,
   });
@@ -123,9 +141,10 @@ function isUnknownCommand(error: unknown, command: string): boolean {
 /** Version 0: today's untyped calls and capability reads for a pre-contract node. */
 function legacyApi(_call: CommandCall, context: DomainAdapterContext): NativeSessionsApi {
   return Object.freeze({
-    ...commandApi((command, args) =>
-      context.invoke(command.name, args as Readonly<Record<string, unknown>> | undefined),
-    ),
+    ...commandApi(async (command, args) => {
+      checkFailureRetry(args);
+      return context.invoke(command.name, args as Readonly<Record<string, unknown>> | undefined);
+    }),
     handoffCapabilities: async () => {
       const name = getAgentHandoffCapabilitiesCommand.name;
       let response: unknown;
@@ -155,6 +174,8 @@ function legacyApi(_call: CommandCall, context: DomainAdapterContext): NativeSes
 }
 
 export const nativeSessionsClient = domainClient(nativeSessionsDomain, {
+  5: (call) => currentApi(call, true),
+  // Older peers cannot verify that the requested failure is still current.
   4: (call) => currentApi(call),
   // Version 4 only removed `get_native_agent_projection_update`, which no
   // client called once joined history paging retired (2026-11-16), and the

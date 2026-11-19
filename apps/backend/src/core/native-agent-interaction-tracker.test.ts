@@ -74,6 +74,35 @@ describe("NativeAgentInteractionTracker pending-interaction reads", () => {
     expect(listPendingInteractions).toHaveBeenCalledTimes(3);
   });
 
+  test("shares a read and fences its response when the session's requests change", async () => {
+    const entered = Promise.withResolvers<void>();
+    const old = Promise.withResolvers<AgentInteractionRequest[]>();
+    let calls = 0;
+    const listPendingInteractions = async () => {
+      if (++calls === 1) {
+        entered.resolve();
+        return { requests: await old.promise, revision: 1 };
+      }
+      return { requests: [request("next-question", "pending")], revision: 2 };
+    };
+    const provider = {
+      interactions: { listPendingInteractions },
+    } as unknown as NativeAgentRuntimeProvider;
+    const { tracker } = harness({ observeProvider: async () => provider });
+    const first = tracker.sessionPendingInteractions(identity);
+    const shared = tracker.sessionPendingInteractions(identity);
+    await entered.promise;
+    expect(calls).toBe(1);
+    tracker.forgetPendingInteractions(sessionKey);
+    const fresh = await tracker.sessionPendingInteractions(identity);
+    expect(fresh?.map(({ id }) => id)).toEqual(["next-question"]);
+    old.resolve([request("old-question", "pending")]);
+    expect(await first).toBeNull();
+    expect(await shared).toBeNull();
+    expect(await tracker.sessionPendingInteractions(identity)).toEqual(fresh);
+    expect(calls).toBe(2);
+  });
+
   test("falls back to the cached projection when the provider cannot answer", async () => {
     const projection = {
       interactions: [request("from-projection", "answering"), request("old", "expired")],

@@ -11,11 +11,17 @@ import type {
 } from "@orkestrator/protocol/coordinator";
 import { canFastForwardUpstream } from "@orkestrator/protocol/coordinator-upstream-merge";
 import { CommandFailedError, runCommand } from "./shell.js";
-import { runGitWithFsmonitorFallback, runRemoteGit } from "./git/index.js";
+import {
+  backgroundBranchFetchRefspec,
+  NO_WRITE_FETCH_HEAD,
+  runGitWithFsmonitorFallback,
+  runRemoteGit,
+} from "./git/index.js";
 import { isProjectHomeEnvironment, projectHomeBranchUpdates } from "./project-home-environment.js";
 import type { StorageService } from "./storage.js";
 
 const FETCH_COOLDOWN_MS = 60_000;
+const FETCH_TIMEOUT_MS = 60_000;
 const COMMIT_ID = /^[0-9a-f]{7,64}$/;
 const MAX_SUBJECT_CHARS = 200;
 const MAX_LISTED_RANGE_FILES = 2_000;
@@ -133,8 +139,35 @@ async function readCommit(root: string, ref: string): Promise<string | null> {
   return resolved.stdout.trim() || null;
 }
 
+async function getFetchAllRemotes(root: string, remotes: string[]): Promise<string[]> {
+  const settings = await runCommand(
+    "git",
+    [
+      "config",
+      "--null",
+      "--type=bool",
+      "--get-regexp",
+      "^remote\\..*\\.(skipfetchall|skipdefaultupdate)$",
+    ],
+    { cwd: root, timeoutMs: 10_000 },
+  ).catch((error) => {
+    // Git reports exit 1 when neither key is set.
+    if (error instanceof CommandFailedError && error.exitCode === 1) return { stdout: "" };
+    throw error;
+  });
+  // Both keys control the same Git setting and the last occurrence wins.
+  const skip = new Map<string, boolean>();
+  for (const entry of settings.stdout.split("\0")) {
+    const match = /^remote\.(.*)\.(?:skipfetchall|skipdefaultupdate)\n(true|false)$/.exec(entry);
+    if (match) skip.set(match[1]!, match[2] === "true");
+  }
+  return remotes.filter((remote) => !skip.get(remote));
+}
+
 export { resolveProjectGitRoot } from "./project-git-root.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
+
+type ProjectFetchIntent = "background" | "manual";
 
 /** Serialized, checkout-root-bound Git operations for project coordinators. */
 export class ProjectGitService {
@@ -145,7 +178,7 @@ export class ProjectGitService {
   private readonly pendingTurns = new Map<string, number>();
   private readonly fetches = new Map<
     string,
-    { force: boolean; promise: Promise<ProjectGitStatus> }
+    { force: boolean; intent: ProjectFetchIntent; promise: Promise<ProjectGitStatus> }
   >();
   private readonly fetching = new Set<string>();
   private readonly baseFetches = new Map<string, Promise<{ fetchError?: string }>>();
@@ -708,11 +741,19 @@ export class ProjectGitService {
     });
   }
 
-  async fetch(projectId: string, force = false): Promise<ProjectGitStatus> {
+  // A caller can bypass the cooldown and still preserve FETCH_HEAD, as the PR
+  // merge follower does when it learns that a remote ref has moved.
+  async fetch(
+    projectId: string,
+    force = false,
+    intent: ProjectFetchIntent = "background",
+  ): Promise<ProjectGitStatus> {
     const existing = this.fetches.get(projectId);
     if (existing) {
-      if (existing.force || !force) return existing.promise;
-      return existing.promise.then(() => this.fetch(projectId, true));
+      if (existing.intent === intent && (existing.force || !force)) return existing.promise;
+      return existing.promise
+        .catch(() => undefined)
+        .then(() => this.fetch(projectId, force, intent));
     }
     const operation = (async () => {
       const root = await this.root(projectId);
@@ -754,19 +795,47 @@ export class ProjectGitService {
         }
         this.fetching.add(projectId);
         await this.operationState(projectId, "fetching");
-        return { remote: before.remote };
+        return { remote: before.remote, configuredRemotes };
       });
       if ("status" in prepared) return prepared.status!;
       let fetchError: ProjectGitStatus["lastError"] = null;
       try {
-        await runRemoteGit(
-          "fetch",
-          prepared.remote ? ["--prune", prepared.remote] : ["--prune", "--all"],
-          {
-            cwd: root,
-            timeoutMs: 60_000,
-          },
-        );
+        if (intent === "manual") {
+          await runRemoteGit(
+            "fetch",
+            ["--prune", ...(prepared.remote ? ["--", prepared.remote] : ["--all"])],
+            {
+              cwd: root,
+              timeoutMs: FETCH_TIMEOUT_MS,
+            },
+          );
+        } else {
+          // Git 2.39 drops --no-write-fetch-head in --all's child processes.
+          const remotes = prepared.remote
+            ? prepared.configuredRemotes
+            : await getFetchAllRemotes(root, prepared.configuredRemotes);
+          const deadline = performance.now() + FETCH_TIMEOUT_MS;
+          for (const remote of remotes) {
+            const remaining = Math.ceil(deadline - performance.now());
+            if (remaining <= 0) {
+              fetchError ??= gitError("fetch", new Error("Remote refresh timed out"));
+              break;
+            }
+            try {
+              await runRemoteGit(
+                "fetch",
+                [NO_WRITE_FETCH_HEAD, "--no-all", "--prune", "--", remote],
+                {
+                  cwd: root,
+                  timeoutMs: remaining,
+                },
+              );
+            } catch (error) {
+              // Match --all's best effort and preserve the first actionable error.
+              fetchError ??= gitError("fetch", error);
+            }
+          }
+        }
       } catch (error) {
         fetchError = gitError("fetch", error);
       }
@@ -790,7 +859,7 @@ export class ProjectGitService {
       this.fetching.delete(projectId);
       if (this.fetches.get(projectId)?.promise === operation) this.fetches.delete(projectId);
     });
-    this.fetches.set(projectId, { force, promise: operation });
+    this.fetches.set(projectId, { force, intent, promise: operation });
     return operation;
   }
 
@@ -829,10 +898,10 @@ export class ProjectGitService {
           try {
             await runRemoteGit(
               "fetch",
-              ["origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
+              [NO_WRITE_FETCH_HEAD, "origin", backgroundBranchFetchRefspec(branch)],
               {
                 cwd: root,
-                timeoutMs: 60_000,
+                timeoutMs: FETCH_TIMEOUT_MS,
               },
             );
             fetched = true;

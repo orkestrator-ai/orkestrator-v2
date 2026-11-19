@@ -1,3 +1,4 @@
+import { EDITOR_FILE_MISSING_MESSAGE } from "@orkestrator/protocol/file-write-precondition";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import os from "node:os";
@@ -128,15 +129,27 @@ export async function readFileBase64(filePath: string, allowedRoots?: string[]):
  * root: callers echo it back to the renderer, which knows the worktree by the
  * path it asked for, not by its canonical form.
  */
+/**
+ * Replace (or create) one worktree file: the payload is written in full to a
+ * temporary sibling and renamed over the target, so a reader never sees a
+ * partial file. Replacing a file keeps its permission bits. `expectedSha256`
+ * publishes only while the target still has those bytes (see
+ * `writeConfinedFile`).
+ */
 export async function writeFileBase64(
   rootPath: string,
   relativePath: string,
   base64Data: string,
+  options: { expectedSha256?: string; expectedAbsent?: boolean } = {},
 ): Promise<string> {
   const safeRelativePath = validateRelativeFilePath(relativePath, "relative file path");
   await writeConfinedFile(rootPath, safeRelativePath, base64Data, {
-    exclusive: false,
+    exclusive: options.expectedAbsent === true,
+    createAncestors: !options.expectedSha256 && !options.expectedAbsent,
+    expectedAbsent: options.expectedAbsent,
     label: "relative file path",
+    preserveExistingMode: true,
+    ...(options.expectedSha256 ? { expectedSha256: options.expectedSha256 } : {}),
   });
   return path.join(rootPath, safeRelativePath);
 }
@@ -214,14 +227,17 @@ export async function readTextFile(
   const fullPath = path.join(rootPath, safeRelativePath);
   const [canonicalRoot, canonicalTarget] = await Promise.all([
     fs.realpath(rootPath),
-    fs.realpath(fullPath),
+    fs.realpath(fullPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") throw new Error(EDITOR_FILE_MISSING_MESSAGE);
+      throw error;
+    }),
   ]);
   if (!isPathInsideRoot(canonicalTarget, canonicalRoot)) {
     throw new Error("File is outside the local worktree");
   }
   const handle = await fs.open(
     canonicalTarget,
-    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
   );
   let contents: Buffer;
   try {

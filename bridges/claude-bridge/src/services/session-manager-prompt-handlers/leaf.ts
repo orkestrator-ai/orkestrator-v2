@@ -59,6 +59,11 @@ function handleRateLimitEvent(turn: TurnState, message: SDKMessage): void {
   }
   if (info) {
     const nextWindows = rateLimitsFromEventInfo(info);
+    if (info.status) {
+      turn.rejectedRateLimitResetsAt = turn.rateLimitRejected
+        ? nextWindows[0]?.resetsAt
+        : undefined;
+    }
     const nextLabels = new Set(nextWindows.map((window) => window.label));
     // Held on the session, not inside `usage`. Rate-limit events arrive
     // mid-turn and `usage` only exists after the first `result`, so

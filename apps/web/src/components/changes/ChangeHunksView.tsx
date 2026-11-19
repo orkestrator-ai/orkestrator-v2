@@ -1,4 +1,4 @@
-import { Fragment, useMemo } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 import type {
   ChangeDiffFileBody,
   ChangeDiffHunk,
@@ -12,6 +12,10 @@ import { cn } from "@/lib/utils";
  * split mode pairs each run of removals with the following run of additions
  * for side-by-side display. Both are layouts of the same rows — no diff is
  * computed in the client.
+ *
+ * A viewer that navigates between hunks passes `positionOffset` (each hunk
+ * header then carries `data-hunk-position`, its place in the viewer's order),
+ * the selected `activeHunkIndex`, and optional per-hunk actions.
  */
 
 type SplitRow = { left: ChangeDiffLine | null; right: ChangeDiffLine | null };
@@ -63,15 +67,62 @@ function lineText(line: ChangeDiffLine | null): string {
   return `${prefix}${line.text}`;
 }
 
+interface HunkNavigationProps {
+  /** Navigation position of this file's first hunk; enables `data-hunk-position`. */
+  positionOffset?: number;
+  /** The hunk (index within this file) navigation has selected. */
+  activeHunkIndex?: number | null;
+  /** A hunk header was clicked. */
+  onSelectHunk?: (hunkIndex: number) => void;
+  /** Controls shown at the end of a hunk's header (stage, unstage). */
+  renderHunkActions?: (hunk: ChangeDiffHunk, hunkIndex: number) => ReactNode;
+}
+
+function HunkHeader({
+  hunk,
+  hunkIndex,
+  positionOffset,
+  activeHunkIndex,
+  onSelectHunk,
+  renderHunkActions,
+}: HunkNavigationProps & { hunk: ChangeDiffHunk; hunkIndex: number }) {
+  const active = activeHunkIndex === hunkIndex;
+  const actions = renderHunkActions?.(hunk, hunkIndex);
+  return (
+    <div
+      data-testid="change-hunk-header"
+      data-hunk-position={positionOffset !== undefined ? positionOffset + hunkIndex : undefined}
+      aria-current={active ? "location" : undefined}
+      onClick={onSelectHunk ? () => onSelectHunk(hunkIndex) : undefined}
+      className={cn(
+        "flex scroll-mt-1 items-center gap-2 bg-blue-500/10 px-3 py-0.5 text-blue-400",
+        active && "bg-blue-500/20 ring-1 ring-inset ring-primary/60",
+        onSelectHunk && "cursor-pointer",
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate">{hunk.header}</span>
+      {actions && (
+        <span
+          className="flex shrink-0 items-center gap-1 font-sans"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {actions}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function ChangeHunksView({
   file,
   mode = "unified",
   maxHeightClass = "max-h-64",
+  ...navigation
 }: {
   file: ChangeDiffFileBody;
   mode?: "unified" | "split";
   maxHeightClass?: string;
-}) {
+} & HunkNavigationProps) {
   const split = useMemo(
     () => (mode === "split" ? file.hunks.map(splitRows) : null),
     [file.hunks, mode],
@@ -96,7 +147,7 @@ export function ChangeHunksView({
         <pre className="text-xs font-mono">
           {file.hunks.map((hunk, hunkIndex) => (
             <Fragment key={hunkIndex}>
-              <div className="px-3 py-0.5 bg-blue-500/10 text-blue-400">{hunk.header}</div>
+              <HunkHeader hunk={hunk} hunkIndex={hunkIndex} {...navigation} />
               {hunk.lines.map((line, index) => (
                 <div
                   key={index}
@@ -112,9 +163,7 @@ export function ChangeHunksView({
         <div className="text-xs font-mono">
           {split.map((rows, hunkIndex) => (
             <Fragment key={hunkIndex}>
-              <div className="px-3 py-0.5 bg-blue-500/10 text-blue-400">
-                {file.hunks[hunkIndex]!.header}
-              </div>
+              <HunkHeader hunk={file.hunks[hunkIndex]!} hunkIndex={hunkIndex} {...navigation} />
               {rows.map((row, index) => (
                 <div key={index} className="grid grid-cols-2">
                   <div

@@ -298,6 +298,92 @@ for (const view of ["native", "reviewer"] as const) {
   });
 }
 
+// A history page has its own request identity: the live tail's reads, which
+// keep landing every 500–1500 ms while the agent streams, neither cancel it nor
+// are cancelled by it. Held for 3 s, it must still land on a single click,
+// above the rows the stream aged out meanwhile, with every row once.
+test("native: a page held 3 s while the agent streams lands on one click and holds the reader", async ({
+  page,
+}) => {
+  await page.goto("/transcript-paging?mixed=1&stream=1&delay=3000");
+  const list = page.locator("[data-transcript-scroller]");
+  await expect(list).toBeVisible();
+  await list.hover();
+  const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
+  await expect
+    .poll(async () => {
+      await page.mouse.wheel(0, -4000);
+      const top = await list.evaluate((el) => el.scrollTop);
+      return (
+        top <= 1 &&
+        (await load.count()) > 0 &&
+        (await load.isVisible()) &&
+        (await toolPosition(list, "call-40")) !== null
+      );
+    })
+    .toBe(true);
+  // Let the wheel settle before capturing the place to hold.
+  await page.waitForTimeout(400);
+  const before = (await toolPosition(list, "call-40"))!;
+  await startAnchorProbe(list, "call-40");
+  await load.click();
+  const loading = page.getByRole("button", { name: "Loading…", exact: true });
+  await expect(loading).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests,
+      ),
+    )
+    .toEqual(["before-40"]);
+  // Start the stream after the request goes out, then check the applied
+  // projection and the response counter in the same browser evaluation.
+  await page.evaluate(() =>
+    (window as unknown as { startPagingFixtureStream: () => void }).startPagingFixtureStream(),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const fixture = window as unknown as {
+          pagingFixtureResponses: () => number;
+          pagingFixtureRowIds: () => string[];
+        };
+        return (
+          fixture.pagingFixtureResponses() === 0 &&
+          fixture.pagingFixtureRowIds().some((id) => id.startsWith("streamed-"))
+        );
+      }),
+    )
+    .toBe(true);
+  await expect(loading).toHaveCount(0, { timeout: 10_000 });
+  // Let late measurement and the restoration's own frames finish.
+  await page.waitForTimeout(800);
+  const probe = await stopAnchorProbe(list);
+
+  // One click, one request, and it landed.
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests,
+    ),
+  ).toEqual(["before-40"]);
+  const rowIds = await page.evaluate(() =>
+    (window as unknown as { pagingFixtureRowIds: () => string[] }).pagingFixtureRowIds(),
+  );
+  expect(new Set(rowIds).size).toBe(rowIds.length);
+  expect(rowIds[0]).toBe("row-0");
+  expect(rowIds.indexOf("row-39") + 1).toBe(rowIds.indexOf("row-40"));
+  expect(rowIds.at(-1)).toMatch(/^streamed-/);
+  await expect(load).toHaveCount(0);
+
+  // The reader's place held through the merge.
+  expect(probe.count).toBeGreaterThan(10);
+  expect(probe.missing).toBe(0);
+  expect(probe.maxError).toBeLessThanOrEqual(2);
+  const after = (await toolPosition(list, "call-40"))!;
+  expect(Math.abs(after.offset - before.offset)).toBeLessThan(3);
+  expect(Number(after.index)).toBeGreaterThan(Number(before.index) + 40);
+});
+
 for (const view of ["native", "reviewer"] as const) {
   for (const reducedMotion of ["no-preference", "reduce"] as const) {
     test(`${view}: paging folds a visible short group during held-place restoration with ${reducedMotion} motion`, async ({

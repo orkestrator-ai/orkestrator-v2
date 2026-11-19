@@ -1,4 +1,5 @@
 import type { SDKAssistantMessageError } from "@anthropic-ai/claude-agent-sdk";
+import type { ProviderFailureReason } from "@orkestrator/protocol/provider-failures";
 
 /**
  * What a turn that ended on an API error says about the bridge.
@@ -55,4 +56,41 @@ export function providerStateApiError(
   code: SDKAssistantMessageError | undefined,
 ): SDKAssistantMessageError | undefined {
   return code && CLAUDE_API_ERROR_FATES[code] === "provider-state" ? code : undefined;
+}
+
+/**
+ * The provider-neutral reason for each SDK API error code
+ * (`@orkestrator/protocol/provider-failures`), or `null` where the code does
+ * not settle it and the error text should decide: an invalid request may be a
+ * prompt that no longer fits the context window, and `unknown` says nothing.
+ * A `Record` over the SDK's union, like the fates above.
+ */
+const CLAUDE_API_ERROR_REASONS: Readonly<
+  Record<SDKAssistantMessageError, ProviderFailureReason | null>
+> = {
+  authentication_failed: "authentication",
+  oauth_org_not_allowed: "authentication",
+  verification_required: "authentication",
+  cloud_credential_error: "authentication",
+  account_on_hold: "billing",
+  billing_error: "billing",
+  rate_limit: "rate-limit",
+  overloaded: "provider-unavailable",
+  server_error: "provider-unavailable",
+  model_not_found: "model-unavailable",
+  invalid_request: null,
+  max_output_tokens: null,
+  unknown: null,
+};
+
+/**
+ * The reason a failed turn reports. A rejected `rate_limit_event` is the
+ * plan allowance running out, whatever API code the reply carried.
+ */
+export function claudeFailureReason(
+  code: SDKAssistantMessageError | undefined,
+  rateLimitRejected: boolean,
+): ProviderFailureReason | undefined {
+  if (rateLimitRejected) return "usage-limit";
+  return (code && CLAUDE_API_ERROR_REASONS[code]) ?? undefined;
 }

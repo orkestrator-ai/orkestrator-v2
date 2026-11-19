@@ -292,7 +292,12 @@ export class NativeAgentProgressiveSessionState {
     const terminalMessages = nativeTerminalMessages({
       notices: stateSnapshot.notices,
       error: stateSnapshot.error,
+      failedTurn: stateSnapshot.failedTurn,
+      failureRequestId: resolved.session.dispatchedRequestIds?.at(-1),
+      ...(stateSnapshot.failureReason ? { failureReason: stateSnapshot.failureReason } : {}),
+      ...(stateSnapshot.rateLimits ? { rateLimits: stateSnapshot.rateLimits } : {}),
       turnStartedAt: stateSnapshot.turnStartedAt,
+      now: this.host.now(),
     });
     return {
       identity: this.context.reads.progressiveIdentity(

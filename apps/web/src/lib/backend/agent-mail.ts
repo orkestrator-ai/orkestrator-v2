@@ -152,6 +152,8 @@ export function createAgentMailApi(client: BackendClient) {
   function getAgentRegistry(filter: {
     projectId?: string;
     environmentId?: string;
+    /** Add each waiting tab's pending-interaction summary. */
+    includePending?: boolean;
   }): Promise<AgentRegistrySnapshot> {
     return mail().get_agent_registry(filter);
   }

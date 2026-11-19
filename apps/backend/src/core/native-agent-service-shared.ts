@@ -178,6 +178,8 @@ export interface EnsureNativeAgentSessionInput {
 }
 
 export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSessionInput {
+  /** Retry must still be targeting this provider session at admission. */
+  failureSessionId?: string;
   prompt: string;
   requestId: string;
   /** Base64 images that still need staging into the workspace. */

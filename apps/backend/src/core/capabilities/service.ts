@@ -293,6 +293,8 @@ export class CapabilityService {
       transport,
       isAuthority: deps.isAuthority,
       emit: (change) => void this.announce(change),
+      nodeName: async (nodeId) =>
+        (await this.machineFacts()).find((machine) => machine.nodeId === nodeId)?.name ?? nodeId,
       ...(deps.now ? { now: deps.now } : {}),
     });
   }

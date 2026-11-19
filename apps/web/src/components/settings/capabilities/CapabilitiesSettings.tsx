@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { capabilitiesApi } from "@/lib/backend/capabilities";
 
@@ -151,7 +152,10 @@ export function CapabilitiesSettings({ initialTab = "library" }: { initialTab?: 
         open={updatePreview !== null}
         onOpenChange={(open) => !open && setUpdatePreview(null)}
       >
-        <DialogContent className="max-w-3xl">
+        <DialogContent
+          className={`max-w-3xl ${Z_FULLSCREEN_DIALOG}`}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
           <DialogHeader>
             <DialogTitle>Review the update</DialogTitle>
             <DialogDescription>

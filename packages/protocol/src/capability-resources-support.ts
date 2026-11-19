@@ -28,7 +28,7 @@
  *
  * Browser-safe.
  */
-import { AGENT_PLATFORMS, type AgentPlatform } from "./agent-platforms.js";
+import { AGENT_PLATFORM_LABELS, AGENT_PLATFORMS, type AgentPlatform } from "./agent-platforms.js";
 import type {
   CapabilityLiveSemantics,
   ComponentKind,
@@ -567,7 +567,7 @@ export function describeCapabilitySupport(
         if (operation === "discover") continue;
         copy[operation] = {
           level: "unsupported",
-          reason: `${provider} is not installed on this machine.`,
+          reason: `${AGENT_PLATFORM_LABELS[provider]} is not installed on this machine.`,
         };
       }
     }

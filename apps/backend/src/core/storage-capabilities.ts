@@ -127,6 +127,16 @@ export function pruneCapabilityState(state: CapabilityState, now = Date.now()): 
   keepNewest(state.observations, CAPABILITY_LIMITS.maxObservations, (entry) => entry.observedAt);
   keepNewest(state.requests, 2_000, (entry) => entry.at);
   keepNewest(state.launches, 2_000, (entry) => entry.launchedAt);
+  // A preview nobody applied within a day is withdrawn; its approval could no longer match anyway.
+  for (const operation of Object.values(state.operations)) {
+    if (
+      (operation.state === "awaiting-approval" || operation.state === "planned") &&
+      Date.parse(operation.updatedAt) + 24 * 60 * 60_000 <= now
+    ) {
+      operation.state = "cancelled";
+      operation.error = "The preview expired without being applied.";
+    }
+  }
   for (const [id, inspection] of Object.entries(state.inspections)) {
     if (Date.parse(inspection.expiresAt) <= now) delete state.inspections[id];
   }

@@ -185,6 +185,8 @@ describe("add once, use wherever compatible", () => {
     const cursor = detail.availability.find((cell) => cell.target.provider === "cursor");
     expect(cursor?.verification).toBe("present");
 
+    // The library row says the same: installed, not "Ready", until a session reports it.
+    expect((await command.service.listPackages({})).packages[0]?.readiness).toBe("installed");
     const operation = await command.service.getOperation({ operationId: preview.operation.id });
     expect(operation.state).toBe("completed");
 

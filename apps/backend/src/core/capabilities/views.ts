@@ -169,6 +169,10 @@ export function packageSummary(
       cell.status === "pending" || cell.status === "outcome-unknown" || cell.status === "offline",
   );
   const kinds = [...new Set(components.map((component) => component.kind))] as ComponentKind[];
+  // "Ready" needs runtime evidence on every target that can take the package.
+  const deliverable = cells.filter(
+    (cell) => cell.status !== "unsupported" && cell.status !== "blocked-policy",
+  );
   return {
     id: pkg.id,
     displayName: pkg.displayName,
@@ -195,7 +199,11 @@ export function packageSummary(
           ? "needs-attention"
           : pending
             ? "pending"
-            : "ready",
+            : deliverable.length > 0 && deliverable.every((cell) => cell.status === "ready")
+              ? "ready"
+              : deliverable.length > 0
+                ? "installed"
+                : "pending",
     attention,
     updateAvailable: Object.values(state.updates).some(
       (update) => update.packageId === packageId && update.state === "pending",

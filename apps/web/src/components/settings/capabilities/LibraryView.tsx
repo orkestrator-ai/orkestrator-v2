@@ -17,6 +17,7 @@ import { useCapabilityResource } from "./useCapabilityResource";
 
 const READINESS_STATUS: Record<CapabilityPackageSummary["readiness"], string> = {
   ready: "ready",
+  installed: "installed-next-session",
   "needs-attention": "failed",
   pending: "pending",
   unassigned: "unsupported",
@@ -24,6 +25,7 @@ const READINESS_STATUS: Record<CapabilityPackageSummary["readiness"], string> = 
 
 const READINESS_LABEL: Record<CapabilityPackageSummary["readiness"], string> = {
   ready: "Ready",
+  installed: "Next session",
   "needs-attention": "Needs attention",
   pending: "On its way",
   unassigned: "In library only",
@@ -109,46 +111,50 @@ export function LibraryView({
           where to use it.
         </div>
       ) : null}
-      <ul className="divide-y divide-zinc-900 rounded-lg border border-zinc-800">
-        {packages.map((pkg) => (
-          <li key={pkg.id}>
-            <button
-              type="button"
-              onClick={() => onOpen(pkg.id)}
-              className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5 text-left hover:bg-zinc-900/60 focus-visible:bg-zinc-900/60 focus-visible:outline-none"
-            >
-              <div className="min-w-[10rem] flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium text-foreground">{pkg.displayName}</span>
-                  {pkg.kinds.map((entry) => (
-                    <Pill key={entry}>{kindLabel(entry)}</Pill>
-                  ))}
-                  {pkg.updateAvailable ? (
-                    <Pill className="border-sky-500/40 text-sky-300">Update available</Pill>
-                  ) : null}
-                  {pkg.pinned ? <Pill>Pinned</Pill> : null}
-                  {pkg.paused ? <Pill className="text-amber-300">Paused</Pill> : null}
-                </div>
-                <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                  {pkg.sourceLabel} · {pkg.revision.slice(0, 12)}
-                </div>
-              </div>
-              <RiskLabel risk={pkg.risk} />
-              <span className="text-xs text-muted-foreground">
-                {pkg.assignedSetupIds.map((id) => setupNames[id] ?? id).join(" + ") || "No setup"}
-              </span>
-              <span
-                title={pkg.attention > 0 ? `${pkg.attention} target(s) need attention` : undefined}
+      {packages.length > 0 ? (
+        <ul className="divide-y divide-zinc-900 rounded-lg border border-zinc-800">
+          {packages.map((pkg) => (
+            <li key={pkg.id}>
+              <button
+                type="button"
+                onClick={() => onOpen(pkg.id)}
+                className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5 text-left hover:bg-zinc-900/60 focus-visible:bg-zinc-900/60 focus-visible:outline-none"
               >
-                <StatusBadge
-                  status={READINESS_STATUS[pkg.readiness]}
-                  label={READINESS_LABEL[pkg.readiness]}
-                />
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+                <div className="min-w-[10rem] flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-foreground">{pkg.displayName}</span>
+                    {pkg.kinds.map((entry) => (
+                      <Pill key={entry}>{kindLabel(entry)}</Pill>
+                    ))}
+                    {pkg.updateAvailable ? (
+                      <Pill className="border-sky-500/40 text-sky-300">Update available</Pill>
+                    ) : null}
+                    {pkg.pinned ? <Pill>Pinned</Pill> : null}
+                    {pkg.paused ? <Pill className="text-amber-300">Paused</Pill> : null}
+                  </div>
+                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {pkg.sourceLabel} · {pkg.revision.slice(0, 12)}
+                  </div>
+                </div>
+                <RiskLabel risk={pkg.risk} />
+                <span className="text-xs text-muted-foreground">
+                  {pkg.assignedSetupIds.map((id) => setupNames[id] ?? id).join(" + ") || "No setup"}
+                </span>
+                <span
+                  title={
+                    pkg.attention > 0 ? `${pkg.attention} target(s) need attention` : undefined
+                  }
+                >
+                  <StatusBadge
+                    status={READINESS_STATUS[pkg.readiness]}
+                    label={READINESS_LABEL[pkg.readiness]}
+                  />
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {state.data?.truncated ? (
         <p className="text-xs text-muted-foreground">
           {state.data.truncated} more; narrow the search.

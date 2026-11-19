@@ -12,6 +12,7 @@ import type {
   CapabilitySetup,
 } from "@orkestrator/protocol/capability-resources";
 
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -231,7 +232,8 @@ export function AddCapabilityDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="max-h-[90vh] max-w-3xl overflow-y-auto"
+        className={`max-h-[90vh] max-w-3xl overflow-y-auto ${Z_FULLSCREEN_DIALOG}`}
+        overlayClassName={Z_FULLSCREEN_DIALOG}
         data-testid="add-capability-dialog"
       >
         <DialogHeader>
@@ -433,7 +435,9 @@ export function AddCapabilityDialog({
                 disabled={
                   busy ||
                   inspection.secretsFound.length > 0 ||
-                  (mode !== "installed" && providers.size === 0)
+                  (mode !== "installed" &&
+                    inspection.compatibleProviders.length > 0 &&
+                    providers.size === 0)
                 }
                 data-testid="capability-preview"
               >

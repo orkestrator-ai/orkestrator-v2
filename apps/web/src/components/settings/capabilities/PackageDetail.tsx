@@ -21,6 +21,7 @@ import {
 } from "@orkestrator/protocol/capability-resources";
 import type { CapabilityVerification } from "@orkestrator/protocol/capability-resources-api";
 
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -473,7 +474,10 @@ export function PackageDetail({
       </section>
 
       <Dialog open={preview !== null} onOpenChange={(open) => !open && setPreview(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent
+          className={`max-w-3xl ${Z_FULLSCREEN_DIALOG}`}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
           <DialogHeader>
             <DialogTitle>Review the plan</DialogTitle>
             <DialogDescription>Copies another setup still uses are kept.</DialogDescription>
@@ -500,7 +504,10 @@ export function PackageDetail({
           if (!open) setTestResult(null);
         }}
       >
-        <DialogContent className="max-w-xl">
+        <DialogContent
+          className={`max-w-xl ${Z_FULLSCREEN_DIALOG}`}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
           <DialogHeader>
             <DialogTitle>Test {pkg.displayName}</DialogTitle>
             <DialogDescription>

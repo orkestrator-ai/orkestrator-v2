@@ -684,7 +684,11 @@ export interface CapabilityPackageSummary {
   componentCount: number;
   components: Array<Pick<CapabilityComponent, "id" | "kind" | "name" | "risk">>;
   assignedSetupIds: string[];
-  readiness: "ready" | "needs-attention" | "pending" | "unassigned";
+  /**
+   * `ready` only when every target that can take it has runtime evidence;
+   * `installed` when the files are in place but no session has reported them yet.
+   */
+  readiness: "ready" | "installed" | "needs-attention" | "pending" | "unassigned";
   attention: number;
   updateAvailable: boolean;
   pinned: boolean;

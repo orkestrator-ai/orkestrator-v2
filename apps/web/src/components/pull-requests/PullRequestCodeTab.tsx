@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  gitHubPullRequestComparisonKey,
   gitHubPullRequestKey,
   gitHubPullRequestUrl,
   type GitHubPullRequestFile,
@@ -29,6 +30,7 @@ import {
   type FilePatchState,
 } from "./PullRequestFileSection";
 import { PullRequestFileTree } from "./PullRequestFileTree";
+import { PullRequestReviewDrafts } from "./pull-request-review-drafts";
 import { pluralize } from "./pull-request-format";
 import {
   NO_FILE_FILTERS,
@@ -68,7 +70,7 @@ function withRemoved(set: ReadonlySet<string>, ...values: string[]): Set<string>
 }
 
 /** A pending scroll to a file section, or to one conversation inside it. */
-type ScrollTarget = { path: string; threadId: string | null };
+type ScrollTarget = { path: string; threadId: string | null; revealTree: boolean };
 
 function findByData(root: HTMLElement, selector: string, key: string, value: string) {
   for (const element of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
@@ -123,19 +125,24 @@ export function PullRequestCodeTab({
   const filePatches = usePullRequestsStore((state) => state.filePatches);
   const loading = usePullRequestsStore((state) => state.loading);
   const errors = usePullRequestsStore((state) => state.errors);
+  const loadedAt = usePullRequestsStore((state) => state.loadedAt);
   const prKey = gitHubPullRequestKey(pullRequest);
+  const { headSha, comparisonBase } = files;
+  const comparisonKey = gitHubPullRequestComparisonKey(files);
 
   const [expanded, setExpanded] = useState(() => initialExpanded(files.files));
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [filters, setFilters] = useState<FileFilters>(NO_FILE_FILTERS);
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
-  /** Files whose deferred patch the reader asked for, one action at a time. */
-  const [wantedPatches, setWantedPatches] = useState<Set<string>>(() => new Set());
+  // The last attempted comparison for each file the reader explicitly opened.
+  // A null entry records intent on a file that had no deferred patch to load.
+  const wantedPatches = useRef(new Map<string, string | null>());
   const [threadCursor, setThreadCursor] = useState<string | null>(null);
   const [treeOverride, setTreeOverride] = useState<boolean | null>(null);
   const [measureRef, wide] = useWidthAtLeast<HTMLDivElement>(FILE_TREE_SIDE_BY_SIDE_MIN_WIDTH_PX);
   const showTree = treeOverride ?? wide;
   const listRef = useRef<HTMLDivElement>(null);
+  const treeRef = useRef<HTMLElement>(null);
   const scrollTarget = useRef<ScrollTarget | null>(null);
   // Bumped with each navigation so the scroll effect runs even when the
   // file was already open and selected.
@@ -166,6 +173,7 @@ export function PullRequestCodeTab({
     [files.files, filters, unresolved],
   );
   const shownFiles = useMemo(() => treeFileOrder(tree), [tree]);
+  const shownPaths = useMemo(() => new Set(shownFiles.map((file) => file.path)), [shownFiles]);
   const unresolvedThreads = useMemo(
     () => unresolvedThreadOrder(shownFiles, files.threads),
     [shownFiles, files.threads],
@@ -181,82 +189,106 @@ export function PullRequestCodeTab({
   const threadPosition = unresolvedThreads.findIndex((thread) => thread.id === threadCursor);
 
   const patchStateFor = (path: string): FilePatchState => {
-    const key = filePatchKey(prKey, files.headSha, path);
+    const key = filePatchKey(prKey, comparisonKey, path);
+    const loadKey = resourceKey("file-patch", key);
     return {
       patch: filePatches.get(key),
-      loading: loading.has(resourceKey("file-patch", key)),
-      error: errors.get(resourceKey("file-patch", key)),
+      loading: loading.has(loadKey),
+      error: errors.get(loadKey),
+      settled: loadedAt.has(loadKey),
     };
   };
 
   const requestPatch = (path: string) => {
+    if (!wantedPatches.current.has(path)) wantedPatches.current.set(path, null);
     const file = filesByPath.get(path);
-    if (!file?.patchDeferred) return;
+    if (!comparisonBase || !file?.patchDeferred || file.patchAvailable) return;
+    wantedPatches.current.set(path, comparisonKey);
+    if (patchStateFor(path).patch) return;
     void loadFilePatch(pullRequest, {
       path,
-      headSha: files.headSha,
+      headSha,
+      comparisonBase,
       index: indexByPath.get(path),
     });
   };
 
-  // A wanted patch is (re)requested once the list's head changes under it,
-  // which is how a file opened before a push follows the new head. Reads in
-  // flight, cached answers and failures (retried by hand) are left alone.
+  // Carry explicit intent forward when a new list arrives. Cache eviction
+  // leaves the attempt recorded so only another file action reloads that patch.
   useEffect(() => {
-    for (const path of wantedPatches) {
-      if (!expanded.has(path)) continue;
+    for (const [path, attempted] of Array.from(wantedPatches.current)) {
       const file = filesByPath.get(path);
-      if (!file?.patchDeferred) continue;
-      const key = filePatchKey(prKey, files.headSha, path);
-      if (
-        filePatches.has(key) ||
-        loading.has(resourceKey("file-patch", key)) ||
-        errors.has(resourceKey("file-patch", key))
-      )
+      if (!file) {
+        wantedPatches.current.delete(path);
         continue;
+      }
+      if (!comparisonBase || !expanded.has(path) || !shownPaths.has(path)) continue;
+      if (!file.patchDeferred || file.patchAvailable || attempted === comparisonKey) continue;
+      wantedPatches.current.set(path, comparisonKey);
+      const key = filePatchKey(prKey, comparisonKey, path);
+      if (filePatches.has(key)) continue;
       void loadFilePatch(pullRequest, {
         path,
-        headSha: files.headSha,
+        headSha,
+        comparisonBase,
         index: indexByPath.get(path),
       });
     }
   }, [
-    wantedPatches,
+    comparisonBase,
+    comparisonKey,
     expanded,
+    shownPaths,
     filesByPath,
     filePatches,
-    loading,
-    errors,
     prKey,
-    files.headSha,
+    headSha,
     indexByPath,
     loadFilePatch,
     pullRequest,
   ]);
 
-  // Scroll to whatever navigation asked for once it is on screen. A
-  // conversation inside a deferred file waits for that file's patch; if it
-  // cannot be placed, the file itself is the target.
   useEffect(() => {
     const target = scrollTarget.current;
     const list = listRef.current;
     if (!target || !list) return;
+    if (!shownPaths.has(target.path) || !expanded.has(target.path)) {
+      scrollTarget.current = null;
+      return;
+    }
+    const tree = treeRef.current;
+    if (target.revealTree && tree) {
+      const row = findByData(tree, '[aria-current="true"]', "path", target.path);
+      if (row) {
+        const viewport = tree.getBoundingClientRect();
+        const bounds = row.getBoundingClientRect();
+        if (bounds.top < viewport.top) tree.scrollTop += bounds.top - viewport.top;
+        else if (bounds.bottom > viewport.bottom) tree.scrollTop += bounds.bottom - viewport.bottom;
+      }
+    }
+    target.revealTree = false;
+
+    const section = findByData(list, '[data-testid="pull-request-file"]', "path", target.path);
+    if (!section) return;
     if (target.threadId) {
-      const thread = findByData(list, "[data-thread-id]", "threadId", target.threadId);
+      const file = filesByPath.get(target.path);
+      const { patch, loading, error, settled } = patchStateFor(target.path);
+      if (
+        comparisonBase &&
+        file?.patchDeferred &&
+        !file.patchAvailable &&
+        (loading || (!patch && !error && !settled))
+      )
+        return;
+
+      const thread = findByData(section, "[data-thread-id]", "threadId", target.threadId);
       if (thread) {
         scrollTarget.current = null;
         thread.scrollIntoView?.({ block: "center" });
         thread.focus?.({ preventScroll: true });
         return;
       }
-      const file = filesByPath.get(target.path);
-      const key = filePatchKey(prKey, files.headSha, target.path);
-      const waiting =
-        file?.patchDeferred && !filePatches.has(key) && !errors.has(resourceKey("file-patch", key));
-      if (waiting) return;
     }
-    const section = findByData(list, '[data-testid="pull-request-file"]', "path", target.path);
-    if (!section) return;
     scrollTarget.current = null;
     section.scrollIntoView?.({ block: "start" });
   });
@@ -265,9 +297,9 @@ export function PullRequestCodeTab({
   const openFile = (path: string, threadId: string | null = null) => {
     setSelectedPath(path);
     setExpanded((current) => (current.has(path) ? current : withAdded(current, path)));
-    setWantedPatches((current) => (current.has(path) ? current : withAdded(current, path)));
+    requestPatch(path);
     setCollapsedDirectories((current) => withRemoved(current, ...ancestorDirectories(path)));
-    scrollTarget.current = { path, threadId };
+    scrollTarget.current = { path, threadId, revealTree: true };
     setScrollRequests((count) => count + 1);
   };
 
@@ -276,7 +308,7 @@ export function PullRequestCodeTab({
     setExpanded((current) => (opening ? withAdded(current, path) : withRemoved(current, path)));
     if (opening) {
       setSelectedPath(path);
-      setWantedPatches((current) => (current.has(path) ? current : withAdded(current, path)));
+      requestPatch(path);
     }
   };
 
@@ -316,7 +348,9 @@ export function PullRequestCodeTab({
           selected={file.path === selectedPath}
           onToggle={() => toggle(file.path)}
           onViewed={(viewed) => markViewed(file.path, viewed)}
-          commitId={files.headSha}
+          commitId={headSha}
+          comparisonKey={comparisonKey}
+          canLoadPatch={Boolean(comparisonBase)}
           canComment={canComment}
           patchState={patchStateFor(file.path)}
           onLoadPatch={() => requestPatch(file.path)}
@@ -465,6 +499,7 @@ export function PullRequestCodeTab({
       <div className={cn("flex min-h-0 flex-1", wide ? "flex-row" : "flex-col")}>
         {showTree && files.files.length > 0 && (
           <PullRequestFileTree
+            ref={treeRef}
             nodes={tree}
             collapsed={collapsedDirectories}
             forceOpen={filtering}
@@ -482,7 +517,7 @@ export function PullRequestCodeTab({
           data-testid="pull-request-file-list"
           className="min-h-0 min-w-0 flex-1 overflow-y-auto pb-6"
         >
-          {fileList}
+          <PullRequestReviewDrafts>{fileList}</PullRequestReviewDrafts>
         </div>
       </div>
     </div>

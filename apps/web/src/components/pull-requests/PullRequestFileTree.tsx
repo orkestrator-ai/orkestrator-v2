@@ -6,6 +6,7 @@ import {
   FolderOpen,
   MessageSquare,
 } from "lucide-react";
+import type { Ref } from "react";
 import { cn } from "@/lib/utils";
 import { pluralize } from "./pull-request-format";
 import type { FileTreeNode } from "./pull-request-file-navigation";
@@ -57,13 +58,17 @@ function TreeLevel({
                 data-testid="file-tree-directory"
                 data-path={node.path}
                 aria-expanded={open}
+                disabled={forceOpen}
                 onClick={() => onToggleDirectory(node.path)}
                 title={`${node.path} · ${node.viewedCount} / ${pluralize(node.fileCount, "file")} viewed`}
-                className="flex w-full min-w-0 items-center gap-1 rounded-sm py-0.5 pr-1.5 text-left text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                className={cn(
+                  "flex w-full min-w-0 items-center gap-1 rounded-sm py-0.5 pr-1.5 text-left text-xs text-muted-foreground",
+                  !forceOpen && "hover:bg-muted/40 hover:text-foreground",
+                )}
                 style={padding}
               >
                 {open ? (
-                  <ChevronDown className="size-3 shrink-0" />
+                  <ChevronDown className={cn("size-3 shrink-0", forceOpen && "invisible")} />
                 ) : (
                   <ChevronRight className="size-3 shrink-0" />
                 )}
@@ -140,6 +145,7 @@ function TreeLevel({
  * directory is shown open, so a match is never hidden in a closed folder.
  */
 export function PullRequestFileTree({
+  ref,
   nodes,
   collapsed,
   forceOpen,
@@ -155,9 +161,11 @@ export function PullRequestFileTree({
   onToggleDirectory: (path: string) => void;
   onSelectFile: (path: string) => void;
   className?: string;
+  ref?: Ref<HTMLElement>;
 }) {
   return (
     <nav
+      ref={ref}
       aria-label="Changed files"
       data-testid="pull-request-file-tree"
       className={cn("min-h-0 overflow-y-auto py-1", className)}

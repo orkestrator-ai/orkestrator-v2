@@ -1,12 +1,25 @@
 {
   "schemaVersion": 1,
-  "digest": "sha256:34546d285155765801259ec03cf579bcbea9865b23a357aecac9e64159557fa8",
+  "digest": "sha256:5ba9d94eb6b2fbb9bfc14e41796006596ce9a66792489d3e0663754ad2628c2f",
   "document": {
     "definitions": {},
     "dialect": "draft-2020-12",
     "schema": {
       "additionalProperties": true,
       "properties": {
+        "comparisonBase": {
+          "additionalProperties": true,
+          "properties": {
+            "ref": {
+              "type": "string"
+            },
+            "sha": {
+              "type": "string"
+            }
+          },
+          "required": ["ref", "sha"],
+          "type": "object"
+        },
         "headSha": {
           "type": "string"
         },
@@ -26,7 +39,7 @@
           "type": "string"
         }
       },
-      "required": ["headSha", "number", "owner", "path", "repo"],
+      "required": ["comparisonBase", "headSha", "number", "owner", "path", "repo"],
       "type": "object"
     }
   }

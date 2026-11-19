@@ -241,6 +241,7 @@ export function registerGitHubPullRequestCommands(
     const input = {
       path: asString(args.path, "path"),
       headSha: asString(args.headSha, "headSha"),
+      comparisonBase: args.comparisonBase,
       ...(args.index === undefined ? {} : { index: asNumber(args.index, "index") }),
     };
     return withGitHubToken(context, (token) => getGitHubPullRequestFilePatch(token, ref, input));

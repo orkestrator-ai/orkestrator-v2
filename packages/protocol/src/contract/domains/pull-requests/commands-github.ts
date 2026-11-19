@@ -30,6 +30,7 @@ import {
   GitHubIssueStatusSchema,
   GitHubIssuesSnapshotSchema,
   GitHubPullRequestCommentSchema,
+  GitHubPullRequestComparisonBaseSchema,
   GitHubPullRequestDetailSchema,
   GitHubPullRequestFilePatchSchema,
   GitHubPullRequestFilesSchema,
@@ -233,7 +234,7 @@ export const getGitHubPullRequestFilesCommand = defineCommand({
 });
 
 /**
- * One file's patch at `headSha`, for a file the list marked `patchDeferred`.
+ * One file's patch at the comparison the list marked `patchDeferred`.
  * `index` is the file's position in that list, so the read usually costs one
  * page of GitHub's file list.
  */
@@ -247,10 +248,11 @@ export const getGitHubPullRequestFilePatchCommand = defineCommand({
     ...pullRequestRef,
     path: Schema.String,
     headSha: Schema.String,
+    comparisonBase: GitHubPullRequestComparisonBaseSchema,
     index: Schema.optionalKey(Schema.Finite),
   }),
   result: GitHubPullRequestFilePatchSchema,
-  critical: [],
+  critical: ["comparisonBase"],
 });
 
 export const mergeGitHubPullRequestCommand = defineCommand({

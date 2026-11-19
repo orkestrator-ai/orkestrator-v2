@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { usePullRequestsStore } from "@/stores/pullRequestsStore";
 import { pluralize } from "./pull-request-format";
+import { useReviewDraft, useReviewDraftStore } from "./pull-request-review-drafts";
 import {
   CommentComposer,
   MarkdownBody,
@@ -30,8 +31,15 @@ export function PullRequestReviewThread({
 }) {
   const replyToThread = usePullRequestsStore((state) => state.replyToThread);
   const setThreadResolved = usePullRequestsStore((state) => state.setThreadResolved);
-  const [expanded, setExpanded] = useState(!thread.isResolved);
-  const [replying, setReplying] = useState(false);
+  const drafts = useReviewDraftStore();
+  const { draft, setDraft, updateDraft } = useReviewDraft(
+    drafts,
+    "replies",
+    thread.id,
+    (draft) => draft,
+  );
+  const [expanded, setExpanded] = useState(!thread.isResolved || Boolean(draft));
+  const [autoFocus, setAutoFocus] = useState(false);
   const [resolving, setResolving] = useState(false);
   const first = thread.comments[0];
 
@@ -127,22 +135,26 @@ export function PullRequestReviewThread({
             </div>
           ))}
           {canReply &&
-            (replying ? (
+            (draft ? (
               <CommentComposer
-                autoFocus
+                autoFocus={autoFocus}
+                draft={{ ...draft, update: updateDraft }}
                 placeholder="Reply…"
                 ariaLabel="Reply to conversation"
                 submitLabel="Reply"
-                onCancel={() => setReplying(false)}
+                onCancel={() => setDraft(undefined)}
                 onSubmit={async (body) => {
                   await replyToThread(pullRequest, thread.id, body);
-                  setReplying(false);
+                  setDraft(undefined);
                 }}
               />
             ) : (
               <button
                 type="button"
-                onClick={() => setReplying(true)}
+                onClick={() => {
+                  setAutoFocus(true);
+                  setDraft({ body: "", submitting: false });
+                }}
                 className="flex w-full items-center gap-1.5 rounded-md border border-border/60 bg-input-surface px-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
               >
                 <Reply className="size-3" />

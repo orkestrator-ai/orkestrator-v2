@@ -205,9 +205,15 @@ export const GitHubPullRequestReviewThreadCommentSchema =
     htmlUrl: Schema.String,
   }).annotate({ identifier: "GitHubPullRequestReviewThreadComment" });
 
+export const GitHubPullRequestComparisonBaseSchema = Schema.Struct({
+  ref: Schema.String,
+  sha: Schema.String,
+});
+
 export const GitHubPullRequestFilesSchema = modelRecord<GitHubPullRequestFiles>()({
   ref: PullRequestRefSchema,
   headSha: Schema.String,
+  comparisonBase: Schema.optionalKey(GitHubPullRequestComparisonBaseSchema),
   files: Schema.Array(
     openRecord({
       path: Schema.String,
@@ -234,6 +240,7 @@ export const GitHubPullRequestFilePatchSchema = modelRecord<GitHubPullRequestFil
   ref: PullRequestRefSchema,
   path: Schema.String,
   headSha: Schema.String,
+  comparisonBase: GitHubPullRequestComparisonBaseSchema,
   outcome: Schema.String,
   patchAvailable: Schema.Boolean,
   hunks: Schema.Array(openRecord({ header: Schema.String })),

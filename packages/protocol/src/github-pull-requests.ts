@@ -256,21 +256,39 @@ export type GitHubPullRequestFile = {
   blobUrl?: string;
 };
 
+/** The target branch and commit of the pull request comparison. */
+export type GitHubPullRequestComparisonBase = { ref: string; sha: string };
+
+export type GitHubPullRequestComparison = {
+  headSha: string;
+  comparisonBase: GitHubPullRequestComparisonBase;
+};
+
+export type GitHubPullRequestFilePatchInput = GitHubPullRequestComparison & {
+  path: string;
+  index?: number;
+};
+
+export function gitHubPullRequestComparisonKey({
+  headSha,
+  comparisonBase,
+}: Pick<GitHubPullRequestFiles, "headSha" | "comparisonBase">): string {
+  return JSON.stringify([headSha, comparisonBase?.ref, comparisonBase?.sha]);
+}
+
 /** How a single-file patch read ended. */
 export type GitHubPullRequestFilePatchOutcome =
-  /** `hunks` and `patchAvailable` describe the file at the requested head. */
+  /** `hunks` and `patchAvailable` describe the file at the requested comparison. */
   | "loaded"
-  /** The pull request's head is no longer the requested one; reload the file list. */
+  /** The head or base changed; reload the file list. */
   | "head-moved"
-  /** The file is not among the pull request's files at the requested head. */
+  /** The file is not among the pull request's files at the requested comparison. */
   | "not-found";
 
 /** One file's patch, read on demand (`get_github_pull_request_file_patch`). */
-export type GitHubPullRequestFilePatch = {
+export type GitHubPullRequestFilePatch = GitHubPullRequestComparison & {
   ref: GitHubPullRequestRef;
   path: string;
-  /** The head the read saw; differs from the requested head only for `head-moved`. */
-  headSha: string;
   outcome: GitHubPullRequestFilePatchOutcome;
   /** False for a binary file or one too large to render here even on its own. */
   patchAvailable: boolean;
@@ -308,6 +326,8 @@ export type GitHubPullRequestReviewThread = {
 export type GitHubPullRequestFiles = {
   ref: GitHubPullRequestRef;
   headSha: string;
+  /** Absent from older backends that cannot bind a deferred read to this base. */
+  comparisonBase?: GitHubPullRequestComparisonBase;
   files: GitHubPullRequestFile[];
   threads: GitHubPullRequestReviewThread[];
   /** GitHub caps the file list (3000 files); true when the PR exceeds it. */

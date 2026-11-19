@@ -3,14 +3,17 @@
  * GraphQL-only data (per-file viewed state and review threads).
  */
 import type { ChangeDiffHunk, ChangeFileStatus } from "@orkestrator/protocol/change-resources";
-import type {
-  GitHubPullRequestFile,
-  GitHubPullRequestFilePatch,
-  GitHubPullRequestFiles,
-  GitHubPullRequestRef,
-  GitHubPullRequestReviewThread,
-  GitHubPullRequestReviewThreadComment,
-  GitHubPullRequestViewedState,
+import {
+  gitHubPullRequestComparisonKey,
+  type GitHubPullRequestComparison,
+  type GitHubPullRequestFilePatchInput,
+  type GitHubPullRequestFile,
+  type GitHubPullRequestFilePatch,
+  type GitHubPullRequestFiles,
+  type GitHubPullRequestRef,
+  type GitHubPullRequestReviewThread,
+  type GitHubPullRequestReviewThreadComment,
+  type GitHubPullRequestViewedState,
 } from "@orkestrator/protocol/github-pull-requests";
 import { parseUnifiedPatch } from "@orkestrator/protocol/node/change-tracking/unified-patch";
 import { GitHubApiError, isRecord, numberValue, optionalString, stringValue } from "./github.js";
@@ -349,6 +352,25 @@ export async function loadReviewState(
   return { viewedStates, threads };
 }
 
+/** Bracket mutable file reads with uncached checks on both sides of the comparison. */
+async function readComparison(client: GitHubPullRequestClient, ref: GitHubPullRequestRef) {
+  const { data } = await getJson(client, pullPath(ref), "validate pull request comparison", {
+    cached: false,
+  });
+  const pull = isRecord(data) ? data : {};
+  const base = isRecord(pull.base) ? pull.base : {};
+  const headSha = pullHeadSha(pull);
+  const baseRef = stringValue(base.ref);
+  const baseSha = stringValue(base.sha);
+  if (!isCommitSha(headSha) || !baseRef || !isCommitSha(baseSha)) {
+    throw new GitHubApiError("GitHub returned an invalid pull request comparison.");
+  }
+  return {
+    comparison: { headSha, comparisonBase: { ref: baseRef, sha: baseSha } },
+    changedFiles: numberValue(pull.changed_files),
+  };
+}
+
 export async function getGitHubPullRequestFiles(
   token: string,
   ref: GitHubPullRequestRef,
@@ -356,18 +378,8 @@ export async function getGitHubPullRequestFiles(
 ): Promise<GitHubPullRequestFiles> {
   assertPullRequestRef(ref);
   const client = pullRequestClient(token, options);
-  // Bracket every paginated read with uncached head reads. Never expose mixed
-  // revision coordinates as an inline-comment target.
-  const readHead = async () => {
-    const { data } = await getJson(client, pullPath(ref), "validate pull request head", {
-      cached: false,
-    });
-    if (!isRecord(data) || !pullHeadSha(data))
-      throw new GitHubApiError("GitHub returned an invalid pull request head.");
-    return data;
-  };
   for (let attempt = 0; attempt < 3; attempt++) {
-    const before = await readHead();
+    const before = await readComparison(client, ref);
     const [fileList, reviewState] = await Promise.all([
       // File pages can be large; they bypass the conditional cache.
       getList(
@@ -379,15 +391,19 @@ export async function getGitHubPullRequestFiles(
       ),
       loadReviewState(client, ref),
     ]);
-    const pull = await readHead();
-    if (pullHeadSha(before) !== pullHeadSha(pull)) continue;
+    const { comparison, changedFiles } = await readComparison(client, ref);
+    if (
+      gitHubPullRequestComparisonKey(before.comparison) !==
+      gitHubPullRequestComparisonKey(comparison)
+    )
+      continue;
     const files = mapPullRequestFiles(fileList.values, reviewState.viewedStates);
     return {
       ref: { owner: ref.owner, repo: ref.repo, number: ref.number },
-      headSha: pullHeadSha(pull),
+      ...comparison,
       files,
       threads: reviewState.threads,
-      truncated: fileList.truncated || numberValue(pull.changed_files) > files.length,
+      truncated: fileList.truncated || changedFiles > files.length,
     };
   }
   throw new GitHubApiError("The pull request changed while loading files. Refresh and try again.");
@@ -428,24 +444,24 @@ export function singleFilePatch(value: Record<string, unknown>): {
 }
 
 /**
- * One file's patch at `headSha`, for a file the list left out to bound its
- * response. Reads the page `index` names first and falls back to the others,
- * between two uncached head reads: a head other than `headSha` on either side
- * answers `head-moved`, so a patch never mixes revisions with the list it
- * belongs to.
+ * One file's patch at the requested comparison. Try the hinted page first,
+ * and discard the result if either side of the comparison has changed.
  */
 export async function getGitHubPullRequestFilePatch(
   token: string,
   ref: GitHubPullRequestRef,
-  input: { path: string; headSha: string; index?: number },
+  input: GitHubPullRequestFilePatchInput,
   options: GitHubPullRequestRequestOptions = {},
 ): Promise<GitHubPullRequestFilePatch> {
   assertPullRequestRef(ref);
   if (!input.path) throw new Error("Expected path to name a file of the pull request");
   if (!isCommitSha(input.headSha)) throw new Error("Expected headSha to be a commit SHA");
+  if (!input.comparisonBase.ref || !isCommitSha(input.comparisonBase.sha))
+    throw new Error("Expected comparisonBase to identify a branch and commit SHA");
   const client = pullRequestClient(token, options);
+  const expected = gitHubPullRequestComparisonKey(input);
   const result = (
-    headSha: string,
+    comparison: GitHubPullRequestComparison,
     outcome: GitHubPullRequestFilePatch["outcome"],
     patch: { patchAvailable: boolean; hunks: ChangeDiffHunk[] } = {
       patchAvailable: false,
@@ -454,20 +470,12 @@ export async function getGitHubPullRequestFilePatch(
   ): GitHubPullRequestFilePatch => ({
     ref: { owner: ref.owner, repo: ref.repo, number: ref.number },
     path: input.path,
-    headSha,
+    ...comparison,
     outcome,
     ...patch,
   });
-  const readHead = async () => {
-    const { data } = await getJson(client, pullPath(ref), "validate pull request head", {
-      cached: false,
-    });
-    const sha = isRecord(data) ? pullHeadSha(data) : "";
-    if (!sha) throw new GitHubApiError("GitHub returned an invalid pull request head.");
-    return sha;
-  };
-  const before = await readHead();
-  if (before !== input.headSha) return result(before, "head-moved");
+  const { comparison: before } = await readComparison(client, ref);
+  if (gitHubPullRequestComparisonKey(before) !== expected) return result(before, "head-moved");
   let found: Record<string, unknown> | null = null;
   // A short page is the last one: every page after it is empty.
   let lastPage = Number.POSITIVE_INFINITY;
@@ -490,7 +498,7 @@ export async function getGitHubPullRequestFilePatch(
     if (found) break;
     if (data.length < FILE_PAGE_SIZE) lastPage = Math.min(lastPage, page);
   }
-  const after = await readHead();
-  if (after !== input.headSha) return result(after, "head-moved");
+  const { comparison: after } = await readComparison(client, ref);
+  if (gitHubPullRequestComparisonKey(after) !== expected) return result(after, "head-moved");
   return found ? result(after, "loaded", singleFilePatch(found)) : result(after, "not-found");
 }

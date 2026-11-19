@@ -2,6 +2,7 @@ import type {
   GitHubPullRequestComment,
   GitHubPullRequestDetail,
   GitHubPullRequestFilePatch,
+  GitHubPullRequestFilePatchInput,
   GitHubPullRequestFiles,
   GitHubPullRequestInlineCommentInput,
   GitHubPullRequestLabel,
@@ -69,13 +70,11 @@ export function createGithubPullRequestsApi(client: BackendClient) {
   }
 
   /**
-   * One file's patch at `headSha`. Only files a backend marked
-   * `patchDeferred` are read this way, and only backends with this command
-   * mark them.
+   * One deferred file's patch at the comparison returned by the file list.
    */
   async function getGitHubPullRequestFilePatch(
     ref: GitHubPullRequestRef,
-    file: { path: string; headSha: string; index?: number },
+    file: GitHubPullRequestFilePatchInput,
   ): Promise<GitHubPullRequestFilePatch> {
     return api().get_github_pull_request_file_patch({ ...refArgs(ref), ...file });
   }

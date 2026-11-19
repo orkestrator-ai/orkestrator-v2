@@ -9,10 +9,12 @@ import { appCommandScope } from "@/lib/node-scope-slots";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import {
+  gitHubPullRequestComparisonKey,
   gitHubPullRequestKey,
   type GitHubPullRequestComment,
   type GitHubPullRequestDetail,
   type GitHubPullRequestFilePatch,
+  type GitHubPullRequestFilePatchInput,
   type GitHubPullRequestFiles,
   type GitHubPullRequestInlineCommentInput,
   type GitHubPullRequestListFilter,
@@ -33,7 +35,7 @@ import {
  * each mutation. Keys:
  * - pull request resources: `gitHubPullRequestKey(ref)`
  * - list results: `pullRequestListKey(projectId, filter, query)`
- * - single-file patches: `filePatchKey(prKey, headSha, path)`
+ * - single-file patches: `filePatchKey(prKey, comparisonKey, path)`
  * Loading and error state is keyed by `resourceKey(kind, key)`.
  */
 
@@ -48,9 +50,9 @@ export const MAX_CACHED_PULL_REQUEST_LISTS = 40;
 export const MAX_CACHED_FILE_PATCHES = 40;
 export const MAX_CACHED_FILE_PATCH_ROWS = 60_000;
 
-/** One file's patch at one head of one pull request. */
-export function filePatchKey(pullRequestKey: string, headSha: string, path: string): string {
-  return `${pullRequestKey}\u0000${headSha}\u0000${path}`;
+/** One file's patch at one comparison of one pull request. */
+export function filePatchKey(pullRequestKey: string, comparisonKey: string, path: string): string {
+  return `${pullRequestKey}\u0000${comparisonKey}\u0000${path}`;
 }
 
 function patchRows(patch: GitHubPullRequestFilePatch): number {
@@ -80,14 +82,14 @@ function setFilePatch(
   return next;
 }
 
-/** Drops a pull request's patches read at any head but `headSha`. */
+/** Drops a pull request's patches from earlier comparisons. */
 function withoutStalePatches(
   map: Map<string, GitHubPullRequestFilePatch>,
   pullRequestKey: string,
-  headSha: string,
+  comparisonKey: string,
 ): Map<string, GitHubPullRequestFilePatch> {
   const prefix = `${pullRequestKey}\u0000`;
-  const current = `${prefix}${headSha}\u0000`;
+  const current = `${prefix}${comparisonKey}\u0000`;
   let next: Map<string, GitHubPullRequestFilePatch> | null = null;
   for (const key of map.keys()) {
     if (!key.startsWith(prefix) || key.startsWith(current)) continue;
@@ -177,13 +179,12 @@ export interface PullRequestsState {
   loadTimeline: (ref: GitHubPullRequestRef) => Promise<void>;
   loadFiles: (ref: GitHubPullRequestRef) => Promise<void>;
   /**
-   * Loads one deferred file's patch at `headSha`. A read already in flight
-   * for it is not repeated. When the pull request's head has moved, nothing
-   * is cached and the file list is reloaded instead.
+   * Loads one deferred patch at the list's comparison. If GitHub reports a
+   * change, the patch stays pending while the store refreshes the file list.
    */
   loadFilePatch: (
     ref: GitHubPullRequestRef,
-    file: { path: string; headSha: string; index?: number },
+    file: GitHubPullRequestFilePatchInput,
   ) => Promise<void>;
   loadList: (
     projectId: string,
@@ -316,6 +317,7 @@ export const pullRequestsStore = defineScopedStore<PullRequestsState>(
   "pull-requests",
   (scope) => (set, get) => {
     const requestSequence: RequestSequence = new Map();
+    const fileListReads = new Map<string, Promise<void>>();
     /** The scope's node's GitHub commands (the named exports on the app's command scope). */
     const api = () => backendApiForScope(scope, createGithubPullRequestsApi, backend);
     const reloadDetail = (ref: GitHubPullRequestRef) => get().loadDetail(ref);
@@ -365,42 +367,68 @@ export const pullRequestsStore = defineScopedStore<PullRequestsState>(
 
       loadFiles: (ref) => {
         const key = gitHubPullRequestKey(ref);
-        return runLoad(
+        const read = runLoad(
           set,
           requestSequence,
           resourceKey("files", key),
           () => api().getGitHubPullRequestFiles(ref),
           (state, files) => ({
             files: setCapped(state.files, key, files, MAX_CACHED_PULL_REQUESTS),
-            filePatches: withoutStalePatches(state.filePatches, key, files.headSha),
+            filePatches: withoutStalePatches(
+              state.filePatches,
+              key,
+              gitHubPullRequestComparisonKey(files),
+            ),
           }),
           "Could not load the changed files.",
-        );
+        ).finally(() => {
+          if (fileListReads.get(key) === read) fileListReads.delete(key);
+        });
+        fileListReads.set(key, read);
+        return read;
       },
 
       loadFilePatch: (ref, file) => {
         const key = gitHubPullRequestKey(ref);
-        const patchKey = filePatchKey(key, file.headSha, file.path);
+        const comparisonKey = gitHubPullRequestComparisonKey(file);
+        const patchKey = filePatchKey(key, comparisonKey, file.path);
         const loadKey = resourceKey("file-patch", patchKey);
-        if (get().loading.has(loadKey)) return Promise.resolve();
-        let headMoved = false;
+        const isCurrent = (state: PullRequestsState) => {
+          const latest = state.files.get(key);
+          return !latest || gitHubPullRequestComparisonKey(latest) === comparisonKey;
+        };
+        if (!isCurrent(get()) || get().loading.has(loadKey)) return Promise.resolve();
         return runLoad(
           set,
           requestSequence,
           loadKey,
           async () => {
             const patch = await api().getGitHubPullRequestFilePatch(ref, file);
+            if (!isCurrent(get())) return null;
             if (patch.outcome === "head-moved") {
-              // Recorded as this head's error, so a reader that re-requests
-              // at each new head asks once per head, never in a loop.
-              headMoved = true;
+              // Keep the patch pending through recovery so jumps wait for the
+              // new diff. Other moved replies can join the same list read.
+              let refresh: Promise<void> | undefined =
+                fileListReads.get(key) ?? get().loadFiles(ref);
+              while (refresh) {
+                await refresh;
+                if (!isCurrent(get())) return null;
+                // A poll or mutation can have superseded the read we joined.
+                refresh = fileListReads.get(key);
+              }
               throw new Error("The pull request changed while loading this file.");
+            }
+            if (gitHubPullRequestComparisonKey(patch) !== comparisonKey) {
+              throw new Error("GitHub returned a patch for a different comparison.");
             }
             return patch;
           },
-          (state, patch) => ({ filePatches: setFilePatch(state.filePatches, patchKey, patch) }),
+          (state, patch) =>
+            patch && isCurrent(state)
+              ? { filePatches: setFilePatch(state.filePatches, patchKey, patch) }
+              : {},
           "Could not load this file's changes.",
-        ).then(() => (headMoved ? get().loadFiles(ref) : undefined));
+        );
       },
 
       loadList: (projectId, filter, query = "") => {

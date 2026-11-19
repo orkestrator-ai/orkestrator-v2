@@ -17,6 +17,8 @@ import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { pullRequestsStore } from "@/stores/pullRequestsStore";
 import { appCommandStore } from "@/test/app-command-store";
 
+export const comparisonBase = { ref: "main", sha: "d".repeat(40) };
+
 export const prRef: GitHubPullRequestRef = { owner: "acme", repo: "widget", number: 42 };
 
 export function makeDetail(
@@ -110,6 +112,7 @@ export function makeFiles(overrides: Partial<GitHubPullRequestFiles> = {}): GitH
   return {
     ref: prRef,
     headSha: "abc1234def5678",
+    comparisonBase,
     files: [makeFile()],
     threads: [],
     truncated: false,

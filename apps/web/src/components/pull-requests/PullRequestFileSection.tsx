@@ -15,6 +15,7 @@ import { openInBrowser } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { PullRequestDiff } from "./PullRequestDiff";
 import { PullRequestReviewThread } from "./PullRequestReviewThread";
+import { InlineReviewDraftComposer, useReviewDraftStore } from "./pull-request-review-drafts";
 import { pluralize, splitPath } from "./pull-request-format";
 import { FILE_STATUS_ICONS } from "./pull-request-file-status";
 import { errorMessage } from "./pull-request-shared";
@@ -30,6 +31,7 @@ export type FilePatchState = {
   patch: GitHubPullRequestFilePatch | undefined;
   loading: boolean;
   error: string | undefined;
+  settled: boolean;
 };
 
 function ViewOnGitHub({
@@ -95,6 +97,8 @@ function FileBody({
   file,
   threads,
   commitId,
+  comparisonKey,
+  canLoadPatch,
   canComment,
   patchState,
   onLoadPatch,
@@ -103,12 +107,16 @@ function FileBody({
   file: GitHubPullRequestFile;
   threads: GitHubPullRequestReviewThread[];
   commitId: string;
+  comparisonKey: string;
+  canLoadPatch: boolean;
   canComment: boolean;
   patchState: FilePatchState;
   onLoadPatch: () => void;
 }) {
-  const { patch, loading, error } = patchState;
-  const loaded = patch?.outcome === "loaded" && patch.patchAvailable ? patch : null;
+  const drafts = useReviewDraftStore();
+  const { patch, loading, error, settled } = patchState;
+  const deferred = canLoadPatch && file.patchDeferred && !file.patchAvailable;
+  const loaded = deferred && patch?.outcome === "loaded" && patch.patchAvailable ? patch : null;
   // One stable object per loaded patch, so the diff's thread anchoring memoizes.
   const fileWithPatch = useMemo(
     () => (loaded ? { ...file, hunks: loaded.hunks, patchAvailable: true } : null),
@@ -122,13 +130,14 @@ function FileBody({
         file={fileWithPatch ?? file}
         threads={threads}
         commitId={commitId}
+        comparisonKey={comparisonKey}
         canComment={canComment}
       />
     );
   }
 
   let notice: ReactNode;
-  if (file.patchDeferred && !patch) {
+  if (deferred && !patch) {
     if (loading) {
       notice = (
         <Notice testId="file-patch-loading">
@@ -178,7 +187,15 @@ function FileBody({
       {notice}
       {/* A deferred file shows its conversations on their lines once its diff
           loads, or here if it cannot. */}
-      {!(file.patchDeferred && !patch && !error) && (
+      {canComment && (
+        <InlineReviewDraftComposer
+          store={drafts}
+          pullRequest={pullRequest}
+          path={file.path}
+          comparisonKey={comparisonKey}
+        />
+      )}
+      {(!deferred || patch || (!loading && (error || settled))) && (
         <ThreadsWithoutDiff pullRequest={pullRequest} threads={threads} canComment={canComment} />
       )}
     </>
@@ -195,6 +212,8 @@ export function PullRequestFileSection({
   onToggle,
   onViewed,
   commitId,
+  comparisonKey,
+  canLoadPatch,
   canComment,
   patchState,
   onLoadPatch,
@@ -207,6 +226,8 @@ export function PullRequestFileSection({
   onToggle: () => void;
   onViewed: (viewed: boolean) => void;
   commitId: string;
+  comparisonKey: string;
+  canLoadPatch: boolean;
   canComment: boolean;
   patchState: FilePatchState;
   onLoadPatch: () => void;
@@ -298,6 +319,8 @@ export function PullRequestFileSection({
             file={file}
             threads={threads}
             commitId={commitId}
+            comparisonKey={comparisonKey}
+            canLoadPatch={canLoadPatch}
             canComment={canComment}
             patchState={patchState}
             onLoadPatch={onLoadPatch}

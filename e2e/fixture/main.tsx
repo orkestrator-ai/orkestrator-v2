@@ -177,6 +177,9 @@ import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow"
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
+const PullRequestCodeFixture = lazy(async () => ({
+  default: (await import("./PullRequestCodeFixture")).PullRequestCodeFixture,
+}));
 const MarkdownEditorDiagramFixture = lazy(async () => ({
   default: (await import("./MarkdownEditorDiagramFixture")).MarkdownEditorDiagramFixture,
 }));
@@ -2384,6 +2387,13 @@ function fixtureForPath() {
         <DataSavingGatewayFixture />
       </Suspense>
     );
+  if (window.location.pathname === "/pull-request-code") {
+    return (
+      <Suspense fallback={null}>
+        <PullRequestCodeFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/diff-base") return <DiffBaseFixture />;
   if (window.location.pathname === "/coordinator-explanations")
     return <CoordinatorExplanationsFixture />;

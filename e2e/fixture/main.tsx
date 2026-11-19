@@ -1484,17 +1484,26 @@ function installDiffViewerFixture() {
     statusParam === "new" ? "new" : statusParam === "deleted" ? "deleted" : "modified";
   const filePath = diffViewerFixturePath;
   const baselineVersion = `${params.get("branch") ?? "main"}@${diffFixtureObjectId}`;
+  const staging = params.has("staging");
   const body = liveDiffFixtureBody({ path: filePath, status, baselineVersion });
 
   window.orkestrator = {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
       switch (command) {
         case "changes_resolve_live_detail":
-          assertFixtureArgs(command, args, { resourceKey: diffFixtureResourceKey, path: filePath });
+          assertFixtureArgs(command, args, {
+            resourceKey: diffFixtureResourceKey,
+            ...(args?.pathId ? { pathId: body.files[0]?.pathId } : { path: filePath }),
+          });
           return { kind: "identity", identity: body.identity } as T;
         case "changes_get_diff":
           assertFixtureArgs(command, args, { diffIdentityId: body.identity.id });
           return body as T;
+        case "changes_get_capabilities":
+          if (!staging) throw new Error("Staging disabled in this fixture");
+          return { hunkStaging: true } as T;
+        case "changes_stage_hunk":
+          return { kind: "applied", action: "stage", pathId: body.files[0]?.pathId } as T;
         case "changes_get_view":
           // The shared projection subscription; the viewer does not depend on it.
           return {
@@ -1512,21 +1521,28 @@ function installDiffViewerFixture() {
 function DiffViewerFixture() {
   const filePath = diffViewerFixturePath;
   const [viewFileCount, setViewFileCount] = useState(0);
+  const [secondActive, setSecondActive] = useState(false);
+  const twoTabs = new URLSearchParams(window.location.search).has("staging");
+  const target = {
+    kind: "live",
+    resourceKey: diffFixtureResourceKey,
+    path: filePath,
+    title: "frontend-state-audit.md",
+  } as const;
 
   return (
-    <main className="h-screen bg-background text-foreground">
-      <section data-testid="diff-viewer-pane" className="relative h-full w-full">
+    <main className="flex h-screen flex-col bg-background text-foreground">
+      {twoTabs && (
+        <button onClick={() => setSecondActive((active) => !active)}>Switch diff tab</button>
+      )}
+      <section data-testid="diff-viewer-pane" className="relative min-h-0 w-full flex-1">
         <DiffViewerTab
-          target={{
-            kind: "live",
-            resourceKey: diffFixtureResourceKey,
-            path: filePath,
-            title: "frontend-state-audit.md",
-          }}
+          target={target}
           filePath={filePath}
-          isActive
+          isActive={!secondActive}
           onSwitchToFileView={() => setViewFileCount((count) => count + 1)}
         />
+        {twoTabs && <DiffViewerTab target={target} filePath={filePath} isActive={secondActive} />}
       </section>
       <output data-testid="view-file-count" className="sr-only">
         {viewFileCount}

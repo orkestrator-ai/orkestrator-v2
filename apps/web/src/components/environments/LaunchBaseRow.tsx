@@ -23,7 +23,7 @@ export function LaunchBaseRow({
   if (state.status === "idle") return null;
   return (
     <div
-      className="border-b border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6"
+      className="shrink-0 border-t border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6"
       data-testid="launch-base-row"
     >
       <Label className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0">Base</Label>

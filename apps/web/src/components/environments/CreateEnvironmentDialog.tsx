@@ -636,7 +636,7 @@ export function CreateEnvironmentDialog({
   }, [agentType, config, fastMode, model, modelCatalog, projectId, reasoningEffort]);
   const [buildIntent, setBuildIntent] = useState<BuildIntent>("prompt");
   const loadLaunchBaseTip = useCallback(
-    (pid: string) => nodeBackend.getProjectBaseBranchTip(pid),
+    (pid: string, retry: boolean) => nodeBackend.getProjectBaseBranchTip(pid, retry),
     [nodeBackend],
   );
   // Refreshed while the dialog is open, so the start needs no fetch of its own.
@@ -1428,7 +1428,7 @@ export function CreateEnvironmentDialog({
     return true;
   }, [portMappings]);
 
-  const pinnedLaunchBase = launchBaseForCreate(launchBase.state);
+  const launchBaseRequest = launchBaseForCreate(launchBase.state);
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
@@ -1505,8 +1505,8 @@ export function CreateEnvironmentDialog({
           environmentType,
           environmentName: environmentName.trim(),
           ...(environmentType === "local" && worktreeBaseDir ? { worktreeBaseDir } : {}),
-          ...(environmentType === "local" && pinnedLaunchBase
-            ? { launchBase: pinnedLaunchBase }
+          ...(environmentType === "local" && launchBaseRequest
+            ? { launchBase: launchBaseRequest }
             : {}),
           launchAgent,
           agentType,
@@ -1546,7 +1546,7 @@ export function CreateEnvironmentDialog({
       environmentType,
       environmentName,
       worktreeBaseDir,
-      pinnedLaunchBase,
+      launchBaseRequest,
       launchAgent,
       agentType,
       buildIntent,
@@ -1875,12 +1875,6 @@ export function CreateEnvironmentDialog({
                   </div>
                 )}
               </div>
-
-              <LaunchBaseRow
-                state={launchBase.state}
-                onRefresh={launchBase.refresh}
-                disabled={isLoading}
-              />
             </TabsContent>
 
             {/* Network Access Mode - only for containerized environments */}
@@ -2261,6 +2255,11 @@ export function CreateEnvironmentDialog({
           </Tabs>
         </form>
 
+        <LaunchBaseRow
+          state={launchBase.state}
+          onRefresh={launchBase.refresh}
+          disabled={isLoading}
+        />
         <DialogFooter className="m-0 grid shrink-0 grid-cols-2 border-t border-divider px-4 py-2.5 sm:m-0 sm:flex sm:flex-row sm:px-6">
           <Button
             type="button"

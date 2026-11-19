@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:cdba18fab39d8b435ca0497fd4a7e13ac33de8ed4fc0a1ab99eb1bc4a6bce297",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentSettings": {},
+        "buildPipelineId": {},
+        "controlRequestFingerprint": {},
+        "controlRequestId": {},
+        "delegationBaseBranch": {},
+        "delegationBaseCommit": {},
+        "environmentType": {},
+        "initialAgentModel": {},
+        "initialAgentPlatform": {},
+        "initialConversationMode": {},
+        "initialFastMode": {},
+        "initialPrompt": {},
+        "initialReasoningEffort": {},
+        "name": {},
+        "namingPrompt": {},
+        "networkAccessMode": {},
+        "pendingAgentLaunch": {},
+        "portMappings": {},
+        "projectId": {
+          "type": "string"
+        },
+        "worktreeBaseBranch": {},
+        "worktreeBaseCommit": {},
+        "worktreeBaseDir": {}
+      },
+      "required": ["projectId"],
+      "type": "object"
+    }
+  }
+}

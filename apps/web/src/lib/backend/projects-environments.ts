@@ -268,11 +268,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     buildPipelineId?: string,
     /** Parent folder for a local environment's worktree; omitted uses the default. */
     worktreeBaseDir?: string,
-    /**
-     * The exact commit a local worktree starts from, resolved while the create
-     * dialog was open. The start then creates the worktree from it without
-     * fetching first (`lib/launch-base.ts`).
-     */
+    /** The dialog's pinned commit or a refresh still in progress. */
     launchBase?: EnvironmentLaunchBase,
   ): Promise<Environment> {
     return environments().createEnvironment({
@@ -286,10 +282,9 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
       ...(buildPipelineId ? { buildPipelineId } : {}),
       ...(worktreeBaseDir ? { worktreeBaseDir } : {}),
       ...(launchBase
-        ? {
-            delegationBaseBranch: launchBase.branch,
-            delegationBaseCommit: launchBase.commit,
-          }
+        ? "pending" in launchBase
+          ? { worktreeBaseBranch: null }
+          : { worktreeBaseBranch: launchBase.branch, worktreeBaseCommit: launchBase.commit }
         : {}),
     });
   }

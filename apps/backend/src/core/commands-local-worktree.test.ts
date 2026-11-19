@@ -20,6 +20,7 @@ import { createEnvironment } from "./storage-shared-core.js";
 import type { StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
+import * as remoteGit from "./git/noninteractive-env.js";
 
 const tempDirectories: string[] = [];
 
@@ -246,6 +247,18 @@ test("a pinned start commit creates the worktree without contacting the remote",
   await expect(
     createLocalWorktree(project, "app", "unpinned", "main", [], trees),
   ).rejects.toThrow();
+});
+
+test("a missing pin reports the commit without trying to fetch it as a branch", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worktree-lost-pin-"));
+  tempDirectories.push(root);
+  const project = await initProject(root);
+  const missing = "f".repeat(40);
+  const remote = spyOn(remoteGit, "runRemoteGit");
+  await expect(
+    createLocalWorktree(project, "app", "missing-pin", missing, [], path.join(root, "trees")),
+  ).rejects.toThrow(`Starting commit ${missing} is unavailable`);
+  expect(remote).not.toHaveBeenCalled();
 });
 
 test("an opencode.json named by files-to-copy reaches the worktree, untracked or only staged", async () => {

@@ -12,11 +12,14 @@ import type { Environment } from "@/types";
 export function EnvironmentStartingCommit({
   environment,
 }: {
-  environment: Pick<Environment, "createdFromCommit" | "delegationBaseBranch" | "projectHome">;
+  environment: Pick<
+    Environment,
+    "createdFromCommit" | "worktreeBaseBranch" | "delegationBaseBranch" | "projectHome"
+  >;
 }) {
   const commit = environment.createdFromCommit?.trim();
   if (!commit || environment.projectHome) return null;
-  const branch = environment.delegationBaseBranch?.trim();
+  const branch = (environment.worktreeBaseBranch ?? environment.delegationBaseBranch)?.trim();
   return (
     <div className="space-y-2" data-testid="environment-starting-commit">
       <Label>Started from</Label>

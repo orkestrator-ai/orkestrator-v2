@@ -7,6 +7,7 @@ import {
   type GitFetchScheduler,
   type GitFileChange,
   HARDENED_GIT_CONFIG,
+  isMissingRemoteRefFailure,
   neutralizeGitFilters,
   parseGitDiffSummary,
   parseGitFileChanges,
@@ -1067,13 +1068,6 @@ async function hasOriginRemote(projectPath: string): Promise<boolean> {
   }).then(
     () => true,
     () => false,
-  );
-}
-
-function isMissingRemoteRefFailure(error: unknown): boolean {
-  if (!(error instanceof CommandFailedError) || error.timedOut) return false;
-  return /couldn't find remote ref|could not find remote ref/i.test(
-    `${error.stderr}\n${error.message}`,
   );
 }
 

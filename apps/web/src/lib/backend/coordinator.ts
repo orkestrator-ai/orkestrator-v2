@@ -137,8 +137,11 @@ export function createCoordinatorApi(client: BackendClient) {
    * exact commit a new environment would start from. A failed fetch still
    * answers from the last-fetched ref, with `fetchError` set.
    */
-  const getProjectBaseBranchTip = (projectId: string): Promise<ProjectBaseBranchTip> =>
-    domain().get_project_base_branch_tip({ projectId });
+  const getProjectBaseBranchTip = (
+    projectId: string,
+    retry = false,
+  ): Promise<ProjectBaseBranchTip> =>
+    domain().get_project_base_branch_tip({ projectId, ...(retry ? { retry } : {}) });
 
   const syncProjectGit = (projectId: string): Promise<ProjectGitStatus> =>
     domain().sync_project_git({ projectId });

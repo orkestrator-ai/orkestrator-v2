@@ -10,6 +10,7 @@ const tip = (commit: string): ProjectBaseBranchTip => ({
   commit,
   ref: "origin/main",
   fetched: true,
+  launchEligible: true,
   fetchedAt: "2026-11-19T10:00:00.000Z",
 });
 
@@ -34,7 +35,7 @@ describe("useLaunchBase", () => {
     rerender({ enabled: true });
     expect(result.current.state).toEqual({ status: "resolving" });
     await waitFor(() => expect(result.current.state.status).toBe("ready"));
-    expect(load).toHaveBeenCalledWith("p1");
+    expect(load).toHaveBeenCalledWith("p1", false);
   });
 
   test("reads the base again every time it becomes wanted, never reusing an old answer", async () => {
@@ -83,5 +84,37 @@ describe("useLaunchBase", () => {
     act(() => result.current.refresh());
     expect(result.current.state).toEqual({ status: "resolving" });
     await waitFor(() => expect(result.current.state).toMatchObject({ commit: "d".repeat(40) }));
+    expect(load).toHaveBeenLastCalledWith("p1", true);
+  });
+
+  test("returning to a project and switching loaders both invalidate the displayed commit", async () => {
+    const firstA = "a".repeat(40);
+    const secondA = deferred<ProjectBaseBranchTip>();
+    const onB = deferred<ProjectBaseBranchTip>();
+    const replacement = deferred<ProjectBaseBranchTip>();
+    const load = mock<LoadLaunchBaseTip>()
+      .mockResolvedValueOnce(tip(firstA))
+      .mockReturnValueOnce(onB.promise)
+      .mockReturnValueOnce(secondA.promise);
+    const nextLoad = mock<LoadLaunchBaseTip>(() => replacement.promise);
+    const { result, rerender } = renderHook(
+      ({ projectId, load }: { projectId: string; load: LoadLaunchBaseTip }) =>
+        useLaunchBase({ enabled: true, projectId, load }),
+      { initialProps: { projectId: "a", load } },
+    );
+    await waitFor(() => expect(result.current.state).toMatchObject({ commit: firstA }));
+    rerender({ projectId: "b", load });
+    await waitFor(() => expect(load).toHaveBeenLastCalledWith("b", false));
+    rerender({ projectId: "a", load });
+    expect(result.current.state).toEqual({ status: "resolving" });
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+    await act(async () => onB.resolve(tip("b".repeat(40))));
+    expect(result.current.state).toEqual({ status: "resolving" });
+    await act(async () => secondA.resolve(tip("c".repeat(40))));
+    expect(result.current.state).toMatchObject({ commit: "c".repeat(40) });
+    rerender({ projectId: "a", load: nextLoad });
+    expect(result.current.state).toEqual({ status: "resolving" });
+    await act(async () => replacement.resolve(tip("d".repeat(40))));
+    expect(result.current.state).toMatchObject({ commit: "d".repeat(40) });
   });
 });

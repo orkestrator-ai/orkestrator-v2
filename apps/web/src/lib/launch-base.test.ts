@@ -10,6 +10,7 @@ describe("classifyLaunchBaseTip", () => {
       commit: COMMIT,
       ref: "origin/main",
       fetched: true,
+      launchEligible: true,
       fetchedAt: "2026-11-19T10:00:00.000Z",
     });
     expect(state).toEqual({
@@ -30,6 +31,7 @@ describe("classifyLaunchBaseTip", () => {
         commit: COMMIT,
         ref: "origin/main",
         fetched: false,
+        launchEligible: true,
         fetchedAt: "2026-11-19T10:00:00.000Z",
       }),
     ).toMatchObject({ status: "ready", freshness: "fresh" });
@@ -41,6 +43,7 @@ describe("classifyLaunchBaseTip", () => {
       commit: COMMIT.toUpperCase(),
       ref: "origin/main",
       fetched: false,
+      launchEligible: true,
       fetchedAt: "2026-11-19T09:00:00.000Z",
       fetchError: "Could not resolve host",
     });
@@ -62,6 +65,7 @@ describe("classifyLaunchBaseTip", () => {
       commit: COMMIT,
       ref: "main",
       fetched: false,
+      launchEligible: true,
     });
     expect(state).toMatchObject({ status: "ready", freshness: "local", ref: "main" });
     expect(launchBaseForCreate(state)).toEqual({ branch: "main", commit: COMMIT });
@@ -75,6 +79,7 @@ describe("classifyLaunchBaseTip", () => {
       commit: COMMIT,
       ref: "main",
       fetched: false,
+      launchEligible: false,
       fetchError: "couldn't find remote ref main",
     });
     expect(state.status).toBe("unavailable");
@@ -94,14 +99,33 @@ describe("classifyLaunchBaseTip", () => {
       reason: "Base branch nowhere was not found locally or on origin",
     });
     expect(
-      classifyLaunchBaseTip({ branch: "main", commit: "abc123", ref: "origin/main" }).status,
+      classifyLaunchBaseTip({
+        branch: "main",
+        commit: "abc123",
+        ref: "origin/main",
+        launchEligible: true,
+      }).status,
     ).toBe("unavailable");
     expect(classifyLaunchBaseTip(null).status).toBe("unavailable");
   });
 
-  test("only a resolved base is sent with the create", () => {
+  test("local tips without eligibility from the backend cannot be pinned", () => {
+    for (const launchEligible of [false, undefined]) {
+      const state = classifyLaunchBaseTip({
+        branch: "main",
+        commit: COMMIT,
+        ref: "main",
+        fetched: false,
+        launchEligible,
+      });
+      expect(state.status).toBe("unavailable");
+      expect(launchBaseForCreate(state)).toBeUndefined();
+    }
+  });
+
+  test("resolving submits a pending reference and unavailable falls back to ordinary start", () => {
     expect(launchBaseForCreate({ status: "idle" })).toBeUndefined();
-    expect(launchBaseForCreate({ status: "resolving" })).toBeUndefined();
+    expect(launchBaseForCreate({ status: "resolving" })).toEqual({ pending: true });
     expect(launchBaseForCreate({ status: "unavailable", reason: "x" })).toBeUndefined();
   });
 });

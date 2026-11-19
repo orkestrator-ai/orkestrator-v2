@@ -180,6 +180,7 @@ export const ProjectBaseBranchTipSchema = openRecord({
   fetchedAt: optionalString,
   fetchError: optionalString,
   unavailableReason: optionalString,
+  launchEligible: optionalBoolean,
 });
 
 /** `ProjectBaseContainment`: `{ contained: true }` or `{ contained: false, reason }`. */

@@ -172,6 +172,7 @@ import {
 import {
   resolveRemoteWorktreeStartPoint,
   gitRefExists,
+  isImmutableCommitRef,
   enableGitScanCaches,
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
@@ -1740,11 +1741,24 @@ export async function startEnvironmentOnce(
       );
       const seedRoot = seedFilesDir(storage.getDataDir(), environment.id);
       const worktreeStartedAt = performance.now();
+      const baseBranch = environment.worktreeBaseBranch ?? repoConfig.defaultBranch;
+      let baseCommit = environment.worktreeBaseCommit ?? environment.delegationBaseCommit;
+      let launchBaseResolveMs = 0;
+      if (environment.worktreeBaseBranch && !baseCommit && context.projectGit) {
+        // Fast Create leaves this read to the backend. It will join the dialog's
+        // fetch (or reuse its result if it finished while creating the record).
+        const tip = await context.projectGit.baseBranchTip(project.id, baseBranch);
+        launchBaseResolveMs = performance.now() - worktreeStartedAt;
+        if (tip.launchEligible && tip.commit && isImmutableCommitRef(tip.commit)) {
+          baseCommit = tip.commit;
+          await storage.updateEnvironment(environment.id, { worktreeBaseCommit: baseCommit });
+        }
+      }
       const worktree = await createLocalWorktree(
         project.localPath,
         project.name,
         environment.branch,
-        environment.delegationBaseCommit ?? repoConfig.defaultBranch,
+        baseCommit ?? baseBranch,
         repoConfig.filesToCopy,
         worktreeBaseDir,
         (await pathExists(seedRoot)) ? seedRoot : undefined,
@@ -1752,14 +1766,7 @@ export async function startEnvironmentOnce(
         project.gitUrl === project.localPath,
         (await storage.loadConfig()).global.envFilePatterns,
       );
-      // Time to a usable worktree, the measure the pinned launch base shortens.
-      // Content-free: no path, branch or commit.
-      log.info("worktree.created", {
-        environmentId: environment.id,
-        startPoint: worktree.startPointSource,
-        resolveMs: worktree.startPointResolveMs,
-        durationMs: Math.round(performance.now() - worktreeStartedAt),
-      });
+      const durationMs = Math.round(performance.now() - worktreeStartedAt);
       rememberWorktreeSeedRefusals(environment.id, worktree.envFileRefusals);
       // Seed files are copied once; the staging copy is not kept.
       await fs.rm(seedRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -1773,11 +1780,23 @@ export async function startEnvironmentOnce(
         worktreeBaseDir,
         branch: worktree.branch,
         createdFromCommit: worktree.createdFromCommit,
+        ...(environment.worktreeBaseBranch
+          ? { worktreeBaseCommit: worktree.createdFromCommit }
+          : {}),
         diffBaseOverride: null,
         status: "running",
         lifecycleError: null,
       });
       unpersistedWorktree = null;
+      // Includes branch allocation before the create response and the durable
+      // running transition. Content-free: no path, branch or commit.
+      log.info("worktree.created", {
+        environmentId: environment.id,
+        startPoint: worktree.startPointSource,
+        resolveMs: Math.round(launchBaseResolveMs + worktree.startPointResolveMs),
+        durationMs,
+        creationToWorktreeReadyMs: Math.max(0, Date.now() - Date.parse(environment.createdAt)),
+      });
       const result = await startEnvironmentSetup(updated, context);
       schedulePendingRename(environment.id, context);
       await context.runtime.diffStats.sync(context);
@@ -2404,8 +2423,12 @@ export async function createLocalWorktree(
   // A pinned commit (chosen while the creation dialog was open, or by a
   // coordinator) is already in this repository, so the start needs no fetch:
   // the remote round trip, and its long deadline, stay off the blocking path.
-  const pinned =
-    /^[0-9a-f]{40}$/i.test(requestedBase) && (await gitRefExists(projectPath, requestedBase));
+  const pinned = isImmutableCommitRef(requestedBase);
+  if (pinned && !(await gitRefExists(projectPath, requestedBase))) {
+    throw new Error(
+      `Starting commit ${requestedBase} is unavailable in the project checkout. Restore that commit or create a new environment from a refreshed base.`,
+    );
+  }
   const startPoint = pinned
     ? requestedBase
     : await resolveRemoteWorktreeStartPoint(projectPath, requestedBase, { localOnly });

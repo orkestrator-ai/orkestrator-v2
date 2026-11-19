@@ -2,7 +2,7 @@
 
 A local-worktree environment's start fetches the base branch from the
 project checkout's `origin` (`resolveRemoteWorktreeStartPoint`) before it
-creates the worktree, unless the create request pinned an exact start commit
+creates the worktree, unless the launch resolved an exact start commit
 (the create dialog does, see
 [worktree-launch-base.md](worktree-launch-base.md)); a pinned start makes no
 fetch and cannot fail in the ways below. When that fetch cannot reach the remote, the start

@@ -355,6 +355,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
       commit,
       ref: "origin/main",
       fetched: true,
+      launchEligible: true,
       fetchedAt: new Date().toISOString(),
     }));
     try {
@@ -377,7 +378,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
       await waitFor(() =>
         expect(screen.getByTestId("launch-base-row").textContent).toContain(commit),
       );
-      expect(readTip).toHaveBeenCalledWith("project-1");
+      expect(readTip).toHaveBeenCalledWith("project-1", false);
 
       fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
       await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
@@ -392,12 +393,39 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     }
   });
 
+  test("submitting during the base refresh carries the pending request to start", async () => {
+    const readTip = spyOn(backend, "getProjectBaseBranchTip").mockImplementation(
+      () => new Promise(() => {}),
+    );
+    try {
+      const onCreate = mock(async (_options: ClaudeOptions) => true);
+      renderInAppCommandScope(
+        <DockerAvailabilityProvider available>
+          <CreateEnvironmentDialog
+            open
+            onOpenChange={() => {}}
+            onCreate={onCreate}
+            projectId="project-1"
+          />
+        </DockerAvailabilityProvider>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Local" }));
+      await waitFor(() => expect(readTip).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      expect(onCreate.mock.calls[0]?.[0].launchBase).toEqual({ pending: true });
+    } finally {
+      readTip.mockRestore();
+    }
+  });
+
   test("a container create carries no pinned base", async () => {
     const readTip = spyOn(backend, "getProjectBaseBranchTip").mockImplementation(async () => ({
       branch: "main",
       commit: "a".repeat(40),
       ref: "origin/main",
       fetched: true,
+      launchEligible: true,
     }));
     try {
       const onCreate = mock(async (_options: ClaudeOptions) => true);

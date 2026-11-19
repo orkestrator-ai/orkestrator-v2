@@ -28,8 +28,9 @@ describe("createEnvironment", () => {
       .catch(() => undefined);
 
     const sent = sentArgs(invokeRaw);
-    expect(sent).toContain('"delegationBaseBranch":"main"');
-    expect(sent).toContain(`"delegationBaseCommit":"${commit}"`);
+    expect(sent).toContain('"worktreeBaseBranch":"main"');
+    expect(sent).toContain(`"worktreeBaseCommit":"${commit}"`);
+    expect(sent).not.toContain("delegationBase");
   });
 
   test("an unpinned create sends no base, so the start resolves it", async () => {
@@ -39,6 +40,6 @@ describe("createEnvironment", () => {
     await api.createEnvironment("project-1").catch(() => undefined);
 
     expect(invokeRaw).toHaveBeenCalled();
-    expect(sentArgs(invokeRaw)).not.toContain("delegationBase");
+    expect(sentArgs(invokeRaw)).not.toContain("worktreeBase");
   });
 });

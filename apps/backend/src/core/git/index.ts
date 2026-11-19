@@ -104,7 +104,7 @@ export {
   type GitHubIssueStatus,
   type GitHubRepositoryRef,
 } from "./github.js";
-export { runRemoteGit } from "./noninteractive-env.js";
+export { isMissingRemoteRefFailure, runRemoteGit } from "./noninteractive-env.js";
 export { classifyPrDetectionFailure } from "./pr-monitor-policy.js";
 export { type PrDetection, type PrMonitorKanbanTask, type PrMonitorTarget } from "./pr-monitor.js";
 export {

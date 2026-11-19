@@ -8,7 +8,10 @@ import {
 
 const log = createLogger("web.environment");
 
-export type LoadLaunchBaseTip = (projectId: string) => Promise<ProjectBaseBranchTip>;
+export type LoadLaunchBaseTip = (
+  projectId: string,
+  retry: boolean,
+) => Promise<ProjectBaseBranchTip>;
 
 /**
  * Refreshes and resolves the base a new local environment starts from while
@@ -28,33 +31,31 @@ export function useLaunchBase({
   projectId: string | null;
   load: LoadLaunchBaseTip;
 }): { state: LaunchBaseState; refresh: () => void } {
-  const [generation, setGeneration] = useState(0);
-  const [wasEnabled, setWasEnabled] = useState(enabled);
-  // Adjusting state while rendering, React's pattern for a prop change: each
-  // time the base becomes wanted again it is a new read, never a cached one.
-  if (enabled !== wasEnabled) {
-    setWasEnabled(enabled);
-    if (enabled) setGeneration((value) => value + 1);
+  const [request, setRequest] = useState({ enabled, projectId, load, retry: false });
+  if (enabled !== request.enabled || projectId !== request.projectId || load !== request.load) {
+    setRequest({ enabled, projectId, load, retry: false });
   }
-  const [result, setResult] = useState<{ key: string; state: LaunchBaseState } | null>(null);
-  const key = enabled && projectId ? `${projectId}\u0000${generation}` : null;
+  const [result, setResult] = useState<{ request: typeof request; state: LaunchBaseState } | null>(
+    null,
+  );
 
   useEffect(() => {
-    if (!key || !projectId) return;
+    const { enabled, projectId, load, retry } = request;
+    if (!enabled || !projectId) return;
     let current = true;
     // A load that throws synchronously (an older node's backend without the
     // read) is an unavailable base like any rejected one.
     Promise.resolve()
-      .then(() => load(projectId))
+      .then(() => load(projectId, retry))
       .then(
         (tip) => {
-          if (current) setResult({ key, state: classifyLaunchBaseTip(tip) });
+          if (current) setResult({ request, state: classifyLaunchBaseTip(tip) });
         },
         (error: unknown) => {
           log.warn("launch-base.unavailable", { error: formatLogError(error) });
           if (current) {
             setResult({
-              key,
+              request,
               state: {
                 status: "unavailable",
                 reason: "The base could not be read; it resolves when the environment starts",
@@ -66,13 +67,14 @@ export function useLaunchBase({
     return () => {
       current = false;
     };
-  }, [key, projectId, load]);
+  }, [request]);
 
-  const refresh = useCallback(() => setGeneration((value) => value + 1), []);
-  const state: LaunchBaseState = !key
-    ? { status: "idle" }
-    : result?.key === key
-      ? result.state
-      : { status: "resolving" };
+  const refresh = useCallback(() => setRequest((current) => ({ ...current, retry: true })), []);
+  const state: LaunchBaseState =
+    !enabled || !projectId
+      ? { status: "idle" }
+      : result?.request === request
+        ? result.state
+        : { status: "resolving" };
   return { state, refresh };
 }

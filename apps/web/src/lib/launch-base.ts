@@ -21,13 +21,12 @@ export interface ProjectBaseBranchTip {
   fetchedAt?: string;
   fetchError?: string;
   unavailableReason?: string;
+  /** Older backends cannot opt a tip into the dialog's pinned create. */
+  launchEligible?: boolean;
 }
 
-/** A pinned base: the create request's `delegationBaseBranch`/`delegationBaseCommit`. */
-export interface EnvironmentLaunchBase {
-  branch: string;
-  commit: string;
-}
+/** The shown commit, or a request for first start to finish the same base refresh. */
+export type EnvironmentLaunchBase = { branch: string; commit: string } | { pending: true };
 
 /**
  * How current a resolved base is:
@@ -59,10 +58,14 @@ const FULL_COMMIT = /^[0-9a-f]{40}$/i;
 export function classifyLaunchBaseTip(tip: ProjectBaseBranchTip | null): LaunchBaseState {
   const branch = typeof tip?.branch === "string" ? tip.branch.trim() : "";
   const commit = typeof tip?.commit === "string" ? tip.commit.trim().toLowerCase() : "";
-  if (!tip || !branch || !FULL_COMMIT.test(commit)) {
+  if (tip?.launchEligible !== true || !branch || !FULL_COMMIT.test(commit)) {
     return {
       status: "unavailable",
-      reason: tip?.unavailableReason?.trim() || "The base branch could not be resolved",
+      reason:
+        tip?.unavailableReason?.trim() ||
+        (tip?.fetchError && branch
+          ? `origin/${branch} could not be read. The base resolves when the environment starts`
+          : "The base branch could not be resolved"),
     };
   }
   const fetchError = tip.fetchError?.trim() || undefined;
@@ -80,20 +83,15 @@ export function classifyLaunchBaseTip(tip: ProjectBaseBranchTip | null): LaunchB
       ...(fetchError ? { fetchError } : {}),
     };
   }
-  // A local branch answers for a project without a remote. When the remote
-  // exists but could not supply the branch, pinning the local branch would
-  // start from commits that may never have been pushed; the start resolves it
-  // instead, as it always has, and reports what is wrong.
-  if (fetchError) {
-    return {
-      status: "unavailable",
-      reason: `${remoteRef} could not be read; the base resolves when the environment starts`,
-    };
+  if (tip.ref === branch && !fetchError) {
+    return { status: "ready", freshness: "local", branch, ref: branch, commit };
   }
-  return { status: "ready", freshness: "local", branch, ref: branch, commit };
+  return { status: "unavailable", reason: "The base branch could not be resolved" };
 }
 
-/** The pin a create request carries, or undefined to let the start resolve it. */
+/** A definitive unavailable result uses the usual unpinned start. */
 export function launchBaseForCreate(state: LaunchBaseState): EnvironmentLaunchBase | undefined {
-  return state.status === "ready" ? { branch: state.branch, commit: state.commit } : undefined;
+  if (state.status === "ready") return { branch: state.branch, commit: state.commit };
+  if (state.status === "resolving") return { pending: true };
+  return undefined;
 }

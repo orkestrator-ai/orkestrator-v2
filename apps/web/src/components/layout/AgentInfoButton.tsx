@@ -1047,6 +1047,14 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   planWindows={planWindows}
                   accountLabel={usageAccount?.label}
                   accountEmail={usageAccount?.identity.email}
+                  continuation={{
+                    provider: activeSession.provider,
+                    running: currentSessionLoading,
+                    canCompact,
+                    resolvedModelId: neutralProjection?.composer?.models.find(
+                      (model) => model.id === modelId,
+                    )?.resolvedModel,
+                  }}
                 />
               </div>
 

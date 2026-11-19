@@ -138,6 +138,7 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
   const usage: NativeAgentContextUsage = {
     usedTokens,
     ...(raw.occupancyUnknown === true ? { occupancyUnknown: true } : {}),
+    ...(raw.contextCompacted === true ? { contextCompacted: true } : {}),
     ...(maximumTokens === undefined ? {} : { maximumTokens }),
     ...(percentage === undefined ? {} : { percentage }),
   };
@@ -257,9 +258,10 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
       if (modelId !== undefined) normalized.modelId = modelId;
       // Re-serialized rather than copied, so an unparseable value is dropped
       // here instead of reaching a consumer that buckets usage by it.
-      if (typeof turn.at === "string") {
-        const at = new Date(turn.at);
-        if (!Number.isNaN(at.getTime())) normalized.at = at.toISOString();
+      for (const key of ["at", "cacheAccessNotBefore"] as const) {
+        if (typeof turn[key] !== "string") continue;
+        const at = new Date(turn[key]);
+        if (!Number.isNaN(at.getTime())) normalized[key] = at.toISOString();
       }
       if (isNativeAgentPricingTier(turn.pricingTier)) normalized.pricingTier = turn.pricingTier;
       return [normalized];

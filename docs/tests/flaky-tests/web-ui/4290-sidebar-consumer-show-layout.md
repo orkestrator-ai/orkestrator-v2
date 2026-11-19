@@ -108,3 +108,13 @@ Verification (same profile):
 - `bun test --cwd apps/web ./src/components/layout/useSidebarPanelMotion.test.tsx`:
   23 pass. `e2e/SidebarMotion.spec.ts` (component fixture, two workers)
   passed. Web and e2e typechecks passed.
+
+A viewport resize can replace the transition within the
+same mode change. The hook now checks for a live replacement after completion
+or cancellation. It stops checking when a drag releases the pins explicitly
+or a later mode change supersedes the wait. The same-generation regression
+failed on the previous hook and passed with the fix. Focused tests also cover
+cancellation without a replacement and manual release during either wait.
+The Chromium fixture resized the viewport from 1024 px to 390 px during
+the wait and verified that the content stayed pinned until the replacement
+ended. The real-stack terminal and editor spec passed on an isolated profile.

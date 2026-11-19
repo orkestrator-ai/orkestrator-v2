@@ -100,3 +100,10 @@
   both interpreters, through the 2 s attempt). Stress without the injection:
   `mise run test:logged -- --name fp-stress -- bun scripts/test-under-contention.ts --burners 4 -- bun --cwd=apps/backend test ./src/core/review-worktree-fingerprint.test.ts --rerun-each=5`
   → PASS (97.3 s; macOS, burners unpinned).
+
+Each attempt now gives the fake Git its own PID record. The
+fixture writes the pair to a temporary file and renames it into place, so
+expiry between those steps leaves the final record absent and allows a
+retry. The owning test file passed. A separate probe held the first attempt
+after writing its temporary file and verified that both Bun and Node retried,
+then confirmed that the two processes from the successful attempt stopped.

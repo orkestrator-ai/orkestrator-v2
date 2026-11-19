@@ -274,7 +274,6 @@ for (const interpreter of INTERPRETERS) {
     `stops a blocked git and its descendant at its budget (${interpreter})`,
     async () => {
       const root = await fixture();
-      const pidFile = path.join(root, ".git", "status-pid");
       // Keep the fake Git alive as the group leader, with a separate long-lived
       // child. Killing just Git must fail this regression test. Both processes
       // are bounded even if cleanup regresses. The probe's first Git call is
@@ -282,7 +281,16 @@ for (const interpreter of INTERPRETERS) {
       // budget, so a short budget still finds it running.
       const bin = await fakeGitBin(
         root,
-        `case " $* " in *" --show-toplevel "*) sleep 30 & child=$!; printf '%s\\n' "$$" "$child" > '${pidFile}'; wait "$child"; exit;; esac\nexec "$REAL_GIT" "$@"`,
+        `case " $* " in
+  *" --show-toplevel "*)
+    sleep 30 &
+    child=$!
+    printf '%s\\n' "$$" "$child" > "$STATUS_PID_FILE.tmp" &&
+      mv "$STATUS_PID_FILE.tmp" "$STATUS_PID_FILE"
+    wait "$child"
+    exit;;
+esac
+exec "$REAL_GIT" "$@"`,
       );
       // The budget is armed when the fake Git is spawned, not when its shell
       // has started. On a loaded host the budget can fire before the shell
@@ -291,7 +299,8 @@ for (const interpreter of INTERPRETERS) {
       // as a timeout; the next attempt gives the shell a longer budget.
       let pidText: string | null = null;
       for (const budgetMs of [500, 2_000, 5_000]) {
-        await fs.rm(pidFile, { force: true });
+        // Each attempt reads only its own atomically published pair.
+        const pidFile = path.join(root, ".git", `status-pid-${budgetMs}`);
         const started = Date.now();
         const error = await runCommand(
           interpreter,
@@ -299,7 +308,7 @@ for (const interpreter of INTERPRETERS) {
           {
             cwd: root,
             timeoutMs: budgetMs + 10_000,
-            env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+            env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STATUS_PID_FILE: pidFile },
           },
         ).then(
           () => null,

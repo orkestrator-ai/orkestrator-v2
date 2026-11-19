@@ -95,8 +95,19 @@ test("discards the partial output of an oversized read whose unzip still exits 0
   const original = process.env.PATH;
   process.env.PATH = `${bin}${path.delimiter}${original ?? ""}`;
   try {
+    const overflow = spawnSync(
+      "unzip",
+      ["-p", path.join(root, "oversized", "trace.zip"), "*.trace"],
+      { encoding: "utf8", maxBuffer: 1024 },
+    );
+    expect(overflow.status).toBe(0);
+    expect(overflow.error).toMatchObject({ code: "ENOBUFS" });
+    expect(overflow.stdout).toContain(aborted);
     expect(networkChurnReport(root, 1024)).toBeNull();
   } finally {
-    process.env.PATH = original;
+    if (original === undefined) delete process.env.PATH;
+    else process.env.PATH = original;
   }
+  expect(process.env.PATH).toBe(original);
+  expect(spawnSync("zip", ["-v"]).status).toBe(0);
 });

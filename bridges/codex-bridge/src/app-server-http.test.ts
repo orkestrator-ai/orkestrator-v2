@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, test, expect } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { bridgeDiagnosticPayloads } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
+import { UNMAPPED_PID } from "@orkestrator/protocol/testing/fake-pids";
 
 const fakeCodex = join(import.meta.dir, "testing", "fake-codex-app-server.mjs");
 const harness = join(import.meta.dir, "testing", "http-flag-harness.ts");
@@ -23,6 +25,7 @@ interface StepResult {
 
 interface HarnessOutput {
   engine?: string;
+  parentPid?: number;
   results?: StepResult[];
   error?: string;
 }
@@ -42,7 +45,7 @@ afterEach(() => {
   }
 });
 
-async function run(env: Record<string, string>): Promise<HarnessOutput> {
+async function run(env: Record<string, string>) {
   const proc = Bun.spawn(["bun", harness], {
     cwd: workspace,
     env: {
@@ -53,12 +56,14 @@ async function run(env: Record<string, string>): Promise<HarnessOutput> {
       CWD: workspace,
       CODEX_BRIDGE_TOKEN: "http-harness-token",
       FAKE_CODEX_SCRIPT: "auto-complete",
+      ORKESTRATOR_BRIDGE_LOG_RELAY: "0",
+      ORKESTRATOR_LOG_FORMAT: "text",
+      ...env,
       // The harness is this process's child, so this process is the parent it
       // watches. Inheriting the variable (an agent shell carries the backend's
       // PID) would let an unrelated process's exit drain the bridge mid-run:
       // exit 0, no result line, "app-server is stopped" (flake 0233).
       ORKESTRATOR_PARENT_PID: String(process.pid),
-      ...env,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -72,18 +77,15 @@ async function run(env: Record<string, string>): Promise<HarnessOutput> {
 
   // The result is the last JSON line; bridge diagnostics (`[bridge-diagnostics] ...`,
   // printed when ORKESTRATOR_BRIDGE_DEBUG is set) can share stdout with it.
-  const line = stdout
-    .trim()
-    .split("\n")
-    .filter((entry) => entry.startsWith("{"))
-    .at(-1);
+  const lines = stdout.trim().split("\n");
+  const line = lines.findLast((entry) => entry.startsWith("{"));
   if (!line) {
     // Exit 0 with no result is the bridge's own SIGTERM/SIGINT or parent-exit
     // drain: something outside the test stopped the harness. The harness says
     // which signal on stderr.
     throw new Error(`harness produced no output (exit ${code}):\n${stderr.slice(0, 3_000)}`);
   }
-  return JSON.parse(line) as HarnessOutput;
+  return { ...(JSON.parse(line) as HarnessOutput), diagnostics: bridgeDiagnosticPayloads(lines) };
 }
 
 function step(output: HarnessOutput, name: string): StepResult {
@@ -94,9 +96,18 @@ function step(output: HarnessOutput, name: string): StepResult {
 
 describe("app-server engine over HTTP", () => {
   test("serves the whole session lifecycle through the real routes", async () => {
-    const output = await run({ CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS: "15000" });
+    const output = await run({
+      CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS: "15000",
+      ORKESTRATOR_PARENT_PID: String(UNMAPPED_PID),
+      ORKESTRATOR_BRIDGE_DEBUG: "1",
+      ORKESTRATOR_LOG_LEVEL: "info,bridge.diagnostics=debug",
+    });
     expect(output.error).toBeUndefined();
     expect(output.engine).toBe("app-server");
+    expect(output.parentPid).toBe(process.pid);
+    expect(output.diagnostics).toContainEqual(
+      expect.objectContaining({ bridge: "codex", event: "send-started" }),
+    );
 
     // Health reflects the live child, including the version it reported.
     const health = step(output, "health");

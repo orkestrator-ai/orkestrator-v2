@@ -56,3 +56,8 @@ shows whether the handshake test fails independently.
 - **Verification:** the same dead-parent command with the fix and
   `--rerun-each=3` passed (`forkb-0233-fixed`, 9.8 s); the `SIGTERM` probe now
   prints the signal line before the bridge's own `engine.start-failed` line.
+
+The HTTP lifecycle test now explicitly supplies an unmapped
+parent PID and enables bridge diagnostics. It verifies that the harness
+received the spawning test's actual PID and that bridge diagnostics shared
+stdout with the result. The owning test file passed.

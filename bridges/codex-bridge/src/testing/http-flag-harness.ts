@@ -11,6 +11,7 @@
  */
 // Must precede ../index.js, which removes the token from process.env.
 import { capturedCodexBridgeToken } from "./captured-bridge-token.js";
+import { PARENT_PID_ENV, parseParentPid } from "@orkestrator/protocol/parent-watchdog";
 import { app } from "../index.js";
 import { resolveHttpHarnessReadyProbeConfig } from "./http-flag-harness-config.js";
 
@@ -128,7 +129,8 @@ async function main(): Promise<void> {
 
   await record("close", await request(`/session/${sessionId}/close`, { method: "POST" }));
 
-  process.stdout.write(`${JSON.stringify({ engine: "app-server", results })}\n`);
+  const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
+  process.stdout.write(`${JSON.stringify({ engine: "app-server", parentPid, results })}\n`);
   process.exit(0);
 }
 

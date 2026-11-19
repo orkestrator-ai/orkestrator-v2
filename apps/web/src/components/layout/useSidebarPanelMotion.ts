@@ -29,7 +29,9 @@ function unfinishedWidthTransitions(element: HTMLElement | null): Animation[] {
     .filter(
       (animation) =>
         (animation as Animation & { transitionProperty?: string }).transitionProperty ===
-          "flex-grow" && animation.playState !== "finished",
+          "flex-grow" &&
+        animation.playState !== "finished" &&
+        animation.playState !== "idle",
     );
 }
 
@@ -120,24 +122,24 @@ export function useSidebarPanelMotion(input: {
     const generation = ++motionGeneration.current;
     // Release the pins once the transition has run: a fixed time after it
     // starts, and never while the panel is still moving.
+    const settleWhenStill = () => {
+      if (motionGeneration.current !== generation || settleTimer.current === null) return;
+      if (restorePending.current) {
+        settleAfterRestore.current = armSettle;
+        return;
+      }
+      const running = unfinishedWidthTransitions(sidebarElement);
+      if (running.length === 0) {
+        settle();
+        return;
+      }
+      // A resize can cancel and replace a transition without changing the mode.
+      void Promise.all(running.map((animation) => animation.finished.catch(() => null))).then(
+        settleWhenStill,
+      );
+    };
     const armSettle = () => {
-      settleTimer.current = setTimeout(() => {
-        if (motionGeneration.current !== generation) return;
-        if (restorePending.current) {
-          settleAfterRestore.current = armSettle;
-          return;
-        }
-        const running = unfinishedWidthTransitions(sidebarElement);
-        if (running.length === 0) {
-          settle();
-          return;
-        }
-        void Promise.all(running.map((animation) => animation.finished.catch(() => null))).then(
-          () => {
-            if (motionGeneration.current === generation) settle();
-          },
-        );
-      }, SIDEBAR_SETTLE_MS);
+      settleTimer.current = setTimeout(settleWhenStill, SIDEBAR_SETTLE_MS);
     };
     const dragging =
       sidebarElement?.parentElement?.querySelector('[data-separator="active"]') != null;

@@ -36,3 +36,9 @@ The report checks the unzip process exit status before parsing stdout. The aggre
 - **Verified:** `mise run test:logged -- --name f-a-churn -- bun test ./e2e/agent-testing/network-churn-report.test.ts --rerun-each=20`
   passed (exit 0); the same file on beelink (Linux) with `--rerun-each=10`
   passed 60 of 60.
+
+The regression now checks that the stand-in exits 0, reports
+`ENOBUFS`, and returns the marker in its partial output before testing the
+reporter. The fixture restores an originally absent `PATH` by removing its
+override. The owning test file passed with inherited `PATH` and with `PATH`
+removed, and `zip` remained discoverable afterward in both runs.

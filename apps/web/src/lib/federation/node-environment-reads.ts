@@ -38,9 +38,11 @@ export function nodeAgentSummarySource(nodeId: BackendId): AgentSummarySource {
     source = {
       resyncOnSubscribe: true,
       // Routed through the command node, so the `agent-mail` client's version 0 (today's call).
-      read: (environmentId) =>
+      // A node that predates `includePending` drops it and sends no summaries.
+      read: (environmentId, options) =>
         domainApi(routedBackendClient(portalStore, nodeId), agentMailClient).get_agent_registry({
           environmentId,
+          ...(options?.includePending ? { includePending: true } : {}),
         }),
       subscribe: (environmentId, refresh) =>
         subscribeNodeEvents(nodeId, {
@@ -54,7 +56,9 @@ export function nodeAgentSummarySource(nodeId: BackendId): AgentSummarySource {
             }
             const change = changedResource(payload);
             if (
-              (change?.resource === "environment" || change?.resource === "pane-layout") &&
+              (change?.resource === "environment" ||
+                change?.resource === "pane-layout" ||
+                change?.resource === "native-agent-session") &&
               change.id === environmentId
             ) {
               refresh();

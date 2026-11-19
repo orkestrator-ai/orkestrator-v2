@@ -89,10 +89,6 @@ import {
   ActivityEnvironmentList,
   type ActivityCreateTarget,
 } from "@/components/sidebar/ActivityEnvironmentList";
-import {
-  ProjectHomeActivityButton,
-  projectHomeStatus,
-} from "@/components/sidebar/ProjectHomeActivity";
 import { compareActivity, type ActivitySortKey } from "@/lib/activity-order";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { useFederation } from "./FederationProvider";
@@ -101,6 +97,7 @@ import {
   RemoteEnvironmentItem,
   RemoteMachineTree,
   RemoteProjectGroup,
+  RemoteProjectHomeActivity,
   openWebPage,
   remoteEnvironmentProject,
   useRemoteEnvironments,
@@ -833,7 +830,8 @@ export function FederatedActivityList({
       (environment) =>
         !environment.deleting &&
         (environment.hasUnreadWork ||
-          (environment.isProjectHome && environment.activity === "waiting")),
+          (environment.isProjectHome &&
+            (environment.activity === "waiting" || environment.hasWaitingNativeTab))),
     ).length;
   return (
     <ActivityEnvironmentList
@@ -847,7 +845,7 @@ export function FederatedActivityList({
         machine.bound ? (
           <div key={environment.key}>{renderBoundHome(environment.ref.environmentId)}</div>
         ) : (
-          <RemoteActivityHome
+          <RemoteProjectHomeActivity
             key={environment.key}
             machine={machine}
             environment={environment}
@@ -928,41 +926,4 @@ function activitySortKey(
     order: environment.order,
     id: environment.ref.environmentId,
   };
-}
-
-/** Another machine's project home in the activity list, by the rule this window's homes follow. */
-function RemoteActivityHome({
-  machine,
-  environment,
-  projectName,
-}: {
-  machine: MachineView;
-  environment: FederatedEnvironment;
-  projectName: string;
-}) {
-  const status =
-    machine.transport === "connected"
-      ? projectHomeStatus({
-          deleting: environment.deleting,
-          buildActive: environment.buildActive === true,
-          activity: environment.buildActive ? "working" : environment.activity,
-          hasUnreadWork: environment.hasUnreadWork,
-        })
-      : null;
-  if (!status) return null;
-  return (
-    <ProjectHomeActivityButton
-      status={status}
-      projectName={projectName}
-      onOpen={() =>
-        openMachineWorkspace({
-          connectionId: machine.connectionId,
-          projectId: environment.projectId,
-          environmentId: environment.ref.environmentId,
-          boardTab: "home",
-          title: projectName,
-        })
-      }
-    />
-  );
 }

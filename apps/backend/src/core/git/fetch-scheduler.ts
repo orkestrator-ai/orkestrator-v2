@@ -18,9 +18,14 @@
  * against a base that is at most `ttlMs` behind. That is the correct trade: the
  * base branch moves on the order of minutes, and the alternative was a network
  * round trip every fifteen seconds per environment.
+ *
+ * The fetch is a background one ({@link backgroundFetchArgs}): it updates only
+ * `origin/<ref>` and never rewrites the worktree's `FETCH_HEAD`, which belongs
+ * to whoever is working in that checkout.
  */
 
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { backgroundFetchArgs } from "./background-fetch.js";
 
 export interface GitFetchSchedulerOptions {
   /** Runs a git command; injected so tests need neither git nor a network. */
@@ -90,7 +95,7 @@ export class GitFetchScheduler {
     const record: FetchRecord = { completedAt: existing?.completedAt ?? 0 };
     const attempt = this.metrics
       .observe("git-fetch-local", () =>
-        this.run(["-C", worktreePath, "fetch", "origin", ref], this.fetchTimeoutMs),
+        this.run(["-C", worktreePath, "fetch", ...backgroundFetchArgs(ref)], this.fetchTimeoutMs),
       )
       .then(
         () => undefined,

@@ -60,6 +60,7 @@ function harness(
     },
     recordAsyncQuestionAttention: async () => undefined,
     withdrawEnvironmentInteractions: () => undefined,
+    forgetPendingInteractions: () => undefined,
     dispatchPrompt: mock(async () => {
       throw new Error("unexpected dispatch");
     }),

@@ -1,4 +1,4 @@
-import type { EnvironmentUnreadReason } from "./contract/domains/environments/models";
+import type { EnvironmentUnreadReason } from "./contract/domains/environments/models.js";
 
 /**
  * Backend -> client "an environment needs attention" notifications.

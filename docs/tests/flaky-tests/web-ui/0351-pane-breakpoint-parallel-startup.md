@@ -264,3 +264,28 @@ browser owner passed separately at both viewports, as did the public-site
 suite, which the interrupted aggregate did not reach. The preserved aggregate
 log is now `orkestrator-test-run.Ni6dzT/browser.log.gz` under the temporary root
 above, alongside its `summary.json`.
+
+## Sidebar attention repair — 2026-11-19
+
+The branch base was `0007f0e669b0f9ac0c1abc215ff466c17c3bfc07`. Running
+`mise run flaky:recurrence -- 0351 --base 0007f0e669b0f9ac0c1abc215ff466c17c3bfc07 --registry-ref origin/main`
+confirmed the case was still open at that base.
+
+With six workers, `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name browser-tests -- mise run test:browser`
+again hit the mobile app-shell `appendChild fallback` anchor mismatch at
+`e2e/PaneBreakpoint.spec.ts:145`. The assertion expected `Transcript message 36.`
+and read `Transcript message 35.` The unchanged pane fixture had no pending
+interactions. The command reached case 1,810 of 2,066 before the absolute
+deadline ended it at 1,800.7 seconds, so it produced no final pass, fail or skip
+totals.
+
+The complete owning file passed with one worker (exit 0, 48.4 seconds).
+
+```sh
+ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name findings-pane-breakpoint -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts --workers=1 --output=output/playwright/address-findings-pane-breakpoint e2e/PaneBreakpoint.spec.ts
+```
+
+The aggregate report is in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.GmSFXR/browser-tests.log.gz`.
+The owner passed without changes to the pane fixture, assertions, skips or
+timeouts. The cause of the intermittent anchor shift remains undetermined.

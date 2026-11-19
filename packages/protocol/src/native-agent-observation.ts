@@ -77,6 +77,8 @@ export const NATIVE_SESSION_INVALIDATION_CAUSES = [
   // `native-agent-session` resource changes from the projection layer.
   /** A provider read produced a projection that differs from the cached one. */
   "projection-read",
+  /** An interaction answer invalidated the session's pending reads. */
+  "pending-interactions",
   /** A provider read failed and the projection changed to its unreachable form. */
   "projection-unreachable",
   /** A title the backend chose was written into cached projections. */
@@ -114,7 +116,7 @@ export const NATIVE_SESSION_INVALIDATION_CAUSES = [
   // `native-agent-session-activity` announcements from the activity observer.
   /** The session's activity state changed. */
   "transition",
-  /** An idle (or released) session's provider content revision moved. */
+  /** An idle, released or waiting session's provider content revision moved. */
   "content-revision",
   /** The session's backend-owned view changed, such as its goal. */
   "session-content",

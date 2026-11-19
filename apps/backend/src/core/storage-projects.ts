@@ -1144,6 +1144,7 @@ export class ProjectsRepository {
           // update could never take the equality bail-out below.
           const alreadyCleared =
             environment.agentActivityState === "idle" &&
+            environment.hasWaitingNativeTab !== true &&
             isRecord(environment.agentActivitySources) &&
             Object.keys(environment.agentActivitySources).length === 0 &&
             isRecord(environment.frontendAgentActivityObservers) &&
@@ -1151,6 +1152,7 @@ export class ProjectsRepository {
           if (!alreadyCleared) {
             environment.agentActivityState = "idle";
             environment.agentActivitySources = {};
+            delete environment.hasWaitingNativeTab;
             environment.frontendAgentActivityObservers = {};
             environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
               environment.agentActivityUpdatedAt,
@@ -1856,6 +1858,7 @@ export class ProjectsRepository {
     options: {
       completionAttention?: boolean;
       completionOutcome?: AgentActivityCompletionOutcome;
+      hasWaitingNativeTab?: boolean;
     } = {},
   ): Promise<Environment> {
     if (!isOneOf(state, AGENT_ACTIVITY_STATES)) {
@@ -1938,6 +1941,14 @@ export class ProjectsRepository {
         };
       }
 
+      const startedWaiting =
+        source === "native-agent" &&
+        options.hasWaitingNativeTab === true &&
+        environment.hasWaitingNativeTab !== true;
+      if (source === "native-agent" && options.hasWaitingNativeTab !== undefined) {
+        if (options.hasWaitingNativeTab) environment.hasWaitingNativeTab = true;
+        else delete environment.hasWaitingNativeTab;
+      }
       environment.agentActivitySources = sources;
       environment.frontendAgentActivityObservers = observers;
       environment.agentActivityState = aggregateEnvironmentAgentActivity(sources, observers);
@@ -1979,7 +1990,7 @@ export class ProjectsRepository {
           (previousAggregate === "working" &&
             ((nextAggregate === "idle" && options.completionOutcome !== "none") ||
               nextAggregate === "waiting")));
-      if (activityTransition || failedEnd || completionTransition) {
+      if (activityTransition || startedWaiting || failedEnd || completionTransition) {
         const previousLastActivityAt = Date.parse(environment.lastActivityAt ?? "");
         environment.lastActivityAt = new Date(
           Math.max(

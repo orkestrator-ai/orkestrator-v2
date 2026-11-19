@@ -9,6 +9,8 @@ interface FileSaveConflictBannerProps {
   isSaving: boolean;
   onToggleCompare: () => void;
   onKeepMine: () => void;
+  onRecreate: () => void;
+  onRetry: () => void;
   onUseTheirs: () => void;
 }
 
@@ -24,9 +26,12 @@ export function FileSaveConflictBanner({
   isSaving,
   onToggleCompare,
   onKeepMine,
+  onRecreate,
   onUseTheirs,
+  onRetry,
 }: FileSaveConflictBannerProps) {
   const changed = conflict.kind === "changed";
+  const missing = conflict.kind === "missing";
   return (
     <div
       role="alert"
@@ -37,7 +42,11 @@ export function FileSaveConflictBanner({
         <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-failure" aria-hidden />
         <p className="min-w-0 text-foreground">
           <span className="font-medium">
-            {changed ? "Changed on disk." : "Deleted or unreadable on disk."}
+            {changed
+              ? "Changed on disk."
+              : missing
+                ? "File is missing."
+                : "File could not be read."}
           </span>{" "}
           <span className="text-muted-foreground">
             {changed ? (
@@ -69,12 +78,23 @@ export function FileSaveConflictBanner({
           </Button>
         )}
         {changed && (
-          <Button type="button" variant="outline" size="sm" onClick={onUseTheirs}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={isSaving}
+            onClick={onUseTheirs}
+          >
             Use theirs
           </Button>
         )}
-        <Button type="button" size="sm" disabled={isSaving} onClick={onKeepMine}>
-          {changed ? "Keep mine" : "Save mine"}
+        <Button
+          type="button"
+          size="sm"
+          disabled={isSaving}
+          onClick={changed ? onKeepMine : missing ? onRecreate : onRetry}
+        >
+          {changed ? "Keep mine" : missing ? "Recreate file" : "Retry save"}
         </Button>
       </div>
     </div>

@@ -1,8 +1,8 @@
+import { isEditorFileMissing } from "@orkestrator/protocol/file-write-precondition";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import * as backend from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { Loader2, AlertCircle, FileCode, Image as ImageIcon } from "lucide-react";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
@@ -12,6 +12,7 @@ import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import {
   fileConflictResolvedToastId,
   fileWriteConflictToastId,
+  offerRecoveryCopy,
   useFileSave,
 } from "@/hooks/useFileSave";
 import { useChangeContentGeneration, useChangeProjection } from "@/hooks/useChangeProjection";
@@ -26,6 +27,7 @@ import {
 } from "@/lib/file-draft-persistence";
 import { DraftRevisionConflictError } from "@/lib/draft-conflict";
 import { loadEnvironmentImage } from "@/lib/environment-image-source";
+import type { TiptapMarkdownEditorHandle } from "@/components/markdown/TiptapMarkdownEditor";
 import { FileSaveConflictBanner } from "./FileSaveConflictBanner";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 import {
@@ -337,9 +339,7 @@ export function FileViewerTab({
   const dirtyEntry = useFileDirtyStore((state) => state.dirtyFiles.get(tabId));
   const dirtyContent = useFileDirtyStore((state) => state.dirtyFiles.get(tabId)?.content);
 
-  // An HTML page's own stylesheets are read through the same file reads as the
-  // editor, which keep to the workspace and refuse symlinked folders. Stable, so
-  // the page does not read them again on every render.
+  // Use the same workspace-bounded read for reloads and HTML stylesheets.
   const readSiblingFile = useMemo(() => {
     if (isLocalEnvironment && worktreePath) {
       return async (path: string) =>
@@ -358,33 +358,55 @@ export function FileViewerTab({
     showDiff,
     hasDiffData: hasDiffTarget,
   });
-  // Bumped to re-read the file after the user chose to drop their edits.
-  const [reloadGeneration, setReloadGeneration] = useState(0);
-  // The conflict comparison is open (only shown while a conflict exists).
+  const markdownEditorRef = useRef<TiptapMarkdownEditorHandle>(null);
+  const flushEditor = useCallback(() => {
+    markdownEditorRef.current?.flushPendingChanges();
+  }, []);
   const [comparing, setComparing] = useState(false);
+  const [isReloading, setIsReloading] = useState(false);
+  const viewerMounted = useRef(true);
+  useEffect(() => {
+    viewerMounted.current = true;
+    return () => {
+      viewerMounted.current = false;
+    };
+  }, []);
+  const reloadPending = useRef(false);
+  const canSave = useCallback(() => !reloadPending.current, []);
+  // The banner carries every choice from here, so the toast that pointed at
+  // it is no longer needed once the comparison is open.
+  const openComparison = useCallback(() => {
+    toast.dismiss(fileWriteConflictToastId(tabId));
+    flushEditor();
+    setComparing(true);
+  }, [flushEditor, tabId]);
+  const { saveFile, keepMine, recreate, isSaving, isSavingNow } = useFileSave({
+    tabId,
+    filePath,
+    containerId,
+    worktreePath,
+    isLocalEnvironment,
+    onCompare: openComparison,
+    flushEditor,
+    canSave,
+  });
   const reloadFromDisk = useCallback(() => {
+    if (reloadPending.current || !readSiblingFile || isSavingNow()) return;
+    reloadPending.current = true;
+    setIsReloading(true);
     void (async () => {
-      // "Use theirs": the buffer is replaced by disk, but stays restorable.
       const dirty = draftScope.store(fileDirtyStore);
-      const before = dirty.getState().dirtyFiles.get(tabId);
-      const discarded = before && before.content !== before.originalContent ? before.content : null;
-      // Discard the persisted draft first, or the reload would restore it.
-      if (environmentId) {
-        await discardFileDraft(
-          environmentId,
-          filePath,
-          getFileDraftRevisionState(tabId, draftScope),
-          draftScope,
-        ).catch((draftError: unknown) => {
-          log.warn("draft.discard-failed", { tabId, error: formatLogError(draftError) });
-        });
-      }
-      lastDraftFlushRef.current = null;
-      dirty.getState().clearDirty(tabId);
-      toast.dismiss(fileWriteConflictToastId(tabId));
-      setComparing(false);
-      setReloadGeneration((generation) => generation + 1);
-      if (discarded !== null) {
+      try {
+        const disk = await readSiblingFile(filePath);
+        // Capture the latest visible edits after the read, including typing
+        // during the request. Publish disk and the replacement buffer together.
+        flushEditor();
+        const store = dirty.getState();
+        const current = store.dirtyFiles.get(tabId);
+        if (!current || !store.replaceDocument(tabId, current, disk, true)) return;
+        const loaded = dirty.getState().dirtyFiles.get(tabId)!;
+        toast.dismiss(fileWriteConflictToastId(tabId));
+        setComparing(false);
         toast.info("Loaded the version on disk", {
           id: fileConflictResolvedToastId(tabId),
           description: `Your unsaved edits to ${filePath} were set aside. Restore them into the editor if you still need them.`,
@@ -392,38 +414,51 @@ export function FileViewerTab({
           action: {
             label: "Restore mine",
             onClick: () => {
-              // Edits on top of whatever disk holds now; a save is still checked.
-              if (dirty.getState().dirtyFiles.has(tabId)) {
-                dirty.getState().setContent(tabId, discarded);
+              flushEditor();
+              if (
+                isSavingNow() ||
+                !viewerMounted.current ||
+                !dirty.getState().replaceDocument(tabId, loaded, current.content)
+              ) {
+                offerRecoveryCopy(tabId, current.content);
               }
             },
           },
         });
+        // Remove only the prior draft. Edits after replacement use the normal
+        // persistence queue and follow this deletion.
+        if (environmentId) {
+          const fingerprint = JSON.stringify([environmentId, filePath, "discard"]);
+          lastDraftFlushRef.current = fingerprint;
+          void discardFileDraft(
+            environmentId,
+            filePath,
+            getFileDraftRevisionState(tabId, draftScope),
+            draftScope,
+          ).catch((draftError: unknown) => {
+            if (lastDraftFlushRef.current === fingerprint) lastDraftFlushRef.current = null;
+            log.warn("draft.discard-failed", { tabId, error: formatLogError(draftError) });
+          });
+        }
+      } catch (readError) {
+        dirty.getState().markDiskUnreadable(tabId, isEditorFileMissing(readError));
+        toast.error("Could not load the version on disk", {
+          description: "Your unsaved edits are still in the editor.",
+        });
+      } finally {
+        reloadPending.current = false;
+        setIsReloading(false);
       }
     })();
-  }, [draftScope, environmentId, filePath, tabId]);
-  // The banner carries every choice from here, so the toast that pointed at
-  // it is no longer needed once the comparison is open.
-  const openComparison = useCallback(() => {
-    toast.dismiss(fileWriteConflictToastId(tabId));
-    setComparing(true);
-  }, [tabId]);
-  const { saveFile, keepMine, isSaving } = useFileSave({
-    tabId,
-    filePath,
-    containerId,
-    worktreePath,
-    isLocalEnvironment,
-    onReloadFromDisk: reloadFromDisk,
-    onCompare: openComparison,
-  });
+  }, [draftScope, environmentId, filePath, flushEditor, isSavingNow, readSiblingFile, tabId]);
   const conflict = fileSaveConflict(dirtyEntry);
   const showComparison = comparing && conflict?.kind === "changed";
   const keepMineAndClose = useCallback(() => {
-    void keepMine().then((saved) => {
+    if (conflict?.kind !== "changed") return;
+    void keepMine(conflict.disk).then((saved) => {
       if (saved) setComparing(false);
     });
-  }, [keepMine]);
+  }, [conflict, keepMine]);
 
   const reportFileDraftError = useCallback(
     function reportFileDraftError(
@@ -602,63 +637,62 @@ export function FileViewerTab({
             setImageUrl(loaded.url);
           }
         } else {
-          // Load text file - use appropriate command based on environment type
-          let fileContent: backend.FileContent;
-          if (isLocalEnvironment && worktreePath) {
-            fileContent = await backendForScope(draftScope).readLocalFile(worktreePath, filePath);
-          } else if (containerId) {
-            fileContent = await backendForScope(draftScope).readContainerFile(
-              containerId,
-              filePath,
-            );
-          } else {
+          const store = draftScope.store(fileDirtyStore);
+          const loadText = async () => {
+            const node = backendForScope(draftScope);
+            if (isLocalEnvironment && worktreePath)
+              return node.readLocalFile(worktreePath, filePath);
+            if (containerId) return node.readContainerFile(containerId, filePath);
             throw new Error("No container ID or worktree path available");
-          }
-          if (!cancelled) {
-            setContent(fileContent.content);
-            setDetectedLanguage(fileContent.language || language || "plaintext");
-            const liveEntry = draftScope.store(fileDirtyStore).getState().dirtyFiles.get(tabId);
-            let draftReadSucceeded = !environmentId || Boolean(liveEntry);
-            let persistedDraft: Awaited<ReturnType<typeof loadFileDraft>> = null;
-            if (environmentId && !liveEntry) {
-              try {
-                persistedDraft = await loadFileDraft(
+          };
+          const [disk, draft] = await Promise.allSettled([
+            loadText(),
+            environmentId && !store.getState().dirtyFiles.has(tabId)
+              ? loadFileDraft(
                   environmentId,
                   filePath,
                   getFileDraftRevisionState(tabId, draftScope),
                   draftScope,
-                );
-                draftReadSucceeded = true;
-              } catch (draftError) {
-                log.warn("draft.restore-failed", { tabId, error: formatLogError(draftError) });
-              }
-            }
-            if (cancelled) return;
-            if (liveEntry) {
-              // Visibility changes may unmount the editor before its debounce
-              // fires. Its in-memory buffer is newer than any backend snapshot.
-              // The buffer's own baseline stays, so disk moving meanwhile is a
-              // conflict at save rather than an overwrite.
-              observeDiskContent(tabId, fileContent.content);
-            } else if (
-              persistedDraft &&
-              persistedDraft.environmentId === environmentId &&
-              persistedDraft.filePath === filePath
+                )
+              : null,
+          ]);
+          if (cancelled) return;
+          const persistedDraft = draft.status === "fulfilled" ? draft.value : null;
+          if (draft.status === "rejected") {
+            log.warn("draft.restore-failed", { tabId, error: formatLogError(draft.reason) });
+          }
+          const fileContent = disk.status === "fulfilled" ? disk.value : null;
+          const live = store.getState().dirtyFiles.get(tabId);
+          if (live) {
+            if (fileContent) observeDiskContent(tabId, fileContent.content);
+          } else if (
+            persistedDraft?.environmentId === environmentId &&
+            persistedDraft?.filePath === filePath
+          ) {
+            hydrateDraft(
+              tabId,
+              persistedDraft.content,
+              fileContent?.content ?? persistedDraft.originalContent,
+              persistedDraft.originalContent,
+            );
+          } else if (fileContent) {
+            setOriginalContent(tabId, fileContent.content);
+          }
+          setDraftHydrated(draft.status === "fulfilled");
+          if (disk.status === "rejected") {
+            const retained = store.getState().dirtyFiles.get(tabId);
+            if (
+              !retained ||
+              (!retained.diskUnreadable && retained.content === retained.originalContent)
             ) {
-              // Disk may have changed while the app was closed. Preserve the
-              // user's buffer but compare it with the current disk content so
-              // the editor never silently treats an externally changed file as
-              // saved. A save still checks against what the draft was edited from.
-              hydrateDraft(
-                tabId,
-                persistedDraft.content,
-                fileContent.content,
-                persistedDraft.originalContent,
-              );
-            } else {
-              setOriginalContent(tabId, fileContent.content);
+              throw disk.reason;
             }
-            setDraftHydrated(draftReadSucceeded);
+            store.getState().markDiskUnreadable(tabId, isEditorFileMissing(disk.reason));
+            setContent(retained.content);
+            setDetectedLanguage(language || "plaintext");
+          } else {
+            setContent(disk.value.content);
+            setDetectedLanguage(disk.value.language || language || "plaintext");
           }
         }
       } catch (err) {
@@ -692,7 +726,6 @@ export function FileViewerTab({
     hydrateDraft,
     observeDiskContent,
     setOriginalContent,
-    reloadGeneration,
   ]);
 
   // Write through after a short debounce. The persistence helper serializes
@@ -813,7 +846,6 @@ export function FileViewerTab({
   // While disk and buffer disagree, the editor shows the conflict above it and
   // can swap itself for the side-by-side comparison.
   const withConflict = (editor: ReactNode): ReactNode => {
-    if (!conflict) return editor;
     return (
       <div
         className={cn(
@@ -822,15 +854,19 @@ export function FileViewerTab({
         )}
         style={{ backgroundColor: terminalAppearance.backgroundColor }}
       >
-        <FileSaveConflictBanner
-          filePath={filePath}
-          conflict={conflict}
-          comparing={showComparison}
-          isSaving={isSaving}
-          onToggleCompare={() => (showComparison ? setComparing(false) : openComparison())}
-          onKeepMine={keepMineAndClose}
-          onUseTheirs={reloadFromDisk}
-        />
+        {conflict && (
+          <FileSaveConflictBanner
+            filePath={filePath}
+            conflict={conflict}
+            comparing={showComparison}
+            isSaving={isSaving || isReloading}
+            onToggleCompare={() => (showComparison ? setComparing(false) : openComparison())}
+            onKeepMine={keepMineAndClose}
+            onRecreate={() => void recreate()}
+            onRetry={() => void saveFile()}
+            onUseTheirs={reloadFromDisk}
+          />
+        )}
         <div className="relative min-h-0 flex-1">
           {showComparison && conflict.kind === "changed" ? (
             <LazyLoadBoundary
@@ -842,7 +878,7 @@ export function FileViewerTab({
                 disk={conflict.disk}
                 mine={conflict.mine}
                 onChange={(nextContent) => setDirtyContent(tabId, nextContent)}
-                onKeepMine={keepMineAndClose}
+                onSave={() => void saveFile()}
               />
             </LazyLoadBoundary>
           ) : (
@@ -860,6 +896,7 @@ export function FileViewerTab({
         renderError={renderEditorError}
       >
         <LazyMarkdownEditorTab
+          editorHandle={markdownEditorRef}
           tabId={tabId}
           filePath={filePath}
           initialContent={content}

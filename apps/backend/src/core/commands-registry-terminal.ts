@@ -106,6 +106,8 @@ import { isSafeRelativePath } from "@orkestrator/protocol/web-annotations-valida
 import { parseFileWritePrecondition } from "@orkestrator/protocol/file-write-precondition";
 import {
   CONTAINER_WRITE_CONFLICT_EXIT,
+  CONTAINER_WRITE_METADATA_EXIT,
+  CONTAINER_WRITE_ACCESS_EXIT,
   CONTAINER_WRITE_NOT_FILE_EXIT,
   containerFileWriteScript,
   fileWriteConflictError,
@@ -1117,13 +1119,18 @@ export function registerTerminalCommands(
           try {
             // The helper checks the digest after the payload is staged beside
             // the target and immediately before the atomic rename.
-            return await (precondition
-              ? serializeFileWrite(`local:${canonical}:${relativePath}`, () =>
-                  writeFileBase64(currentRoot, relativePath, data, {
-                    expectedSha256: precondition.sha256,
-                  }),
-                )
-              : writeFileBase64(currentRoot, relativePath, data));
+            // A symlink and its referent share the worktree's write queue.
+            return await serializeFileWrite(`local:${canonical}`, () =>
+              writeFileBase64(
+                currentRoot,
+                relativePath,
+                data,
+                precondition &&
+                  ("sha256" in precondition
+                    ? { expectedSha256: precondition.sha256 }
+                    : { expectedAbsent: true }),
+              ),
+            );
           } finally {
             // A write this backend makes is a known mutation, like a delete or
             // move: the file tree and Changes must not wait for a watcher hint,
@@ -1480,17 +1487,25 @@ export function registerTerminalCommands(
           ],
           normalized,
           {
-            errorForExit: (code) =>
-              code === CONTAINER_WRITE_CONFLICT_EXIT
-                ? fileWriteConflictError()
-                : code === CONTAINER_WRITE_NOT_FILE_EXIT
-                  ? fileWriteNotRegularFileError()
-                  : undefined,
+            errorForExit: (code) => {
+              switch (code) {
+                case CONTAINER_WRITE_CONFLICT_EXIT:
+                  return fileWriteConflictError();
+                case CONTAINER_WRITE_NOT_FILE_EXIT:
+                  return fileWriteNotRegularFileError();
+                case CONTAINER_WRITE_METADATA_EXIT:
+                  return new Error(
+                    "Cannot save: the existing file's access metadata could not be preserved",
+                  );
+                case CONTAINER_WRITE_ACCESS_EXIT:
+                  return new Error("Cannot save: the existing file is not writable");
+              }
+            },
           },
         );
         return fullPath;
       };
-      return precondition ? serializeFileWrite(`container:${id}:${fullPath}`, write) : write();
+      return serializeFileWrite(`container:${id}`, write);
     },
     ASYNC_HANDLER,
   );

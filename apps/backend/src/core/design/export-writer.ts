@@ -2,9 +2,8 @@
  * Safe repository export of design canvases (`.orkdes` files).
  *
  * The generic `write_local_file` / `write_container_file` writers stage the
- * payload and rename it over the destination, checking an editor's optional
- * digest precondition first (`file-write-precondition.ts`), but they know
- * nothing about `.orkdes` paths or "must be absent". Export follows the
+ * payload and support digest and absence checks (`file-write-precondition.ts`).
+ * Export applies its own rules for `.orkdes` paths and recovery. It follows the
  * destination write protocol described in docs/architecture/design-canvas.md:
  *
  * 1. validate a repository-relative `.orkdes` path (folders allowed);

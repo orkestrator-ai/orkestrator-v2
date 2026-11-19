@@ -10,7 +10,7 @@ import { join, relative, resolve } from "node:path";
  * - shared algorithms and backend domain code never branch on provider names
  *   or import provider SDKs — provider knowledge ends at adapter ingress;
  * - renderer code has no line-counting, diffing, provider-classification or
- *   provider-SDK engines: it renders backend projections.
+ *   provider-SDK engines for backend change projections.
  */
 
 const repoRoot = resolve(import.meta.dir, "../..");
@@ -91,13 +91,20 @@ describe("change-tracking architecture boundaries", () => {
       [/\bcountDiffStats\s*\(/, "client patch counting"],
       [/\btoolDiffFromOpenCodeToolState\s*\(/, "client provider payload parsing"],
       [/\bisFileEditToolName\s*\(/, "client provider tool classification"],
-      [/<DiffEditor\b/, "client-side two-buffer diffing"],
     ];
     const offenders: string[] = [];
     for (const path of files(join(repoRoot, "apps/web/src"), isSource)) {
       const source = read(path);
       for (const [pattern, label] of forbidden) {
         if (pattern.test(source)) offenders.push(`${rel(path)}: ${label}`);
+      }
+      // The editable save-conflict view compares a renderer-owned draft with
+      // a disk snapshot. It never supplies a backend change projection.
+      if (
+        /<DiffEditor\b/.test(source) &&
+        rel(path) !== "apps/web/src/components/terminal/FileConflictDiff.tsx"
+      ) {
+        offenders.push(`${rel(path)}: client-side two-buffer diffing`);
       }
       for (const sdk of PROVIDER_SDKS) {
         if (source.includes(`from "${sdk}`)) offenders.push(`${rel(path)}: provider SDK ${sdk}`);

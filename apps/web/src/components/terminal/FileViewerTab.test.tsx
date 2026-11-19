@@ -15,6 +15,7 @@ import { mockToastError, mockToastInfo } from "../../../../../tests/mocks/sonner
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 import {
   FILE_WRITE_CONFLICT_MESSAGE,
+  EDITOR_FILE_MISSING_MESSAGE,
   fileContentSha256,
 } from "@orkestrator/protocol/file-write-precondition";
 import { appCommandStore } from "@/test/app-command-store";
@@ -890,11 +891,7 @@ describe("FileViewerTab component", () => {
     expect(appCommandStore(fileDirtyStore).getState().isDirty("conflict-tab")).toBe(true);
     expect(await screen.findByRole("alert", { name: "File changed on disk" })).toBeTruthy();
 
-    const options = mockToastError.mock.calls.at(-1)?.[1] as {
-      cancel: { label: string; onClick: () => void };
-    };
-    expect(options.cancel.label).toBe("Use theirs");
-    act(() => options.cancel.onClick());
+    fireEvent.click(screen.getByRole("button", { name: "Use theirs" }));
 
     await waitFor(async () =>
       expect(
@@ -906,6 +903,7 @@ describe("FileViewerTab component", () => {
     expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("conflict-tab")).toEqual({
       content: "newer on disk",
       originalContent: "newer on disk",
+      documentRevision: 1,
     });
     expect(screen.queryByRole("alert", { name: "File changed on disk" }) === null).toBe(true);
 
@@ -918,7 +916,98 @@ describe("FileViewerTab component", () => {
     expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("conflict-tab")).toEqual({
       content: "mine",
       originalContent: "newer on disk",
+      documentRevision: 2,
     });
+  });
+
+  test("Use theirs captures typing during the read and leaves later edits alone during draft deletion", async () => {
+    const loaded = Promise.withResolvers<{ content: string; language: string }>();
+    const deleted = Promise.withResolvers<undefined>();
+    const tabId = "pending-reload";
+    const view = renderInAppCommandScope(
+      <FileViewerTab
+        tabId={tabId}
+        environmentId="env-reload"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    act(() =>
+      appCommandStore(fileDirtyStore)
+        .getState()
+        .hydrateDraft(tabId, "mine", "theirs", "container text"),
+    );
+    readContainerFileMock.mockImplementationOnce(() => loaded.promise);
+    deleteFileDraftMock.mockImplementationOnce(() => deleted.promise);
+    mockToastInfo.mockClear();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Use theirs" }));
+      expect(mockToastInfo).not.toHaveBeenCalled();
+      fireEvent.change(editor, { target: { value: "typed during read" } });
+      await act(async () => loaded.resolve({ content: "theirs", language: "plaintext" }));
+      const restore = (mockToastInfo.mock.calls.at(-1)![1] as { action: { onClick: () => void } })
+        .action;
+      act(() => restore.onClick());
+      expect(appCommandStore(fileDirtyStore).getState().getContent(tabId)).toBe(
+        "typed during read",
+      );
+      fireEvent.change(editor, { target: { value: "typed during deletion" } });
+      await act(async () => deleted.resolve(undefined));
+      act(() => restore.onClick());
+      expect(appCommandStore(fileDirtyStore).getState().getContent(tabId)).toBe(
+        "typed during deletion",
+      );
+    } finally {
+      loaded.resolve({ content: "theirs", language: "plaintext" });
+      deleted.resolve(undefined);
+      view.unmount();
+    }
+  });
+
+  test("a failed Use theirs reload retains the buffer and the remounted editor can recover it", async () => {
+    const tabId = "missing-file";
+    const tab = (
+      <FileViewerTab tabId={tabId} filePath="notes.txt" containerId="container-1" isActive />
+    );
+    const view = renderInAppCommandScope(tab);
+    await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    act(() =>
+      appCommandStore(fileDirtyStore)
+        .getState()
+        .hydrateDraft(tabId, "mine", "theirs", "container text"),
+    );
+    readContainerFileMock.mockRejectedValue(new Error(EDITOR_FILE_MISSING_MESSAGE));
+    fireEvent.click(screen.getByRole("button", { name: "Use theirs" }));
+    expect(await screen.findByRole("button", { name: "Recreate file" })).toBeTruthy();
+    expect(deleteFileDraftMock).not.toHaveBeenCalled();
+    view.unmount();
+    renderInAppCommandScope(tab);
+    expect(
+      (await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "Monaco plaintext" })).value,
+    ).toBe("mine");
+    expect(screen.getByRole("button", { name: "Recreate file" })).toBeTruthy();
+  });
+
+  test("a clean remount refreshes the buffer without a conflict", async () => {
+    const tab = (
+      <FileViewerTab
+        tabId="refresh-clean"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />
+    );
+    const view = renderInAppCommandScope(tab);
+    await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    view.unmount();
+    readContainerFileMock.mockResolvedValueOnce({ content: "new disk", language: "plaintext" });
+    renderInAppCommandScope(tab);
+    expect(
+      (await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "Monaco plaintext" })).value,
+    ).toBe("new disk");
+    expect(screen.queryAllByRole("alert", { name: "File changed on disk" })).toHaveLength(0);
   });
 
   test("a conflict shows both versions side by side and keeps the merged buffer", async () => {

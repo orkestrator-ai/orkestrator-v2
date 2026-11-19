@@ -13,8 +13,8 @@ interface FileConflictDiffProps {
   /** The unsaved buffer (right, editable, so the user can merge into it). */
   mine: string;
   onChange: (value: string) => void;
-  /** Ctrl/Cmd+S in the comparison keeps the merged buffer. */
-  onKeepMine: () => void;
+  /** Ctrl/Cmd+S uses the ordinary checked save. */
+  onSave: () => void;
 }
 
 type MonacoDiffEditor = Parameters<DiffOnMount>[0];
@@ -25,7 +25,7 @@ export function FileConflictDiff({
   disk,
   mine,
   onChange,
-  onKeepMine,
+  onSave,
 }: FileConflictDiffProps) {
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ||
@@ -33,12 +33,12 @@ export function FileConflictDiff({
   const [monacoReady, setMonacoReady] = useState(isMonacoConfigured);
   const [monacoFailed, setMonacoFailed] = useState(false);
   const onChangeRef = useRef(onChange);
-  const onKeepMineRef = useRef(onKeepMine);
+  const onSaveRef = useRef(onSave);
   const disposeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     onChangeRef.current = onChange;
-    onKeepMineRef.current = onKeepMine;
+    onSaveRef.current = onSave;
   });
 
   useEffect(() => {
@@ -71,7 +71,7 @@ export function FileConflictDiff({
       onChangeRef.current(modified.getValue());
     });
     modified.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-      onKeepMineRef.current();
+      onSaveRef.current();
     });
     disposeRef.current?.();
     disposeRef.current = () => subscription.dispose();
@@ -108,6 +108,7 @@ export function FileConflictDiff({
               originalEditable: false,
               readOnly: false,
               renderSideBySide: true,
+              ignoreTrimWhitespace: false,
               useInlineViewWhenSpaceIsLimited: true,
               minimap: { enabled: false },
               scrollBeyondLastLine: false,

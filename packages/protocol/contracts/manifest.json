@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1007,
-    "defined": 1007,
+    "commands": 1009,
+    "defined": 1009,
     "untyped": 0,
     "events": 45
   },
@@ -1017,6 +1017,15 @@
       "critical": [],
       "argsDigest": "sha256:03b7e6646b447b674e07ff564b9e53e94661dfec00d7462ab5f884e4aebe46be",
       "resultDigest": "sha256:2a402ad850b125e94eac97e2422c8de08c2860e737f870a0f3dabe5b0aa27b14"
+    },
+    "claim_terminal_size": {
+      "domain": "terminals",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:78eef3038001fab8006c340dc6b137392938cf1c37fa3c585af758327d56d8a2",
+      "resultDigest": "sha256:89612c3710b634db7358e69c1f291b475d495885195315e7cea87fc058d09d30"
     },
     "claude_tmux_answer_pre_tool_use": {
       "domain": "claude-tmux",
@@ -5503,8 +5512,8 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:475ae1bd0856a51b16605745130dfe7f38fa1d662a57b18f3e8671c81c8f4279",
-      "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
+      "argsDigest": "sha256:0446177a464b55a9345c9064788cca8a0ba126812fff2007ad01a480de6e240c",
+      "resultDigest": "sha256:89612c3710b634db7358e69c1f291b475d495885195315e7cea87fc058d09d30"
     },
     "local_terminal_write": {
       "domain": "terminals",
@@ -6458,6 +6467,15 @@
       "critical": [],
       "argsDigest": "sha256:336ee5561eaa88168790a65c5faefce3d14d1e61217e345b67f678970225268b",
       "resultDigest": "sha256:9b5e99a1ca123b58c9517aff6cd70dc5c9e77ef414bdbd0c5b8d65f63594c9a4"
+    },
+    "release_terminal_size": {
+      "domain": "terminals",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c0dd85927fe411f6ae8f6ffa3881e16d3d18ea80a46bd6cd959dd79f4625a466",
+      "resultDigest": "sha256:461ecbc649a0cb663fabfc47d96b343d700850afc046cfb0785edb447049b9bf"
     },
     "remove_agent_account": {
       "domain": "accounts",
@@ -8301,8 +8319,8 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:475ae1bd0856a51b16605745130dfe7f38fa1d662a57b18f3e8671c81c8f4279",
-      "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
+      "argsDigest": "sha256:0446177a464b55a9345c9064788cca8a0ba126812fff2007ad01a480de6e240c",
+      "resultDigest": "sha256:89612c3710b634db7358e69c1f291b475d495885195315e7cea87fc058d09d30"
     },
     "terminal_snapshot_applied": {
       "domain": "terminals",

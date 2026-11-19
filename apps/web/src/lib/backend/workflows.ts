@@ -878,9 +878,19 @@ export function createWorkflowsApi(client: BackendClient) {
     );
   }
 
-  /** Resize a local terminal session */
-  async function resizeLocalTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
-    await terminalsDomain().local_terminal_resize({ sessionId, cols, rows });
+  /** Resize a local terminal session; `clientId` as for `resizeTerminal`. */
+  async function resizeLocalTerminal(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    clientId?: string,
+  ): Promise<void> {
+    await terminalsDomain().local_terminal_resize({
+      sessionId,
+      cols,
+      rows,
+      ...(clientId === undefined ? {} : { clientId }),
+    });
   }
 
   /** Close a local terminal session */

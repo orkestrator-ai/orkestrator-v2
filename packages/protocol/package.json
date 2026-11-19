@@ -340,6 +340,7 @@
     "./terminal-input-batcher": "./src/terminal-input-batcher.ts",
     "./terminal-input-contract-fixtures": "./src/terminal-input-contract-fixtures.ts",
     "./terminal-input-sequencer": "./src/terminal-input-sequencer.ts",
+    "./terminal-size-ownership": "./src/terminal-size-ownership.ts",
     "./terminal-websocket": "./src/terminal-websocket.ts",
     "./tool-diff": "./src/tool-diff.ts",
     "./tmux-prompt": "./src/tmux-prompt.ts",

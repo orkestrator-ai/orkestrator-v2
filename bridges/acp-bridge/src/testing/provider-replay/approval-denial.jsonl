@@ -1,0 +1,11 @@
+{"replay":1,"bridge":"acp","scenario":"approval-denial","source":"synthetic","provider":"grok","providerVersion":"1.0.88","description":"Under an ask policy Grok asks permission to run a command; the user denies it, Grok reports the call failed and answers without it."}
+{"action":"prompt","text":"Delete the build directory","policy":"ask"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-1","content":{"type":"text","text":"Removing it."}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"tool_call","toolCallId":"call-rm","title":"rm -rf build","kind":"execute","status":"pending","rawInput":{"command":"rm -rf build"}}}}}
+{"frame":{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"fake-session","toolCall":{"toolCallId":"call-rm","title":"rm -rf build","kind":"execute","rawInput":{"command":"rm -rf build"}},"options":[{"optionId":"allow-once","name":"Allow","kind":"allow_once"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}}}
+{"action":"observe","label":"parked"}
+{"action":"answer","decision":"deny"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-rm","status":"failed","content":[{"type":"content","content":{"type":"text","text":"Permission denied by the user"}}],"rawOutput":{"output":"Permission denied by the user"}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-2","content":{"type":"text","text":"Understood, the build directory stays."}}}}}
+{"frame":{"jsonrpc":"2.0","id":"$prompt","result":{"stopReason":"end_turn"}}}
+{"action":"settle"}

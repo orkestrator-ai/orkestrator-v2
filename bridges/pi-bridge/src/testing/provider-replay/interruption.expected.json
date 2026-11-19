@@ -1,0 +1,87 @@
+[
+  {
+    "label": "mid-turn",
+    "activity": "working",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Run the full test suite",
+        "textLength": 23,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Run the full test suite"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the suite.",
+        "textLength": 19,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the suite."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "bash",
+            "toolState": "pending",
+            "outputLength": 18
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Run the full test suite",
+        "textLength": 23,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Run the full test suite"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the suite.",
+        "textLength": 19,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the suite."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "bash",
+            "toolState": "failure",
+            "outputLength": 18,
+            "error": true
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  }
+]

@@ -1,0 +1,104 @@
+[
+  {
+    "label": "parked",
+    "activity": "waiting",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [
+      {
+        "kind": "tool-approval",
+        "toolName": "bash"
+      }
+    ],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Delete the build directory",
+        "textLength": 26,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delete the build directory"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Removing it.",
+        "textLength": 12,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Removing it."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Delete the build directory",
+        "textLength": 26,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delete the build directory"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Removing it.",
+        "textLength": 12,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Removing it."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "bash",
+            "toolState": "failure",
+            "error": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Understood, the build directory stays.",
+        "textLength": 38,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Understood, the build directory stays."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "decisions": [
+        {
+          "toolName": "bash",
+          "blocked": true
+        }
+      ]
+    }
+  }
+]

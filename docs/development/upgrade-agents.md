@@ -419,6 +419,32 @@ There is no blanket re-run of every qualified live spec on a bump:
 A run that needs a real login or billed turns is a manual-test checklist item
 naming the bump, never a step an agent skips silently.
 
+## Replay recorded provider traffic
+
+Every Claude, Cursor, Pi and Grok bump, and every change to one of those
+bridges' engine boundaries, replays that bridge's provider-traffic corpus
+([`tests/conformance/provider-replay/`](../../tests/conformance/provider-replay/README.md)):
+recorded and synthetic provider frames fed through the bridge's production
+ingestion path, compared with committed expectations of the transcript rows,
+pending interactions, activity, completion and drift they produce. It runs in
+every bridge's default test group, so `mise run test` fails on a change; run
+one bridge's corpus directly while working:
+
+```bash
+cd bridges/<name>-bridge && bun test src/conformance-provider-replay.test.ts \
+  --preload ../../tests/setup-node.ts
+```
+
+(Pi also needs `--preload ./src/testing/test-isolation.ts`.) A changed
+expectation, or a new kind under `drift`, is an adapter decision: read the
+diff and fix the adapter or accept the new shape on purpose before
+regenerating with `ORKESTRATOR_PROVIDER_REPLAY_UPDATE=1`. The corpus cannot
+show that a new release still emits the old traffic, so it does not replace
+the live checks above; when a bump does change a scenario's traffic, record
+a fresh fixture for it with the bridge's recorder and keep the old one only
+while the old version is still supported. Codex's equivalent is step 7 of
+[How to upgrade Codex](#how-to-upgrade-codex).
+
 ## Re-trace preserved provider state
 
 A preserving container rebuild keeps `/workspace` and only the provider paths

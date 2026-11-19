@@ -1,0 +1,14 @@
+{"replay":1,"bridge":"cursor","scenario":"outside-tail-update","source":"synthetic","provider":"@cursor/sdk","providerVersion":"1.4.1","description":"A shell call starts in the first step; two later steps push its row out of the live tail before its completion arrives and revises that row."}
+{"action":"prompt","text":"Build, then summarise while it runs"}
+{"frame":{"type":"step-started"}}
+{"frame":{"type":"text-delta","text":"Starting the build."}}
+{"frame":{"type":"tool-call-started","callId":"call-build","modelCallId":"m1","toolCall":{"type":"shell","args":{"command":"bun run build"}}}}
+{"frame":{"type":"step-started"}}
+{"frame":{"type":"text-delta","text":"Meanwhile, the first note."}}
+{"frame":{"type":"step-started"}}
+{"frame":{"type":"text-delta","text":"And the second note."}}
+{"action":"observe","label":"before-result"}
+{"frame":{"type":"tool-call-completed","callId":"call-build","modelCallId":"m1","toolCall":{"type":"shell","args":{"command":"bun run build"},"result":{"status":"success","value":{"exitCode":0,"signal":"","stdout":"built in 3s\n","stderr":"","executionTime":3000}}}}}
+{"action":"observe","label":"after-result"}
+{"frame":{"type":"turn-ended","usage":{"inputTokens":10,"outputTokens":20,"cacheReadTokens":0,"cacheWriteTokens":0}}}
+{"action":"end","status":"finished","result":"And the second note."}

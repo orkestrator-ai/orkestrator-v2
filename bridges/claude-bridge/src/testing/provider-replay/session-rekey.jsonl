@@ -1,0 +1,7 @@
+{"replay":1,"bridge":"claude","scenario":"session-rekey","source":"synthetic","provider":"@anthropic-ai/claude-agent-sdk","providerVersion":"0.3.326","description":"The CLI's init names a session id other than the one the bridge derived; the bridge adopts it as the session's durable id and keeps one bridge session."}
+{"action":"prompt","text":"Continue"}
+{"frame":{"type":"system","subtype":"init","session_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","claude_code_version":"2.1.326","model":"claude-sonnet-4-6","cwd":"/replay/workspace","tools":["Read"],"mcp_servers":[],"slash_commands":[],"permissionMode":"default","apiKeySource":"none","output_style":"default","uuid":"00000000-0000-4000-8000-0000000000f0"}}
+{"frame":{"type":"assistant","message":{"id":"msg-rekey-1","model":"claude-sonnet-4-6","role":"assistant","content":[{"type":"text","text":"Continuing under the new session."}]},"parent_tool_use_id":null,"session_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","uuid":"00000000-0000-4000-8000-0000000000f1"}}
+{"frame":{"type":"result","subtype":"success","duration_ms":12,"duration_api_ms":10,"is_error":false,"num_turns":2,"result":"done","total_cost_usd":0,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"modelUsage":{},"permission_denials":[],"uuid":"00000000-0000-4000-8000-0000000000bf"}}
+{"action":"settle"}
+{"action":"end"}

@@ -546,6 +546,23 @@ const MAX_PENDING_COMMAND_CHANGES = 64;
  * first frame arrives. Newest messages first: the call is almost always in the
  * turn still running.
  */
+export function settleInterruptedTools(state: SessionState): void {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const row = state.messages[index]!;
+    if (row.role === "user") break;
+    let changed = false;
+    for (const part of row.parts) {
+      if (part.type !== "tool-invocation" || part.toolState !== "pending") continue;
+      part.toolState = "failure";
+      part.toolError = "Interrupted by user or provider";
+      chargeToolPart(state, part);
+      if (part.toolUseId) state.toolInputs.delete(part.toolUseId);
+      changed = true;
+    }
+    if (changed) rowChanged(state, row);
+  }
+}
+
 export function applyCommandChanges(
   state: SessionState,
   toolCallId: string,

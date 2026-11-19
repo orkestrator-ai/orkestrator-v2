@@ -290,6 +290,7 @@
     "./preview-services": "./src/preview-services.ts",
     "./node/progressive-transcript": "./src/node/progressive-transcript.ts",
     "./node/revised-rows": "./src/node/revised-rows.ts",
+    "./node/provider-replay-recorder": "./src/node/provider-replay-recorder.ts",
     "./project-arrangement": "./src/project-arrangement.ts",
     "./project-folders": "./src/project-folders.ts",
     "./project-icon": "./src/project-icon.ts",

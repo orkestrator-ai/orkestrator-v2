@@ -91,6 +91,7 @@ export interface TurnAccumulatorOptions {
   requestId?: string;
   /** True when the final agent message must be parsed as provider-constrained JSON. */
   expectsStructuredOutput?: boolean;
+  suppressAsyncQuestions?: boolean;
   engineGeneration: EngineGeneration;
   assistantMessageId: string;
   startedAt?: string;
@@ -156,6 +157,7 @@ export class TurnAccumulator {
   /** Identity of the current provider attempt; requestId owns logical result credit. */
   providerRequestId?: string;
   readonly expectsStructuredOutput: boolean;
+  readonly suppressAsyncQuestions: boolean;
   /** Assistant transcript row receiving newly introduced items in this turn. */
   assistantMessageId: string;
   readonly startedAt: string;
@@ -281,6 +283,7 @@ export class TurnAccumulator {
     this.turnId = options.turnId;
     this.requestId = options.requestId;
     this.expectsStructuredOutput = options.expectsStructuredOutput ?? false;
+    this.suppressAsyncQuestions = options.suppressAsyncQuestions ?? false;
     this.engineGeneration = options.engineGeneration;
     this.assistantMessageId = options.assistantMessageId;
     this.startedAt = options.startedAt ?? new Date().toISOString();

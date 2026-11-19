@@ -301,6 +301,12 @@ export function effectiveItem(
       // A response cut off before it said anything leaves nothing to show, and
       // nothing will ever arrive to fill the empty row in.
       if (accumulator.interrupted && !hasVisibleText(settled.text)) return null;
+      // Rollout replay already presents this as ordinary assistant text.
+      // Keep live Task questions out of both the actionable rows and the
+      // activity index, which is built from those rows.
+      if (turn.suppressAsyncQuestions && settled.delivery === "async") {
+        return { ...settled, delivery: undefined, questions: undefined };
+      }
       return settled;
     }
     case "reasoning": {

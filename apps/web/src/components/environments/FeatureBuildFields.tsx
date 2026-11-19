@@ -6,7 +6,8 @@ import {
   GitPullRequest,
   Hammer,
   ListChecks,
-  MessageSquareText,
+  ListTodo,
+  MessagesSquare,
   Plus,
   ScanSearch,
   ShieldCheck,
@@ -55,32 +56,50 @@ const BUILD_INTENTS: Array<{
 }> = [
   {
     value: "feature",
-    label: "A feature",
+    label: "Pipeline",
     description: "Specify what you want to build",
     icon: <Sparkles className="h-3.5 w-3.5" />,
   },
   {
-    value: "prompt",
-    label: "With a prompt",
-    description: "Ask the agent to do something",
-    icon: <MessageSquareText className="h-3.5 w-3.5" />,
+    value: "task",
+    label: "Task",
+    description: "Run a prompt, then wait for you",
+    icon: <ListTodo className="h-3.5 w-3.5" />,
+  },
+  {
+    value: "interactive",
+    label: "Interactive",
+    description: "Work through a prompt together",
+    icon: <MessagesSquare className="h-3.5 w-3.5" />,
   },
 ];
 
 /**
- * Which kind of environment each choice creates. The dialog keeps the
- * "feature" wording users think in; everywhere else the result is called a
- * pipeline environment or a prompt environment.
+ * Which kind of environment each choice creates, and whether its agent may
+ * talk with the user while it works (its interaction mode). Everywhere else
+ * the result is called a pipeline environment or a prompt environment.
  */
-const BUILD_INTENT_GUIDANCE: Record<BuildIntent, { kind: string; detail: string }> = {
+const BUILD_INTENT_GUIDANCE: Record<
+  BuildIntent,
+  { kind: string; interactive: string; detail: string }
+> = {
   feature: {
     kind: "pipeline environment",
+    interactive: "off",
     detail:
-      "build, review, address findings, verify, rework, PR and conflict resolution run automatically.",
+      "build, review, address findings, verify, rework, PR and conflict resolution run automatically, without asking you anything.",
   },
-  prompt: {
+  task: {
     kind: "prompt environment",
-    detail: "the agent runs one prompt; start review and the PR by hand or from a Coordinator.",
+    interactive: "off until the task is finished",
+    detail:
+      "the agent completes the prompt without asking you questions, then waits for you. Start review and the PR by hand or from a Coordinator.",
+  },
+  interactive: {
+    kind: "prompt environment",
+    interactive: "on",
+    detail:
+      "the agent can ask you questions and check decisions with you as it works. Start review and the PR by hand or from a Coordinator.",
   },
 };
 
@@ -151,7 +170,7 @@ export interface FeatureBuildFieldsProps {
   catalog: AgentModelCatalog;
   enabledPlatforms: LaunchAgent[];
   disabled?: boolean;
-  /** Rendered under the intent selector when "with a prompt" is chosen. */
+  /** Rendered under the intent selector when a prompt intent (task or interactive) is chosen. */
   promptFields: React.ReactNode;
   /** Image attachments rendered with the feature ticket fields. */
   featureAttachments?: React.ReactNode;
@@ -204,7 +223,10 @@ export function FeatureBuildFields({
             <p className="text-xs text-muted-foreground">{selectedIntent.description}</p>
           </div>
           <p className="text-xs text-muted-foreground" data-testid="build-intent-guidance">
-            Creates a <span className="font-medium text-foreground">{guidance.kind}</span>:{" "}
+            Creates a <span className="font-medium text-foreground">{guidance.kind}</span>
+            {", interactive "}
+            <span className="font-medium text-foreground">{guidance.interactive}</span>
+            {": "}
             {guidance.detail}
           </p>
         </div>

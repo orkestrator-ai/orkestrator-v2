@@ -754,10 +754,12 @@ describe("session ownership", () => {
 
 describe("Pi SDK lifecycle", () => {
   test("fails project resource discovery closed unless explicitly enabled and writable", () => {
+    // The user's own skills and templates load; the project's stay out
+    // through project trust (`capability-delivery-conformance.test.ts`).
     expect(projectResourceDiscoveryOptions(false)).toEqual({
       noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
+      noSkills: false,
+      noPromptTemplates: false,
       noContextFiles: false,
     });
     expect(projectResourceDiscoveryOptions(true)).toEqual({

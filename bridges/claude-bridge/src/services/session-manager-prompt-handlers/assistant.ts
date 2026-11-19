@@ -3,6 +3,7 @@ import type {
   SDKMessage,
   SDKUsageReport,
 } from "@anthropic-ai/claude-agent-sdk";
+import { invokedSkill, noteCapabilityUse } from "../capability-evidence.js";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import { claudePlanWindowFromKind } from "@orkestrator/protocol/plan-usage";
 import type { SdkMessageBase, SessionState, SessionUsageSnapshot } from "../../types/index.js";
@@ -183,6 +184,8 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
   // started the subagent.
   const evidenceParent = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
   for (const use of claudeToolUses(message)) {
+    const skill = invokedSkill(use.toolName, use.input);
+    if (skill) noteCapabilityUse(session, skill);
     recordClaudeToolUse(sessionId, {
       ...use,
       turnId: claudeEvidenceTurnId(turn),

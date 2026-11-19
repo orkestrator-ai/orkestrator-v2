@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Loader2, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
 import type {
   AccountMachine,
   AgentExtensionItem,
@@ -107,9 +108,21 @@ export function useAgentPlugins(
   };
 }
 
+/**
+ * Switching a plugin on or off, for a provider that keeps a per-plugin flag
+ * Orkestrator can edit (Codex's `config.toml`, `set_capability_plugin_enabled`).
+ * Absent for providers without one; `unavailable` explains why the switch is
+ * shown but cannot be used (for example, another machine's plugins).
+ */
+export type AgentPluginSwitch =
+  | { kind: "available"; setEnabled: (qualifiedId: string, enabled: boolean) => Promise<unknown> }
+  | { kind: "unavailable"; reason: string };
+
 interface AgentPluginsBrowserProps {
   state: AgentPluginsState;
   onReload: () => void;
+  /** The enable switch in a plugin's details; absent where the provider has none. */
+  pluginSwitch?: AgentPluginSwitch;
   /** The provider's scanned skills; undefined until a scan has completed. */
   skills: AgentSkill[] | undefined;
   skillsLoading?: boolean;
@@ -120,6 +133,7 @@ interface AgentPluginsBrowserProps {
 export function AgentPluginsBrowser({
   state,
   onReload,
+  pluginSwitch,
   skills,
   skillsLoading,
   skillsError,
@@ -145,7 +159,8 @@ export function AgentPluginsBrowser({
           (item.source?.toLowerCase().includes(needle) ?? false),
       )
     : plugins;
-  const selected = (plugins.find((plugin) => plugin.id === selectedId) ?? filtered[0])?.item;
+  const selectedEntry = plugins.find((plugin) => plugin.id === selectedId) ?? filtered[0];
+  const selected = selectedEntry?.item;
   const pluginError = state.catalog?.pluginError;
   // Scans currently expose only the short plugin name. Do not guess the marketplace.
   const ambiguous =
@@ -287,6 +302,14 @@ export function AgentPluginsBrowser({
                   {selected.source}
                 </p>
               )}
+              {pluginSwitch && selectedEntry ? (
+                <PluginEnabledSwitch
+                  key={selectedEntry.id}
+                  item={selected}
+                  pluginSwitch={pluginSwitch}
+                  onChanged={onReload}
+                />
+              ) : null}
             </div>
 
             <ScrollArea className="min-h-0 flex-1 p-4">
@@ -348,6 +371,85 @@ export function AgentPluginsBrowser({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Why a plugin's switch cannot be used, or `undefined` when it can. */
+function switchUnavailableReason(
+  item: AgentExtensionItem,
+  pluginSwitch: AgentPluginSwitch,
+): string | undefined {
+  if (pluginSwitch.kind === "unavailable") return pluginSwitch.reason;
+  if (!pluginQualifiedId(item)) {
+    return "The agent did not report which marketplace this plugin came from, so it cannot be switched here.";
+  }
+  if (item.status !== "configured" && item.status !== "disabled") {
+    return `The agent reports this plugin as ${STATUS_LABELS[item.status].toLowerCase()}; switch it in the agent itself.`;
+  }
+  return undefined;
+}
+
+function pluginQualifiedId(item: AgentExtensionItem): string | undefined {
+  return item.qualifiedId ?? (item.name.includes("@") ? item.name : undefined);
+}
+
+/**
+ * The plugin's on/off switch. The provider's own list is read back after the
+ * change, so what the switch shows is what the agent reports.
+ */
+function PluginEnabledSwitch({
+  item,
+  pluginSwitch,
+  onChanged,
+}: {
+  item: AgentExtensionItem;
+  pluginSwitch: AgentPluginSwitch;
+  onChanged: () => void;
+}) {
+  const [pending, setPending] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const reasonId = useId();
+  const unavailable = switchUnavailableReason(item, pluginSwitch);
+  const enabled = pending ?? item.status !== "disabled";
+  const qualifiedId = pluginQualifiedId(item);
+  const toggle = async (next: boolean) => {
+    if (pluginSwitch.kind !== "available" || !qualifiedId) return;
+    setPending(next);
+    setError(null);
+    try {
+      await pluginSwitch.setEnabled(qualifiedId, next);
+      onChanged();
+    } catch (toggleError) {
+      setError(toggleError instanceof Error ? toggleError.message : String(toggleError));
+    } finally {
+      setPending(null);
+    }
+  };
+  return (
+    <div className="mt-2 space-y-1" data-testid="plugin-enabled-switch">
+      <div className="flex items-center gap-2">
+        <Switch
+          checked={enabled}
+          disabled={unavailable !== undefined || pending !== null}
+          aria-label={`Enable ${item.name}`}
+          aria-describedby={reasonId}
+          onCheckedChange={(next) => void toggle(next)}
+        />
+        {/* The status pill above says on or off; this names the control (and is in its name). */}
+        <span className="text-xs text-foreground">Enable</span>
+        {pending !== null ? (
+          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" aria-hidden />
+        ) : null}
+      </div>
+      <p id={reasonId} className="text-[11px] text-muted-foreground">
+        {unavailable ?? "Changes this machine's agent configuration; new sessions pick it up."}
+      </p>
+      {error ? (
+        <p role="alert" className="text-xs text-failure">
+          Could not switch {item.name}: {error}
+        </p>
+      ) : null}
     </div>
   );
 }

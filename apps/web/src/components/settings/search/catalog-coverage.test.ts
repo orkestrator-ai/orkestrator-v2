@@ -47,7 +47,8 @@ describe("settings catalog", () => {
     const sections = new Set<string>(GLOBAL_SETTINGS_SECTIONS);
     const covered = new Set<string>(SETTINGS_CATALOG.map((descriptor) => descriptor.section));
     for (const descriptor of SETTINGS_CATALOG) expect(sections.has(descriptor.section)).toBe(true);
-    expect([...sections].filter((section) => !covered.has(section))).toEqual([]);
+    // The legacy Skills deep link opens the Installed tab within Capabilities.
+    expect([...sections].filter((section) => !covered.has(section))).toEqual(["skills"]);
   });
 
   test("every setting the shared form saves is catalogued with a value binding", () => {

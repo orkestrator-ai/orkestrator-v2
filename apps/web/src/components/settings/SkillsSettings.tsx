@@ -25,13 +25,18 @@ import type {
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
-import { AgentPluginsBrowser, useAgentPlugins } from "./AgentPluginsBrowser";
+import {
+  AgentPluginsBrowser,
+  useAgentPlugins,
+  type AgentPluginSwitch,
+} from "./AgentPluginsBrowser";
 import {
   SETTINGS_PAGE_BROWSER_WIDTH_CLASS,
   SettingsPageHeader,
   SettingsSectionHeader,
 } from "./SettingsPageLayout";
-import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useScopeApi, useScopeBackend } from "@/hooks/useScopeBackend";
+import { capabilitiesApi, createCapabilitiesApi } from "@/lib/backend/capabilities";
 
 const PROVIDERS: Array<{ id: AgentSkillProvider; label: string }> = [
   { id: "claude", label: "Claude" },
@@ -226,6 +231,26 @@ export function SkillsSettings({
   const showPlugins = !embedded;
   const [view, setView] = useState<"skills" | "plugins">("skills");
   const plugins = useAgentPlugins(provider, machine, showPlugins && view === "plugins");
+  // Codex keeps a per-plugin flag Orkestrator edits on the machine that answers
+  // (`set_capability_plugin_enabled`): the command node for `null`, this
+  // view's node for `undefined`, the same node the plugin list came from.
+  const scopeCapabilities = useScopeApi(createCapabilitiesApi, capabilitiesApi);
+  const pluginSwitch = useMemo((): AgentPluginSwitch | undefined => {
+    if (provider !== "codex") return undefined;
+    if (machine !== null && machine !== undefined) {
+      return {
+        kind: "unavailable",
+        reason:
+          "Orkestrator switches Codex plugins only on the machine Settings belongs to; open Orkestrator on that machine to switch this one.",
+      };
+    }
+    const api = machine === null ? capabilitiesApi : scopeCapabilities;
+    return {
+      kind: "available",
+      setEnabled: (qualifiedId, enabled) =>
+        api.setCapabilityPluginEnabled("codex", qualifiedId, enabled),
+    };
+  }, [provider, machine, scopeCapabilities]);
 
   /**
    * Guards both async paths against a stale response landing after the user has
@@ -477,6 +502,7 @@ export function SkillsSettings({
         <AgentPluginsBrowser
           key={provider}
           state={plugins.state}
+          {...(pluginSwitch ? { pluginSwitch } : {})}
           onReload={() => {
             plugins.reload();
             void loadProvider(provider);

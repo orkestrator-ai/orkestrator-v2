@@ -162,12 +162,15 @@ describe("resource-only command read (SDK pin)", () => {
 
   test("follows the session's resource policy", async () => {
     const { cwd, agentDir } = await fixture();
-    // Without project resources Pi's loader skips templates and skills
-    // altogether (user ones too), exactly as it does on attach.
+    // Without project resources Pi's loader keeps the project's templates
+    // and skills out (it is untrusted) and lists the user's own, exactly as
+    // it does on attach.
     const off = await recordingInstalls(() =>
       readResourceCommands({ cwd, agentDir, policy: policyFor(false) }),
     );
-    expect(off.result.commands).toEqual([]);
+    expect(names(off.result.commands)).toContain("/mine");
+    expect(names(off.result.commands)).not.toContain("/alpha");
+    expect(names(off.result.commands)).not.toContain("/skill:lint");
     const readOnly = await recordingInstalls(() =>
       readResourceCommands({ cwd, agentDir, policy: policyFor(true, true) }),
     );

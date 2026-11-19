@@ -24,6 +24,8 @@ export const NODES_LOG_AREAS = defineLogAreas({
       "grant.revocation-listener-failed":
         "A connection could not be told its client grant was removed; the grant is still gone.",
       "handover.recovery-pending": "Command handover recovery is still pending.",
+      "handover.capabilities-release-failed":
+        "The old command node could not record that its capability authority moved; it stays non-authoritative.",
       "ticket-sync.work-record-failed":
         "A remote build started but its ticket work location could not be saved.",
       "ticket-sync.failed": "A Kanban sync with a node failed; it is retried.",

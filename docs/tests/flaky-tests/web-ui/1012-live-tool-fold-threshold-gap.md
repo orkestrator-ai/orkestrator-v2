@@ -502,3 +502,19 @@ ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name tool-group-fold-o
 `mise run flaky:recurrence -- 1012 --base 5e9835d0a6981a8d2c217d8941e2e065abbe3008`
 reported the case open. The Settings branch leaves the fold implementation and
 test unchanged.
+
+## Capabilities merge validation on 2026-11-19
+
+The merge combined feature head `daa4699dcab5c2765e8291be914892b92dfd7a1b`
+with target parent `75f4aed74cf4cc9a50859d9deef0bc25b7081593`. The branch
+base was `fb2c01e830f497e51745bebd8d73a093fb4af90a`. The five-worker
+component run, `mise run test:logged -- --name merge-browser -- mise run test:browser`,
+finished with 1,964 passed, 155 skipped and three failed. The mobile
+no-preference-motion case measured 57 px against a 2 px limit at line 195.
+
+A private-port rerun of `e2e/HoverWashes.spec.ts` and
+`e2e/ToolGroupFold.spec.ts` with `--workers 1` through `test:logged` reported
+47 passed, one skipped and four failed. This case measured 13 px on mobile
+and 11 px on desktop. With one worker on the detached target parent, the
+exact case also failed on both viewports, at 12 px on mobile and 95 px on
+desktop. The recurrence check confirmed the case was open at the branch base.

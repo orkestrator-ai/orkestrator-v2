@@ -593,6 +593,12 @@ export interface ProviderSendOptions {
      */
     artifacts?: { token: string };
   };
+  /**
+   * Claude only: plugin directories Orkestrator staged for this session
+   * alone (Agent Capabilities session-private delivery). Frozen at launch;
+   * every turn of the session passes the same directories.
+   */
+  capabilityPlugins?: string[];
 }
 
 export type ProviderPrepareDispatchOptions = {
@@ -1164,6 +1170,15 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     sessionId: string,
     options?: ProviderReadOptions,
   ): Promise<ProviderMcpConfigReport>;
+  /**
+   * Agent Capabilities runtime proof: what the session's provider reported
+   * loading and invoking, from the no-touch `/session/:id/capability-evidence`
+   * route (`http-bridge/capability-evidence.ts`). Backend only.
+   */
+  capabilityEvidence?(
+    sessionId: string,
+    options?: ProviderReadOptions,
+  ): Promise<import("@orkestrator/protocol/capability-evidence").CapabilitySessionEvidenceRead>;
 }
 
 /**

@@ -31,6 +31,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "workflow-result.store-unavailable":
         "The workflow result store is unavailable, so the provider's result is used.",
       "catalogue.refresh-failed": "A provider's command catalogue could not be refreshed.",
+      "dispatch.capability-plugins-failed":
+        "A Claude session's private capability plugin (Agent Capabilities) could not be produced for a turn; the turn is refused.",
       "dispatch.attach-failed":
         "Attaching an agent before dispatch failed; the prompt request answers authoritatively.",
       "coordinator-context.ack-failed": "Coordinator repository context could not be acknowledged.",

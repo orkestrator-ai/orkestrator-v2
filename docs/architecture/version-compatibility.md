@@ -420,7 +420,7 @@ the last five).
 ### Domains and versions
 
 A domain groups the commands and events that change together. The domain
-names are `DOMAIN_NAMES` in `contract/domain.ts` (29 today); `defineDomain`
+names are `DOMAIN_NAMES` in `contract/domain.ts` (30 today); `defineDomain`
 accepts only those, so a new domain is added there first.
 
 ```ts

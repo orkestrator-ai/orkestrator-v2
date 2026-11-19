@@ -115,10 +115,17 @@ function stubBridgeSpawn(respond: (spawned: ProbeSpawn) => unknown): void {
     spawns.push(spawned);
     const child = createFakeChild();
     children.push(child);
-    // A real bridge announces its bind once it listens; startup waits for it.
-    void Promise.resolve(respond(spawned)).then(() =>
-      announceFakeBridgeReady(child.stdout, spawned.env.PORT ?? ""),
-    );
+    void Promise.resolve(respond(spawned)).then(() => {
+      const port = Number(spawned.env.PORT);
+      if (
+        servers.some((server) => {
+          const address = server.address();
+          return address && typeof address !== "string" && address.port === port;
+        })
+      ) {
+        announceFakeBridgeReady(child.stdout, port);
+      }
+    });
     return child;
   }) as never;
 }

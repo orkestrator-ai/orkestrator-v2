@@ -6,6 +6,7 @@
     "accounts": { "current": 1, "adapters": [1, 0] },
     "agent-mail": { "current": 2, "adapters": [2, 1, 0] },
     "agent-servers": { "current": 2, "adapters": [2, 1, 0] },
+    "capabilities": { "current": 1, "adapters": [1, 0] },
     "claude-tmux": { "current": 1, "adapters": [1, 0] },
     "config": { "current": 2, "adapters": [2, 1, 0] },
     "coordinator": { "current": 1, "adapters": [1, 0] },

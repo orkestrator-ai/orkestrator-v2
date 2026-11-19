@@ -90,8 +90,8 @@ describe("extension discovery parsers", () => {
         ]),
       ),
     ).toEqual([
-      { name: "lint", status: "disabled", source: "project" },
-      { name: "review", status: "configured", source: "user" },
+      { name: "lint", status: "disabled", source: "project", qualifiedId: "lint@team" },
+      { name: "review", status: "configured", source: "user", qualifiedId: "review@official" },
     ]);
   });
 
@@ -135,6 +135,7 @@ describe("extension discovery parsers", () => {
         name: "documents",
         status: "configured",
         source: "runtime",
+        qualifiedId: "documents@runtime",
       },
     ]);
   });
@@ -276,7 +277,7 @@ describe("plugin identity", () => {
       parseClaudePlugins(JSON.stringify([{ id: "@team/review@official" }, { id: "@team/lint" }])),
     ).toEqual([
       { name: "@team/lint", status: "configured" },
-      { name: "@team/review", status: "configured" },
+      { name: "@team/review", status: "configured", qualifiedId: "@team/review@official" },
     ]);
   });
 
@@ -289,15 +290,15 @@ describe("plugin identity", () => {
         ]),
       ),
     ).toEqual([
-      { name: "review", status: "configured", source: "project" },
-      { name: "review", status: "configured", source: "user" },
+      { name: "review", status: "configured", source: "project", qualifiedId: "review@internal" },
+      { name: "review", status: "configured", source: "user", qualifiedId: "review@official" },
     ]);
   });
 
   test("prefers an explicit name field over the id", () => {
     expect(
       parseClaudePlugins(JSON.stringify([{ id: "review@official", name: "Review Helper" }])),
-    ).toEqual([{ name: "Review Helper", status: "configured" }]);
+    ).toEqual([{ name: "Review Helper", status: "configured", qualifiedId: "review@official" }]);
   });
 
   test("drops records that carry neither an id nor a name", () => {
@@ -351,8 +352,13 @@ describe("parseCodexPlugins edge cases", () => {
     });
 
     expect(parseCodexPlugins(output)).toEqual([
-      { name: "@team/docs", status: "configured", source: "runtime" },
-      { name: "legacy", status: "disabled", source: "runtime" },
+      {
+        name: "@team/docs",
+        status: "configured",
+        source: "runtime",
+        qualifiedId: "@team/docs@runtime",
+      },
+      { name: "legacy", status: "disabled", source: "runtime", qualifiedId: "legacy@runtime" },
     ]);
   });
 
@@ -467,7 +473,7 @@ describe("parseOpenCodeConfig edge cases", () => {
       ),
     ).toEqual([
       { name: "cursor-review", status: "configured", source: "user" },
-      { name: "lint", status: "disabled" },
+      { name: "lint", status: "disabled", qualifiedId: "lint@cursor" },
     ]);
   });
 
@@ -783,7 +789,7 @@ describe("discoverAgentExtensions", () => {
     expect(catalogFor(await discoverAgentExtensions(run), "claude")).toEqual({
       agent: "claude",
       mcpServers: [],
-      plugins: [{ name: "review", status: "configured" }],
+      plugins: [{ name: "review", status: "configured", qualifiedId: "review@official" }],
       mcpError: "Could not read Claude MCP servers.",
     });
   });
@@ -1045,8 +1051,8 @@ describe("discoverAgentPlugins", () => {
     await expect(discoverAgentPlugins("claude", run)).resolves.toEqual({
       agent: "claude",
       plugins: [
-        { name: "stripe", status: "disabled", source: "project" },
-        { name: "vercel", status: "configured", source: "user" },
+        { name: "stripe", status: "disabled", source: "project", qualifiedId: "stripe@official" },
+        { name: "vercel", status: "configured", source: "user", qualifiedId: "vercel@official" },
       ],
     });
     expect(calls).toEqual(["claude plugin list --json"]);

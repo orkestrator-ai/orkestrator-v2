@@ -25,6 +25,7 @@ import {
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
 import type { PermissionMode, PromptOptions, SessionState } from "../types/index.js";
+import { capabilitySessionPlugins } from "./capability-session-plugins.js";
 import { coordinatorSkillPlugins, coordinatorSkillSources } from "./coordinator-skills.js";
 import { getPluginsForSdk, type SdkPluginConfig } from "./plugin-config.js";
 import {
@@ -309,14 +310,20 @@ export async function resolveClaudeTurnPlugins(
   cwd: string,
   policy: NativeAgentExecutionPolicy | undefined,
   settingSources: readonly SettingSource[],
+  capabilityPlugins?: readonly string[],
 ): Promise<ClaudeTurnPlugins> {
-  const [plugins, skills] = await Promise.all([
+  const [plugins, skills, sessionPlugins] = await Promise.all([
     getPluginsForSdk(cwd, policy?.projectResources !== false, settingSources),
     loadsCoordinatorSkills(policy)
       ? coordinatorSkillPlugins(coordinatorSkillSources(cwd))
       : { plugins: [], skills: [] },
+    // Agent Capabilities delivered to this session alone.
+    capabilitySessionPlugins(capabilityPlugins, policy),
   ]);
-  return { plugins: [...plugins, ...skills.plugins], coordinatorSkills: skills.skills };
+  return {
+    plugins: [...plugins, ...skills.plugins, ...sessionPlugins],
+    coordinatorSkills: skills.skills,
+  };
 }
 
 export interface ClaudeDiscoveryConfig {

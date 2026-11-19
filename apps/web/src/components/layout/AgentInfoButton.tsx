@@ -70,6 +70,7 @@ import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { MultiReviewReviewer } from "@orkestrator/protocol/multi-review";
 import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
+import { AgentInfoCapabilitiesSection } from "./AgentInfoCapabilitiesSection";
 import { SignInExpiry } from "@/components/native-agent/SignInExpiry";
 import { SessionBranchPicker } from "@/components/native-agent/SessionBranchPicker";
 import { directSteerNotice } from "@/components/native-agent/auto-steer";
@@ -392,6 +393,11 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     (state) =>
       state.environments.find((environment) => environment.id === activeSession?.environmentId)
         ?.containerId,
+  );
+  const sessionProjectId = useEnvironmentStore(
+    (state) =>
+      state.environments.find((environment) => environment.id === activeSession?.environmentId)
+        ?.projectId,
   );
   const sessionContainerId =
     (activeTab ? getNativeAgentData(activeTab)?.containerId : undefined) ??
@@ -1817,6 +1823,18 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     })
                   }
                 />
+                {isCoordinatorSession ? null : (
+                  <AgentInfoCapabilitiesSection
+                    nodeId={nodeScope.nodeId}
+                    environmentId={activeSession.environmentId}
+                    projectId={sessionProjectId}
+                    provider={activeSession.provider}
+                    sessionKey={activeSession.sessionKey}
+                    running={(neutralProjection?.turn.phase ?? "idle") !== "idle"}
+                    policy={neutralProjection?.policy}
+                    readOnly={isWorkflowSession}
+                  />
+                )}
                 {activeSession.provider === "claude" ? (
                   <div
                     className={cn(

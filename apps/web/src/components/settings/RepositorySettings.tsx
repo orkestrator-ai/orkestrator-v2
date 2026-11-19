@@ -8,6 +8,7 @@ import {
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
+import { ProjectCapabilitiesSection } from "./capabilities/ProjectCapabilitiesSection";
 import { SlidersHorizontal } from "lucide-react";
 import { agentSettingsTiers } from "@/lib/agent-settings";
 import {
@@ -39,6 +40,7 @@ import {
   ImageUp,
   Settings2,
   Bot,
+  Sparkles,
   GitBranch,
   RefreshCw,
 } from "lucide-react";
@@ -552,6 +554,7 @@ export function RepositorySettings({
     { id: "ports", label: "Ports", icon: <Network className="h-4 w-4" /> },
     { id: "files", label: "Files", icon: <FileText className="h-4 w-4" /> },
     { id: "coordinator", label: "Coordinator", icon: <Bot className="h-4 w-4" /> },
+    { id: "capabilities", label: "Capabilities", icon: <Sparkles className="h-4 w-4" /> },
   ];
 
   const renderRepoSection = (section: string) => {
@@ -762,6 +765,8 @@ export function RepositorySettings({
             scopeLabel="this repository"
           />
         );
+      case "capabilities":
+        return <ProjectCapabilitiesSection projectId={project.id} />;
       case "coordinator":
         return (
           <div className="space-y-6">

@@ -14,6 +14,7 @@ import type { SettingDescriptor, SettingScope, SettingTiming } from "./types";
  */
 export const COMMAND_NODE_SECTIONS: ReadonlySet<GlobalSettingsSection | ""> = new Set([
   "machines",
+  "capabilities",
   "review",
   "messaging",
   "schedules",
@@ -71,7 +72,7 @@ export const SECTIONS_OUTSIDE_SHARED_FORM: ReadonlySet<GlobalSettingsSection> = 
   "machines",
   "disk-usage",
   "usage",
-  "skills",
+  "capabilities",
   "mcp",
   "mcp-servers",
   "messaging",

@@ -28,6 +28,8 @@ import {
 } from "@orkestrator/protocol/login-snapshots";
 import { claudeContainerPluginSettings } from "@orkestrator/protocol/node/claude-plugin-set";
 import { SHARED_SKILLS_INPUT } from "@orkestrator/protocol/container-recovery";
+import { readLocationIndex } from "./capabilities/native-ownership.js";
+import { CAPABILITY_LOCATION_INDEX, CAPABILITY_MARKER_FILE } from "./capabilities/security.js";
 import { claudeContainerConfig } from "./claude-container-config.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 import { platformDescriptorClone, type DescriptorClone } from "./portable-inputs-clone.js";
@@ -58,9 +60,10 @@ import { platformDescriptorClone, type DescriptorClone } from "./portable-inputs
  * version 5 adds the shared `~/.agents/skills` and stages a linked skill;
  * version 6 stages `.claude.json` through `claudeContainerConfig`; version 7
  * leaves a skill's oversized files out instead of the whole skill, and its
- * credential guard ignores example and placeholder values.
+ * credential guard ignores example and placeholder values. Version 8 leaves
+ * managed flat resources to the container capability plan.
  */
-export const PORTABLE_INPUT_SPEC_VERSION = 7;
+export const PORTABLE_INPUT_SPEC_VERSION = 8;
 
 export type InputLimits = {
   fileBytes: number;
@@ -545,6 +548,8 @@ export interface StagedInputs {
   stagedAt: string;
   /** Files reflinked rather than copied ({@link FileCloner}); not in the manifest. */
   clonedFiles: number;
+  /** What `StagingOptions.beforeCommit` recorded in the manifest. */
+  extensions?: Record<string, unknown>;
 }
 
 class Budget {
@@ -662,6 +667,15 @@ export interface StagingOptions {
    * its files are copied, so a test can change the source in between.
    */
   afterListing?: (source: string) => Promise<void> | void;
+  /**
+   * Runs inside the partial revision after the allowlisted inputs are copied
+   * and before the revision is committed: Agent Capabilities stages the
+   * effective manifest's packages into the provider directories here
+   * (`capabilities/container-staging.ts`). Its answer is kept in the
+   * revision's manifest under `extensions`; a stage it creates is mounted
+   * like any other.
+   */
+  beforeCommit?: (partialDirectory: string) => Promise<Record<string, unknown> | undefined>;
 }
 
 /**
@@ -811,6 +825,12 @@ async function listTree(
       if (!relative && exclude.includes(name)) continue;
       const child = relative ? `${relative}/${name}` : name;
       const stat = await lstat(path.join(root, child));
+      if (name === CAPABILITY_LOCATION_INDEX && !stat.isFile()) throw new Skip("unreadable");
+      if (name === CAPABILITY_MARKER_FILE || name === CAPABILITY_LOCATION_INDEX) {
+        entries.push({ relative: child, kind: "file", size: 0 });
+        if (entries.length > maxEntries) throw new Skip("too-many-entries");
+        continue;
+      }
       if (stat.isSymbolicLink()) {
         symlinks += 1;
         continue;
@@ -1041,7 +1061,39 @@ class ProviderCopier {
     options: { skill?: boolean; verify?: () => Promise<void> } = {},
   ): Promise<void> {
     const { skill = false, verify } = options;
+    // Managed skills enter the container only through its effective capability plan.
+    if (
+      skill &&
+      (await lstat(path.join(source, CAPABILITY_MARKER_FILE)).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        },
+      ))
+    )
+      return;
     const listed = await listTree(source, this.limits.directoryEntries, exclude);
+    // Whole provider configuration trees may contain both ownership formats.
+    const managed = new Set<string>();
+    for (const entry of listed.entries) {
+      const name = path.posix.basename(entry.relative);
+      const parent = path.posix.dirname(entry.relative);
+      if (name === CAPABILITY_MARKER_FILE) managed.add(parent);
+      if (name !== CAPABILITY_LOCATION_INDEX) continue;
+      managed.add(entry.relative);
+      await assertNoSymlinkAncestry(source, entry.relative);
+      const index = await readLocationIndex(path.join(source, parent), { strict: true });
+      for (const name of Object.keys(index.files)) {
+        managed.add(path.posix.join(parent, name));
+      }
+    }
+    const stagedEntries = listed.entries.filter(({ relative }) => {
+      for (let entry = relative; entry !== "."; entry = path.posix.dirname(entry)) {
+        if (managed.has(entry)) return false;
+      }
+      return !managed.has(".");
+    });
     const skipped = new Map<SkipReason, number>();
     const leaveOut = (reason: SkipReason, count = 1) =>
       skipped.set(reason, (skipped.get(reason) ?? 0) + count);
@@ -1050,10 +1102,10 @@ class ProviderCopier {
       entry.kind === "file" && entry.size > this.limits.fileBytes;
     // Only a skill's optional files may be left out; its SKILL.md never is.
     const optional = (entry: TreeEntry) => skill && entry.relative !== "SKILL.md";
-    const dropped = listed.entries.filter((entry) => oversized(entry) && optional(entry)).length;
+    const dropped = stagedEntries.filter((entry) => oversized(entry) && optional(entry)).length;
     const entries = dropped
-      ? listed.entries.filter((entry) => !(oversized(entry) && optional(entry)))
-      : listed.entries;
+      ? stagedEntries.filter((entry) => !(oversized(entry) && optional(entry)))
+      : stagedEntries;
     if (dropped > 0) leaveOut("too-large", dropped);
     const bytes = entries.reduce((sum, entry) => sum + entry.size, 0);
     if (bytes > this.limits.directoryBytes) throw new Skip("too-large");
@@ -1132,9 +1184,18 @@ class ProviderCopier {
       if (!stat) return;
       if (stat.isSymbolicLink()) throw new Skip("symlink");
       if (!stat.isDirectory()) throw new Skip("not-regular");
-      const names = (await readdir(directory))
+      const listed = await readdir(directory);
+      const index = listed.includes(CAPABILITY_LOCATION_INDEX)
+        ? await readLocationIndex(directory, { strict: true })
+        : undefined;
+      const names = listed
         .sort()
-        .filter((name) => !(spec.exclude ?? []).includes(name));
+        .filter(
+          (name) =>
+            name !== CAPABILITY_LOCATION_INDEX &&
+            !Object.hasOwn(index?.files ?? {}, name) &&
+            !(spec.exclude ?? []).includes(name),
+        );
       if (names.length > this.limits.directoryEntries) throw new Skip("too-many-entries");
       for (const name of names) {
         try {
@@ -1275,6 +1336,23 @@ export async function stagePortableInputs(
       }
       summaries.push(copier.summary);
     }
+    const extensions = options.beforeCommit ? await options.beforeCommit(partial) : undefined;
+    if (extensions) {
+      // A stage the hook created (no host files of that kind) still needs its mount.
+      for (const spec of specs) {
+        if (!providers.has(spec.provider)) continue;
+        for (const source of spec.directories) {
+          if (mounts.some((mount) => mount.target === source.target)) continue;
+          const created = await lstat(path.join(partial, source.stage)).then(
+            (info) => info.isDirectory(),
+            () => false,
+          );
+          if (created) {
+            mounts.push({ source: path.join(directory, source.stage), target: source.target });
+          }
+        }
+      }
+    }
     const stagedAt = now.toISOString();
     await writeFile(
       path.join(partial, "manifest.json"),
@@ -1283,6 +1361,7 @@ export async function stagePortableInputs(
         revision,
         stagedAt,
         providers: summaries,
+        ...(extensions ? { extensions } : {}),
       }),
       { mode: 0o600 },
     );
@@ -1295,6 +1374,7 @@ export async function stagePortableInputs(
       specVersion: PORTABLE_INPUT_SPEC_VERSION,
       stagedAt,
       clonedFiles: cloner.cloned,
+      ...(extensions ? { extensions } : {}),
     };
   } catch (error) {
     await rm(partial, { recursive: true, force: true }).catch(() => undefined);
@@ -1486,6 +1566,7 @@ export interface EnvironmentInputsManifest {
   stagedAt: string;
   specVersion: number;
   providers: ProviderInputSummary[];
+  extensions?: Record<string, unknown>;
 }
 
 export async function readInputsManifest(

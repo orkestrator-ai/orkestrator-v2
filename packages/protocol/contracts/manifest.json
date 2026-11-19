@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1026,
-    "defined": 1026,
+    "commands": 1082,
+    "defined": 1082,
     "untyped": 0,
-    "events": 45
+    "events": 48
   },
   "untypedByDomain": {},
   "domains": {
@@ -19,6 +19,10 @@
     },
     "agent-servers": {
       "version": 2,
+      "min": 1
+    },
+    "capabilities": {
+      "version": 1,
       "min": 1
     },
     "claude-tmux": {
@@ -280,6 +284,15 @@
       "argsDigest": "sha256:09b98d2f663f831e2d4716ee2f2733752318c6600593ec2efa521191753f3746",
       "resultDigest": "sha256:e7c4caca8f1336b84fb49c78b9c5c5d28f996b24a16e747c8fe29ec23a4fafa8"
     },
+    "adopt_external_capability": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:eae6b0af4b45790c867aa61683eef73b1f9b75f725b5da81b75c5df71f566ecd",
+      "resultDigest": "sha256:ce6679aeb7c377365bdf1b0192935b1980473f0940eed29d20e2973238508319"
+    },
     "adopt_native_agent_session": {
       "domain": "native-sessions",
       "since": 1,
@@ -297,6 +310,24 @@
       "critical": [],
       "argsDigest": "sha256:57167a617095ad9edc9b86373fd2697e81cb22d9c9d7ee658f72e5db55f64fd1",
       "resultDigest": "sha256:ae0d30c46a376c0fba94960e2b8c66e97add0bc7c0ba90c1ba4376e292863992"
+    },
+    "answer_capability_node_launch": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:510eb7a99ceb20f0ae9a6eeac9e521864aecda302350f8b96ed65043c287981c",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
+    },
+    "answer_capability_node_request": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:510eb7a99ceb20f0ae9a6eeac9e521864aecda302350f8b96ed65043c287981c",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
     },
     "answer_controller_worker_question": {
       "domain": "coordinator",
@@ -351,6 +382,33 @@
       "critical": [],
       "argsDigest": "sha256:899d146880f566105249ca59935fe14fcfde85cff3e65d884f3a1ea11d9d868e",
       "resultDigest": "sha256:db8a58a4030483aa11cfdcc207769190e65cf9c022828bdf7c032de6caea5748"
+    },
+    "apply_capability_change": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7059ebb46d5a8839b83b41106e137ef6f366995f595ae5da1a44ea090bc64150",
+      "resultDigest": "sha256:252a98bc8ff092f1a24fa2b9ad5a4b3da5736a644b37a771ab291dc9d47b1465"
+    },
+    "apply_capability_node_environment_plan": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e9c11b6d0040495264d9861a1c39d10cf95858ec61aa41cfe4fd3538b67d6a0f",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
+    },
+    "apply_capability_node_plan": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e1c84359938b120c2ed6c706b5d7a0d8d5ee6f07e4550cbf4992b9094e6680df",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
     },
     "apply_controller_root_patch": {
       "domain": "coordinator",
@@ -432,6 +490,15 @@
       "critical": ["liveIds", "reset"],
       "argsDigest": "sha256:20b586a7940fc8a1ff56fe55e6c4e7527357a26eb6815b57bae44771705056de",
       "resultDigest": "sha256:8a62babc0519cc8dc63a8493a1025d0e86913952348111019aab4e16dc0748da"
+    },
+    "approve_capability_update": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1ccf68f28ee5528636a964df6257d15a944dad443dd4db0cb6b9f23301bc0632",
+      "resultDigest": "sha256:252a98bc8ff092f1a24fa2b9ad5a4b3da5736a644b37a771ab291dc9d47b1465"
     },
     "approve_credential_request": {
       "domain": "config",
@@ -550,6 +617,15 @@
       "argsDigest": "sha256:377797b539abc986d658652e842ccfab17c8721c4d61779588dbc42ab72f2768",
       "resultDigest": "sha256:6140be35d86a3f441ec8256bd2b46950f199de530d68304d5954687b25c230e4"
     },
+    "assign_capability_setup": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:854f65dd085afa496eeafd0bc880c56d169cbad5f74bdcb673244d34970f615f",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
+    },
     "assign_coordinator_conversation_agent": {
       "domain": "coordinator",
       "since": 1,
@@ -576,6 +652,15 @@
       "critical": [],
       "argsDigest": "sha256:96031f3d97ee183aa98990b5094516bd02e2263566cbeed64b653bdc3483b01a",
       "resultDigest": "sha256:001f57eeae7a1bea83fd92f7633e3e68dac21a44111f9a6e6c0d4b40725eda1a"
+    },
+    "author_capability_package": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:32e879610bdce1ae034813894667fcb37b2d566f6d137a43936f43364ae6c71c",
+      "resultDigest": "sha256:ce6679aeb7c377365bdf1b0192935b1980473f0940eed29d20e2973238508319"
     },
     "auto_pipeline_sources": {
       "domain": "pipelines",
@@ -666,6 +751,15 @@
       "critical": [],
       "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
       "resultDigest": "sha256:a07846e6c0c637d3c664ad1f1918dddc92004bc963da66f77bd3e7260bf058d8"
+    },
+    "cancel_capability_operation": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4fe644ba27b30ef7fa04e0178c117fd60ae2296d9887f4dcc5d3dc20ee8b905e",
+      "resultDigest": "sha256:beedc389c9cec3f49a69adeb32e5a824041788d0c97d4c06a6ccda61c2c2f7ac"
     },
     "cancel_container_operation": {
       "domain": "environments",
@@ -1843,6 +1937,15 @@
       "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
       "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
+    "delete_capability_setup": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:64e195489512a1d34aa45ac95077cfde461f89be213f2697ca6a4f6901f36770",
+      "resultDigest": "sha256:b99eaa05b0b69852951ee591d77c79f583d806af13c1c314f22ff27e2d9ded07"
+    },
     "delete_compose_draft": {
       "domain": "native-sessions",
       "since": 1,
@@ -2628,6 +2731,24 @@
       "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
       "resultDigest": "sha256:7ddf00abb9b5c7902dbaf4ec272b82286b1108d499b97ab3dadff311063a4219"
     },
+    "export_capability_node_item": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:767e9a1c6bac52a2180f96fdfd9e2e8c213479194c0dafcf91524dc896fe3d48",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
+    },
+    "export_capability_setup": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:70bf6c4a9aa42f20d1fe96f3b49be87cea799a21e01c4bfcef5c7b89d4d773d6",
+      "resultDigest": "sha256:9e413728979a124101f00891484f68d31eec9829ae56f7dd5399955d48a853f4"
+    },
     "export_linear_connection": {
       "domain": "ticket-sync",
       "since": 1,
@@ -2951,6 +3072,105 @@
       "critical": [],
       "argsDigest": "sha256:67a7508d0f94643b4b28c2021da625b36461e509d7d3a887cdc09977afda241f",
       "resultDigest": "sha256:eb6f957593f316ad6b7a341f760e69b2358fda182b01e75d8e17299517b51e45"
+    },
+    "get_capability_admin_policy": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:dc4461da6452b82e83c53992bf8243c5c3469b7fb675bd96a69e9a95e1c69e64"
+    },
+    "get_capability_assignment": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:83359594c9d2c234b86f774694d10da6008ca9c08cd3442344fac65ecc74d933",
+      "resultDigest": "sha256:1a8c2523766f7381b636475f94caba2609d72fa6c01e846646853f6eed8c9d63"
+    },
+    "get_capability_environment_delivery": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0d06dac3e0feeea0fa7bb17fb897b9dcf70e0737968a71773042e55514216032",
+      "resultDigest": "sha256:adefbb1bc89378611f7ef4a9ba4003e991071a337aa9c45f27ea042b5ef1f52b"
+    },
+    "get_capability_inventory": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:280e6acdf0384cbe23a1f0c876d75baef40d854b47c4c676dbcb14093384b9d1",
+      "resultDigest": "sha256:c157da2da4414f64e6d262692b4bab67e1dd1365ec316807bb42a88a3e2ca4b2"
+    },
+    "get_capability_node_container_delivery": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:de40500c73c70228e600989e791c2ff94f635688c4e8fc52ab58e979e863a296",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
+    },
+    "get_capability_node_environment_observation": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:b98d6e9c97cd7d214313a38f93e219f473f51aeab7fb8c47636db50d40263e1b",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
+    },
+    "get_capability_node_observation": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:25c9a2e5518bc2d0378cc7de2e50522066c9577dd78f4b7358b317167dcb9226",
+      "resultDigest": "sha256:c157da2da4414f64e6d262692b4bab67e1dd1365ec316807bb42a88a3e2ca4b2"
+    },
+    "get_capability_operation": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4fe644ba27b30ef7fa04e0178c117fd60ae2296d9887f4dcc5d3dc20ee8b905e",
+      "resultDigest": "sha256:beedc389c9cec3f49a69adeb32e5a824041788d0c97d4c06a6ccda61c2c2f7ac"
+    },
+    "get_capability_package": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:f14e632078a3176b62dd080ed961ad4eb2888bd01543ee30e0ea496ed07c5cc2",
+      "resultDigest": "sha256:a6ec6bb9171f2f0bad775097cf11ada75a1f39c761f4f77e5465cdef74fec34e"
+    },
+    "get_capability_session_view": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:d641de55ae50b00f8ab456f5873b18f2f68c1f3313f0695c5d2dcb46055c2d84",
+      "resultDigest": "sha256:2fbf8e0c73002480dc076fbc57aa0e9021697d754e290b2a8fd438e48b412886"
+    },
+    "get_capability_target_support": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:2c746133a9675c24e725bf1244004abd9df475b5aa639ac7f9250daa46176bf2",
+      "resultDigest": "sha256:670cd3bbfd13c3caaa92e0a1d46f1ad228e632d799b0e56f7271fb3c63a7b03f"
     },
     "get_claude_model_catalog": {
       "domain": "agent-servers",
@@ -3311,6 +3531,15 @@
       "critical": [],
       "argsDigest": "sha256:cfcf1119dda31479cf9e39ab26e9bde04ce4366a684131a66d683e6ef804c070",
       "resultDigest": "sha256:d31ab02079289105570d10f1cf1bd058a4a06d0dcf98a5382d7a0e246f4c3e1b"
+    },
+    "get_effective_agent_resources": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:ba50fd3c70934f7486c090fe22a4cec970df5e9bad0bc8ac4f487f4f6a736b22",
+      "resultDigest": "sha256:680b805a9b1e5ff2d0e671f8c36909205946ee69993647d6981943fc37ea85d6"
     },
     "get_environment": {
       "domain": "environments",
@@ -5004,6 +5233,15 @@
       "argsDigest": "sha256:cd9fc5943a85f7af615279bedea848a1418c8d9e9e04ca6d0c3fb37dd323f64a",
       "resultDigest": "sha256:91fe2cc1513288699c8be9d13a604eb879193c2e09ccdb4f3687282277bee0b0"
     },
+    "import_capability_setup": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:89d077ef477548571a41d9421961f3bf6f49ab0bc0399f2d39544cbc78ef1bca",
+      "resultDigest": "sha256:b99eaa05b0b69852951ee591d77c79f583d806af13c1c314f22ff27e2d9ded07"
+    },
     "import_desktop_connections": {
       "domain": "nodes",
       "since": 1,
@@ -5012,6 +5250,15 @@
       "critical": [],
       "argsDigest": "sha256:a4c37688a38b9796cd1afbeb9cced6dbd7bf85f31f808d196bd0dc6567e7dd49",
       "resultDigest": "sha256:2e4be3996d0eb7b798ef6aaf4e99d95f2daa2ff484b74bb391188c497d98e2b6"
+    },
+    "inspect_capability_source": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:95d92e99c9ceb77de782ca63d79d6a4b7ea47b0ccb04ca9be07d8094d7f879be",
+      "resultDigest": "sha256:ce6679aeb7c377365bdf1b0192935b1980473f0940eed29d20e2973238508319"
     },
     "invoke_on_node": {
       "domain": "nodes",
@@ -5209,6 +5456,87 @@
       "critical": [],
       "argsDigest": "sha256:0f056c475222c3f13c5e51dc41dd1f21f294bd87353135702db38ff421a98783",
       "resultDigest": "sha256:321f59c868c16a186733b1239fc0a44056b2c52587f77f22241db9f67790555e"
+    },
+    "list_capability_activity": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:42adfb48222b43b746b90e10785f791510db8cb697107b748502797564f6d4e9",
+      "resultDigest": "sha256:200957f6b25dcb5404535a36e0d54cb5da3e081f008883488c838a1b0edfeff0"
+    },
+    "list_capability_drift": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a2705767c2f751f084f53c07e3e1db9ecfc15b7b59936221d92beb6fd3cd38e3",
+      "resultDigest": "sha256:374ece50a9fcb870902326dc7551d62635c1d2d6fc65022fb79a058740242218"
+    },
+    "list_capability_machines": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:7acdda907a40c57ea2b303c545f54d61ae032157dab6bae646cfa066d2b7ed8f"
+    },
+    "list_capability_operations": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:485a228836ad6d99d71285d5cea86185e105f540bd935c7b3fed3c340708bade",
+      "resultDigest": "sha256:d37cffad2dce0785cac0f8c9f32d8c1864b38f8fc228d8c2cb80febf18caf32b"
+    },
+    "list_capability_packages": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:ee796586241b4dba80de12fdd7441940ddd4cdfbf78cf5d7f1cf491ad0a704e2",
+      "resultDigest": "sha256:4ebf7f846255720d14d1145b9be6282aaa2b1d0c7c4c58ce90f2da0e2d154801"
+    },
+    "list_capability_registries": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:6eede81c66e7b62cc8589f5240ee4102e4ab424d325383d83c5ed3bf326ef2e7"
+    },
+    "list_capability_registry_packages": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:8c72608058fe6419f651b269602701e3ab3835b67e1c983aa0cf80765a9816e7",
+      "resultDigest": "sha256:188c5b8b5ea2d9458bd9e870bfa7b5ce0e020019b5c66fd1d9242fa3b5605fdf"
+    },
+    "list_capability_setups": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:b99eaa05b0b69852951ee591d77c79f583d806af13c1c314f22ff27e2d9ded07"
+    },
+    "list_capability_updates": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:2b9173257902937cf4302e5a041617147d52948cc19805ab26becd161ca55b8b"
     },
     "list_controller_worker_commands": {
       "domain": "coordinator",
@@ -5624,6 +5952,15 @@
       "argsDigest": "sha256:7ad6587b65c949f60fc447e4f3d0168ab5905f12fd487b4aa47cb3cb77f3eefe",
       "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
     },
+    "manage_capability_exception": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:3990cefeb9a8e942f24d31b44c7d74ff996af9a4cf61a0b4e2e41d292bb45e94",
+      "resultDigest": "sha256:23f1adab9121d2eef5b4d26abb54a4481e23eadfcb513875ab27108490a86664"
+    },
     "mark_agent_mail_conversation_seen": {
       "domain": "agent-mail",
       "since": 1,
@@ -5650,6 +5987,15 @@
       "critical": [],
       "argsDigest": "sha256:83315c2244564c94b3c6069fa93f391d82ac4fdc1e5badf29dcd8cd258173256",
       "resultDigest": "sha256:6140be35d86a3f441ec8256bd2b46950f199de530d68304d5954687b25c230e4"
+    },
+    "merge_capability_drift": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5c26b5207be803d4ce768a67f46e10ea3a0e93516e4e3bbf7b1b75d52905e134",
+      "resultDigest": "sha256:8a6e1cb53c4977f884509220eaad1c7a0c6727c65e87b1b91a23f8a6e0d93c18"
     },
     "merge_environment_pr": {
       "domain": "pull-requests",
@@ -6118,6 +6464,33 @@
       "argsDigest": "sha256:5f8e300defc6523fcc2f6c6585d6e080fe4c944d3aba9d9b8ca8a6a0f5f3a938",
       "resultDigest": "sha256:a542e740cb61565d6d1f80150e6ee9a3f96252e03edd3b2dcc11fff5ceda4801"
     },
+    "preview_capability_change": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1fa2a56e8ea52716bf2795cd1471de70b252160f8997375f3714997a5bc3cbfc",
+      "resultDigest": "sha256:252a98bc8ff092f1a24fa2b9ad5a4b3da5736a644b37a771ab291dc9d47b1465"
+    },
+    "preview_capability_import": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:67e7d31d301ff08c01e03f79a10257a6c14bfeaeb3cb11e1774151d4d9c7101b",
+      "resultDigest": "sha256:153a804ce76e9721dc0e9f0fa4b5ac6342495ed3d5769834926644a46bb6f1d0"
+    },
+    "preview_capability_update": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:be7d2f4d269b116843c3f3abde5b1358ca700d9d4c8084e1e5332e563ea79198",
+      "resultDigest": "sha256:252a98bc8ff092f1a24fa2b9ad5a4b3da5736a644b37a771ab291dc9d47b1465"
+    },
     "preview_command_handover": {
       "domain": "nodes",
       "since": 1,
@@ -6216,6 +6589,15 @@
       "critical": [],
       "argsDigest": "sha256:2858661f1451ded654a6007da840bf254873733dcc25c4cffa49571138774300",
       "resultDigest": "sha256:a5ac1c1fb12e0586efcf3e46113dbe3c35b5286431355bfa1ac74d8471760cd5"
+    },
+    "read_capability_file": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0acfd18bbdb814ca4f460ed2e579e48c54463c9454ab18056a5d422e24e9e264",
+      "resultDigest": "sha256:b7af877822e369e4961de1c75c41efc6309dd0207749454146898d75c45786e3"
     },
     "read_container_file": {
       "domain": "files",
@@ -6513,6 +6895,15 @@
       "critical": ["expectedContainerId", "expectedRevision", "keepRecoveryCopy", "operationId"],
       "argsDigest": "sha256:cac0e9d25111f53afb60b84295c961937f0c05fc91fa6e23aeac95fe72d3733d",
       "resultDigest": "sha256:444664cd3919a2c713cd1c5d2ab3b6996d1dfa3feee6c5aaa404d4ab403cc7bc"
+    },
+    "refresh_capability_updates": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f14e632078a3176b62dd080ed961ad4eb2888bd01543ee30e0ea496ed07c5cc2",
+      "resultDigest": "sha256:2b9173257902937cf4302e5a041617147d52948cc19805ab26becd161ca55b8b"
     },
     "refresh_host_agent_model_catalog": {
       "domain": "agent-servers",
@@ -6828,6 +7219,15 @@
       "critical": [],
       "argsDigest": "sha256:2415f7b173dfb39bef016a20720690c04b9022c66147e8b25499bf067c4b0c09",
       "resultDigest": "sha256:d566e192752db0c41e3cdad5530f37a01a25142a0f541919009c0bb0b773525f"
+    },
+    "resolve_capability_drift": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:91ef6f9ae5e79be08e53ba10bdf4da1946f9d333eb3b761cd731548ef95cc433",
+      "resultDigest": "sha256:0bc75d51312e5e46334f7850949014bf27cd610c4fb17f78447f9b94597eeff7"
     },
     "resolve_container_operation": {
       "domain": "environments",
@@ -7225,6 +7625,15 @@
       "argsDigest": "sha256:a14f6addf3170a3a2b744782f9b10c936584033fbc59585c860cac787d6b4c9f",
       "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
+    "rollback_capability_package": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c580661a14271de6611be849b3af0bc968215b5e3b54d84ffcced46c42f359f",
+      "resultDigest": "sha256:252a98bc8ff092f1a24fa2b9ad5a4b3da5736a644b37a771ab291dc9d47b1465"
+    },
     "rotate_control_mcp_credential": {
       "domain": "coordinator",
       "since": 1,
@@ -7513,6 +7922,78 @@
       "argsDigest": "sha256:adb51eb53a995589b66c1689ff2dda370872caf40af68fb0c3d2443d0121cc78",
       "resultDigest": "sha256:0d6dab7c5cb086d1074fc8d647f09902e2b1c914e5923e58833cfcb0b9c8eb10"
     },
+    "set_capability_admin_policy": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7d6e0ed859431c68b0bbc408ebc18b4655c24eef9c09347776ea96bb74f80180",
+      "resultDigest": "sha256:dc4461da6452b82e83c53992bf8243c5c3469b7fb675bd96a69e9a95e1c69e64"
+    },
+    "set_capability_machine_enrollment": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4488add217bf4bd0f167b52ea2fcbf83dc5ce91fed7a3f7092691d687ef6b56a",
+      "resultDigest": "sha256:2293aed42c9a9ef78e78018be48362df8744fb2467b975d66969839e3274d701"
+    },
+    "set_capability_manifest_policy": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4b9c23acbfcf718e5a7bad8a89f35fbe442a22421a804fb3809b867c383d317e",
+      "resultDigest": "sha256:6eede81c66e7b62cc8589f5240ee4102e4ab424d325383d83c5ed3bf326ef2e7"
+    },
+    "set_capability_package_state": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:dce48f733dad8b53dcd08b25440f57834ca4365ba7822b65a458027bdcf60121",
+      "resultDigest": "sha256:5476eef246acf81be7be19c905ac1f4812d07ad56819eb9df1a93542f4d05886"
+    },
+    "set_capability_plugin_enabled": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:366eff07f5f1a780a9eb9e98aab2b052b487276657cd9d1e1e60fcc169efa923",
+      "resultDigest": "sha256:fa66d44fb5fe8faab15a6c2cae757b774c7db32ddccc1c52902b32836761ac09"
+    },
+    "set_capability_registry": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:92a0effafbdcf1b2555c1314e5caee0fe277e7efe525396313aad1d11f6249c7",
+      "resultDigest": "sha256:6eede81c66e7b62cc8589f5240ee4102e4ab424d325383d83c5ed3bf326ef2e7"
+    },
+    "set_capability_setup": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2ed8cca1379880e74e264844712a318e96dae27e346ac5889dcb5da1493e9810",
+      "resultDigest": "sha256:23f1adab9121d2eef5b4d26abb54a4481e23eadfcb513875ab27108490a86664"
+    },
+    "set_capability_update_policy": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e62adf2e8cf18d71a6a5f74bff9843867714eaeaa9e138d3d9aa1c3c6692faae",
+      "resultDigest": "sha256:23f1adab9121d2eef5b4d26abb54a4481e23eadfcb513875ab27108490a86664"
+    },
     "set_command_node_enabled": {
       "domain": "nodes",
       "since": 1,
@@ -7791,6 +8272,24 @@
       "critical": [],
       "argsDigest": "sha256:591582f7ec8873110ef84048e53e5d5862218460c45eedc95ffa45f2e56586e2",
       "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "stage_capability_node_artifact": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0c0f1e92ad3ab9259f64b978edf0dba677d73ceb102bd5409841d7e0b6e8b426",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
+    },
+    "stage_capability_node_handover": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:cdca0f7f6d2af236d362446127cc40a5d36fed91e24f0754d1798d44aab62407",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
     },
     "start_agent_account_login": {
       "domain": "accounts",
@@ -8971,6 +9470,15 @@
       "argsDigest": "sha256:8cfde18a75d5882bda337d1cbc89d822506597c4e8a514d113e0518776d6bb1d",
       "resultDigest": "sha256:593cefa7bf550cca64eeefa666d4dd95bc80691c278828bdfff7da2b37584f7b"
     },
+    "verify_agent_capability": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4ff1712cc326d256fe572f6b1c3548a226de47ca7b3ad121853de3427f8bdd2a",
+      "resultDigest": "sha256:0e68b45c483d1ce937c8ddc12e58774c4e9c8b25188bd7fb96f75c5a829e8472"
+    },
     "verify_project_launch_base": {
       "domain": "coordinator",
       "since": 1,
@@ -9417,6 +9925,10 @@
       "domain": "system",
       "payloadDigest": "sha256:d20b074eb74ecdbe653a429b828150913db7e15764a2032c74e4326da25502b0"
     },
+    "capability-management-changed": {
+      "domain": "capabilities",
+      "payloadDigest": "sha256:e914e84a31cd05668c483b6d9fe0aba967d440eae0284710912092fdf09ed5eb"
+    },
     "change-projection-changed": {
       "domain": "git",
       "payloadDigest": "sha256:7d3f5486c444baafbf7de95bf33009a4c00bc06263f4917e578e2cd381fb02c7"
@@ -9507,6 +10019,14 @@
     "node-agent-account-auto-switched": {
       "domain": "accounts",
       "payloadDigest": "sha256:2fe3152f04522229dc0f79c778a56e255e3190615050adf1574c367177412e47"
+    },
+    "node-capability-launch-requested": {
+      "domain": "capabilities",
+      "payloadDigest": "sha256:19d372587c7fad0836c20acb8df9ef68b01289bfe8e394b91f9504a32af171c0"
+    },
+    "node-capability-leaf-requested": {
+      "domain": "capabilities",
+      "payloadDigest": "sha256:cb499d4603380bdcfbe33ab7949bd66062c4ae6460042ce18c3703267f0ed18d"
     },
     "node-outbox-ready": {
       "domain": "node-mail",

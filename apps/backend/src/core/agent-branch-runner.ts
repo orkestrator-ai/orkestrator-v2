@@ -27,6 +27,7 @@
  * Token usage is metered throughout. The runner holds no state of its own
  * beyond its write queue and its host (`agent-branch-types.ts`).
  */
+import { beginCapabilityTurn } from "./capabilities/running-work.js";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
@@ -516,6 +517,8 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     if (toolTransport && host.prepareResult) {
       await host.prepareResult(branch, requestId, host.resultSchema(branch));
     }
+    const capabilityPlugins =
+      branch.agent === "claude" ? ((await host.capabilityPlugins?.(branch)) ?? []) : [];
     let reviewShellPolicy: NativeAgentExecutionPolicy | undefined;
     if (host.mode === "plan" && branch.agent === "opencode") {
       try {
@@ -530,99 +533,105 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     const resultTurn = host.resultTurn(branch, requestId);
     const artifactTurn = this.beginArtifactTurn(branch, index, agentMcp);
     const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp ?? workerTurn?.agentMcp;
+    const releaseCapabilityTurn = await beginCapabilityTurn(branch.agent);
     try {
-      // Attach after the connection is resolved so broker registration happens
-      // outside the at-most-once window.
-      await attachAgentBeforeDispatch(
-        provider,
-        providerSessionId,
-        turnAgentMcp ? { agentMcp: turnAgentMcp, ...resultTurn.prepare } : undefined,
-        host.logOwner,
-      );
-      // Other branches may be committing concurrently; this branch's own
-      // journal is what matters. Its `dispatching` write is durable once this
-      // await resolves, and `send` is the next branch-local fallible call.
-      // Set inside the write, so no peer's save can make it durable first.
-      await this.commits.commit({
-        apply: () => {
-          branch.dispatchState = "dispatching";
-          branch.turnStartedAt = agentBranchNowIso();
-        },
-        revert: () => {
-          branch.dispatchState = "prepared";
-        },
-      });
-    } catch (error) {
-      this.settleArtifactTurn(branch, index);
-      throw error;
-    }
-    const sendStarted = Date.now();
-    try {
-      await provider.send(
-        providerSessionId,
-        withResultInstruction(
-          prompt,
-          toolTransport ? host.resultInstruction(branch, requestId, agentMcp) : "",
-        ),
-        {
-          requestId,
-          schema: toolTransport ? undefined : host.resultSchema(branch),
-          mode: host.mode ?? "build",
-          ...(host.mode === "plan" ? { readOnly: true } : {}),
-          ...(reviewShellPolicy ? { reviewShellPolicy } : {}),
-          model: agentBranchModel(branch),
-          effort: branch.reasoningEffort,
-          ...(typeof branch.fastMode === "boolean" ? { fastMode: branch.fastMode } : {}),
-          ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
-          ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
-          ...(workerTurn?.workerMail ? { workerMail: workerTurn.workerMail } : {}),
-          ...(agentMcp ? resultTurn.send : {}),
-        },
-      );
-    } catch (error) {
-      // An ambiguous send may still be running; its grant settles with the
-      // turn. A refused one never ran, so its grant must not outlive it.
-      if (!(error instanceof AmbiguousPromptDispatchError)) {
-        this.settleArtifactTurn(branch, index);
-      }
-      if (error instanceof AmbiguousPromptDispatchError) {
-        this.record({
-          operation: "reviewer.send",
-          outcome: "ambiguous",
-          platform: efficiencyPlatform(branch.agent),
-          elapsedMs: Date.now() - sendStarted,
+      try {
+        // Attach after the connection is resolved so broker registration happens
+        // outside the at-most-once window.
+        await attachAgentBeforeDispatch(
+          provider,
+          providerSessionId,
+          turnAgentMcp ? { agentMcp: turnAgentMcp, ...resultTurn.prepare } : undefined,
+          host.logOwner,
+        );
+        // Other branches may be committing concurrently; this branch's own
+        // journal is what matters. Its `dispatching` write is durable once this
+        // await resolves, and `send` is the next branch-local fallible call.
+        // Set inside the write, so no peer's save can make it durable first.
+        await this.commits.commit({
+          apply: () => {
+            branch.dispatchState = "dispatching";
+            branch.turnStartedAt = agentBranchNowIso();
+          },
+          revert: () => {
+            branch.dispatchState = "prepared";
+          },
         });
-        return "stop";
+      } catch (error) {
+        this.settleArtifactTurn(branch, index);
+        throw error;
       }
-      branch.dispatchState = "prepared";
+      const sendStarted = Date.now();
+      try {
+        await provider.send(
+          providerSessionId,
+          withResultInstruction(
+            prompt,
+            toolTransport ? host.resultInstruction(branch, requestId, agentMcp) : "",
+          ),
+          {
+            requestId,
+            schema: toolTransport ? undefined : host.resultSchema(branch),
+            mode: host.mode ?? "build",
+            ...(host.mode === "plan" ? { readOnly: true } : {}),
+            ...(reviewShellPolicy ? { reviewShellPolicy } : {}),
+            model: agentBranchModel(branch),
+            effort: branch.reasoningEffort,
+            ...(typeof branch.fastMode === "boolean" ? { fastMode: branch.fastMode } : {}),
+            ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
+            ...(capabilityPlugins.length > 0 ? { capabilityPlugins } : {}),
+            ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
+            ...(workerTurn?.workerMail ? { workerMail: workerTurn.workerMail } : {}),
+            ...(agentMcp ? resultTurn.send : {}),
+          },
+        );
+      } catch (error) {
+        // An ambiguous send may still be running; its grant settles with the
+        // turn. A refused one never ran, so its grant must not outlive it.
+        if (!(error instanceof AmbiguousPromptDispatchError)) {
+          this.settleArtifactTurn(branch, index);
+        }
+        if (error instanceof AmbiguousPromptDispatchError) {
+          this.record({
+            operation: "reviewer.send",
+            outcome: "ambiguous",
+            platform: efficiencyPlatform(branch.agent),
+            elapsedMs: Date.now() - sendStarted,
+          });
+          return "stop";
+        }
+        branch.dispatchState = "prepared";
+        await this.commits.commit();
+        if (error instanceof ProviderDispatchPreparationError) {
+          throw new AgentBranchDispatchSetupError(error);
+        }
+        throw error;
+      }
+      const sentAt = Date.now();
+      this.record({
+        operation: "reviewer.send",
+        outcome: "success",
+        platform: efficiencyPlatform(branch.agent),
+        elapsedMs: sentAt - sendStarted,
+      });
+      this.record({
+        operation: "reviewer.dispatch_skew",
+        reviewers: count,
+        elapsedMs: sentAt - this.passStartedAt,
+      });
+      await host.assertFence();
+      branch.agentStarted = true;
+      branch.dispatchState = "sent";
+      delete branch.error;
+      delete branch.startFailed;
+      delete branch.idleResultPolls;
+      host.pollGate?.clear(agentBranchPollScope(this.context, branch, "idle"));
+      delete branch.continuationPrompt;
       await this.commits.commit();
-      if (error instanceof ProviderDispatchPreparationError) {
-        throw new AgentBranchDispatchSetupError(error);
-      }
-      throw error;
+      return "continue";
+    } finally {
+      releaseCapabilityTurn();
     }
-    const sentAt = Date.now();
-    this.record({
-      operation: "reviewer.send",
-      outcome: "success",
-      platform: efficiencyPlatform(branch.agent),
-      elapsedMs: sentAt - sendStarted,
-    });
-    this.record({
-      operation: "reviewer.dispatch_skew",
-      reviewers: count,
-      elapsedMs: sentAt - this.passStartedAt,
-    });
-    await host.assertFence();
-    branch.agentStarted = true;
-    branch.dispatchState = "sent";
-    delete branch.error;
-    delete branch.startFailed;
-    delete branch.idleResultPolls;
-    host.pollGate?.clear(agentBranchPollScope(this.context, branch, "idle"));
-    delete branch.continuationPrompt;
-    await this.commits.commit();
-    return "continue";
   }
 
   /** Status, transcript, progress and result of a dispatched request. */

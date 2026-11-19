@@ -93,6 +93,10 @@ import {
   resolveBugReportRuntime,
 } from "./bug-report-runtime.js";
 import {
+  CAPABILITY_SESSION_PLUGINS_DIR_ENV,
+  CAPABILITY_SESSION_PLUGINS_DIRECTORY,
+} from "@orkestrator/protocol/capability-resources";
+import {
   COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV,
   COORDINATOR_CODEX_USER_SKILLS_DIR_ENV,
   COORDINATOR_COMMAND_SANDBOX_ENV,
@@ -997,6 +1001,16 @@ async function startLocalServerAttempt(
   delete env[COORDINATOR_PROTECTED_DATA_DIR_ENV];
   delete env[COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV];
   delete env[COORDINATOR_CODEX_USER_SKILLS_DIR_ENV];
+  // Agent Capabilities session-private plugins: a Claude bridge passes a
+  // prompt's plugin directories only from inside this backend-owned root.
+  // A coordinator or bug report never receives one.
+  delete env[CAPABILITY_SESSION_PLUGINS_DIR_ENV];
+  if (!coordinatorId && !bugReportId) {
+    env[CAPABILITY_SESSION_PLUGINS_DIR_ENV] = path.join(
+      context.storage.getDataDir(),
+      CAPABILITY_SESSION_PLUGINS_DIRECTORY,
+    );
+  }
   delete env[BUG_REPORT_WORKSPACE_ENV];
   if (bugReportId) {
     if (kind === "claude" || kind === "codex")

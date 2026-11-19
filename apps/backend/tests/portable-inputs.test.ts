@@ -21,6 +21,7 @@ import {
   revokeProviderCredentials,
   selectedInputProviders,
 } from "../src/core/portable-input-status";
+import { writeLocationIndex } from "../src/core/capabilities/native-ownership";
 import { environmentStateDirectory } from "../src/core/environment-state-paths";
 import {
   CURSOR_MCP_STAGED_INPUTS_VERSION,
@@ -87,6 +88,53 @@ async function listFiles(directory: string): Promise<string[]> {
 }
 
 describe("portable input staging", () => {
+  test("leaves managed flat commands and prompts to the container plan", async () => {
+    const { home, dataDir, roots } = await fixtureHome();
+    const directories = [
+      path.join(home, ".claude", "commands"),
+      path.join(home, ".claude", "agents"),
+      path.join(home, ".codex", "prompts"),
+      path.join(home, ".pi", "agent", "prompts"),
+    ];
+    for (const directory of directories) {
+      await write(path.join(directory, "managed.md"), "host revision");
+      await write(path.join(directory, "personal.md"), "personal revision");
+      await writeLocationIndex(directory, {
+        formatVersion: 1,
+        files: {
+          "managed.md": {
+            packageId: "managed:review",
+            componentId: "command:review",
+            digest: "sha256:fixture",
+            writtenAt: "",
+          },
+        },
+      });
+    }
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-managed",
+      new Set(["claude", "codex", "pi"]),
+      roots,
+      undefined,
+      undefined,
+      {
+        beforeCommit: async (directory) => {
+          await write(path.join(directory, "codex-home/prompts/managed.md"), "pinned revision");
+          return {};
+        },
+      },
+    );
+    const files = await listFiles(staged.directory);
+    expect(files.filter((file) => file.endsWith("managed.md"))).toEqual([
+      "codex-home/prompts/managed.md",
+    ]);
+    expect(files.filter((file) => file.endsWith("personal.md"))).toHaveLength(4);
+    expect(
+      await fs.readFile(path.join(staged.directory, "codex-home/prompts/managed.md"), "utf8"),
+    ).toBe("pinned revision");
+  });
+
   test("stages only the allowlist of enabled providers and binds only staged subtrees", async () => {
     const { dataDir, roots } = await fixtureHome();
     const staged = await stagePortableInputs(

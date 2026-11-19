@@ -1,3 +1,4 @@
+import { beginCapabilityTurn } from "./capabilities/running-work.js";
 import { bugReportInitialApprovalMode, validBugReportApprovalMode } from "./bug-report-runtime.js";
 import {
   PROVIDER_FAILURE_RETRY_ID_PREFIX,
@@ -1322,6 +1323,25 @@ export class NativeAgentPromptDispatch {
           log.warn("dispatch.attach-failed", { agent: input.agent, error: formatLogError(error) });
         });
       await this.prepareEnvironmentFirstPrompt(input, session, provider);
+      // What the session's launch delivered to it alone, before the at-most-once window.
+      let capabilityPlugins: string[] = [];
+      if (session.agent === "claude" && this.host.options.capabilitySessionPlugins) {
+        try {
+          capabilityPlugins = await this.host.options.capabilitySessionPlugins(
+            session.logicalSessionKey,
+            input.environmentId,
+            session.agent,
+          );
+        } catch (error) {
+          log.warn("dispatch.capability-plugins-failed", {
+            agent: input.agent,
+            error: formatLogError(error, { message: false }),
+          });
+          throw new PromptRejectedError(
+            "This session's capabilities could not be prepared for this turn. Start a new session, or check the package in Capabilities.",
+          );
+        }
+      }
       const commandContextBlock = userCommands?.block || leadingUserCommandContext(input.prompt);
       if (commandContextBlock) {
         input = { ...input, prompt: insertUserCommandContext(input.prompt, commandContextBlock) };
@@ -1342,8 +1362,12 @@ export class NativeAgentPromptDispatch {
        * queues behind that same lock, so it cannot remove the record mid-dispatch
        * and leave a confirmed turn unattributed.
        */
-      await this.host.assertEnvironmentLive(input.environmentId);
+      const dispatchEnvironment = await this.host.assertEnvironmentLive(input.environmentId);
       this.host.providerRegistry.beginDispatch(provider);
+      const releaseCapabilityTurn =
+        dispatchEnvironment?.environmentType === "containerized"
+          ? undefined
+          : await beginCapabilityTurn(input.agent);
       try {
         let preparation: PromptDispatchPreparation = { dispatch: true };
         const result = await this.host.storage.dispatchNativeAgentPromptOnce(
@@ -1457,6 +1481,7 @@ export class NativeAgentPromptDispatch {
                         durable.controls?.approvalMode,
                       ),
                 agentMcp,
+                ...(capabilityPlugins.length > 0 ? { capabilityPlugins } : {}),
                 ...(artifactGrant ? { artifactGrant } : {}),
                 ...(tabMail ? { tabMail } : {}),
               });
@@ -1654,6 +1679,7 @@ export class NativeAgentPromptDispatch {
         }
         return result.session;
       } finally {
+        releaseCapabilityTurn?.();
         this.host.providerRegistry.endDispatch(provider);
       }
     } finally {

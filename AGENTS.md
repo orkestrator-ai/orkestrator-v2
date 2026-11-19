@@ -22,6 +22,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | `docker/`, container lifecycle, firewall, Playwright in containers | [`docker/AGENTS.md`](docker/AGENTS.md) |
 | OpenCode provider or its `opencode2` pin (`apps/backend/src/core/opencode2/`) | [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md#maintaining-the-opencode-integration) |
 | Coordinator qualification (`coordinator-providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
+| Agent Capabilities (`core/capabilities/`, `capability-resources*`, the `capabilities` domain, `settings/capabilities/`) | [`docs/architecture/agent-capabilities-management.md`](docs/architecture/agent-capabilities-management.md) |
 | Scheduled jobs (`scheduled-jobs/`, `schedule.*` actions, schedule tools) | [`docs/architecture/scheduled-jobs.md`](docs/architecture/scheduled-jobs.md) |
 | Agent credentials (`apps/backend/src/core/credentials/`, `credential_*` commands, `request_credential` and the other credential tools) | [`docs/architecture/agent-credentials.md`](docs/architecture/agent-credentials.md) |
 | Slash-command discovery or dispatch | [`docs/architecture/native-agent-commands.md`](docs/architecture/native-agent-commands.md) |

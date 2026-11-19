@@ -47,10 +47,12 @@ import {
   nativeAgentPolicyForBridge,
   parseNativeAgentSteerRejection,
 } from "@orkestrator/protocol/native-agent";
-import { bridgeRuntimeSummary, snapshotNotices } from "./runtime-health.js";
+import { snapshotNotices } from "./runtime-health.js";
 import { ensureCodexMode, updateCodexSessionConfig } from "./codex-config.js";
 import { readBridgeMcpConfigEvidence } from "./mcp-evidence.js";
+import { readBridgeCapabilityEvidence } from "./capability-evidence.js";
 import {
+  readBridgeRuntimeHealth,
   refreshHttpBridgeRuntimeMetadata,
   type HttpBridgeRuntimeMetadata,
 } from "./runtime-metadata.js";
@@ -575,39 +577,21 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     });
   }
 
-  /**
-   * Bounded inventory, drift and provider diagnostics for one session.
-   *
-   * Answers in band for a bridge that predates the route and for a session it
-   * does not have. A failure here must never fail the environment: this hop
-   * cannot tell "older bridge" from "gone session", and health is optional
-   * metadata either way — the authoritative liveness answer is `/activity`.
-   */
-  async runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
-    try {
-      const response = await bridgeFetch(
-        this.connection,
-        `/session/${encodeURIComponent(sessionId)}/runtime-health`,
-        {},
-        this.fetchImpl,
-      );
-      if (!response.ok) return { summary: {}, notices: [], authoritative: false };
-      const summary = bridgeRuntimeSummary(
-        await boundedJson(response, `${this.agent} runtime health read`, {
-          remaining: 512 * 1024,
-        }),
-      );
-      if (!summary) return { summary: {}, notices: [], authoritative: false };
-      return { summary, notices: summary.notices ?? [], authoritative: true };
-    } catch {
-      return { summary: {}, notices: [], authoritative: false };
-    }
+  runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
+    const { agent, connection, fetchImpl } = this;
+    return readBridgeRuntimeHealth({ agent, connection, fetchImpl, sessionId });
   }
 
   /** Backend-only MCP apply evidence; see `http-bridge/mcp-evidence.ts`. */
   mcpConfigEvidence(sessionId: string, { signal }: ProviderReadOptions = {}) {
     const { connection, fetchImpl, agent } = this;
     return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId, signal });
+  }
+
+  /** Agent Capabilities runtime proof; see `http-bridge/capability-evidence.ts`. */
+  capabilityEvidence(sessionId: string, { signal }: ProviderReadOptions = {}) {
+    const { connection, fetchImpl, agent } = this;
+    return readBridgeCapabilityEvidence({ connection, fetchImpl, agent, sessionId, signal });
   }
 
   private refreshRuntimeMetadata(sessionId: string): Promise<void> {

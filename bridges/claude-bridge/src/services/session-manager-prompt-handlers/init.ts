@@ -3,6 +3,7 @@ import type { McpServerRuntimeStatus } from "../../types/index.js";
 import { sessionHealth } from "../../types/index.js";
 import { eventEmitter } from "../event-emitter.js";
 import { recordTerminalSlashCommands } from "../claude-terminal-commands.js";
+import { noteCapabilityInit } from "../capability-evidence.js";
 import { pluginStatusesFromInit } from "../init-plugins.js";
 import { initMcpServerStatus } from "../mcp-runtime-status.js";
 import { debugLog } from "../logger.js";
@@ -83,6 +84,9 @@ export async function handleInitMessage(turn: TurnState, message: SDKMessage): P
       detail: `${pluginError.type}: ${pluginError.message}`,
     });
   }
+
+  // What this query loaded, for Agent Capabilities runtime proof.
+  noteCapabilityInit(session, initMsg);
 
   // Store init data in session
   session.initData = {

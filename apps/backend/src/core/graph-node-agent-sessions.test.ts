@@ -87,7 +87,18 @@ function continueTemplate(from = "draft"): GraphTemplateV1 {
 
 describe("session: continue", () => {
   test("the continuing step sends its turn into the source step's provider session", async () => {
-    world = await graphAgentWorld({ script: submittingScript() });
+    const approved = new Map<string, string>();
+    world = await graphAgentWorld({
+      script: submittingScript(),
+      capabilityPreflight: async ({ sessionKey, graphNode }) => {
+        approved.set(sessionKey, `/approved/${graphNode}`);
+        return null;
+      },
+      capabilitySessionPlugins: async (sessionKey) => {
+        const plugin = approved.get(sessionKey);
+        return plugin ? [plugin] : [];
+      },
+    });
     world.start();
     const run = await world.launch(continueTemplate(), { ticket: TEST_TICKET });
     const done = await world.drive(run.id);
@@ -100,6 +111,9 @@ describe("session: continue", () => {
     const turns = world.provider.turns();
     expect(turns).toHaveLength(2);
     expect(turns[1]!.prompt).toContain("Refine your draft.");
+    expect(turns[0]!.options.capabilityPlugins).toEqual([...approved.values()].slice(0, 1));
+    expect(turns[1]!.options.capabilityPlugins).toEqual([...approved.values()].slice(1));
+    expect(turns[1]!.options.capabilityPlugins).not.toEqual(turns[0]!.options.capabilityPlugins);
     // The continued session's earlier usage is not counted twice.
     expect(done.usage.tokens).toBe(0);
   });

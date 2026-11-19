@@ -749,16 +749,15 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
   signIn("pi"),
   ...platformPane("pi"),
 
-  // --- Skills, MCP ----------------------------------------------------------------
+  // --- Capabilities, MCP ----------------------------------------------------------
   {
-    id: "skills.browser",
-    section: "skills",
-    label: "Skills and plugins",
-    description: "Browse the skills and plugins each agent loads on this machine.",
-    aliases: ["skills", "plugins", "slash commands", "extensions"],
+    id: "capabilities.library",
+    section: "capabilities",
+    label: "Capabilities",
+    description: "Manage capability packages and browse installed skills and plugins.",
+    aliases: ["skills", "plugins", "slash commands", "extensions", "toolkits"],
     appliesWhen: "new-sessions",
-    owner: "machine",
-    locate: { heading: "Skills and plugins" },
+    locate: { heading: "Capabilities" },
   },
   {
     id: "mcp-servers.list",

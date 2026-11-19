@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_ACCOUNT_ID } from "@orkestrator/protocol/agent-accounts";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import { turnOutcomeFailureKind } from "./agent-usage-limits.js";
@@ -3002,6 +3003,33 @@ export class NativeAgentService {
     return provider.mcpConfigEvidence(session.providerSessionId, options);
   }
 
+  /**
+   * Agent Capabilities runtime proof for one session
+   * (`capabilities/runtime-proof.ts`), observation-only on every hop exactly
+   * as {@link mcpConfigEvidenceIfRunning}: never starts a bridge, touches
+   * liveness or re-attaches. A provider without the report is `unsupported`.
+   */
+  async capabilityEvidenceIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+    options: ProviderReadOptions = {},
+  ): Promise<import("@orkestrator/protocol/capability-evidence").CapabilitySessionEvidenceRead> {
+    const session = await this.storage.getNativeAgentSession(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    if (!session?.providerSessionId) return { state: "none" };
+    const provider = await this.observeProvider({ environmentId, agent, logicalSessionKey });
+    if (!provider) return { state: "not-running" };
+    if (!provider.capabilityEvidence) return { state: "unsupported" };
+    options.signal?.throwIfAborted();
+    return provider.capabilityEvidence(session.providerSessionId, options);
+  }
+
+  capabilityActivity(sessionKey: string): string | undefined {
+    return this.launches.observedActivity(sessionKey)?.state;
+  }
+
   private trackScan(task: Promise<void>): Promise<void> {
     const tracked = task.finally(() => {
       this.scanTasks.delete(tracked);
@@ -3088,6 +3116,22 @@ export class NativeAgentService {
             environment.environmentType === "local" ? "host" : "container",
           )
         : undefined;
+    const accountHomeId =
+      environment?.environmentType === "local" &&
+      (input.agent === "claude" || input.agent === "codex")
+        ? this.options.localBridgeAccountId?.(`${input.agent}:${input.environmentId}`)
+        : undefined;
+    await this.options.capabilityPreflight?.({
+      environmentId: input.environmentId,
+      ...(accountHomeId && accountHomeId !== DEFAULT_AGENT_ACCOUNT_ID ? { accountHomeId } : {}),
+      ...(environment && environment.environmentType !== "local"
+        ? { environmentIncarnation: environment.containerId ?? environment.id }
+        : {}),
+      ...(environment?.projectId ? { projectId: environment.projectId } : {}),
+      agent: input.agent,
+      logicalSessionKey: input.logicalSessionKey,
+      ...(input.policy ? { policy: input.policy } : {}),
+    });
     const options = {
       clientSessionKey: input.logicalSessionKey,
       model: input.model,

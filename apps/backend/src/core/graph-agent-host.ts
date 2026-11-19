@@ -306,6 +306,17 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     );
   }
 
+  async capabilityPlugins(): Promise<string[]> {
+    const launchKey = graphAgentSessionKey(this.context.run.id, this.context.activation.key);
+    return (
+      (await this.dependencies.capabilitySessionPlugins?.(
+        launchKey,
+        this.context.environmentId,
+        "claude",
+      )) ?? []
+    );
+  }
+
   sessionLabelFor(): string {
     const node = this.input.node;
     const branchKey = this.context.activation.branchKey;

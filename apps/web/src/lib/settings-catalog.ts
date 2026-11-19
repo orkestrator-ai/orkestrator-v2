@@ -67,6 +67,10 @@ export const GLOBAL_SETTINGS_CATALOG: Readonly<
   grok: { label: SETTINGS_SECTION_LABELS["grok"], aliases: ["xai"] },
   opencode: { label: SETTINGS_SECTION_LABELS["opencode"], aliases: ["zen", "model providers"] },
   pi: { label: SETTINGS_SECTION_LABELS["pi"], aliases: ["pi agent", "thinking level"] },
+  capabilities: {
+    label: SETTINGS_SECTION_LABELS["capabilities"],
+    aliases: ["capability packages", "toolkits", "agent resources"],
+  },
   skills: {
     label: SETTINGS_SECTION_LABELS["skills"],
     aliases: ["plugins", "skills", "extensions"],

@@ -89,6 +89,13 @@ export const WORKSPACE_EXEMPT_MODULES: Readonly<Record<string, string>> = {
 export const WORKSPACE_WINDOW_LEVEL_EXPORTS: Readonly<
   Record<string, Readonly<Record<string, string>>>
 > = {
+  capabilities: {
+    capabilitiesApi:
+      "Agent Capabilities belong to the command node: it holds the fleet's library, setups and " +
+      "assignments for every machine (docs/architecture/agent-capabilities-management.md), so a " +
+      "project, environment or graph node's toolkit selection is recorded there whichever node " +
+      "the workspace shows.",
+  },
   "config-integrations": {
     openInBrowser:
       "Opens a link on the machine the window runs on (the desktop shell, the browser tab, " +

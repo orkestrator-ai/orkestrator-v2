@@ -28,6 +28,7 @@ import {
   commandUnavailableResponse,
   readBridgePromptCommandFields,
 } from "@orkestrator/protocol/agent-command-catalogue";
+import { capabilityEvidenceBody } from "../services/capability-evidence.js";
 import {
   createOrRecoverSession,
   getSession,
@@ -109,6 +110,7 @@ import { readSessionActivityObservation } from "./session-activity.js";
 import { registerSessionTranscriptRoutes } from "./session-transcript.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
+import { parseCapabilityPlugins } from "../services/capability-session-plugins.js";
 
 const log = createLogger("bridge.claude");
 
@@ -840,6 +842,7 @@ session.post("/:id/prompt", async (c) => {
             ...(artifactsToken ? { artifacts: { token: artifactsToken } } : {}),
           }
         : undefined;
+    const capabilityPlugins = parseCapabilityPlugins(body.capabilityPlugins);
     // Every prompt is deduplicated on this id, not just structured ones: a plain
     // prompt retried after a lost HTTP response would otherwise run its shell
     // commands and file edits twice. Clients always send one; the fallback keeps
@@ -987,6 +990,7 @@ session.post("/:id/prompt", async (c) => {
       promptSuggestions,
       parameterValues,
       ...(agentMcp ? { agentMcp } : {}),
+      ...(capabilityPlugins ? { capabilityPlugins } : {}),
       ...(workflowResultTurn ? { workflowResultTurn } : {}),
     };
     // Refused before anything is journaled: a prompt the session's running CLI
@@ -1315,6 +1319,16 @@ session.get("/:id/activity", async (c) => {
  */
 session.get("/:id/runtime-health", (c) => {
   return c.json(sessionRuntimeHealthBody(peekSession(c.req.param("id"))));
+});
+
+/**
+ * Agent Capabilities runtime proof for one session (`capability-evidence.ts`):
+ * the plugins and skills its latest query loaded and the skills it invoked.
+ * No-touch like `/activity` and `/runtime-health`, and answered in band
+ * (`missing`) for a session this bridge does not hold, never 404.
+ */
+session.get("/:id/capability-evidence", (c) => {
+  return c.json(capabilityEvidenceBody(peekSession(c.req.param("id"))));
 });
 
 /**

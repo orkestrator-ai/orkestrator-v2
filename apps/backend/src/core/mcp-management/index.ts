@@ -6,6 +6,14 @@ export type { LoadedSource } from "./catalog.js";
 export type { ContainerNetworkView } from "./network-hints.js";
 export type { StagedDefaultsWriter } from "./overlay-service.js";
 export { McpManagementService, type McpManagementServiceOptions } from "./service.js";
+// The format-preserving TOML editor, for Codex plugin switches (capabilities/provider-adapters).
+export {
+  scanTomlLayout,
+  tomlDeepEqual,
+  tomlEntryLayout,
+  TomlEditError,
+  updateTomlEntry,
+} from "./toml-edit.js";
 export type {
   ContainerBootReader,
   ContainerDirectoryLister,
@@ -13,3 +21,4 @@ export type {
   ContainerFileWriter,
   ContainerPathProbe,
 } from "./types.js";
+export { McpSourceStore } from "./source-store.js";

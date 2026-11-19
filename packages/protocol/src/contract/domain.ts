@@ -55,6 +55,7 @@ export const DOMAIN_NAMES = [
   "web-annotations",
   "design",
   "mcp",
+  "capabilities",
   "nodes",
   "node-mail",
   "node-files",

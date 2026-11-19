@@ -547,6 +547,32 @@ export interface NativeAgentServiceOptions {
     take(environmentId: string, tabId: string): { block: string; ids: string[] };
     delivered(ids: readonly string[], requestId: string): void;
   };
+  /**
+   * Agent Capabilities launch preflight (docs/architecture/agent-capabilities-management.md,
+   * "Runtime connection points"): resolves the session's effective
+   * manifest before its provider session is created, and throws, with the
+   * reason, when a component the session's setups mark required cannot be
+   * delivered. Optional components never block.
+   */
+  capabilityPreflight?: (input: {
+    environmentId: string;
+    environmentIncarnation?: string;
+    accountHomeId?: string;
+    projectId?: string;
+    agent: string;
+    logicalSessionKey: string;
+    policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
+  }) => Promise<void>;
+  /**
+   * The plugin directories a Claude session's turns pass: what its launch
+   * delivered to it alone (Agent Capabilities). Throws when the session's
+   * recorded plugin can no longer be produced.
+   */
+  capabilitySessionPlugins?: (
+    logicalSessionKey: string,
+    environmentId: string,
+    provider: AgentPlatform,
+  ) => Promise<string[]>;
   resolveAgentToolConnection?: (
     environmentId: string,
     projectId: string,
@@ -979,19 +1005,7 @@ export {
   LEGACY_TIMESTAMP_ENVIRONMENT_NAME,
 } from "./environment-name.js";
 
-export function nativeAgentSessionStorageKey(
-  environmentId: string,
-  agent: BuildPipelineAgent,
-  logicalSessionKey: string,
-): string {
-  return createHash("sha256")
-    .update(environmentId)
-    .update("\0")
-    .update(agent)
-    .update("\0")
-    .update(logicalSessionKey)
-    .digest("hex");
-}
+export { nativeAgentSessionStorageKey } from "./native-agent-session-key.js";
 
 export type PromptDispatchPreparation =
   | { dispatch: false; notice?: IncompleteTurnNotice }

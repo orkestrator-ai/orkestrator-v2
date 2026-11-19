@@ -20,6 +20,7 @@ import {
   type GraphWorkspaceIsolation,
 } from "@orkestrator/protocol/graphs/template";
 import { Button } from "@/components/ui/button";
+import { GraphNodeToolkitsEditor } from "./GraphNodeToolkitsEditor";
 import { GraphEnforcementMatrix, useGraphNodeCapabilities } from "./GraphEnforcementMatrix";
 import { GraphMcpServersEditor } from "./GraphMcpServersEditor";
 import { GRAPH_ENFORCEMENT_LABELS } from "./graph-designer-model";
@@ -89,7 +90,7 @@ function isCapabilitySpec(value: unknown): string | null {
 }
 
 export function GraphCapabilitiesEditor({ node }: { node: GraphAgentNode }) {
-  const { plan, compile, ceiling, providers, acknowledge } = useGraphEditor();
+  const { template, plan, compile, ceiling, providers, acknowledge } = useGraphEditor();
   const editNode = useGraphNodeEdit(node.id);
   const planNode = plan?.nodes.find((candidate) => candidate.id === node.id);
   const compiled = useGraphNodeCapabilities(node, planNode, ceiling);
@@ -328,6 +329,17 @@ export function GraphCapabilitiesEditor({ node }: { node: GraphAgentNode }) {
       {compiled ? (
         <FormSection title="Enforcement by provider">
           <GraphEnforcementMatrix compiled={compiled} providers={providers} />
+        </FormSection>
+      ) : null}
+      {compiled ? (
+        <FormSection title="Toolkits">
+          <GraphNodeToolkitsEditor
+            templateId={template.id}
+            nodeId={node.id}
+            denied={compiled.denied}
+            policy={compiled.policy}
+            providers={providers}
+          />
         </FormSection>
       ) : (
         <p className="text-[11px] text-failure">

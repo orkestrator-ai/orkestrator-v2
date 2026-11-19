@@ -28,6 +28,12 @@ export const DOCKER_LABEL_DEBIAN_ARCHIVE = "orkestrator-debian-archive";
 /** Staged portable-input revision a container binds (step 08). */
 export const DOCKER_LABEL_INPUTS_REVISION = "orkestrator-inputs-revision";
 /**
+ * The Agent Capabilities manifest digest staged into the container's inputs
+ * revision (`capabilities/container-staging.ts`); the revision's manifest
+ * holds the per-component record it summarises.
+ */
+export const DOCKER_LABEL_CAPABILITIES_DIGEST = "orkestrator-capabilities-digest";
+/**
  * Project seed files (`.env`, `.env.local`, `opencode.json`) refused at
  * creation, as `name=reason` pairs from a fixed vocabulary.
  */

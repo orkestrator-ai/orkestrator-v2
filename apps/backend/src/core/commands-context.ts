@@ -27,6 +27,10 @@ export type CommandContext = {
   design?: import("./design/index.js").DesignService;
   previews?: import("./previews/index.js").PreviewRuntime;
   mcpManagement?: import("./mcp-management/index.js").McpManagementService;
+  /** Agent Capabilities: library, setups, reconciliation and this machine's executor. */
+  capabilities?: import("./capabilities/service.js").CapabilityService;
+  /** A leaf's container staging and environment cards under the command node (`environment-authority.ts`). */
+  capabilityEnvironments?: import("./capabilities/environment-authority.js").CapabilityEnvironmentAuthority;
   webAnnotations?: import("./web-annotations/index.js").WebAnnotationService;
   /** Transcript artifacts: durable revisions, receipts and publications. */
   transcriptArtifacts?: import("./transcript-artifacts/index.js").TranscriptArtifactService;

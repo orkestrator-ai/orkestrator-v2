@@ -2,6 +2,7 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
 import type {
+  CreateEnvironmentHandoff,
   WorkspaceBoardTab,
   WorkspaceDialog,
   WorkspaceWorkTarget,
@@ -24,6 +25,7 @@ export interface MachineWorkspaceSpec {
   workTarget?: WorkspaceWorkTarget;
   /** Open the New Environment dialog for `projectId` instead of selecting it. */
   createEnvironment?: boolean;
+  createEnvironmentHandoff?: CreateEnvironmentHandoff;
   /**
    * Open one of the node's own dialogs over the selection: the project's, or
    * with `environmentId`, the environment's settings (or its rebuild).
@@ -31,24 +33,6 @@ export interface MachineWorkspaceSpec {
   dialog?: WorkspaceDialog;
   /** For messages while it opens. */
   title: string;
-}
-
-const CREATE_ENVIRONMENT_REQUEST_EVENT = "orkestrator:create-environment";
-
-/** Asks this window's sidebar to open the New Environment dialog for a project. */
-function requestCreateEnvironment(projectId: string): void {
-  window.dispatchEvent(
-    new CustomEvent<string>(CREATE_ENVIRONMENT_REQUEST_EVENT, { detail: projectId }),
-  );
-}
-
-export function onCreateEnvironmentRequest(listener: (projectId: string) => void): () => void {
-  const handle = (event: Event) => {
-    const projectId = (event as CustomEvent<unknown>).detail;
-    if (typeof projectId === "string" && projectId) listener(projectId);
-  };
-  window.addEventListener(CREATE_ENVIRONMENT_REQUEST_EVENT, handle);
-  return () => window.removeEventListener(CREATE_ENVIRONMENT_REQUEST_EVENT, handle);
 }
 
 /**
@@ -63,12 +47,19 @@ export function onCreateEnvironmentRequest(listener: (projectId: string) => void
  */
 export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
   const selfId = portalStore.getState().selfId;
-  if (!selfId || spec.connectionId === selfId) {
+  if (!spec.connectionId || !selfId || spec.connectionId === selfId) {
     useRemoteWorkspaceStore.getState().showLocal();
-    const ui = getWindowScope().commandScope().store(uiStore).getState();
+    const scope = getWindowScope().commandScope();
+    const ui = scope.store(uiStore).getState();
     if (!spec.projectId) return;
-    if (spec.createEnvironment) requestCreateEnvironment(spec.projectId);
-    else if (spec.environmentId) {
+    if (spec.createEnvironment) {
+      useAppDialogStore.getState().open({
+        kind: "create-environment",
+        nodeId: scope.nodeId,
+        projectId: spec.projectId,
+        ...(spec.createEnvironmentHandoff ? { handoff: spec.createEnvironmentHandoff } : {}),
+      });
+    } else if (spec.environmentId) {
       ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId, {
         landingTab: spec.landingTab,
       });
@@ -86,7 +77,13 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
     !spec.projectId
       ? { addProject: true }
       : spec.createEnvironment
-        ? { projectId: spec.projectId, createEnvironmentProjectId: spec.projectId }
+        ? {
+            projectId: spec.projectId,
+            createEnvironmentProjectId: spec.projectId,
+            ...(spec.createEnvironmentHandoff
+              ? { createEnvironmentHandoff: spec.createEnvironmentHandoff }
+              : {}),
+          }
         : {
             projectId: spec.projectId,
             ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),

@@ -591,12 +591,17 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   chooses the default machine by where it opens the dialog. The dialog's
   header has a Machine dropdown beside its close button
   (`CreateEnvironmentMachinePicker`), listing the dialog's own machine and
-  every reachable machine holding a project for the same repository
-  (`repositoryHint`, `useCreateEnvironmentMachines`). Picking another closes
-  this dialog and opens that machine's own for its copy of the project
-  (`openCreateEnvironmentOnMachine`), carrying the typed prompt and name.
-  Attachments and other choices do not travel: that machine resolves its own
-  defaults.
+  reachable machines holding a project for the same repository
+  (`repositoryHint`, `useCreateEnvironmentMachines`). Matching uses a held node's
+  loaded project list when available. An alternate needs a local checkout or
+  confirmed Docker availability.
+
+  Picking another machine opens its own dialog for its copy of the project
+  (`openCreateEnvironmentOnMachine`). The command node's dialog opens through
+  the app-level host, including when the sidebar is hidden. The open request
+  carries the name, prompt and Feature build details. The source retains a
+  recoverable draft, and opening a handoff preserves any saved destination draft.
+  The transfer omits attachments and uses the destination’s machine-specific defaults.
 - **Project and environment menus** of another node offer what the node's
   own sidebar does. Dialogs (Repository settings, Delete project, an
   environment's Settings) open on the node's scope, so they read and write the

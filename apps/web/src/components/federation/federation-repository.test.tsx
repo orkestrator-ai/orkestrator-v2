@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
@@ -9,7 +9,7 @@ import {
   type BackendId,
 } from "@orkestrator/protocol/federation";
 import { portalStore } from "@/lib/portal/portal-store";
-import { onCreateEnvironmentRequest } from "@/lib/federation/open-workspace";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
@@ -48,6 +48,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAppDialogStore.getState().close();
   uninstallDesktopFake();
   useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
@@ -124,46 +125,43 @@ for (const bound of [true, false]) {
         selectedEnvironmentId: "previous-environment",
         projectBoardTab: action === "Open board" ? "coordinator" : "kanban",
       });
-      const create = mock((_projectId: string) => undefined);
-      const stop = onCreateEnvironmentRequest(create);
-      try {
-        const { menu, target, fake } = await renderRepositoryMenu({ bound });
-        expect(within(menu).getByText(`On ${target.name}`)).toBeTruthy();
-        fireEvent.click(within(menu).getByRole("menuitem", { name: action }));
-        const project = target.projects[0]!;
-        await waitFor(() => {
-          if (bound) {
-            expect(useRemoteWorkspaceStore.getState().active).toBeNull();
-            if (boardTab) {
-              expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(
-                project.ref.projectId,
-              );
-              expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
-              expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(boardTab);
-            } else {
-              expect(create.mock.calls).toEqual([[project.ref.projectId]]);
-            }
+      const { menu, target, fake } = await renderRepositoryMenu({ bound });
+      expect(within(menu).getByText(`On ${target.name}`)).toBeTruthy();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: action }));
+      const project = target.projects[0]!;
+      await waitFor(() => {
+        if (bound) {
+          expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+          if (boardTab) {
+            expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(
+              project.ref.projectId,
+            );
+            expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+            expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(boardTab);
           } else {
-            expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe(target.connectionId);
-            expect(
-              useRemoteWorkspaceStore.getState().requests[target.connectionId]?.request,
-            ).toEqual({
+            expect(useAppDialogStore.getState().request).toMatchObject({
+              kind: "create-environment",
+              projectId: project.ref.projectId,
+            });
+          }
+        } else {
+          expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe(target.connectionId);
+          expect(useRemoteWorkspaceStore.getState().requests[target.connectionId]?.request).toEqual(
+            {
               projectId: project.ref.projectId,
               ...(boardTab ? { boardTab } : { createEnvironmentProjectId: project.ref.projectId }),
-            });
-            expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
-            expect(create.mock.calls).toEqual([]);
-          }
-        });
-        expect(useMachineViewStore.getState().openedRepository).toEqual(
-          action === "Open Coordinator"
-            ? { name: "github.com/acme/app", projectKey: project.key }
-            : null,
-        );
-        expect(fake.calls.filter((call) => call.command === "create_environment")).toEqual([]);
-      } finally {
-        stop();
-      }
+            },
+          );
+          expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
+          expect(useAppDialogStore.getState().request).toBeNull();
+        }
+      });
+      expect(useMachineViewStore.getState().openedRepository).toEqual(
+        action === "Open Coordinator"
+          ? { name: "github.com/acme/app", projectKey: project.key }
+          : null,
+      );
+      expect(fake.calls.filter((call) => call.command === "create_environment")).toEqual([]);
     });
   }
 

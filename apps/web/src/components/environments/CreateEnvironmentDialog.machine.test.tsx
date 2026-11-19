@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import * as federation from "@/components/federation/FederationProvider";
 import * as machineViews from "@/components/federation/useMachineViews";
@@ -140,16 +141,28 @@ const STUDIO: CreateEnvironmentMachine = {
 
 function dialogWithMachines(
   machines: CreateEnvironmentMachine[],
-  onSelectMachine: (machine: CreateEnvironmentMachine) => void,
-  projectId = "project-1",
+  onSelectMachine: (machine: CreateEnvironmentMachine, form: CreateEnvironmentHandoff) => boolean,
+  {
+    projectId = "project-1",
+    handoff,
+    onOpenChange = () => undefined,
+    isLoading = false,
+  }: {
+    projectId?: string;
+    handoff?: CreateEnvironmentHandoff;
+    onOpenChange?: (open: boolean) => void;
+    isLoading?: boolean;
+  } = {},
 ) {
   return (
     <DockerAvailabilityProvider available>
       <CreateEnvironmentDialog
         open
-        onOpenChange={() => undefined}
+        onOpenChange={onOpenChange}
+        isLoading={isLoading}
         onCreate={async () => true}
         projectId={projectId}
+        handoff={handoff}
         machines={machines}
         onSelectMachine={onSelectMachine}
       />
@@ -160,11 +173,14 @@ function dialogWithMachines(
 describe("CreateEnvironmentDialog machine dropdown", () => {
   test("sits in the header and lists only the machines that can take the environment", async () => {
     federated();
-    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], () => undefined));
+    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], () => true));
     const header = screen.getByRole("dialog").querySelector("[data-slot='dialog-header']");
     const select = screen.getByRole("combobox", { name: "Machine" });
     expect(header?.contains(select)).toBe(true);
     expect(select.textContent).toContain("Build Mac");
+    expect(select.querySelector("[data-machine-color]")?.getAttribute("data-machine-color")).toBe(
+      "teal",
+    );
     expect((select as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(select);
     const options = await screen.findAllByRole("option");
@@ -173,16 +189,64 @@ describe("CreateEnvironmentDialog machine dropdown", () => {
 
   test("with no other machine holding the repository it names this one, disabled", () => {
     federated();
-    renderInAppCommandScope(dialogWithMachines([OWN], () => undefined));
+    renderInAppCommandScope(dialogWithMachines([OWN], () => true));
     const select = screen.getByRole("combobox", { name: "Machine" }) as HTMLButtonElement;
     expect(select.textContent).toContain("Build Mac");
     expect(select.disabled).toBe(true);
   });
 
-  test("picking another machine hands the typed prompt and name to its dialog", async () => {
+  test("disables switching during creation even when an alternative is available", () => {
     federated();
-    const onSelectMachine = mock((_machine: CreateEnvironmentMachine) => undefined);
-    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], onSelectMachine));
+    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], () => true, { isLoading: true }));
+    expect((screen.getByRole("combobox", { name: "Machine" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  for (const prompt of ["", "Add a dark mode"]) {
+    test(`preserves an existing destination draft with a ${prompt ? "populated" : "blank"} handoff`, async () => {
+      federated();
+      const projectId = `project-draft-${Boolean(prompt)}`;
+      const handoff = { prompt, name: "dark-mode" };
+      const showTarget = (form?: CreateEnvironmentHandoff) =>
+        renderInAppCommandScope(
+          dialogWithMachines([STUDIO], () => true, { projectId, handoff: form }),
+        );
+      const promptField = () =>
+        screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement;
+      const nameField = () =>
+        screen.getByLabelText("Environment name (optional)") as HTMLInputElement;
+      const close = () => fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+      showTarget();
+      fireEvent.change(promptField(), { target: { value: "Existing draft" } });
+      close();
+      cleanup();
+
+      showTarget(handoff);
+      expect(promptField().value).toBe(prompt || "Existing draft");
+      expect(nameField().value).toBe("dark-mode");
+      close();
+      cleanup();
+
+      showTarget({ prompt: "", name: "" });
+      expect(promptField().value).toBe("Existing draft");
+      expect(nameField().value).toBe("");
+      cleanup();
+
+      showTarget();
+      expect(promptField().value).toBe("Existing draft");
+      expect(nameField().value).toBe("");
+    });
+  }
+
+  test("packages prompt and name and keeps the source draft recoverable", async () => {
+    federated();
+    const onSelectMachine = mock(
+      (_machine: CreateEnvironmentMachine, _form: CreateEnvironmentHandoff) => true,
+    );
+    const projectId = "project-recovery";
+    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], onSelectMachine, { projectId }));
     fireEvent.change(screen.getByLabelText("Environment name (optional)"), {
       target: { value: "dark-mode" },
     });
@@ -191,26 +255,14 @@ describe("CreateEnvironmentDialog machine dropdown", () => {
     });
     fireEvent.click(screen.getByRole("combobox", { name: "Machine" }));
     fireEvent.click(await screen.findByRole("option", { name: /Studio/ }));
-    expect(onSelectMachine).toHaveBeenCalledTimes(1);
-    expect(onSelectMachine.mock.calls[0]![0]).toBe(STUDIO);
+    expect(onSelectMachine.mock.calls).toEqual([
+      [STUDIO, { prompt: "Add a dark mode", name: "dark-mode" }],
+    ]);
     cleanup();
 
-    // Studio's own dialog, for its copy of the project, opens with them.
-    renderInAppCommandScope(dialogWithMachines([STUDIO], () => undefined, "project-studio"));
-    await waitFor(() =>
-      expect(
-        (screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value,
-      ).toBe("Add a dark mode"),
-    );
-    expect((screen.getByLabelText("Environment name (optional)") as HTMLInputElement).value).toBe(
-      "dark-mode",
-    );
-    cleanup();
-
-    // They moved: this machine's project keeps no copy of the prompt.
-    renderInAppCommandScope(dialogWithMachines([OWN], () => undefined));
+    renderInAppCommandScope(dialogWithMachines([OWN], () => true, { projectId }));
     expect((screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value).toBe(
-      "",
+      "Add a dark mode",
     );
   });
 });

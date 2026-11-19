@@ -1,3 +1,5 @@
+import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
+import { defineScopedSlot } from "@/lib/node-scope-slots";
 import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useRemoteMachineView } from "@/components/federation/useMachineViews";
@@ -282,18 +284,17 @@ interface CreateEnvironmentDialogProps {
    * dropdown lists them while several machines are in view.
    */
   machines?: readonly CreateEnvironmentMachine[];
-  /**
-   * Moves the dialog to another machine's own New Environment dialog. The
-   * typed prompt and name travel with it; this dialog is reset first.
-   */
-  onSelectMachine?: (machine: CreateEnvironmentMachine) => void;
+  /** Form data carried by the request that opened this dialog. */
+  handoff?: CreateEnvironmentHandoff;
+  /** Moves the form to another machine, returning whether the switch was accepted. */
+  onSelectMachine?: (machine: CreateEnvironmentMachine, form: CreateEnvironmentHandoff) => boolean;
 }
 
-// Persist draft prompt text per project across dialog open/close within the session
-const draftPrompts = new Map<string, string>();
-// An environment name typed before the dialog moved to another machine, for
-// that machine's project. Spent by the next opening for that project.
-const carriedEnvironmentNames = new Map<string, string>();
+// Drafts are per project within a node scope, independent of transient open requests.
+const environmentDrafts = defineScopedSlot(
+  "create-environment-drafts",
+  () => new Map<string, CreateEnvironmentHandoff>(),
+);
 
 export function CreateEnvironmentDialog({
   open,
@@ -308,6 +309,7 @@ export function CreateEnvironmentDialog({
   localEnvironmentAvailable = true,
   machines,
   onSelectMachine,
+  handoff,
 }: CreateEnvironmentDialogProps) {
   const nodeBackend = useScopeBackend();
   // Browses the host of the node this component renders in.
@@ -318,6 +320,8 @@ export function CreateEnvironmentDialog({
   // sidebar opens it outside every node's provider, where it is the command
   // scope's, as for `useScopeBackend` above.
   const dialogScope = useScopesWithCommandFallback().scope;
+  const drafts = environmentDrafts(dialogScope);
+  const preserveSavedDraft = Boolean(handoff && projectId && drafts.has(projectId));
   const remoteMachine = useRemoteMachineView(
     dialogScope.role === "command" ? null : dialogScope.nodeId,
   );
@@ -785,20 +789,22 @@ export function CreateEnvironmentDialog({
     };
   }, [catalogRefreshRevision, open, projectId, nodeBackend]);
 
-  // Restore drafts only for a new dialog/project, never for navigation changes.
+  // A handoff belongs to this opening. An empty prompt can fall back to the
+  // destination's draft, while an empty Feature description stays empty.
   useEffect(() => {
-    if (open && projectId) {
-      const draft = draftPrompts.get(projectId);
-      if (draft) {
-        setInitialPrompt(draft);
-      }
-      const carriedName = carriedEnvironmentNames.get(projectId);
-      if (carriedName) {
-        carriedEnvironmentNames.delete(projectId);
-        setEnvironmentName(carriedName);
-      }
-    }
-  }, [open, projectId]);
+    if (!open || !projectId) return;
+    const saved = drafts.get(projectId);
+    const form = handoff ?? saved;
+    if (!form) return;
+    setInitialPrompt(form.feature || form.prompt ? form.prompt : (saved?.prompt ?? ""));
+    setEnvironmentName(form.name);
+    const intent = form.feature ? "feature" : "prompt";
+    buildIntentRef.current = intent;
+    setBuildIntent(intent);
+    setFeatureName(form.feature?.name ?? "");
+    setFeatureAcceptanceCriteria(form.feature?.acceptanceCriteria ?? "");
+    setFeatureDeliveryPolicy(form.feature?.deliveryPolicy ?? DEFAULT_DELIVERY_POLICY);
+  }, [drafts, handoff, open, projectId]);
 
   // Focus the prompt when its section becomes active.
   useEffect(() => {
@@ -1418,40 +1424,59 @@ export function CreateEnvironmentDialog({
     setPortMappings((prev) => prev.map((m, i) => (i === index ? { ...m, ...updates } : m)));
   }, []);
 
+  const portableForm = useMemo<CreateEnvironmentHandoff>(
+    () => ({
+      prompt: initialPrompt.trim(),
+      name: environmentName.trim(),
+      ...(buildIntent === "feature"
+        ? {
+            feature: {
+              name: featureName,
+              acceptanceCriteria: featureAcceptanceCriteria,
+              deliveryPolicy: featureDeliveryPolicy,
+            },
+          }
+        : {}),
+    }),
+    [
+      buildIntent,
+      environmentName,
+      featureAcceptanceCriteria,
+      featureDeliveryPolicy,
+      featureName,
+      initialPrompt,
+    ],
+  );
+
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
       if (!isOpen) {
-        // Save draft prompt before resetting, so it can be restored next time
-        if (projectId) {
-          const trimmed = initialPrompt.trim();
-          if (trimmed) {
-            draftPrompts.set(projectId, trimmed);
-          } else {
-            draftPrompts.delete(projectId);
-          }
+        if (projectId && !preserveSavedDraft) {
+          if (portableForm.prompt) drafts.set(projectId, { prompt: portableForm.prompt, name: "" });
+          else drafts.delete(projectId);
         }
         resetForm();
       }
       onOpenChange(isOpen);
     },
-    [onOpenChange, resetForm, projectId, initialPrompt],
+    [drafts, onOpenChange, portableForm.prompt, preserveSavedDraft, projectId, resetForm],
   );
 
-  // The prompt and name move to the other machine's project; nothing else
-  // does, since that machine resolves its own defaults.
   const handleSelectMachine = useCallback(
     (machine: CreateEnvironmentMachine) => {
-      if (!onSelectMachine || isLoading) return;
-      const prompt = initialPrompt.trim();
-      const name = environmentName.trim();
-      if (projectId) draftPrompts.delete(projectId);
-      if (prompt) draftPrompts.set(machine.projectId, prompt);
-      else draftPrompts.delete(machine.projectId);
-      if (name) carriedEnvironmentNames.set(machine.projectId, name);
+      if (!onSelectMachine || isLoading || !onSelectMachine(machine, portableForm)) return;
+      // Keep recovery on the source scope. Navigation can supersede the
+      // destination request before its stores are ready to show the dialog.
+      if (projectId && !preserveSavedDraft) {
+        if (portableForm.prompt || portableForm.name || portableForm.feature) {
+          drafts.set(projectId, portableForm);
+        } else {
+          drafts.delete(projectId);
+        }
+      }
       resetForm();
-      onSelectMachine(machine);
     },
-    [environmentName, initialPrompt, isLoading, onSelectMachine, projectId, resetForm],
+    [drafts, isLoading, onSelectMachine, portableForm, preserveSavedDraft, projectId, resetForm],
   );
 
   // Validate port mappings - returns true if all valid
@@ -1535,7 +1560,7 @@ export function CreateEnvironmentDialog({
           featureAttemptIdentityRef.current = null;
           featureAttemptModelsRef.current = null;
           // The description is the shared prompt text, so its draft is spent too.
-          draftPrompts.delete(projectId);
+          if (!preserveSavedDraft) drafts.delete(projectId);
           resetForm();
           onOpenChange(false);
           return;
@@ -1569,7 +1594,7 @@ export function CreateEnvironmentDialog({
         // Clear the draft on successful creation and close directly
         // (bypass handleOpenChange which would re-save the draft)
         if (projectId) {
-          draftPrompts.delete(projectId);
+          if (!preserveSavedDraft) drafts.delete(projectId);
         }
         resetForm();
         onOpenChange(false);
@@ -1614,6 +1639,8 @@ export function CreateEnvironmentDialog({
       onOpenChange,
       projectId,
       validatePortMappings,
+      drafts,
+      preserveSavedDraft,
     ],
   );
 

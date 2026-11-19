@@ -56,7 +56,7 @@ export function CreateEnvironmentMachinePicker({
           title={
             choosable
               ? "Create this environment on another machine"
-              : "No other machine has this repository"
+              : "No other machine can create this environment"
           }
           data-testid="create-environment-machine-select"
           className="max-w-44 bg-background"

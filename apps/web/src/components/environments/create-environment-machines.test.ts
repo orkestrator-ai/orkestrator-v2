@@ -43,31 +43,41 @@ const asleep: BuildLaunchMachine = {
 
 describe("createEnvironmentMachines", () => {
   test("keeps the dialog's own machine and every reachable machine with the repository", () => {
-    expect(createEnvironmentMachines([own, studio, asleep]).map((machine) => machine.key)).toEqual([
-      "node:own",
-      "node:studio",
-    ]);
+    expect(
+      createEnvironmentMachines([own, studio, asleep], new Map([[studio.key, true]])).map(
+        (machine) => machine.key,
+      ),
+    ).toEqual(["node:own", "node:studio"]);
   });
 
-  test("a machine without a checkout is still offered: a container needs none", () => {
-    expect(createEnvironmentMachines([own, studio])).toContain(studio);
+  test("a remote-only machine is offered once Docker availability is known", () => {
+    expect(createEnvironmentMachines([own, studio], new Map())).toEqual([own]);
+    expect(createEnvironmentMachines([own, studio], new Map([[studio.key, false]]))).toEqual([own]);
+    expect(createEnvironmentMachines([own, studio], new Map([[studio.key, true]]))).toContain(
+      studio,
+    );
   });
 
   test("the dialog's own machine stays even when the summary calls it unavailable", () => {
     const ownUnknown = { ...own, available: false };
-    expect(createEnvironmentMachines([ownUnknown])).toEqual([ownUnknown]);
+    expect(createEnvironmentMachines([ownUnknown], new Map())).toEqual([ownUnknown]);
   });
 });
 
 describe("openCreateEnvironmentOnMachine", () => {
-  test("opens that machine's own New Environment dialog for its copy of the project", () => {
-    const open = spyOn(openWorkspace, "openMachineWorkspace").mockImplementation(() => undefined);
-    openCreateEnvironmentOnMachine(studio, "repo");
-    expect(open).toHaveBeenCalledWith({
-      connectionId: "studio",
-      projectId: "project-studio",
-      createEnvironment: true,
-      title: "repo",
-    });
-  });
+  test.each([studio, { ...studio, machine: null, nodeId: null }])(
+    "opens the destination project with the switch form",
+    (machine) => {
+      const open = spyOn(openWorkspace, "openMachineWorkspace").mockImplementation(() => undefined);
+      const handoff = { prompt: "draft", name: "" };
+      openCreateEnvironmentOnMachine(machine, "repo", handoff);
+      expect(open).toHaveBeenCalledWith({
+        connectionId: machine.nodeId ?? "",
+        projectId: "project-studio",
+        createEnvironment: true,
+        createEnvironmentHandoff: handoff,
+        title: "repo",
+      });
+    },
+  );
 });

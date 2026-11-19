@@ -1,3 +1,4 @@
+import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
 import {
   effectiveClaudeNativeBackend,
   isTmuxModeEnabled,
@@ -69,6 +70,7 @@ export interface CreateEnvironmentFlowOperations {
 }
 
 interface CreateEnvironmentFlowDialogProps extends CreateEnvironmentFlowOperations {
+  handoff?: CreateEnvironmentHandoff;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
@@ -188,6 +190,7 @@ export function CreateEnvironmentFlowDialog({
   onOpenChange,
   projectId,
   projectName: providedProjectName,
+  handoff,
   createEnvironment,
   updateEnvironment,
   startEnvironment,
@@ -219,7 +222,7 @@ export function CreateEnvironmentFlowDialog({
     localEnvironmentAvailableRef.current = localEnvironmentAvailable;
   }, [dockerAvailable, localEnvironmentAvailable]);
   const projectName = providedProjectName ?? storedProjectName;
-  const machines = useCreateEnvironmentMachines(projectId);
+  const machines = useCreateEnvironmentMachines(open ? projectId : null);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
 
@@ -460,11 +463,15 @@ export function CreateEnvironmentFlowDialog({
 
   // That machine's own dialog takes over: this one closes, and the window
   // shows the machine's copy of the project with its dialog open.
-  const handleSelectMachine = (machine: CreateEnvironmentMachine) => {
-    if (isCreating) return;
+  const handleSelectMachine = (
+    machine: CreateEnvironmentMachine,
+    form: CreateEnvironmentHandoff,
+  ) => {
+    if (isCreating) return false;
     cancelPendingCredentialFlow();
     onOpenChange(false);
-    openCreateEnvironmentOnMachine(machine, projectName ?? "New environment");
+    openCreateEnvironmentOnMachine(machine, projectName ?? "New environment", form);
+    return true;
   };
 
   const handleCreate = (options: ClaudeOptions): Promise<boolean> =>
@@ -563,6 +570,7 @@ export function CreateEnvironmentFlowDialog({
         projectName={projectName}
         localEnvironmentAvailable={localEnvironmentAvailable}
         machines={machines}
+        handoff={handoff}
         onSelectMachine={handleSelectMachine}
         defaultPortMappings={
           projectId ? config.repositories[projectId]?.defaultPortMappings : undefined

@@ -1799,7 +1799,7 @@ describe("HierarchicalSidebar", () => {
     );
   });
 
-  test("opens the create dialog when a machine section asks for this window's machine", async () => {
+  test("routes a command-machine create request to the app dialog host", () => {
     portalStore.store.setState({ selfId: "bk_here" as never });
     try {
       renderInAppCommandScope(<HierarchicalSidebar />);
@@ -1811,10 +1811,15 @@ describe("HierarchicalSidebar", () => {
           title: "Project One",
         }),
       );
-      await screen.findByText(/^Create Ork \(environment\)/);
+      expect(useAppDialogStore.getState().request).toEqual({
+        kind: "create-environment",
+        nodeId: appCommandScope().nodeId,
+        projectId: "project-1",
+      });
       expect(createEnvironmentMock).not.toHaveBeenCalled();
       expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
     } finally {
+      useAppDialogStore.getState().close();
       portalStore.store.setState({ selfId: null });
     }
   });

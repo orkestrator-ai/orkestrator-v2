@@ -149,7 +149,12 @@ export function startRemoteWorkspaceSelectionSync(): () => void {
     // Navigation supersedes pending work even when its host has not mounted
     // yet. Returning to a warm node must not revive a deferred dialog.
     const requests = Object.fromEntries(
-      Object.entries(state.requests).filter(([nodeId]) => nodeId === selection?.nodeId),
+      Object.entries(state.requests).filter(
+        ([nodeId, { request }]) =>
+          nodeId === selection?.nodeId &&
+          (!request.createEnvironmentHandoff ||
+            (request.projectId === selection.projectId && selection.environmentId === null)),
+      ),
     );
     if (
       !sameActive(state.active, next) ||

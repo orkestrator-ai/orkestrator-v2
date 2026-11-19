@@ -318,7 +318,9 @@ export function NodeWorkspaceHost() {
         existingGitUrls={projectGitUrls}
       />
       <CreateEnvironmentFlowDialog
+        key={createEnvProjectId ? dialogRequest?.seq : undefined}
         open={createEnvProjectId !== null}
+        handoff={createEnvProjectId ? dialogRequest?.createEnvironmentHandoff : undefined}
         onOpenChange={(open) => {
           if (!open) closeDialog();
         }}

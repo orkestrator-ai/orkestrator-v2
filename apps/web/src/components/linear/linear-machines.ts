@@ -9,6 +9,8 @@
 import { useMemo } from "react";
 import { useStore } from "zustand";
 import { sha256Hex } from "@orkestrator/protocol/graphs/sha256";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { ScopeRows } from "@/lib/federation/scope-overlay";
 import { repositoryHint, type NodeSummary } from "@orkestrator/protocol/node-summaries";
 import type { AccountMachine } from "@/lib/backend/client";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
@@ -58,6 +60,7 @@ interface TargetInput {
   commandColorToken?: string;
   commandProjects: readonly (Pick<Project, "id" | "gitUrl"> & { localPath?: string | null })[];
   nodes: readonly NodeSummary[];
+  scopeRows?: ReadonlyMap<BackendId, ScopeRows>;
   /** Whether this tab's own project has a checkout; true when unknown. */
   currentHasCheckout?: boolean;
 }
@@ -104,25 +107,33 @@ export function linearMachineTargets(input: TargetInput): LinearMachineTarget[] 
   }
   for (const node of input.nodes) {
     if (node.nodeId === input.currentNodeId || node.nodeId === input.commandNodeId) continue;
-    const project = node.projects.find((entry) => entry.repositoryHint === hint);
-    if (!project) continue;
+    const liveRows = input.scopeRows?.get(node.nodeId);
+    const liveProject = liveRows?.projects.find((entry) => repositoryHint(entry.gitUrl) === hint);
+    const summaryProject = liveRows
+      ? undefined
+      : node.projects.find((entry) => entry.repositoryHint === hint);
+    const projectId = liveProject?.id ?? summaryProject?.ref.projectId;
+    if (!projectId) continue;
     targets.push({
       key: `node:${node.nodeId}`,
       machine: node.nodeId,
       nodeId: node.nodeId,
       name: node.view.displayName || "Unnamed machine",
       ...(node.view.colorToken ? { colorToken: node.view.colorToken } : {}),
-      projectId: project.ref.projectId,
+      projectId,
       current: false,
       available: node.available,
-      hasCheckout: Boolean(project.pathName),
+      hasCheckout: Boolean(liveProject?.localPath ?? summaryProject?.pathName),
     });
   }
   return targets;
 }
 
 /** The connect dialog's machines for `projectId` on this tab's node. */
-export function useLinearMachineTargets(projectId: string): LinearMachineTarget[] {
+export function useLinearMachineTargets(
+  projectId: string,
+  scopeRows?: ReadonlyMap<BackendId, ScopeRows>,
+): LinearMachineTarget[] {
   const { windowScope, scope } = useScopesWithCommandFallback();
   const commandScope = windowScope.commandScope();
   const projects = useStore(scope.store(projectStore), (state) => state.projects);
@@ -148,6 +159,7 @@ export function useLinearMachineTargets(projectId: string): LinearMachineTarget[
         ...(commandColorToken ? { commandColorToken } : {}),
         commandProjects,
         nodes,
+        scopeRows,
         currentHasCheckout,
       }),
     [
@@ -160,6 +172,7 @@ export function useLinearMachineTargets(projectId: string): LinearMachineTarget[
       projectId,
       scope,
       selfId,
+      scopeRows,
     ],
   );
 }

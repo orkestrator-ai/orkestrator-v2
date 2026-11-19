@@ -65,6 +65,7 @@ import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
 import { FeaturesComposeFixture, TerminalComposeFixture } from "./ComposeFramesFixture";
+import { QueuedPromptEditFixture } from "./QueuedPromptEditFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
@@ -2069,6 +2070,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/queued-prompt-edit") return <QueuedPromptEditFixture />;
   if (window.location.pathname === "/tab-styles") return <TabStylesFixture />;
   if (window.location.pathname === "/html-preview") return <HtmlPreviewFixture />;
   if (window.location.pathname === "/annotation-destination-layout")

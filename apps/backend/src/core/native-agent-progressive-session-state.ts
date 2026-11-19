@@ -39,6 +39,7 @@ import {
   type NativeAgentProjectionContext,
   goalProjectionField,
 } from "./native-agent-projection-context.js";
+import { nativeAgentQueueEditingField } from "./native-agent-queue-editing.js";
 
 const log = createLogger("native-agent");
 
@@ -363,6 +364,7 @@ export class NativeAgentProgressiveSessionState {
                 queue.messages,
               ),
               ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
+              ...nativeAgentQueueEditingField(queue),
               ...(queue.dispatchError
                 ? {
                     blocked: {

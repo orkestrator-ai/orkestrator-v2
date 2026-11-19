@@ -8,6 +8,12 @@ import {
   type EnvironmentHydrationBatch,
 } from "@orkestrator/protocol/environment-hydration";
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
+import type {
+  PromptQueueEditBeginResult,
+  PromptQueueEditFinish,
+  PromptQueueEditFinishResult,
+  PromptQueueEditRenewResult,
+} from "@/lib/prompt-queue-edit";
 import { terminalWriteWasDelivered } from "@/lib/backend/shared";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
@@ -775,6 +781,67 @@ export function createWorkflowsApi(client: BackendClient) {
     );
   }
 
+  /**
+   * Start editing a queued prompt in place (`prompt-queue-edit.ts`). The
+   * backend holds the item back from delivery until the edit finishes.
+   */
+  async function beginPromptQueueMessageEdit(input: {
+    queueKey: string;
+    environmentId: string;
+    messageId: string;
+    takeOver?: boolean;
+  }): Promise<PromptQueueEditBeginResult> {
+    return asWebModel<PromptQueueEditBeginResult>(
+      native().begin_prompt_queue_message_edit({
+        queueKey: input.queueKey,
+        environmentId: input.environmentId,
+        messageId: input.messageId,
+        ...(input.takeOver ? { takeOver: true } : {}),
+      }),
+    );
+  }
+
+  async function renewPromptQueueMessageEdit(input: {
+    queueKey: string;
+    environmentId: string;
+    messageId: string;
+    leaseId: string;
+  }): Promise<PromptQueueEditRenewResult> {
+    return asWebModel<PromptQueueEditRenewResult>(native().renew_prompt_queue_message_edit(input));
+  }
+
+  /** Commit (text and attachments together) or cancel an in-place edit. */
+  async function finishPromptQueueMessageEdit(
+    input: {
+      queueKey: string;
+      environmentId: string;
+      messageId: string;
+      leaseId: string;
+    } & PromptQueueEditFinish,
+  ): Promise<PromptQueueEditFinishResult> {
+    return asWebModel<PromptQueueEditFinishResult>(
+      native().finish_prompt_queue_message_edit(
+        input.outcome === "commit"
+          ? {
+              queueKey: input.queueKey,
+              environmentId: input.environmentId,
+              messageId: input.messageId,
+              leaseId: input.leaseId,
+              outcome: "commit",
+              text: input.text,
+              ...(input.attachments?.length ? { attachments: [...input.attachments] } : {}),
+            }
+          : {
+              queueKey: input.queueKey,
+              environmentId: input.environmentId,
+              messageId: input.messageId,
+              leaseId: input.leaseId,
+              outcome: input.outcome,
+            },
+      ),
+    );
+  }
+
   async function retryPromptQueueDispatch<T = unknown>(
     queueKey: string,
   ): Promise<PersistedPromptQueue<T> | null> {
@@ -945,6 +1012,9 @@ export function createWorkflowsApi(client: BackendClient) {
     enqueuePromptQueueMessage,
     removePromptQueueMessage,
     movePromptQueueMessage,
+    beginPromptQueueMessageEdit,
+    renewPromptQueueMessageEdit,
+    finishPromptQueueMessageEdit,
     retryPromptQueueDispatch,
     getComposeDraft,
     saveComposeDraft,
@@ -1008,6 +1078,9 @@ export const {
   enqueuePromptQueueMessage,
   removePromptQueueMessage,
   movePromptQueueMessage,
+  beginPromptQueueMessageEdit,
+  renewPromptQueueMessageEdit,
+  finishPromptQueueMessageEdit,
   retryPromptQueueDispatch,
   getComposeDraft,
   saveComposeDraft,

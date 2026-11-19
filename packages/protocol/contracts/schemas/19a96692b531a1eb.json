@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:19a96692b531a1eb94fcd36aaa40f9dd07cb1923f60e1f9636ef64c8ed6a3dbf",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "queueKey": {
+          "type": "string"
+        },
+        "takeOver": {
+          "type": "boolean"
+        }
+      },
+      "required": ["environmentId", "messageId", "queueKey"],
+      "type": "object"
+    }
+  }
+}

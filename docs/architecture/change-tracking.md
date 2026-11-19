@@ -449,6 +449,10 @@ renderer (no line counting, diffing, provider-tool classification, provider
 SDKs or two-buffer diff editors) and keeps the portable contracts free of
 platform and provider imports.
 
+The file editor's save-conflict comparison is the sole exception for
+two-buffer editors. It renders a disk snapshot beside the live, editable draft
+with Monaco. That comparison supplies no change statistics or projections.
+
 ### Surfaces
 
 | Surface | Resource |

@@ -544,7 +544,9 @@ describe("useNativeAgentSession history paging", () => {
             connection: "connected",
             turn: { phase: "running" },
             interactions: [],
-            composerControls: [],
+            composerControls: [
+              { id: "plan-mode", kind: "toggle", label: "Plan mode", value: true },
+            ],
             capabilities: nativeAgentCapabilities("codex"),
             notices: [],
           },
@@ -563,7 +565,12 @@ describe("useNativeAgentSession history paging", () => {
       await release();
       expect(result.current.projection?.generation).toBe("generation-2");
       expect(result.current.projection?.turn.phase).toBe("running");
+      expect(result.current.projection?.composerControls[0]?.id).toBe("plan-mode");
       expect(ids(result.current.projection)).toEqual(["m3", "m4"]);
+      await act(async () => {
+        await result.current.loadEarlierMessages();
+      });
+      expect(messagePageCalls).toHaveLength(1);
     } finally {
       await act(async () => {
         stateGate.resolve();

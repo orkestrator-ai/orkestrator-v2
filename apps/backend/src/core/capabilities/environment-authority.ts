@@ -1,4 +1,3 @@
-import { kindsFor } from "./scoped-locations.js";
 /**
  * A leaf's environments under its command node's authority
  * (docs/architecture/agent-capabilities-management.md, "Authority" and
@@ -33,6 +32,7 @@ import { kindsFor } from "./scoped-locations.js";
  * On a command node (or a machine with no command node) both fall through to
  * this machine's own staging and view (`environment-delivery.ts`).
  */
+import { kindsFor } from "./scoped-locations.js";
 import { randomBytes } from "node:crypto";
 
 import { AGENT_PLATFORMS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";

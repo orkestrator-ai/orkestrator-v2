@@ -1,10 +1,10 @@
-import { CAPABILITY_LIMITS, MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 /**
  * Command-node handover of capability authority over real node links
  * (in-memory network, real `NodeService` handover and real capability
  * services): the state, its artifacts and the single-writer epoch move to
  * the new command node; the old one stops acting and is refused everywhere.
  */
+import { CAPABILITY_LIMITS, MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";

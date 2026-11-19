@@ -358,6 +358,15 @@ export class CapabilityService {
       );
       if (!applied?.mcp || !applied.packageId || !applied.componentId) continue;
       const status = await observeMcp(applied.mcp).catch(() => "unavailable");
+      if (
+        status === "unavailable" &&
+        !inventory.errors.some((error) => error.provider === item.provider)
+      ) {
+        inventory.errors.push({
+          provider: item.provider,
+          message: "Could not verify managed MCP definitions.",
+        });
+      }
       if (status === "present" || status === "drifted") {
         item.locationId = `mcp:${applied.mcp.provider}`;
         item.ownership = "managed";

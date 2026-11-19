@@ -1,4 +1,3 @@
-import { isTrustedSource, packageUpdatePolicy } from "./update-checker.js";
 /**
  * Previewing, applying and cancelling a change for `CapabilityService`
  * (docs/architecture/agent-capabilities-management.md, "Operations and
@@ -8,6 +7,7 @@ import { isTrustedSource, packageUpdatePolicy } from "./update-checker.js";
  * change, the approval and the operation together and starts delivery.
  * Change parsing and application are `operations.ts`.
  */
+import { isTrustedSource, packageUpdatePolicy } from "./update-checker.js";
 import {
   CAPABILITY_LIMITS,
   isTerminalCapabilityOperationState,

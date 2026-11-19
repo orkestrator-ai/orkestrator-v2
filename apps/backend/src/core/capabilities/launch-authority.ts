@@ -145,6 +145,7 @@ export function verifyLaunchDeliveries(input: {
         component.kind === "skill" &&
         scoped.kind === "verified" &&
         !scoped.exclusive &&
+        input.scopedEvidence?.account?.entries["claude-user-skills"] !== "private" &&
         inventory?.items.some((item) => {
           if (item.locationId !== "claude-user-skills") return false;
           const receipt = Object.values(state.receipts).find(
@@ -153,7 +154,7 @@ export function verifyLaunchDeliveries(input: {
               entry.locationId === item.locationId &&
               entry.componentId === item.componentId &&
               entry.environmentId === undefined &&
-              entry.accountHomeId === target.accountHomeId,
+              entry.accountHomeId === undefined,
           );
           const observedComponent =
             receipt &&
@@ -179,7 +180,21 @@ export function verifyLaunchDeliveries(input: {
       }
       if (scoped.kind === "verified") {
         for (const entry of scoped.deliveries) {
-          deliveries.push({ packageId: pkg.id, componentId, ...entry });
+          deliveries.push({
+            packageId: pkg.id,
+            componentId,
+            ...entry,
+            ...(!scoped.exclusive &&
+            target.provider === "claude" &&
+            "kind" in component &&
+            component.kind === "skill"
+              ? {
+                  claudeSkillNameDigest: sha256(
+                    installName(component.name, component.pathOrKey, "directory"),
+                  ),
+                }
+              : {}),
+          });
         }
         if (scoped.exclusive) continue;
       }
@@ -553,8 +568,17 @@ function parseAnswer(value: unknown, target: CapabilityTarget): LeafAnswer | nul
         const componentId = text(delivery.componentId);
         const locationId = text(delivery.locationId);
         const digest = text(delivery.digest, 200);
+        const claudeSkillNameDigest = text(delivery.claudeSkillNameDigest, 80);
         return packageId && componentId && locationId && digest
-          ? [{ packageId, componentId, locationId, digest }]
+          ? [
+              {
+                packageId,
+                componentId,
+                locationId,
+                digest,
+                ...(claudeSkillNameDigest ? { claudeSkillNameDigest } : {}),
+              },
+            ]
           : [];
       })
     : [];
@@ -747,6 +771,25 @@ export class LeafLaunchAuthority {
       const scoped = scopedDeliveryDigest(delivery, report);
       if (scoped !== undefined) {
         if (scoped !== delivery.digest) changed(delivery.componentId);
+        const name = delivery.claudeSkillNameDigest;
+        if (
+          name &&
+          (!inventory ||
+            inventory.items.some(
+              (item) =>
+                item.locationId === "claude-user-skills" &&
+                sha256(item.name) === name &&
+                !answer.deliveries.some(
+                  (proven) =>
+                    proven.packageId === delivery.packageId &&
+                    proven.componentId === delivery.componentId &&
+                    proven.locationId === item.locationId &&
+                    item.digest === proven.digest &&
+                    !item.drifted,
+                ),
+            ))
+        )
+          changed(delivery.componentId);
         continue;
       }
       const observed = inventory?.items.find(

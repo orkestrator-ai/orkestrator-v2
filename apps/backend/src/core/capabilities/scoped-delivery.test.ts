@@ -227,6 +227,19 @@ describe("project setups in a local worktree", () => {
       ).toContain(name);
     }
     expect(await exists(path.join(worktree, ".claude", "skills", "graph-review"))).toBe(false);
+    const personal = path.join(fixture.home, ".claude", "skills", "graph-review");
+    await fs.mkdir(personal, { recursive: true });
+    await fs.writeFile(path.join(personal, "SKILL.md"), "A different personal skill.");
+    await expect(
+      fixture.service.preflightSession({
+        environmentId: "env-graph",
+        projectId: "proj-1",
+        graphNode: "template/node",
+        relativeWorktree,
+        provider: "claude",
+        sessionKey: "graph-session",
+      }),
+    ).rejects.toThrow("shadows the required project revision");
   });
 
   test("are written into the worktree, kept out of Git and never replace a tracked file", async () => {
@@ -797,6 +810,7 @@ describe("launch deliveries for targets with their own copies", () => {
         componentId: receipt!.componentId,
         locationId: "project-claude-skills",
         digest: receipt!.digest,
+        claudeSkillNameDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       },
     ]);
   });

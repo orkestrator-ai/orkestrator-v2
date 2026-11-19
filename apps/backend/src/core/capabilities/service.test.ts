@@ -40,6 +40,7 @@ const nodes: Node[] = [];
 afterEach(async () => {
   for (const node of nodes.splice(0)) {
     node.service.dispose();
+    await node.service.reconciler.idle();
     node.storage.close?.();
     await fs.rm(node.dir, { recursive: true, force: true });
   }

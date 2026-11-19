@@ -226,6 +226,8 @@ export interface CapabilityLaunchDelivery {
   componentId: string;
   locationId: string;
   digest: string;
+  /** A leaf rechecks whether a personal Claude skill shadows this project copy. */
+  claudeSkillNameDigest?: string;
 }
 
 /**

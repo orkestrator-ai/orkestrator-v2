@@ -367,7 +367,14 @@ export class CapabilityReconciler {
             receipt.digest = expected;
             receipt.status = "installed-next-session";
             receipt.verification = fileKind ? "present" : "enabled";
-          } else if (receipt.pendingWrite?.action === "remove" && !seen) {
+          } else if (
+            receipt.pendingWrite?.action === "remove" &&
+            !seen &&
+            inventory.truncated === 0 &&
+            !inventory.errors.some(
+              (error) => error.provider === undefined || receipt.providers.includes(error.provider),
+            )
+          ) {
             delete current.receipts[receipt.id];
             observedRemovals.set(receipt.id, { status: "ready" });
           } else if (fileKind && expectedDigests.has(receipt.id) && !seen) {

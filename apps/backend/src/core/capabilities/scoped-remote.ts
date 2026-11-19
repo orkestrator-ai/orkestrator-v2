@@ -1,4 +1,3 @@
-import { confinedPath } from "./security.js";
 /**
  * Project setups in worktrees on other machines
  * (docs/architecture/agent-capabilities-management.md, "Shared locations and
@@ -32,6 +31,7 @@ import { confinedPath } from "./security.js";
  * single-writer epoch. An environment the machine no longer has releases its
  * receipts; one it still has but cannot reach now keeps them.
  */
+import { confinedPath } from "./security.js";
 import { promises as fs } from "node:fs";
 
 import {

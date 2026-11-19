@@ -12,6 +12,30 @@ import { COORDINATOR_CONTEXT_CLOSE_TAG, COORDINATOR_CONTEXT_OPEN_TAG } from "./c
  * `node/bug-report-facts.ts` on the host being diagnosed.
  */
 
+/** Set by the host launcher only for a dedicated report bridge. */
+export const BUG_REPORT_WORKSPACE_ENV = "ORKESTRATOR_BUG_REPORT_WORKSPACE";
+
+/**
+ * The only legacy policy change report bridges admit. Compare every other
+ * axis with the normal narrowing check.
+ */
+export function bugReportPolicyBeforeApprovalUpgrade<
+  T extends { sandbox: string; approvals: string; projectResources: boolean },
+>(previous: T | undefined, next: T, reportWorkspace: string | undefined): T | undefined {
+  if (
+    reportWorkspace &&
+    previous?.sandbox === "provider" &&
+    next.sandbox === "provider" &&
+    !previous.projectResources &&
+    !next.projectResources &&
+    previous.approvals === "ask" &&
+    next.approvals === "auto-approve"
+  ) {
+    return { ...previous, approvals: next.approvals };
+  }
+  return previous;
+}
+
 export const BUG_REPORT_ISSUE_REPOSITORY = "orkestrator-ai/orkestrator-v2";
 export const BUG_REPORT_NEW_ISSUE_URL = `https://github.com/${BUG_REPORT_ISSUE_REPOSITORY}/issues/new`;
 
@@ -354,7 +378,7 @@ export function buildBugReportBriefing(input: BugReportBriefingInput): string {
     ...describeClientContext(input.client),
     "",
     "## How you are running",
-    "Your sandbox lets you write only inside your working directory. Commands and anything outside it need my approval, so prefer reading files and searching logs over running commands, and say why before asking. Stay in this working directory: it is deleted once the issue is filed.",
+    "Write report files inside this working directory. Commands may need my approval depending on the provider and approval mode, so prefer reading files and searching logs over running commands, and say why before asking. The working directory is deleted when the report is closed.",
     "",
     ...bugReportUnderstandSection(
       `I can attach screenshots to my messages, or capture the Orkestrator window into ${input.screenshotDir}`,

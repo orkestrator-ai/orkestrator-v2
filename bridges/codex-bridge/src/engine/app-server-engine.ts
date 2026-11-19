@@ -1,3 +1,4 @@
+import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
 /**
  * `CodexEngine` over a persistent `codex app-server --stdio` child.
  *
@@ -933,6 +934,7 @@ export class AppServerEngine implements CodexEngine {
       codexHome: options.codexHome,
       clientInfo: options.clientInfo,
       configOverrides: options.configOverrides,
+      experimentalApi: Boolean(process.env[BUG_REPORT_WORKSPACE_ENV]),
       now: options.now,
       ...options.supervisorOverrides,
       // Listed after the overrides so they can never be replaced: losing these
@@ -1861,6 +1863,13 @@ export class AppServerEngine implements CodexEngine {
       // `request_user_input` without this.
       ...codexRequestUserInputConfig(config.policy),
       ...extraConfig,
+      ...(config.excludeTemporaryWriteRoots
+        ? {
+            "sandbox_workspace_write.exclude_tmpdir_env_var": true,
+            "sandbox_workspace_write.exclude_slash_tmp": true,
+            "sandbox_workspace_write.writable_roots": [],
+          }
+        : {}),
       ...(config.agentMcp
         ? {
             // Replace the complete server table. The app-server process may
@@ -3090,8 +3099,8 @@ function toSandboxPolicy(config: EngineTurnConfig): Record<string, unknown> {
         type: "workspaceWrite",
         writableRoots: [],
         networkAccess,
-        excludeTmpdirEnvVar: false,
-        excludeSlashTmp: false,
+        excludeTmpdirEnvVar: config.excludeTemporaryWriteRoots ?? false,
+        excludeSlashTmp: config.excludeTemporaryWriteRoots ?? false,
       };
     case "danger-full-access":
     default:

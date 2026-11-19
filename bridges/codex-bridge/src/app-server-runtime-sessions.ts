@@ -1,3 +1,7 @@
+import {
+  BUG_REPORT_WORKSPACE_ENV,
+  bugReportPolicyBeforeApprovalUpgrade,
+} from "@orkestrator/protocol/bug-report";
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 import { USAGE_LIMIT_ERROR_CODE } from "@orkestrator/protocol/agent-usage-limits";
 import type { ProviderFailureReason } from "@orkestrator/protocol/provider-failures";
@@ -1277,14 +1281,33 @@ export class CodexRuntimeSessions {
     const policyRequested = body.policy !== undefined;
     if (policyRequested && !isNativeAgentExecutionPolicy(body.policy)) return "invalid-policy";
     const policyAtStart = session.config.policy;
+    const reportWorkspace = process.env[BUG_REPORT_WORKSPACE_ENV];
     const nextConfig = this.lifecycle.toEngineConfig({
+      // A policy sync carries no composer changes.
+      ...(reportWorkspace && policyRequested && Object.keys(body).length === 1
+        ? {
+            mode: session.config.mode,
+            model: session.config.model,
+            modelReasoningEffort: session.config.reasoningEffort,
+            fastMode: session.config.serviceTier === "fast",
+            agentMcp: session.config.agentMcp,
+          }
+        : {}),
       ...body,
       ...(policyRequested ? {} : { policy: policyAtStart }),
     });
     // Narrow-only (H4): the agent this bridge runs can read the bridge token.
     // Check before applying settings, and again after the engine work yields.
+    const policyBeforeUpdate = () =>
+      nextConfig.policy
+        ? bugReportPolicyBeforeApprovalUpgrade(
+            liveCodexPolicy(session),
+            nextConfig.policy,
+            reportWorkspace,
+          )
+        : liveCodexPolicy(session);
     if (policyRequested && nextConfig.policy) {
-      assertExecutionPolicyNotWidened(liveCodexPolicy(session), nextConfig.policy);
+      assertExecutionPolicyNotWidened(policyBeforeUpdate(), nextConfig.policy);
     }
     await this.ctx.callbacks.touchSession(sessionId);
     const context = this.ctx.registry.getThreadForSession(sessionId);
@@ -1341,7 +1364,7 @@ export class CodexRuntimeSessions {
     // meanwhile; revalidate and commit together without another await. A request
     // with no policy carries the old one, so it retries against the new one.
     if (policyRequested && nextConfig.policy) {
-      const widened = executionPolicyWidenings(liveCodexPolicy(session), nextConfig.policy);
+      const widened = executionPolicyWidenings(policyBeforeUpdate(), nextConfig.policy);
       if (widened.length > 0) {
         await restoreEngineConfig();
         throw new PolicyWideningRefusedError(widened);

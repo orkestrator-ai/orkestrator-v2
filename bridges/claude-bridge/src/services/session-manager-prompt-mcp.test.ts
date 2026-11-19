@@ -1,3 +1,4 @@
+import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
 /**
  * MCP source scope and configuration revision on the real prompt path.
  *
@@ -235,4 +236,49 @@ describe("coordinator query wiring", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+test("report Bypass keeps the SDK file-tool write boundary and Bash sandbox", async () => {
+  const workspace = await realpath(await mkdtemp(join(tmpdir(), "claude-report-policy-")));
+  const previous = process.env[BUG_REPORT_WORKSPACE_ENV];
+  process.env[BUG_REPORT_WORKSPACE_ENV] = workspace;
+  try {
+    const session = createSession("report");
+    track(session.id);
+    session.executionPolicy = {
+      id: "interactive-host",
+      approvals: "auto-approve",
+      sandbox: "provider",
+      projectResources: false,
+      networkAccess: "full",
+    };
+    const prompt = sendPrompt(session.id, "Prepare a draft", {
+      permissionMode: "bypassPermissions",
+    });
+    const call = await nextQueryCall();
+    try {
+      expect(call.options.permissionMode).toBe("bypassPermissions");
+      expect(call.options.cwd).toBe(workspace);
+      expect(call.options.settings).toMatchObject({
+        permissions: {
+          blockWritesOutsideWorkingDirectories: true,
+          workingDirectoriesAsGiven: [workspace],
+        },
+      });
+      expect(call.options.sandbox).toMatchObject({
+        enabled: true,
+        failIfUnavailable: true,
+        allowUnsandboxedCommands: false,
+      });
+      expect(call.options.settingSources).toEqual([]);
+    } finally {
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await prompt;
+    }
+  } finally {
+    if (previous === undefined) delete process.env[BUG_REPORT_WORKSPACE_ENV];
+    else process.env[BUG_REPORT_WORKSPACE_ENV] = previous;
+    await rm(workspace, { recursive: true, force: true });
+  }
 });

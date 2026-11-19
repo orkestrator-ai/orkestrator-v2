@@ -83,7 +83,10 @@ import { createBridgeOutputForwarder, relayBridgeOutput } from "./bridge-output-
 import { dropInheritedVendorDebug } from "./bridge-vendor-debug-env.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
-import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
+import {
+  BUG_REPORT_WORKSPACE_ENV,
+  bugReportIdFromRuntimeId,
+} from "@orkestrator/protocol/bug-report";
 import {
   bugReportRuntimeEnvironment,
   bugReportRuntimeUnavailableMessage,
@@ -994,7 +997,10 @@ async function startLocalServerAttempt(
   delete env[COORDINATOR_PROTECTED_DATA_DIR_ENV];
   delete env[COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV];
   delete env[COORDINATOR_CODEX_USER_SKILLS_DIR_ENV];
+  delete env[BUG_REPORT_WORKSPACE_ENV];
   if (bugReportId) {
+    if (kind === "claude" || kind === "codex")
+      env[BUG_REPORT_WORKSPACE_ENV] = environment.worktreePath;
     // No project tools, and none inherited from this backend's own environment.
     delete env[ORKESTRATOR_AGENT_MCP_URL_ENV];
     delete env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV];

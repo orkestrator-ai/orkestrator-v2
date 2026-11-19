@@ -1644,8 +1644,8 @@ the pinned binary's parser over the production argument shape.
    gained one notification, `thread/section/changed` (ignored: thread sections
    are decided out), the `humanCommand` command-approval kind and
    `InitializeCapabilities.requiredHumanApproval` (both need `experimentalApi`,
-   which the bridge does not send), and audio `fileId` inputs the bridge never
-   sends. `features.deferred_tool_world_state` became stable and on: deferred
+   which report bridges enable for granular approvals), and audio `fileId`
+   inputs the bridge never sends. `features.deferred_tool_world_state` became stable and on: deferred
    MCP namespaces are now described in the world-state developer context
    checkpointed into history, much as `incremental_tools` did. The
    project-trust (including after a reload), network-lock and resume-context

@@ -78,6 +78,26 @@ describe("codexApprovalConfig", () => {
     ).toBe("on-request");
   });
 
+  test("report Auto review denies sandbox and extra-permission approvals", () => {
+    const reportPolicy = { ...hostPolicy, sandbox: "provider" as const };
+    expect(codexApprovalConfig(reportPolicy, "workspace-write", "auto-review", true)).toEqual({
+      approvalsReviewer: "auto_review",
+      approvalPolicy: {
+        granular: {
+          sandbox_approval: false,
+          request_permissions: false,
+          rules: false,
+          skill_approval: true,
+          mcp_elicitations: true,
+        },
+      },
+    });
+    expect(codexApprovalConfig(reportPolicy, "workspace-write", undefined, true)).toEqual({
+      approvalsReviewer: "user",
+      approvalPolicy: "on-request",
+    });
+  });
+
   test("recognises only the composer's modes", () => {
     expect(isCodexApprovalMode("auto-review")).toBe(true);
     expect(isCodexApprovalMode({ granular: {} })).toBe(false);

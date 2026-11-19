@@ -2299,6 +2299,25 @@ describe("HTTP bridge provider", () => {
     });
   });
 
+  test("a report policy sync requires durable Codex confirmation", async () => {
+    const policy = {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    } as const;
+    const durable = codexConfigBridge({});
+    await durable.provider.synchronizeBugReportSessionPolicy!("report-thread", policy);
+    expect(durable.requests).toHaveLength(1);
+    expect(JSON.parse(String(durable.requests[0]!.init.body))).toEqual({ policy });
+
+    const memoryOnly = codexConfigBridge({}, false);
+    await expect(
+      memoryOnly.provider.synchronizeBugReportSessionPolicy!("report-thread", policy),
+    ).rejects.toThrow("could not save");
+  });
+
   test("a Codex model pick keeps Plan mode and fast mode and drops the old model's effort", async () => {
     const { provider, requests } = codexConfigBridge({
       model: "gpt-old",

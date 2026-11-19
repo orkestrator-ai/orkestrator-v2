@@ -963,6 +963,85 @@ export async function writeConfinedFile(
   return fullPath;
 }
 
+/** A lexical read root whose mutable ancestors must be opened below a trusted directory. */
+export type ReadableHostRoot = string | { path: string; trustedParent: string };
+
+async function openAnchoredHostFile(targetPath: string, root: Exclude<ReadableHostRoot, string>) {
+  const relative = validateRelativeFilePath(
+    path.relative(root.trustedParent, targetPath),
+    "filePath",
+  );
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    throw new Error("Invalid file path: anchored host reads are unavailable");
+  }
+  const canonicalParent = await fs.realpath(root.trustedParent);
+  const darwin = process.platform === "darwin";
+  // Node does not expose O_CLOEXEC, and these raw descriptors outlive awaits.
+  const closeOnExec = darwin ? 0x1000000 : 0x80000;
+  const readFlags = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK | closeOnExec;
+  const directoryFlags = readFlags | constants.O_DIRECTORY;
+  const parent = await fs.open(canonicalParent, directoryFlags);
+  try {
+    const lib = dlopen(darwin ? "/usr/lib/libSystem.B.dylib" : "libc.so.6", {
+      openat: {
+        args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.i32],
+        returns: FFIType.i32,
+      },
+      close: { args: [FFIType.i32], returns: FFIType.i32 },
+      [darwin ? "__error" : "__errno_location"]: { args: [], returns: FFIType.ptr },
+    });
+    const errno = (lib.symbols as Record<string, () => Pointer>)[
+      darwin ? "__error" : "__errno_location"
+    ]!;
+    let fd = parent.fd;
+    try {
+      const segments = relative.split("/");
+      for (const [index, segment] of segments.entries()) {
+        const name = nulTerminated(segment);
+        const flags = index === segments.length - 1 ? readFlags : directoryFlags;
+        const next = lib.symbols.openat(fd, ptr(name), flags, 0);
+        if (next < 0) {
+          const code = read.i32(errno(), 0);
+          if (code === ERRNO_ENOTDIR || isLoopOrNoFollowError(code)) {
+            throw new Error(
+              "Invalid file path: symbolic links and non-directory ancestors are not allowed",
+            );
+          }
+          throw new Error("Invalid file path: report image path could not be opened");
+        }
+        if (fd !== parent.fd) lib.symbols.close(fd);
+        fd = next;
+      }
+      const pinned = fsSync.fstatSync(fd);
+      if (!pinned.isFile() || pinned.nlink !== 1) {
+        throw new Error("Invalid file path: report image must be a regular, single-link file");
+      }
+      // Duplicate the pinned file into a FileHandle for bounded and ranged reads.
+      const handle = await fs.open(
+        `${darwin ? "/dev/fd" : "/proc/self/fd"}/${fd}`,
+        constants.O_RDONLY,
+      );
+      try {
+        const stats = await handle.stat();
+        const canonicalRoot = path.join(
+          canonicalParent,
+          path.relative(root.trustedParent, root.path),
+        );
+        await assertOpenedHostFile(targetPath, canonicalRoot, stats);
+        return { handle, stats, targetPath, canonicalRoot };
+      } catch (error) {
+        await handle.close().catch(() => undefined);
+        throw error;
+      }
+    } finally {
+      if (fd !== parent.fd) lib.symbols.close(fd);
+      lib.close();
+    }
+  } finally {
+    await parent.close();
+  }
+}
+
 async function resolveReadableHostTarget(
   filePath: string,
   allowedRoots: string[],
@@ -1040,9 +1119,21 @@ async function assertOpenedHostFile(
  */
 export async function openReadableHostFile(
   filePath: string,
-  allowedRoots: string[],
+  allowedRoots: readonly ReadableHostRoot[],
 ): Promise<{ handle: FileHandle; stats: Stats; targetPath: string; canonicalRoot: string }> {
-  const { canonicalRoot, targetPath } = await resolveReadableHostTarget(filePath, allowedRoots);
+  const target = path.resolve(filePath);
+  const anchored = allowedRoots.find(
+    (root) => typeof root !== "string" && isPathInsideRoot(target, root.path),
+  );
+  if (anchored && typeof anchored !== "string") {
+    rejectControlCharacters(filePath, "file path");
+    if (!path.isAbsolute(filePath)) throw new Error("Invalid file path: absolute path is required");
+    return openAnchoredHostFile(target, anchored);
+  }
+  const { canonicalRoot, targetPath } = await resolveReadableHostTarget(
+    filePath,
+    allowedRoots.filter((root): root is string => typeof root === "string"),
+  );
   const handle = await fs.open(
     targetPath,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
@@ -1063,7 +1154,7 @@ export async function openReadableHostFile(
  */
 export async function readReadableHostFile(
   filePath: string,
-  allowedRoots = defaultReadableHostRoots(),
+  allowedRoots: readonly ReadableHostRoot[] = defaultReadableHostRoots(),
   testHooks?: {
     afterInitialValidation?: () => void | Promise<void>;
   },

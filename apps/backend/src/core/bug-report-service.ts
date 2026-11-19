@@ -9,7 +9,6 @@
  * which the sheet does when the user is done with a filed report.
  */
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
 import { lstat, mkdtemp, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -44,12 +43,15 @@ import { stopLocalServer } from "./commands-servers.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { gitHubCli, gitHubCliEnv, resolveGitHubToken } from "./git/index.js";
 import { runCommand } from "./shell.js";
-import { writeConfinedFile } from "./path-safety.js";
+import { MAX_BINARY_FILE_BYTES, writeConfinedFile } from "./path-safety.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import type { BugReportRecord } from "./storage-bug-reports.js";
+import {
+  BUG_REPORT_SCRATCH_PREFIX,
+  isOwnedBugReportScratchDir as ownedScratchDir,
+} from "./bug-report-scratch.js";
 
-export const BUG_REPORT_SCRATCH_PREFIX = "orkestrator-bug-report-";
-const MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024;
+const MAX_SCREENSHOT_BYTES = MAX_BINARY_FILE_BYTES;
 const MAX_DRAFT_FILE_BYTES = 1024 * 1024;
 const MAX_CONTEXT_STRING = 512;
 
@@ -259,8 +261,11 @@ export async function saveBugReportScreenshot(
   if (typeof base64Data !== "string" || !base64Data) throw new Error("Screenshot is empty");
   const record = await requireReport(context, reportId);
   const bytes = Buffer.from(base64Data, "base64");
-  if (bytes.length === 0 || bytes.length > MAX_SCREENSHOT_BYTES) {
-    throw new Error("Screenshot is empty or too large");
+  if (bytes.length === 0) throw new Error("Screenshot is empty");
+  if (bytes.length > MAX_SCREENSHOT_BYTES) {
+    throw new Error(
+      `Screenshot exceeds the ${MAX_SCREENSHOT_BYTES / (1024 * 1024)} MiB preview limit`,
+    );
   }
   const isPng = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   if (!isPng) throw new Error("Screenshot must be a PNG image");
@@ -420,22 +425,6 @@ export async function markBugReportFiled(
     filed: { url, filedAt: new Date().toISOString() },
   }));
   return getBugReportSnapshot(context);
-}
-
-/**
- * Only a directory this service created is ever removed: one directly under
- * the temporary directory, named with the report prefix.
- */
-function ownedScratchDir(scratchDir: string): boolean {
-  if (!path.basename(scratchDir).startsWith(BUG_REPORT_SCRATCH_PREFIX)) return false;
-  const parent = path.dirname(scratchDir);
-  let tmp = os.tmpdir();
-  try {
-    tmp = realpathSync(tmp);
-  } catch {
-    // An unreadable temporary directory still names the parent literally.
-  }
-  return parent === tmp || parent === os.tmpdir();
 }
 
 async function discardRecord(context: CommandContext, record: BugReportRecord): Promise<void> {

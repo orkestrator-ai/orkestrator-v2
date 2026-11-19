@@ -6,7 +6,9 @@ import {
   getEnvironmentProcessUsageCommand,
   getMachineLoadCommand,
   getProgressiveReadMetricsCommand,
+  getPushMetricsCommand,
   getRecurringWorkDiagnosticsCommand,
+  pushSetSubscriptionsCommand,
   getSystemUsageCommand,
   planDiagnosticsBundleCommand,
   planDiagnosticsBundleWithContainerLogsCommand,
@@ -138,6 +140,21 @@ export function registerSystemCommands(
   register(getProgressiveReadMetricsCommand, (_args, context) => {
     if (!context.nativeAgents) throw new Error("Native agents are not available here.");
     return { samples: context.nativeAgents.progressiveReadSamples() };
+  });
+  /**
+   * The push layer's subscribe command is answered by the gateway that holds
+   * the caller's event stream (`gateway-handlers.ts`), because only it knows
+   * which credential opened the stream. A caller that reaches the registry
+   * directly (an in-process or IPC caller) has no stream here, so it keeps its
+   * polling cadence.
+   */
+  register(pushSetSubscriptionsCommand, () => ({
+    status: "refused" as const,
+    reason: "unavailable" as const,
+  }));
+  /** Content-free push counters, also on the gateway's `/__orkestrator/metrics`. */
+  register(getPushMetricsCommand, (_args, context) => {
+    return (context.push?.metrics() ?? {}) as Record<string, unknown>;
   });
   /** Content-free transcript artifact counters; an empty set where artifacts do not run. */
   register(getArtifactMetricsCommand, (_args, context) => {

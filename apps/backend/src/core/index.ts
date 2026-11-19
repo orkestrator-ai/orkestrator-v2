@@ -72,6 +72,7 @@ import {
   nativeAgentSessionActivityEvent,
 } from "@orkestrator/protocol/contract/domains/events";
 import { createBackendEmit, type BackendEventSink } from "./backend-emit.js";
+import { BackendPush } from "./push/index.js";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
@@ -334,6 +335,11 @@ export class OrkestratorBackend {
   private readonly context: CommandContext;
   private readonly buildPipelines: BuildPipelineService;
   private readonly nativeAgents: NativeAgentService;
+  /**
+   * The push event layer (docs/architecture/push-events.md): the gateway opens
+   * a connection here per event stream; topics observe what clients subscribe.
+   */
+  readonly push: BackendPush;
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
@@ -583,9 +589,37 @@ export class OrkestratorBackend {
     /** Test seam: node links (fetch, SSH, timers). */
     nodeLinks?: Pick<NodeServiceOptions, "fetchImpl" | "createSsh" | "timers" | "heartbeatMs">;
   }) {
-    const emit = createBackendEmit((event, payload) => options.emit(event, payload));
+    const emit = createBackendEmit((event, payload) => {
+      options.emit(event, payload);
+      // After delivery, and never throwing into the emitter: a topic only
+      // wakes the observer of the session an event names.
+      try {
+        this.push?.observeEvent(event, payload);
+      } catch (error) {
+        log.warn("push.observe-event-failed", { error: formatLogError(error) });
+      }
+    });
     this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
+    this.push = new BackendPush({
+      nativeAgents: () => this.nativeAgents,
+      sessionExists: async (environmentId, agent, logicalSessionKey) => {
+        const session = await storage.getNativeAgentSession(
+          nativeAgentSessionStorageKey(
+            environmentId,
+            agent as BuildPipelineAgent,
+            logicalSessionKey,
+          ),
+        );
+        return (
+          session !== null &&
+          session !== undefined &&
+          session.environmentId === environmentId &&
+          session.agent === agent &&
+          session.logicalSessionKey === logicalSessionKey
+        );
+      },
+    });
     // History survives a restart through one database row (#2287).
     this.machineLoad = new MachineLoadSampler({
       historyStore: {
@@ -1410,6 +1444,7 @@ export class OrkestratorBackend {
       },
     );
     context.nativeAgents = this.nativeAgents;
+    context.push = this.push;
     this.agentTools.setGoalToolHost?.(this.nativeAgents.goals);
     context.agentRegistry = new AgentRegistry(storage, {
       native: (environmentId, agent, logicalSessionKey) =>
@@ -3257,6 +3292,8 @@ export class OrkestratorBackend {
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    // Observers read sessions on timers of their own; stop them first.
+    stopStepNow("push", () => this.push.dispose());
     stopStepNow("agent-test-dispatch-hold", () => this.uninstallDispatchHold?.());
     // Each synchronous stop is guarded: one that throws is logged and the rest
     // still run, since an exception here would skip the drain and every close.

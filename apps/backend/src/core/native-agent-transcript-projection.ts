@@ -196,6 +196,16 @@ export class NativeAgentTranscriptProjection {
     return this.reads.progressiveReadSamples();
   }
 
+  /** The push layer observes a session (`NativeAgentProgressiveReads.observeSession`). */
+  observePushSession(sessionKey: string): () => void {
+    return this.reads.observeSession(sessionKey);
+  }
+
+  /** A pushed session moved: its settled reads stop answering. */
+  forgetPushSettled(sessionKey: string): void {
+    this.reads.forgetObservedSettled(sessionKey);
+  }
+
   /** Keep a session's stop result until its next authoritative projection. */
   recordStopNotice(sessionKey: string, message: string): void {
     this.full.recordStopNotice(sessionKey, message);

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:586d72f4a8475bd21e4654db3eecbfd0dddcfe47d9450276d0da2588edce1a0e",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "setRevision": {
+          "type": "number"
+        },
+        "streamId": {
+          "type": "string"
+        },
+        "subscriptions": {
+          "items": {
+            "additionalProperties": true,
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": ["key", "topic"],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": ["setRevision", "streamId", "subscriptions"],
+      "type": "object"
+    }
+  }
+}

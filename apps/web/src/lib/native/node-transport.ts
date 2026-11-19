@@ -37,6 +37,7 @@ import {
   type GatewayRelayedEventsMode,
 } from "@orkestrator/protocol/gateway-event-stream";
 import { isPerNodeRelayedEvent } from "@orkestrator/protocol/node-events";
+import { PUSH_STREAM_STATE_EVENT, type PushStreamState } from "@orkestrator/protocol/push-events";
 import { TerminalInputSequencer } from "@orkestrator/protocol/terminal-input-sequencer";
 import {
   TerminalWebSocketClient,
@@ -348,9 +349,23 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
   const mainStreamConnectionListeners = new Set<
     (state: GatewayEventStreamConnectionState) => void
   >();
+  /**
+   * The push layer's view of the main stream (`push-events.ts`): what the
+   * newest `gateway.connected` offered, until the stream stops being
+   * connected. A push listener that attaches later is told it at once.
+   */
+  let pushStreamState: PushStreamState | null = null;
+  const setPushStreamState = (next: PushStreamState) => {
+    if (next.state === "disconnected" && pushStreamState?.state !== "connected") return;
+    pushStreamState = next;
+    deliver(PUSH_STREAM_STATE_EVENT, next);
+  };
   const setMainStreamConnectionState = (next: GatewayEventStreamConnectionState) => {
     if (mainStreamConnectionState === next) return;
     mainStreamConnectionState = next;
+    // The stream's push connection ended with it; frames resume only after
+    // the next `gateway.connected` offers a new one.
+    if (next !== "connected") setPushStreamState({ state: "disconnected" });
     for (const listener of Array.from(mainStreamConnectionListeners)) {
       try {
         listener(next);
@@ -575,6 +590,9 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
     const message = mainStream.accept(data, lastEventId);
     if (message.kind === "resync") announceEventStreamConnected();
     else if (message.kind === "event") deliver(message.event, message.payload);
+    if ((message.kind === "resync" || message.kind === "control") && message.connected) {
+      setPushStreamState({ state: "connected", offer: message.connected.push });
+    }
   };
 
   /**
@@ -1476,6 +1494,15 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
       const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
       listeners.set(event, callbackSet);
       callbackSet.add(callback as EventCallback<unknown>);
+      if (event === PUSH_STREAM_STATE_EVENT && pushStreamState?.state === "connected") {
+        // The stream connected before this listener attached; tell it now.
+        const current = pushStreamState;
+        queueMicrotask(() => {
+          if (listeners.get(event)?.has(callback as EventCallback<unknown>)) {
+            if (pushStreamState === current) callback(current as T);
+          }
+        });
+      }
       if (isTerminalOutputEvent(event)) {
         ensureTerminalEventStream(event);
       } else if (isPerNodeRelayedEvent(event)) {

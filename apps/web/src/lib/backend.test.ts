@@ -1799,6 +1799,8 @@ describe("backend command wrapper coverage", () => {
       // Validate the machine profile they return; covered below.
       "getBackendProfile",
       "updateBackendProfile",
+      // Its arguments are decoded against the command's schema; covered below.
+      "setPushSubscriptions",
     ]);
     // `createXApi(client)` factories (plan item 3002) are covered per client in
     // `backend/factories.test.ts`; their named exports are the wrappers swept here.
@@ -1819,6 +1821,21 @@ describe("backend command wrapper coverage", () => {
       await wrapper(...args).catch(() => undefined);
       expect(invokeMock.mock.calls.length, `${name} must call invoke`).toBeGreaterThan(0);
     }
+  });
+
+  test("sends a push subscription set to the backend", async () => {
+    const args = {
+      streamId: "stream-aaaaaaaaaaaaaaaa",
+      setRevision: 2,
+      subscriptions: [{ topic: "native-session", key: "env-1/claude/tab-1" }],
+    };
+    invokeMock.mockResolvedValueOnce({ status: "refused", reason: "stream-unknown" });
+    await expect(backendWrappers.setPushSubscriptions(args)).resolves.toEqual({
+      status: "refused",
+      reason: "stream-unknown",
+    });
+    expect(invokeMock.mock.calls.at(-1)?.[0]).toBe("push_set_subscriptions");
+    expect(invokeMock.mock.calls.at(-1)?.[1]).toEqual(args);
   });
 
   test("machine profile wrappers validate the profile the machine returns", async () => {

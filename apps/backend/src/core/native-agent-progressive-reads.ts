@@ -32,6 +32,10 @@ import {
   type NativeAgentProjectionContext,
 } from "./native-agent-projection-context.js";
 
+/** How long a push-observed session's settled read answers equivalent reads. */
+export const OBSERVED_SETTLED_SHARE_MS = 750;
+const MAX_OBSERVED_SETTLED = 2_048;
+
 /**
  * How the progressive transcript, session-state and discovery reads run:
  * equivalent source work is joined (`progressiveRead`), a read the session
@@ -57,12 +61,17 @@ export class NativeAgentProgressiveReads {
       progressiveTrailing: this.progressiveTrailing,
       progressiveMetrics: this.progressiveMetrics,
       progressiveReadWaiterCount: () => this.progressiveReadWaiterCount,
+      setObservedShareClock: (now: () => number) => {
+        this.observedShareNow = now;
+      },
     };
   }
 
   /** Key counts of the read state, for `native-projection` diagnostics. */
   cacheGauges(): Record<string, number> {
     return {
+      observedSessions: this.observedSessions.size,
+      observedSettled: this.observedSettled.size,
       progressiveReads: this.progressiveReads.size,
       progressiveReadWaiters: this.progressiveReadWaiters.size,
       progressiveReadEpochs: this.progressiveReadEpochs.size,
@@ -78,8 +87,83 @@ export class NativeAgentProgressiveReads {
     await Promise.allSettled(this.progressiveTrailing.values());
   }
 
+  /**
+   * The push layer observes this session (`core/push/native-session-push-topic.ts`):
+   * one observer reads it at a viewer's cadence and announces each change, and
+   * every viewer then reads once. While it is observed, a transcript or state
+   * read that settled within {@link OBSERVED_SETTLED_SHARE_MS} answers the
+   * next equivalent read of the same epoch instead of a second provider read,
+   * so N viewers cost one provider read per change. Forced and fresh-source
+   * reads never take it, a running read is joined in preference to it, and an
+   * epoch change or a wake (activity announcement, invalidation) drops it.
+   * Returns the stop.
+   */
+  observeSession(sessionKey: string): () => void {
+    this.observedSessions.set(sessionKey, (this.observedSessions.get(sessionKey) ?? 0) + 1);
+    let stopped = false;
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      const remaining = (this.observedSessions.get(sessionKey) ?? 1) - 1;
+      if (remaining > 0) {
+        this.observedSessions.set(sessionKey, remaining);
+        return;
+      }
+      this.observedSessions.delete(sessionKey);
+      this.forgetObservedSettled(sessionKey);
+    };
+  }
+
+  /** Something says the session moved: the next read goes to the provider. */
+  forgetObservedSettled(sessionKey: string): void {
+    const prefix = `${sessionKey}\0progressive-v1\0`;
+    for (const key of Array.from(this.observedSettled.keys())) {
+      if (key.startsWith(prefix)) this.observedSettled.delete(key);
+    }
+  }
+
+  private observedShareNow: () => number = () => monotonicMs();
+  private readonly observedSessions = new Map<string, number>();
+  private readonly observedSettled = new Map<
+    string,
+    { value: unknown; epoch: number; expiresAt: number }
+  >();
+
+  private takeObservedSettled<T>(key: string, sessionKey: string, epoch: number): T | undefined {
+    const entry = this.observedSettled.get(key);
+    if (!entry) return undefined;
+    if (
+      !this.observedSessions.has(sessionKey) ||
+      entry.epoch !== epoch ||
+      entry.expiresAt <= this.observedShareNow()
+    ) {
+      this.observedSettled.delete(key);
+      return undefined;
+    }
+    return entry.value as T;
+  }
+
+  private recordObservedSettled(key: string, sessionKey: string, epoch: number, value: unknown) {
+    if (!this.observedSessions.has(sessionKey)) return;
+    this.observedSettled.delete(key);
+    this.observedSettled.set(key, {
+      value,
+      epoch,
+      expiresAt: this.observedShareNow() + OBSERVED_SETTLED_SHARE_MS,
+    });
+    // Two keys (transcript, state) per observed session; the bound only
+    // guards against a key shape this does not expect.
+    while (this.observedSettled.size > MAX_OBSERVED_SETTLED) {
+      const oldest = this.observedSettled.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.observedSettled.delete(oldest);
+    }
+  }
+
   /** Drop all read state; run after `settle`. */
   clear(): void {
+    this.observedSettled.clear();
+    this.observedSessions.clear();
     this.progressiveReads.clear();
     this.progressiveReadWaiters.clear();
     this.progressiveReadWaiterCount = 0;
@@ -96,6 +180,7 @@ export class NativeAgentProgressiveReads {
    * each runs one trailing re-read.
    */
   forgetSession(sessionKey: string, epoch: number): void {
+    this.forgetObservedSettled(sessionKey);
     const progressivePrefix = `${sessionKey}\0progressive-v1\0`;
     for (const candidate of Array.from(this.interactiveSnapshotShares.keys())) {
       if (candidate.startsWith(`${sessionKey}\0`)) this.interactiveSnapshotShares.delete(candidate);
@@ -257,9 +342,16 @@ export class NativeAgentProgressiveReads {
     ) {
       await pending.catch(() => undefined);
     }
+    if (!pending && !force && !freshSource) {
+      const shared = this.takeObservedSettled<T>(key, sessionKey, requestedEpoch);
+      if (shared !== undefined) return shared;
+    }
     const value = await this.progressiveRead(key, read, sessionKey);
     const latest = this.context.projectionEpochs.get(sessionKey) ?? 0;
-    if (latest <= requestedEpoch && (!force || latest >= requestedEpoch)) return value;
+    if (latest <= requestedEpoch && (!force || latest >= requestedEpoch)) {
+      if (latest === requestedEpoch) this.recordObservedSettled(key, sessionKey, latest, value);
+      return value;
+    }
     this.progressiveDirtyFollowUps.set(
       key,
       Math.max(this.progressiveDirtyFollowUps.get(key) ?? 0, latest),

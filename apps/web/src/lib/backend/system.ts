@@ -1,6 +1,10 @@
 import { asSystemModel, systemApi, systemApiOn } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import { commandBackendClient, type BackendClient } from "./client";
+import type {
+  PushSetSubscriptionsArgs,
+  PushSetSubscriptionsResult,
+} from "@orkestrator/protocol/push-events";
 
 /** Current resource use on the host running the Orkestrator backend. */
 export interface SystemUsageSnapshot {
@@ -72,11 +76,21 @@ export function createSystemApi(client: BackendClient) {
     );
   }
 
-  return { getAppVersion, getSystemUsage, getEnvironmentProcessUsage };
+  /**
+   * Replaces this window's push subscription set for one event stream
+   * (`push-events.ts`). Answered by the gateway holding that stream.
+   */
+  async function setPushSubscriptions(
+    args: PushSetSubscriptionsArgs,
+  ): Promise<PushSetSubscriptionsResult> {
+    return system().push_set_subscriptions(args);
+  }
+
+  return { getAppVersion, getSystemUsage, getEnvironmentProcessUsage, setPushSubscriptions };
 }
 
 export type SystemApi = ReturnType<typeof createSystemApi>;
 
 /** The window's command-scope binding (the counted shim, plan item 3002). */
-export const { getAppVersion, getSystemUsage, getEnvironmentProcessUsage } =
+export const { getAppVersion, getSystemUsage, getEnvironmentProcessUsage, setPushSubscriptions } =
   createSystemApi(commandBackendClient);

@@ -89,6 +89,12 @@ import {
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { readCoordinatorFor } from "@/lib/read-coordinator";
+import { pushClientFor, usePushSubscription } from "@/lib/push/push-subscriptions";
+import type { PushKeyChange } from "@orkestrator/protocol/push-client";
+import {
+  NATIVE_SESSION_PUSH_TOPIC,
+  formatNativeSessionPushKey,
+} from "@orkestrator/protocol/push-events";
 import type { StoreApi } from "zustand/vanilla";
 
 /** Mirrors the backend ceiling, so the button stops offering what it would clamp. */
@@ -2710,6 +2716,38 @@ export function useNativeAgentSession<TMessage = unknown>({
    * reads, and are never joined.
    */
   const sharedReadTarget = `${environmentId}\u0000${platform}\u0000${sessionKey}`;
+  /*
+   * Push (docs/architecture/push-events.md): while this view is active the
+   * node announces each change of the session, and the view reads only then.
+   * While the subscription is healthy the coordinator's cadence falls to the
+   * recovery poll; while it is not (no push on this node, a dropped stream, a
+   * gap being recovered) the view keeps its old cadence.
+   */
+  const pushKey = formatNativeSessionPushKey({
+    environmentId,
+    agent: platform,
+    logicalSessionKey: sessionKey,
+  });
+  const onPushChange = useCallback(
+    (change: PushKeyChange) => {
+      if (change.parts === null || change.parts.includes("discovery")) {
+        discoverySchedule.markDue();
+      }
+      coordinatedInvalidateRef.current();
+    },
+    [discoverySchedule],
+  );
+  const pushHealthy = usePushSubscription(
+    scope,
+    NATIVE_SESSION_PUSH_TOPIC,
+    pushKey,
+    enabled && isActive,
+    onPushChange,
+  );
+  const pushHealthyRef = useRef(pushHealthy);
+  useLayoutEffect(() => {
+    pushHealthyRef.current = pushHealthy;
+  }, [pushHealthy]);
   useEffect(() => {
     if (!enabled) return;
     return registerNativeSessionView(
@@ -2721,13 +2759,20 @@ export function useNativeAgentSession<TMessage = unknown>({
           if (context.reason !== "interval" && context.reason !== "invalidate") {
             discoverySchedule.markDue();
           }
-          return (
-            refreshRef.current?.(
+          // A recovery-poll read under a healthy subscription that finds a
+          // new projection found a change no frame announced (design D8).
+          const recovery = context.reason === "interval" && pushHealthyRef.current;
+          const before = recovery ? projectionRef.current : null;
+          const result =
+            (await refreshRef.current?.(
               context.reason === "interval"
                 ? { manual: false, round }
                 : { manual: false, reconcileAfterInFlight: true, round },
-            ) ?? null
-          );
+            )) ?? null;
+          if (recovery && before && result && result !== before) {
+            pushClientFor(scope).noteRecoveryReadFoundChange(NATIVE_SESSION_PUSH_TOPIC);
+          }
+          return result;
         },
       },
       scope,
@@ -2747,6 +2792,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       active: enabled && isActive,
       observationEvents: nativeObservationEventsSupported(scope),
       quietObservation: runtimeProjection?.turn.quietObservation === true,
+      pushHealthy,
     }),
     read: async (context) => {
       await runNativeSessionReadRound(sharedReadTarget, context, scope);

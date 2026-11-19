@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentDiscoveryView } from "@orkestrator/protocol/native-agent";
+import { PUSH_RECOVERY_POLL_MS } from "@orkestrator/protocol/push-events";
 import { DATA_SAVING_ACTIVE_PROJECTION_REFRESH_MS } from "./data-saving-policy";
 import {
   ACTIVE_PROJECTION_REFRESH_MS,
@@ -14,6 +15,25 @@ import {
 } from "./native-session-read-policy";
 
 describe("native session read policy", () => {
+  test("a healthy push subscription falls to the recovery poll in every phase", () => {
+    for (const phase of ["running", "blocked", "idle", undefined]) {
+      expect(nativeSessionReadDemand("claude", phase, { active: true, pushHealthy: true })).toEqual(
+        {
+          active: true,
+          intervalMs: PUSH_RECOVERY_POLL_MS,
+          priority: "critical",
+          quietBackoffMs: null,
+          dataSaving: null,
+        },
+      );
+    }
+    // Unhealthy push keeps the old cadence: never worse than before push.
+    expect(
+      nativeSessionReadDemand("claude", "running", { active: true, pushHealthy: false }).intervalMs,
+    ).toBe(ACTIVE_PROJECTION_REFRESH_MS);
+    expect(PUSH_RECOVERY_POLL_MS).toBe(30_000);
+  });
+
   test("preserves the baseline foreground cadence for every phase", () => {
     for (const phase of ["running", "blocked", "cancelling", "recovering"]) {
       expect(nativeSessionReadDemand("codex", phase, { active: true })).toEqual({

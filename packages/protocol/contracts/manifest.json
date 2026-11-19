@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1023,
-    "defined": 1023,
+    "commands": 1025,
+    "defined": 1025,
     "untyped": 0,
     "events": 45
   },
@@ -4383,6 +4383,15 @@
       "argsDigest": "sha256:c70ee0a2c1492907562dc615d9b55359b88a0961e7bdd96ebf93f46ea8ed5fc0",
       "resultDigest": "sha256:3976352feee717732405fa31960dbae93ad03b24068b31c5255329d1fb9588e3"
     },
+    "get_push_metrics": {
+      "domain": "system",
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
+    },
     "get_rebuild_preview": {
       "domain": "environments",
       "since": 1,
@@ -6189,6 +6198,15 @@
       "critical": ["node", "relayedAuthority"],
       "argsDigest": "sha256:bb01ba0620344056575129be5e476e5e8ab72ecb04068f66824cfc63beb3c987",
       "resultDigest": "sha256:d9845eccb449721bb9c4e44cfb06f65d2597a2dee0fb846652d39ef610a1970b"
+    },
+    "push_set_subscriptions": {
+      "domain": "system",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:586d72f4a8475bd21e4654db3eecbfd0dddcfe47d9450276d0da2588edce1a0e",
+      "resultDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
     },
     "put_ticket_image": {
       "domain": "ticket-sync",

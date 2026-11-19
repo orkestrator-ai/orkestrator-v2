@@ -9,20 +9,26 @@ flow over, with the bridge state revision from 6680 as its change signal.
 
 ## Task analysis
 
-Analysed 2026-11-15 against `main` at `a8b89f154`. Phase 1 is done: the
-design draft is under [Outstanding work](#the-design-draft-for-review) and the
-polling baseline under [Current state](#current-state). No product code has
-been written. Phase 2 onwards (tasks 2 to 5) waits on the user reviewing the
-design, which is item "8102 task 1" in the
-[manual-test checklist](../manual-test/7568-manual-test-checklist.md#transcripts-observation-and-bandwidth-1).
+Analysed 2026-11-19 against `main` at `5e9835d0a`. Phase 1 (2026-11-15) wrote
+the design and the polling baseline. On 2026-11-19 the user's ticket
+("Push live updates efficiently with performance budgets") asked for the
+layer to be built, which answers the design review that tasks 2 to 5 waited
+on. The layer's core and the `native-session` topic are built (task 3) and
+the living doc is [push-events.md](../../architecture/push-events.md)
+(task 5). What is built differs from the draft in one place, recorded under
+[Assumptions and decisions](#assumptions-and-decisions): the change signal is
+a backend observer per subscribed session rather than bridge revisions, so
+task 2 is no longer a prerequisite and stays open as an optimisation.
 
 ### Tasks
 
 1. **Design and baseline**: write the layer's design and take the before-measurement per the efficiency rules, before any code. Status: done (2026-11-15).
-2. **Bridge state revision**: every bridge moves a revision on every state change and answers a conditional state read `unchanged`; Pi sends its composer and model list only when they changed. Status: open (depends on 7568: the user's review of the design).
-3. **The layer's core and the live agent view over push**: subscriptions on the existing event stream, the `native-session` topic, the recovery poll, and removing the 500 ms poll. Status: open (depends on 2 and on 7568).
-4. **Further surfaces**: measure the other live surfaces' request volume, then move them onto the layer one at a time, highest volume first. Status: open (depends on 3).
-5. **Promote the design to a living doc**: move what was built from this file into `docs/architecture/` (a new `push-events.md`, linked from `event-snapshot-recovery.md` and `recurring-work.md`) and retire this file. Status: open (depends on 3).
+2. **Bridge state revision**: every bridge moves a revision on every state change and answers a conditional state read `unchanged`; Pi sends its composer and model list only when they changed. Status: open.
+3. **The layer's core and the live agent view over push**: subscriptions on the existing event stream, the `native-session` topic, the recovery poll, and removing the 500 ms poll while push is healthy. Status: done (2026-11-19).
+4. **Further surfaces**: measure the other live surfaces' request volume, then move them onto the layer one at a time, highest volume first. Status: open.
+5. **Promote the design to a living doc**: [push-events.md](../../architecture/push-events.md), linked from `event-snapshot-recovery.md` and `recurring-work.md`. Status: done (2026-11-19); this file stays until tasks 2, 4, 6 and 7 are done.
+6. **Node subscription controller (D10)**: let a window subscribe to a node it reaches through a command node, through a controller on the command node that unions and reference-counts downstream sets. Status: open.
+7. **Measure the result against the baseline**: repeat baselines A and B on the new commit, one and two viewers, and the reconnect and inactive-view cases. Status: open.
 
 ### 1. Design and baseline
 
@@ -155,9 +161,11 @@ the decision names: 2.2 requests a second per viewer while nothing moves.
 `native-session-shared-reads.ts` (C01). The design is D3 to D6 and D8; the
 migration is D9 steps 2 and 3. The recovery poll stays as a safety net only.
 
-**Investigation.** Designed; not built. Measure against the baseline below
-with the same two specs and workloads, and test the inactive-environment
-path (start a turn, switch away, return, reload).
+**Investigation.** Built 2026-11-19 (see [push-events.md](../../architecture/push-events.md)).
+The 500 ms and 1.5 s rounds and the quiet ladder are kept as the fallback
+cadence while push is unhealthy rather than removed, which the "never worse
+than today" rule of D8 needs. Unit, contract, gateway and hook tests cover it;
+the live measurement is task 7.
 
 **Decisions.**
 
@@ -218,6 +226,45 @@ living description of the layer.
   - **A section of `event-snapshot-recovery.md`.**
     - Pros: one file.
     - Cons: that file is already long and per-view.
+
+### 6. Node subscription controller (D10)
+
+**Problem.** A window's view of a session on another node, reached through
+its command node's relay, gets no push offer on the relayed stream, so it
+keeps polling.
+
+**Context.** D10 below; `apps/backend/src/core/nodes/node-event-relay.ts`
+shares one leaf stream per node across every window, which is why a window
+must not subscribe on the leaf directly.
+
+**Investigation.** Not built. The client already treats a stream without an
+offer as unavailable, so nothing breaks meanwhile.
+
+**Decisions.**
+
+- **Who owns the leaf subscription?** As D10: a controller on the command
+  node that unions and reference-counts downstream sets (recommended); the
+  alternative of a leaf stream per window is recorded there.
+
+### 7. Measure the result against the baseline
+
+**Problem.** The acceptance numbers (at least 90% fewer recurring requests
+per viewer while quiet; no doubling of bridge reads for a second viewer;
+p95 observation latency under 250 ms on a local fixture) need the live
+specs that took the baseline.
+
+**Context.** [How to repeat it](#the-polling-baseline-2026-11-15). Push
+metrics are in `/__orkestrator/metrics` under `push`.
+
+**Investigation.** Not run. The unit and gateway tests show a quiet running
+view sends no reads but the 30 s recovery poll and that two viewers share one
+observer read per round; that is not a measurement.
+
+**Decisions.**
+
+- **Which runs?** Baselines A and B, one and two viewers, plus the reconnect
+  and inactive cases already in `agent-tab-requests-live.spec.ts`
+  (recommended): the same specs make the comparison direct.
 
 ## Current state
 
@@ -330,8 +377,11 @@ Stop and reset each profile afterwards (`dev:stop`, `dev:reset`).
 
 ### The design (draft for review)
 
-Status: draft, 2026-11-15, waiting on the user's review (7568). Nothing here
-is built.
+Status: drafted 2026-11-15; D1 to D6, D8 and D11 are built (2026-11-19) with
+the changes recorded under [Assumptions and decisions](#assumptions-and-decisions).
+D7 (bridge revisions) is task 2 and D10 (node subscription controller) is
+task 6. What was built is described in
+[push-events.md](../../architecture/push-events.md).
 
 #### D1. Goals and non-goals
 
@@ -891,8 +941,9 @@ Nothing; new work from 1202 (retired) task 4 and 6680 (retired) task 2.
 
 The ticket for phase 1 scoped it to the design and the baseline, with no
 product code, and asked that phase 2 onwards wait for the user's approval.
-Tasks 2 to 5 therefore depend on 7568's review item, and this file's status
-is `blocked` until it is answered.
+Tasks 2 to 5 therefore depended on 7568's review item, and this file's status
+was `blocked` until it was answered. It was answered on 2026-11-19 by the
+user's ticket to build the layer.
 
 ### Task 1: the baseline adds a two-viewer quiet case (2026-11-15)
 
@@ -909,6 +960,50 @@ reading `/proc/<pid>/cmdline`, so it ran only on Linux. On macOS it now
 reads the backend's command line with `ps` and takes the value that starts
 with the profile's data directory (which contains a space), so the baseline
 could be taken on the Mac the maintainer uses.
+
+### Task 3: the change signal is a backend observer per subscribed session (2026-11-19)
+
+D7 made bridge revisions the change signal and the first migration step.
+The build uses the backend's own conditional read instead: one observer per
+subscribed session reads the live update with its own tokens at a single
+viewer's old cadence, wakes on the session's activity announcements and
+invalidations, and announces a change when a token moves. Viewers' follow-up
+reads take the observer's settled answer for 750 ms
+(`OBSERVED_SETTLED_SHARE_MS`), so a second viewer adds no provider read.
+
+- **Backend observer (chosen).** Pros: works for every provider today with no
+  bridge change; one provider read per session per round however many
+  viewers; quiet sessions cost nothing on the wire. Cons: a quiet session is
+  still read by the backend at the old cadence, so bridge requests fall by the
+  number of extra viewers, not to zero; task 2 is what removes those.
+- **Bridge revisions first (D7).** Pros: a quiet session costs no bridge read
+  at all. Cons: five bridges' mutation sites and a revision harness each
+  before any client benefits.
+
+Task 2 stays open: when it lands, the observer can read on the bridge's
+wakeup and skip quiet rounds.
+
+### Task 3: the old cadence stays as the fallback (2026-11-19)
+
+The 500 ms and 1.5 s rounds and the quiet ladder are not removed: they are
+what a view uses while its subscription is unhealthy (no offer, a dropped
+stream, a gap being recovered), as D8 requires. A healthy view uses only the
+30 s recovery poll.
+
+### Task 3: hidden documents unsubscribe (2026-11-19)
+
+D5 kept a hidden document's subscriptions and deferred its reads. Because the
+observer's reads touch provider liveness (the tab-facing routes in
+[bridges/AGENTS.md](../../../bridges/AGENTS.md)), a hidden document sends an
+empty set instead, so nothing keeps an unwatched session attached; returning
+re-subscribes and the answer's stamps say what moved.
+
+### Task 3: the subscribe command is answered by the gateway (2026-11-19)
+
+`push_set_subscriptions` is a registered `system` command (so grants, the
+manifest and the domain client know it), but the gateway answers it, because
+only the gateway knows which credential opened the stream. The registry's
+handler answers `refused` to an in-process caller.
 
 ### Task 1: review corrections to the draft (2026-11-15)
 

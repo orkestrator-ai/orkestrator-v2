@@ -202,6 +202,8 @@
     "./feature-planning": "./src/feature-planning.ts",
     "./fatal-rejections": "./src/fatal-rejections.ts",
     "./gateway-event-stream": "./src/gateway-event-stream.ts",
+    "./push-events": "./src/push-events.ts",
+    "./push-client": "./src/push-client.ts",
     "./host-maintenance": "./src/host-maintenance.ts",
     "./gateway-event-stream-contract-fixtures": "./src/gateway-event-stream-contract-fixtures.ts",
     "./gateway-token": "./src/gateway-token.ts",

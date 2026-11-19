@@ -2667,6 +2667,22 @@ export class NativeAgentService {
   }
 
   /** The last progressive reads per domain, for diagnostics. Memory only. */
+  /**
+   * The push layer observes one session: shares its settled reads between the
+   * observer and the viewers it announces changes to. Returns the stop.
+   */
+  observePushSession(environmentId: string, agent: string, logicalSessionKey: string) {
+    return this.projections.observePushSession(
+      nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
+    );
+  }
+
+  forgetPushSettled(environmentId: string, agent: string, logicalSessionKey: string): void {
+    this.projections.forgetPushSettled(
+      nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
+    );
+  }
+
   progressiveReadSamples() {
     return this.projections.progressiveReadSamples();
   }

@@ -19,6 +19,12 @@
  *   ordinary listeners, so a server frame can never impersonate the transport.
  */
 
+import {
+  PUSH_STREAM_STATE_EVENT,
+  parsePushStreamOffer,
+  type PushStreamOffer,
+} from "./push-events.js";
+
 /**
  * Synthesized by the client transport, never sent by the gateway. Consumers
  * listening for it must refetch authoritative state: it fires for a fresh
@@ -72,12 +78,21 @@ export interface SseFrame {
   event?: string;
 }
 
+/**
+ * What a `gateway.connected` frame told the client about its new connection.
+ * `push` is the push layer's offer for this connection (`push-events.ts`), or
+ * `null` from a backend that does not offer it.
+ */
+export interface GatewayConnectedInfo {
+  push: PushStreamOffer | null;
+}
+
 export type GatewayStreamMessage =
   | { kind: "event"; event: string; payload: unknown }
   /** Consumers must refetch authoritative state. */
-  | { kind: "resync" }
+  | { kind: "resync"; connected?: GatewayConnectedInfo }
   /** A transport frame that must not reach ordinary listeners. */
-  | { kind: "control" }
+  | { kind: "control"; connected?: GatewayConnectedInfo }
   | { kind: "malformed" };
 
 export class GatewayEventFrameTooLargeError extends Error {
@@ -91,6 +106,7 @@ export class GatewayEventFrameTooLargeError extends Error {
 export function isGatewayTransportEvent(event: string): boolean {
   return (
     event === GATEWAY_CONNECTED_EVENT ||
+    event === PUSH_STREAM_STATE_EVENT ||
     event === GATEWAY_RECONCILE_REQUIRED_EVENT ||
     event === GATEWAY_CURSOR_EVENT ||
     event === NATIVE_EVENT_STREAM_CONNECTED_EVENT ||
@@ -299,15 +315,17 @@ export class GatewayEventStreamState {
         parsed.payload && typeof parsed.payload === "object" && "status" in parsed.payload
           ? (parsed.payload as { status?: unknown }).status
           : null;
+      const connected: GatewayConnectedInfo = { push: parsePushStreamOffer(parsed.payload) };
       if (status === "fresh" && !this.announced) {
         this.announced = true;
-        return { kind: "resync" };
+        return { kind: "resync", connected };
       }
-      return { kind: "control" };
+      return { kind: "control", connected };
     }
     if (
       parsed.event === NATIVE_EVENT_STREAM_CONNECTED_EVENT ||
-      parsed.event === TERMINAL_EVENT_STREAM_CONNECTED_EVENT
+      parsed.event === TERMINAL_EVENT_STREAM_CONNECTED_EVENT ||
+      parsed.event === PUSH_STREAM_STATE_EVENT
     )
       return { kind: "control" };
     return { kind: "event", event: parsed.event, payload: parsed.payload };

@@ -285,7 +285,7 @@ test.each(["commit", "cancel"] as const)(
       } as unknown as CommandContext;
       const args = { ...target, leaseId: edit.lease.leaseId, outcome };
       const attachments = Array.from({ length: 20 }, (_, index) => ({
-        type: "file",
+        type: "file" as const,
         path: `/workspace/reference-${index}.txt`,
         filename: `reference-${index}.txt`,
       }));

@@ -22,12 +22,12 @@
  * a line arrives on stdin.
  */
 import { Terminal as HeadlessTerminal } from "@xterm/headless";
-import { EchoTracker, KEY_ALPHABET, SseFrameReader, type SseEvent } from "./scenario.js";
+import { EchoTracker, echoPayload, SseFrameReader, type SseEvent } from "./scenario.js";
 
 type TypistConfig = {
   url: string;
   interactiveSessionId: string;
-  parsedSessionIds: string[];
+  loadSessionIds: string[];
   keystrokes: number;
   warmupKeystrokes: number;
   keyIntervalMs: number;
@@ -50,16 +50,22 @@ const role = process.argv[2];
 const config = JSON.parse(process.argv[3] ?? "{}") as Record<string, unknown>;
 const token = process.env.ORK_LATENCY_TOKEN ?? "";
 const headers = { authorization: `Bearer ${token}` };
+const connection = new AbortController();
 
-function report(value: Record<string, unknown>): void {
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+function report(value: Record<string, unknown>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(`${JSON.stringify(value)}\n`, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 function peakRss(): number {
   return process.memoryUsage().rss;
 }
 
-type Stream = { bytes: () => number; desyncs: () => number; close: () => void };
+type Stream = { bytes: () => number; desyncs: () => number };
 
 /** Opens one event stream and feeds it through an SSE reader until closed. */
 async function openStream(
@@ -67,7 +73,6 @@ async function openStream(
   query: URLSearchParams,
   onEvent: (event: SseEvent, at: number) => void,
 ): Promise<Stream> {
-  const controller = new AbortController();
   let bytes = 0;
   let desyncs = 0;
   let connected: () => void = () => {};
@@ -86,45 +91,56 @@ async function openStream(
   );
   const response = await fetch(`${url}__orkestrator/events?${query.toString()}`, {
     headers,
-    signal: controller.signal,
+    signal: connection.signal,
   });
   if (!response.ok || !response.body) throw new Error(`event stream answered ${response.status}`);
   const body = response.body.getReader();
   const decoder = new TextDecoder();
-  void (async () => {
-    try {
-      for (;;) {
-        const { done, value } = await body.read();
-        if (done) break;
-        bytes += value.byteLength;
-        reader.push(decoder.decode(value, { stream: true }));
-      }
-    } catch {
-      // Closed by `close()`, or the backend went away at teardown.
+  const read = (async () => {
+    while (!connection.signal.aborted) {
+      const { done, value } = await body.read();
+      if (done) throw new Error("SSE stream closed unexpectedly");
+      bytes += value.byteLength;
+      reader.push(decoder.decode(value, { stream: true }));
     }
   })();
-  await ready;
-  return { bytes: () => bytes, desyncs: () => desyncs, close: () => controller.abort() };
+  void read.catch((error: unknown) => connection.abort(error));
+  await Promise.race([ready, read]);
+  return { bytes: () => bytes, desyncs: () => desyncs };
 }
 
-async function invoke(url: string, command: string, args: Record<string, unknown>) {
+async function invoke(
+  url: string,
+  command: string,
+  args: Record<string, unknown>,
+  signal = connection.signal,
+) {
   const response = await fetch(`${url}__orkestrator/invoke`, {
     method: "POST",
     headers: { ...headers, "content-type": "application/json" },
     body: JSON.stringify({ command, args }),
+    signal,
   });
   const text = await response.text();
   if (!response.ok) throw new Error(`${command} answered ${response.status}`);
   return { bytes: text.length, body: JSON.parse(text) as { result?: unknown } };
 }
 
+function parentSignal(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process.stdin.once("data", () => resolve());
+    process.stdin.once("end", () => reject(new Error("Parent closed the control pipe")));
+  });
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function runTypist(options: TypistConfig): Promise<void> {
   const tracker = new EchoTracker();
+  const subscribed = [options.interactiveSessionId, ...options.loadSessionIds];
   const terminals = new Map<string, HeadlessTerminal>();
   if (options.parse) {
-    for (const sessionId of [options.interactiveSessionId, ...options.parsedSessionIds]) {
+    for (const sessionId of subscribed) {
       terminals.set(
         sessionId,
         new HeadlessTerminal({
@@ -136,12 +152,9 @@ async function runTypist(options: TypistConfig): Promise<void> {
       );
     }
   }
-  const subscribed = [
-    options.interactiveSessionId,
-    ...(options.parse ? options.parsedSessionIds : []),
-  ];
   const interactiveEvent = `${TERMINAL_EVENT_PREFIX}${options.interactiveSessionId}`;
   let parsedBytes = 0;
+  let receivedOutputBytes = 0;
   const stream = await openStream(
     options.url,
     new URLSearchParams({
@@ -153,10 +166,10 @@ async function runTypist(options: TypistConfig): Promise<void> {
       const text = (event.payload as { text?: unknown } | null)?.text;
       if (typeof text !== "string") return;
       if (event.event === interactiveEvent) tracker.observe(text, at);
+      receivedOutputBytes += text.length;
       const terminal = terminals.get(event.event.slice(TERMINAL_EVENT_PREFIX.length));
       if (terminal) {
-        // The renderer hands each frame to xterm.js on its main thread; the
-        // parse runs before the next frame is read, as it does there.
+        // Like the renderer, feed xterm on the client event loop.
         terminal.write(text);
         parsedBytes += text.length;
       }
@@ -164,44 +177,62 @@ async function runTypist(options: TypistConfig): Promise<void> {
   );
 
   await sleep(options.settleMs);
-  report({ type: "measuring" });
   const latencies: number[] = [];
   let timeouts = 0;
   const total = options.warmupKeystrokes + options.keystrokes;
   for (let index = 0; index < total; index += 1) {
-    const key = KEY_ALPHABET[index % KEY_ALPHABET.length]!;
-    const echoed = tracker.expect(key);
-    const sentAt = performance.now();
-    void invoke(options.url, "terminal_write", {
-      sessionId: options.interactiveSessionId,
-      data: key,
-    }).catch(() => undefined);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const outcome = await Promise.race([
-      echoed,
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), options.echoTimeoutMs);
-      }),
-    ]);
-    clearTimeout(timer);
-    if (outcome === null) {
-      tracker.cancel();
-      if (index >= options.warmupKeystrokes) timeouts += 1;
-    } else if (index >= options.warmupKeystrokes) {
-      latencies.push(outcome - sentAt);
+    const measured = index >= options.warmupKeystrokes;
+    if (index === options.warmupKeystrokes) {
+      const acknowledged = parentSignal();
+      await Promise.all([report({ type: "measurement-ready" }), acknowledged]);
     }
-    await sleep(options.keyIntervalMs);
+
+    const key = echoPayload(index);
+    const echoed = tracker.expect(key);
+    const request = new AbortController();
+    const sentAt = performance.now();
+    const delivery = invoke(
+      options.url,
+      "terminal_write",
+      { sessionId: options.interactiveSessionId, data: key },
+      AbortSignal.any([connection.signal, request.signal]),
+    ).then(({ body }) => {
+      if (!(body.result as { delivered?: boolean } | undefined)?.delivered) {
+        throw new Error("Interactive terminal did not accept the write");
+      }
+      return echoed;
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        echoed,
+        delivery,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), options.echoTimeoutMs);
+        }),
+      ]);
+      if (measured) {
+        if (outcome === null) timeouts += 1;
+        else latencies.push(outcome - sentAt);
+      }
+    } finally {
+      clearTimeout(timer);
+      request.abort();
+      tracker.cancel();
+    }
+    if (index + 1 < total) await sleep(options.keyIntervalMs);
   }
-  report({
+  await report({ type: "measurement-ended" });
+  await report({
     type: "typist-result",
     latencies,
     timeouts,
     streamBytes: stream.bytes(),
     parsedBytes,
+    receivedOutputBytes,
     desyncs: stream.desyncs(),
     rssBytes: peakRss(),
   });
-  stream.close();
   for (const terminal of terminals.values()) terminal.dispose();
 }
 
@@ -247,41 +278,62 @@ async function runObserver(options: ObserverConfig): Promise<void> {
       if (typeof sessionId === "string") void read(sessionId);
     },
   );
-  const terminals =
-    options.terminalSessionIds.length > 0
-      ? await openStream(
-          options.url,
-          new URLSearchParams({
-            excludeEvents: TERMINAL_EVENT_PREFIX,
-            includeEvents: options.terminalSessionIds
-              .map((id) => `${TERMINAL_EVENT_PREFIX}${id}`)
-              .join(","),
-          }),
-          () => {},
-        )
-      : null;
-  report({ type: "ready" });
-  await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()));
-  report({
+  let snapshotInFlight = false;
+  let nextSnapshotAt = 0;
+  const terminals = await openStream(
+    options.url,
+    new URLSearchParams({
+      excludeEvents: TERMINAL_EVENT_PREFIX,
+      includeEvents: options.terminalSessionIds
+        .map((id) => `${TERMINAL_EVENT_PREFIX}${id}`)
+        .join(","),
+    }),
+    (event, at) => {
+      if (!event.event.startsWith(TERMINAL_EVENT_PREFIX)) return;
+      if (snapshotInFlight || at < nextSnapshotAt) return;
+      snapshotInFlight = true;
+      nextSnapshotAt = at + 1_000;
+      void invoke(options.url, "get_terminal_state_snapshot", {
+        sessionId: event.event.slice(TERMINAL_EVENT_PREFIX.length),
+      })
+        .then(({ body }) => {
+          if (typeof (body.result as { output?: unknown } | null)?.output !== "string") {
+            throw new Error("Terminal snapshot returned no output");
+          }
+        })
+        .catch((error: unknown) => connection.abort(error))
+        .finally(() => {
+          snapshotInFlight = false;
+        });
+    },
+  );
+  const finish = parentSignal();
+  await Promise.all([report({ type: "ready" }), finish]);
+  await report({
     type: "observer-result",
     mainBytes: main.bytes(),
-    terminalBytes: terminals?.bytes() ?? 0,
-    desyncs: terminals?.desyncs() ?? 0,
+    terminalBytes: terminals.bytes(),
+    desyncs: terminals.desyncs(),
     transcriptReads,
     transcriptBytes,
     transcriptFailures,
     rssBytes: peakRss(),
   });
-  main.close();
-  terminals?.close();
 }
 
+const disconnected = new Promise<never>((_resolve, reject) => {
+  connection.signal.addEventListener("abort", () => reject(connection.signal.reason), {
+    once: true,
+  });
+});
 try {
-  if (role === "typist") await runTypist(config as TypistConfig);
-  else if (role === "observer") await runObserver(config as ObserverConfig);
-  else throw new Error(`unknown role ${role}`);
+  if (role !== "typist" && role !== "observer") throw new Error(`unknown role ${role}`);
+  const client =
+    role === "typist" ? runTypist(config as TypistConfig) : runObserver(config as ObserverConfig);
+  await Promise.race([client, disconnected]);
+  connection.abort();
   process.exit(0);
 } catch (error) {
-  report({ type: "error", message: error instanceof Error ? error.message : String(error) });
+  await report({ type: "error", message: error instanceof Error ? error.message : String(error) });
   process.exit(1);
 }

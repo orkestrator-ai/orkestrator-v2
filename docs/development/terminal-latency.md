@@ -41,7 +41,7 @@ Each level adds, all at once:
 | Build terminals | A PTY running `terminal-latency/producer.ts build`: coloured build lines and progress bars at 256 KiB/s each. |
 | Tool terminals | A PTY dumping a 2 MiB block (diff and JSON lines) every 1.5 s, staggered. |
 | Agents | A transcript row every 250 ms (8 KiB of tool output, every tenth 128 KiB), announced with the real `native-agent-session-activity` event. |
-| Observers | Client processes holding the main stream and a stream of every terminal, reading the changed transcript rows (`get_native_agent_live_update`) on every activity event, as an open agent tab does. |
+| Observers | Client processes holding the main stream and a stream of every terminal, reading the changed transcript rows (`get_native_agent_live_update`) on every activity event, as an open agent tab does. They also request one terminal state snapshot at a time, at most once per second per observer. |
 
 | Level | Build | Tool | Agents | Observers |
 | --- | --- | --- | --- | --- |
@@ -55,9 +55,12 @@ Each level adds, all at once:
 A typing client then types 200 keys (after 10 warm-up keys), one at a time
 with 30 ms between an echo and the next key, into an interactive terminal
 running `cat` in raw mode, so the echo comes from a user-space process as a
-shell's does. With `--client-parse on` (the default) it also subscribes to the
-level's load terminals and feeds every terminal it receives into a headless
-xterm on its own thread, as the renderer parses each mounted terminal tab.
+shell's does. Each write carries a short printable identifier, allowing a
+late echo to be discarded after a timeout. Both parser variants receive and
+decode the same terminal streams. With `--client-parse on` (the default), the
+client also feeds the decoded output into headless xterm. The backend starts
+its measurement window after warm-up and acknowledges readiness before the
+first measured write. Unexpected SSE disconnects fail the level.
 
 It reports, per level:
 
@@ -67,9 +70,9 @@ It reports, per level:
 - **event-loop lag** in the backend process (a 10 ms timer chain; Bun's
   `monitorEventLoopDelay` misses synchronous work, see
   `scripts/efficiency/resources.ts`);
-- **serializations per second** (checkpoints and snapshots, through the
-  history's `serializeHook`) and each `SerializeAddon.serialize` call's
-  duration;
+- **checkpoints per second**, **snapshot reads per second** and **snapshot read
+  latency** during the measurement window, plus the duration of each
+  `SerializeAddon.serialize` call;
 - terminal throughput, transcript reads per second, desyncs, peak RSS and heap
   of the backend, and the typing client's RSS.
 
@@ -85,7 +88,9 @@ terminal content.
 Measured on 2026-11-19 on a 12-thread Linux host (Bun 1.4.4, load average
 under 1 before each run), against `main` at `0007f0e66`.
 
-**Attribution.** One run per variant at the heavy level:
+**Historical attribution.** One run per variant at the heavy level. The
+original parser toggle also removed load-terminal subscriptions, so those
+rows measure the combined cost of delivery, decoding and parsing.
 
 | Variant | Key-to-echo p95 / p99 ms | Backend echo p95 ms | Loop lag p99 ms | Peak RSS MiB |
 | --- | --- | --- | --- | --- |
@@ -107,8 +112,8 @@ the whole backend cost. A CPU profile of the heavy level split it:
 - `SerializeAddon.serialize`, about 3% of samples, but 9 to 12 ms per full
   call, about five times a second.
 
-Parsing in the typing client added the rest of the client-side figure; that
-is the renderer's cost and is follow-up work (8312 task 2).
+The client-side variant measured the combined subscription and parsing cost.
+Renderer-side measurement is follow-up work (8312 task 2).
 
 ## What changed
 
@@ -121,20 +126,22 @@ is the renderer's cost and is follow-up work (8312 task 2).
    at random points.
 2. **Metered headless parsing** (`apps/backend/src/core/terminal-parse-scheduler.ts`).
    Every write to a history's headless terminals goes through one scheduler:
-   slices of at most 8 KiB, one slice in flight per terminal and at most
-   32 KiB across all of them, taken in turn, with the next slices issued from
+   slices of at most 8,192 UTF-16 code units, one slice in flight per terminal
+   and at most 32,768 code units across all of them, taken in turn, with the next slices issued from
    `setImmediate` after the loop has polled for I/O. Nothing is dropped and
    per-terminal order is kept; a write resolves once all of its slices are
    parsed, as before.
-3. **Coalesced checkpoints** (`TerminalHistory.scheduleCheckpoint`). Output
-   faster than parsing queued one checkpoint per mebibyte behind the backlog,
-   and all but the newest were overwritten as soon as the parser caught up.
-   Only the newest queued checkpoint now serializes
-   (`terminal-history-load.test.ts`).
+3. **Checkpoint progress** (`TerminalHistory.scheduleCheckpoint`). Every
+   eligible boundary is serialized as the parser reaches it. A newer valid
+   screen can replace one still waiting for disk I/O. This preserves partial
+   crash recovery during a sustained backlog and when a later boundary ends
+   inside an oversized unfinished escape sequence.
 
-## Before and after
+## Historical before and after
 
-Medians of three full-ladder runs each, same host and options:
+Medians of three full-ladder runs each on the same host with matching options.
+These runs predate the corrected workload, measurement boundaries and
+checkpoint durability change. The values describe the original experiment.
 
 | Level | Key-to-echo p95 ms | Key-to-echo p99 ms | Backend echo p95 / p99 ms | Loop lag p95 / p99 / max ms | Serializations/s | Peak RSS MiB |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -159,7 +166,7 @@ level. Desyncs at heavy (slow-consumer resyncs of terminal streams) fell from
   rendering.
 - Agents are simulated: their transcript reads follow the live-update shape,
   not the real projection's cost.
-- Desyncs are counted, not recovered: no client fetches a snapshot after one,
-  so snapshot reads under load are not measured.
+- Observers count desync notices and exercise snapshot reads under load. They do
+  not reconstruct a renderer or reapply the returned screen.
 - Variation between runs is a few milliseconds at p95 and up to about 15 ms
   at p99 under heavy load; compare medians of several runs.

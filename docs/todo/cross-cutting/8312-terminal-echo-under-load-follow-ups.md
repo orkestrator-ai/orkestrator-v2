@@ -14,9 +14,10 @@ which measured the backend's share, cut it, and left these three.
 
 ### 1. Move headless parsing and serialization off the backend's event loop
 
-**Problem.** After the scanner rewrite, metered parsing and coalesced
-checkpoints, the heavy level of `apps/backend/scripts/terminal-latency.ts`
-still shows backend echo p99 of about 21 ms and loop-lag p99 of about 14 ms.
+**Problem.** The original heavy-load run of `apps/backend/scripts/terminal-latency.ts`
+reported backend echo p99 of about 21 ms and loop-lag p99 of about 14 ms
+after the first optimization pass. Those figures predate the benchmark and
+checkpoint corrections.
 xterm's headless parser is now about half of the backend's CPU under that
 load, and each full `SerializeAddon.serialize` call holds the loop 9 to 12 ms.
 
@@ -50,14 +51,15 @@ checkpoints, snapshots and the graceful-shutdown checkpoint.
     - Cons: a crash loses up to the interval's screen state rather than up to a mebibyte of output; a durability change to agree first.
   - **Leave the trigger as it is (recommended until the worker decision).**
     - Pros: no durability change.
-    - Cons: about four serializations a second at the heavy level.
+    - Cons: Serialization still runs synchronously at every eligible checkpoint boundary.
 
 ### 2. Measure and reduce the renderer's parsing of hidden terminal tabs
 
-**Problem.** In the benchmark, a typing client that also parses its
-environment's load terminals (as the renderer parses every mounted terminal
-tab) sees heavy-level key-to-echo p95 of about 26 ms against about 17 ms when
-it parses only its own terminal: the client's own thread delays the echo.
+**Problem.** The original heavy-load benchmark reported key-to-echo p95 of
+about 26 ms with load-terminal subscriptions and client parsing enabled, and
+about 17 ms with those subscriptions and parsing disabled. The corrected
+harness keeps delivery and decoding constant across the parser toggle.
+Renderer-side impact still needs measurement.
 
 **Context.** Hidden terminal tabs of the selected environment stay subscribed
 and parse their output (decided 2026-10-27 in

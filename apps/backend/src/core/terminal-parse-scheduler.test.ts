@@ -45,8 +45,8 @@ describe("headless parse scheduler", () => {
     expect(nextParseSlice(text, 0, 3)).toBe(2);
     expect(nextParseSlice(text, 2, 3)).toBe(5);
     expect(nextParseSlice(text, 0, 100)).toBe(text.length);
-    // A slice of one high surrogate still advances rather than looping.
-    expect(nextParseSlice(text, 2, 1)).toBe(3);
+    expect(nextParseSlice(text, 2, 1)).toBe(2);
+    expect(nextParseSlice("\ud800a", 0, 1)).toBe(1);
   });
 
   test("hands a parser one bounded slice at a time and resolves after the last", async () => {
@@ -85,21 +85,20 @@ describe("headless parse scheduler", () => {
     const other = fakeTarget("other", log);
     void scheduler.write(flood, "x".repeat(40));
     void scheduler.write(quiet, "yy");
-    void scheduler.write(other, "zzzz");
+    void scheduler.write(other, "z😀z");
     const late = fakeTarget("late", log);
     void scheduler.write(late, "w");
 
-    // Issuing stops once the budget of 8 is reached (the slice that reaches it
-    // may overshoot); the late parser waits for output to be parsed.
-    expect(log).toEqual(["flood:4", "quiet:2", "other:4"]);
-    expect(scheduler.stats().inFlightChars).toBe(10);
+    // The two remaining units fit only the first character of the other
+    // write. The final unit goes to the next target while the pair waits.
+    expect(log).toEqual(["flood:4", "quiet:2", "other:1", "late:1"]);
+    expect(scheduler.stats().inFlightChars).toBe(8);
     flood.parseNext();
     quiet.parseNext();
     other.parseNext();
     turns.next();
-    // The late parser is served before the flood's next slice, and the flood
-    // never has more than one slice at a time.
-    expect(log.slice(3)).toEqual(["late:1", "flood:4"]);
+    expect(log.slice(4)).toEqual(["flood:4", "other:3"]);
+    expect(scheduler.stats().inFlightChars).toBe(8);
     expect(flood.waiting()).toBe(1);
   });
 

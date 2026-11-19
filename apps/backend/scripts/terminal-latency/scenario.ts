@@ -41,7 +41,7 @@ export type LatencyOptions = {
   /**
    * The typing client also parses every terminal it subscribes to with a
    * headless xterm on its own thread, as the renderer does for each mounted
-   * terminal tab, and subscribes to the load terminals of its environment.
+   * terminal tab. Both variants subscribe to the same terminals.
    */
   clientParse: boolean;
   /** Event-loop sampler interval in the backend process. */
@@ -196,6 +196,11 @@ export function parseLatencyArgs(argv: readonly string[]): LatencyOptions {
   return options;
 }
 
+/** Allow each write its full echo timeout, the pacing interval and phase overhead. */
+export function typingPhaseTimeoutMs(options: LatencyOptions, keys: number): number {
+  return 30_000 + keys * (options.echoTimeoutMs + options.keyIntervalMs);
+}
+
 /** Nearest-rank percentile; 0 for no samples. */
 export function percentile(values: readonly number[], quantile: number): number {
   if (values.length === 0) return 0;
@@ -262,20 +267,13 @@ export class SseFrameReader {
   }
 }
 
-/**
- * The characters the typing client cycles through: printable and single-byte.
- * Echoes are read only from the interactive terminal's own events, so load
- * output on other terminals can never be mistaken for one.
- */
-export const KEY_ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+/** A printable, delimited payload that identifies one write even after a timeout. */
+export const echoPayload = (index: number): string => `[${index.toString(36)}]`;
 
-/**
- * Matches echoes of one outstanding key at a time. The typist sends a key only
- * after the previous one came back, so the first occurrence of the expected
- * character in the interactive terminal's output is its echo.
- */
+/** Matches one write at a time, including echoes split across output chunks. */
 export class EchoTracker {
   private expected: { key: string; resolve: (at: number) => void } | null = null;
+  private tail = "";
 
   expect(key: string): Promise<number> {
     if (this.expected) throw new Error("A key is already outstanding");
@@ -284,15 +282,22 @@ export class EchoTracker {
     });
   }
 
-  /** Feeds the interactive terminal's output; resolves the outstanding key if it is echoed. */
-  observe(text: string, at: number): void {
+  observe(text: string, at: number): boolean {
     const expected = this.expected;
-    if (!expected || !text.includes(expected.key)) return;
-    this.expected = null;
+    if (!expected) return false;
+    const output = this.tail + text;
+    if (!output.includes(expected.key)) {
+      const carry = expected.key.length - 1;
+      this.tail = carry > 0 ? output.slice(-carry) : "";
+      return false;
+    }
+    this.cancel();
     expected.resolve(at);
+    return true;
   }
 
   cancel(): void {
     this.expected = null;
+    this.tail = "";
   }
 }

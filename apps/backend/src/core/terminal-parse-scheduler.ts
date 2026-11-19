@@ -43,12 +43,10 @@ type ParseJob = {
 
 /** Cuts at most `size` code units from `offset`, never between a surrogate pair. */
 export function nextParseSlice(text: string, offset: number, size: number): number {
-  let end = Math.min(text.length, offset + size);
-  if (end < text.length && end - offset > 1) {
-    const last = text.charCodeAt(end - 1);
-    if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-  }
-  return end;
+  const end = Math.min(text.length, offset + size);
+  const last = text.charCodeAt(end - 1);
+  const next = text.charCodeAt(end);
+  return last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff ? end - 1 : end;
 }
 
 export class HeadlessParseScheduler {
@@ -62,7 +60,11 @@ export class HeadlessParseScheduler {
     private readonly sliceChars = HEADLESS_PARSE_SLICE_CHARS,
     private readonly turnChars = HEADLESS_PARSE_TURN_CHARS,
     private readonly defer: (run: () => void) => void = (run) => setImmediate(run),
-  ) {}
+  ) {
+    if (sliceChars < 2 || turnChars < 2) {
+      throw new RangeError("Headless parse limits must fit a surrogate pair");
+    }
+  }
 
   /** Parses `text` into `target`; resolves once every slice of it is parsed. */
   write(target: HeadlessParseTarget, text: string): Promise<void> {
@@ -114,7 +116,9 @@ export class HeadlessParseScheduler {
       this.queues.delete(target);
       return;
     }
-    const end = nextParseSlice(job.text, job.offset, this.sliceChars);
+    const budget = Math.min(this.sliceChars, this.turnChars - this.inFlightChars);
+    const end = nextParseSlice(job.text, job.offset, budget);
+    if (end === job.offset) return; // Wait for room for both halves of the surrogate pair.
     const slice =
       job.offset === 0 && end === job.text.length ? job.text : job.text.slice(job.offset, end);
     job.offset = end;

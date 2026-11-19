@@ -47,9 +47,14 @@ import { createBackendEmit } from "../src/core/backend-emit.js";
 import { spawnPty, type PtyProcess } from "../src/core/pty.js";
 import { TerminalRuntime } from "../src/core/terminal-runtime.js";
 import { startGateway, type StartedGateway } from "./gateway-frame-costs.js";
-import { startResourceSampler } from "../../../scripts/efficiency/resources.ts";
+import {
+  startResourceSampler,
+  type ResourceSampler,
+} from "../../../scripts/efficiency/resources.ts";
 import {
   distribution,
+  EchoTracker,
+  typingPhaseTimeoutMs,
   parseLatencyArgs,
   USAGE,
   type Distribution,
@@ -91,7 +96,11 @@ export type LevelResult = {
   timeouts: number;
   backendEchoMs: Distribution;
   eventLoopLagMs: Distribution;
-  serializationsPerSecond: number;
+  checkpointsPerSecond: number;
+  snapshotReadsPerSecond: number;
+  snapshotReadMs: Distribution;
+  typistOutputBytes: number;
+  typistParsedBytes: number;
   /** Each `SerializeAddon.serialize` call; one serialization may make several. */
   serializeCallMs: Distribution;
   terminalMiBPerSecond: number;
@@ -106,53 +115,67 @@ export type LevelResult = {
 
 type Child = {
   process: ChildProcessWithoutNullStreams;
-  next(type: string): Promise<Record<string, unknown>>;
+  next(type: string, timeoutMs?: number): Promise<Record<string, unknown>>;
 };
 
 /** A client process whose JSON-line reports can be awaited by type. */
-function startClient(role: string, config: unknown, token: string): Child {
+function startClient(
+  role: "typist" | "observer",
+  config: unknown,
+  token: string,
+  failure: AbortController,
+): Child {
   const child = spawn(process.execPath, [CLIENT, role, JSON.stringify(config)], {
     env: { ...process.env, ORK_LATENCY_TOKEN: token },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const reports: Record<string, unknown>[] = [];
-  const waiters: Array<() => void> = [];
+  let wake: (() => void) | undefined;
+  let reportedResult = false;
+  const fail = (message: string) => failure.abort(new Error(`${role} failed: ${message}`));
   createInterface({ input: child.stdout }).on("line", (line) => {
+    let report: Record<string, unknown>;
     try {
-      reports.push(JSON.parse(line) as Record<string, unknown>);
+      report = JSON.parse(line) as Record<string, unknown>;
     } catch {
+      fail("invalid report");
       return;
     }
-    for (const wake of waiters.splice(0)) wake();
+    if (report.type === "error") {
+      fail(String(report.message));
+      return;
+    }
+    reportedResult ||= report.type === `${role}-result`;
+    reports.push(report);
+    wake?.();
   });
   child.stderr.resume();
-  let exited = false;
-  child.once("exit", () => {
-    exited = true;
-    for (const wake of waiters.splice(0)) wake();
+  child.on("error", (error) => fail(error.message));
+  child.stdin.on("error", (error) => fail(error.message));
+  child.once("close", (code) => {
+    if (code !== 0 || !reportedResult) fail("exited before a successful result");
   });
   return {
     process: child,
-    async next(type) {
-      const deadline = Date.now() + CHILD_REPORT_TIMEOUT_MS * 20;
-      for (;;) {
-        const index = reports.findIndex(
-          (report) => report.type === type || report.type === "error",
-        );
-        if (index !== -1) {
-          const [report] = reports.splice(index, 1);
-          if (report!.type === "error")
-            throw new Error(`${role} failed: ${String(report!.message)}`);
-          return report!;
-        }
-        if (exited) throw new Error(`${role} exited before reporting ${type}`);
-        if (Date.now() > deadline) throw new Error(`${role} did not report ${type}`);
+    async next(type, timeoutMs = CHILD_REPORT_TIMEOUT_MS) {
+      const deadline = performance.now() + timeoutMs;
+      const signal = failure.signal;
+      while (true) {
+        signal.throwIfAborted();
+        const index = reports.findIndex((report) => report.type === type);
+        if (index !== -1) return reports.splice(index, 1)[0]!;
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) throw new Error(`${role} did not report ${type}`);
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 1_000);
-          waiters.push(() => {
+          const timer = setTimeout(finish, Math.min(remaining, 2_147_483_647));
+          function finish() {
             clearTimeout(timer);
+            signal.removeEventListener("abort", finish);
+            wake = undefined;
             resolve();
-          });
+          }
+          wake = finish;
+          signal.addEventListener("abort", finish, { once: true });
         });
       }
     },
@@ -206,31 +229,62 @@ class SimulatedAgent {
 
 async function runLevel(level: LoadLevel, options: LatencyOptions): Promise<LevelResult> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-terminal-latency-"));
-  let serializations = 0;
+  let checkpoints = 0;
+  let measuring = false;
   const runtime = new TerminalRuntime({
-    history: { serializeHook: () => (serializations += 1) },
+    history: {
+      serializeHook: (source) => {
+        if (source === "checkpoint" && measuring) checkpoints += 1;
+      },
+    },
   });
   const ptys = new Map<string, PtyProcess>();
   const agents = new Map<string, SimulatedAgent>();
   const timers: ReturnType<typeof setInterval>[] = [];
   const clients: Child[] = [];
+  const clientFailure = new AbortController();
   let started: StartedGateway | null = null;
-  let measuring = false;
+  let sampler: ResourceSampler | undefined;
   let terminalBytes = 0;
   let transcriptReads = 0;
   const backendEcho: number[] = [];
-  let pendingKey: { key: string; at: number } | null = null;
+  const snapshotReads: number[] = [];
+  const tracker = new EchoTracker();
+  const interactiveReady = Promise.withResolvers<void>();
+  let waitingForInteractive = true;
+  let latestKey = -1;
+  let pendingKey: { at: number; measured: boolean } | null = null;
 
   const backend = {
     invoke: async (command: string, args: Record<string, unknown>) => {
       switch (command) {
         case "terminal_write": {
+          const at = performance.now();
           const pty = ptys.get(String(args.sessionId));
           if (!pty) return { delivered: false };
           const data = String(args.data ?? "");
-          if (args.sessionId === INTERACTIVE) pendingKey = { key: data, at: performance.now() };
+          if (args.sessionId === INTERACTIVE) {
+            const index = Number.parseInt(data.slice(1, -1), 36);
+            if (index > latestKey) {
+              latestKey = index;
+              tracker.cancel();
+              void tracker.expect(data);
+              pendingKey = { at, measured: index >= options.warmupKeystrokes };
+            }
+          }
           pty.write(data);
           return { delivered: true };
+        }
+        case "get_terminal_state_snapshot": {
+          const sessionId = String(args.sessionId);
+          if (!ptys.has(sessionId)) return null;
+          const inWindow = measuring;
+          const at = performance.now();
+          const snapshot = options.history
+            ? await runtime.history.stateSnapshot(sessionId)
+            : { output: runtime.readOutput(sessionId) };
+          if (snapshot && inWindow && measuring) snapshotReads.push(performance.now() - at);
+          return snapshot;
         }
         case "get_native_agent_live_update": {
           if (measuring) transcriptReads += 1;
@@ -263,17 +317,40 @@ async function runLevel(level: LoadLevel, options: LatencyOptions): Promise<Leve
           rows: ROWS,
         });
       }
+      pty.onExit(({ exitCode }) => {
+        clientFailure.abort(new Error(`Terminal ${id} exited during the benchmark (${exitCode})`));
+      });
       pty.onData((data) => {
-        if (id === INTERACTIVE && pendingKey && data.includes(pendingKey.key)) {
-          if (measuring) backendEcho.push(performance.now() - pendingKey.at);
+        // The interactive shell emits a single readiness byte only after
+        // switching its PTY to raw mode. No writes are sent before then.
+        if (id === INTERACTIVE && waitingForInteractive && data === "R") {
+          waitingForInteractive = false;
+          interactiveReady.resolve();
+          return;
+        }
+        if (measuring) terminalBytes += Buffer.byteLength(data);
+        runtime.emitOutput(id, data, emit);
+        if (id !== INTERACTIVE || !pendingKey) return;
+        const emittedAt = performance.now();
+        if (tracker.observe(data, emittedAt)) {
+          if (measuring && pendingKey.measured) backendEcho.push(emittedAt - pendingKey.at);
           pendingKey = null;
         }
-        if (measuring) terminalBytes += data.length;
-        runtime.emitOutput(id, data, emit);
       });
     };
 
-    spawnTerminal(INTERACTIVE, "/bin/sh", ["-c", "stty raw -echo; exec cat"]);
+    spawnTerminal(INTERACTIVE, "/bin/sh", ["-c", "stty raw -echo && printf R && exec cat"]);
+    const startup = AbortSignal.any([
+      clientFailure.signal,
+      AbortSignal.timeout(CHILD_REPORT_TIMEOUT_MS),
+    ]);
+    await Promise.race([
+      interactiveReady.promise,
+      new Promise<never>((_resolve, reject) => {
+        if (startup.aborted) reject(startup.reason);
+        else startup.addEventListener("abort", () => reject(startup.reason), { once: true });
+      }),
+    ]);
     const loadIds: string[] = [];
     for (let index = 0; index < level.buildTerminals; index += 1) {
       const id = `latency-build-${index}`;
@@ -310,6 +387,7 @@ async function runLevel(level: LoadLevel, options: LatencyOptions): Promise<Leve
         "observer",
         { url, terminalSessionIds: [INTERACTIVE, ...loadIds] },
         started.token,
+        clientFailure,
       );
       clients.push(observer);
       await observer.next("ready");
@@ -320,7 +398,7 @@ async function runLevel(level: LoadLevel, options: LatencyOptions): Promise<Leve
       {
         url,
         interactiveSessionId: INTERACTIVE,
-        parsedSessionIds: loadIds,
+        loadSessionIds: loadIds,
         keystrokes: options.keystrokes,
         warmupKeystrokes: options.warmupKeystrokes,
         keyIntervalMs: options.keyIntervalMs,
@@ -331,20 +409,27 @@ async function runLevel(level: LoadLevel, options: LatencyOptions): Promise<Leve
         rows: ROWS,
       },
       started.token,
+      clientFailure,
     );
     clients.push(typist);
-    await typist.next("measuring");
-    const sampler = startResourceSampler(options.lagSampleMs);
-    const serializationsAtStart = serializations;
+    await typist.next(
+      "measurement-ready",
+      typingPhaseTimeoutMs(options, options.warmupKeystrokes) + options.settleMs,
+    );
+    sampler = startResourceSampler(options.lagSampleMs);
     serializeCalls.length = 0;
     timingSerialize = true;
     const measuredFrom = performance.now();
     measuring = true;
-    const typed = await typist.next("typist-result");
+    typist.process.stdin.write("measure\n");
+    await typist.next("measurement-ended", typingPhaseTimeoutMs(options, options.keystrokes));
     measuring = false;
     timingSerialize = false;
     const measuredSeconds = (performance.now() - measuredFrom) / 1000;
+    const checkpointCount = checkpoints;
     const resources = sampler.stop();
+    sampler = undefined;
+    const typed = await typist.next("typist-result");
 
     let desyncs = Number(typed.desyncs) || 0;
     for (const observer of clients.slice(0, -1)) {
@@ -359,8 +444,11 @@ async function runLevel(level: LoadLevel, options: LatencyOptions): Promise<Leve
       timeouts: Number(typed.timeouts) || 0,
       backendEchoMs: distribution(backendEcho),
       eventLoopLagMs: distribution(resources.lagMs),
-      serializationsPerSecond:
-        Math.round(((serializations - serializationsAtStart) / measuredSeconds) * 10) / 10,
+      checkpointsPerSecond: Math.round((checkpointCount / measuredSeconds) * 10) / 10,
+      snapshotReadsPerSecond: Math.round((snapshotReads.length / measuredSeconds) * 10) / 10,
+      snapshotReadMs: distribution(snapshotReads),
+      typistOutputBytes: Number(typed.receivedOutputBytes),
+      typistParsedBytes: Number(typed.parsedBytes),
       serializeCallMs: distribution(serializeCalls),
       terminalMiBPerSecond: Math.round((terminalBytes / 1024 / 1024 / measuredSeconds) * 10) / 10,
       transcriptReadsPerSecond: Math.round((transcriptReads / measuredSeconds) * 10) / 10,
@@ -374,6 +462,7 @@ async function runLevel(level: LoadLevel, options: LatencyOptions): Promise<Leve
   } finally {
     measuring = false;
     timingSerialize = false;
+    sampler?.stop();
     for (const timer of timers) clearInterval(timer);
     for (const client of clients) {
       if (client.process.exitCode === null && client.process.signalCode === null) {
@@ -396,7 +485,9 @@ function formatTable(results: readonly LevelResult[]): string {
     "timeouts",
     "backend p50/p95/p99 ms",
     "loop lag p50/p95/p99/max ms",
-    "serial/s",
+    "checkpoints/s",
+    "snapshots/s",
+    "snapshot p95 ms",
     "serialize p95/max ms",
     "term MiB/s",
     "reads/s",
@@ -410,7 +501,9 @@ function formatTable(results: readonly LevelResult[]): string {
     String(result.timeouts),
     `${result.backendEchoMs.p50}/${result.backendEchoMs.p95}/${result.backendEchoMs.p99}`,
     `${result.eventLoopLagMs.p50}/${result.eventLoopLagMs.p95}/${result.eventLoopLagMs.p99}/${result.eventLoopLagMs.max}`,
-    String(result.serializationsPerSecond),
+    String(result.checkpointsPerSecond),
+    String(result.snapshotReadsPerSecond),
+    String(result.snapshotReadMs.p95),
     `${result.serializeCallMs.p95}/${result.serializeCallMs.max}`,
     String(result.terminalMiBPerSecond),
     String(result.transcriptReadsPerSecond),

@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_LEVELS,
+  DEFAULT_OPTIONS,
   distribution,
   EchoTracker,
+  echoPayload,
+  typingPhaseTimeoutMs,
   parseLatencyArgs,
   parseLevel,
   percentile,
@@ -88,13 +91,26 @@ describe("terminal latency benchmark helpers", () => {
     tracker.observe("xqz", 2);
     tracker.observe("q", 3);
     expect(await echoed).toBe(2);
-    const next = tracker.expect("r");
-    expect(() => tracker.expect("s")).toThrow("already outstanding");
+  });
+
+  test("an expired attempt cannot satisfy the next attempt, even across frame boundaries", async () => {
+    const tracker = new EchoTracker();
+    const expired = echoPayload(0);
+    const current = echoPayload(26);
+    void tracker.expect(expired);
     tracker.cancel();
-    tracker.observe("r", 4);
-    const after = tracker.expect("r");
-    tracker.observe("r", 5);
-    expect(await after).toBe(5);
-    void next;
+    const next = tracker.expect(current);
+    expect(() => tracker.expect(expired)).toThrow("already outstanding");
+    expect(tracker.observe(expired, 3)).toBe(false);
+    expect(tracker.observe(current.slice(0, 2), 4)).toBe(false);
+    expect(tracker.observe(current.slice(2), 5)).toBe(true);
+    expect(await next).toBe(5);
+  });
+
+  test("sizes phase deadlines for long runs and echo timeouts", () => {
+    expect(typingPhaseTimeoutMs(DEFAULT_OPTIONS, 20_000)).toBeGreaterThan(600_000);
+    expect(typingPhaseTimeoutMs(DEFAULT_OPTIONS, DEFAULT_OPTIONS.keystrokes)).toBeGreaterThan(
+      DEFAULT_OPTIONS.keystrokes * DEFAULT_OPTIONS.echoTimeoutMs,
+    );
   });
 });

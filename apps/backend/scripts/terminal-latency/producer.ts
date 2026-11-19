@@ -32,9 +32,9 @@ function buildLine(): string {
   if (line % 40 === 0) {
     // A progress bar redrawn in place, as bundlers and test runners print.
     const done = line % 400;
-    return `\r\x1b[2K\x1b[1m[${"#".repeat(done / 20)}${" ".repeat(20 - done / 20)}]\x1b[0m ${done}/400\r\n`;
+    return `\r\x1b[2K\x1b[1m[${"#".repeat(done / 20)}${" ".repeat(20 - done / 20)}]\x1b[0m ${done}/400\n`;
   }
-  return `\x1b[${colour}m${String(line).padStart(7, "0")}\x1b[0m ${path}:${line % 977}:${line % 61} \x1b[2mcompiled ${line % 13} modules in ${line % 97}ms\x1b[0m\r\n`;
+  return `\x1b[${colour}m${String(line).padStart(7, "0")}\x1b[0m ${path}:${line % 977}:${line % 61} \x1b[2mcompiled ${line % 13} modules in ${line % 97}ms\x1b[0m\n`;
 }
 
 function toolBlock(bytes: number): string {
@@ -43,8 +43,8 @@ function toolBlock(bytes: number): string {
   while (size < bytes) {
     const row =
       line % 3 === 0
-        ? `\x1b[32m+  const value${line} = compute(${line}, "${PATHS[line % PATHS.length]}");\x1b[0m\r\n`
-        : `   ${JSON.stringify({ id: line, path: PATHS[line % PATHS.length], ok: line % 7 !== 0 })}\r\n`;
+        ? `\x1b[32m+  const value${line} = compute(${line}, "${PATHS[line % PATHS.length]}");\x1b[0m\n`
+        : `   ${JSON.stringify({ id: line, path: PATHS[line % PATHS.length], ok: line % 7 !== 0 })}\n`;
     line += 1;
     rows.push(row);
     size += row.length;
@@ -60,14 +60,21 @@ async function write(text: string): Promise<void> {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function runBuild(bytesPerSecond: number): Promise<never> {
-  const perTick = Math.max(1, Math.round((bytesPerSecond * TICK_MS) / 1000));
+  const perTick = (bytesPerSecond * TICK_MS) / 1000;
+  let credit = 0;
+  let pending = buildLine();
   let next = performance.now();
   for (;;) {
-    let chunk = "";
-    while (chunk.length < perTick) chunk += buildLine();
-    await write(chunk);
     next += TICK_MS;
     await sleep(Math.max(0, next - performance.now()));
+    credit += perTick;
+    const rows: string[] = [];
+    while (credit >= pending.length) {
+      rows.push(pending);
+      credit -= pending.length;
+      pending = buildLine();
+    }
+    if (rows.length > 0) await write(rows.join(""));
   }
 }
 

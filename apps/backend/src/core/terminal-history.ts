@@ -112,8 +112,7 @@ type Session = {
   flushQueued: boolean;
   lastCheckpointAt: number;
   bytesSinceCheckpoint: number;
-  /** Counts scheduled checkpoints; only the newest one queued on `parseTail` runs. */
-  checkpointTicket: number;
+  pendingCheckpoint: string | null;
   manifest: Manifest;
   estimatedBytes: number;
   scrollback: number;
@@ -369,8 +368,10 @@ function outputPrefix(text: string, maximumBytes: number): string {
 export type TerminalHistoryOptions = {
   /** Awaited inside each page read's concurrency slot. Tests hold reads open with it. */
   pageReadHook?: () => Promise<void>;
+  /** Shared scheduler, injectable for deterministic tests with real parsers. */
+  parser?: HeadlessParseScheduler;
   /** Called before every state serialization. Tests inject serialization failures with it. */
-  serializeHook?: () => void;
+  serializeHook?: (source: "checkpoint" | "snapshot") => void;
   /** Most history directories one root keeps (and scans twice that per prune pass). */
   maxHistoryDirectories?: number;
   /** Most chunks one session queues. Tests lower it instead of appending thousands of chunks. */
@@ -407,9 +408,9 @@ export class TerminalHistory {
   private readonly maxPendingChunks: number;
   private readonly maxGlobalPendingChunks: number;
   private readonly pageReadHook: (() => Promise<void>) | null;
-  private readonly serializeHook: (() => void) | null;
+  private readonly serializeHook: TerminalHistoryOptions["serializeHook"];
   /** Meters headless parsing so no burst holds the event loop (`terminal-parse-scheduler.ts`). */
-  private readonly parser = new HeadlessParseScheduler();
+  private readonly parser: HeadlessParseScheduler;
 
   constructor(options: TerminalHistoryOptions = {}) {
     this.maxDirectories = Math.max(
@@ -420,7 +421,8 @@ export class TerminalHistory {
     this.maxGlobalPendingChunks =
       options.maxGlobalPendingChunks ?? TERMINAL_HISTORY_GLOBAL_PENDING_CHUNKS;
     this.pageReadHook = options.pageReadHook ?? null;
-    this.serializeHook = options.serializeHook ?? null;
+    this.serializeHook = options.serializeHook;
+    this.parser = options.parser ?? new HeadlessParseScheduler();
   }
 
   configureRetention(value: {
@@ -603,8 +605,8 @@ export class TerminalHistory {
     await this.scheduleRootPrune(root);
   }
 
-  private serializedState(session: Session): string {
-    this.serializeHook?.();
+  private serializedState(session: Session, source: "checkpoint" | "snapshot"): string {
+    this.serializeHook?.(source);
     const pendingBytes = Buffer.byteLength(session.parserCarry, "utf8");
     const availableBytes = TERMINAL_STATE_MAX_BYTES - pendingBytes;
     const currentScreen = session.serializer.serialize({ scrollback: 0 });
@@ -821,7 +823,7 @@ export class TerminalHistory {
       flushQueued: false,
       lastCheckpointAt: 0,
       bytesSinceCheckpoint: 0,
-      checkpointTicket: 0,
+      pendingCheckpoint: null,
       manifest: blankManifest(historyId, incarnation, input.environmentId, input.tabId),
       estimatedBytes,
       scrollback,
@@ -1178,6 +1180,41 @@ export class TerminalHistory {
     }
   }
 
+  private captureCheckpoint(session: Session): string {
+    const output = this.serializedState(session, "checkpoint");
+    return `${JSON.stringify({
+      formatVersion: TERMINAL_STATE_FORMAT_VERSION,
+      output,
+      cols: session.terminal.cols,
+      rows: session.terminal.rows,
+      sequence: session.sequence,
+      revision: session.appliedRevision,
+      generation: session.generation,
+      incarnation: session.incarnation,
+      at: Date.now(),
+      checksum: createHash("sha256")
+        .update(output)
+        .update("\0")
+        .update(session.parserCarry)
+        .digest("hex"),
+      pendingOutput: session.parserCarry,
+    })}\n`;
+  }
+
+  private queueCheckpoint(session: Session, checkpoint: string): void {
+    const writeAlreadyQueued = session.pendingCheckpoint !== null;
+    session.pendingCheckpoint = checkpoint;
+    if (writeAlreadyQueued) return;
+    // Only coalesce already serialized screens. An invalid later boundary
+    // cannot supersede a usable predecessor, and slow disk I/O holds at most
+    // one pending snapshot besides the write in progress.
+    this.scheduleIo(session, async () => {
+      const pending = session.pendingCheckpoint!;
+      session.pendingCheckpoint = null;
+      await atomicWrite(checkpointPath(session), pending);
+    });
+  }
+
   private scheduleCheckpoint(session: Session): void {
     const now = Date.now();
     if (
@@ -1188,44 +1225,15 @@ export class TerminalHistory {
     }
     session.lastCheckpointAt = now;
     session.bytesSinceCheckpoint = 0;
-    session.checkpointTicket += 1;
-    const ticket = session.checkpointTicket;
     session.parseTail = session.parseTail
-      .then(async () => {
-        if (session.disposed) return;
-        // Output arriving faster than it is parsed queues one checkpoint per
-        // megabyte behind the backlog. Each serialization holds the event loop
-        // for milliseconds, and all but the newest would be overwritten as soon
-        // as the parser caught up, so only the newest queued one runs.
-        if (ticket !== session.checkpointTicket) return;
-        if (session.parserCarryOverflow) return;
+      .then(() => {
+        if (session.disposed || session.parserCarryOverflow) return;
         this.numberQueuedOutput(session);
-        const output = this.serializedState(session);
-        const checkpoint = {
-          formatVersion: TERMINAL_STATE_FORMAT_VERSION,
-          output,
-          cols: session.terminal.cols,
-          rows: session.terminal.rows,
-          sequence: session.sequence,
-          revision: session.appliedRevision,
-          generation: session.generation,
-          incarnation: session.incarnation,
-          at: Date.now(),
-          checksum: createHash("sha256")
-            .update(output)
-            .update("\0")
-            .update(session.parserCarry)
-            .digest("hex"),
-          pendingOutput: session.parserCarry,
-        };
-        this.scheduleIo(session, () =>
-          atomicWrite(checkpointPath(session), `${JSON.stringify(checkpoint)}\n`),
-        );
+        this.queueCheckpoint(session, this.captureCheckpoint(session));
       })
       .catch(() => {
-        // A pathological current screen can exceed the hard snapshot bound. Keep
-        // the parser chain usable for later output/resizes and report that the
-        // durable checkpoint has a gap instead of freezing collection forever.
+        // A pathological screen can exceed the snapshot bound. Keep the
+        // parser usable and preserve the last checkpoint we could serialize.
         this.markHistoryGap(session);
       });
   }
@@ -1320,35 +1328,13 @@ export class TerminalHistory {
     });
     if (session.disposed) return;
     this.numberQueuedOutput(session);
-    let checkpoint: string | null = null;
-    if (!session.parserCarryOverflow) {
-      try {
-        const output = this.serializedState(session);
-        checkpoint = `${JSON.stringify({
-          formatVersion: TERMINAL_STATE_FORMAT_VERSION,
-          output,
-          cols: session.terminal.cols,
-          rows: session.terminal.rows,
-          sequence: session.sequence,
-          revision: session.appliedRevision,
-          generation: session.generation,
-          incarnation: session.incarnation,
-          at: Date.now(),
-          checksum: createHash("sha256")
-            .update(output)
-            .update("\0")
-            .update(session.parserCarry)
-            .digest("hex"),
-          pendingOutput: session.parserCarry,
-        })}\n`;
-      } catch {
-        this.markHistoryGap(session);
-      }
-    } else {
+    try {
+      if (session.parserCarryOverflow) this.markHistoryGap(session);
+      else this.queueCheckpoint(session, this.captureCheckpoint(session));
+    } catch {
       this.markHistoryGap(session);
     }
     await this.scheduleIo(session, async () => {
-      if (checkpoint !== null) await atomicWrite(checkpointPath(session), checkpoint);
       session.manifest.updatedAt = Date.now();
       await atomicWrite(manifestPath(session), `${JSON.stringify(session.manifest)}\n`);
     });
@@ -1380,7 +1366,7 @@ export class TerminalHistory {
         return {
           formatVersion: TERMINAL_STATE_FORMAT_VERSION,
           mode: "state",
-          output: this.serializedState(session),
+          output: this.serializedState(session, "snapshot"),
           pendingOutput: session.parserCarry,
           generation: session.generation,
           revision: session.appliedRevision,

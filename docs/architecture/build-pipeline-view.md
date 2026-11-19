@@ -36,19 +36,36 @@ tab. The old PIPELINE stage list (`PipelineStageRail`) is gone.
   conflict resolution) this tab shows.
 - **Pipeline environment**: an environment a build pipeline created and runs
   in. A ticket's Build button, the Features view, `start_build_pipeline`, the
-  CLI's `build launch` and the New environment dialog's "A feature" option all
-  make one. The sidebar marks it with the pipe icon (`PipeIcon.tsx`).
+  CLI's `build launch` and the New environment dialog's "Pipeline" option all
+  make one. The sidebar marks it with the pipe icon (`PipeIcon.tsx`). It is
+  never interactive: every stage prompt carries the unattended policy.
 - **Prompt environment**: an environment that runs one prompt, from the New
-  Environment dialog's "With a prompt" option or a coordinator's
+  Environment dialog's "Task" or "Interactive" option or a coordinator's
   `launch_environment`. Review and the PR are started by hand or by a
   coordinator.
+- **Interaction mode**: whether a prompt environment's agent may talk with the
+  user (`interactionMode`, `@orkestrator/protocol/environment-interaction`).
+  `task` (the dialog's "Task") runs the opening prompt without asking
+  questions, then stops and waits. `interactive` (the dialog's "Interactive")
+  may ask questions from the start. The backend adds a system-instructions
+  frame to the first native prompt, including one sent manually after setup,
+  and to prompts supplied to terminal launches. Native transcripts strip the
+  frame. An opening provider slash command is refused with guidance to send a
+  regular prompt first. Later commands receive their original arguments. During
+  the opening native Task turn the backend declines input requests and uses the
+  normal authorization policy. Codex displays async questions from that turn as
+  ordinary text. Grok Terminal requires an explicit switch to Native to start
+  with a prompt or attachments. The dialog explains that prompts typed later
+  into a terminal follow that CLI's interaction settings.
+  Environments created without a mode receive no frame.
 
-The New environment dialog keeps the "A feature" / "With a prompt" wording and
-says under it which of the two each choice creates. Internal names still say
-"feature build" (`BuildIntent = "feature" | "prompt"`, `createFeatureBuild`,
-the `create_feature_build` command, `featureBuildRequestHash`, the `feature-build.*` log
-events): they are persisted or part of the backend contract, so they were not
-renamed.
+The New environment dialog offers "Pipeline", "Task" and "Interactive" and
+says under them which kind of environment each creates and whether it is
+interactive. Internal names still say "feature build" (`BuildIntent =
+"feature" | "task" | "interactive"`, `createFeatureBuild`, the
+`create_feature_build` command, `featureBuildRequestHash`, the
+`feature-build.*` log events): they are persisted or part of the backend
+contract, so they were not renamed.
 
 ## Sidebar activity and completion
 

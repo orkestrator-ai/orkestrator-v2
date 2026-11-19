@@ -24,7 +24,8 @@ import * as realBackend from "@/lib/backend";
 const realBackendSnapshot = { ...realBackend };
 
 const updateEnvironmentAgentSettingsMock = mock(
-  async (environmentId: string, ..._rest: unknown[]) => ({ id: environmentId }) as Environment,
+  async (environmentId: string, ...rest: unknown[]) =>
+    ({ id: environmentId, interactionMode: rest[6] }) as Environment,
 );
 const getContainerGitHubCredentialStatusMock = mock(async (): Promise<GitHubCredentialStatus> => ({
   source: "host-cli",
@@ -99,7 +100,9 @@ afterEach(cleanup);
  * the flow made, so the durable launch intent is asserted end to end rather than
  * only through the pure helpers.
  */
-async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) {
+async function submitCreateFlow(
+  options: { turnOffLaunchAgent?: boolean; intent?: "Task" | "Interactive" } = {},
+) {
   const created = { id: "env-created" } as Environment;
   const startEnvironment = mock(async () => {});
   renderInAppCommandScope(
@@ -115,6 +118,9 @@ async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) 
 
   if (options.turnOffLaunchAgent) {
     fireEvent.click(screen.getByLabelText("Launch agent"));
+  }
+  if (options.intent) {
+    fireEvent.click(screen.getByRole("button", { name: options.intent }));
   }
   fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
@@ -536,13 +542,13 @@ describe("CreateEnvironmentFlowDialog", () => {
    * that provisions, so a failed clone is not something the user can undo.
    */
   function startFeatureBuild(name: string) {
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     fireEvent.change(screen.getByLabelText(/Feature name/i), { target: { value: name } });
     fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
   }
 
   function startFeatureBuildFromDescription(description: string) {
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     fireEvent.change(screen.getByLabelText(/^Description$/i), { target: { value: description } });
     fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
   }
@@ -985,6 +991,22 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[4]).toBeUndefined();
   });
 
+  test("saves a prompt environment as a task by default", async () => {
+    const call = await submitCreateFlow();
+    expect(call[7]).toBe("task");
+  });
+
+  test("saves the interactive mode the user chose", async () => {
+    const call = await submitCreateFlow({ intent: "Interactive" });
+    expect(call[7]).toBe("interactive");
+  });
+
+  test("keeps the interaction mode when the agent is not launched now", async () => {
+    const call = await submitCreateFlow({ turnOffLaunchAgent: true, intent: "Interactive" });
+    expect(call[2]).toBe(false);
+    expect(call[7]).toBe("interactive");
+  });
+
   test("arms the creating Electron window for the post-setup agent handoff", async () => {
     const config = structuredClone(appCommandStore(configStore).getState().config);
     config.global.agentSettings = {
@@ -1131,6 +1153,36 @@ describe("CreateEnvironmentFlowDialog", () => {
       logs.restore();
     }
   });
+
+  test.each(["Task", "Interactive"])(
+    "stops before launch when the node drops %s",
+    async (intent) => {
+      const startEnvironment = mock(async () => {});
+      const onOpenChange = mock(() => {});
+      updateEnvironmentAgentSettingsMock.mockResolvedValueOnce({ id: "env-older" } as Environment);
+      renderInAppCommandScope(
+        <CreateEnvironmentFlowDialog
+          open
+          onOpenChange={onOpenChange}
+          projectId="project-1"
+          createEnvironment={async () => ({ id: "env-older" }) as Environment}
+          updateEnvironment={() => {}}
+          startEnvironment={startEnvironment}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: intent }));
+      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Could not create environment", {
+          description: expect.stringContaining(
+            "This node could not save the selected interaction mode",
+          ),
+        }),
+      );
+      expect(startEnvironment).not.toHaveBeenCalled();
+      expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    },
+  );
 
   test("surfaces an agent-settings persistence failure and does not start", async () => {
     const createEnvironment = mock(async () => ({ id: "env-settings-failed" }) as Environment);
@@ -1397,6 +1449,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       initialReasoningEffort: undefined,
       initialFastMode: undefined,
       initialPromptAttachments: attachments,
+      interactionMode: undefined,
     });
     expect(
       resolveEnvironmentAgentLaunchSettings({
@@ -1410,6 +1463,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       initialReasoningEffort: undefined,
       initialFastMode: undefined,
       initialPromptAttachments: undefined,
+      interactionMode: undefined,
     });
   });
 

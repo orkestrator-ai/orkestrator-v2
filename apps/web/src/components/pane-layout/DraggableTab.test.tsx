@@ -104,6 +104,26 @@ describe("DraggableTab title precedence", () => {
     cleanup();
   });
 
+  test("includes both working and unsaved changes in the accessible name", () => {
+    appCommandStore(fileDirtyStore).getState().hydrateDraft("file", "edited", "original");
+    renderInAppCommandScope(
+      <DraggableTab
+        tab={{
+          id: "file",
+          type: "file",
+          fileData: { filePath: "src/report.ts", containerId: "c" },
+        }}
+        paneId="pane-1"
+        index={0}
+        isActive
+        isWorking
+        canClose
+        onSelect={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: "report.ts, working, unsaved changes" })).toBeTruthy();
+  });
+
   test("a design tab is named after its design, with the tab number after it", () => {
     const canvasId = "00000000-0000-4000-8000-000000000001";
     const tab: TabInfo = { id: "design", type: "design-canvas", designCanvasData: { canvasId } };

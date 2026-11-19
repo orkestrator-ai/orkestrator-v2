@@ -45,6 +45,14 @@ const CONTROLLER = "bk_terminal_controller" as BackendId;
 const OTHER_CONTROLLER = "bk_other_controller" as BackendId;
 
 /**
+ * What `queueBehindBlockedWrite` leaves behind once its socket disconnects:
+ * both held writes drain, because input the gateway accepted must reach the
+ * terminal, but the queued resize is skipped, because a geometry update has no
+ * meaning once its view has unsubscribed (`terminal-websocket-server.ts`).
+ */
+const DISCONNECTED_QUEUE_OPERATIONS = ["terminal_write", "terminal_write"];
+
+/**
  * A gateway on the production `nodeGateway()` hooks over a real grant service,
  * a real browser session store and a backend whose first terminal operation
  * blocks.
@@ -340,7 +348,7 @@ describe("terminal operations after a credential lapses", () => {
 
       fixture.release();
       await drained(fixture);
-      expect(fixture.operations).toEqual(["terminal_write", "terminal_write", "terminal_resize"]);
+      expect(fixture.operations).toEqual(DISCONNECTED_QUEUE_OPERATIONS);
       expect(state.authenticated).toBe(true);
       expectWatchReleased(state);
       expect(fixture.listeners(kind)).toBe(0);
@@ -362,7 +370,7 @@ describe("terminal operations after a credential lapses", () => {
 
     fixture.release();
     await drained(fixture);
-    expect(fixture.operations).toEqual(["terminal_write", "terminal_write", "terminal_resize"]);
+    expect(fixture.operations).toEqual(DISCONNECTED_QUEUE_OPERATIONS);
     expectWatchReleased(state);
     expect(fixture.listeners("client grant")).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -419,7 +427,7 @@ describe("terminal operations after a credential lapses", () => {
 
       fixture.release();
       await drained(fixture);
-      expect(fixture.operations).toEqual(["terminal_write", "terminal_write", "terminal_resize"]);
+      expect(fixture.operations).toEqual(DISCONNECTED_QUEUE_OPERATIONS);
       expectWatchReleased(state);
       expect(fixture.listeners("client grant")).toBe(0);
     } finally {

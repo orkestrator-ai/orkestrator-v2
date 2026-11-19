@@ -124,11 +124,11 @@ async function pick(name: string) {
   fireEvent.click(await screen.findByRole("option", { name }));
 }
 
-test("switches to the command machine without a sidebar and submits a Feature on its backend", async () => {
+test("switches to the command machine without a sidebar and starts a Pipeline on its backend", async () => {
   const { leaf } = setup(true);
   open(leafId, leafProject);
   await screen.findByRole("dialog");
-  fireEvent.click(screen.getByRole("button", { name: /^A feature$/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
   fireEvent.change(screen.getByLabelText(/Feature name/), { target: { value: "Improve search" } });
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Search by label" } });
   fireEvent.change(screen.getByLabelText("Acceptance criteria"), {
@@ -170,7 +170,7 @@ test("cancelling a switch during destination hydration discards its form and pre
     target: { value: "pending-name" },
   });
   await pick("Studio");
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("dialog") === null).toBe(true);
   expect(
     useRemoteWorkspaceStore.getState().requests[leafId]?.request.createEnvironmentHandoff?.name,
   ).toBe("pending-name");
@@ -178,7 +178,7 @@ test("cancelling a switch during destination hydration discards its form and pre
   act(() => windowScope.select({ nodeId: leafId, projectId: "other", environmentId: null }));
   act(() => leafScope.store(configStore).setState({ hasLoaded: true }));
   expect(useRemoteWorkspaceStore.getState().requests[leafId]).toBeUndefined();
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("dialog") === null).toBe(true);
 
   open(leafId, leafProject);
   await screen.findByRole("dialog");
@@ -282,12 +282,12 @@ test("navigation cancels a return to the command node while its dialog is loadin
     target: { value: "Pending command handoff" },
   });
   await pick("This machine");
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("dialog") === null).toBe(true);
 
   act(() => windowScope.select({ nodeId: commandId, projectId: "other", environmentId: null }));
   act(() => config.setState({ hasLoaded: true }));
   expect(useAppDialogStore.getState().request).toBeNull();
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("dialog") === null).toBe(true);
 
   open(commandId, commandProject);
   await screen.findByRole("dialog");

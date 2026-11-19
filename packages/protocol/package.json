@@ -312,6 +312,7 @@
     "./self-improvement": "./src/self-improvement.ts",
     "./resource-events": "./src/resource-events.ts",
     "./review-artifacts": "./src/review-artifacts.ts",
+    "./environment-interaction": "./src/environment-interaction.ts",
     "./review-evidence-frames": "./src/review-evidence-frames.ts",
     "./review-fanout": "./src/review-fanout.ts",
     "./review-instruction": "./src/review-prompt.ts",

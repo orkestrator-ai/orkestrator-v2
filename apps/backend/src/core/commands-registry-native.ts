@@ -24,6 +24,7 @@ import {
   getNativeAgentTranscriptUpdateCommand,
   holdNativeAgentInteractionCommand,
   listNativeAgentBranchesCommand,
+  listNativeAgentSessionActivityCommand,
   listNativeAgentResumableSessionsCommand,
   nativeAgentGoalCommand,
   performNativeAgentMcpActionCommand,
@@ -274,6 +275,27 @@ export function registerNativeAgentCommands(
       ? { observation: context.nativeAgents.observationStatus().stamp }
       : {}),
   }));
+
+  // Which of an environment's sessions have a turn in flight, for the tab
+  // strip's working tint. Reads only the activity observer's retained answers
+  // and the session list: no provider read, bridge start, attach or liveness
+  // touch, so the renderer can re-read it on every activity hint.
+  register(listNativeAgentSessionActivityCommand, async (args, context) => {
+    const environmentId = asNonBlankString(args.environmentId, "environmentId");
+    const nativeAgents = context.nativeAgents;
+    const sessions: Record<string, "working" | "waiting"> = {};
+    if (!nativeAgents) return { sessions };
+    for (const session of await context.storage.readNativeAgentSessionsSnapshot()) {
+      if (session.environmentId !== environmentId) continue;
+      const state = nativeAgents.sessionTurnActivitySnapshot(
+        environmentId,
+        session.agent,
+        session.logicalSessionKey,
+      );
+      if (state === "working" || state === "waiting") sessions[session.logicalSessionKey] = state;
+    }
+    return { sessions };
+  });
 
   register(getNativeAgentTranscriptUpdateCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");

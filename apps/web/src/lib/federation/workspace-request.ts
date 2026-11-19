@@ -1,4 +1,5 @@
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
+import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 
 /**
  * What the window asks another node's workspace to show when it opens it
@@ -46,6 +47,7 @@ export type WorkspaceWorkTarget =
 export interface CreateEnvironmentHandoff {
   prompt: string;
   name: string;
+  interactionMode?: EnvironmentInteractionMode;
   feature?: {
     name: string;
     acceptanceCriteria: string;

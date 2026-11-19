@@ -89,6 +89,7 @@ import {
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { isEnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import { environmentMailMarkers, isWorkingPipelineRecord } from "./nodes/index.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
@@ -280,11 +281,15 @@ export function registerEnvironmentCommands(
   });
   register(getEnvironmentCommand, async ({ environmentId, includeFinalPrState }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
-    return environment
-      ? reconcileProjectHomeEnvironment(environment, storage)
-      : includeFinalPrState === true
-        ? storage.getFinalEnvironmentPr(asString(environmentId, "environmentId"))
-        : null;
+    if (environment) {
+      const detail = await reconcileProjectHomeEnvironment(environment, storage);
+      if (!detail.openingInteraction) return detail;
+      const { openingInteraction: _openingInteraction, ...clientDetail } = detail;
+      return clientDetail;
+    }
+    return includeFinalPrState === true
+      ? storage.getFinalEnvironmentPr(asString(environmentId, "environmentId"))
+      : null;
   });
   // `claude-state-*` frames are emitted only on change, so a client whose
   // disconnect outlasted gateway replay reads the persisted state here instead
@@ -1009,6 +1014,7 @@ export function registerEnvironmentCommands(
         initialConversationMode,
         initialPrompt,
         initialPromptAttachments,
+        interactionMode,
       },
       { storage },
     ) => {
@@ -1076,6 +1082,14 @@ export function registerEnvironmentCommands(
       if (pendingAgentLaunch !== false && Array.isArray(initialPromptAttachments)) {
         updates.initialPromptAttachments =
           initialPromptAttachments as Environment["initialPromptAttachments"];
+      }
+      // Durable, and independent of the launch intent: the mode describes the
+      // environment, so a call that only cancels a launch must not erase it.
+      if (interactionMode !== undefined) {
+        if (!isEnvironmentInteractionMode(interactionMode)) {
+          throw new Error("interactionMode must be task or interactive");
+        }
+        updates.interactionMode = interactionMode;
       }
       return toClientEnvironment(await storage.updateEnvironment(id, updates));
     },

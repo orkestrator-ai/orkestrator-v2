@@ -95,19 +95,27 @@ function openBuildPicker() {
 }
 
 describe("FeatureBuildFields intent guidance", () => {
-  test("keeps the feature wording and says a feature makes a pipeline environment", () => {
+  test("offers pipeline, task and interactive, and says a pipeline is never interactive", () => {
     renderInAppCommandScope(<Harness onModels={() => undefined} />);
-    expect(screen.getByRole("button", { name: "A feature" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "With a prompt" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Pipeline" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Task" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Interactive" })).toBeTruthy();
     expect(screen.getByTestId("build-intent-guidance").textContent).toBe(
-      "Creates a pipeline environment: build, review, address findings, verify, rework, PR and conflict resolution run automatically.",
+      "Creates a pipeline environment, interactive off: build, review, address findings, verify, rework, PR and conflict resolution run automatically, without asking you anything.",
     );
   });
 
-  test("says a prompt makes a prompt environment whose review and PR are started separately", () => {
-    renderInAppCommandScope(<Harness intent="prompt" onModels={() => undefined} />);
+  test("says a task makes a prompt environment that is not interactive until it finishes", () => {
+    renderInAppCommandScope(<Harness intent="task" onModels={() => undefined} />);
     expect(screen.getByTestId("build-intent-guidance").textContent).toBe(
-      "Creates a prompt environment: the agent runs one prompt; start review and the PR by hand or from a Coordinator.",
+      "Creates a prompt environment, interactive off until the task is finished: the agent completes the prompt without asking you questions, then waits for you. Start review and the PR by hand or from a Coordinator.",
+    );
+  });
+
+  test("says interactive makes a prompt environment whose agent may ask questions", () => {
+    renderInAppCommandScope(<Harness intent="interactive" onModels={() => undefined} />);
+    expect(screen.getByTestId("build-intent-guidance").textContent).toBe(
+      "Creates a prompt environment, interactive on: the agent can ask you questions and check decisions with you as it works. Start review and the PR by hand or from a Coordinator.",
     );
   });
 });

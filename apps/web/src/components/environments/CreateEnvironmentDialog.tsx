@@ -1,10 +1,13 @@
 import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
 import { defineScopedSlot } from "@/lib/node-scope-slots";
+import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useRemoteMachineView } from "@/components/federation/useMachineViews";
 import {
   resolveAgentPlatformSettings,
+  effectiveClaudeNativeBackend,
+  isTmuxModeEnabled,
   resolveDefaultAgent,
   type AgentSettingsTiers,
 } from "@orkestrator/protocol/agent-settings";
@@ -99,15 +102,18 @@ import {
 import {
   defaultFeatureBuildModels,
   featureBuildIdentity,
+  buildIntentInteractionMode,
   featureBuildRequest,
   type BuildIntent,
   type FeatureBuildModelState,
 } from "@/lib/feature-build-launch";
 import { buildPipelineLauncherDefaults } from "@/lib/build-launch-options";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
+import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 import type { CachedOpenCodeModel } from "@/lib/backend";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
+  AGENT_PLATFORM_LABELS,
   firstEnabledAgentPlatform,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
@@ -187,6 +193,8 @@ const MOBILE_TAB_CONTENT_CLASSES =
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_RGBA_SIZE = 32 * 1024 * 1024;
 const MAX_INITIAL_PROMPT_ATTACHMENTS = 20;
+/** The Build section's choice when the dialog opens: a prompt environment run as a task. */
+const DEFAULT_PROMPT_INTENT: BuildIntent = "task";
 
 export function getEncodedImageSizeError(base64Length: number): string | null {
   const estimatedSize = (base64Length * 3) / 4;
@@ -247,6 +255,12 @@ export interface ClaudeOptions {
   fastMode?: boolean;
   initialPrompt: string;
   initialPromptAttachments: InitialPromptImageAttachment[];
+  /**
+   * Whether the prompt environment's agent may ask the user questions: a
+   * `task` runs the opening prompt unattended and then waits, `interactive`
+   * may ask from the start. Durable on the environment.
+   */
+  interactionMode?: EnvironmentInteractionMode;
   networkAccessMode: NetworkAccessMode;
   portMappings: PortMapping[];
 }
@@ -655,7 +669,7 @@ export function CreateEnvironmentDialog({
       resolve: configured.steps["resolve-conflicts"] ?? review,
     });
   }, [agentType, config, fastMode, model, modelCatalog, projectId, reasoningEffort]);
-  const [buildIntent, setBuildIntent] = useState<BuildIntent>("prompt");
+  const [buildIntent, setBuildIntent] = useState<BuildIntent>(DEFAULT_PROMPT_INTENT);
   const loadLaunchBaseTip = useCallback(
     (pid: string, retry: boolean) => nodeBackend.getProjectBaseBranchTip(pid, retry),
     [nodeBackend],
@@ -729,14 +743,16 @@ export function CreateEnvironmentDialog({
     useState<MobileTabTransitionDirection | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const buildIntentRef = useRef<BuildIntent>("prompt");
+  const buildIntentRef = useRef<BuildIntent>(DEFAULT_PROMPT_INTENT);
   const promptPasteRequestIdRef = useRef(0);
   const initialPromptAttachmentsRef = useRef<InitialPromptImageAttachment[]>([]);
   const attachmentDragDepthRef = useRef(0);
   const attachmentProcessingGenerationRef = useRef(0);
   const nextAttachmentOperationIdRef = useRef(0);
   const activeAttachmentOperationIdsRef = useRef(new Set<number>());
-  const promptPasteOperationRef = useRef<AttachmentOperation | null>(null);
+  const promptPasteOperationRef = useRef<
+    (AttachmentOperation & { switchedPromptMode?: boolean }) | null
+  >(null);
   const agentSelectionTouchedRef = useRef(false);
 
   useEffect(() => {
@@ -798,7 +814,7 @@ export function CreateEnvironmentDialog({
     if (!form) return;
     setInitialPrompt(form.feature || form.prompt ? form.prompt : (saved?.prompt ?? ""));
     setEnvironmentName(form.name);
-    const intent = form.feature ? "feature" : "prompt";
+    const intent = form.feature ? "feature" : (form.interactionMode ?? DEFAULT_PROMPT_INTENT);
     buildIntentRef.current = intent;
     setBuildIntent(intent);
     setFeatureName(form.feature?.name ?? "");
@@ -865,8 +881,8 @@ export function CreateEnvironmentDialog({
     setShowPortConfig(defaultPortMappings.length > 0);
     setMobileSection("prompt");
     setMobileTabTransitionDirection(null);
-    buildIntentRef.current = "prompt";
-    setBuildIntent("prompt");
+    buildIntentRef.current = DEFAULT_PROMPT_INTENT;
+    setBuildIntent(DEFAULT_PROMPT_INTENT);
     setFeatureName("");
     setFeatureAcceptanceCriteria("");
     setAdvancedOpen(false);
@@ -900,13 +916,17 @@ export function CreateEnvironmentDialog({
 
   const handleBuildIntentChange = useCallback((intent: BuildIntent) => {
     if (intent === buildIntentRef.current) return;
-    promptPasteRequestIdRef.current += 1;
-    attachmentProcessingGenerationRef.current += 1;
-    activeAttachmentOperationIdsRef.current.clear();
-    promptPasteOperationRef.current = null;
-    setPendingAttachmentOperations(0);
-    attachmentDragDepthRef.current = 0;
-    setIsDraggingAttachments(false);
+    if ((intent === "feature") !== (buildIntentRef.current === "feature")) {
+      promptPasteRequestIdRef.current += 1;
+      attachmentProcessingGenerationRef.current += 1;
+      activeAttachmentOperationIdsRef.current.clear();
+      promptPasteOperationRef.current = null;
+      setPendingAttachmentOperations(0);
+      attachmentDragDepthRef.current = 0;
+      setIsDraggingAttachments(false);
+    } else if (promptPasteOperationRef.current) {
+      promptPasteOperationRef.current.switchedPromptMode = true;
+    }
     buildIntentRef.current = intent;
     setBuildIntent(intent);
     if (intent === "feature") setWorktreeBaseDir(null);
@@ -1014,7 +1034,6 @@ export function CreateEnvironmentDialog({
         (launchAgent && document.activeElement === promptRef.current);
       if (!open || !isPasteTarget()) return;
 
-      const pasteIntent = buildIntentRef.current;
       const pastedBlob = getPastedImageBlob(event);
       // A native paste event already exposes its complete readable payload.
       // If that payload contains no image, leave text paste alone without
@@ -1029,8 +1048,9 @@ export function CreateEnvironmentDialog({
       const isCurrentRequest = () =>
         requestId === promptPasteRequestIdRef.current &&
         operation.generation === attachmentProcessingGenerationRef.current &&
-        pasteIntent === buildIntentRef.current &&
-        isPasteTarget();
+        (isPasteTarget() ||
+          (promptPasteOperationRef.current?.switchedPromptMode === true &&
+            Boolean(document.activeElement?.closest('[role="group"][aria-label="Build intent"]'))));
 
       try {
         if (pastedBlob) {
@@ -1113,8 +1133,7 @@ export function CreateEnvironmentDialog({
       }
       const operation = beginAttachmentOperation();
       const isCurrentOperation = () =>
-        operation.generation === attachmentProcessingGenerationRef.current &&
-        dropIntent === buildIntentRef.current;
+        operation.generation === attachmentProcessingGenerationRef.current;
       try {
         const attachments: InitialPromptImageAttachment[] = [];
         for (const file of files) {
@@ -1436,7 +1455,7 @@ export function CreateEnvironmentDialog({
               deliveryPolicy: featureDeliveryPolicy,
             },
           }
-        : {}),
+        : { interactionMode: buildIntent }),
     }),
     [
       buildIntent,
@@ -1468,7 +1487,12 @@ export function CreateEnvironmentDialog({
       // Keep recovery on the source scope. Navigation can supersede the
       // destination request before its stores are ready to show the dialog.
       if (projectId && !preserveSavedDraft) {
-        if (portableForm.prompt || portableForm.name || portableForm.feature) {
+        if (
+          portableForm.prompt ||
+          portableForm.name ||
+          portableForm.feature ||
+          portableForm.interactionMode === "interactive"
+        ) {
           drafts.set(projectId, portableForm);
         } else {
           drafts.delete(projectId);
@@ -1492,12 +1516,38 @@ export function CreateEnvironmentDialog({
     return true;
   }, [portMappings]);
 
+  const selectedAgentMode = resolveAgentModeSettings(agentType, {
+    claudeMode,
+    codexMode,
+    opencodeMode,
+    grokMode,
+    piMode,
+  }).platforms?.[agentType]?.mode;
+  const terminalAgent =
+    selectedAgentMode === "terminal" ||
+    (agentType === "claude" &&
+      effectiveClaudeNativeBackend(
+        resolveAgentPlatformSettings(agentTiers, "claude").claudeNativeBackend,
+        isTmuxModeEnabled(config.global),
+      ) === "tmux");
+  const hasOpeningWork = Boolean(initialPrompt.trim() || initialPromptAttachments.length);
+  const grokTerminalConflict =
+    buildIntent !== "feature" &&
+    agentType === "grok" &&
+    terminalAgent &&
+    launchAgent &&
+    hasOpeningWork;
+  const terminalPromptNotice =
+    "Prompts entered later in a terminal follow the CLI’s interaction settings.";
+  const deferredTerminalPrompt =
+    buildIntent !== "feature" && terminalAgent && (!launchAgent || !hasOpeningWork);
+
   const launchBaseRequest = launchBaseForCreate(launchBase.state);
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
 
-      if (activeAttachmentOperationIdsRef.current.size > 0) return;
+      if (activeAttachmentOperationIdsRef.current.size > 0 || grokTerminalConflict) return;
 
       if (environmentType === "containerized" && !dockerAvailable) return;
       if (environmentType === "local" && !localEnvironmentAvailable) return;
@@ -1587,6 +1637,7 @@ export function CreateEnvironmentDialog({
           fastMode: speedAvailable ? fastMode : undefined,
           initialPrompt: initialPrompt.trim(),
           initialPromptAttachments,
+          interactionMode: buildIntentInteractionMode(buildIntent),
           networkAccessMode,
           portMappings: environmentType === "containerized" ? portMappings : [],
         });
@@ -1607,6 +1658,7 @@ export function CreateEnvironmentDialog({
     },
     [
       dockerAvailable,
+      grokTerminalConflict,
       environmentType,
       environmentName,
       worktreeBaseDir,
@@ -1645,6 +1697,7 @@ export function CreateEnvironmentDialog({
   );
 
   const submitDisabled =
+    grokTerminalConflict ||
     isLoading ||
     pendingAttachmentOperations > 0 ||
     (environmentType === "containerized" && (!dockerAvailable || !validatePortMappings())) ||
@@ -2037,7 +2090,7 @@ export function CreateEnvironmentDialog({
               <div
                 className={cn(
                   "border-b border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6",
-                  !launchAgent && buildIntent === "prompt" && "opacity-50",
+                  !launchAgent && buildIntent !== "feature" && "opacity-50",
                 )}
               >
                 <Label className="mb-2 text-sm font-medium text-muted-foreground sm:mb-0">
@@ -2068,7 +2121,7 @@ export function CreateEnvironmentDialog({
                     fastModeAvailable={speedAvailable}
                     fastModeEnabled={speedAvailable ? (fastMode ?? false) : false}
                     onFastModeChange={speedAvailable ? setFastMode : undefined}
-                    disabled={isLoading || (!launchAgent && buildIntent === "prompt")}
+                    disabled={isLoading || (!launchAgent && buildIntent !== "feature")}
                     title="Choose agent, model, and reasoning"
                     className={MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME}
                   />
@@ -2089,6 +2142,14 @@ export function CreateEnvironmentDialog({
                   </div>
                 </div>
               </div>
+              {deferredTerminalPrompt && !launchAgent && (
+                <p
+                  className="border-b border-divider px-4 py-2 text-sm text-muted-foreground sm:px-6"
+                  role="status"
+                >
+                  {terminalPromptNotice}
+                </p>
+              )}
             </TabsContent>
 
             {/* Port configuration - only for containerized environments */}
@@ -2231,6 +2292,28 @@ export function CreateEnvironmentDialog({
               data-mobile-transition={mobileTabTransitionDirection ?? undefined}
               className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:!block")}
             >
+              {grokTerminalConflict && (
+                <div
+                  className="flex flex-wrap items-center gap-2 px-4 pt-3 text-sm sm:px-6"
+                  role="status"
+                >
+                  <span>Grok Terminal cannot launch with a prompt or attachments.</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setGrokMode("native")}
+                    disabled={isLoading}
+                  >
+                    Use Grok Native
+                  </Button>
+                </div>
+              )}
+              {deferredTerminalPrompt && launchAgent && (
+                <p className="px-4 pt-3 text-sm text-muted-foreground sm:px-6" role="status">
+                  {terminalPromptNotice}
+                </p>
+              )}
               <FeatureBuildFields
                 intent={buildIntent}
                 onIntentChange={handleBuildIntentChange}
@@ -2287,13 +2370,7 @@ export function CreateEnvironmentDialog({
                         <Textarea
                           ref={promptRef}
                           id="initial-prompt"
-                          placeholder={
-                            agentType === "claude"
-                              ? "Enter a task for Claude to work on..."
-                              : agentType === "codex"
-                                ? "Enter a task for Codex to work on..."
-                                : "Enter a task for OpenCode to work on..."
-                          }
+                          placeholder={`Enter a task for ${AGENT_PLATFORM_LABELS[agentType]} to work on...`}
                           value={initialPrompt}
                           onChange={(e) => setInitialPrompt(e.target.value)}
                           disabled={isLoading}

@@ -424,7 +424,7 @@ test("switching refuses a busy form and cancels the pending credential warning b
   await act(async () =>
     fireEvent.click(screen.getByRole("button", { name: "Switch machines", hidden: true })),
   );
-  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(screen.queryByRole("alertdialog") === null).toBe(true);
   expect(onOpenChange.mock.calls).toEqual([[false]]);
   expect(route.mock.calls).toEqual([[targetMachine, "repo", handoff]]);
   expect(createEnvironment).not.toHaveBeenCalled();

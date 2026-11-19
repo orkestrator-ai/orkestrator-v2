@@ -489,7 +489,12 @@ test.each(["steer", "recovered"] as const)(
         expect(await storage.confirmNativeAgentDispatch(input.key, "latest")).toBe(true);
       }
       const session = (await storage.getNativeAgentSession(input.key))!;
-      expect(session.lastDispatchedTurn).toEqual({ requestId: "latest", mode: "plan" });
+      // A steer has its own receipt but stays part of the model turn it joined.
+      expect(session.lastDispatchedTurn).toEqual(
+        kind === "steer"
+          ? { requestId: "latest", modelRequestId: "original", mode: "plan" }
+          : { requestId: "latest", mode: "plan" },
+      );
       const h = harness({ session });
       h.resend.noteActivity(session, "idle", "working");
       await h.settle();

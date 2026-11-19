@@ -1304,7 +1304,11 @@ describe("NativeMessage", () => {
       renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
       fireEvent.click(screen.getByRole("button", { name: /workspace/i }));
 
-      await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
+      // Only the file URL's name suggests an image. A hint that cannot be read
+      // falls back to a plain file chip rather than a broken image.
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Preview file: workspace (File)" })).toBeTruthy(),
+      );
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
       expect(mockReadFileBase64).not.toHaveBeenCalled();
     } finally {

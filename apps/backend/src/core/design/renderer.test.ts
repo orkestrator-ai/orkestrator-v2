@@ -947,7 +947,14 @@ describe("DesignRenderer with real Chromium", () => {
           });
           child.once("exit", () => reject(new Error("the renderer fixture exited early")));
         });
-        const [recordName] = readdirSync(ledgerDir).filter((name) => name.endsWith(".json"));
+        // The renderer writes its ledger record without holding the render
+        // for it, so `ready` can arrive first on a loaded host.
+        const recordNames = () =>
+          existsSync(ledgerDir)
+            ? readdirSync(ledgerDir).filter((name) => name.endsWith(".json"))
+            : [];
+        await waitFor(() => recordNames().length > 0, 10_000);
+        const [recordName] = recordNames();
         const record = JSON.parse(readFileSync(path.join(ledgerDir, recordName!), "utf8")) as {
           profile: string;
           artifacts?: string;

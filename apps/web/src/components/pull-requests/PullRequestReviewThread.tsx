@@ -63,7 +63,7 @@ export function PullRequestReviewThread({
       // Focus target for "next unresolved conversation".
       tabIndex={-1}
       className={cn(
-        "rounded-lg border bg-card/60 font-sans text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "rounded-lg border bg-card/60 font-sans text-sm outline-none focus-hairline",
         thread.isResolved ? "border-border/50" : "border-border",
       )}
     >

@@ -120,8 +120,7 @@ beforeEach(() => {
   });
   useMachineViewStore.setState({
     grouping: "compact",
-    groupingBeforeCompact: "machine",
-    machineFilter: "all",
+    machineFilter: [],
     collapsedMachines: [],
     collapsedProjectKeys: [],
     collapsedFolderKeys: [],
@@ -166,6 +165,8 @@ describe("what compact shows", () => {
     expect(screen.queryByRole("button", { name: /Search/ }) === null).toBe(true);
     expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
     expect(screen.queryByTestId("machine-section-header") === null).toBe(true);
+    expect(screen.queryByTestId("machine-tiles") === null).toBe(true);
+    expect(screen.queryByTestId("machines-filter") === null).toBe(true);
     expect(screen.queryByTestId("federated-repository-list") === null).toBe(true);
   });
 
@@ -208,7 +209,8 @@ describe("what compact shows", () => {
 
   test("the machine filter does not hide a repository, since its control is gone", async () => {
     installTwoMachines();
-    useMachineViewStore.setState({ machineFilter: "bk_self" });
+    // Only the other machine is picked, yet this window's repository stays.
+    useMachineViewStore.setState({ machineFilter: ["bk_leaf"] });
     renderSidebar();
     await findCompactIcons(2);
   });
@@ -251,7 +253,7 @@ describe("opening a repository", () => {
           ?.getAttribute("aria-current"),
       ).toBe("page"),
     );
-    // Repository grouping would highlight the same heading.
+    // The repository list would highlight the same heading.
     expect(useMachineViewStore.getState().openedRepository?.name).toBe("github.com/acme/app");
   });
 
@@ -392,7 +394,7 @@ describe("the keyboard", () => {
     act(() => useUIChromeStore.setState({ sidebarOpen: false }));
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
     expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
-    expect(useMachineViewStore.getState().grouping).toBe("machine");
+    expect(useMachineViewStore.getState().grouping).toBe("repository");
   });
 
   test("an unreachable saved machine adds no rotation stops", async () => {
@@ -405,14 +407,13 @@ describe("the keyboard", () => {
     renderSidebar();
     await findCompactIcons(1);
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
-    expect(useMachineViewStore.getState().grouping).toBe("machine");
+    expect(useMachineViewStore.getState().grouping).toBe("repository");
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
     expect(useMachineViewStore.getState().grouping).toBe("compact");
   });
 
-  test("activity rotation preserves sorting and restores grouping through both stores", async () => {
+  test("activity rotation preserves sorting and restores the full list through both stores", async () => {
     installTwoMachines();
-    useMachineViewStore.setState({ groupingBeforeCompact: "repository" });
     useUIChromeStore.setState({ environmentSortMode: "activity" });
     renderSidebar();
     await findCompactIcons(2);
@@ -453,14 +454,12 @@ describe("the keyboard", () => {
     renderSidebar();
     await findCompactIcons(2);
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
-    expect(useMachineViewStore.getState().grouping).toBe("machine");
+    expect(useMachineViewStore.getState().grouping).toBe("repository");
     await waitFor(() =>
       expect(screen.queryByTestId("compact-repository-list") === null).toBe(true),
     );
-    act(() => requestAppShortcut("rotate-sidebar-grouping"));
-    expect(useMachineViewStore.getState().grouping).toBe("project");
-    act(() => requestAppShortcut("rotate-sidebar-grouping"));
-    expect(useMachineViewStore.getState().grouping).toBe("repository");
+    expect(await screen.findByTestId("federated-repository-list")).toBeTruthy();
+    expect(screen.getByTestId("machine-tiles")).toBeTruthy();
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
     expect(useMachineViewStore.getState().grouping).toBe("compact");
     await findCompactIcons(2);
@@ -470,19 +469,21 @@ describe("the keyboard", () => {
     renderSidebar();
     await findCompactIcons(1);
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
-    expect(useMachineViewStore.getState().grouping).toBe("machine");
+    expect(useMachineViewStore.getState().grouping).toBe("repository");
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
     expect(useMachineViewStore.getState().grouping).toBe("compact");
   });
 });
 
 describe("leaving with the mouse", () => {
-  test("the sort icon's menu changes the group-by mode", async () => {
+  test("the sort icon's menu returns to the full list", async () => {
     installTwoMachines();
     renderSidebar();
     await findCompactIcons(2);
     fireEvent.pointerDown(screen.getByRole("button", { name: "Sidebar view: Compact" }));
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: "By repository" }));
+    expect(screen.queryByRole("menuitemradio", { name: "By repository" }) === null).toBe(true);
+    expect(screen.queryByText("Order environments") === null).toBe(true);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Full list" }));
     expect(useMachineViewStore.getState().grouping).toBe("repository");
     await waitFor(() =>
       expect(screen.queryByTestId("compact-repository-list") === null).toBe(true),
@@ -492,7 +493,7 @@ describe("leaving with the mouse", () => {
 
   test("the menu offers compact back, in the other modes", async () => {
     installTwoMachines();
-    useMachineViewStore.setState({ grouping: "machine" });
+    useMachineViewStore.setState({ grouping: "repository" });
     renderSidebar();
     fireEvent.pointerDown(await screen.findByRole("button", { name: /^Sort environments/ }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Compact" }));
@@ -500,17 +501,18 @@ describe("leaving with the mouse", () => {
   });
 
   test("a window naming no machines has it too", async () => {
-    useMachineViewStore.setState({ grouping: "machine" });
+    useMachineViewStore.setState({ grouping: "repository" });
     renderSidebar();
     fireEvent.pointerDown(await screen.findByRole("button", { name: /^Sort environments/ }));
     expect(await screen.findByRole("menuitemradio", { name: "Full list" })).toBeTruthy();
+    // With one machine there is nothing to order across machines.
+    expect(screen.queryByText("Order environments") === null).toBe(true);
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Compact" }));
     await findCompactIcons(1);
   });
 
-  test("the activity list is reachable from compact, restoring the grouping", async () => {
+  test("the activity list is reachable from compact, leaving compact", async () => {
     installTwoMachines();
-    useMachineViewStore.setState({ groupingBeforeCompact: "repository" });
     renderSidebar();
     await findCompactIcons(2);
     fireEvent.pointerDown(screen.getByRole("button", { name: "Sidebar view: Compact" }));

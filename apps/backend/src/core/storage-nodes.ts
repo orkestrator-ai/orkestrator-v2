@@ -4,9 +4,11 @@ import {
   type ControllerSettingsStore,
 } from "@orkestrator/protocol/controller-settings";
 import {
+  applyRepositoryEnvironmentOrder,
   parsePortalLayout,
   type PortalLayout,
   type PortalLayoutUpdate,
+  type RepositoryEnvironmentOrderUpdate,
 } from "@orkestrator/protocol/portal-layout";
 
 import {
@@ -120,22 +122,79 @@ export class NodesRepository {
     );
   }
 
-  /** The portal sidebar's cross-machine order (see `@orkestrator/protocol/portal-layout`). */
-  async getPortalLayout(): Promise<PortalLayout> {
-    return parsePortalLayout(
-      await this.context.loadJson<unknown>(this.portalLayoutFile(), () => null),
-    );
+  private repositoryEnvironmentOrderFile(): string {
+    return this.context.file("portal-environment-order.json");
   }
 
-  /** Replaces the given fields; the revision advances on every write. */
+  /** The layout and Manual stores share one lease. */
+  private async readPortalLayoutParts() {
+    const layout = parsePortalLayout(
+      await this.context.loadJson<unknown>(this.portalLayoutFile(), () => null),
+    );
+    const stored = await this.context.loadJson<unknown>(
+      this.repositoryEnvironmentOrderFile(),
+      () => null,
+    );
+    if (stored !== null) {
+      const { environmentOrder, revision } = parsePortalLayout(stored);
+      return { layout, manual: { environmentOrder, revision } };
+    }
+    // Earlier EL01 builds wrote Manual orders in the legacy file. Publish the
+    // separate copy before an older backend can replace that file on downgrade.
+    const manual = { environmentOrder: layout.environmentOrder, revision: 0 };
+    if (Object.keys(manual.environmentOrder).length > 0) {
+      await this.context.saveJson(this.repositoryEnvironmentOrderFile(), { version: 1, ...manual });
+    }
+    return { layout, manual };
+  }
+
+  private combinePortalLayout(
+    layout: PortalLayout,
+    manual: Pick<PortalLayout, "environmentOrder" | "revision">,
+  ): PortalLayout {
+    return {
+      ...layout,
+      environmentOrder: manual.environmentOrder,
+      revision: layout.revision + manual.revision,
+      manualOrderSupported: true,
+    };
+  }
+
+  /** The portal sidebar's cross-machine order (see `@orkestrator/protocol/portal-layout`). */
+  async getPortalLayout(): Promise<PortalLayout> {
+    return this.context.serialize(this.portalLayoutFile(), "portal layout", async () => {
+      const { layout, manual } = await this.readPortalLayoutParts();
+      return this.combinePortalLayout(layout, manual);
+    });
+  }
+
+  /** Replaces the given legacy layout fields. */
   async updatePortalLayout(update: PortalLayoutUpdate): Promise<PortalLayout> {
     return this.context.serialize(this.portalLayoutFile(), "portal layout", async () => {
-      const current = parsePortalLayout(
-        await this.context.loadJson<unknown>(this.portalLayoutFile(), () => null),
-      );
-      const next: PortalLayout = { ...current, ...update, revision: current.revision + 1 };
-      await this.context.saveJson(this.portalLayoutFile(), { version: 1, ...next });
-      return next;
+      const { layout, manual } = await this.readPortalLayoutParts();
+      const next = { ...layout, ...update, revision: layout.revision + 1 };
+      await this.context.saveJson(this.portalLayoutFile(), {
+        version: 1,
+        revision: next.revision,
+        machineOrder: next.machineOrder,
+        projectOrder: next.projectOrder,
+        projectFolders: next.projectFolders,
+        repositoryOrder: next.repositoryOrder,
+      });
+      return this.combinePortalLayout(next, manual);
+    });
+  }
+
+  /** Merges the changed repository against the saved order under the layout lease. */
+  async updateRepositoryEnvironmentOrder(
+    update: RepositoryEnvironmentOrderUpdate,
+  ): Promise<PortalLayout> {
+    return this.context.serialize(this.portalLayoutFile(), "portal layout", async () => {
+      const { layout, manual } = await this.readPortalLayoutParts();
+      const environmentOrder = applyRepositoryEnvironmentOrder(manual.environmentOrder, update);
+      const next = { environmentOrder, revision: manual.revision + 1 };
+      await this.context.saveJson(this.repositoryEnvironmentOrderFile(), { version: 1, ...next });
+      return this.combinePortalLayout(layout, next);
     });
   }
 
@@ -279,6 +338,7 @@ export type NodesStorage = Pick<
   | "mutateControllerSettings"
   | "getPortalLayout"
   | "updatePortalLayout"
+  | "updateRepositoryEnvironmentOrder"
   | "loadFleetUpdatePolicy"
   | "saveFleetUpdatePolicy"
   | "loadNodeSummariesCache"

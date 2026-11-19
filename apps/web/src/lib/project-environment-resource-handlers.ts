@@ -67,7 +67,7 @@ function registerEnvironments(context: StoreResourceSyncContext): void {
     const accepted =
       !context.disposed() && environments.getState().environments === environmentsAtRequest;
     if (accepted) {
-      environments.getState().setEnvironments(snapshots.flat());
+      environments.getState().setEnvironments(snapshots.flat(), projectIds);
       // A scope painted from its local snapshot waits for this (plan item 4003).
       noteAuthoritativeRead(context.scope, "environment");
     } else if (!context.disposed()) {

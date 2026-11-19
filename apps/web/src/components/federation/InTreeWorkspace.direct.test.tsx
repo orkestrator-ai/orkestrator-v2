@@ -125,7 +125,7 @@ async function settle() {
 beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project", sidebarOpen: true });
-  useMachineViewStore.setState({ grouping: "machine" });
+  useMachineViewStore.setState({ grouping: "repository" });
   sessionStorage.clear();
   // The window's own node, so entry points tell it from another node's.
   portalStore.store.setState({ selfId: SELF_NODE_ID });
@@ -227,12 +227,12 @@ test("select: ⌘K's project result lands on the asked tab of the node's project
   await waitFor(() => expect(ui.getState().selectedProjectId).toBe(project.id));
   act(() => ui.getState().setProjectBoardTab("kanban"));
   // The search's result for another node's project, as `ProjectSearchBar`
-  // opens it grouped by machine: on its coordinator.
+  // opens it sorted by activity: on its coordinator.
   act(() =>
     openMachineWorkspace({
       connectionId: LEAF,
       projectId: project.id,
-      boardTab: projectLandingBoardTab("machine", false),
+      boardTab: projectLandingBoardTab("activity", false),
       title: project.name,
     }),
   );

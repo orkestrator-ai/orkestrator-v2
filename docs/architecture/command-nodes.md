@@ -404,13 +404,14 @@ A command node attached to another command node operates in leaf mode:
   (`openedLeafCoordinators` in the UI store, not persisted), so the warning
   returns after a restart.
 - A leaf's workspace shown in a window follows the window's sidebar
-  grouping. Grouped by repository, the window links each repository's
-  projects across machines, so the leaf's coordinator is replaced by the
-  same warning, with a link to the command node's coordinator for that
-  repository; if the command node has no copy of it, the leaf's
-  coordinator opens directly. Compact links them the same way and counts as
-  repository grouping. Grouped by machine, project or activity, the machines
-  are not linked and the leaf's coordinator opens directly. The leaf's
+  grouping. The repository list (the sidebar's full list since 2.39, design
+  EL01) links each repository's projects across machines, so the leaf's
+  coordinator is replaced by the same warning, with a link to the command
+  node's coordinator for that repository; if the command node has no copy of
+  it, the leaf's coordinator opens directly. Compact links them the same way
+  and counts as the repository list. Sorted by activity, the machines are not
+  linked and the leaf's coordinator opens directly. A stored "by machine" or
+  "by project" grouping from an earlier build reads as the repository list. The leaf's
   workspace is in the window's own tree, so its coordinator gate
   (`LeafModeCoordinatorGate`) reads the grouping from the window's stores
   (`useWindowGrouping`, `coordinatorDefersToCommandNode` in
@@ -624,26 +625,36 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   node owns it.
 - **The sidebar order is the command node's.** The command node keeps the
   cross-machine order every client shows (`get_portal_layout`,
-  `update_portal_layout`, `portal-layout-changed`;
-  `@orkestrator/protocol/portal-layout`): the machine order ("by machine"),
-  the merged project order and the folders projects sit in there ("by
-  project"), and the repository order ("by repository"). Which node the
-  central region shows never moves anything. Until the user drags something, the
-  command node comes first, then the other nodes in registry order; in the
-  merged lists the command node's projects (with its folders) come first and
-  every other node's follow. Anything new goes after whatever precedes it in
-  that default. A node that is not connected is hidden from the merged lists
-  but keeps its entries, so its projects return to their place. The machine
-  order is also set by dragging rows in Settings > Machines, and the machine
+  `update_portal_layout`, `update_repository_environment_order`,
+  `portal-layout-changed`;
+  `@orkestrator/protocol/portal-layout`): the machine order (the machine
+  tiles, and the environment list ordered by machine), the repository order,
+  and each repository's hand-arranged environment order (`environmentOrder`,
+  used when the sidebar orders environments "Manual"). The Manual command
+  merges one repository order under the layout lease and persists it in
+  `portal-environment-order.json`. Older backends can rewrite
+  `portal-layout.json` during a downgrade without erasing those orders. On
+  re-upgrade, the read combines both stores. The read advertises
+  `manualOrderSupported` so renderers can use By machine with older command
+  nodes. `projectOrder` and
+  `projectFolders`, written by the retired "by project" list, are kept and
+  still seed the repository order's default. Which node the central region
+  shows never moves anything. Until the user drags something, the command node
+  comes first, then the other nodes in registry order; in the repository list
+  the command node's projects come first and every other node's follow.
+  Anything new goes after whatever precedes it in that default; a new
+  environment in a manual order goes after the last one of its own machine in
+  that repository. A node that is not connected is hidden from the list but
+  keeps its entries, so its projects and environments return to their place.
+  The machine order is set by dragging the machine tiles or rows in
+  Settings > Machines, and the machine
   lists outside the sidebar follow it with the command node always first
   (`inMachineOrder`): that list, the Settings machine strip, the agent accounts
   table and the title bar's per-machine CPU readings
   (`MachineCpuReadings`, one coordinated read per machine, routed through the
-  command node). Within a
-  node's own section, project, folder and environment order belong to that
-  node: a drag there is written to the owner (`arrange_projects_by_intent`,
-  `reorder_environments`), and moving a project into a folder of the merged
-  list is recorded on the command node only.
+  command node). Ordered by machine, a node's environment order belongs to
+  that node: a drag within its run is written to the owner
+  (`reorder_environments`).
 - **Presentation.** Per-node state (layouts, drafts) is namespaced by node
   identity; window-level state (sidebar, zoom, and what is collapsed in the
   multi-machine sidebar, by machine-qualified key) stays with the window's own

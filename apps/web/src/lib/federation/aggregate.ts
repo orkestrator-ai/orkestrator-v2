@@ -31,6 +31,8 @@ export interface MachineView {
   projects: readonly FederatedProject[];
   environmentsByProject: ReadonlyMap<string, readonly FederatedEnvironment[]>;
   truncated: boolean;
+  /** The bound scope has authoritative environment lists for all its projects. */
+  boundEnvironmentsComplete?: boolean;
   loadedAt: number | null;
   /**
    * The version and hello domains of its current connection, as the command
@@ -40,9 +42,12 @@ export interface MachineView {
   release?: MachineRelease;
 }
 
-export type SidebarGrouping = "machine" | "project" | "repository" | "activity" | "compact";
+/**
+ * What the sidebar lists: the repository list (EL01: each repository with its
+ * environments across machines), the activity list, or compact.
+ */
+export type SidebarGrouping = "repository" | "activity" | "compact";
 export const ALL_MACHINES = "all";
-export type MachineFilter = typeof ALL_MACHINES | string;
 
 export interface ActivityRow {
   machine: MachineView;
@@ -55,12 +60,75 @@ export function isMachineWritable(machine: MachineView): boolean {
   return machine.bound || machine.transport === "connected";
 }
 
+/** The machines `filter` shows, in their order (`shownMachineIds`). */
 export function filterMachines(
   machines: readonly MachineView[],
-  filter: MachineFilter,
+  filter: readonly string[],
 ): MachineView[] {
-  if (filter === ALL_MACHINES) return [...machines];
-  return machines.filter((machine) => machine.connectionId === filter);
+  const shown = shownMachineIds(machines, filter);
+  return machines.filter((machine) => shown.has(machine.connectionId));
+}
+
+/**
+ * The machines a filter shows: `filter` names the selected machines; an empty
+ * filter, or one naming no known machine, shows them all.
+ */
+export function shownMachineIds(
+  machines: readonly Pick<MachineView, "connectionId">[],
+  filter: readonly string[],
+): Set<string> {
+  const known = machines.map((machine) => machine.connectionId);
+  const selected = known.filter((id) => filter.includes(id));
+  return new Set(selected.length > 0 ? selected : known);
+}
+
+/** Whether a filter actually narrows `machines`. */
+export function isMachineFilterActive(
+  machines: readonly Pick<MachineView, "connectionId">[],
+  filter: readonly string[],
+): boolean {
+  return shownMachineIds(machines, filter).size < machines.length;
+}
+
+function normalizedFilter(
+  machines: readonly Pick<MachineView, "connectionId">[],
+  shown: ReadonlySet<string>,
+): string[] {
+  const known = machines.map((machine) => machine.connectionId);
+  if (shown.size === 0 || known.every((id) => shown.has(id))) return [];
+  return known.filter((id) => shown.has(id));
+}
+
+/**
+ * A machine tile's click (EL01, decision 7). With every machine shown it
+ * shows only that machine; otherwise it adds or removes that machine. Turning
+ * off the last one shows every machine again, so the list is never empty.
+ */
+export function toggleMachineFilter(
+  machines: readonly Pick<MachineView, "connectionId">[],
+  filter: readonly string[],
+  machineId: string,
+): string[] {
+  if (!machines.some((machine) => machine.connectionId === machineId)) return [...filter];
+  if (!isMachineFilterActive(machines, filter))
+    return normalizedFilter(machines, new Set([machineId]));
+  const shown = shownMachineIds(machines, filter);
+  if (shown.has(machineId)) shown.delete(machineId);
+  else shown.add(machineId);
+  return normalizedFilter(machines, shown);
+}
+
+/** The machines menu's checkbox: shows or hides one machine. Hiding every machine shows them all. */
+export function setMachineShownInFilter(
+  machines: readonly Pick<MachineView, "connectionId">[],
+  filter: readonly string[],
+  machineId: string,
+  shown: boolean,
+): string[] {
+  const next = shownMachineIds(machines, filter);
+  if (shown) next.add(machineId);
+  else next.delete(machineId);
+  return normalizedFilter(machines, next);
 }
 
 /**

@@ -119,20 +119,26 @@ describe("LM-04 coordinator conversations in leaf mode", () => {
   });
 
   test("a node in leaf mode keeps the notice whatever the grouping", () => {
-    useMachineViewStore.setState({ grouping: "machine" });
-    portalStore.store.setState({
-      loaded: true,
-      status: {
-        nodeId: "bk_middle" as never,
-        mode: "leaf",
-        registrationEnabled: true,
-        controllers: [],
-        detachedControllers: [],
-        suspendedSubordinateCount: 0,
-      },
-    });
-    renderGate();
-    expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
+    // Sorted by activity the window does not link repositories across machines.
+    const initialSortMode = useUIChromeStore.getState().environmentSortMode;
+    useUIChromeStore.setState({ environmentSortMode: "activity" });
+    try {
+      portalStore.store.setState({
+        loaded: true,
+        status: {
+          nodeId: "bk_middle" as never,
+          mode: "leaf",
+          registrationEnabled: true,
+          controllers: [],
+          detachedControllers: [],
+          suspendedSubordinateCount: 0,
+        },
+      });
+      renderGate();
+      expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
+    } finally {
+      useUIChromeStore.setState({ environmentSortMode: initialSortMode });
+    }
   });
 });
 
@@ -272,10 +278,12 @@ test("a leaf shown in the window's tree follows the window's own grouping (plan 
         projects: [{ id: "leaf-project", name: "app", gitUrl } as Project],
       }),
     );
-    // The window's repository grouping applies.
+    // The window's repository list applies.
     expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
-    act(() => useMachineViewStore.setState({ grouping: "machine" }));
+    act(() => useUIChromeStore.setState({ environmentSortMode: "activity" }));
     expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+    act(() => useUIChromeStore.setState({ environmentSortMode: "project" }));
+    expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
   } finally {
     cleanupNodeScopes();
     useMachineViewStore.setState(initialViews, true);
@@ -326,7 +334,7 @@ describe("a leaf shown in the window's tree", () => {
   }: {
     commandProjects?: Project[];
     commandState?: "loaded" | "loading" | "failed";
-    grouping?: "machine" | "project" | "repository" | "compact";
+    grouping?: "repository" | "compact";
     sortMode?: "project" | "activity";
   } = {}) {
     const commandClient = new FakeNodeClient({
@@ -361,7 +369,7 @@ describe("a leaf shown in the window's tree", () => {
     return { ...rendered, commandScope, commandClient };
   }
 
-  test("grouped by repository, it leads to the command scope's coordinator for the same repository", () => {
+  test("in the repository list, it leads to the command scope's coordinator for the same repository", () => {
     const reads = watchPortalGlobal();
     const open = spyOn(openWorkspace, "openMachineWorkspace").mockImplementation(() => undefined);
     portalStore.store.setState({ loaded: false, selfId: null });
@@ -389,7 +397,7 @@ describe("a leaf shown in the window's tree", () => {
     expect(open.mock.calls[0]?.[0]).toMatchObject({ connectionId: "bk_command" });
   });
 
-  test("compact links repositories as repository grouping does", () => {
+  test("compact links repositories as the repository list does", () => {
     renderInTree({ grouping: "compact" });
     expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
   });
@@ -403,17 +411,11 @@ describe("a leaf shown in the window's tree", () => {
     expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
   });
 
-  for (const [label, options] of [
-    ["machine", { grouping: "machine" }],
-    ["project", { grouping: "project" }],
-    ["activity", { sortMode: "activity" }],
-  ] as const) {
-    test(`grouped by ${label}, the leaf's coordinator opens directly`, () => {
-      renderInTree(options);
-      expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
-      expect(screen.queryByTestId("leaf-mode-coordinator-gate") === null).toBe(true);
-    });
-  }
+  test("sorted by activity, the leaf's coordinator opens directly", () => {
+    renderInTree({ sortMode: "activity" });
+    expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+    expect(screen.queryByTestId("leaf-mode-coordinator-gate") === null).toBe(true);
+  });
 
   test("waits for the command scope's projects, then follows them", () => {
     const { commandScope } = renderInTree({ commandState: "loading" });

@@ -110,7 +110,7 @@ async function settle() {
 beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project", sidebarOpen: true });
-  useMachineViewStore.setState({ grouping: "machine" });
+  useMachineViewStore.setState({ grouping: "repository" });
   sessionStorage.clear();
   // The window's own node, so entry points tell it from another node's.
   portalStore.store.setState({ selfId: SELF_NODE_ID });

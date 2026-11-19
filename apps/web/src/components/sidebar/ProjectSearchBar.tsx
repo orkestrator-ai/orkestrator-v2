@@ -449,7 +449,21 @@ export function ProjectSearchBar({
           useMachineViewStore.getState().grouping,
           window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches,
         );
-        const landingTab = projectLandingBoardTab(grouping, false);
+        const repository = other.projects.find(
+          (project) => project.ref.projectId === hit.project.id,
+        )?.repositoryHint;
+        const commandHasCopy =
+          !!repository &&
+          machineViews.some(
+            (machine) =>
+              machine.backendId === federation.portalState.selfId &&
+              machine.projects.some((project) => project.repositoryHint === repository),
+          );
+        const landingTab = projectLandingBoardTab(
+          grouping,
+          other.backendId === federation.portalState.selfId,
+          commandHasCopy,
+        );
         openMachineWorkspace({
           connectionId: other.connectionId,
           projectId: hit.project.id,

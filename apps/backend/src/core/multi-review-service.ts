@@ -87,6 +87,7 @@ import {
   LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
   missingWorkflowResultMessage,
+  workflowResultRefusals,
   workflowRestartContinuationPrompt,
   workflowUsageLimitContinuationPrompt,
   workflowResultReminderPrompt,
@@ -4101,8 +4102,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               if (pending.length > 0) workflow.pendingResultConsumptions = pending;
               else delete workflow.pendingResultConsumptions;
             },
-            closeResult: (requestId: string) =>
-              this.options.workflowResults!.close(requestId, "superseded"),
+            closeResult: (requestId: string, successorRequestId?: string) =>
+              this.options.workflowResults!.close(requestId, "superseded", successorRequestId),
+            resultRefusals: (requestId: string) =>
+              workflowResultRefusals(this.options.workflowResults, requestId),
           }
         : {}),
       save: async () => {
@@ -4999,6 +5002,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               submission: request.resultSubmission,
               finalText,
               workLabel: stepWorkLabel(request.kind),
+              refusals: workflowResultRefusals(this.options.workflowResults, request.requestId),
             }),
             spend: "resultReminderSent",
           });
@@ -5011,6 +5015,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             toolName: workflowResultToolName(this.stepResultKind(request.kind)),
             submission: request.resultSubmission,
             finalText,
+            refusals: workflowResultRefusals(this.options.workflowResults, request.requestId),
           }),
         );
       }
@@ -5288,7 +5293,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     delete request.idleResultPolls;
     session.requestIds.push(requestId);
     if (previousTransport === "tool-v1") {
-      await this.options.workflowResults?.close(previousRequestId, "superseded");
+      await this.options.workflowResults?.close(previousRequestId, "superseded", requestId);
     }
     await this.save(workflow, token);
   }
@@ -5331,10 +5336,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     followUp: { prompt: string; spend?: "resultReminderSent" | "restartContinuationSent" },
   ): Promise<void> {
     const previousRequestId = request.requestId;
-    if (request.resultTransport === "tool-v1") {
-      await this.options.workflowResults?.close(previousRequestId, "superseded");
-    }
     const requestId = randomUUID();
+    if (request.resultTransport === "tool-v1") {
+      await this.options.workflowResults?.close(previousRequestId, "superseded", requestId);
+    }
     request.requestId = requestId;
     request.state = "prepared";
     request.createdAt = nowIso();

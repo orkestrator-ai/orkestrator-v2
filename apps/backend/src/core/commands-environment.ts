@@ -2783,7 +2783,13 @@ export async function resolveContainerAgentToolConnection(
       environmentName: environment.name,
     })
     .catch(() => undefined);
-  return context.agentTools.connection(environment.id, environment.projectId, "container");
+  return context.agentTools.connection(
+    environment.id,
+    environment.projectId,
+    "container",
+    undefined,
+    { credentialsDisabled: true },
+  );
 }
 
 /**

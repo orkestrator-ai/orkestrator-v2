@@ -9,6 +9,7 @@ import {
   Layers,
   Loader2,
   Square,
+  Timer,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -188,7 +189,13 @@ function backgroundTaskDurationMs(
 function RuntimeLabel({ value, className }: { value?: string; className?: string }) {
   if (!value) return null;
   return (
-    <div className={cn("shrink-0 tabular-nums text-[11px] text-muted-foreground", className)}>
+    <div
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 tabular-nums text-[11px] text-muted-foreground",
+        className,
+      )}
+    >
+      <Timer className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       {value}
     </div>
   );

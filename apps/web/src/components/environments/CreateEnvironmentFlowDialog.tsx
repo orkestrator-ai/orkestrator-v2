@@ -1,3 +1,4 @@
+import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
 import {
   effectiveClaudeNativeBackend,
   isTmuxModeEnabled,
@@ -34,6 +35,11 @@ import type {
   PortMapping,
 } from "@/types";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
+import {
+  openCreateEnvironmentOnMachine,
+  useCreateEnvironmentMachines,
+  type CreateEnvironmentMachine,
+} from "./create-environment-machines";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -64,6 +70,7 @@ export interface CreateEnvironmentFlowOperations {
 }
 
 interface CreateEnvironmentFlowDialogProps extends CreateEnvironmentFlowOperations {
+  handoff?: CreateEnvironmentHandoff;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
@@ -129,6 +136,8 @@ export function resolveEnvironmentAgentLaunchSettings(options: ClaudeOptions) {
     initialReasoningEffort: options.launchAgent ? options.reasoningEffort : undefined,
     initialFastMode: options.launchAgent ? options.fastMode : undefined,
     initialPromptAttachments: options.launchAgent ? options.initialPromptAttachments : undefined,
+    // A deferred native turn reads the mode when it sends its first request.
+    interactionMode: options.interactionMode,
   };
 }
 
@@ -171,12 +180,19 @@ export function startEnvironmentInBackground(
 /**
  * Owns the shared create/configure/start workflow so every project entry point
  * behaves the same way.
+ *
+ * The environment is created on the machine of the node scope the dialog
+ * renders in, so an entry point chooses the default machine by opening the
+ * dialog there (`openMachineWorkspace` with `createEnvironment` for another
+ * machine). The header's machine dropdown moves the dialog to another
+ * machine that holds the same repository.
  */
 export function CreateEnvironmentFlowDialog({
   open,
   onOpenChange,
   projectId,
   projectName: providedProjectName,
+  handoff,
   createEnvironment,
   updateEnvironment,
   startEnvironment,
@@ -208,6 +224,7 @@ export function CreateEnvironmentFlowDialog({
     localEnvironmentAvailableRef.current = localEnvironmentAvailable;
   }, [dockerAvailable, localEnvironmentAvailable]);
   const projectName = providedProjectName ?? storedProjectName;
+  const machines = useCreateEnvironmentMachines(open ? projectId : null);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
 
@@ -327,8 +344,17 @@ export function CreateEnvironmentFlowDialog({
         launchSettings.initialReasoningEffort,
         launchSettings.initialPromptAttachments,
         launchSettings.initialFastMode,
+        launchSettings.interactionMode,
       );
       updateEnvironment(environment.id, configuredEnvironment);
+      if (
+        launchSettings.interactionMode &&
+        configuredEnvironment.interactionMode !== launchSettings.interactionMode
+      ) {
+        throw new Error(
+          "This node could not save the selected interaction mode. The environment was created and left stopped. Update the node before creating a Task or Interactive environment.",
+        );
+      }
       if (
         launchSettings.pendingAgentLaunch &&
         usesNativeStartupAgentTab(config, projectId, agentSettings)
@@ -446,6 +472,19 @@ export function CreateEnvironmentFlowDialog({
     });
   };
 
+  // That machine's own dialog takes over: this one closes, and the window
+  // shows the machine's copy of the project with its dialog open.
+  const handleSelectMachine = (
+    machine: CreateEnvironmentMachine,
+    form: CreateEnvironmentHandoff,
+  ) => {
+    if (isCreating) return false;
+    cancelPendingCredentialFlow();
+    onOpenChange(false);
+    openCreateEnvironmentOnMachine(machine, projectName ?? "New environment", form);
+    return true;
+  };
+
   const handleCreate = (options: ClaudeOptions): Promise<boolean> =>
     withGitHubCredentialPreflight(options.environmentType, () => performCreate(options));
 
@@ -541,6 +580,9 @@ export function CreateEnvironmentFlowDialog({
         projectId={projectId}
         projectName={projectName}
         localEnvironmentAvailable={localEnvironmentAvailable}
+        machines={machines}
+        handoff={handoff}
+        onSelectMachine={handleSelectMachine}
         defaultPortMappings={
           projectId ? config.repositories[projectId]?.defaultPortMappings : undefined
         }

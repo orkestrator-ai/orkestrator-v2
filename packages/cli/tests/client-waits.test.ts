@@ -410,14 +410,29 @@ describe("waiting through a lost submission response", () => {
   });
 
   test("recovery and final observation share the remaining deadline", async () => {
-    const { box } = await lostStart([admitted], [dispatched], {
-      mutationDelay: 160,
+    // The submission spends 4.25 s of a 10 s budget on a virtual clock that the
+    // gateway advances when it answers, so however slow the host is the lookup
+    // that finds the run and the observation after it share the 5.75 s left: the
+    // run never finishes, and the wait ends at the original deadline rather
+    // than starting a fresh one after recovery.
+    const start = 1_790_000_000_000;
+    let time = start;
+    const { box, lookups } = await lostStart([admitted], [dispatched], {
       realClock: true,
+      onSubmit: () => {
+        time += 4_250;
+      },
     });
-    const started = Date.now();
-    const result = await box.run([...START, "--wait", "--timeout", "300ms"]);
+    const io = captureIo(box.env);
+    io.now = () => time;
+    io.sleep = async (ms) => {
+      time += ms;
+    };
+    const result = await box.run([...START, "--wait", "--timeout", "10s"], io);
     expect(JSON.parse(result.out).error.code).toBe("deadline-exceeded");
-    expect(Date.now() - started).toBeLessThan(450);
+    expect(lookups).toHaveLength(1);
+    expect(time - start).toBeGreaterThanOrEqual(4_250);
+    expect(time - start).toBeLessThanOrEqual(10_000);
   });
 
   test("ordinary admission retains the full observation duration", async () => {
@@ -493,6 +508,8 @@ describe("environment --wait through a lost submission response", () => {
     byId: PublicReceipt[],
     options: {
       mutationDelay?: number;
+      /** Runs when the gateway receives the submission, before it answers. */
+      onSubmit?: () => void;
       readDelay?: "run.get" | "environment.get";
       environment?: PublicEnvironmentSummary | null;
       /** Cases whose subject is real elapsed time keep the real clock. */
@@ -507,6 +524,7 @@ describe("environment --wait through a lost submission response", () => {
       const input = request.body.args.input as Record<string, unknown>;
       if (called === action) {
         submissions += 1;
+        options.onSubmit?.();
         if (options.mutationDelay) await Bun.sleep(options.mutationDelay);
         return new Response("upstream timeout", { status: 504 });
       }
@@ -879,15 +897,33 @@ describe("environment --wait through a lost submission response", () => {
       execution: { state: "running" },
       completedAt: undefined,
     });
-    const { box } = await lostEnvironmentMutation("environment.exec", [running], [running], {
-      mutationDelay: 400,
-      realClock: true,
-    });
-    const started = Date.now();
-    const result = await box.run([...EXEC, "--wait", "--timeout", "500ms", ...COMMAND]);
+    // The submission spends 4.25 s of a 10 s budget on a virtual clock the
+    // gateway advances when it answers, so however slow the host is the
+    // recovery lookup and the observation after it share the 5.75 s left.
+    const start = 1_790_000_000_000;
+    let time = start;
+    const { box, lookups } = await lostEnvironmentMutation(
+      "environment.exec",
+      [running],
+      [running],
+      {
+        realClock: true,
+        onSubmit: () => {
+          time += 4_250;
+        },
+      },
+    );
+    const io = captureIo(box.env);
+    io.now = () => time;
+    io.sleep = async (ms) => {
+      time += ms;
+    };
+    const result = await box.run([...EXEC, "--wait", "--timeout", "10s", ...COMMAND], io);
     expect(JSON.parse(result.out).error.code).toBe("deadline-exceeded");
-    // A fresh budget after recovery would run past 400 + 500 ms.
-    expect(Date.now() - started).toBeLessThan(850);
+    expect(lookups).toHaveLength(1);
+    // A fresh budget after recovery would run past 4.25 + 10 s.
+    expect(time - start).toBeGreaterThanOrEqual(4_250);
+    expect(time - start).toBeLessThanOrEqual(10_000);
   });
 });
 

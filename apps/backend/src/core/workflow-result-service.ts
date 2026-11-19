@@ -82,6 +82,24 @@ interface DeliveryCounters {
   validationCalls: number;
   submissionCalls: number;
   lastValidation?: "valid" | "invalid";
+  /** Calls refused before they reached `validate`/`submit` (`recordRefusedCall`). */
+  refusedCalls?: number;
+  /** Why the newest refused call was refused, bounded and without an excerpt. */
+  lastRefusal?: string;
+  /** Diagnostics from earlier slots in the same session. Status remains slot-local. */
+  priorDelivery?: WorkflowResultRefusals;
+}
+
+/** Bound on the remembered reason of the newest refused call. */
+const MAX_REFUSAL_REASON_CHARS = 600;
+
+/** What a step reports when its result never arrived: how many calls were refused, and why. */
+export interface WorkflowResultRefusals {
+  /** Calls refused before validation. */
+  count: number;
+  /** Validation and submission calls that were processed in the same result turn sequence. */
+  processed: number;
+  lastReason?: string;
 }
 
 interface WorkflowResultCapabilityIdentity {
@@ -453,7 +471,7 @@ export class WorkflowResultService {
     this.index = null;
   }
 
-  /** Counters exist only for slots the store knows, so a caller cannot grow them. */
+  /** Bounded counters for known slots and their internally assigned successors. */
   private counters(resultKey: string): DeliveryCounters {
     let counters = this.deliveryCounters.get(resultKey);
     if (!counters) {
@@ -466,6 +484,59 @@ export class WorkflowResultService {
       }
     }
     return counters;
+  }
+
+  /**
+   * A result-tool call refused before it reached {@link validate} or
+   * {@link submit}: arguments the tool's input check rejected, or a `result`
+   * sent as JSON text that does not parse. Nothing else records such a call,
+   * so without this a step whose every call was refused reports that its tool
+   * was never called. Counted only for an open slot of the caller's scope, in
+   * memory, like the other delivery counters.
+   */
+  recordRefusedCall(scope: WorkflowResultCallerScope, resultKey: string, reason: string): void {
+    let entry: StoredWorkflowResult | undefined;
+    try {
+      entry = this.readEntry(resultKey);
+    } catch {
+      return;
+    }
+    if (
+      !entry ||
+      entry.lifecycle !== "open" ||
+      entry.environmentId !== scope.environmentId ||
+      entry.projectId !== scope.projectId
+    ) {
+      return;
+    }
+    const counters = this.counters(resultKey);
+    counters.refusedCalls = Math.min((counters.refusedCalls ?? 0) + 1, Number.MAX_SAFE_INTEGER);
+    counters.lastRefusal =
+      reason.length > MAX_REFUSAL_REASON_CHARS
+        ? `${reason.slice(0, MAX_REFUSAL_REASON_CHARS - 1)}…`
+        : reason;
+    this.metrics.recordRefusedCall(entry.kind);
+  }
+
+  /** The refused calls of this slot and any it replaced in the same session. */
+  refusals(resultKey: string): WorkflowResultRefusals | undefined {
+    const summary = this.deliverySummary(resultKey);
+    return summary?.count ? summary : undefined;
+  }
+
+  private deliverySummary(resultKey: string): WorkflowResultRefusals | undefined {
+    const counters = this.deliveryCounters.get(resultKey);
+    if (!counters) return undefined;
+    const prior = counters.priorDelivery;
+    const lastReason = counters.lastRefusal ?? prior?.lastReason;
+    return {
+      count: Math.min((prior?.count ?? 0) + (counters.refusedCalls ?? 0), Number.MAX_SAFE_INTEGER),
+      processed: Math.min(
+        (prior?.processed ?? 0) + counters.validationCalls + counters.submissionCalls,
+        Number.MAX_SAFE_INTEGER,
+      ),
+      ...(lastReason !== undefined ? { lastReason } : {}),
+    };
   }
 
   private releaseHeld(resultKey: string): void {
@@ -1574,9 +1645,12 @@ export class WorkflowResultService {
     const held = this.heldValidation(resultKey);
     const validationCalls = counters?.validationCalls ?? 0;
     const submissionCalls = counters?.submissionCalls ?? 0;
+    const refusedCalls = counters?.refusedCalls ?? 0;
     let hint: string | undefined;
     if (held) {
       hint = `A validated result is held. Commit it by calling ${workflowResultKindDefinition(entry.kind).toolName(entry)} with this resultKey and validatedDigest; do not re-send the result.`;
+    } else if (validationCalls === 0 && submissionCalls === 0 && refusedCalls > 0) {
+      hint = `${refusedCalls} call${refusedCalls === 1 ? " was" : "s were"} refused before processing because the arguments did not pass the tool's input check. The newest refusal said: ${counters?.lastRefusal ?? "(no reason recorded)"} Correct exactly that; sending the same arguments again is refused the same way.`;
     } else if (validationCalls === 0 && submissionCalls === 0) {
       hint =
         "No validation or submission has been processed for this resultKey. Calls may have been rejected by the client or by service size or capacity limits before processing. Check the actual call error before retrying.";
@@ -1586,6 +1660,7 @@ export class WorkflowResultService {
     return {
       validationCalls,
       submissionCalls,
+      ...(refusedCalls > 0 ? { refusedCalls } : {}),
       ...(counters?.lastValidation ? { lastValidation: counters.lastValidation } : {}),
       ...(held ? { validatedDigest: held.digest } : {}),
       ...(hint ? { hint } : {}),
@@ -1712,7 +1787,15 @@ export class WorkflowResultService {
     );
   }
 
-  async close(resultKey: string, lifecycle: "cancelled" | "superseded"): Promise<void> {
+  /**
+   * Retires a slot. A same-session follow-up can inherit its bounded delivery
+   * summary under its fresh key, even before that key is prepared.
+   */
+  async close(
+    resultKey: string,
+    lifecycle: "cancelled" | "superseded",
+    successorResultKey?: string,
+  ): Promise<void> {
     this.mutateEntry<void>(
       resultKey,
       (entry) => {
@@ -1738,7 +1821,18 @@ export class WorkflowResultService {
         // The overwritten row may have held an accepted payload or context.
         return { result: undefined, entry, removesContent: true };
       },
-      { afterCommit: () => this.forgetDelivery(resultKey) },
+      {
+        afterCommit: () => {
+          const summary =
+            lifecycle === "superseded" && successorResultKey
+              ? this.deliverySummary(resultKey)
+              : undefined;
+          this.forgetDelivery(resultKey);
+          if (successorResultKey && summary && (summary.count || summary.processed)) {
+            this.counters(successorResultKey).priorDelivery = summary;
+          }
+        },
+      },
     );
   }
 

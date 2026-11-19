@@ -1,6 +1,6 @@
 import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
 /**
- * What another machine's rows and project headers show now that they share
+ * What another machine's rows and repository headings show now that they share
  * this window's components: agent-mail badges, the project home's activity,
  * and the activity list's controls bar. The facts-level parity of a row is
  * pinned by `environment-row-model.parity.test.ts`.
@@ -36,7 +36,9 @@ import {
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { FederatedActivityList } from "./FederatedSidebarSections";
 import { FederationProvider } from "./FederationProvider";
-import { RemoteEnvironmentItem, RemoteProjectGroup } from "./RemoteMachineTree";
+import { NO_BOUND_ROWS } from "./federation-ui-test-fixture";
+import { RemoteEnvironmentItem } from "./RemoteMachineTree";
+import { RepositoryEnvironmentList } from "./RepositoryEnvironmentList";
 import { appCommandStore } from "@/test/app-command-store";
 
 const initialUI = appCommandStore(uiStore).getState();
@@ -229,7 +231,7 @@ test("a remote waiting row sends the named interaction to the owning workspace",
   });
 });
 
-test("another machine's project header shows its home's activity and no mail count", async () => {
+test("another machine's repository heading shows its home's activity and no mail count", async () => {
   const home = environment("home", {
     isProjectHome: true,
     name: "project-home",
@@ -239,20 +241,15 @@ test("another machine's project header shows its home's activity and no mail cou
   const worker = environment("feature", { agentMailUnread: 2, agentMailFailed: true });
   const machine = machineView([home, worker]);
   renderWithFederation(
-    <RemoteProjectGroup
-      machine={machine}
-      project={machine.projects[0]!}
-      environments={[worker]}
-      isCollapsed={false}
-      onToggleCollapse={() => {}}
-      sortable={false}
-      grouping="machine"
+    <RepositoryEnvironmentList
+      machines={[machine]}
+      shownIds={new Set([machine.connectionId])}
+      ordering="machine"
+      bound={NO_BOUND_ROWS}
     />,
   );
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-  const header = screen.getByRole("button", {
-    name: "New environment in app on Machine A",
-  }).parentElement!;
+  const header = screen.getByRole("button", { name: "New environment in app" }).parentElement!;
   expect(within(header).queryByLabelText("3 unread agent messages") === null).toBe(true);
   expect(within(header).queryByLabelText("Agent message delivery failed") === null).toBe(true);
 
@@ -282,14 +279,11 @@ test("a failed tombstoned remote home cannot be selected", async () => {
   })!;
   const machine = machineView([home]);
   renderWithFederation(
-    <RemoteProjectGroup
-      machine={machine}
-      project={machine.projects[0]!}
-      environments={[]}
-      isCollapsed={false}
-      onToggleCollapse={() => {}}
-      sortable={false}
-      grouping="machine"
+    <RepositoryEnvironmentList
+      machines={[machine]}
+      shownIds={new Set([machine.connectionId])}
+      ordering="machine"
+      bound={NO_BOUND_ROWS}
     />,
   );
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
@@ -298,18 +292,15 @@ test("a failed tombstoned remote home cannot be selected", async () => {
   );
 });
 
-test("a quiet home shows nothing in its project header", async () => {
+test("a quiet home shows nothing in its repository heading", async () => {
   const home = environment("home", { isProjectHome: true, name: "project-home" });
   const machine = machineView([home]);
   renderWithFederation(
-    <RemoteProjectGroup
-      machine={machine}
-      project={machine.projects[0]!}
-      environments={[]}
-      isCollapsed={false}
-      onToggleCollapse={() => {}}
-      sortable={false}
-      grouping="machine"
+    <RepositoryEnvironmentList
+      machines={[machine]}
+      shownIds={new Set([machine.connectionId])}
+      ordering="machine"
+      bound={NO_BOUND_ROWS}
     />,
   );
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));

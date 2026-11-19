@@ -264,13 +264,17 @@ export function CompactRepositoryList({
         projectKey: opens.id,
         connectionId: opens.machine.connectionId,
         projectId,
+        onCommandNode: opens.machine.backendId === portalState.selfId,
+        commandHasCopy: repository.members.some(
+          (member) => member.machine?.backendId === portalState.selfId,
+        ),
         coordinatorGated: opens.machine.bound && portalState.status?.mode === "leaf",
         title: opens.name,
       });
     } else if (opens.machine.bound) {
       selectProject(projectId);
     } else {
-      const landingTab = projectLandingBoardTab("repository", false);
+      const landingTab = projectLandingBoardTab("repository", false, false);
       openMachineWorkspace({
         connectionId: opens.machine.connectionId,
         projectId,

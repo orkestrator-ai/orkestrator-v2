@@ -12,6 +12,10 @@ import {
   connectivitySummary,
   duplicateMachineColors,
   filterMachines,
+  isMachineFilterActive,
+  setMachineShownInFilter,
+  shownMachineIds,
+  toggleMachineFilter,
   type MachineView,
 } from "./aggregate";
 import type { FederatedEnvironment, FederatedProject } from "./summaries";
@@ -221,8 +225,17 @@ describe("aggregate projections", () => {
   });
 
   test("filtering changes presentation only", () => {
-    expect(filterMachines([mini, vps, laptop], "vps")).toEqual([vps]);
-    expect(filterMachines([mini, vps], "all")).toHaveLength(2);
+    expect(filterMachines([mini, vps, laptop], ["vps"])).toEqual([vps]);
+    expect(filterMachines([mini, vps, laptop], ["laptop", "mini"])).toEqual([mini, laptop]);
+    expect(filterMachines([mini, vps], [])).toHaveLength(2);
+  });
+
+  test("a filter naming no known machine shows every machine", () => {
+    expect(filterMachines([mini, vps], ["gone"])).toEqual([mini, vps]);
+    expect(Array.from(shownMachineIds([mini, vps], ["gone", "vps"]))).toEqual(["vps"]);
+    expect(isMachineFilterActive([mini, vps], ["gone"])).toBe(false);
+    expect(isMachineFilterActive([mini, vps], ["mini", "vps"])).toBe(false);
+    expect(isMachineFilterActive([mini, vps], ["vps"])).toBe(true);
   });
 
   test("CL-03: shared colours are reported, never resolved automatically", () => {
@@ -328,4 +341,44 @@ test("raw remote PR readings survive normalization into every federated activity
       "merged-unread",
     ]);
   }
+});
+
+describe("machine tile and menu filter changes", () => {
+  const machines = [{ connectionId: "a" }, { connectionId: "b" }, { connectionId: "c" }];
+
+  test("from every machine shown, a tile click shows only that machine", () => {
+    expect(toggleMachineFilter(machines, [], "b")).toEqual(["b"]);
+    // A filter naming every machine is not narrowing: it behaves as all.
+    expect(toggleMachineFilter(machines, ["a", "b", "c"], "c")).toEqual(["c"]);
+  });
+
+  test("further tile clicks add and remove machines, in machine order", () => {
+    let filter = toggleMachineFilter(machines, [], "c");
+    filter = toggleMachineFilter(machines, filter, "a");
+    expect(filter).toEqual(["a", "c"]);
+    filter = toggleMachineFilter(machines, filter, "c");
+    expect(filter).toEqual(["a"]);
+  });
+
+  test("turning off the last shown machine shows every machine again", () => {
+    expect(toggleMachineFilter(machines, ["b"], "b")).toEqual([]);
+  });
+
+  test("adding back every machine normalises to all", () => {
+    expect(toggleMachineFilter(machines, ["a", "b"], "c")).toEqual([]);
+  });
+
+  test("an unknown machine id leaves the filter as it is", () => {
+    expect(toggleMachineFilter(machines, [], "gone")).toEqual([]);
+    expect(toggleMachineFilter(machines, ["a"], "gone")).toEqual(["a"]);
+  });
+
+  test("the menu checkbox shows or hides one machine", () => {
+    expect(setMachineShownInFilter(machines, [], "b", false)).toEqual(["a", "c"]);
+    expect(setMachineShownInFilter(machines, ["a"], "c", true)).toEqual(["a", "c"]);
+    expect(setMachineShownInFilter(machines, ["a"], "a", true)).toEqual(["a"]);
+    expect(setMachineShownInFilter(machines, ["a", "c"], "b", true)).toEqual([]);
+    // Hiding the last shown machine shows them all rather than an empty list.
+    expect(setMachineShownInFilter(machines, ["a"], "a", false)).toEqual([]);
+  });
 });

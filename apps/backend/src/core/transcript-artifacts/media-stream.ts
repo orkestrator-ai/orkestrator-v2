@@ -44,7 +44,11 @@ import {
   type ArtifactErrorCode,
 } from "@orkestrator/protocol/transcript-artifacts";
 
-import { openReadableHostFile, validateRelativeFilePath } from "../path-safety.js";
+import {
+  openReadableHostFile,
+  validateRelativeFilePath,
+  type ReadableHostRoot,
+} from "../path-safety.js";
 import type { MintMediaInput, OpenedMediaFile } from "./media-stream-route.js";
 import { MEDIA_SNIFF_BYTES, sniffServedMediaMime } from "./media-stream-sniff.js";
 
@@ -90,7 +94,7 @@ export interface TranscriptMediaStreamsOptions {
    * The `read_file_base64` allowlist. Without it a request must name an
    * environment, as before readable-roots streams existed.
    */
-  readableHostRoots?: () => Promise<readonly string[]>;
+  readableHostRoots?: () => Promise<readonly ReadableHostRoot[]>;
   containerIdMatches?: (known: string, candidate: string) => boolean;
   limits?: Partial<{
     maxHostBytes: number;
@@ -383,16 +387,14 @@ export class TranscriptMediaStreams {
       kind: "readable",
       stagedBytes: 0,
     };
-    return this.mintHostFile(server, session, path.resolve(requestedPath), async () => [
-      ...(await roots()),
-    ]);
+    return this.mintHostFile(server, session, path.resolve(requestedPath), roots);
   }
 
   private async mintHostFile(
     server: MediaStreamServer,
     session: StreamSession,
     absolute: string,
-    roots: () => Promise<string[]>,
+    roots: () => Promise<readonly ReadableHostRoot[]>,
   ): Promise<TranscriptMediaStreamResponse> {
     // The route closes a handle that opens after it stopped waiting; this only
     // skips the open once the route has already given up.

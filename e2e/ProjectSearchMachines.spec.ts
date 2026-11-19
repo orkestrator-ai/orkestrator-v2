@@ -48,9 +48,9 @@ test("one row per machine, offline rows greyed, and every row fits the dialog", 
     }
   }
 
-  // Tab cycles to environments: the remote environment stays, projects go.
-  await input.press("Tab");
-  await input.press("Tab");
+  // Alt+Down cycles to environments: the remote environment stays, projects go.
+  await input.press("Alt+ArrowDown");
+  await input.press("Alt+ArrowDown");
   await expect(projects).toHaveCount(0);
   await expect(
     page.getByRole("option", { name: "run-desktop-app, environment of orkestrator-v2 on mbp3" }),
@@ -60,8 +60,20 @@ test("one row per machine, offline rows greyed, and every row fits the dialog", 
 test("the machine filter narrows the merged list to one machine", async ({ page }) => {
   const input = await openSearch(page);
   await input.fill("orkestrator");
-  await page.getByTestId("project-search-filter").click();
-  await page.getByRole("menuitemradio", { name: /mbp3/ }).click();
+  const filter = page.getByTestId("project-search-filter");
+  await input.press("Tab");
+  await expect(filter).toBeFocused();
+  await filter.press("Enter");
+  const remote = page.getByRole("menuitemradio", { name: /mbp3/ });
+  await expect(remote).toBeVisible();
+  await expect(page.getByRole("menuitemradio", { name: "All", exact: true })).toBeFocused();
+  const items = page.getByRole("menuitemradio");
+  for (let step = 0; step < (await items.count()); step++) {
+    if (await remote.evaluate((element) => element === document.activeElement)) break;
+    await page.keyboard.press("ArrowDown");
+  }
+  await expect(remote).toBeFocused();
+  await remote.press("Enter");
   await expect(page.getByLabel("Filter results: All, mbp3")).toBeVisible();
   await expect(page.getByRole("option", { name: /^orkestrator-v2, project on / })).toHaveCount(1);
   await expect(page.getByTestId("federated-search-incomplete")).toHaveCount(0);
@@ -103,8 +115,8 @@ test("empty-query recents show the incomplete note until scoped to a complete ma
   await expect(page.getByTestId("federated-search-incomplete")).toHaveCount(0);
 });
 
-for (const mode of ["activity", "project", "repository"] as const) {
-  test(`project selection opens its workspace and reveals its row from ${mode} view`, async ({
+for (const mode of ["activity", "repository"] as const) {
+  test(`project selection opens its workspace and reveals its heading from ${mode} view`, async ({
     page,
   }) => {
     await page.goto("/project-search-machines");
@@ -123,8 +135,18 @@ for (const mode of ["activity", "project", "repository"] as const) {
       .click();
     const sidebar = page.getByRole("complementary", { name: "Machine projects" });
     const revealed = sidebar.locator('[data-revealed="true"]');
+    // The repository list, where the heading is, replaces the activity list.
+    await expect(page.getByRole("combobox", { name: "Sidebar view", exact: true })).toHaveValue(
+      "repository",
+    );
     await expect(revealed).toBeVisible();
-    await expect(revealed.locator('[aria-current="page"]')).toBeVisible();
+    // The heading of the repository (mini's copy is offline, so mbp3's opens it).
+    const headingName =
+      mode === "activity"
+        ? "Open acme/telegram-scraper on mbp3"
+        : "Open acme/orkestrator-v2 on mbp3";
+    const headingButton = sidebar.getByRole("button", { name: headingName, exact: true });
+    await expect(revealed.getByRole("button", { name: headingName, exact: true })).toBeVisible();
     await expect(page.getByTestId("opened")).toHaveText(
       mode === "activity" ? "bk_mbp3" : "bk_mini",
     );
@@ -135,9 +157,7 @@ for (const mode of ["activity", "project", "repository"] as const) {
         environmentId: null,
       }),
     );
-    await expect(page.getByRole("combobox", { name: "Sidebar view", exact: true })).toHaveValue(
-      "machine",
-    );
+    if (mode === "activity") await expect(headingButton).toHaveAttribute("aria-current", "page");
     // Opening another machine's environment ends the reveal, even with no local selection.
     await page.getByTestId("project-search-trigger").click();
     await input.fill("run-desktop");
@@ -145,12 +165,7 @@ for (const mode of ["activity", "project", "repository"] as const) {
       .getByRole("option", { name: "run-desktop-app, environment of orkestrator-v2 on mbp3" })
       .click();
     await expect(sidebar.locator('[data-revealed="true"]')).toHaveCount(0);
-    const projectButton = sidebar.locator(
-      mode === "activity"
-        ? 'button[aria-label="Open telegram-scraper on mbp3"]'
-        : 'button[aria-label="Open orkestrator-v2 on mini"]',
-    );
-    await expect(projectButton).not.toHaveAttribute("aria-current");
+    await expect(headingButton).not.toHaveAttribute("aria-current");
   });
 }
 
@@ -166,7 +181,7 @@ test("a connected project opens and stays selected in repository view", async ({
     "repository",
   );
   await expect(
-    page.getByRole("button", { name: "Open telegram-scraper on mbp3", exact: true }),
+    page.getByRole("button", { name: "Open acme/telegram-scraper on mbp3", exact: true }),
   ).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("opened-selection")).toHaveText(
     JSON.stringify({

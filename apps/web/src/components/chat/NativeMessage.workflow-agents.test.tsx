@@ -83,7 +83,7 @@ describe("workflow agents", () => {
       "queued",
       "failed",
     ]);
-    expect(within(rows[0]!).getByText("9s")).toBeTruthy();
+    expect(within(rows[0]!).getByText("9s").querySelector("svg.lucide-timer")).toBeTruthy();
     expect(within(rows[0]!).getByText("12k")).toBeTruthy();
     expect(within(rows[1]!).getByText("Editing src/app/introductions/page.tsx")).toBeTruthy();
     expect(within(rows[1]!).getByText("Explore")).toBeTruthy();

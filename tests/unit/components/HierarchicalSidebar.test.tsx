@@ -1,13 +1,11 @@
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { useMachineViewStore } from "@/stores/machineViewStore";
-import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import {
   connectionList,
   installDesktopFake,
   remoteConnection,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
-import { updatePortalLayout } from "@/lib/portal/portal-layout";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { NodeWorkspaceHost } from "@/components/federation/NodeWorkspaceHost";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -17,7 +15,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { createElement, type ComponentProps } from "react";
-import type { CollisionDetection, DragEndEvent, DragStartEvent } from "@dnd-kit/core";
+import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { mockToastWarning } from "../../mocks/sonner";
@@ -88,7 +86,12 @@ const forkEnvironmentMock = mock(async () => ({
   delegationBaseCommit: "a".repeat(40),
   delegationBaseBranch: "main",
 }));
-const updateEnvironmentAgentSettingsMock = mock(async () => createdEnvironment);
+const updateEnvironmentAgentSettingsMock = mock(
+  async (...args: Parameters<typeof realBackend.updateEnvironmentAgentSettings>) => ({
+    ...createdEnvironment,
+    interactionMode: args[7],
+  }),
+);
 const getContainerGitHubCredentialStatusMock = mock(async () => ({
   source: "host-cli" as const,
   available: true,
@@ -227,15 +230,14 @@ function mockActivityRowOffsetTop(
 }
 
 describe("HierarchicalSidebar", () => {
-  test("merged bound rows hide owner folder actions while machine sections keep them", async () => {
+  test("a bound repository heading leads with its tile and offers repository actions, not folder ones", async () => {
     const previousView = useMachineViewStore.getState();
     const previousNative = window.orkestrator;
-    const fake = installDesktopFake({
+    installDesktopFake({
       list: connectionList([remoteConnection("a", "Machine A", "teal")]),
       datasets: { a: { projects: [], environments: {} } },
     });
     appCommandStore(projectStore).getState().setProjects([project]);
-    useMachineViewStore.getState().setGrouping("project");
     let view: ReturnType<typeof render> | undefined;
     try {
       view = renderInAppCommandScope(
@@ -243,36 +245,20 @@ describe("HierarchicalSidebar", () => {
           <HierarchicalSidebar />
         </FederationProvider>,
       );
-      const list = await screen.findByTestId("federated-project-list");
-      const boundHeading = within(list).getByRole("button", { name: /^Project One/i });
-      const home = within(boundHeading).getByTestId("machine-home-icon");
-      await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe("violet"));
-      // It leads the heading inside the coordinator's activity ring.
-      expect(boundHeading.firstElementChild?.contains(home)).toBe(true);
-      const boundId = "bk_self";
-      // The project is rooted on its owner, but filed in a shared folder.
-      await act(async () => {
-        await updatePortalLayout({
-          projectFolders: { [projectKey(projectRef(boundId as never, project.id))]: "Shared" },
-        });
+      const list = await screen.findByTestId("federated-repository-list");
+      const heading = within(list).getByRole("button", {
+        name: "Open acme/project-one on This computer",
       });
-      fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
+      const tile = within(heading).getByTestId("command-node-home-icon");
+      await waitFor(() => expect(tile.getAttribute("data-machine-color")).toBe("violet"));
+      // No machine sections or per-project headings under the repository.
+      expect(screen.queryByTestId("machine-section-header") === null).toBe(true);
+      expect(within(list).getByText("1 machine")).toBeTruthy();
+      fireEvent.contextMenu(heading);
       expect(screen.queryByText("Add to Folder") === null).toBe(true);
-      expect(screen.queryByText("Remove from Folder") === null).toBe(true);
-      expect(project.folder).toBeUndefined();
+      expect(screen.getByText("Repository settings")).toBeTruthy();
       expect(arrangeProjectsMock).not.toHaveBeenCalled();
-      expect(fake.layout().projectFolders).toEqual({
-        [projectKey(projectRef(boundId as never, project.id))]: "Shared",
-      });
       fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-      act(() => useMachineViewStore.getState().setGrouping("machine"));
-      const machineHeading = await screen.findByRole("button", { name: /^Project One/i });
-      // By machine, this window's projects lead with its home too.
-      const machineHome = within(machineHeading).getByTestId("machine-home-icon");
-      expect(machineHome.getAttribute("data-machine-color")).toBe("violet");
-      expect(machineHeading.firstElementChild?.contains(machineHome)).toBe(true);
-      fireEvent.contextMenu(machineHeading);
-      expect(screen.getByText("Add to Folder")).toBeTruthy();
     } finally {
       view?.unmount();
       uninstallDesktopFake();
@@ -281,7 +267,7 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
-  test("bound repository members keep their machine-colored label, trailing collapse control, and selection", async () => {
+  test("a repository lists every checkout's environments flat, its own rows with full controls", async () => {
     const previousView = useMachineViewStore.getState();
     const previousNative = window.orkestrator;
     installDesktopFake({
@@ -308,7 +294,6 @@ describe("HierarchicalSidebar", () => {
     ];
     appCommandStore(projectStore).getState().setProjects(projectsValue);
     appCommandStore(environmentStore).getState().setEnvironments(environmentsValue);
-    useMachineViewStore.getState().setGrouping("repository");
     let view: ReturnType<typeof render> | undefined;
     try {
       view = renderInAppCommandScope(
@@ -317,47 +302,30 @@ describe("HierarchicalSidebar", () => {
         </FederationProvider>,
       );
       const list = await screen.findByTestId("federated-repository-list");
-      expect(await within(list).findByText("This computer · Project One")).toBeTruthy();
-      expect(within(list).getByText("This computer · Second checkout")).toBeTruthy();
       // Both bound checkouts contribute, but count as only one machine.
       expect(await within(list).findByText("2 machines · 3 environments")).toBeTruthy();
+      expect(within(list).queryByText(/This computer · /) === null).toBe(true);
+      expect(within(list).getByRole("button", { name: /^First worker, on / })).toBeTruthy();
+      expect(within(list).getByRole("button", { name: /^Second worker, on / })).toBeTruthy();
+      expect(await within(list).findByRole("button", { name: /^Remote worker, on / })).toBeTruthy();
       expect(
-        within(list).getByRole("button", { name: "Open acme/project-one on This computer" }),
+        within(list).getByRole("button", { name: "New environment in acme/project-one" }),
       ).toBeTruthy();
-      const member = within(list).getByText("This computer · Project One").closest("button")!;
-      const otherMember = within(list)
-        .getByText("This computer · Second checkout")
-        .closest("button")!;
-      for (const button of [member, otherMember]) {
-        const label = within(button).getByText(/^This computer · /);
-        await waitFor(() => expect(label.classList).toContain("text-violet-500"));
-        expect(button.firstElementChild === label).toBe(true);
-        expect(within(button).queryByTestId("machine-home-icon") === null).toBe(true);
-        expect(within(button).queryByTestId("machine-dot") === null).toBe(true);
-        expect(
-          button.parentElement!.parentElement!.lastElementChild!.getAttribute("aria-label"),
-        ).toMatch(/^Collapse project /);
-      }
-      fireEvent.click(otherMember);
-      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(sameRepository.id);
-      fireEvent.click(within(list).getByRole("button", { name: "Collapse project Project One" }));
+      // This window's own row selects in place.
+      fireEvent.click(within(list).getByRole("button", { name: /^Second worker, on / }));
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("second-worker");
+      // Collapse is on the keyboard now that the chevron is a + button.
+      const heading = within(list).getByRole("button", {
+        name: "Open acme/project-one on This computer",
+      });
+      fireEvent.keyDown(heading, { key: "ArrowLeft" });
       await waitFor(() =>
         expect(within(list).queryByRole("button", { name: /^First worker, on / }) === null).toBe(
           true,
         ),
       );
-      expect(within(list).getByRole("button", { name: /^Second worker, on / })).toBeTruthy();
-      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(sameRepository.id);
-      expect(
-        within(list)
-          .getByRole("button", { name: "Collapse folder acme/project-one" })
-          .getAttribute("aria-expanded"),
-      ).toBe("true");
-      fireEvent.click(within(list).getByRole("button", { name: "Expand project Project One" }));
+      fireEvent.keyDown(heading, { key: "ArrowRight" });
       expect(await within(list).findByRole("button", { name: /^First worker, on / })).toBeTruthy();
-      fireEvent.click(member);
-      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(project.id);
-      expect(member.getAttribute("aria-current")).toBe("page");
     } finally {
       view?.unmount();
       uninstallDesktopFake();
@@ -365,74 +333,6 @@ describe("HierarchicalSidebar", () => {
       useMachineViewStore.setState(previousView, true);
     }
   });
-
-  for (const mode of ["project", "repository"] as const) {
-    test(`${mode} collision filtering skips environment rows for project and folder drags`, async () => {
-      const previousView = useMachineViewStore.getState();
-      const previousNative = window.orkestrator;
-      installDesktopFake({
-        list: connectionList([remoteConnection("a", "Machine A", "teal")]),
-        datasets: { a: { projects: [], environments: {} } },
-      });
-      appCommandStore(projectStore).getState().setProjects([project]);
-      useMachineViewStore.getState().setGrouping(mode);
-      let view: ReturnType<typeof render> | undefined;
-      try {
-        view = renderInAppCommandScope(
-          <FederationProvider>
-            <HierarchicalSidebar />
-          </FederationProvider>,
-        );
-        await screen.findByTestId(`federated-${mode}-list`);
-        const detect = dndContextProps!.collisionDetection!;
-        const projectId = projectKey(projectRef("bk_self" as never, project.id));
-        const groupId = "project-folder:github.com/acme/project-one";
-        const rootId = "project-folder-root";
-        const rect = (x: number) => ({
-          top: 0,
-          bottom: 10,
-          left: x,
-          right: x + 10,
-          width: 10,
-          height: 10,
-        });
-        const containers = [
-          "env-one",
-          "env-two",
-          projectId,
-          groupId,
-          ...(mode === "project" ? [rootId] : []),
-        ];
-        const dragData = (id: string) => ({
-          current:
-            id === rootId
-              ? undefined
-              : { sortable: { containerId: id.startsWith("env-") ? "environments" : "projects" } },
-        });
-        const args = (activeId: string, x = 0) =>
-          ({
-            active: { id: activeId, data: dragData(activeId) },
-            collisionRect: rect(x),
-            droppableRects: new Map(containers.map((id, index) => [id, rect(index * 100)])),
-            droppableContainers: containers.map((id) => ({ id, data: dragData(id) })),
-            pointerCoordinates: null,
-          }) as Parameters<CollisionDetection>[0];
-        for (const activeId of [projectId, groupId]) {
-          // The environment is nearest; the next valid project must win.
-          expect(detect(args(activeId))[0]?.id).toBe(projectId);
-          expect(detect(args(activeId, 300))[0]?.id).toBe(groupId);
-          if (mode === "project") expect(detect(args(activeId, 400))[0]?.id).toBe(rootId);
-        }
-        expect(detect(args("env-one"))[0]?.id).toBe("env-one");
-        expect(detect(args("env-one", 100))[0]?.id).toBe("env-two");
-      } finally {
-        view?.unmount();
-        uninstallDesktopFake();
-        window.orkestrator = previousNative;
-        useMachineViewStore.setState(previousView, true);
-      }
-    });
-  }
 
   beforeEach(() => {
     if (!HTMLElement.prototype.scrollIntoView) {
@@ -1673,6 +1573,7 @@ describe("HierarchicalSidebar", () => {
         // No speed was offered for this launch, so the platform tier decides
         // rather than a one-shot Normal being pinned here.
         undefined,
+        "task",
       );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "", {
@@ -1799,7 +1700,7 @@ describe("HierarchicalSidebar", () => {
     );
   });
 
-  test("opens the create dialog when a machine section asks for this window's machine", async () => {
+  test("routes a command-machine create request to the app dialog host", () => {
     portalStore.store.setState({ selfId: "bk_here" as never });
     try {
       renderInAppCommandScope(<HierarchicalSidebar />);
@@ -1811,10 +1712,15 @@ describe("HierarchicalSidebar", () => {
           title: "Project One",
         }),
       );
-      await screen.findByText(/^Create Ork \(environment\)/);
+      expect(useAppDialogStore.getState().request).toEqual({
+        kind: "create-environment",
+        nodeId: appCommandScope().nodeId,
+        projectId: "project-1",
+      });
       expect(createEnvironmentMock).not.toHaveBeenCalled();
       expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
     } finally {
+      useAppDialogStore.getState().close();
       portalStore.store.setState({ selfId: null });
     }
   });
@@ -1913,6 +1819,7 @@ describe("HierarchicalSidebar", () => {
               "high",
               [],
               undefined,
+              "task",
             );
           });
           await waitFor(() =>

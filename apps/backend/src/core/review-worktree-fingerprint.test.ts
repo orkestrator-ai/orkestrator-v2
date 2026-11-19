@@ -274,7 +274,6 @@ for (const interpreter of INTERPRETERS) {
     `stops a blocked git and its descendant at its budget (${interpreter})`,
     async () => {
       const root = await fixture();
-      const pidFile = path.join(root, ".git", "status-pid");
       // Keep the fake Git alive as the group leader, with a separate long-lived
       // child. Killing just Git must fail this regression test. Both processes
       // are bounded even if cleanup regresses. The probe's first Git call is
@@ -282,28 +281,53 @@ for (const interpreter of INTERPRETERS) {
       // budget, so a short budget still finds it running.
       const bin = await fakeGitBin(
         root,
-        `case " $* " in *" --show-toplevel "*) sleep 30 & child=$!; printf '%s\\n' "$$" "$child" > '${pidFile}'; wait "$child"; exit;; esac\nexec "$REAL_GIT" "$@"`,
+        `case " $* " in
+  *" --show-toplevel "*)
+    sleep 30 &
+    child=$!
+    printf '%s\\n' "$$" "$child" > "$STATUS_PID_FILE.tmp" &&
+      mv "$STATUS_PID_FILE.tmp" "$STATUS_PID_FILE"
+    wait "$child"
+    exit;;
+esac
+exec "$REAL_GIT" "$@"`,
       );
-      const started = Date.now();
-      const error = await runCommand(
-        interpreter,
-        ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, "budget-ms=500"],
-        {
-          cwd: root,
-          timeoutMs: 10_000,
-          env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
-        },
-      ).then(
-        () => null,
-        (failure: unknown) => failure,
-      );
-      expect(Date.now() - started).toBeLessThan(8_000);
-      expect(error).toBeInstanceOf(CommandFailedError);
-      expect((error as CommandFailedError).timedOut).toBe(false);
-      expect(reviewWorktreeProbeReasonCode(String((error as CommandFailedError).stderr))).toBe(
-        "timeout",
-      );
-      const pids = (await fs.readFile(pidFile, "utf8")).trim().split("\n");
+      // The budget is armed when the fake Git is spawned, not when its shell
+      // has started. On a loaded host the budget can fire before the shell
+      // has forked its child and written the pid file, which proves nothing
+      // about the descendant (flake 1491). Such an attempt still has to end
+      // as a timeout; the next attempt gives the shell a longer budget.
+      let pidText: string | null = null;
+      for (const budgetMs of [500, 2_000, 5_000]) {
+        // Each attempt reads only its own atomically published pair.
+        const pidFile = path.join(root, ".git", `status-pid-${budgetMs}`);
+        const started = Date.now();
+        const error = await runCommand(
+          interpreter,
+          ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, `budget-ms=${budgetMs}`],
+          {
+            cwd: root,
+            timeoutMs: budgetMs + 10_000,
+            env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STATUS_PID_FILE: pidFile },
+          },
+        ).then(
+          () => null,
+          (failure: unknown) => failure,
+        );
+        expect(Date.now() - started).toBeLessThan(budgetMs + 7_500);
+        expect(error).toBeInstanceOf(CommandFailedError);
+        expect((error as CommandFailedError).timedOut).toBe(false);
+        expect(reviewWorktreeProbeReasonCode(String((error as CommandFailedError).stderr))).toBe(
+          "timeout",
+        );
+        pidText = await fs.readFile(pidFile, "utf8").catch((failure: NodeJS.ErrnoException) => {
+          if (failure.code === "ENOENT") return null;
+          throw failure;
+        });
+        if (pidText !== null) break;
+      }
+      expect(pidText).not.toBeNull();
+      const pids = pidText!.trim().split("\n");
       expect(pids).toHaveLength(2);
       expect(new Set(pids).size).toBe(2);
       for (const pid of pids) {
@@ -337,7 +361,8 @@ for (const interpreter of INTERPRETERS) {
         });
       }
     },
-    15_000,
+    // Three attempts, each bounded by its own budget plus the probe deadline.
+    45_000,
   );
 }
 

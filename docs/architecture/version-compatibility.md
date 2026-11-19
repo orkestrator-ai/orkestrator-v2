@@ -158,6 +158,7 @@ supported peer already has the newer behaviour.
 
 | Path | Where | Counter | Serves | Retire when | Owner |
 | --- | --- | --- | --- | --- | --- |
+| Backends without shared Manual ordering return no `manualOrderSupported` on `get_portal_layout`. The renderer uses By machine and reserves `update_repository_environment_order` for capable nodes. Older layout writers leave the separate Manual store intact during a downgrade | `lib/portal/portal-layout.ts`, `storage-nodes.ts` | None (renderer capability check) | Command nodes before EL01’s per-repository save command | Revisit the renderer fallback once the support floor advertises Manual. Keep the separate store for downgrade safety | Sidebar layout |
 | The shared per-window preview partition | `browserPreviewPartitionForWindow` (`desktop-window-lifecycle.ts`) | None (desktop side) | Desktops with the service-preview transport off; the legacy loopback route that also used it was retired on 2026-11-15 (Retired) | 0042 task 9 removes it | [0042](../todo/previews-and-annotations/0042-service-preview-rollout.md) task 9 |
 | Pre-contract node-mail leaves without `node-mail-turn-origin` reject `turnOrigin`: adapter 0 omits it only without that capability; capable v2.36.5-beta and v2.36.6-beta leaves and version 1 preserve it | `node-mail/client.ts` | `domain-adapter.backend.node-mail.v0` | Leaves without a `node-mail` domain, including strict v2.36.1 and capable v2.36.5-beta/v2.36.6-beta | Retire the legacy capability read with adapter 0 and mixed-version qualification under to-do 8304; current hello advertisement is retired | Coordinator mail |
 
@@ -946,7 +947,7 @@ export const nodeMailClient = domainClient(nodeMail, {
   readiness waits and peeks, host CLI and credential checks, the GitHub CLI
   sign-in, model catalogues, skills and plugins), `system` (50: host
   maintenance, usage, load and diagnostics, scheduled jobs, bug reports, disk
-  usage, worktree locations, the resource manifests) and `nodes` (51: the
+  usage, worktree locations, the resource manifests) and `nodes` (52: the
   registry, controller attachment, client grants, command handover, leaf
   workspaces, portal summaries, layout and event relay, `invoke_on_node`,
   project comparisons and copies, the machine profile), all at version 1
@@ -1355,7 +1356,9 @@ Converting an existing string command is the same, plus: delete its entry in
 still mapped), keep the handler tolerant, keep its error text with `message`
 annotations, and commit the lower baseline that `contract:manifest` writes.
 
-Changing a defined command: a new optional field needs nothing else. Anything
+A new optional field can be ignored by older peers. If a write requires the
+peer to apply it, use a new command or an explicit capability and a defined
+fallback before sending it. Anything
 in the bump list above bumps the domain version, keeps the old version
 accepted through `min` where clients in the window still send it, adds a
 client adapter for the old version, and adds a register row.

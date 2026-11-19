@@ -1,3 +1,4 @@
+import { configStore } from "../../apps/web/src/stores/configStore";
 import {
   StatusReadabilityFixture,
   installStatusReadabilityFixture,
@@ -36,9 +37,10 @@ import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
 import { EnvironmentAttentionFixture } from "./EnvironmentAttentionFixture";
-import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
+import { RepositoryEnvironmentListFixture } from "../../apps/web/src/test/RepositoryEnvironmentListFixture";
 import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
-import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
+import { CommandPaletteHistoryFixture } from "./CommandPaletteHistoryFixture";
+import { RemoteEnvironmentRowsFixture } from "../../apps/web/src/test/RemoteEnvironmentRowsFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { CursorScreenRecordingFixture } from "./CursorScreenRecordingFixture";
 import { NativeMessageSpacingFixture } from "./NativeMessageSpacingFixture";
@@ -65,6 +67,7 @@ import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
 import { FeaturesComposeFixture, TerminalComposeFixture } from "./ComposeFramesFixture";
+import { QueuedPromptEditFixture } from "./QueuedPromptEditFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
@@ -73,6 +76,7 @@ import { SelfImprovementSettingsFixture } from "./SelfImprovementSettingsFixture
 import { SettingsMachineFixture } from "./SettingsMachineFixture";
 import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
 import { CapabilitiesFixture } from "./CapabilitiesFixture";
+import { SettingsSearchFixture } from "./SettingsSearchFixture";
 import { GitHubCliSetupFixture } from "./GitHubCliSetupFixture";
 import { AgentsMdApprovalFixture } from "./AgentsMdApprovalFixture";
 import { GraphRunFlowFixture } from "./GraphRunFlowFixture";
@@ -180,6 +184,9 @@ import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow"
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
+const PullRequestCodeFixture = lazy(async () => ({
+  default: (await import("./PullRequestCodeFixture")).PullRequestCodeFixture,
+}));
 const MarkdownEditorDiagramFixture = lazy(async () => ({
   default: (await import("./MarkdownEditorDiagramFixture")).MarkdownEditorDiagramFixture,
 }));
@@ -2070,6 +2077,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/queued-prompt-edit") return <QueuedPromptEditFixture />;
   if (window.location.pathname === "/tab-styles") return <TabStylesFixture />;
   if (window.location.pathname === "/html-preview") return <HtmlPreviewFixture />;
   if (window.location.pathname === "/annotation-destination-layout")
@@ -2164,13 +2172,17 @@ function fixtureForPath() {
       </Suspense>
     );
   }
-  if (window.location.pathname === "/merged-project-list") return <MergedProjectListFixture />;
+  if (window.location.pathname === "/repository-environment-list")
+    return <RepositoryEnvironmentListFixture />;
   if (window.location.pathname === "/project-search-machines")
     return <ProjectSearchMachinesFixture />;
+  if (window.location.pathname === "/command-palette-history")
+    return <CommandPaletteHistoryFixture />;
   if (window.location.pathname === "/environment-status-marker")
     return <EnvironmentStatusMarkerFixture />;
   if (window.location.pathname === "/environment-attention") return <EnvironmentAttentionFixture />;
-  if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
+  if (window.location.pathname === "/remote-environment-rows")
+    return <RemoteEnvironmentRowsFixture />;
   if (window.location.pathname === "/agent-account-status") return <AgentAccountStatusFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings")
@@ -2181,6 +2193,7 @@ function fixtureForPath() {
       </>
     );
   if (window.location.pathname === "/settings-machines") return <SettingsMachineFixture />;
+  if (window.location.pathname === "/settings-search") return <SettingsSearchFixture />;
   if (window.location.pathname === "/self-improvement-settings")
     return <SelfImprovementSettingsFixture />;
   if (window.location.pathname === "/scheduler-status") return <SchedulerStatusFixture />;
@@ -2445,11 +2458,38 @@ function fixtureForPath() {
         <DataSavingGatewayFixture />
       </Suspense>
     );
+  if (window.location.pathname === "/pull-request-code") {
+    return (
+      <Suspense fallback={null}>
+        <PullRequestCodeFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/diff-base") return <DiffBaseFixture />;
   if (window.location.pathname === "/coordinator-explanations")
     return <CoordinatorExplanationsFixture />;
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
+}
+
+const terminalFixtureAgent = new URLSearchParams(window.location.search).get("terminal-agent");
+if (
+  window.location.pathname === "/" &&
+  (terminalFixtureAgent === "grok" || terminalFixtureAgent === "codex")
+) {
+  appCommandStore(configStore).setState(({ config }) => ({
+    config: {
+      ...config,
+      global: {
+        ...config.global,
+        enabledAgentPlatforms: [terminalFixtureAgent],
+        agentSettings: {
+          defaultAgent: terminalFixtureAgent,
+          platforms: { [terminalFixtureAgent]: { mode: "terminal" } },
+        },
+      },
+    },
+  }));
 }
 
 if (window.location.pathname === "/diff-base") installDiffBaseFixture();

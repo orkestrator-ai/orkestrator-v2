@@ -38,18 +38,41 @@ import {
 const CONFIG_ADMIN = new Set([
   "update_global_config",
   "patch_global_config",
+  "reset_global_settings",
   "update_notification_sound_settings",
   "save_desktop_connections",
   "set_github_token",
   "set_cursor_api_key",
   "set_anthropic_api_key",
   "set_opencode_zen_api_key",
+  // Agent credentials: only a full session approves a request or stores a value.
+  "approve_credential_request",
+  "decline_credential_request",
+  "create_credential_connection",
+  "update_credential_connection",
+  "replace_credential_connection_value",
+  "delete_credential_connection",
 ]);
 
 const PROJECTS_INTERNAL = new Set(["request_coordinator_agents_md_update"]);
 
 /** Commands added after version 2 shipped; a version-1 peer is never sent them. */
-const ADDED_IN_VERSION_2 = new Set(["get_project_setup_requirements"]);
+const ADDED_IN_VERSION_2 = new Set([
+  "get_project_setup_requirements",
+  // Agent credentials (docs/architecture/agent-credentials.md).
+  "get_credential_snapshot",
+  "get_credential_overview",
+  "approve_credential_request",
+  "decline_credential_request",
+  "revoke_credential_grant",
+  "create_credential_connection",
+  "update_credential_connection",
+  "replace_credential_connection_value",
+  "delete_credential_connection",
+  // Settings search (docs/architecture/settings-search.md).
+  "get_global_setting_sources",
+  "reset_global_settings",
+]);
 
 const PROJECT = {
   id: "p1",
@@ -91,7 +114,7 @@ describe("projects and config definitions", () => {
     expect(projectsDomain).toMatchObject({ name: "projects", version: 2, min: 1 });
     expect(configDomain).toMatchObject({ name: "config", version: 2, min: 1 });
     expect(PROJECTS_COMMANDS).toHaveLength(27);
-    expect(CONFIG_COMMANDS).toHaveLength(29);
+    expect(CONFIG_COMMANDS).toHaveLength(40);
     for (const [domain, commands] of [
       [projectsDomain, PROJECTS_COMMANDS],
       [configDomain, CONFIG_COMMANDS],

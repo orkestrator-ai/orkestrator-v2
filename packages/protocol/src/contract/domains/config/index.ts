@@ -2,4 +2,5 @@
 export * from "./domain.js";
 export * from "./models.js";
 export * from "./commands.js";
+export * from "./credential-commands.js";
 export * from "./client.js";

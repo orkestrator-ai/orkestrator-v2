@@ -1,3 +1,4 @@
+import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
 /**
  * Query configuration shared by real turns and command-discovery probes.
  *
@@ -52,7 +53,7 @@ export interface ClaudeDiscoveryInputs {
 export function claudeWorkspaceCwd(): string {
   // CWD is set for local environments, where the bridge runs from its own
   // directory but the SDK must operate on the project.
-  return process.env.CWD || process.cwd();
+  return process.env[BUG_REPORT_WORKSPACE_ENV] || process.env.CWD || process.cwd();
 }
 
 /**
@@ -170,7 +171,9 @@ function withLinuxLoopbackNote(
 export function claudePolicyPermissionMode(
   policy: NativeAgentExecutionPolicy | undefined,
 ): PermissionMode {
-  return isRestrictivePolicy(policy) ? "default" : "bypassPermissions";
+  return isRestrictivePolicy(policy) || process.env[BUG_REPORT_WORKSPACE_ENV]
+    ? "default"
+    : "bypassPermissions";
 }
 
 function isRestrictivePolicy(policy: NativeAgentExecutionPolicy | undefined): boolean {
@@ -264,6 +267,19 @@ export function claudeManagedSettings(
   return isCoordinatorReadOnlyPolicy(policy)
     ? { allowManagedHooksOnly: true, disableSkillShellExecution: true }
     : undefined;
+}
+
+/** SDK launch settings enforce the file-tool boundary in every permission mode. */
+export function claudeBugReportSettings(
+  workspace: string,
+): Exclude<Options["settings"], string | undefined> {
+  return {
+    autoMemoryEnabled: false,
+    permissions: {
+      blockWritesOutsideWorkingDirectories: true,
+      workingDirectoriesAsGiven: [workspace],
+    },
+  };
 }
 
 /**

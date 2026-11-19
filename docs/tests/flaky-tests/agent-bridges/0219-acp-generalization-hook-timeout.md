@@ -132,3 +132,22 @@ The combined merge repeated a failure in this owner during `mise run test:logged
   current `afterAll` stop has the same shape. If this recurs, record how long
   the bridge took to exit after SIGTERM and which of its children were still
   alive, before changing the budget.
+
+## Investigation (2026-11-19) — not reproduced on macOS; still open
+
+0093, 0210 and 0219 share one shape: a test (or, for 0219, the old per-test
+bridge stop) waits for a spawned child's `exit` or `close` and hits its full
+budget. On macOS with Bun 1.4.4 at host load about 35, two probes tried to make
+that exit go unobserved:
+
+- 300 fresh Bun processes, eight at a time, each spawning
+  `fake-codex-app-server.mjs --version` and waiting for `close` with an 8 s
+  watchdog: no hang, every output intact.
+- One Bun process running 2,000 children 24 at a time, alternating
+  `spawn(fake --version)` (waiting for `close`) and `execFile("/bin/sh", ["-c",
+  "echo hi"])` (the shape of 0093's helper), with a 15 s watchdog per child:
+  2,000 done, no hang (4.9 s).
+
+Neither reproduced a lost exit, so no code changed. The next recurrence should
+still record whether the child was alive and whether `exit` fired without
+`close`.

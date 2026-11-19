@@ -1799,6 +1799,12 @@ describe("backend command wrapper coverage", () => {
       // Validate the machine profile they return; covered below.
       "getBackendProfile",
       "updateBackendProfile",
+      // Its last argument is a launch-base object, which a string cannot stand
+      // in for; covered by the create-environment tests above.
+      "createEnvironment",
+      // Its keys and expectations are lists, which a string cannot stand in
+      // for; covered below.
+      "resetGlobalSettings",
     ]);
     // `createXApi(client)` factories (plan item 3002) are covered per client in
     // `backend/factories.test.ts`; their named exports are the wrappers swept here.
@@ -1819,6 +1825,21 @@ describe("backend command wrapper coverage", () => {
       await wrapper(...args).catch(() => undefined);
       expect(invokeMock.mock.calls.length, `${name} must call invoke`).toBeGreaterThan(0);
     }
+  });
+
+  test("resetGlobalSettings sends the guarded reset to the command node", async () => {
+    const config = { global: {}, repositories: {} } as unknown as AppConfig;
+    invokeMock.mockImplementation(async (command: unknown) =>
+      command === "reset_global_settings" ? { status: "reset", conflicts: [], config } : undefined,
+    );
+    const expectations = [{ key: "terminalScrollback", present: true, value: 5000 }] as const;
+    await expect(
+      backendWrappers.resetGlobalSettings(["terminalScrollback"], expectations, null),
+    ).resolves.toEqual({ status: "reset", conflicts: [], config });
+    expect(invokeMock).toHaveBeenCalledWith("reset_global_settings", {
+      keys: ["terminalScrollback"],
+      expect: expectations,
+    });
   });
 
   test("machine profile wrappers validate the profile the machine returns", async () => {

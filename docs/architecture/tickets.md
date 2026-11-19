@@ -284,7 +284,7 @@ viewing it nor launching changes it. The tile always shows on the ticket dialog,
 even with no policy; the pipeline's Ticket node keeps the read-only view of its
 snapshot. A launch saves its choice to the ticket (`launch_build_pipeline`), and
 a choice equal to the ticket's own writes nothing. The delivery note is kept.
-The form's "A feature" option has the same control under Advanced and saves it
+The form's "Pipeline" option has the same control under Advanced and saves it
 on the ticket it creates. Other launchers have no control and use the ticket's
 policy: the coordinator's `start_build_pipeline` deliberately has no override
 (and is linked to its ticket, so the too-late comment below reaches it too),

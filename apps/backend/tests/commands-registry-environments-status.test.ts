@@ -33,6 +33,70 @@ const {
 } = await createCommandFixtures();
 
 describe("environment status and settings commands", () => {
+  test("validates and clears the backend-only opening interaction", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment({ id: "opening", interactionMode: "task" });
+      await storage.addEnvironment(environment);
+      const openingInteraction = {
+        mode: "task",
+        requestId: "request",
+        providerSessionId: "private-provider",
+        sessionKey: "private-key",
+      };
+      for (const invalid of [
+        { requestId: " " },
+        { mode: "pipeline" },
+        { providerSessionId: "" },
+        { sessionKey: " " },
+      ]) {
+        await expect(
+          storage.updateEnvironment(environment.id, {
+            openingInteraction: { ...openingInteraction, ...invalid },
+          }),
+        ).rejects.toThrow("Invalid opening interaction");
+      }
+      await storage.updateEnvironment(environment.id, { openingInteraction });
+      const { context } = createContext([], { dataDir });
+      context.storage = storage;
+      const detail = await createCommandRegistry().get("get_environment")?.(
+        { environmentId: environment.id },
+        context,
+      );
+      expect(detail).toMatchObject({ id: environment.id, interactionMode: "task" });
+      expect(detail).not.toHaveProperty("openingInteraction");
+      expect(JSON.stringify(detail)).not.toContain("private-provider");
+      expect(JSON.stringify(detail)).not.toContain("private-key");
+
+      await storage.updateEnvironment(environment.id, { openingInteraction: null });
+      expect((await storage.getEnvironment(environment.id))?.openingInteraction).toBeUndefined();
+    });
+  });
+
+  test("refuses prompt interaction modes on a pipeline-owned environment", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment({ id: "owned", buildPipelineId: "pipeline" });
+      await storage.addEnvironment(environment);
+      await storage.saveBuildPipeline("pipeline", environment.projectId, environment.id, 1, {
+        environmentId: environment.id,
+      });
+      const { context } = createContext([], { dataDir });
+      context.storage = storage;
+      const commands = createCommandRegistry();
+
+      await expect(
+        commands.get("update_environment_agent_settings")?.(
+          {
+            environmentId: environment.id,
+            interactionMode: "interactive",
+          },
+          context,
+        ),
+      ).rejects.toThrow("Pipeline environments use the pipeline interaction policy");
+      const saved = await storage.getEnvironment(environment.id);
+      expect(saved?.interactionMode).toBeUndefined();
+    });
+  });
+
   test("lists and snapshots only the requested project's persisted environments", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const projectId = "project-1";
@@ -1413,6 +1477,27 @@ exit 0
       context,
     );
     expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
+    // The interaction mode is durable: it is saved even with the launch
+    // cancelled, and only a known mode is accepted.
+    await commands.get("update_environment_agent_settings")?.(
+      { environmentId: environment.id, pendingAgentLaunch: false, interactionMode: "interactive" },
+      context,
+    );
+    expect(updates.at(-1)).toMatchObject({
+      pendingAgentLaunch: false,
+      interactionMode: "interactive",
+    });
+    await commands.get("update_environment_agent_settings")?.(
+      { environmentId: environment.id, agentSettings: null },
+      context,
+    );
+    expect(updates.at(-1)).not.toHaveProperty("interactionMode");
+    await expect(
+      commands.get("update_environment_agent_settings")?.(
+        { environmentId: environment.id, interactionMode: "pipeline" },
+        context,
+      ),
+    ).rejects.toThrow("interactionMode must be task or interactive");
 
     await commands.get("update_environment_allowed_domains")?.(
       {

@@ -8,6 +8,11 @@
  * creates the ticket, the environment and the pipeline from this one object.
  */
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
+import {
+  isBuildIntent,
+  type BuildIntent,
+  type EnvironmentInteractionMode,
+} from "@orkestrator/protocol/environment-interaction";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   BuildStepConfig,
@@ -29,8 +34,36 @@ import {
 import { createUuid } from "@/lib/uuid";
 import type { EnvironmentType, NetworkAccessMode, PortMapping } from "@/types";
 
-/** How the dialog's Build section is being used. */
-export type BuildIntent = "feature" | "prompt";
+/**
+ * How the dialog's Build section is being used.
+ *
+ * `feature` creates a pipeline environment, which is never interactive. The
+ * other two create a prompt environment and name its interaction mode
+ * (`@orkestrator/protocol/environment-interaction`): a `task` runs the prompt
+ * without asking questions and then waits, `interactive` may ask questions
+ * from the start.
+ */
+export type { BuildIntent };
+
+/**
+ * The Build choice the create dialog opens on: the one this project last
+ * created an environment with (`RepositoryConfig.lastBuildIntent`), or a task.
+ * Pipeline is remembered only where this dialog can launch one.
+ */
+export function rememberedBuildIntent(
+  lastBuildIntent: unknown,
+  canLaunchPipeline: boolean,
+): BuildIntent {
+  if (!isBuildIntent(lastBuildIntent)) return "task";
+  return lastBuildIntent === "feature" && !canLaunchPipeline ? "task" : lastBuildIntent;
+}
+
+/** The interaction mode a prompt intent gives its environment; none for a pipeline. */
+export function buildIntentInteractionMode(
+  intent: BuildIntent,
+): EnvironmentInteractionMode | undefined {
+  return intent === "feature" ? undefined : intent;
+}
 
 export interface FeatureBuildStepSelection {
   agent: LaunchAgent;

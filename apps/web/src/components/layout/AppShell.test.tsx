@@ -278,7 +278,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useMachineViewStore.setState({ grouping: "machine" });
+  useMachineViewStore.setState({ grouping: "repository" });
   useActiveCoordinatorConversationStore.setState({ active: null });
   uiStore().setState({ projectBoardTab: INITIAL_PROJECT_BOARD_TAB });
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
@@ -317,7 +317,7 @@ describe("AppShell", () => {
     },
   );
 
-  test("an open files sheet stays hidden over a remote workspace across layout changes", () => {
+  test("an open files sheet waits for a remote scope across layout changes", () => {
     filesPanelOpen = true;
     isMobile = false;
     act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
@@ -669,6 +669,10 @@ describe("AppShell", () => {
       act(() => requestAppShortcut("search-projects"));
       expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
       // The reopening transition settles; the search it delivered stays open.
+      // The hook restores the full width on the next animation frame.
+      await act(async () => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      });
       await act(async () => {
         expect(settle.advance()).toBe(1);
       });
@@ -684,7 +688,7 @@ describe("AppShell", () => {
     useMachineViewStore.setState({ grouping: "compact" });
     renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.getByTestId("resize-handle").dataset.disabled).toBe("true");
-    act(() => useMachineViewStore.setState({ grouping: "machine" }));
+    act(() => useMachineViewStore.setState({ grouping: "repository" }));
     expect(screen.getByTestId("resize-handle").dataset.disabled).toBe("false");
   });
 
@@ -698,7 +702,7 @@ describe("AppShell", () => {
     expect(useUIChromeStore.getState().sidebarOpen).toBe(false);
 
     act(() => {
-      useMachineViewStore.setState({ grouping: "machine" });
+      useMachineViewStore.setState({ grouping: "repository" });
       useUIChromeStore.setState({ sidebarOpen: true });
     });
     await waitFor(() => expect(screen.getByText("Sidebar")).toBeTruthy());

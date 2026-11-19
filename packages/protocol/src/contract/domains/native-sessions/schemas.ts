@@ -188,6 +188,15 @@ export const NativeAgentJobReceiptSchema = openRecord({
 });
 export type NativeAgentJobReceipt = Mutable<typeof NativeAgentJobReceiptSchema.Type>;
 
+/** `PromptQueueEditLease` (`prompt-queue-edit.ts`): one in-place edit's hold on a queued item. */
+const PromptQueueEditLeaseSchema = openRecord({
+  messageId: Schema.String,
+  leaseId: Schema.String,
+  acquiredAt: Schema.String,
+  expiresAt: Schema.String,
+  baseFingerprint: Schema.String,
+});
+
 /**
  * `PersistedPromptQueue`: prompts a user has committed to sending but which
  * have not been dispatched yet, for one agent tab. It lives in the backend
@@ -247,10 +256,58 @@ export const PromptQueueSchema = openRecord({
   removedOrigins: Schema.optional(
     mutableArray(openRecord({ requestId: Schema.String, removedAt: Schema.String })),
   ),
+  /**
+   * In-place edits (`prompt-queue-edit.ts`): at most one lease per queued
+   * item. While one names an item, the backend does not deliver it.
+   */
+  editLeases: Schema.optional(mutableArray(PromptQueueEditLeaseSchema)),
   updatedAt: Schema.String,
   revision: Schema.Finite,
 });
 export type PersistedPromptQueue = Mutable<typeof PromptQueueSchema.Type>;
+
+const PromptQueueEditConflictSchema = Schema.Literals(["lease-lost", "missing", "changed"]);
+
+/** `begin_prompt_queue_message_edit`: the lease and the item as it stands, or why not. */
+export const PromptQueueEditBeginSchema = Schema.Union([
+  openRecord({
+    status: Schema.Literal("editing"),
+    lease: PromptQueueEditLeaseSchema,
+    /** The item being edited, as stored when the lease was granted. */
+    message: Schema.Unknown,
+    /** True when this took over another client's lease. */
+    tookOver: optionalBoolean,
+    queue: PromptQueueSchema,
+  }),
+  openRecord({
+    status: Schema.Literal("refused"),
+    reason: Schema.Literals(["missing", "frozen", "held-elsewhere"]),
+    /** For `held-elsewhere`: when the other client's lease runs out. */
+    expiresAt: optionalString,
+    queue: Schema.NullOr(PromptQueueSchema),
+  }),
+]);
+
+/** `renew_prompt_queue_message_edit`: the new deadline, or why the edit no longer holds. */
+export const PromptQueueEditRenewSchema = Schema.Union([
+  openRecord({ status: Schema.Literal("renewed"), expiresAt: Schema.String }),
+  openRecord({ status: Schema.Literal("conflict"), reason: PromptQueueEditConflictSchema }),
+]);
+
+/** `finish_prompt_queue_message_edit`: what happened, and the queue after it. */
+export const PromptQueueEditFinishSchema = Schema.Union([
+  openRecord({
+    status: Schema.Literals(["committed", "released"]),
+    queue: Schema.NullOr(PromptQueueSchema),
+  }),
+  openRecord({
+    status: Schema.Literal("conflict"),
+    reason: PromptQueueEditConflictSchema,
+    /** The item as it now stands, when it is still queued. */
+    current: Schema.optional(Schema.Unknown),
+    queue: Schema.NullOr(PromptQueueSchema),
+  }),
+]);
 
 /** `remove_prompt_queue_message`: the removed message (or `null`) and the queue after it. */
 export const PromptQueueRemovalSchema = openRecord({
@@ -496,7 +553,12 @@ const nativeAgentSessionFields = {
   dispatchedRequestIds: Schema.optional(mutableArray(Schema.String)),
   /** The mode the newest accepted turn was sent in. */
   lastDispatchedTurn: Schema.optional(
-    openRecord({ requestId: Schema.String, mode: Schema.optional(ConversationModeSchema) }),
+    openRecord({
+      requestId: Schema.String,
+      mode: Schema.optional(ConversationModeSchema),
+      // A steer has its own receipt but belongs to the current model turn.
+      modelRequestId: optionalString,
+    }),
   ),
   /** Retained only while the provider outcome is ambiguous. */
   pendingDispatch: Schema.optional(PendingDispatchSchema),

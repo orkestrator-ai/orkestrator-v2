@@ -289,29 +289,48 @@ function jsonSchemaFieldRefusal(
 }
 
 /**
+ * The check a `jsonSchemaField` runs: `true` for a value the schema accepts,
+ * otherwise the refusal text, naming each field at fault by its path from the
+ * field (`$.a.b`). A handler that decodes a value itself (a result sent as
+ * JSON text) runs the same check on what it decoded.
+ */
+export function jsonSchemaFieldCheck(
+  acceptanceSchema: Record<string, unknown>,
+): (value: unknown) => true | string {
+  const standard = fromJsonSchema(acceptanceSchema as JsonSchemaType)["~standard"];
+  return (value) => {
+    const result = standard.validate(value);
+    if (result instanceof Promise) return "Asynchronous validation is not supported";
+    if (!result.issues) return true;
+    return jsonSchemaFieldRefusal(
+      acceptanceSchema,
+      value,
+      result.issues.map((issue) => issue.message).join("; "),
+    );
+  };
+}
+
+/**
  * A field checked by the MCP SDK's JSON Schema validator. A caller can supply
  * an acceptance schema to support older payloads alongside the published shape.
  * A refusal names each field at fault by its path from the field (`$.a.b`).
+ *
+ * With `jsonText`, a string also passes the check unread, though the published
+ * schema still asks for the object: the handler parses it and runs
+ * {@link jsonSchemaFieldCheck} on the result, so a model that sent its payload
+ * as JSON text is told where that text breaks rather than that it is a string.
  */
 export function jsonSchemaField<T = unknown>(
   publishedSchema: Record<string, unknown>,
   acceptanceSchema = publishedSchema,
+  options: { readonly jsonText?: boolean } = {},
 ): Schema.Codec<T, T> {
-  const standard = fromJsonSchema<T>(acceptanceSchema as JsonSchemaType)["~standard"];
+  const check = jsonSchemaFieldCheck(acceptanceSchema);
   const { $schema: _dialect, ...published } = publishedSchema;
   // `Unknown` publishes `{}` whatever its checks say; `Any` publishes them.
   return Schema.Any.check(
     Schema.makeFilter(
-      (value) => {
-        const result = standard.validate(value);
-        if (result instanceof Promise) return "Asynchronous validation is not supported";
-        if (!result.issues) return true;
-        return jsonSchemaFieldRefusal(
-          acceptanceSchema,
-          value,
-          result.issues.map((issue) => issue.message).join("; "),
-        );
-      },
+      (value) => (options.jsonText && typeof value === "string" ? true : check(value)),
       { toJsonSchema: () => published },
     ),
   ) as unknown as Schema.Codec<T, T>;
@@ -544,16 +563,31 @@ type StandardIssue = { readonly message: string; readonly path?: ReadonlyArray<P
  * JSON Schema and validates each call with the schema; the handler receives
  * the decoded value.
  */
-export function toolInput<S extends Schema.Top>(schema: S): ToolInput<S["Encoded"], S["Type"]> {
+export function toolInput<S extends Schema.Top>(
+  schema: S,
+  options: {
+    /**
+     * Told of every call the schema refuses, before the SDK answers it. The
+     * handler never sees such a call, so this is the only place it can be
+     * counted. Must not throw or block.
+     */
+    readonly onRefused?: (value: unknown, issues: ReadonlyArray<StandardIssue>) => void;
+  } = {},
+): ToolInput<S["Encoded"], S["Type"]> {
   return {
     "~standard": {
       version: 1,
       vendor: "effect",
       validate: (value) => {
         const result = decodeResult(schema, value);
-        return result.success
-          ? { value: result.data }
-          : { issues: schemaErrorIssues(result.error) };
+        if (result.success) return { value: result.data };
+        const issues = schemaErrorIssues(result.error);
+        try {
+          options.onRefused?.(value, issues);
+        } catch {
+          // Counting a refusal must never change the answer.
+        }
+        return { issues };
       },
       jsonSchema: {
         input: () => toolJsonSchema(schema),

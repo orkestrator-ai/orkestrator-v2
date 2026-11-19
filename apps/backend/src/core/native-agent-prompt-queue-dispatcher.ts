@@ -32,6 +32,7 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { NativeQueueScheduling } from "./native-agent-queue-scheduling.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
+import { promptQueueHeadHeldByEdit } from "@orkestrator/protocol/prompt-queue-edit";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 import {
   queueBoolean,
@@ -574,6 +575,8 @@ export class NativeAgentPromptQueueDispatcher {
     }
     if (queue.dispatchError) return;
     if (queue.inFlight === undefined && queue.messages.length === 0) return;
+    // An edit holds the head; finishing it wakes this queue again.
+    if (queue.inFlight === undefined && promptQueueHeadHeldByEdit(queue)) return;
     const environment = await this.host.assertEnvironmentLive(queue.environmentId);
     // The launch path has always required this; so must the drain path. A
     // stopped or still-provisioning environment must not be started by a

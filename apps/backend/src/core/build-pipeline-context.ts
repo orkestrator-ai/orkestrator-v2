@@ -51,6 +51,7 @@ import {
 import type { BuildPipelineProvider, ProviderDependencies } from "./build-pipeline-provider.js";
 import {
   errorMessage,
+  resumablePhase,
   DEFAULT_RECONNECT_DEADLINE_MS,
   DEFAULT_STRUCTURED_RESULT_DEADLINE_MS,
   DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS,
@@ -305,6 +306,21 @@ export class BuildPipelineContext {
     }
     const sessionPhase = sessionPhaseForBuildPhase(phase);
     return sessionPhase ? (buildPipelineSessionStage(sessionPhase).result ?? undefined) : undefined;
+  }
+
+  /** The current tool slot's result kind, if it belongs to this stage. */
+  async boundWorkflowResultKind(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+  ): Promise<WorkflowResultKind | undefined> {
+    const phase = resumablePhase(pipeline.phase);
+    const resultKey = session.structuredRequestId;
+    if (!phase || !resultKey || session.resultTransport !== "tool-v1") return undefined;
+    const binding = await this.options.workflowResults
+      ?.binding({ environmentId: pipeline.environmentId, projectId: pipeline.projectId }, resultKey)
+      .catch(() => null);
+    const kind = binding?.kind;
+    return kind === this.workflowResultKind(phase, kind === "validation-plan") ? kind : undefined;
   }
 
   async workflowAgentMcp(

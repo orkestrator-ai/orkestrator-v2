@@ -3207,6 +3207,32 @@ describe("resolveAgentDefaults", () => {
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
+  test("keeps a paste when switching prompt modes moves focus to the selector", async () => {
+    const pendingImage = deferred<{
+      rgba: () => Promise<Uint8Array>;
+      size: () => Promise<{ width: number; height: number }>;
+    }>();
+    mockReadImage.mockImplementation(() => pendingImage.promise);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+    screen.getByLabelText(/Initial prompt/i).focus();
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    const interactive = screen.getByRole("button", { name: /^Interactive$/ });
+    interactive.focus();
+    fireEvent.click(interactive);
+    await act(async () =>
+      pendingImage.resolve({
+        rgba: async () => new Uint8Array([255, 0, 0, 255]),
+        size: async () => ({ width: 1, height: 1 }),
+      }),
+    );
+
+    expect(await screen.findByAltText(/initial-prompt-/)).toBeTruthy();
+  });
+
   test("lets a second paste supersede an earlier in-flight clipboard read", async () => {
     const firstImage = deferred<{
       rgba: () => Promise<Uint8Array>;
@@ -3417,6 +3443,44 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => expect(create.disabled).toBe(false));
     fireEvent.click(create);
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  });
+
+  test("keeps a pending drop and the prompt when switching to Interactive", async () => {
+    const pendingBuffer = deferred<ArrayBuffer>();
+    const file = new File(["pending"], "pending.txt", { type: "text/plain" });
+    Object.defineProperty(file, "arrayBuffer", { value: () => pendingBuffer.promise });
+    const onCreate = mock(async (_options: unknown) => {});
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
+      target: { value: "Inspect the attachment" },
+    });
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([file]),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Interactive$/ }));
+    const create = screen.getByRole("button", {
+      name: "Create environment",
+    }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    fireEvent.click(create);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", ctrlKey: true });
+    expect(onCreate).not.toHaveBeenCalled();
+
+    await act(async () => pendingBuffer.resolve(new TextEncoder().encode("pending").buffer));
+    expect(await screen.findByText("pending.txt")).toBeTruthy();
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]).toContainEqual(
+      expect.objectContaining({
+        initialPrompt: "Inspect the attachment",
+        interactionMode: "interactive",
+        initialPromptAttachments: [expect.objectContaining({ name: "pending.txt" })],
+      }),
+    );
   });
 
   test("discards a pending drop when the dialog resets", async () => {
@@ -3735,7 +3799,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     description?: string;
     acceptanceCriteria?: string;
   }) {
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     if (fields.name !== undefined) {
       fireEvent.change(screen.getByLabelText(/Feature name/i), {
         target: { value: fields.name },
@@ -3766,7 +3830,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(screen.getByLabelText(/Initial prompt/i)).toBeTruthy();
     expect(screen.queryByLabelText(/Feature name/i) === null).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
 
     expect(screen.getByLabelText(/Feature name/i)).toBeTruthy();
     expect(screen.getByLabelText(/Acceptance criteria/i)).toBeTruthy();
@@ -3786,14 +3850,14 @@ describe("CreateEnvironmentDialog feature builds", () => {
     fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Add a dark mode toggle." },
     });
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     const description = screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement;
     expect(description.value).toBe("Add a dark mode toggle.");
 
     fireEvent.change(description, {
       target: { value: "Add a dark mode toggle to the header." },
     });
-    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Task" }));
     expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe(
       "Add a dark mode toggle to the header.",
     );
@@ -3936,7 +4000,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Add sign in with passkeys." },
     });
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     const createButton = screen.getByRole("button", { name: "Create environment" });
     expect((createButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(createButton);
@@ -4168,11 +4232,11 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(await screen.findByAltText("reference.png")).toBeTruthy();
     expect(await screen.findByText("notes.txt")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     expect(screen.getByAltText("reference.png")).toBeTruthy();
     expect(screen.queryByText("notes.txt") === null).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Task" }));
     expect(screen.getByAltText("reference.png")).toBeTruthy();
     expect(screen.getByText("notes.txt")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
@@ -4202,7 +4266,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     });
     expect(await screen.findByText("prompt-19.txt")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     fireEvent.drop(screen.getByRole("dialog"), {
       dataTransfer: attachmentDataTransfer([
         new File(["image"], "feature.png", { type: "image/png" }),
@@ -4214,7 +4278,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     );
     expect(mockReadImage).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Task" }));
     fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]![0].initialPromptAttachments).toHaveLength(20);
@@ -4384,7 +4448,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     });
     await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Task" }));
     await act(async () => pendingImage.resolve({ rgba, size }));
 
     expect(rgba).not.toHaveBeenCalled();

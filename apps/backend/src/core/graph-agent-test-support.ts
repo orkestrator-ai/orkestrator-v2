@@ -707,6 +707,7 @@ export function agentTestTemplate(
     profile?: string;
     askHuman?: boolean;
     workspaceOutput?: boolean;
+    requiredDecision?: boolean;
     promptBuiltIn?: string;
     ticketRender?: string;
   } = {},
@@ -752,7 +753,12 @@ export function agentTestTemplate(
         ],
         outputs: [
           { name: "description", type: "pr-description@1" },
-          { name: "decision", type: "decision@1", choices: ["ship", "hold"], required: false },
+          {
+            name: "decision",
+            type: "decision@1",
+            choices: ["ship", "hold"],
+            required: overrides.requiredDecision ?? false,
+          },
           ...(overrides.workspaceOutput ? [{ name: "code", type: "workspace@1" }] : []),
         ],
       },

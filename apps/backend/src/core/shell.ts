@@ -8,6 +8,7 @@ import {
   MAX_TEXT_FILE_BYTES,
   MAX_TEXT_FILE_SIZE_LABEL,
   readReadableHostFile,
+  type ReadableHostRoot,
   validateRelativeFilePath,
   writeConfinedFile,
 } from "./path-safety.js";
@@ -116,7 +117,10 @@ export async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-export async function readFileBase64(filePath: string, allowedRoots?: string[]): Promise<string> {
+export async function readFileBase64(
+  filePath: string,
+  allowedRoots?: readonly ReadableHostRoot[],
+): Promise<string> {
   return (await readReadableHostFile(filePath, allowedRoots)).toString("base64");
 }
 

@@ -101,12 +101,19 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
-  BUG_REPORT_EXECUTION_POLICY_OVERRIDE,
+  bugReportExecutionPolicyOverride,
+  bugReportInitialApprovalMode,
+  isLegacyBugReportPolicy,
+  validBugReportApprovalMode,
   bugReportRuntimeEnvironment,
   bugReportRuntimeUnavailableMessage,
   resolveBugReportRuntime,
 } from "./bug-report-runtime.js";
-import { bugReportFirstPromptNote } from "@orkestrator/protocol/bug-report";
+import {
+  bugReportFirstPromptNote,
+  bugReportIdFromRuntimeId,
+  type BugReportAgent,
+} from "@orkestrator/protocol/bug-report";
 import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
@@ -1161,7 +1168,7 @@ export class NativeAgentService {
    */
   private async trustedBugReportInput<T extends EnsureNativeAgentSessionInput>(
     input: T,
-    record: { id: string; agent: string; briefedAt?: string; scratchDir: string },
+    record: { id: string; agent: BugReportAgent; briefedAt?: string; scratchDir: string },
   ): Promise<T> {
     if (record.agent !== input.agent) {
       throw new Error("This bug report belongs to a different agent platform");
@@ -1169,16 +1176,18 @@ export class NativeAgentService {
     const existing = await this.storage.getNativeAgentSession(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
     );
+    const policy =
+      existing?.policy ??
+      resolveNativeAgentExecutionPolicy(
+        { environmentType: "local", networkAccessMode: "full" },
+        input.origin ?? "interactive-native",
+        bugReportExecutionPolicyOverride(record.agent),
+      );
     const trusted = {
       ...input,
+      approvalMode: validBugReportApprovalMode(record.agent, policy, input.approvalMode),
       executionPolicy: existing?.executionPolicy,
-      policy:
-        existing?.policy ??
-        resolveNativeAgentExecutionPolicy(
-          { environmentType: "local", networkAccessMode: "full" },
-          input.origin ?? "interactive-native",
-          BUG_REPORT_EXECUTION_POLICY_OVERRIDE,
-        ),
+      policy,
     };
     if (
       "prompt" in input &&
@@ -1482,6 +1491,27 @@ export class NativeAgentService {
     }
   }
 
+  private async upgradeBugReportSessionPolicy(
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<PersistedNativeAgentSession> {
+    if (
+      (session.agent !== "claude" && session.agent !== "codex") ||
+      !isLegacyBugReportPolicy(session.policy)
+    )
+      return session;
+    const policy = { ...session.policy, approvals: "auto-approve" as const };
+    const approvalMode = bugReportInitialApprovalMode(session.agent)!;
+    const updated = await this.storage.upgradeBugReportSessionPolicy(
+      session,
+      policy,
+      approvalMode,
+      () => provider.synchronizeBugReportSessionPolicy?.(session.providerSessionId, policy),
+    );
+    this.projections.invalidateProjection(session.key);
+    return updated;
+  }
+
   async ensureSession(input: EnsureNativeAgentSessionInput): Promise<EnsuredNativeAgentSession> {
     input = await this.trustedSessionInput(input);
     this.assertAcceptingWork();
@@ -1501,6 +1531,7 @@ export class NativeAgentService {
     await this.assertEnvironmentLive(input.environmentId);
     const provider = await this.provider(input);
     const existing = await this.storage.getNativeAgentSession(key);
+    const reportSession = Boolean(bugReportIdFromRuntimeId(input.environmentId));
     if (
       input.requireProviderSessionId &&
       existing?.providerSessionId !== input.requireProviderSessionId
@@ -1550,7 +1581,9 @@ export class NativeAgentService {
           });
           return enriched;
         }
-        return existing;
+        return reportSession && (status === "idle" || status === "error")
+          ? this.upgradeBugReportSessionPolicy(existing, provider)
+          : existing;
       }
       if (input.requireProviderSessionId) {
         throw new PromptRejectedError(REQUIRED_CONVERSATION_CHANGED);
@@ -1594,6 +1627,23 @@ export class NativeAgentService {
         : undefined;
     const modelSubstitution = resolution?.substitution;
     if (resolution?.modelId) input = { ...input, model: resolution.modelId };
+    if (reportSession && (input.agent === "claude" || input.agent === "codex")) {
+      const approvalMode =
+        input.approvalMode ??
+        validBugReportApprovalMode(
+          input.agent,
+          existing?.policy,
+          existing?.controls?.approvalMode,
+        ) ??
+        bugReportInitialApprovalMode(input.agent);
+      input = {
+        ...input,
+        ...(input.policy && isLegacyBugReportPolicy(input.policy)
+          ? { policy: { ...input.policy, approvals: "auto-approve" } }
+          : {}),
+        approvalMode,
+      };
+    }
     const session = await this.storage.getOrCreateNativeAgentSession(
       {
         key,
@@ -1727,6 +1777,14 @@ export class NativeAgentService {
           initialPromptPresentation: input.initialPromptPresentation,
           expectedProviderSessionId: input.expectedProviderSessionId,
         });
+        const retired = input.expectedProviderSessionId;
+        if (retired && retired !== session.providerSessionId) {
+          this.options.onConversationRetired?.(
+            input.environmentId,
+            input.logicalSessionKey,
+            retired,
+          );
+        }
         return session;
       },
     );
@@ -1806,10 +1864,28 @@ export class NativeAgentService {
     );
   }
 
+  private async upgradeBugReportProjectionPolicy(input: NativeAgentProjectionInput): Promise<void> {
+    if (!bugReportIdFromRuntimeId(input.environmentId) || input.agent === "opencode") return;
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(key);
+    if (!session || !isLegacyBugReportPolicy(session.policy)) return;
+    const provider = await this.provider(input);
+    // Projections can be read while a turn runs. Its active provider policy
+    // stays in force until the conversation is idle.
+    const { status } = await readProviderStatus(provider, session.providerSessionId);
+    if (status === "idle" || status === "error")
+      await this.upgradeBugReportSessionPolicy(session, provider);
+  }
+
   async getProjection(
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentSessionProjection | null> {
     this.assertProjectionInput(input);
+    await this.upgradeBugReportProjectionPolicy(input);
     return this.projections.refreshProjection(input, true);
   }
 
@@ -2111,9 +2187,10 @@ export class NativeAgentService {
     return this.promptDispatch.steerQueuedPrompt(input);
   }
 
-  updateProjectionControls(
+  async updateProjectionControls(
     input: NativeAgentProjectionInput & { update: NativeAgentControlUpdate },
   ): Promise<NativeAgentSessionProjection | null> {
+    await this.upgradeBugReportProjectionPolicy(input);
     return this.sessionOperations.updateProjectionControls(input);
   }
 

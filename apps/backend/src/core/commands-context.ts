@@ -61,6 +61,7 @@ export type CommandContext = {
       projectId: string,
       target: "host" | "container",
       tabId?: string,
+      options?: { credentialsDisabled: true },
     ): AgentToolConnection;
     workflowResultConnection?(
       environmentId: string,
@@ -98,6 +99,8 @@ export type CommandContext = {
   deleteWorkflowResultsByEnvironment?: (environmentId: string) => Promise<unknown>;
   workflowResultRollout?: import("./workflow-result-rollout.js").WorkflowResultRollout;
   coordinators?: CoordinatorService;
+  /** Agent credentials: connections, requests, grants and their uses (credentials/). */
+  credentials?: import("./credentials/index.js").CredentialService;
   /** User `!` commands run from agent composers (user-commands.ts). */
   userCommands?: import("./user-commands.js").UserCommandService;
   /** Shell prompts waiting on the user, from every detector (human-prompt-registry.ts). */

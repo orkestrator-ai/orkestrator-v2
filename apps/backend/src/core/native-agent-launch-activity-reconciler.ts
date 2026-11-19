@@ -33,6 +33,11 @@ import {
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  agentInteractionPolicyAction,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "@orkestrator/protocol/agent-interactions";
 import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
 import { coordinatorRuntimeEnvironment } from "./coordinator-runtime.js";
 import { runtimeStillLive } from "./native-agent-runtime-liveness.js";
@@ -67,6 +72,7 @@ import {
   type SavedInitialPromptAttachment,
 } from "@orkestrator/protocol/initial-prompt-attachments";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
+import { withEnvironmentInteraction } from "@orkestrator/protocol/environment-interaction";
 import { readActivityGroup } from "./native-agent-activity-reads.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { queueString } from "./native-agent-queue-message.js";
@@ -1036,7 +1042,14 @@ export class NativeAgentLaunchActivityReconciler {
                 settledIdle = false;
                 return;
               }
-              if (session.agent === "codex" && observation?.asyncQuestionItemIds?.length) {
+              const taskInputDeclined =
+                (activity === "waiting" || Boolean(observation?.asyncQuestionItemIds?.length)) &&
+                (await this.declineOpeningTaskInput(session, groupProvider).catch(() => false));
+              if (
+                session.agent === "codex" &&
+                observation?.asyncQuestionItemIds?.length &&
+                !taskInputDeclined
+              ) {
                 try {
                   await this.host.recordAsyncQuestionAttention(
                     session.environmentId,
@@ -1056,7 +1069,7 @@ export class NativeAgentLaunchActivityReconciler {
               // A rule that answered every parked request leaves the turn
               // running: no waiting edge, no attention badge for a card
               // nobody needs to see. Anything left still waits on the user.
-              let observedActivity = activity;
+              let observedActivity = taskInputDeclined ? "working" : activity;
               const ruleProvider = provider;
               if (activity === "waiting" && ruleProvider && this.host.applyPermissionRules) {
                 const ruled = await this.host
@@ -1079,7 +1092,7 @@ export class NativeAgentLaunchActivityReconciler {
                   : {}),
                 pendingInteraction:
                   observedActivity === "waiting" ||
-                  (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
+                  (!taskInputDeclined && (observation?.asyncQuestionItemIds?.length ?? 0) > 0),
                 readTurnFailed: async () => {
                   const outcome = session.turnOutcomes?.find(
                     (entry) => entry.requestId === latestRequestId(session),
@@ -1700,6 +1713,58 @@ export class NativeAgentLaunchActivityReconciler {
     );
   }
 
+  private async declineOpeningTaskInput(
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<boolean> {
+    const interactions = provider.interactions;
+    if (!interactions || session.origin !== "interactive-native") return false;
+    const environment = await this.storage.getEnvironment(session.environmentId);
+    const opening = environment?.openingInteraction;
+    if (
+      opening?.mode !== "task" ||
+      opening.sessionKey !== session.key ||
+      opening.providerSessionId !== session.providerSessionId ||
+      opening.requestId !== latestModelRequestId(session) ||
+      latestTurnStopped(session) ||
+      activityTurnSettled(session) ||
+      openingTurnHasOutcome(session, opening.requestId)
+    )
+      return false;
+
+    const { requests } = await interactions.listPendingInteractions(session.providerSessionId);
+    let allDeclined = requests.length > 0;
+    for (const request of requests) {
+      if (
+        agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, request.kind) !==
+        "decline-and-continue"
+      ) {
+        allDeclined = false;
+        continue;
+      }
+      // The interaction read can race a turn ending and a follow-up starting.
+      const current = await this.storage.getNativeAgentSession(session.key);
+      if (
+        !current ||
+        current.providerSessionId !== session.providerSessionId ||
+        latestModelRequestId(current) !== opening.requestId ||
+        latestTurnStopped(current) ||
+        activityTurnSettled(current) ||
+        openingTurnHasOutcome(current, opening.requestId)
+      )
+        return false;
+      const result = await interactions.resolveInteraction(session.providerSessionId, request.id, {
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        sessionId: session.providerSessionId,
+        interactionId: request.id,
+        action: "decline",
+        resolvedAt: this.host.now(),
+      });
+      allDeclined &&= result.result === "applied" || result.result === "already-resolved";
+    }
+    return allDeclined;
+  }
+
   private async reconcileInitialLaunchOnce(environmentId: string): Promise<void> {
     if (this.host.isStopped()) return;
     const environment = await this.storage.getEnvironment(environmentId);
@@ -1729,7 +1794,6 @@ export class NativeAgentLaunchActivityReconciler {
     // belonging to one platform's catalogue could be sent to another; a model
     // now travels only down its own platform column.
     const resolved = resolveAgentPlatformSettings(tiers, agent);
-    const mode = resolved.mode;
     // Tmux mode is experimental: a stored `tmux` launches on the Agent SDK
     // unless `global.experimentalTmux` is on.
     const claudeNativeBackend = effectiveClaudeNativeBackend(
@@ -1752,7 +1816,27 @@ export class NativeAgentLaunchActivityReconciler {
     const conversationMode = environment.initialConversationMode;
     const parameterValues = agent === "claude" ? claudeNativeParameterValues(resolved) : undefined;
     const nativeProviderLaunch =
-      mode === "native" && !(agent === "claude" && claudeNativeBackend === "tmux");
+      resolved.mode === "native" && !(agent === "claude" && claudeNativeBackend === "tmux");
+
+    if (
+      agent === "grok" &&
+      resolved.mode === "terminal" &&
+      environment.interactionMode &&
+      (environment.initialPrompt?.trim() || environment.initialPromptAttachments?.length)
+    ) {
+      await this.storage.updateEnvironment(environment.id, {
+        pendingAgentLaunch: false,
+        startupAgentSession: {
+          tabId: STARTUP_AGENT_TAB_ID,
+          agent,
+          style: "terminal",
+          status: "error",
+          error:
+            "Grok Terminal cannot start with a prompt or attachments. Open a Native tab to send the opening prompt.",
+        },
+      });
+      return;
+    }
 
     if (!nativeProviderLaunch) {
       try {
@@ -1811,6 +1895,9 @@ export class NativeAgentLaunchActivityReconciler {
           });
         }
 
+        // The interaction mode is told to the agent, never saved into the
+        // stored prompt: that is the user's own text.
+        prompt = withEnvironmentInteraction(prompt, environment.interactionMode);
         if (agent === "claude" && claudeNativeBackend === "tmux") {
           await this.invoke("launch_terminal_job", {
             requestId: tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID),
@@ -1843,6 +1930,14 @@ export class NativeAgentLaunchActivityReconciler {
         }
 
         await this.storage.updateEnvironment(environment.id, {
+          ...(prompt && environment.interactionMode && !environment.openingInteraction
+            ? {
+                openingInteraction: {
+                  requestId: tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID),
+                  mode: environment.interactionMode,
+                },
+              }
+            : {}),
           pendingAgentLaunch: false,
           initialAgentPlatform: undefined,
           initialAgentModel: undefined,
@@ -2148,6 +2243,21 @@ async function readTurnLost(
 
 function latestRequestId(session: PersistedNativeAgentSession): string | undefined {
   return session.pendingDispatch?.requestId ?? session.dispatchedRequestIds?.at(-1);
+}
+
+function latestModelRequestId(session: PersistedNativeAgentSession): string | undefined {
+  return (
+    session.pendingDispatch?.requestId ??
+    session.lastDispatchedTurn?.modelRequestId ??
+    latestRequestId(session)
+  );
+}
+
+function openingTurnHasOutcome(session: PersistedNativeAgentSession, openingRequestId: string) {
+  const latest = latestRequestId(session);
+  return session.turnOutcomes?.some(
+    ({ requestId }) => requestId === openingRequestId || requestId === latest,
+  );
 }
 
 /** The user asked to stop the session's latest turn. */

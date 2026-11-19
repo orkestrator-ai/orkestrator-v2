@@ -1,7 +1,7 @@
 # Codex handshake failure harness exits without a result
 
 - **ID:** 0233
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `app-server engine over HTTP > reports a bounded, actionable error when the handshake never completes`
 - **File:** `bridges/codex-bridge/src/app-server-http.test.ts:161`
@@ -24,3 +24,40 @@ per-test progress (`scripts/test-progress-dots.ts`), which removes one way a
 healthy bridge group was interrupted. This case's own trigger was Turbo
 stopping Codex after a real ACP failure, so it stays open until a recurrence
 shows whether the handshake test fails independently.
+
+## Resolution (2026-11-19) — the harness was stopped from outside
+
+- **Reproduced on demand:** spawning `src/testing/http-flag-harness.ts` with the
+  test's environment (`FAKE_CODEX_SCRIPT=no-initialize`,
+  `CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS=500`) and sending it `SIGTERM`
+  150 or 300 ms after start gave exactly the recorded result: exit 0, no JSON line
+  on stdout, stderr `engine.start-failed ... "app-server is stopped"`. The
+  bridge's `SIGTERM`/`SIGINT` handler (`createShutdownHandler` in `src/index.ts`)
+  stops the engine, which fails the pending start, and exits 0 before the
+  harness's `main()` can print a result. The handshake test cannot produce that
+  output on its own: every path in `main()` prints a JSON line. This confirms the
+  case's hypothesis that Turbo stopped the package after the sibling ACP failure.
+- **A second trigger, found and fixed:** the parent-exit watchdog runs the same
+  drain. The harness inherited the test process's whole environment, including
+  `ORKESTRATOR_PARENT_PID`, which an agent shell carries with the production
+  backend's PID; the harness then watched a process that was not its parent.
+  With `ORKESTRATOR_PARENT_PID=99999999` (no such process) the unchanged file
+  failed (`mise run test:logged -- --name forkb-0233-repro -- bun test --cwd
+  bridges/codex-bridge --preload ../../tests/setup-node.ts
+  ./src/app-server-http.test.ts --parallel=1`: 2 pass, 1 fail). The failure there
+  was a JSON parse error, because `ORKESTRATOR_BRIDGE_DEBUG` (also inherited from
+  the agent shell) put a `[bridge-diagnostics]` line last on stdout.
+- **Fix:** `src/app-server-http.test.ts` passes `ORKESTRATOR_PARENT_PID` set to
+  its own PID (the process that actually spawned the harness), reads the result
+  from the last stdout line that starts with `{`, and explains what an empty
+  exit 0 means. `src/testing/http-flag-harness.ts` writes
+  `[http-flag-harness] received SIGTERM; exiting without a result` to stderr on
+  `SIGTERM`/`SIGINT`, so an interrupted run now names the signal in the failure.
+- **Verification:** the same dead-parent command with the fix and
+  `--rerun-each=3` passed (`forkb-0233-fixed`, 9.8 s); the `SIGTERM` probe now
+  prints the signal line before the bridge's own `engine.start-failed` line.
+
+The HTTP lifecycle test now explicitly supplies an unmapped
+parent PID and enables bridge diagnostics. It verifies that the harness
+received the spawning test's actual PID and that bridge diagnostics shared
+stdout with the result. The owning test file passed.

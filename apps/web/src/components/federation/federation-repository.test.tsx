@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   environmentKey,
@@ -9,7 +9,7 @@ import {
   type BackendId,
 } from "@orkestrator/protocol/federation";
 import { portalStore } from "@/lib/portal/portal-store";
-import { onCreateEnvironmentRequest } from "@/lib/federation/open-workspace";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
@@ -20,8 +20,13 @@ import {
   sharedIdDataset,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
-import { MergedProjectList } from "./FederatedSidebarSections";
-import { firstEnvironment, machineView, renderWithFederation } from "./federation-ui-test-fixture";
+import {
+  NO_BOUND_ROWS,
+  firstEnvironment,
+  machineView,
+  renderWithFederation,
+} from "./federation-ui-test-fixture";
+import { RepositoryEnvironmentList } from "./RepositoryEnvironmentList";
 import { appCommandStore } from "@/test/app-command-store";
 
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
@@ -48,6 +53,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAppDialogStore.getState().close();
   uninstallDesktopFake();
   useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
@@ -94,21 +100,22 @@ async function renderRepositoryMenu({
     environmentsByProject: new Map(),
   });
   const target = bound ? local : remote;
+  // This window's New Environment dialog, as the sidebar opens it.
+  const created: string[] = [];
   renderWithFederation(
-    <MergedProjectList
+    <RepositoryEnvironmentList
       // Prefer the command node's member even when the remote member is first.
       machines={[remote, local]}
       shownIds={new Set(bound ? ["a", "bk_self"] : ["a"])}
-      mode="repository"
-      renderBoundProject={() => null}
-      onBoundEnvironmentDragEnd={() => undefined}
+      ordering="machine"
+      bound={{ ...NO_BOUND_ROWS, onCreate: (projectId) => created.push(projectId) }}
     />,
   );
   const heading = screen.getByRole("button", { name: `Open acme/app on ${target.name}` });
   await act(async () => {
     fireEvent.contextMenu(heading);
   });
-  return { fake, target, menu: await screen.findByRole("menu") };
+  return { fake, target, created, menu: await screen.findByRole("menu") };
 }
 
 for (const bound of [true, false]) {
@@ -124,46 +131,40 @@ for (const bound of [true, false]) {
         selectedEnvironmentId: "previous-environment",
         projectBoardTab: action === "Open board" ? "coordinator" : "kanban",
       });
-      const create = mock((_projectId: string) => undefined);
-      const stop = onCreateEnvironmentRequest(create);
-      try {
-        const { menu, target, fake } = await renderRepositoryMenu({ bound });
-        expect(within(menu).getByText(`On ${target.name}`)).toBeTruthy();
-        fireEvent.click(within(menu).getByRole("menuitem", { name: action }));
-        const project = target.projects[0]!;
-        await waitFor(() => {
-          if (bound) {
-            expect(useRemoteWorkspaceStore.getState().active).toBeNull();
-            if (boardTab) {
-              expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(
-                project.ref.projectId,
-              );
-              expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
-              expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(boardTab);
-            } else {
-              expect(create.mock.calls).toEqual([[project.ref.projectId]]);
-            }
+      const { menu, target, fake, created } = await renderRepositoryMenu({ bound });
+      expect(within(menu).getByText(`On ${target.name}`)).toBeTruthy();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: action }));
+      const project = target.projects[0]!;
+      await waitFor(() => {
+        if (bound) {
+          expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+          if (boardTab) {
+            expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(
+              project.ref.projectId,
+            );
+            expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+            expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(boardTab);
           } else {
-            expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe(target.connectionId);
-            expect(
-              useRemoteWorkspaceStore.getState().requests[target.connectionId]?.request,
-            ).toEqual({
+            expect(created).toEqual([project.ref.projectId]);
+          }
+        } else {
+          expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe(target.connectionId);
+          expect(useRemoteWorkspaceStore.getState().requests[target.connectionId]?.request).toEqual(
+            {
               projectId: project.ref.projectId,
               ...(boardTab ? { boardTab } : { createEnvironmentProjectId: project.ref.projectId }),
-            });
-            expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
-            expect(create.mock.calls).toEqual([]);
-          }
-        });
-        expect(useMachineViewStore.getState().openedRepository).toEqual(
-          action === "Open Coordinator"
-            ? { name: "github.com/acme/app", projectKey: project.key }
-            : null,
-        );
-        expect(fake.calls.filter((call) => call.command === "create_environment")).toEqual([]);
-      } finally {
-        stop();
-      }
+            },
+          );
+          expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
+          expect(useAppDialogStore.getState().request).toBeNull();
+        }
+      });
+      expect(useMachineViewStore.getState().openedRepository).toEqual(
+        action === "Open Coordinator"
+          ? { name: "github.com/acme/app", projectKey: project.key }
+          : null,
+      );
+      expect(fake.calls.filter((call) => call.command === "create_environment")).toEqual([]);
     });
   }
 
@@ -179,7 +180,11 @@ for (const bound of [true, false]) {
       "Open repo on GitHub",
       "Repository settings",
       "New environment",
+      // The repository's other member, on the machine it is on.
+      ...(bound ? ["New environment on Machine A"] : []),
+      "Copy to Machine…",
       "Collapse",
+      `Delete project on ${bound ? "Command" : "Machine A"}…`,
     ]);
     for (const item of within(menu).getAllByRole("menuitem")) {
       expect(item.hasAttribute("data-disabled")).toBe(false);
@@ -201,11 +206,13 @@ test("a non-GitHub repository menu omits Open repo on GitHub", async () => {
     "Open board",
     "Repository settings",
     "New environment",
+    "Copy to Machine…",
     "Collapse",
+    "Delete project on Machine A…",
   ]);
 });
 
-test("a repository group names each member by its machine in its colour and summarizes machines and environments", async () => {
+test("a repository heading summarizes machines and environments and lists every machine's rows flat beneath it", async () => {
   const hint = "github.com/acme/app";
   const first = machineView();
   first.projects[0]!.repositoryHint = hint;
@@ -223,22 +230,34 @@ test("a repository group names each member by its machine in its colour and summ
         repositoryHint: hint,
       },
     ],
+    environmentsByProject: new Map([
+      [
+        "project-1",
+        [
+          {
+            ...firstEnvironment(first),
+            ref: environmentRef("bk_b" as BackendId, "env-1"),
+            key: environmentKey(environmentRef("bk_b" as BackendId, "env-1")),
+          },
+        ],
+      ],
+    ]),
   });
   await act(async () => {
     renderInAppCommandScope(
-      <MergedProjectList
+      <RepositoryEnvironmentList
         machines={[first, second]}
         shownIds={new Set(["a", "b"])}
-        mode="repository"
-        renderBoundProject={() => null}
-        onBoundEnvironmentDragEnd={() => undefined}
+        ordering="machine"
+        bound={NO_BOUND_ROWS}
       />,
     );
   });
   const heading = screen.getByRole("button", {
     name: "Open acme/app on Machine A",
   });
-  expect(heading.getAttribute("aria-expanded")).toBeNull();
+  // The "+" replaces the chevron, so the heading itself says it is expanded.
+  expect(heading.getAttribute("aria-expanded")).toBe("true");
   expect(heading.getAttribute("title")).toBe(`Open ${hint} on Machine A`);
   // No trailing dot or member count: the leading box carries the colour.
   expect(within(heading).queryByTestId("machine-dot") === null).toBe(true);
@@ -251,21 +270,19 @@ test("a repository group names each member by its machine in its colour and summ
   expect(within(heading).getByText("acme/").classList).toContain("text-muted-foreground");
   expect(within(heading).getByText("app").classList).toContain("text-foreground");
   expect(within(heading).getByText("2 machines · 2 environments")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "New environment in acme/app" }).getAttribute("title"),
+  ).toBe("New environment on Machine A");
   const content = document.querySelector("[data-project-folder-content]")!;
   expect(content.className).not.toContain("ml-3");
-  const members = screen.getAllByTestId("federated-project");
-  const labels = members.map((member) => member.querySelector(".truncate")!);
-  expect(labels.map((label) => label.textContent)).toEqual(["Machine A", "Machine B"]);
-  // Members are named in their machine's colour, with no leading home and no
-  // trailing dot, and put the chevron last.
-  expect(labels[0]!.classList).toContain("text-teal-500");
-  expect(labels[1]!.classList).toContain("text-rose-500");
-  for (const member of members) {
-    expect(within(member).queryByTestId("machine-home-icon") === null).toBe(true);
-    const header = member.firstElementChild!.firstElementChild as HTMLElement;
-    expect(within(header).queryByTestId("machine-dot") === null).toBe(true);
-    expect(header.lastElementChild!.getAttribute("aria-label")).toMatch(/^Collapse project /);
-  }
+  // No member headings: every machine's rows sit directly under the heading,
+  // in machine order, each marked in its machine's colour.
+  expect(screen.queryAllByTestId("federated-project")).toHaveLength(0);
+  const rows = within(content as HTMLElement).getAllByTestId("federated-environment-row");
+  expect(rows.map((row) => row.getAttribute("data-machine"))).toEqual(["a", "b"]);
+  expect(
+    rows.map((row) => within(row).getByTestId("machine-dot").getAttribute("data-machine-color")),
+  ).toEqual(["teal", "rose"]);
   // The heading itself is the drag handle; there is no separate grip.
   expect(heading.getAttribute("aria-roledescription")).toBe("sortable");
   expect(screen.queryByRole("button", { name: /^Move repository/ }) === null).toBe(true);
@@ -285,12 +302,11 @@ test("a repository not on the command node has a heading in the colour of the ma
     environmentsByProject: new Map(),
   });
   renderWithFederation(
-    <MergedProjectList
+    <RepositoryEnvironmentList
       machines={[remote, commandNode]}
       shownIds={new Set([remote.connectionId])}
-      mode="repository"
-      renderBoundProject={() => null}
-      onBoundEnvironmentDragEnd={() => undefined}
+      ordering="machine"
+      bound={NO_BOUND_ROWS}
     />,
   );
   const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
@@ -325,12 +341,11 @@ test("a repository heading shows the command node's own icon for the project, ou
     environmentsByProject: new Map(),
   });
   renderWithFederation(
-    <MergedProjectList
+    <RepositoryEnvironmentList
       machines={[remote, commandNode]}
       shownIds={new Set([remote.connectionId])}
-      mode="repository"
-      renderBoundProject={() => null}
-      onBoundEnvironmentDragEnd={() => undefined}
+      ordering="machine"
+      bound={NO_BOUND_ROWS}
     />,
   );
   const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
@@ -379,12 +394,11 @@ test.each([false, true])(
       environmentsByProject: new Map(),
     });
     renderWithFederation(
-      <MergedProjectList
+      <RepositoryEnvironmentList
         machines={[remote, commandNode]}
         shownIds={new Set([remote.connectionId])}
-        mode="repository"
-        renderBoundProject={() => null}
-        onBoundEnvironmentDragEnd={() => undefined}
+        ordering="machine"
+        bound={NO_BOUND_ROWS}
       />,
     );
     const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
@@ -442,12 +456,11 @@ test("a repository not on the command node takes the first icon in machine order
     environmentsByProject: new Map(),
   });
   renderWithFederation(
-    <MergedProjectList
+    <RepositoryEnvironmentList
       machines={[withoutIcon, second, third, commandNode]}
       shownIds={new Set(["a", "b", "c"])}
-      mode="repository"
-      renderBoundProject={() => null}
-      onBoundEnvironmentDragEnd={() => undefined}
+      ordering="machine"
+      bound={NO_BOUND_ROWS}
     />,
   );
   const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
@@ -468,12 +481,11 @@ test("a repository heading's menu acts on the project it opens, in that machine'
     const machine = machineView();
     machine.projects[0]!.repositoryHint = "github.com/acme/app";
     renderWithFederation(
-      <MergedProjectList
+      <RepositoryEnvironmentList
         machines={[machine]}
         shownIds={new Set(["a"])}
-        mode="repository"
-        renderBoundProject={() => null}
-        onBoundEnvironmentDragEnd={() => undefined}
+        ordering="machine"
+        bound={NO_BOUND_ROWS}
       />,
     );
     const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
@@ -495,7 +507,9 @@ test("a repository heading's menu acts on the project it opens, in that machine'
       "Open repo on GitHub",
       "Repository settings",
       "New environment",
+      "Copy to Machine…",
       "Collapse",
+      "Delete project on Machine A…",
     ]);
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Open repo on GitHub" }));
     expect(open).toHaveBeenCalledWith(
@@ -529,12 +543,11 @@ test("a repository heading's menu disables writes while its machine is unavailab
   const machine = machineView({ transport: "unreachable" });
   machine.projects[0]!.repositoryHint = "github.com/acme/app";
   renderWithFederation(
-    <MergedProjectList
+    <RepositoryEnvironmentList
       machines={[machine]}
       shownIds={new Set(["a"])}
-      mode="repository"
-      renderBoundProject={() => null}
-      onBoundEnvironmentDragEnd={() => undefined}
+      ordering="machine"
+      bound={NO_BOUND_ROWS}
     />,
   );
   await act(async () => {
@@ -568,103 +581,14 @@ test("a repository with one visible environment uses singular summary labels and
   ]);
   await act(async () => {
     renderInAppCommandScope(
-      <MergedProjectList
+      <RepositoryEnvironmentList
         machines={[machine]}
         shownIds={new Set([machine.connectionId])}
-        mode="repository"
-        renderBoundProject={() => null}
-        onBoundEnvironmentDragEnd={() => undefined}
+        ordering="machine"
+        bound={NO_BOUND_ROWS}
       />,
     );
   });
   const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
   expect(within(heading).getByText("1 machine · 1 environment")).toBeTruthy();
 });
-
-test("repositories are separated by a rule, but projects are not", async () => {
-  const first = machineView();
-  first.projects[0]!.repositoryHint = "github.com/acme/app";
-  const second = machineView({
-    connectionId: "b",
-    backendId: "bk_b" as never,
-    name: "Machine B",
-    colorToken: "rose",
-    projects: [
-      {
-        ref: projectRef("bk_b" as BackendId, "project-1"),
-        key: projectKey(projectRef("bk_b" as BackendId, "project-1")),
-        name: "api",
-        order: 0,
-        repositoryHint: "github.com/acme/api",
-      },
-    ],
-  });
-  const renderList = async (mode: "project" | "repository") => {
-    let result!: ReturnType<typeof render>;
-    await act(async () => {
-      result = renderInAppCommandScope(
-        <MergedProjectList
-          machines={[first, second]}
-          shownIds={new Set(["a", "b"])}
-          mode={mode}
-          renderBoundProject={() => null}
-          onBoundEnvironmentDragEnd={() => undefined}
-        />,
-      );
-    });
-    return result;
-  };
-  const repositories = await renderList("repository");
-  const separators = screen.getAllByTestId("repository-separator");
-  expect(separators).toHaveLength(1);
-  // The rule belongs to the following repository's measured drop target.
-  const separator = separators[0]!;
-  expect(separator.closest("[data-project-folder]")?.getAttribute("data-project-folder")).toBe(
-    "github.com/acme/api",
-  );
-  repositories.unmount();
-
-  await renderList("project");
-  expect(screen.queryByTestId("repository-separator") === null).toBe(true);
-});
-
-for (const { hints, ruledRepositories } of [
-  {
-    hints: ["github.com/acme/app", undefined, "", "github.com/acme/api"],
-    ruledRepositories: ["github.com/acme/api"],
-  },
-  { hints: [undefined, ""], ruledRepositories: [] },
-  { hints: [undefined, "", "github.com/acme/app"], ruledRepositories: ["github.com/acme/app"] },
-]) {
-  test(`repository rules only introduce repository groups in ${JSON.stringify(hints)}`, async () => {
-    const machine = machineView();
-    machine.projects = hints.map((repositoryHint, order) => {
-      const ref = projectRef(machine.backendId!, `project-${order}`);
-      return { ref, key: projectKey(ref), name: `project-${order}`, order, repositoryHint };
-    });
-    machine.environmentsByProject = new Map();
-    await act(async () => {
-      renderInAppCommandScope(
-        <MergedProjectList
-          machines={[machine]}
-          shownIds={new Set([machine.connectionId])}
-          mode="repository"
-          renderBoundProject={() => null}
-          onBoundEnvironmentDragEnd={() => undefined}
-        />,
-      );
-    });
-
-    const list = screen.getByTestId("federated-repository-list");
-    expect(
-      within(list)
-        .queryAllByTestId("repository-separator")
-        .map((separator) =>
-          separator.closest("[data-project-folder]")?.getAttribute("data-project-folder"),
-        ),
-    ).toEqual(ruledRepositories);
-    for (const project of within(list).getAllByTestId("federated-project")) {
-      expect(within(project).queryByTestId("repository-separator") === null).toBe(true);
-    }
-  });
-}

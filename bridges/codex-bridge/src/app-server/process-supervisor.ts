@@ -97,6 +97,8 @@ export interface AppServerSupervisorOptions {
   codexHome: string;
   /** Extra `-c key=value` overrides, e.g. `features.goals=true`. */
   configOverrides?: Record<string, string>;
+  /** Required for granular approval policies on dedicated report bridges. */
+  experimentalApi?: boolean;
   onNotification: (
     notification: InboundNotification,
     threadId: string | null,
@@ -741,9 +743,9 @@ export class AppServerSupervisor {
       initialize = await client.request<InitializeResult>("initialize", {
         clientInfo: this.options.clientInfo,
         capabilities: {
-          // Experimental methods are not part of the stable generated union, and
-          // opting in would expose us to shapes the router cannot type-check.
-          experimentalApi: false,
+          // Dedicated report bridges need granular approvals to deny sandbox
+          // escalations before an automated reviewer can see them.
+          experimentalApi: this.options.experimentalApi ?? false,
           // Attestation would make us responsible for answering
           // `attestation/generate`; declining keeps the request out of the flow.
           requestAttestation: false,

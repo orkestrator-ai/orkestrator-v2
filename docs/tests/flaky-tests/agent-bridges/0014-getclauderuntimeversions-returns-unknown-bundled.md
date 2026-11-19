@@ -1,7 +1,7 @@
 # `getClaudeRuntimeVersions > returns unknown bundled versions when the SDK manifest cannot be read` (`bridges/claude-bridge/src/services/session-manager-core.test.ts`)
 
 - **ID:** 0014
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-06
 - **Original command:** `bun test bridges/claude-bridge` — a *sequential* run
   with no `--parallel`, so no `--isolate` and one shared module registry across
@@ -51,3 +51,38 @@ Not fixed; the cause is narrowed but not proven as the recorded failure.
   doubles survive re-evaluation, a shared-harness change affecting every
   session-manager suite, which was out of scope here. Run this file with
   `--parallel` (the package script) or alone.
+
+## Resolution (2026-11-19) — cause established: unsupported non-isolated run
+
+- **Reproduced on demand with the recorded invocation's shape** (several files
+  in one process, no `--isolate`): `bun test
+  ./src/routes/session-workflow-result.test.ts
+  ./src/services/session-manager-core.test.ts -t
+  "workflow|getClaudeRuntimeVersions" --preload ../../tests/setup-node.ts`
+  (from `bridges/claude-bridge`) failed this case and the two other
+  mock-dependent `getClaudeRuntimeVersions` cases in 0.2 to 1.3 ms with no
+  assertion text beyond the received real versions, every time. The same
+  command with `--isolate` passed (9 pass, 0 fail).
+- **Root cause:** without isolation Bun evaluates `session-manager-test-harness.ts`
+  (and `session-manager-test-mocks.ts`) once per process. A probe with two copies
+  of a one-line test confirmed it: the second file saw the real
+  `node:fs/promises.readFile`, not `mockReadFile`. The harness's top-level
+  hooks attach only to the first file that imports it, and that file's `afterAll`
+  restores the real `node:fs`, `node:fs/promises` and `node:child_process`. Every
+  later harness file then runs against the real modules, so a test that stubs
+  `mockReadFile` reads the real SDK manifest. The same mechanism explains the
+  `--rerun-each` failures noted on 2026-11-15; Bun 1.4.4 re-runs a file without
+  re-isolating it even with `--isolate`.
+- **Why there is no code fix:** supporting a shared registry would mean every
+  one of the 63 files that import the harness installing its own mocks and hooks,
+  and the harness could still not both keep its mocks for later harness files and
+  restore real modules for the files that need them. Every supported invocation
+  isolates: `test:bridge` runs `--parallel`, and AGENTS.md requires `--parallel`
+  for direct suites. The recorded command (`bun test bridges/claude-bridge`, no
+  `--parallel`) was not one of them.
+- **Change:** the harness header (`src/services/session-manager-test-harness.ts`)
+  now states the consequence of a non-isolated run or `--rerun-each`, names this
+  case, and says to add `--isolate` or repeat the file with a shell loop.
+- **Verification:** the isolated two-file run above (9 pass);
+  `bun test ./src/services/session-manager-core.test.ts -t getClaudeRuntimeVersions
+  --preload ../../tests/setup-node.ts` passes alone.

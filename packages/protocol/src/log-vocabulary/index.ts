@@ -31,6 +31,7 @@ import { DESIGN_LOG_AREAS } from "./design.js";
 import { GRAPH_LOG_AREAS } from "./graph.js";
 import { NODES_LOG_AREAS } from "./nodes.js";
 import { LINEAR_LOG_AREAS } from "./linear.js";
+import { CREDENTIALS_LOG_AREAS } from "./credentials.js";
 import { USAGE_HISTORY_LOG_AREAS } from "./usage-history.js";
 import { FEATURE_LOG_AREAS } from "./feature.js";
 import { HOST_LOG_AREAS } from "./host.js";
@@ -100,6 +101,7 @@ export const LOG_VOCABULARY = {
   ...GRAPH_LOG_AREAS,
   ...NODES_LOG_AREAS,
   ...LINEAR_LOG_AREAS,
+  ...CREDENTIALS_LOG_AREAS,
   ...USAGE_HISTORY_LOG_AREAS,
   ...FEATURE_LOG_AREAS,
   ...HOST_LOG_AREAS,

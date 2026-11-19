@@ -1,4 +1,5 @@
 import { beginCapabilityTurn } from "./capabilities/running-work.js";
+import { bugReportInitialApprovalMode, validBugReportApprovalMode } from "./bug-report-runtime.js";
 import {
   PROVIDER_FAILURE_RETRY_ID_PREFIX,
   providerFailureRetryRequestId,
@@ -9,6 +10,11 @@ import {
 } from "@orkestrator/protocol/native-terminal-rows";
 import { nativeTerminalMessages } from "./native-terminal-messages.js";
 import { asRecord } from "./agent-provider-runtime.js";
+import { withEnvironmentInteraction } from "@orkestrator/protocol/environment-interaction";
+import {
+  tabInitialPromptRequestId,
+  STARTUP_AGENT_TAB_ID,
+} from "@orkestrator/protocol/tab-initial-prompt";
 import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import type {
   NativeAgentControlUpdate,
@@ -63,7 +69,7 @@ import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import { nativeAgentObservationGroupKey } from "./native-agent-observation.js";
 import { deliverMissedSteer } from "./native-agent-missed-steer.js";
 import { randomUUID } from "node:crypto";
-import { PromptRejectedError } from "./agent-provider-contract.js";
+import { PromptRejectedError, type ProviderSendOptions } from "./agent-provider-contract.js";
 import { sessionTakesAgentTools } from "./native-agent-opencode-server.js";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -1280,7 +1286,7 @@ export class NativeAgentPromptDispatch {
        */
       const resolveAgentMcp = async (
         durable: PersistedNativeAgentSession,
-      ): Promise<{ url: string; token: string } | undefined> => {
+      ): Promise<ProviderSendOptions["agentMcp"]> => {
         if (
           !sessionTakesAgentTools(durable.agent) ||
           durable.owner?.kind !== "environment" ||
@@ -1303,7 +1309,7 @@ export class NativeAgentPromptDispatch {
           environment.environmentType === "local" ? "host" : "container",
         );
       };
-      let dispatchAgentMcp: { url: string; token: string } | undefined;
+      let dispatchAgentMcp: ProviderSendOptions["agentMcp"];
       let dispatchAgentMcpResolved = false;
       try {
         dispatchAgentMcp = await resolveAgentMcp(session);
@@ -1410,8 +1416,23 @@ export class NativeAgentPromptDispatch {
               pendingHandoff,
               durable,
             );
+            let opening: Environment["openingInteraction"];
             try {
-              await provider.send(durable.providerSessionId, outgoing.prompt, {
+              opening =
+                home?.interactionMode && !mailInject
+                  ? await this.claimOpeningInteraction(input, durable)
+                  : undefined;
+              if (opening && commandPlan.commandName && commandPlan.allowProviderCommands) {
+                throw new PromptRejectedError(
+                  "Start with a regular prompt to apply the environment’s interaction mode, then run the provider command.",
+                );
+              }
+              const providerPrompt = withEnvironmentInteraction(
+                outgoing.prompt,
+                opening?.mode,
+                hasAttachments,
+              );
+              await provider.send(durable.providerSessionId, providerPrompt, {
                 requestId: input.requestId,
                 // Only a person typing into the composer can mean "run this
                 // command"; workflow-authored prompts are literal text. The plan
@@ -1446,11 +1467,19 @@ export class NativeAgentPromptDispatch {
                     : (preparation.effort ?? input.reasoningEffort),
                 parameterValues: durable.controls?.parameterValues,
                 persistDefaults: durable.controls?.persistDefaults,
-                approvalMode: resolveNativeAgentApprovalMode(
-                  durable.agent,
-                  durable.policy,
-                  durable.controls?.approvalMode,
-                ),
+                approvalMode:
+                  bugReportIdFromRuntimeId(durable.environmentId) &&
+                  (durable.agent === "claude" || durable.agent === "codex")
+                    ? (validBugReportApprovalMode(
+                        durable.agent,
+                        durable.policy,
+                        durable.controls?.approvalMode,
+                      ) ?? bugReportInitialApprovalMode(durable.agent))
+                    : resolveNativeAgentApprovalMode(
+                        durable.agent,
+                        durable.policy,
+                        durable.controls?.approvalMode,
+                      ),
                 agentMcp,
                 ...(capabilityPlugins.length > 0 ? { capabilityPlugins } : {}),
                 ...(artifactGrant ? { artifactGrant } : {}),
@@ -1471,7 +1500,7 @@ export class NativeAgentPromptDispatch {
                 providerSessionId: durable.providerSessionId,
               });
               settleChangeTurn("accepted");
-              this.host.signInResends.remember(durable, input, outgoing.prompt, {
+              this.host.signInResends.remember(durable, input, providerPrompt, {
                 literalPrompt: commandPlan.command === undefined && !mailInject && !recovery,
               });
               return {
@@ -1487,6 +1516,21 @@ export class NativeAgentPromptDispatch {
               // settlement and the artifact grant until the outcome is known.
               if (!(error instanceof AmbiguousPromptDispatchError)) {
                 this.host.settleArtifactTurn(durable, input.requestId);
+                if (opening) {
+                  await this.host.storage
+                    .updateEnvironment(
+                      durable.environmentId,
+                      {
+                        openingInteraction: input.signInResendOf
+                          ? { ...opening, requestId: input.signInResendOf }
+                          : null,
+                      },
+                      (environment) =>
+                        environment.openingInteraction?.sessionKey === durable.key &&
+                        environment.openingInteraction.requestId === input.requestId,
+                    )
+                    .catch(() => undefined);
+                }
               }
               if (
                 mailInject &&
@@ -1515,6 +1559,12 @@ export class NativeAgentPromptDispatch {
               durable.providerSessionId !== input.requireProviderSessionId
             ) {
               throw new PromptRejectedError(REQUIRED_CONVERSATION_CHANGED);
+            }
+            if (
+              input.signInResendOf &&
+              durable.dispatchedRequestIds?.at(-1) !== input.signInResendOf
+            ) {
+              throw new PromptRejectedError("The conversation moved on before sign-in completed.");
             }
             if (failureRetry) {
               if (
@@ -1635,6 +1685,57 @@ export class NativeAgentPromptDispatch {
     } finally {
       releaseCoordinatorTurn?.();
     }
+  }
+
+  /** Claim the environment's opening model turn before writing to the provider. */
+  private async claimOpeningInteraction(
+    input: DispatchNativeAgentPromptInput,
+    session: PersistedNativeAgentSession,
+  ): Promise<Environment["openingInteraction"]> {
+    if (session.owner?.kind !== "environment" || session.origin !== "interactive-native") {
+      return undefined;
+    }
+    const matches = (opening: Environment["openingInteraction"]) =>
+      opening?.sessionKey === session.key && opening.requestId === input.requestId;
+    const live = await this.host.storage.getEnvironment(input.environmentId);
+    if (!live?.interactionMode) return undefined;
+    const previous = live.openingInteraction;
+    if (matches(previous)) return previous;
+    const resend =
+      previous?.sessionKey === session.key &&
+      previous.providerSessionId === session.providerSessionId &&
+      previous.requestId === input.signInResendOf &&
+      session.dispatchedRequestIds?.at(-1) === input.signInResendOf;
+    // This session lease rules out a concurrent send. A receipt can have
+    // been retired or discarded before the opening claim was cleared.
+    const abandoned =
+      previous?.sessionKey === session.key &&
+      session.pendingDispatch?.requestId !== previous.requestId &&
+      !session.dispatchedRequestIds?.includes(previous.requestId);
+    if (
+      (previous && !resend && !abandoned) ||
+      (!resend && (session.lastDispatchedTurn || session.turnOutcomes?.length))
+    )
+      return undefined;
+    const claimed = await this.host.storage.updateEnvironment(
+      live.id,
+      {
+        openingInteraction: {
+          requestId: input.requestId,
+          sessionKey: session.key,
+          providerSessionId: session.providerSessionId,
+          mode: live.interactionMode,
+        },
+      },
+      (environment) =>
+        environment.openingInteraction?.requestId === previous?.requestId &&
+        environment.openingInteraction?.sessionKey === previous?.sessionKey &&
+        environment.interactionMode === live.interactionMode &&
+        (resend ||
+          !environment.pendingAgentLaunch ||
+          input.requestId === tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID)),
+    );
+    return matches(claimed.openingInteraction) ? claimed.openingInteraction : undefined;
   }
 
   /**

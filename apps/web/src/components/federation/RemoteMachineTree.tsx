@@ -1,26 +1,6 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { projectLandingBoardTab, type WindowGrouping } from "@/lib/federation/window-grouping";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
-import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-  type DragStartEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import type { BackendId } from "@orkestrator/protocol/federation";
-import { AddToFolderDialog } from "@/components/projects/AddToFolderDialog";
-import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { EnvironmentRow } from "@/components/environments/EnvironmentRow";
 import {
   nodeEnvironmentRowFacts,
@@ -29,63 +9,29 @@ import {
 import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
 import { useShimmerRequiresChecks } from "@/hooks/useEnvironmentNameSignal";
 import { useHoverTooltip } from "@/components/ui/hover-tooltip";
-import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
-import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
-import {
-  folderDragItem,
-  machineEnvironmentDragItem,
-  SidebarDragOverlay,
-  type SidebarDragItem,
-} from "@/components/sidebar/SidebarDragOverlay";
-import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { incompatibilityNotice, updatableMachine } from "@/lib/federation/fleet-currency";
-import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { shellOpenExternal } from "@/lib/native/shell";
-import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
+import type { MachineView } from "@/lib/federation/aggregate";
 import { useNodeEnvironmentChangeProjection } from "@/lib/federation/node-change-projections";
 import {
   nodeAgentSummarySource,
   useNodeEnvironment,
 } from "@/lib/federation/node-environment-reads";
 import { useStore } from "zustand";
-import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { remoteOrdersFor } from "@/lib/federation/remote-order-writes";
-import { remoteProjectsFor, withArrangement } from "@/lib/federation/remote-project-writes";
 import { moveId, withOrder } from "@/lib/federation/remote-order";
 import type { FederatedEnvironment, FederatedProject } from "@/lib/federation/summaries";
-import {
-  buildProjectTree,
-  listProjectFolderNames,
-  normalizeProjectFolderName,
-  parseProjectFolderDragId,
-  projectFolderKey,
-  projectSortableIds,
-  mapProjectArrangementIntentIds,
-  resolveProjectArrangementIntent,
-  type ProjectArrangementIntent,
-} from "@/lib/project-folders";
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
-import { cn } from "@/lib/utils";
-import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { applySidebarModifierSelection } from "@/lib/sidebar-selection";
 import { useUIStore } from "@/stores/uiStore";
-import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
-import {
-  useRemoteEnvironmentShown,
-  useRemoteProjectHomeShown,
-} from "@/stores/remoteWorkspaceStore";
+import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
 import { SortableEnvironmentRowFrame } from "@/components/sidebar/EnvironmentRowFrame";
-import { ProjectGroupHeader } from "@/components/sidebar/ProjectGroupHeader";
 import {
   ProjectHomeActivityButton,
   projectHomeStatus,
 } from "@/components/sidebar/ProjectHomeActivity";
 import { useFederation } from "./FederationProvider";
-import { MachineHomeIcon, ProjectIconImage } from "./MachineDot";
-import {
-  newFederatedEnvironment,
-  useFederatedEnvironmentActions,
-} from "./useFederatedEnvironmentActions";
+import { useFederatedEnvironmentActions } from "./useFederatedEnvironmentActions";
 
 const NO_ENVIRONMENTS: readonly FederatedEnvironment[] = [];
 
@@ -120,23 +66,6 @@ function reportWriteError(machine: MachineView, what: string, error: unknown): v
       description: error instanceof Error ? error.message : String(error),
     });
   }
-}
-
-/** A project of another machine as the folder arrangement sees it: its key is its drag id. */
-interface RemoteProjectItem {
-  id: string;
-  name: string;
-  folder?: string;
-  project: FederatedProject;
-}
-
-function remoteProjectItems(projects: readonly FederatedProject[]): RemoteProjectItem[] {
-  return projects.map((project) => ({
-    id: project.key,
-    name: project.name,
-    ...(project.folder ? { folder: project.folder } : {}),
-    project,
-  }));
 }
 
 /**
@@ -207,386 +136,10 @@ export function remoteEnvironmentProject(
 }
 
 /**
- * Another machine's projects and environments, laid out like this window's
- * own sidebar: the owner's folders, project order and environment order.
- * Projects, folders and environments can be dragged as on the owner's own
- * sidebar; the result is written to the owner, never to this machine.
- */
-export function RemoteMachineTree({ machine }: { machine: MachineView }) {
-  const { portal } = useFederation();
-  const collapsedProjectKeys = useMachineViewStore((state) => state.collapsedProjectKeys);
-  const collapsedFolderKeys = useMachineViewStore((state) => state.collapsedFolderKeys);
-  const setProjectKeyCollapsed = useMachineViewStore((state) => state.setProjectKeyCollapsed);
-  const setFolderKeyCollapsed = useMachineViewStore((state) => state.setFolderKeyCollapsed);
-  const projectWrites = useMemo(() => remoteProjectsFor(portal), [portal]);
-  const arrangements = useStore(projectWrites.store);
-  const { environmentsOf, reorder } = useRemoteEnvironments();
-  const [dragging, setDragging] = useState<"project" | "other" | null>(null);
-  const [dragItem, setDragItem] = useState<SidebarDragItem>(null);
-  const [folderDialogKey, setFolderDialogKey] = useState<string | null>(null);
-  const writable = isMachineWritable(machine);
-  const sortable = writable && !machine.truncated;
-
-  const projects = useMemo(
-    () => withArrangement(machine.projects, arrangements.get(machine.backendId)),
-    [arrangements, machine.backendId, machine.projects],
-  );
-  const items = useMemo(() => remoteProjectItems(projects), [projects]);
-  const tree = useMemo(() => buildProjectTree(items), [items]);
-  const folderCollapseKey = (name: string) =>
-    sidebarFolderKey(machine.backendId, projectFolderKey(name));
-  const isFolderCollapsed = (name: string) => collapsedFolderKeys.includes(folderCollapseKey(name));
-  const sortableIds = projectSortableIds(tree, [], isFolderCollapsed);
-  const sortingStrategy = projectTreeSortingStrategy(tree, sortableIds);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
-  );
-
-  // The gesture is resolved here for an instant preview and by the owner, on
-  // its current projects, for the result.
-  const arrange = (intent: ProjectArrangementIntent) => {
-    if (!sortable) return;
-    const arrangement = resolveProjectArrangementIntent(intent, items);
-    if (!arrangement) return;
-    const byKey = new Map(items.map((item) => [item.id, item.project.ref.projectId]));
-    const folders: Record<string, string | null> = {};
-    for (const [key, folder] of Object.entries(arrangement.folders)) {
-      const projectId = byKey.get(key);
-      if (projectId) folders[projectId] = folder;
-    }
-    projectWrites.submit(
-      machine.backendId as BackendId,
-      {
-        projectIds: arrangement.projectIds.flatMap((key) => byKey.get(key) ?? []),
-        folders,
-      },
-      (error: unknown) => reportWriteError(machine, "Arrange projects", error),
-      mapProjectArrangementIntentIds(intent, (id) => byKey.get(id) ?? id),
-    );
-  };
-
-  const handleDragStart = ({ active }: DragStartEvent) => {
-    const id = String(active.id);
-    setDragging(
-      parseProjectFolderDragId(id) !== null || items.some((item) => item.id === id)
-        ? "project"
-        : "other",
-    );
-    const project = items.find((item) => item.id === id);
-    setDragItem(
-      folderDragItem(tree, id) ??
-        (project
-          ? { kind: "project", name: project.name }
-          : machineEnvironmentDragItem([machine], id)),
-    );
-  };
-
-  const handleDragEnd = ({ active, over }: DragEndEvent) => {
-    setDragging(null);
-    setDragItem(null);
-    if (!sortable || !over) return;
-    const activeId = String(active.id);
-    const overId = String(over.id);
-    if (parseProjectFolderDragId(activeId) !== null || items.some((item) => item.id === activeId)) {
-      arrange({ kind: "move", activeId, overId });
-      return;
-    }
-    // Environments never move between projects, so both rows share one.
-    const project = remoteEnvironmentProject(machine, projects, activeId);
-    if (project) reorder(machine, project, activeId, overId);
-  };
-
-  const folderDialogItem = folderDialogKey
-    ? (items.find((item) => item.id === folderDialogKey) ?? null)
-    : null;
-
-  const renderProject = (item: RemoteProjectItem) => (
-    <RemoteProjectGroup
-      key={item.id}
-      machine={machine}
-      project={item.project}
-      environments={environmentsOf(machine, item.project)}
-      isCollapsed={collapsedProjectKeys.includes(item.id)}
-      onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
-      sortable={sortable}
-      grouping="machine"
-      showMachine
-      {...(sortable
-        ? {
-            onAddToFolder: () => setFolderDialogKey(item.id),
-            ...(item.folder
-              ? {
-                  onRemoveFromFolder: () =>
-                    arrange({ kind: "remove-from-folder", projectId: item.id }),
-                }
-              : {}),
-          }
-        : {})}
-    />
-  );
-
-  return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={sidebarCollisionDetection}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={() => {
-        setDragging(null);
-        setDragItem(null);
-      }}
-    >
-      <SortableContext items={sortableIds} strategy={sortingStrategy}>
-        {tree.map((entry) => {
-          if (entry.kind === "project") return renderProject(entry.project);
-          const folderActions = sortable
-            ? {
-                onRename: (nextName: string) => {
-                  const normalized = normalizeProjectFolderName(nextName);
-                  if (!normalized) return;
-                  const collapsed = isFolderCollapsed(entry.name);
-                  arrange({ kind: "rename-folder", folder: entry.name, name: nextName });
-                  setFolderKeyCollapsed(folderCollapseKey(entry.name), false);
-                  setFolderKeyCollapsed(folderCollapseKey(normalized), collapsed);
-                },
-                onSort: () => arrange({ kind: "sort-folder", folder: entry.name }),
-                onUngroup: () => arrange({ kind: "ungroup-folder", folder: entry.name }),
-              }
-            : {};
-          return (
-            <SortableProjectFolder
-              key={`folder:${entry.key}`}
-              name={entry.name}
-              projectCount={entry.projects.length}
-              isCollapsed={isFolderCollapsed(entry.name)}
-              onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
-              {...folderActions}
-            >
-              {entry.projects.map(renderProject)}
-            </SortableProjectFolder>
-          );
-        })}
-        <SidebarRootDropZone active={dragging === "project"} />
-      </SortableContext>
-      <SidebarDragOverlay item={dragItem} />
-      <AddToFolderDialog
-        open={folderDialogItem !== null}
-        onOpenChange={(open) => {
-          if (!open) setFolderDialogKey(null);
-        }}
-        projectName={folderDialogItem?.name ?? ""}
-        currentFolder={folderDialogItem?.folder ?? null}
-        existingFolders={listProjectFolderNames(items)}
-        onSubmit={(folderName) => {
-          if (!folderDialogItem) return;
-          arrange({ kind: "add-to-folder", projectId: folderDialogItem.id, folder: folderName });
-          // A folder the user just filed something into has to be visible,
-          // otherwise the project appears to have vanished from the sidebar.
-          const normalized = normalizeProjectFolderName(folderName);
-          if (normalized) setFolderKeyCollapsed(folderCollapseKey(normalized), false);
-        }}
-      />
-    </DndContext>
-  );
-}
-
-/**
- * A project of another machine, drawn like `SortableProjectGroup`. Its drag id
- * is its node-qualified key, so it can share a list with other machines'.
- */
-export function RemoteProjectGroup({
-  machine,
-  project,
-  environments,
-  isCollapsed,
-  onToggleCollapse,
-  sortable,
-  grouping,
-  showMachine,
-  label = project.name,
-  labelClassName,
-  onAddToFolder,
-  onRemoveFromFolder,
-}: {
-  machine: MachineView;
-  project: FederatedProject;
-  environments: readonly FederatedEnvironment[];
-  isCollapsed: boolean;
-  onToggleCollapse: () => void;
-  sortable: boolean;
-  /** How the window's sidebar groups the list this row is in; decides where it opens. */
-  grouping: WindowGrouping;
-  /** Mark the machine with a home before the name, in lists that name machines. */
-  showMachine?: boolean;
-  /** Shown instead of the project name (a repository group names the machine). */
-  label?: string;
-  labelClassName?: string;
-  /** Opens the folder composer for this project; omitted where folders are not arranged. */
-  onAddToFolder?: () => void;
-  /** Lifts this project back out to the root level; omitted when it has no folder. */
-  onRemoveFromFolder?: () => void;
-}) {
-  const writable = isMachineWritable(machine);
-  const githubRepositoryUrl = project.repositoryHint
-    ? getGitHubRepositoryUrl(`https://${project.repositoryHint}`)
-    : null;
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: project.key,
-    disabled: !sortable,
-  });
-  // Chosen in the project search: highlighted like a selected project, and
-  // scrolled into view each time it is chosen.
-  const revealRevision = useMachineViewStore((state) =>
-    state.revealedProject?.key === project.key ? state.revealedProject.revision : null,
-  );
-  const revealed = revealRevision !== null;
-  const everyEnvironment =
-    machine.environmentsByProject.get(project.ref.projectId) ?? NO_ENVIRONMENTS;
-  // Shown with its home or nothing else, as this window's own project rows are.
-  const home = everyEnvironment.find(
-    (environment) => environment.isProjectHome && !environment.deleting,
-  );
-  // The repository heading that opened this project is highlighted in its place.
-  const openedByHeading = useMachineViewStore(
-    (state) => grouping === "repository" && state.openedRepository?.projectKey === project.key,
-  );
-  const shown =
-    useRemoteProjectHomeShown(
-      machine.connectionId,
-      project.ref.projectId,
-      home?.ref.environmentId,
-    ) && !openedByHeading;
-  const rowRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (revealRevision === null) return;
-    rowRef.current?.scrollIntoView?.({ block: "nearest" });
-  }, [revealRevision]);
-  const openProject = (board = false) => {
-    // The heading returns to the project's last tab; the board button always
-    // opens the coordinator.
-    const landingTab = board ? undefined : projectLandingBoardTab(grouping, machine.bound);
-    openMachineWorkspace({
-      connectionId: machine.connectionId,
-      projectId: project.ref.projectId,
-      ...(board ? { boardTab: "coordinator" as const } : {}),
-      ...(landingTab ? { landingTab } : {}),
-      title: project.name,
-    });
-  };
-  // The project's own dialogs, in its machine's workspace, as its sidebar opens them.
-  const openProjectDialog = (dialog: "repository-settings" | "delete-project") =>
-    openMachineWorkspace({
-      connectionId: machine.connectionId,
-      projectId: project.ref.projectId,
-      dialog,
-      title: project.name,
-    });
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cn("px-2", isDragging && "opacity-50 z-50")}
-      data-testid="federated-project"
-      data-project={project.key}
-      data-revealed={revealed || undefined}
-      data-selected={shown || undefined}
-    >
-      <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
-        <ProjectGroupHeader
-          projectName={project.name}
-          accessibleLabel={`Open ${project.name} on ${machine.name}`}
-          label={label}
-          labelClassName={labelClassName}
-          icon={
-            showMachine ? (
-              <MachineHomeIcon
-                colorToken={machine.colorToken}
-                machineName={machine.name}
-                projectIcon={project.icon}
-              />
-            ) : project.icon ? (
-              <ProjectIconImage src={project.icon} />
-            ) : null
-          }
-          card={{
-            ...(project.repositoryHint ? { repository: project.repositoryHint } : {}),
-            ...(project.pathName ? { path: project.pathName } : {}),
-            environmentCount: environments.length,
-            runningCount: environments.filter((environment) => environment.status === "running")
-              .length,
-            openHint: `Click to open on ${machine.name}`,
-          }}
-          highlighted={shown || revealed}
-          ariaCurrent={shown ? "page" : revealed ? "true" : undefined}
-          sortable={sortable}
-          dragAttributes={attributes}
-          dragListeners={listeners}
-          rowRef={rowRef}
-          isCollapsed={isCollapsed}
-          onOpen={() => openProject()}
-          writable={writable}
-          menu={{
-            openBoard: () => openProject(true),
-            ...(githubRepositoryUrl ? { openGithub: () => openWebPage(githubRepositoryUrl) } : {}),
-            openSettings: () => openProjectDialog("repository-settings"),
-            newEnvironment: () => newFederatedEnvironment(machine, project),
-            copyToMachine: () =>
-              useProjectCopyStore.getState().open({
-                source: { nodeId: machine.backendId, projectId: project.ref.projectId },
-              }),
-            ...(onAddToFolder ? { addToFolder: onAddToFolder } : {}),
-            ...(onRemoveFromFolder ? { removeFromFolder: onRemoveFromFolder } : {}),
-            deleteProject: () => openProjectDialog("delete-project"),
-          }}
-          homeActivity={
-            home ? (
-              <RemoteProjectHomeActivity
-                machine={machine}
-                environment={home}
-                projectName={project.name}
-                compact
-              />
-            ) : null
-          }
-          newEnvironment={{
-            label: `New environment in ${project.name} on ${machine.name}`,
-            title: writable
-              ? `New environment on ${machine.name}`
-              : `${machine.name} is unavailable`,
-          }}
-        />
-        <CollapsibleContent>
-          {environments.length > 0 && (
-            <SortableContext
-              items={environments.map((environment) => environment.key)}
-              strategy={verticalListSortingStrategy}
-            >
-              {environments.map((environment) => (
-                <RemoteSortableEnvironmentItem
-                  key={environment.key}
-                  machine={machine}
-                  environment={environment}
-                  sortable={sortable}
-                />
-              ))}
-            </SortableContext>
-          )}
-        </CollapsibleContent>
-      </Collapsible>
-    </div>
-  );
-}
-
-/**
  * An environment of another machine in a project, in the frame this window's
  * rows use. Its drag id is its node-qualified key.
  */
-function RemoteSortableEnvironmentItem({
+export function RemoteSortableEnvironmentItem({
   machine,
   environment,
   sortable,

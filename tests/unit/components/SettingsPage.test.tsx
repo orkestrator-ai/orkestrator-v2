@@ -159,11 +159,12 @@ describe("SettingsPage", () => {
 
   test("shows the loading state until the first config request completes", async () => {
     let resolveConfig!: (config: ReturnType<typeof defaultConfig>) => void;
-    invokeMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveConfig = resolve as typeof resolveConfig;
-        }),
+    invokeMock.mockImplementation((command: string) =>
+      command === "get_config"
+        ? new Promise((resolve) => {
+            resolveConfig = resolve;
+          })
+        : Promise.resolve(undefined),
     );
 
     const { container } = renderInAppCommandScope(
@@ -180,7 +181,9 @@ describe("SettingsPage", () => {
   });
 
   test("keeps sound controls unavailable while the initial config is loading", async () => {
-    invokeMock.mockImplementationOnce(() => new Promise(() => undefined));
+    invokeMock.mockImplementation((command: string) =>
+      command === "get_config" ? new Promise(() => undefined) : Promise.resolve(undefined),
+    );
 
     const { container } = renderInAppCommandScope(
       <SettingsPage open onOpenChange={() => undefined} />,
@@ -193,7 +196,9 @@ describe("SettingsPage", () => {
   });
 
   test("opens Capabilities without waiting for config or rendering GlobalSettings", async () => {
-    invokeMock.mockImplementationOnce(() => new Promise(() => undefined));
+    invokeMock.mockImplementation((command: string) =>
+      command === "get_config" ? new Promise(() => undefined) : Promise.resolve(undefined),
+    );
 
     const { container } = renderInAppCommandScope(
       <SettingsPage open onOpenChange={() => undefined} />,
@@ -218,11 +223,12 @@ describe("SettingsPage", () => {
 
   test("returns to GlobalSettings after leaving Capabilities once config resolves", async () => {
     let resolveConfig!: (config: ReturnType<typeof defaultConfig>) => void;
-    invokeMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveConfig = resolve as typeof resolveConfig;
-        }),
+    invokeMock.mockImplementation((command: string) =>
+      command === "get_config"
+        ? new Promise((resolve) => {
+            resolveConfig = resolve;
+          })
+        : Promise.resolve(undefined),
     );
 
     renderInAppCommandScope(<SettingsPage open onOpenChange={() => undefined} />);

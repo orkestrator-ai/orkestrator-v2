@@ -46,14 +46,19 @@ const sameEnvironments = (a: readonly Environment[], b: readonly Environment[]):
 
 export interface EnvironmentState {
   environments: Environment[];
+  authoritativeProjectIds: ReadonlySet<string>;
   isLoading: boolean;
   error: string | null;
   deletingEnvironments: Set<string>;
   /** This window's active attempt, independent of an older persisted failure. */
   deletingStartedAt: Map<string, string>;
 
-  setEnvironments: (environments: Environment[]) => void;
-  mergeEnvironmentsForProject: (projectId: string, environments: Environment[]) => void;
+  setEnvironments: (environments: Environment[], projectIds?: readonly string[]) => void;
+  mergeEnvironmentsForProject: (
+    projectId: string,
+    environments: Environment[],
+    authoritative?: boolean,
+  ) => void;
   /** Installs one environment's authoritative snapshot; `null` means it is gone. */
   applyEnvironmentSnapshot: (environmentId: string, snapshot: Environment | null) => void;
   addEnvironment: (environment: Environment) => void;
@@ -84,25 +89,48 @@ export const environmentStore = defineScopedStore<EnvironmentState>(
   "environment",
   () => (set, get) => ({
     environments: [],
+    authoritativeProjectIds: new Set(),
     isLoading: false,
     error: null,
     deletingEnvironments: new Set<string>(),
     deletingStartedAt: new Map<string, string>(),
 
-    setEnvironments: (environments) =>
+    setEnvironments: (environments, projectIds = []) =>
       set((state) => {
         const sorted = sortByOrder(reuseUnchangedEnvironments(state.environments, environments));
-        return sameEnvironments(state.environments, sorted) ? state : { environments: sorted };
+        const updates = {
+          environments: sameEnvironments(state.environments, sorted) ? state.environments : sorted,
+          authoritativeProjectIds: state.authoritativeProjectIds,
+        };
+        if (
+          projectIds.length !== state.authoritativeProjectIds.size ||
+          projectIds.some((id) => !state.authoritativeProjectIds.has(id))
+        ) {
+          updates.authoritativeProjectIds = new Set(projectIds);
+        }
+        return updates.environments === state.environments &&
+          updates.authoritativeProjectIds === state.authoritativeProjectIds
+          ? state
+          : updates;
       }),
 
-    mergeEnvironmentsForProject: (projectId, newEnvironments) =>
+    mergeEnvironmentsForProject: (projectId, newEnvironments, authoritative = false) =>
       set((state) => {
         const current = state.environments.filter(
           (environment) => environment.projectId === projectId,
         );
         const sorted = sortByOrder(reuseUnchangedEnvironments(current, newEnvironments));
-        if (sameEnvironments(current, sorted)) return state;
+        const authoritativeProjectIds =
+          authoritative && !state.authoritativeProjectIds.has(projectId)
+            ? new Set(state.authoritativeProjectIds).add(projectId)
+            : state.authoritativeProjectIds;
+        if (sameEnvironments(current, sorted)) {
+          return authoritativeProjectIds === state.authoritativeProjectIds
+            ? state
+            : { authoritativeProjectIds };
+        }
         return {
+          authoritativeProjectIds,
           environments: sortByOrder([
             ...state.environments.filter((environment) => environment.projectId !== projectId),
             ...sorted,

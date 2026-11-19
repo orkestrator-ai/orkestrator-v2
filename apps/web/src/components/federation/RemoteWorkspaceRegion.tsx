@@ -17,7 +17,13 @@ type Rect = { x: number; y: number; width: number; height: number };
  * switches between the desktop and phone layouts. Nodes that are not shown
  * stay held behind it, hidden, as their scope's tier allows (plan item 4002).
  */
-export function RemoteWorkspaceRegion({ anchor }: { anchor: HTMLElement | null }) {
+export function RemoteWorkspaceRegion({
+  anchor,
+  mobileFilesHost,
+}: {
+  anchor: HTMLElement | null;
+  mobileFilesHost?: HTMLElement | null;
+}) {
   const { kind, portalState } = useFederation();
   const openNodes = useRemoteWorkspaceStore((state) => state.openNodes);
   const activeNodeId = useRemoteWorkspaceStore((state) => state.active?.nodeId ?? null);
@@ -47,7 +53,12 @@ export function RemoteWorkspaceRegion({ anchor }: { anchor: HTMLElement | null }
       data-node={activeNodeId ?? undefined}
     >
       {openNodes.map((nodeId) => (
-        <InTreeWorkspace key={nodeId} nodeId={nodeId} shown={shown && nodeId === activeNodeId} />
+        <InTreeWorkspace
+          key={nodeId}
+          nodeId={nodeId}
+          shown={shown && nodeId === activeNodeId}
+          mobileFilesHost={nodeId === activeNodeId ? mobileFilesHost : null}
+        />
       ))}
     </div>
   );

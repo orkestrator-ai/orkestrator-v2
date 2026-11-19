@@ -819,6 +819,9 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
                 toolName: resultTurn.toolName,
                 submission: branch.resultSubmission,
                 finalText: await finalText(),
+                ...(branch.requestId && host.resultRefusals
+                  ? { refusals: host.resultRefusals(branch.requestId) }
+                  : {}),
               })
             : `The ${host.wording.subject} became idle without returning its ${host.wording.resultLabel}`,
         () => prepareAgentBranchReminder(this.context, branch, resultTurn.toolName, finalText),

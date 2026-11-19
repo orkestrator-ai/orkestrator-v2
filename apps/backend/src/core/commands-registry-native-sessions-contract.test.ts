@@ -113,3 +113,38 @@ test("a native-sessions version outside the range is refused", async () => {
       }))(),
   ).rejects.toMatchObject({ code: "unsupported-version" });
 });
+
+test("session activity lists the environment's in-flight turns from the observer alone", async () => {
+  const sessions = [
+    { environmentId: "env-1", agent: "codex", logicalSessionKey: "env-env-1:busy" },
+    { environmentId: "env-1", agent: "claude", logicalSessionKey: "env-env-1:asking" },
+    { environmentId: "env-1", agent: "claude", logicalSessionKey: "env-env-1:idle" },
+    { environmentId: "env-1", agent: "pi", logicalSessionKey: "env-env-1:unseen" },
+    { environmentId: "env-2", agent: "codex", logicalSessionKey: "env-env-2:busy" },
+  ];
+  const states: Record<string, string> = {
+    "env-env-1:busy": "working",
+    "env-env-1:asking": "waiting",
+    "env-env-1:idle": "idle",
+    "env-env-1:unseen": "unknown",
+    "env-env-2:busy": "working",
+  };
+  const sessionTurnActivitySnapshot = mock(
+    (_environmentId: string, _agent: string, key: string) => states[key],
+  );
+  const context = {
+    nativeAgents: { sessionTurnActivitySnapshot },
+    storage: { readNativeAgentSessionsSnapshot: mock(async () => sessions) },
+  } as unknown as CommandContext;
+  const command = createCommandRegistry().get("list_native_agent_session_activity")!;
+  expect(await command({ environmentId: "env-1" }, context)).toEqual({
+    sessions: { "env-env-1:busy": "working", "env-env-1:asking": "waiting" },
+  });
+  expect(sessionTurnActivitySnapshot).toHaveBeenCalledTimes(4);
+  // Without the native agent service nothing is in flight.
+  expect(
+    await command({ environmentId: "env-1" }, {
+      storage: context.storage,
+    } as unknown as CommandContext),
+  ).toEqual({ sessions: {} });
+});

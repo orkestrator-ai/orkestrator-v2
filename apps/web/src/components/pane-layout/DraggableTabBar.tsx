@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useNativeSessionActivity } from "@/stores/nativeSessionActivityStore";
 
 const log = createLogger("web.pane-layout");
 
@@ -75,6 +76,9 @@ export function DraggableTabBar({
   const draftScope = useNodeScope();
   // Agents embedded in a design tab are shown by the design, not the strip.
   const visibleTabs = useMemo(() => visibleTabsOf(pane.tabs), [pane.tabs]);
+  // Backend-owned, so a tab whose view is not mounted still shows its turn.
+  // The container-wide Claude PTY signal cannot identify the tab running the turn.
+  const sessionActivity = useNativeSessionActivity(environmentId);
 
   const discardTabDraft = useCallback(
     (tabId: string): Promise<void> => {
@@ -449,6 +453,10 @@ export function DraggableTabBar({
                 index={index}
                 isActive={isActive}
                 isFocused={isActive && isPaneFocused}
+                isWorking={
+                  tab.type === "agent-native" &&
+                  sessionActivity.get(createSessionKey(environmentId, tab.id)) === "working"
+                }
                 onSelect={() => onTabSelect(tab.id)}
                 onRefresh={
                   onTabRefresh && isRefreshableAgentTab(tab.type)

@@ -1,3 +1,4 @@
+import { CREDENTIAL_HUMAN_ONLY_COMMANDS } from "@orkestrator/protocol/contract/domains/config";
 import { StorageService } from "../storage.js";
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -611,6 +612,9 @@ export class ControlMcpServer {
         "approve_environment_setup",
         "approve_project_setup_commands",
         "approve_setup_commands_on_nodes",
+        // Agent credentials: only a person grants access to a secret or
+        // stores one (docs/architecture/agent-credentials.md).
+        ...CREDENTIAL_HUMAN_ONLY_COMMANDS,
       ]);
       if (denied.has(command)) throw new Error("Coordinator capability denied");
       // A command routed to a connected node is held to the same list, so a

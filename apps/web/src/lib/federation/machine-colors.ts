@@ -65,6 +65,31 @@ const TINT_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, st
   neutral: "bg-muted/40",
 };
 
+// A machine tile (EL01): the colour itself over a darker shade of it.
+const TILE_TOP_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
+  violet: "bg-violet-400",
+  blue: "bg-blue-400",
+  teal: "bg-teal-400",
+  green: "bg-emerald-400",
+  amber: "bg-amber-400",
+  orange: "bg-orange-400",
+  rose: "bg-rose-400",
+  slate: "bg-slate-400",
+  neutral: "bg-zinc-400",
+};
+
+const TILE_BOTTOM_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
+  violet: "bg-violet-800",
+  blue: "bg-blue-800",
+  teal: "bg-teal-800",
+  green: "bg-emerald-800",
+  amber: "bg-amber-800",
+  orange: "bg-orange-800",
+  rose: "bg-rose-800",
+  slate: "bg-slate-700",
+  neutral: "bg-zinc-700",
+};
+
 const LABELS: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
   violet: "Violet",
   blue: "Blue",
@@ -91,6 +116,12 @@ export function machineTextClass(token: string | undefined): string {
 
 export function machineTintClass(token: string | undefined): string {
   return TINT_CLASSES[machineColorForDisplay(token)];
+}
+
+/** A machine tile's two halves: the colour, and a darker shade of it. */
+export function machineTileClasses(token: string | undefined): { top: string; bottom: string } {
+  const color = machineColorForDisplay(token);
+  return { top: TILE_TOP_CLASSES[color], bottom: TILE_BOTTOM_CLASSES[color] };
 }
 
 export function machineColorLabel(token: string | undefined): string {

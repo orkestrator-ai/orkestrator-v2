@@ -581,6 +581,8 @@ export interface ProviderSendOptions {
     design?: boolean;
     url: string;
     token: string;
+    /** Alternate authentication for a read-only turn, with credential tools disabled. */
+    readOnlyToken?: string;
     /** Signed one-attempt argument for providers using a persistent MCP broker. */
     workflowResultCapability?: string;
     /**
@@ -1077,6 +1079,11 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * Restate trusted session-held permissions before dispatch and after restart.
    * Process-held authority is refreshed by the launcher instead.
    */
+  /** Applies a trusted reporter policy upgrade to the same bridge conversation. */
+  synchronizeBugReportSessionPolicy?(
+    sessionId: string,
+    policy: NativeAgentExecutionPolicy,
+  ): Promise<void>;
   synchronizeSessionPolicy?(sessionId: string, policy: NativeAgentExecutionPolicy): Promise<void>;
   resumeSession?(
     sessionId: string,

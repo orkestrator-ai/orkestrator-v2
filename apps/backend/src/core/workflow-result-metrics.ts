@@ -112,6 +112,11 @@ export class WorkflowResultMetrics {
     this.observe(`validation_ms|kind=${segment(kind)}`, ms);
   }
 
+  /** A result-tool call refused by its input check before validation. */
+  recordRefusedCall(kind: WorkflowResultKind): void {
+    this.increment(`refused_calls|kind=${segment(kind)}`);
+  }
+
   recordPreflight(outcome: WorkflowResultPreflightOutcome): void {
     this.increment(`preflights|outcome=${segment(outcome)}`);
   }

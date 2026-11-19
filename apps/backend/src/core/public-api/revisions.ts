@@ -12,7 +12,8 @@
  */
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@orkestrator/protocol/public-api";
-import type { Environment, Project, RepositoryConfig } from "../models.js";
+import type { Environment, Project } from "../models.js";
+import { defaultRepositoryConfig } from "../storage-shared-config.js";
 
 function digest(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex").slice(0, 20);
@@ -28,12 +29,13 @@ export function projectRevision(project: Project): string {
   });
 }
 
-export function repositorySettingsRevision(config: RepositoryConfig | undefined): string {
-  if (!config) return digest({ absent: true });
+export function repositorySettingsRevision(config = defaultRepositoryConfig()): string {
+  // Recording launch history can materialize a project's default settings.
   const {
     lastEnvironmentType: _lastEnvironmentType,
     lastEnvironmentAgentSelection: _lastEnvironmentAgentSelection,
     lastBuildNetworkAccessMode: _lastBuildNetworkAccessMode,
+    lastBuildIntent: _lastBuildIntent,
     ...editable
   } = config;
   return digest(editable);

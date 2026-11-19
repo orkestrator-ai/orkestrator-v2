@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { LOCAL_BRIDGE_READY_PREFIX } from "@orkestrator/protocol/node/local-bridge-readiness";
+import { announceFakeBridgeReady } from "../../tests/fake-bridge-startup.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { EventEmitter } from "node:events";
@@ -93,8 +93,9 @@ function stubBridgeSpawn(respond: (spawned: ProbeSpawn, child: FakeChild) => unk
           const address = server.address();
           return address && typeof address !== "string" && address.port === port;
         })
-      )
-        child.stdout.emit("data", `${LOCAL_BRIDGE_READY_PREFIX}${port}\n`);
+      ) {
+        announceFakeBridgeReady(child.stdout, port);
+      }
     });
     return child;
   }) as never;

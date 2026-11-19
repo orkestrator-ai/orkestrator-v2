@@ -5,6 +5,7 @@ import { generateReviewPackageCommand } from "@orkestrator/protocol/contract/dom
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import { createCommandFixtures } from "./command-fixtures";
+import { FAKE_BRIDGE_STARTUP } from "./fake-bridge-startup.js";
 
 const {
   APP_VERSION,
@@ -3047,8 +3048,13 @@ exit 1
       appRoot,
       "codex-bridge",
       `
+        ${FAKE_BRIDGE_STARTUP}
         const http = require("node:http");
         const server = http.createServer((req, res) => {
+          if (req.url === "/global/auth-check") {
+            res.writeHead(bridgeAuthStatus(req.headers.authorization)).end();
+            return;
+          }
           if (req.url === "/disable") {
             res.writeHead(200);
             res.end();
@@ -3058,7 +3064,7 @@ exit 1
           res.writeHead(req.url === "/global/health" ? 200 : 404);
           res.end();
         });
-        server.listen(Number(process.env.PORT), "127.0.0.1");
+        server.listen(Number(process.env.PORT), "127.0.0.1", announceBridgeReady);
         setInterval(() => {}, 60_000);
       `,
     );

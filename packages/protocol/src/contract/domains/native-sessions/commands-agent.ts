@@ -261,6 +261,27 @@ export const getNativeAgentSyncCapabilitiesCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * Which of one environment's native sessions have a turn in flight, keyed by
+ * logical session key, for the tab strip's working tint. Reads only the
+ * activity observer's retained answers (turn activity, so a session kept
+ * `working` only by background work it launched counts as idle): no provider
+ * read, bridge start, attach or liveness touch, so a tab strip can re-read it
+ * on every activity hint. An idle or never-observed session is absent.
+ */
+export const listNativeAgentSessionActivityCommand = defineCommand({
+  domain: nativeSessionsDomain,
+  name: "list_native_agent_session_activity",
+  since: 1,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({ environmentId: Schema.String }),
+  result: Schema.Struct({
+    sessions: Schema.Record(Schema.String, Schema.Literals(["working", "waiting"])),
+  }),
+  critical: [],
+});
+
 /** The view-protocol keys the progressive reads check themselves. */
 const progressive = {
   viewVersion: optionalUnknown,
@@ -689,6 +710,7 @@ export const NATIVE_AGENT_COMMANDS = [
   getNativeAgentProjectionCommand,
   getNativeAgentSignInResendCommand,
   getNativeAgentSyncCapabilitiesCommand,
+  listNativeAgentSessionActivityCommand,
   getNativeAgentTranscriptUpdateCommand,
   getNativeAgentSessionStateUpdateCommand,
   getNativeAgentLiveUpdateCommand,

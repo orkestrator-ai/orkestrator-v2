@@ -37,6 +37,7 @@ import {
   type CoordinatorResearchMcpServer,
 } from "../../../coordinator-web-research.js";
 import type { WorktreeLocationSettings } from "../../../disk-usage.js";
+import { BUILD_INTENTS } from "../../../environment-interaction.js";
 import type { LogDetail } from "../../../log-policy.js";
 import type { McpManagementRolloutSettings } from "../../../mcp-management.js";
 import { MULTI_REVIEW_ENGINES } from "../../../multi-review.js";
@@ -250,6 +251,13 @@ export const RepositoryConfigSchema = openRecord({
    * build launcher opens on it.
    */
   lastBuildNetworkAccessMode: Schema.optional(NetworkAccessModeSchema),
+  /**
+   * The Build choice last used to create an environment from this project's
+   * Create environment dialog: `feature` (a pipeline environment) or a prompt
+   * environment's interaction mode. The dialog records it after a successful
+   * create and opens on it next time.
+   */
+  lastBuildIntent: Schema.optional(Schema.Literals(BUILD_INTENTS)),
   /** @deprecated Legacy last-create state retained for older clients. */
   lastEnvironmentAgentSelection: Schema.optional(
     Schema.Struct({ platform: AgentPlatformSchema, mode: AgentLaunchModeSchema }),
@@ -302,6 +310,28 @@ export const ConfigReadSchema = Schema.Union([
     snapshot: AppConfigSchema,
   }),
 ]);
+
+/**
+ * `GlobalSettingSources` (`setting-sources.ts`): which settings this machine
+ * stores and which it takes from a command node. Key names only, no values.
+ */
+export const GlobalSettingSourcesSchema = Schema.Struct({
+  storedKeys: mutableArray(Schema.String),
+  unknownKeys: optionalStrings,
+  storedFields: optionalStrings,
+  inheritedKeys: Schema.NullOr(mutableArray(Schema.String)),
+});
+
+/**
+ * A guarded reset: `reset` removed the keys; `conflict` removed nothing
+ * because a stored value no longer matched what the client previewed, and
+ * names those keys. Both answer the machine's current settings.
+ */
+export const ResetGlobalSettingsResultSchema = Schema.Struct({
+  status: Schema.Literals(["reset", "conflict"]),
+  conflicts: mutableArray(Schema.String),
+  config: AppConfigSchema,
+});
 
 /** `StoredDesktopConnections` (`connections.ts`): the desktop's saved machines. */
 export const DesktopConnectionsSchema = openRecord({

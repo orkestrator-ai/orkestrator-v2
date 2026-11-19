@@ -11,6 +11,7 @@
  */
 // Must precede ../index.js, which removes the token from process.env.
 import { capturedCodexBridgeToken } from "./captured-bridge-token.js";
+import { PARENT_PID_ENV, parseParentPid } from "@orkestrator/protocol/parent-watchdog";
 import { app } from "../index.js";
 import { resolveHttpHarnessReadyProbeConfig } from "./http-flag-harness-config.js";
 
@@ -128,8 +129,18 @@ async function main(): Promise<void> {
 
   await record("close", await request(`/session/${sessionId}/close`, { method: "POST" }));
 
-  process.stdout.write(`${JSON.stringify({ engine: "app-server", results })}\n`);
+  const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
+  process.stdout.write(`${JSON.stringify({ engine: "app-server", parentPid, results })}\n`);
   process.exit(0);
+}
+
+// index.ts drains the engine and exits 0 on these signals, before main() can
+// print a result. Say so, so an interrupted run is not mistaken for a failed
+// handshake (flake 0233).
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    process.stderr.write(`[http-flag-harness] received ${signal}; exiting without a result\n`);
+  });
 }
 
 main().catch((error: unknown) => {

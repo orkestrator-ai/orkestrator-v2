@@ -65,6 +65,9 @@ function reviewTemplate(): GraphTemplateV1 {
 
 const plan = compiledPlan(reviewTemplate());
 
+/** Manual time `started()` leaves the run at, with its review turn running. */
+const STARTED_AT_MS = 2_000;
+
 interface Started {
   world: GraphRunWorld;
   service: GraphRunService;
@@ -95,7 +98,7 @@ async function started(): Promise<Started> {
     roles: bindAllRoles(plan),
     inputs: { target: graphTypeExample(plan, "workspace@1") },
   });
-  await advanceKeyedWork(time, [service], 2_000, 250);
+  await advanceKeyedWork(time, [service], STARTED_AT_MS, 250);
   const run = (await service.get(created.id))!;
   const review = run.activations.find((activation) => activation.nodeId === "review");
   expect(review?.state).toBe("running");
@@ -127,7 +130,11 @@ describe("graph run result settle cadence (#2131)", () => {
     // The order 7564 describes: the last observation saw the turn running and
     // its end raises no wake. Nothing reaches it before the next observation.
     s.world.fakes.held.delete("review");
-    await advanceKeyedWork(s.time, [s.service], 1_000, 50);
+    // The next observation is due one cadence after the last (t = 0) plus a
+    // per-run spread in [0, cadence / 3), which is 0 for one random run id in
+    // a thousand. Stop one step short of the cadence, so the check never lands
+    // on the due time itself.
+    await advanceKeyedWork(s.time, [s.service], GRAPH_RUN_OBSERVATION_MS - STARTED_AT_MS - 50, 50);
     expect(await reviewState(s)).toBe("running");
     await advanceKeyedWork(s.time, [s.service], GRAPH_RUN_OBSERVATION_MS * 2, 250);
     expect(await reviewState(s)).toBe("complete");

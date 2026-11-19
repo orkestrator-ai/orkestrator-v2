@@ -1,6 +1,4 @@
-import { registrarFrom } from "./commands-registry-contracts.js";
-import { registerTranscriptArtifactCommands } from "./transcript-artifacts/commands.js";
-import type { CommandHandler } from "./commands-context.js";
+import { createCommandRegistry } from "./commands-registry.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -8,6 +6,7 @@ import path from "node:path";
 
 import { ArtifactFailure } from "@orkestrator/protocol/transcript-artifacts";
 
+import { BUG_REPORT_SCRATCH_PREFIX } from "./bug-report-scratch.js";
 import type { CommandContext } from "./commands-context.js";
 import { readableHostFileRoots } from "./readable-host-roots.js";
 import { readFileBase64 } from "./shell.js";
@@ -28,6 +27,8 @@ let chosenFolder: string;
 let customWorktree: string;
 let outside: string;
 let environments: Array<Record<string, unknown>>;
+let bugReportScratch: string;
+let bugReports: Array<Record<string, unknown>>;
 let streams: TranscriptMediaStreams | undefined;
 let minted: MintMediaInput[];
 
@@ -37,6 +38,7 @@ function context(): Pick<CommandContext, "storage" | "worktreeDir"> {
     storage: {
       loadEnvironments: async () => environments,
       getDataDir: () => dataDir,
+      bugReports: { listBugReports: async () => bugReports },
     } as unknown as CommandContext["storage"],
   };
 }
@@ -115,6 +117,17 @@ beforeEach(() => {
       worktreePath: outside,
     },
   ];
+  // A report's scratch directory is created directly under the temporary
+  // directory, which is the only place a report's images are admitted from.
+  bugReportScratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), BUG_REPORT_SCRATCH_PREFIX)));
+  mkdirSync(path.join(bugReportScratch, "screenshots"));
+  writeFileSync(path.join(bugReportScratch, "screenshots", "window.wav"), WAV);
+  writeFileSync(path.join(bugReportScratch, "issue.wav"), WAV);
+  bugReports = [
+    { id: "report-1", scratchDir: bugReportScratch },
+    // A record naming a directory the service did not create is never a root.
+    { id: "report-2", scratchDir: outside },
+  ];
   minted = [];
 });
 
@@ -122,15 +135,36 @@ afterEach(async () => {
   await streams?.dispose();
   streams = undefined;
   rmSync(root, { recursive: true, force: true });
+  rmSync(bugReportScratch, { recursive: true, force: true });
 });
 
 describe("readable host file roots", () => {
-  test("are the worktree base, custom worktrees one by one, and coordinator attachments", async () => {
+  test("are the worktree base, custom worktrees one by one, coordinator attachments and bug report images", async () => {
     expect(await readableHostFileRoots(context())).toEqual([
       worktrees,
       customWorktree,
       path.join(dataDir, "coordinator-attachments"),
+      {
+        path: path.join(bugReportScratch, "screenshots"),
+        trustedParent: path.dirname(bugReportScratch),
+      },
     ]);
+  });
+
+  test("an open bug report's images are readable until it is discarded", async () => {
+    const capture = path.join(bugReportScratch, "screenshots", "window.wav");
+    expect(await readFileBase64(capture, await readableHostFileRoots(context()))).toBe(
+      Buffer.from(WAV).toString("base64"),
+    );
+    // The rest of the scratch directory is not an image folder.
+    await expect(
+      readFileBase64(
+        path.join(bugReportScratch, "issue.wav"),
+        await readableHostFileRoots(context()),
+      ),
+    ).rejects.toThrow();
+    bugReports = [];
+    await expect(readFileBase64(capture, await readableHostFileRoots(context()))).rejects.toThrow();
   });
 
   test("the readable-roots stream admits exactly what read_file_base64 admits", async () => {
@@ -189,15 +223,18 @@ describe("readable host file roots", () => {
   });
 });
 
-test("registered environment-less stream command uses the current readable host roots", async () => {
-  const commands = new Map<string, CommandHandler>();
-  registerTranscriptArtifactCommands(registrarFrom((name, handler) => commands.set(name, handler)));
+function registeredReadableCommands() {
+  const commands = createCommandRegistry();
   const ctx = {
     ...context(),
     transcriptArtifacts: { runtime: () => ({ contentServer: server }) },
   } as unknown as CommandContext;
-  const invoke = (name: string, args: Record<string, unknown>) =>
+  return (name: string, args: Record<string, unknown>) =>
     Promise.resolve(commands.get(name)!(args as never, ctx));
+}
+
+test("registered environment-less stream command uses the current readable host roots", async () => {
+  const invoke = registeredReadableCommands();
   const opened = (await invoke("transcript_media_open_stream", {
     path: path.join(customWorktree, "clip.wav"),
   })) as { streamId: string };
@@ -214,3 +251,36 @@ test("registered environment-less stream command uses the current readable host 
     await invoke("transcript_media_close_stream", { streamId: opened.streamId });
   }
 });
+
+for (const directory of ["scratch", "screenshots"] as const) {
+  test(`the registered commands refuse a replaced report ${directory} and recheck stream opens`, async () => {
+    const invoke = registeredReadableCommands();
+    const screenshotDir = path.join(bugReportScratch, "screenshots");
+    const filePath = path.join(screenshotDir, "window.wav");
+    expect(await invoke("read_file_base64", { filePath })).toBe(
+      Buffer.from(WAV).toString("base64"),
+    );
+    const opened = (await invoke("transcript_media_open_stream", { path: filePath })) as {
+      streamId: string;
+    };
+    const original = directory === "scratch" ? bugReportScratch : screenshotDir;
+    const replacement = path.join(outside, directory);
+    const replacementImages =
+      directory === "scratch" ? path.join(replacement, "screenshots") : replacement;
+    mkdirSync(replacementImages, { recursive: true });
+    writeFileSync(path.join(replacementImages, "window.wav"), WAV);
+    rmSync(original, { recursive: true });
+    symlinkSync(replacement, original);
+    try {
+      await expect(invoke("read_file_base64", { filePath })).rejects.toThrow("Invalid file path");
+      await expect(invoke("transcript_media_open_stream", { path: filePath })).rejects.toThrow(
+        "policy_denied",
+      );
+      await expect(minted[0]!.resolve(new AbortController().signal)).rejects.toThrow(
+        "Invalid file path",
+      );
+    } finally {
+      await invoke("transcript_media_close_stream", { streamId: opened.streamId });
+    }
+  });
+}

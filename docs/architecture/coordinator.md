@@ -660,10 +660,10 @@ on `self` and on each node:
 
 ### Reaching a leaf's coordinator
 
-A command node's window reaching a leaf's project shows the leaf's
-coordinator directly when the sidebar is grouped by machine or project.
-Grouped by repository, or in the compact sidebar, it leads to the command node's
-coordinator for that repository instead, when the command node has one
+A command node's window reaching a leaf's project from the repository list
+(the sidebar's full list) or the compact sidebar leads to the command node's
+coordinator for that repository, when the command node has one; sorted by
+activity it shows the leaf's coordinator directly
 ([command-nodes.md](command-nodes.md#leaf-mode)).
 
 ### Tickets on other machines
@@ -2498,10 +2498,10 @@ can start only from a commit published to a remote branch; unpublished commits
 remain available to local workers.
 
 Workers come in two kinds. A **prompt environment** runs one prompt
-(`launch_environment`, or "With a prompt" in the New environment dialog); its
+(`launch_environment`, or "Task" or "Interactive" in the New environment dialog); its
 review and PR are started by hand or by the coordinator. A **pipeline
 environment** is one a build pipeline created and runs in
-(`start_build_pipeline`, a ticket's Build button, or "A feature" in the New
+(`start_build_pipeline`, a ticket's Build button, or "Pipeline" in the New
 Environment dialog); the pipeline runs build, review, fix, verify, PR and
 conflict resolution itself.
 

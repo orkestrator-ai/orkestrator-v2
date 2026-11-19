@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { SidebarGrouping } from "@/lib/federation/aggregate";
+import type { EnvironmentOrdering } from "@/lib/federation/environment-list";
 
 const MAX_COLLAPSED_ENTRIES = 2048;
 /** Recently used projects and environments, newest first, across machines. */
@@ -16,8 +17,9 @@ function toggled(list: readonly string[], key: string, collapsed?: boolean): str
 }
 
 /**
- * This client's cross-machine presentation: the machine filter and
- * grouping, and what is collapsed in the multi-machine sidebar. It is
+ * This client's cross-machine presentation: the machine filter, the sidebar
+ * view and environment ordering, and what is collapsed in the multi-machine
+ * sidebar. It is
  * client-local by design — filters are not backend state — and every entry names a machine by its identity, never by a route or
  * forwarded port. Hiding a machine or changing the filter is presentation
  * only: it never stops an agent or touches a backend.
@@ -34,11 +36,16 @@ export interface MachineCollapseState {
 }
 
 interface MachineViewState {
-  /** `"all"` or a machine identity. Filters presentation, never connections. */
-  machineFilter: string;
+  /**
+   * The machines shown, by identity; empty shows every machine. Filters
+   * presentation, never connections. The machine tiles and the machines menu
+   * both set it (`toggleMachineFilter`, `setMachineShownInFilter`).
+   */
+  machineFilter: string[];
+  /** The full repository list, or compact. */
   grouping: Exclude<SidebarGrouping, "activity">;
-  /** What `grouping` was before compact, where leaving compact returns to the activity list. */
-  groupingBeforeCompact: Exclude<SidebarGrouping, "activity" | "compact">;
+  /** How each repository's environments are ordered across machines. */
+  environmentOrdering: EnvironmentOrdering;
   /** Show just the dot (plus tooltip) instead of the machine name label. */
   compactMachineLabels: boolean;
   /**
@@ -68,11 +75,13 @@ interface MachineViewState {
   revealedProject: { key: string; revision: number } | null;
   /**
    * The repository whose heading opened what the window shows, in the
-   * "by repository" list. The heading is highlighted instead of the member
+   * repository list. The heading is highlighted instead of the member
    * project it opened, until anything else is selected. Not persisted.
    */
   openedRepository: OpenedRepository | null;
-  setMachineFilter: (filter: string) => void;
+  /** `[]` (or `"all"`) shows every machine; a machine identity shows only it. */
+  setMachineFilter: (filter: readonly string[] | string) => void;
+  setEnvironmentOrdering: (ordering: EnvironmentOrdering) => void;
   setGrouping: (grouping: Exclude<SidebarGrouping, "activity">) => void;
   setCompactMachineLabels: (compact: boolean) => void;
   setMachineCollapsed: (machineId: string, collapsed?: boolean) => void;
@@ -101,19 +110,49 @@ export function withRecentKeys(list: readonly string[], keys: readonly string[])
 }
 
 /**
- * A folder's collapse key in the multi-machine sidebar: the machine it is on
- * ("by machine"), or the merged list it is in ("by project", "by repository").
+ * A collapse key in the multi-machine sidebar: a folder of a machine, or a
+ * repository of the repository list (scope `"repository"`).
  */
 export function sidebarFolderKey(scope: string, folderKey: string): string {
   return `${scope}/${folderKey}`;
 }
 
+const MAX_FILTER_ENTRIES = 256;
+
+function machineFilterValue(filter: unknown): string[] {
+  // Before 2.39 the filter was one machine or "all".
+  if (typeof filter === "string") return filter && filter !== "all" ? [filter] : [];
+  if (!Array.isArray(filter)) return [];
+  return Array.from(
+    new Set(filter.filter((entry): entry is string => typeof entry === "string" && entry !== "")),
+  ).slice(0, MAX_FILTER_ENTRIES);
+}
+
+/**
+ * A persisted view as this build reads it. The "by machine", "by project" and
+ * "by repository" groupings of earlier builds are all the repository list
+ * now, ordered by machine unless the user chose Manual.
+ */
+export function sanitizePersisted(persisted: unknown): Partial<MachineViewState> {
+  if (persisted === null || typeof persisted !== "object") return {};
+  const { groupingBeforeCompact: _dropped, ...stored } = persisted as Record<string, unknown>;
+  const result: Record<string, unknown> = { ...stored };
+  if ("machineFilter" in stored) result.machineFilter = machineFilterValue(stored.machineFilter);
+  if ("grouping" in stored) {
+    result.grouping = stored.grouping === "compact" ? "compact" : "repository";
+  }
+  if ("environmentOrdering" in stored) {
+    result.environmentOrdering = stored.environmentOrdering === "manual" ? "manual" : "machine";
+  }
+  return result as Partial<MachineViewState>;
+}
+
 export const useMachineViewStore = create<MachineViewState>()(
   persist(
     (set) => ({
-      machineFilter: "all",
-      grouping: "machine",
-      groupingBeforeCompact: "machine",
+      machineFilter: [],
+      grouping: "repository",
+      environmentOrdering: "machine",
       compactMachineLabels: false,
       collapsedMachines: [],
       collapsedProjectKeys: [],
@@ -124,15 +163,9 @@ export const useMachineViewStore = create<MachineViewState>()(
       recentKeys: [],
       revealedProject: null,
       openedRepository: null,
-      setMachineFilter: (machineFilter) => set({ machineFilter }),
-      setGrouping: (grouping) =>
-        set((state) =>
-          grouping !== "compact"
-            ? { grouping, groupingBeforeCompact: grouping }
-            : state.grouping === "compact"
-              ? state
-              : { grouping, groupingBeforeCompact: state.grouping },
-        ),
+      setMachineFilter: (filter) => set({ machineFilter: machineFilterValue(filter) }),
+      setEnvironmentOrdering: (environmentOrdering) => set({ environmentOrdering }),
+      setGrouping: (grouping) => set({ grouping }),
       setCompactMachineLabels: (compactMachineLabels) => set({ compactMachineLabels }),
       setMachineCollapsed: (machineId, collapsed) =>
         set((state) => ({
@@ -200,10 +233,15 @@ export const useMachineViewStore = create<MachineViewState>()(
     }),
     {
       name: "machine-view-storage",
+      version: 1,
+      // Every stored shape, this one included, is read through the same
+      // sanitizer, so a value an older or newer build wrote never breaks it.
+      migrate: (persisted) => sanitizePersisted(persisted) as unknown as MachineViewState,
+      merge: (persisted, current) => ({ ...current, ...sanitizePersisted(persisted) }),
       partialize: (state) => ({
         machineFilter: state.machineFilter,
         grouping: state.grouping,
-        groupingBeforeCompact: state.groupingBeforeCompact,
+        environmentOrdering: state.environmentOrdering,
         compactMachineLabels: state.compactMachineLabels,
         collapsedMachines: state.collapsedMachines,
         collapsedProjectKeys: state.collapsedProjectKeys,

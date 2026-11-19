@@ -669,6 +669,57 @@ describe("prompt queue lease order and races", () => {
     );
   });
 
+  test("a live queue edit and a steer reservation exclude one another across backends", async () => {
+    const dataDir = await emptyDataDir();
+    const editor = await open(dataDir);
+    await addEnvironments(editor);
+    const steerer = await open(dataDir);
+    await editor.getOrCreateNativeAgentSession(
+      { key: SESSION, environmentId: "e1", agent: "claude", logicalSessionKey: LOGICAL },
+      async () => "provider-1",
+    );
+    const target = { queueKey: KEY, environmentId: "e1", messageId: "held" };
+    const begin = () => editor.promptQueueEdits.beginPromptQueueMessageEdit(target);
+    const steer = () => steerer.reservePromptQueueSteer(SESSION, target.messageId, "run-1");
+    const release = (leaseId: string) =>
+      editor.promptQueueEdits.finishPromptQueueMessageEdit(
+        { ...target, leaseId },
+        { outcome: "cancel" },
+      );
+    await editor.enqueuePromptQueueMessage(KEY, "e1", { id: target.messageId, text: "original" });
+
+    const edit = await begin();
+    if (edit.status !== "editing") throw new Error("expected a lease");
+    await expect(steer()).rejects.toThrow("being edited");
+    expect((await steerer.getNativeAgentSession(SESSION))?.pendingSteer).toBeUndefined();
+    await release(edit.lease.leaseId);
+
+    const [racingEdit, racingSteer] = await Promise.all([
+      begin(),
+      steer().catch((error: unknown) => error),
+    ]);
+    let reservation;
+    if (racingEdit.status === "editing") {
+      expect(racingSteer).toBeInstanceOf(Error);
+      expect((racingSteer as Error).message).toContain("being edited");
+      await release(racingEdit.lease.leaseId);
+      reservation = await steer();
+    } else {
+      expect(racingEdit.reason).toBe("missing");
+      reservation = racingSteer;
+    }
+    expect(reservation).toMatchObject({ requestId: target.messageId });
+    const recovered = await open(dataDir);
+    expect((await recovered.getNativeAgentSession(SESSION))?.pendingSteer?.requestId).toBe(
+      target.messageId,
+    );
+    await recovered.confirmNativeAgentSteer(SESSION, target.messageId);
+    expect((await editor.getPromptQueue(KEY))?.inFlight).toBeUndefined();
+    expect((await editor.getNativeAgentSession(SESSION))?.dispatchedRequestIds).toContain(
+      target.messageId,
+    );
+  });
+
   test("a steer racing queue mutations loses no update, across two backends", async () => {
     const dataDir = await emptyDataDir();
     const first = await open(dataDir);

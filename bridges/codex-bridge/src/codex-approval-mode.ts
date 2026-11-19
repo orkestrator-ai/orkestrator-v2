@@ -29,8 +29,29 @@ export function codexApprovalConfig(
   policy: NativeAgentExecutionPolicy | undefined,
   sandbox: EngineTurnConfig["sandbox"],
   mode: CodexApprovalMode | undefined,
+  reportWorkspace = false,
 ): Pick<EngineTurnConfig, "approvalPolicy" | "approvalsReviewer" | "sandbox"> | undefined {
-  if (!mode || policy?.approvals === "deny") return undefined;
+  if (policy?.approvals === "deny") return undefined;
+  if (reportWorkspace) {
+    mode ??= "on-request";
+    if (mode === "auto-review" && policy?.approvals === "auto-approve") {
+      // The reviewer can decide non-sandbox approvals. Both sandbox escapes
+      // and delegated permission grants are refused before they reach it.
+      return {
+        approvalPolicy: {
+          granular: {
+            sandbox_approval: false,
+            request_permissions: false,
+            rules: false,
+            skill_approval: true,
+            mcp_elicitations: true,
+          },
+        },
+        approvalsReviewer: "auto_review",
+      };
+    }
+  }
+  if (!mode) return undefined;
   if (policy?.approvals === "ask" && mode !== "untrusted" && mode !== "on-request") {
     return undefined;
   }

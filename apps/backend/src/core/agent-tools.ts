@@ -84,6 +84,12 @@ import {
   registerTranscriptArtifactTools,
   type TranscriptArtifactToolHost,
 } from "./transcript-artifacts/index.js";
+import { CREDENTIAL_ANY_TAB } from "@orkestrator/protocol/agent-credentials";
+import {
+  CREDENTIAL_TOOL_INSTRUCTIONS,
+  registerCredentialTools,
+  type CredentialToolHost,
+} from "./credentials/tools.js";
 import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
   ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
@@ -144,6 +150,8 @@ export type AgentToolConnection = {
   design?: boolean;
   url: string;
   token: string;
+  /** Same tab authority, with credential access suppressed for a read-only turn. */
+  readOnlyToken?: string;
   /** Signed one-attempt argument used with the persistent OpenCode broker. */
   workflowResultCapability?: string;
   /** A workflow turn's artifact-only connection (see `ProviderSendOptions.agentMcp`). */
@@ -158,10 +166,12 @@ export type AgentToolScope = {
   /** A graph activation's output slots: one capability for every port (see `workflowResultActivationConnection`). */
   workflowResultKeys?: string[];
   workflowResultBroker?: boolean;
+  credentialsDisabled?: true;
 };
 
 type StoredCredential = AgentToolScope & {
   token: string;
+  readOnlyToken?: string;
 };
 
 /** One container's right to ring a state-change doorbell, and nothing else. */
@@ -706,6 +716,7 @@ async function createAgentToolServer(
     suborkTools = null,
     keyInformation = null,
     autoPipelineTools = null,
+    credentialTools = null,
   }: {
     instructions?: boolean;
     graphTools?: GraphActivationToolHost | null;
@@ -713,6 +724,7 @@ async function createAgentToolServer(
     suborkTools?: SuborkToolHost | null;
     keyInformation?: BuildPipelineKeyInformationHost | null;
     autoPipelineTools?: AutoPipelineToolHost | null;
+    credentialTools?: CredentialToolHost | null;
   } = {},
 ): Promise<McpServer> {
   const pipelineScope = { environmentId: scope.environmentId, projectId: scope.projectId };
@@ -937,6 +949,17 @@ async function createAgentToolServer(
   // workflow-result branches above returned without them. Environment-wide
   // credentials must additionally present a per-turn artifact grant.
   const artifactTools = artifacts ?? null;
+  // Credential grants belong to the environment. A tab-scoped credential
+  // names its tab (whose policy applies and whose card shows a request);
+  // OpenCode's environment-wide one is the environment as a whole.
+  const credentialCaller =
+    credentialTools && !scope.credentialsDisabled
+      ? {
+          environmentId: scope.environmentId,
+          projectId: scope.projectId,
+          tabId: scope.tabId ?? CREDENTIAL_ANY_TAB,
+        }
+      : null;
   const server = new McpServer(
     { name: "orkestrator", version: "1.0.0" },
     {
@@ -951,7 +974,8 @@ async function createAgentToolServer(
         (artifactTools
           ? ARTIFACT_TOOL_INSTRUCTIONS +
             artifactAuthoringNotice(artifactTools.authoringAvailability?.())
-          : ""),
+          : "") +
+        (credentialCaller ? CREDENTIAL_TOOL_INSTRUCTIONS : ""),
     },
   );
 
@@ -1008,6 +1032,9 @@ async function createAgentToolServer(
   if (artifactTools) registerTranscriptArtifactTools(server, artifactTools, scope);
 
   if (goalTools) registerGoalTools(server, goalTools, scope);
+
+  if (credentialTools && credentialCaller)
+    registerCredentialTools(server, credentialTools, credentialCaller);
 
   // Tab-scoped credentials only: the draft belongs to the tab that calls it.
   if (autoPipelineTools && scope.tabId) {
@@ -1093,6 +1120,7 @@ export class AgentToolsServer {
   private graphActivationToolHost: GraphActivationToolHost | null = null;
   private keyInformationHost: BuildPipelineKeyInformationHost | null = null;
   private autoPipelineToolHost: AutoPipelineToolHost | null = null;
+  private credentialToolHost: CredentialToolHost | null = null;
   private readonly peerFilter: AgentToolsPeerGate;
   private unfollowNetworkChanges: (() => void) | null = null;
 
@@ -1191,9 +1219,11 @@ export class AgentToolsServer {
     projectId: string,
     target: "host" | "container",
     tabId?: string,
+    options?: { credentialsDisabled: true },
   ): AgentToolConnection {
     if (!this.server || !this.port) throw new Error("Agent tools server is not running");
-    const credentialKey = tabId ? `${environmentId}\0${tabId}` : environmentId;
+    const tabKey = tabId ? `${environmentId}\0${tabId}` : environmentId;
+    const credentialKey = options?.credentialsDisabled ? `${tabKey}\0no-credentials` : tabKey;
     let credential = this.credentialsByEnvironment.get(credentialKey);
     if (credential && credential.projectId !== projectId) {
       this.revokeEnvironment(environmentId);
@@ -1204,19 +1234,30 @@ export class AgentToolsServer {
         environmentId,
         projectId,
         ...(tabId ? { tabId } : {}),
+        ...options,
         token: mintAgentToolsToken(),
+        ...(!options?.credentialsDisabled ? { readOnlyToken: mintAgentToolsToken() } : {}),
       };
       this.credentialsByEnvironment.set(credentialKey, credential);
-      this.scopesByDigest.set(credentialDigest(credential.token), {
+      const scope: AgentToolScope = {
         environmentId,
         projectId,
         ...(tabId ? { tabId } : {}),
-      });
+        ...options,
+      };
+      this.scopesByDigest.set(credentialDigest(credential.token), scope);
+      if (credential.readOnlyToken) {
+        this.scopesByDigest.set(credentialDigest(credential.readOnlyToken), {
+          ...scope,
+          credentialsDisabled: true,
+        });
+      }
     }
     const hostname = target === "container" ? "host.docker.internal" : "127.0.0.1";
     return {
       url: `http://${hostname}:${this.port}${AGENT_MCP_PATH}`,
       token: credential.token,
+      ...(credential.readOnlyToken ? { readOnlyToken: credential.readOnlyToken } : {}),
       ...(this.design?.hasCanvases(environmentId) ? { design: true } : {}),
     };
   }
@@ -1362,6 +1403,11 @@ export class AgentToolsServer {
     this.autoPipelineToolHost = host;
   }
 
+  /** Credential tools for eligible tab-scoped and environment-wide connections. */
+  setCredentialToolHost(host: CredentialToolHost | null): void {
+    this.credentialToolHost = host;
+  }
+
   /** Where `ask_agents` calls go. The tool is listed only while this is set. */
   setSuborkToolHost(host: SuborkToolHost | null): void {
     this.suborkToolHost = host;
@@ -1452,16 +1498,24 @@ export class AgentToolsServer {
     for (const [key, credential] of Array.from(this.credentialsByEnvironment)) {
       if (credential.environmentId !== environmentId) continue;
       this.credentialsByEnvironment.delete(key);
-      this.scopesByDigest.delete(credentialDigest(credential.token));
+      this.removeCredentialDigests(credential);
     }
   }
 
   revokeTab(environmentId: string, tabId: string): void {
     const key = `${environmentId}\0${tabId}`;
-    const credential = this.credentialsByEnvironment.get(key);
-    if (!credential) return;
-    this.credentialsByEnvironment.delete(key);
+    for (const candidate of [key, `${key}\0no-credentials`]) {
+      const credential = this.credentialsByEnvironment.get(candidate);
+      if (!credential) continue;
+      this.credentialsByEnvironment.delete(candidate);
+      this.removeCredentialDigests(credential);
+    }
+  }
+
+  private removeCredentialDigests(credential: StoredCredential): void {
     this.scopesByDigest.delete(credentialDigest(credential.token));
+    if (credential.readOnlyToken)
+      this.scopesByDigest.delete(credentialDigest(credential.readOnlyToken));
   }
 
   async stop(): Promise<void> {
@@ -1744,6 +1798,7 @@ export class AgentToolsServer {
                   suborkTools: this.suborkToolHost,
                   keyInformation: this.keyInformationHost,
                   autoPipelineTools: this.autoPipelineToolHost,
+                  credentialTools: this.credentialToolHost,
                 },
               ),
         { legacy: "stateless" },

@@ -2,19 +2,56 @@ import type {
   NativeAgentComposerState,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
-import type { ProviderRuntimeHealth } from "../agent-provider-contract.js";
+import type { BridgeConnection, ProviderRuntimeHealth } from "../agent-provider-contract.js";
 import {
   INTERACTIVE_RUNTIME_METADATA_RETRY_MS,
   INTERACTIVE_RUNTIME_METADATA_TTL_MS,
   MAX_TRACKED_INTERACTION_SESSIONS,
   setBoundedMapEntry,
 } from "../agent-provider-runtime.js";
+import type { HttpBridgeAgent } from "./catalog.js";
+import { bridgeRuntimeSummary } from "./runtime-health.js";
+import { boundedJson, bridgeFetch } from "./transport.js";
 
 export interface HttpBridgeRuntimeMetadata {
   expiresAt: number;
   executionProfiles?: NativeAgentComposerState["executionProfiles"];
   runtime?: NativeAgentRuntimeSummary;
   runtimeHealthAuthoritative?: boolean;
+}
+
+/**
+ * Reads bounded inventory, drift and provider diagnostics for one session.
+ * Older bridges and missing sessions both return unavailable metadata.
+ * The authoritative liveness answer comes from `/activity`.
+ */
+export async function readBridgeRuntimeHealth({
+  agent,
+  connection,
+  fetchImpl,
+  sessionId,
+}: {
+  agent: HttpBridgeAgent;
+  connection: BridgeConnection;
+  fetchImpl: typeof fetch;
+  sessionId: string;
+}): Promise<ProviderRuntimeHealth> {
+  try {
+    const response = await bridgeFetch(
+      connection,
+      `/session/${encodeURIComponent(sessionId)}/runtime-health`,
+      {},
+      fetchImpl,
+    );
+    if (!response.ok) return { summary: {}, notices: [], authoritative: false };
+    const summary = bridgeRuntimeSummary(
+      await boundedJson(response, `${agent} runtime health read`, { remaining: 512 * 1024 }),
+    );
+    if (!summary) return { summary: {}, notices: [], authoritative: false };
+    return { summary, notices: summary.notices ?? [], authoritative: true };
+  } catch {
+    return { summary: {}, notices: [], authoritative: false };
+  }
 }
 
 export function refreshHttpBridgeRuntimeMetadata(options: {

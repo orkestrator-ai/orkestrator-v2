@@ -1,3 +1,7 @@
+import {
+  BUG_REPORT_WORKSPACE_ENV,
+  bugReportPolicyBeforeApprovalUpgrade,
+} from "@orkestrator/protocol/bug-report";
 import { sessionOperationError } from "../services/session-manager-core.js";
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 // Session management routes
@@ -554,7 +558,14 @@ session.post("/:id/config", async (c) => {
   // after asynchronous SDK work before committing the policy.
   const refusePolicyWidening = () => {
     const widened = nextPolicy
-      ? executionPolicyWidenings(sessionData.executionPolicy, nextPolicy)
+      ? executionPolicyWidenings(
+          bugReportPolicyBeforeApprovalUpgrade(
+            sessionData.executionPolicy,
+            nextPolicy,
+            process.env[BUG_REPORT_WORKSPACE_ENV],
+          ),
+          nextPolicy,
+        )
       : [];
     if (widened.length > 0) {
       log.warn("session.policy-widening-refused", {
@@ -579,7 +590,8 @@ session.post("/:id/config", async (c) => {
     body.mode === "plan"
       ? "plan"
       : body.mode === "build"
-        ? (approvalMode ?? "bypassPermissions")
+        ? (approvalMode ??
+          (process.env[BUG_REPORT_WORKSPACE_ENV] ? "default" : "bypassPermissions"))
         : // Approval changes do not leave plan mode.
           approvalMode !== undefined && sessionData.planMode !== true
           ? approvalMode

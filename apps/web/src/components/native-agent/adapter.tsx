@@ -1,3 +1,4 @@
+import type { NativeAgentResumeIntent } from "@/lib/native-agent-resume-requests";
 import type { ReactNode } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -97,6 +98,12 @@ export interface AgentNativeTabProps {
   composerHint?: ReactNode;
   /** Open the shared resume dialog as soon as the controller mounts. */
   initialResumeOpen?: boolean;
+  /**
+   * A conversation the tab was opened to resume (`native-agent-resume-requests`):
+   * the tab resumes it through the picker's own handler after a successful
+   * layout save. A failed save offers a retry for the same conversation.
+   */
+  initialResume?: NativeAgentResumeIntent;
 }
 
 /** Provider metadata consumed by the one shared native-agent controller. */

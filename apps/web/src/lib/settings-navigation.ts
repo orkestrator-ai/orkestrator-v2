@@ -31,6 +31,7 @@ export const GLOBAL_SETTINGS_SECTIONS = [
   "schedules",
   "self-improvement",
   "permissions",
+  "credentials",
   "sounds",
   "docker",
   "container",
@@ -45,25 +46,40 @@ export function isGlobalSettingsSection(value: unknown): value is GlobalSettings
 }
 
 /**
- * Opens the window's Settings on `section`. Settings belong to the command
- * node, so this is always the window's own surface (`GlobalSettingsHost`).
- * Another node shown in the window's own tree runs in this document and
- * calls it directly (plan item 5003).
+ * Opens the window's Settings surface (`GlobalSettingsHost`) on `section`.
+ * When supplied, `machine` selects its owner explicitly. Null selects the
+ * command node. With no owner specified, Settings keeps its normal selection.
  */
-export function requestGlobalSettings(section: GlobalSettingsSection): void {
+export function requestGlobalSettings(
+  section: GlobalSettingsSection,
+  machine?: string | null,
+): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(
-    new CustomEvent<GlobalSettingsSection>(GLOBAL_SETTINGS_REQUEST_EVENT, { detail: section }),
+    new CustomEvent(GLOBAL_SETTINGS_REQUEST_EVENT, {
+      detail: machine === undefined ? section : { section, machine },
+    }),
   );
 }
 
 export function onGlobalSettingsRequest(
-  listener: (section: GlobalSettingsSection) => void,
+  listener: (section: GlobalSettingsSection, machine?: string | null) => void,
 ): () => void {
   if (typeof window === "undefined") return () => undefined;
   const handle = (event: Event) => {
-    const section = (event as CustomEvent<unknown>).detail;
-    if (isGlobalSettingsSection(section)) listener(section);
+    const detail = (event as CustomEvent<unknown>).detail;
+    if (isGlobalSettingsSection(detail)) {
+      listener(detail);
+    } else if (
+      detail &&
+      typeof detail === "object" &&
+      "section" in detail &&
+      "machine" in detail &&
+      isGlobalSettingsSection(detail.section) &&
+      (detail.machine === null || typeof detail.machine === "string")
+    ) {
+      listener(detail.section, detail.machine);
+    }
   };
   window.addEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, handle);
   return () => window.removeEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, handle);

@@ -22,12 +22,17 @@ import { HierarchicalSidebar } from "./HierarchicalSidebar";
 import { selectOnNode } from "@/test/node-selection";
 import { appCommandStore } from "@/test/app-command-store";
 
-/** A project's header button, found through its "+" button, which names project and machine. */
-async function findProjectHeading(project: string, machine: string): Promise<HTMLElement> {
-  const add = await screen.findByRole("button", {
-    name: `New environment in ${project} on ${machine}`,
-  });
-  return add.parentElement!.querySelector("button")!;
+/** A repository heading of the multi-machine list, which opens the repository on a machine. */
+function findRepositoryHeading(label: string, machine: string): Promise<HTMLElement> {
+  return screen.findByRole("button", { name: `Open ${label} on ${machine}` });
+}
+
+/** Whether a bound environment row of the repository list is drawn selected. */
+function rowDrawnSelected(name: string): boolean {
+  const frame = screen
+    .getByRole("button", { name: new RegExp(`^${name}, on `) })
+    .closest('[data-testid="repository-environment-row"]')!;
+  return frame.firstElementChild!.className.includes("from-selected");
 }
 
 const initialView = useMachineViewStore.getState();
@@ -80,7 +85,7 @@ afterEach(() => {
   useRemoteWorkspaceStore.setState(initialRemote, true);
 });
 
-test("a project row stays highlighted while its home is shown, on the command node and on a leaf", async () => {
+test("a repository heading stays highlighted while its home is shown, on the command node and on a leaf", async () => {
   installDesktopFake({
     list: connectionList([remoteConnection("leaf", "leaf", "teal")]),
     datasets: {
@@ -102,8 +107,8 @@ test("a project row stays highlighted while its home is shown, on the command no
           : undefined,
   });
   useMachineViewStore.setState({
-    grouping: "machine",
-    machineFilter: "all",
+    grouping: "repository",
+    machineFilter: [],
     collapsedMachines: [],
     collapsedProjectKeys: [],
     collapsedFolderKeys: [],
@@ -117,8 +122,10 @@ test("a project row stays highlighted while its home is shown, on the command no
         <HierarchicalSidebar />
       </FederationProvider>,
     );
-    const leafRow = await findProjectHeading("telegram-scraper", "leaf");
-    const localRow = await screen.findByRole("button", { name: /^local-app/ });
+    // The leaf's project reports no repository: it is a heading of its own.
+    const leafRow = await findRepositoryHeading("telegram-scraper", "leaf");
+    const localRow = await screen.findByRole("button", { name: /^Open acme\/local-app on / });
+    expect(screen.getByTestId("federated-repository-list")).toBeTruthy();
     const highlighted = () => ({
       local: localRow.getAttribute("aria-current") === "page",
       leaf: leafRow.getAttribute("aria-current") === "page",
@@ -141,11 +148,17 @@ test("a project row stays highlighted while its home is shown, on the command no
       act(() => selectOnNode("bk_leaf", { projectId, environmentId }));
     report("tg", "tg-home");
     expect(highlighted()).toEqual({ local: false, leaf: true });
-    expect(leafRow.closest("[data-project]")?.getAttribute("data-selected")).toBe("true");
-    // One of the leaf's environments, chosen in its workspace.
+    // One of the leaf's environments, chosen in its workspace: its row is selected instead.
     report("tg", "tg-feature");
     expect(highlighted()).toEqual({ local: false, leaf: false });
-    expect(leafRow.closest("[data-project]")?.getAttribute("data-selected")).toBeNull();
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("button", { name: /^feature, on leaf/ })
+          .closest('[data-testid="federated-environment-row"]')
+          ?.getAttribute("data-selected"),
+      ).toBe("true"),
+    );
     report("tg", "tg-home");
     expect(highlighted()).toEqual({ local: false, leaf: true });
 
@@ -158,44 +171,42 @@ test("a project row stays highlighted while its home is shown, on the command no
   }
 });
 
-for (const grouping of ["machine", "repository"] as const) {
-  test(`bound project icons replace machine homes in ${grouping} grouping`, async () => {
-    const icon = "data:image/png;base64,YQ==";
-    installDesktopFake({
-      list: connectionList([remoteConnection("leaf", "leaf", "teal")]),
-      datasets: { leaf: { projects: [], environments: {} } },
-      respondPortal: (command) =>
-        command === "get_projects"
-          ? [{ ...localProject, icon }]
-          : command === "get_environment_snapshots" || command === "get_environments"
-            ? []
-            : undefined,
-    });
-    appCommandStore(projectStore)
-      .getState()
-      .setProjects([{ ...localProject, icon }]);
-    appCommandStore(environmentStore).getState().setEnvironments([]);
-    useMachineViewStore.setState({
-      grouping,
-      machineFilter: "all",
-      collapsedMachines: [],
-      collapsedProjectKeys: [],
-      collapsedFolderKeys: [],
-      revealedProject: null,
-      recentKeys: [],
-    });
-    renderInAppCommandScope(
-      <FederationProvider>
-        <HierarchicalSidebar />
-      </FederationProvider>,
-    );
-    const image = await screen.findByTestId("project-icon");
-    expect(image.getAttribute("src")).toBe(icon);
-    const row = image.closest("button")!;
-    expect(row.textContent).toContain("local-app");
-    expect(within(row).queryByTestId("machine-home-icon") === null).toBe(true);
+test("bound project icons replace machine homes on repository headings", async () => {
+  const icon = "data:image/png;base64,YQ==";
+  installDesktopFake({
+    list: connectionList([remoteConnection("leaf", "leaf", "teal")]),
+    datasets: { leaf: { projects: [], environments: {} } },
+    respondPortal: (command) =>
+      command === "get_projects"
+        ? [{ ...localProject, icon }]
+        : command === "get_environment_snapshots" || command === "get_environments"
+          ? []
+          : undefined,
   });
-}
+  appCommandStore(projectStore)
+    .getState()
+    .setProjects([{ ...localProject, icon }]);
+  appCommandStore(environmentStore).getState().setEnvironments([]);
+  useMachineViewStore.setState({
+    grouping: "repository",
+    machineFilter: [],
+    collapsedMachines: [],
+    collapsedProjectKeys: [],
+    collapsedFolderKeys: [],
+    revealedProject: null,
+    recentKeys: [],
+  });
+  renderInAppCommandScope(
+    <FederationProvider>
+      <HierarchicalSidebar />
+    </FederationProvider>,
+  );
+  const image = await screen.findByTestId("project-icon");
+  expect(image.getAttribute("src")).toBe(icon);
+  const row = image.closest("button")!;
+  expect(row.textContent).toContain("local-app");
+  expect(within(row).queryByTestId("machine-home-icon") === null).toBe(true);
+});
 
 for (const delayed of [false, true]) {
   test(`repository heading keeps bound Home selection (ensure delayed: ${delayed}) and hands back to explicit navigation`, async () => {
@@ -220,7 +231,7 @@ for (const delayed of [false, true]) {
       .setEnvironments(delayed ? [localFeature] : [localHome, localFeature]);
     useMachineViewStore.setState({
       grouping: "repository",
-      machineFilter: "all",
+      machineFilter: [],
       collapsedFolderKeys: [],
       collapsedProjectKeys: [],
       openedRepository: null,
@@ -250,16 +261,20 @@ for (const delayed of [false, true]) {
     expect(
       heading.closest("[data-project-folder]")!.querySelectorAll('[aria-current="page"]').length,
     ).toBe(1);
-    const add = screen.getByRole("button", { name: /New environment in local-app/ });
-    const member = add.parentElement!.querySelector("button")!;
-    expect(member.getAttribute("aria-current")).toBeNull();
+    // No per-machine member heading is drawn under the repository.
+    expect(screen.queryByRole("button", { name: /^Open local-app/ }) === null).toBe(true);
+    expect(rowDrawnSelected("local-feature")).toBe(false);
     act(() => appCommandStore(uiStore).getState().selectEnvironment(localFeature.id));
     expect(heading.getAttribute("aria-current")).toBeNull();
     expect(useMachineViewStore.getState().openedRepository).toBeNull();
+    expect(rowDrawnSelected("local-feature")).toBe(true);
     fireEvent.click(heading);
     await waitFor(() => expect(heading.getAttribute("aria-current")).toBe("page"));
-    fireEvent.click(member);
-    await waitFor(() => expect(member.getAttribute("aria-current")).toBe("page"));
+    expect(rowDrawnSelected("local-feature")).toBe(false);
+    // Explicit navigation to an environment row hands the highlight to the row.
+    fireEvent.click(screen.getByRole("button", { name: /^local-feature, on / }));
+    await waitFor(() => expect(rowDrawnSelected("local-feature")).toBe(true));
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(localFeature.id);
     expect(heading.getAttribute("aria-current")).toBeNull();
   });
 }

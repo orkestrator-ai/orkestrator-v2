@@ -67,7 +67,7 @@ async function harness(): Promise<Harness> {
         result: { text: `Implemented in ${path}` },
       });
       submissions.push(toolContent(result));
-      if (toolContent(result).accepted !== true) {
+      if (toolContent(result).ok !== true) {
         // Corrected within the turn: commit what was left, then submit again.
         const worktree = branches().worktrees.get(path)!;
         worktree.dirty = [];
@@ -209,14 +209,14 @@ describe("competing implementations", () => {
   test("a branch that submits with uncommitted work is refused and corrects itself", async () => {
     const h = await harness();
     h.beforeSubmit.fn = (path, branches) => {
-      if (path.endsWith("sample.1") && h.submissions.length === 0) {
+      if (path.endsWith("sample.1")) {
         branches.worktrees.get(path)!.dirty = ["scratch.txt"];
       }
     };
     const launched = await launch(h);
     const run = await h.world.drive(launched.id);
     expect(run.status).toBe("complete");
-    const refused = h.submissions.find((submission) => submission.accepted !== true);
+    const refused = h.submissions.find((submission) => submission.ok === false);
     expect(JSON.stringify(refused)).toContain("worktree_changed");
     expect(JSON.stringify(refused)).toContain("scratch.txt");
     expect(latest(run, "implement", "sample.1").state).toBe("complete");

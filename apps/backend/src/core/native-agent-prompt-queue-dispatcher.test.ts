@@ -21,6 +21,8 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { coordinatorRuntimeEnvironment, resolveCoordinatorRuntime } from "./coordinator-runtime.js";
 import { seedLegacyPromptQueueClaim } from "./storage-test-support.js";
+import { createCommandRegistry, type CommandContext } from "./commands.js";
+import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 
 const identity = {
   environmentId: "env-1",
@@ -258,6 +260,66 @@ async function withPersistedQueue(
 }
 
 const queueKey = `${identity.agent}\0${identity.logicalSessionKey}`;
+
+test.each(["commit", "cancel"] as const)(
+  "finishing an edit with %s immediately wakes the held head",
+  async (outcome) => {
+    await withPersistedQueue(async (storage, { dispatcher, host }) => {
+      await storage.savePromptQueue(queueKey, identity.environmentId, [
+        { id: "head", text: "old" },
+      ]);
+      const target = { queueKey, environmentId: identity.environmentId, messageId: "head" };
+      const edit = await storage.promptQueueEdits.beginPromptQueueMessageEdit(target);
+      if (edit.status !== "editing") throw new Error("expected a lease");
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).not.toHaveBeenCalled();
+
+      const drains: Promise<void>[] = [];
+      const notifyPromptQueueChanged = mock(() => {
+        drains.push(dispatcher.drainPromptQueueForSession(identity));
+      });
+      const finish = createCommandRegistry().get("finish_prompt_queue_message_edit")!;
+      const context = {
+        storage,
+        nativeAgents: { notifyPromptQueueChanged },
+      } as unknown as CommandContext;
+      const args = { ...target, leaseId: edit.lease.leaseId, outcome };
+      const attachments = Array.from({ length: 20 }, (_, index) => ({
+        type: "file" as const,
+        path: `/workspace/reference-${index}.txt`,
+        filename: `reference-${index}.txt`,
+      }));
+
+      if (outcome === "commit") {
+        await expect(
+          finish(
+            {
+              ...args,
+              text: "",
+              attachments: [...attachments, { type: "file", path: "/workspace/extra" }],
+            },
+            context,
+          ),
+        ).rejects.toThrow("At most 20");
+        expect(notifyPromptQueueChanged).not.toHaveBeenCalled();
+        expect(await storage.reservePromptQueueHeadForDispatch(queueKey)).toBeNull();
+      }
+      await finish(outcome === "commit" ? { ...args, text: "", attachments } : args, context);
+      expect(notifyPromptQueueChanged).toHaveBeenCalledWith(queueKey);
+      await Promise.all(drains);
+      expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+      const dispatch = (host.dispatchPrompt as ReturnType<typeof mock>).mock
+        .calls[0]![0] as DispatchNativeAgentPromptInput;
+      expect(dispatch.requestId).toBe("head");
+      if (outcome === "commit") {
+        expect(extractMarkedAttachmentReferences(dispatch.prompt).attachments).toHaveLength(20);
+        expect(dispatch.attachments).toEqual(attachments);
+      } else {
+        expect(dispatch.prompt).toBe("old");
+      }
+    });
+  },
+);
 
 describe("NativeAgentPromptQueueDispatcher restored legacy claims", () => {
   test.each(["head", undefined, "", "  ", 42])(

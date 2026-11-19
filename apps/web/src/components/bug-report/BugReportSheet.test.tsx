@@ -3,6 +3,8 @@ import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react
 import type { BugReportSnapshot, BugReportSummary } from "@orkestrator/protocol/bug-report";
 import * as backend from "@/lib/backend";
 import * as coordinatedPoll from "@/lib/coordinated-poll";
+import { NativeMessage } from "@/components/chat/NativeMessage";
+import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import * as realNativeAgent from "@/components/native-agent";
 
 import { createSessionKey } from "@/lib/utils";
@@ -19,12 +21,37 @@ import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 const nativeAgentSnapshot = { ...realNativeAgent };
 const tabProps: Record<string, unknown>[] = [];
+let transcriptImage: string | undefined;
 mock.module("@/components/native-agent", () => ({
   ...nativeAgentSnapshot,
   AgentNativeTab: (props: Record<string, unknown>) => {
     tabProps.push(props);
     // The node scope the session renders in, which it talks to.
-    return <div data-testid="native-agent" data-node={useOptionalNodeScope()?.nodeId ?? "none"} />;
+    const nodeId = useOptionalNodeScope()?.nodeId ?? null;
+    return (
+      <div data-testid="native-agent" data-node={nodeId ?? "none"}>
+        {transcriptImage && (
+          <RichTranscriptScopeContext.Provider
+            value={{
+              backendId: nodeId,
+              environmentId: REPORT.runtimeId,
+              logicalSessionKey: REPORT.tabId,
+              generation: "test",
+            }}
+          >
+            <NativeMessage
+              message={{
+                id: "capture-message",
+                role: "user",
+                content: "",
+                createdAt: REPORT.createdAt,
+                parts: [{ type: "file", content: transcriptImage }],
+              }}
+            />
+          </RichTranscriptScopeContext.Provider>
+        )}
+      </div>
+    );
   },
 }));
 
@@ -53,6 +80,7 @@ const originalOrkestrator = window.orkestrator;
 beforeEach(() => {
   window.orkestrator = undefined;
   tabProps.length = 0;
+  transcriptImage = undefined;
 });
 
 afterEach(() => {
@@ -399,6 +427,45 @@ describe("a report for a node shown in the window's tree (plan item 5003)", () =
     for (const call of commandCalls) expect(call).not.toHaveBeenCalled();
     // The bottom bar's dot is the command node's report, which this is not.
     expect(useBugReportStore.getState().draftInProgress).toBe(false);
+  });
+
+  test("loads a saved capture in the report transcript through the host base64 fallback", async () => {
+    const filePath = `${REPORT.scratchDir}/screenshots/window.png`;
+    transcriptImage = filePath;
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+    spyOn(backend, "getBugReport").mockResolvedValue(snapshot(null));
+    const leaf = new FakeNodeClient({
+      nodeId: LEAF,
+      invoke: {
+        get_bug_report: snapshot({ agent: "claude", screenshots: [filePath] }),
+        transcript_media_pin: () => {
+          throw new Error("Report has no environment row");
+        },
+        read_file_base64: png,
+      },
+    });
+    getWindowScope().open({ role: "leaf", client: leaf });
+    useRemoteWorkspaceStore.setState({
+      active: { nodeId: LEAF, projectId: "p1", environmentId: null },
+      openNodes: [LEAF],
+    });
+    renderInAppCommandScope(
+      <WindowScopeProvider>
+        <BugReportSheetHost />
+      </WindowScopeProvider>,
+    );
+    act(() => openBugReport(LEAF));
+
+    const image = await screen.findByAltText("Thumbnail: window.png");
+    fireEvent.load(image);
+    expect(image.getAttribute("src")).toBe(`data:image/png;base64,${png}`);
+    expect(leaf.calls("transcript_media_pin")[0]?.args).toMatchObject({
+      environmentId: REPORT.runtimeId,
+      path: filePath,
+    });
+    expect(leaf.calls("read_file_base64").map((call) => call.args)).toEqual([{ filePath }]);
+    expectDomAbsent(screen.queryByText("preview unavailable"));
   });
 
   test("a sheet asked for a node with no scope, and not opening one, is closed", async () => {

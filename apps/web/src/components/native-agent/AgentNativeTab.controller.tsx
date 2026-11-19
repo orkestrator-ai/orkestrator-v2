@@ -4,6 +4,7 @@ import { useCoordinatorActionMarking } from "@/components/projects/useCoordinato
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
+import { usePaletteResume } from "./usePaletteResume";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { isGoalCarrierContent } from "@orkestrator/protocol/native-agent-goal";
 import { GoalDetailLoaderContext } from "@/components/chat/goal-detail-context";
@@ -252,6 +253,8 @@ import {
 } from "./AgentNativeTab.helpers";
 import { NativeInteractionAnchor } from "./NativeInteractionAnchor";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
+import { CredentialRequestCard, pendingCredentialRequests } from "./CredentialRequestCard";
+import { useCredentialSnapshot } from "@/hooks/useCredentialSnapshot";
 import {
   commandSubmissionIntent,
   draftCommandBusyTitle,
@@ -276,6 +279,8 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { agentSettingsCanSignIn, agentTerminalSignInCommand } from "@/lib/agent-sign-in";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { ThreadChangesHeader } from "@/components/changes/ThreadChangesHeader";
+import { queuedPromptEditNote } from "@/lib/prompt-queue-edit";
+import { useNativeQueuedPromptEditing } from "./useNativeQueuedPromptEditing";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeLoginRefusalNotice } from "@/lib/claude-auth";
 import {
@@ -337,6 +342,7 @@ export function SharedNativeAgentController({
   initialFastMode,
   initialExecutionProfileId,
   initialResumeOpen,
+  initialResume,
   ownsGlobalShortcuts,
   isReviewTab,
   hideStructuredOutput,
@@ -482,7 +488,10 @@ export function SharedNativeAgentController({
   const [queueEditPending, setQueueEditPending] = useState(false);
   // Reserve synchronously: events can arrive before React commits the disabled UI.
   const queueEditPendingRef = useRef(false);
-  const [resumeDialogOpen, setResumeDialogOpen] = useState(initialResumeOpen === true);
+  // A tab opened to resume a chosen conversation skips the picker.
+  const [resumeDialogOpen, setResumeDialogOpen] = useState(
+    initialResumeOpen === true && !initialResume,
+  );
   /**
    * A tab opened only to resume creates no provider session of its own. The
    * backend resumes into a tab with no mapping, so the session is created only
@@ -577,6 +586,9 @@ export function SharedNativeAgentController({
     removeQueued,
     steerQueued,
     moveQueued,
+    beginQueuedEdit,
+    renewQueuedEdit,
+    finishQueuedEdit,
     retryQueue,
     retryRecoverableDispatch,
     discardRecoverableDispatch,
@@ -3472,6 +3484,10 @@ export function SharedNativeAgentController({
   const pinnedInteractions = allInteractions.filter(
     (interaction) => interaction.kind !== "question" && interaction.kind !== "plan-approval",
   );
+  // An agent's credential requests (docs/architecture/agent-credentials.md),
+  // read from the backend so a hidden or reloaded tab shows them again.
+  const credentials = useCredentialSnapshot(data.environmentId, tabId);
+  const credentialRequests = pendingCredentialRequests(credentials.snapshot);
   // Claude signs in again through the backend's `claude auth login`, which its
   // card drives; the generic banner's routes do not reach it. One card,
   // whichever of the readiness, Claude's own reply or a turn-time auth notice
@@ -3651,6 +3667,38 @@ export function SharedNativeAgentController({
     Boolean(requestedResumeSessionId) ||
     (hasConnectedSession &&
       (messages.length > 0 || authenticationRequired || allInteractions.length > 0));
+  // Edits queued prompts in place, holding each where it is; `editQueuedPrompt`
+  // (the composer edit) is the fallback for slash commands and for nodes that
+  // predate in-place edits. Called before the setup overlay's early return.
+  const queuedPromptEditing = useNativeQueuedPromptEditing({
+    queueIdentity: `${composeScope.nodeId}\u0000${sessionKey}`,
+    messages: queuedMessages,
+    editing: projection?.queue?.editing,
+    begin: beginQueuedEdit,
+    renew: renewQueuedEdit,
+    finish: finishQueuedEdit,
+    filePicker: canSearchFiles
+      ? {
+          search: fileSearch,
+          context: (messageId) => {
+            const queued = queuedMessages.find((message) => message.id === messageId);
+            const modelId = (queued as { model?: unknown } | undefined)?.model;
+            const model =
+              typeof modelId === "string"
+                ? resolvedComposer.models.find((candidate) => candidate.id === modelId)
+                : selectedModel;
+            return {
+              containerId: data.containerId,
+              worktreePath: envWorktreePath ?? coordinatorWorkspacePath,
+              allowFiles: attachmentCapabilities.files,
+              allowImages: attachmentCapabilities.images,
+              modelSupportsImages: model?.supportsImageInput,
+              modelLabel: model?.label,
+            };
+          },
+        }
+      : undefined,
+  });
   useRenderedUnreadResult(
     sessionKey,
     !setupPending &&
@@ -3663,6 +3711,52 @@ export function SharedNativeAgentController({
       ? unreadRead
       : undefined,
   );
+  /** The picker's resume handler; a tab opened to resume a chosen conversation runs it too. */
+  const resumeChosenSession = (providerSessionId: string) => {
+    setResumeDialogOpen(false);
+    const sourceSessionId = projection?.sessionId;
+    if (heldSubmit && providerSessionId !== heldSessionId) {
+      settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
+    }
+    // A tab still waiting on its resume choice has no composer of its
+    // own; the resumed conversation keeps its settings.
+    return resume(
+      providerSessionId,
+      composer
+        ? {
+            modelId: composer.selectedModelId,
+            reasoningId: composer.selectedReasoningId,
+            fastMode: composer.fastModeEnabled ?? undefined,
+            mode: composer.selectedModeId,
+            executionProfileId: effectiveComposeProfileId,
+            includeLocalSettings: composer.includeLocalSettings,
+            promptSuggestions: composer.promptSuggestionsEnabled,
+          }
+        : undefined,
+    )
+      .then(() => {
+        setAwaitingResumeChoice(false);
+        if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
+          clearTabAgentHandoff(tabId, data.environmentId);
+        }
+        clearPersistedVirtuosoState(sessionKey);
+        scrollToBottom();
+      })
+      .catch((error) => {
+        setAwaitingResumeChoice(false);
+        toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`);
+      });
+  };
+  const { resumeSaveFailed, retryResumeSave } = usePaletteResume({
+    scope: composeScope,
+    environmentId: data.environmentId,
+    tabId,
+    platform,
+    initialResume,
+    resumeChosenSession,
+    setAwaitingResumeChoice,
+  });
+
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -3957,41 +4051,7 @@ export function SharedNativeAgentController({
         currentSessionId={projection?.sessionId}
         fetchSessions={fetchResumableSessions}
         {...(canArchiveResumable ? { onArchive: setResumableArchived } : {})}
-        onResume={(providerSessionId) => {
-          setResumeDialogOpen(false);
-          const sourceSessionId = projection?.sessionId;
-          if (heldSubmit && providerSessionId !== heldSessionId) {
-            settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
-          }
-          // A tab still waiting on its resume choice has no composer of its
-          // own; the resumed conversation keeps its settings.
-          void resume(
-            providerSessionId,
-            composer
-              ? {
-                  modelId: composer.selectedModelId,
-                  reasoningId: composer.selectedReasoningId,
-                  fastMode: composer.fastModeEnabled ?? undefined,
-                  mode: composer.selectedModeId,
-                  executionProfileId: effectiveComposeProfileId,
-                  includeLocalSettings: composer.includeLocalSettings,
-                  promptSuggestions: composer.promptSuggestionsEnabled,
-                }
-              : undefined,
-          )
-            .then(() => {
-              setAwaitingResumeChoice(false);
-              if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
-                clearTabAgentHandoff(tabId, data.environmentId);
-              }
-              clearPersistedVirtuosoState(sessionKey);
-              scrollToBottom();
-            })
-            .catch((error) => {
-              setAwaitingResumeChoice(false);
-              toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`);
-            });
-        }}
+        onResume={resumeChosenSession}
       />
     ) : null;
   // The same gate the composer applies to a typed `/steer`.
@@ -4134,7 +4194,8 @@ export function SharedNativeAgentController({
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   };
-  const canSteerQueuedPrompt = (message: { id: string }) => queuedPromptSteerable(message);
+  const canSteerQueuedPrompt = (message: { id: string }) =>
+    queuedPromptEditing.editState(message.id) === undefined && queuedPromptSteerable(message);
   // Why a row offers no Steer while the turn runs. Annotation requests and
   // question answers have their own cards, so they get no note here.
   const queuedRowSteerNote = (message: { id: string }) => {
@@ -4231,6 +4292,15 @@ export function SharedNativeAgentController({
         ...(agentPrompts.length > 0 && !floatingNotices
           ? [<HumanPromptBanner key="human-prompts" prompts={agentPrompts} />]
           : []),
+        ...credentialRequests.map((request) => (
+          <CredentialRequestCard
+            key={`credential-${request.id}`}
+            request={request}
+            connections={credentials.snapshot?.connections ?? []}
+            vault={credentials.snapshot!.vault}
+            onAnswered={credentials.refresh}
+          />
+        )),
         ...pinnedInteractions.map((interaction) => (
           <NativeInteractionAnchor
             key={interaction.id}
@@ -4635,33 +4705,47 @@ export function SharedNativeAgentController({
             await submit(ADDRESS_ALL_REVIEW_PROMPT, undefined, false, "build");
           }}
           queue={
-            projection?.queue
+            projection?.queue || queuedPromptEditing.editor
               ? {
                   // A blocked goal turn has no row of its own, but its error and
                   // Retry must still show.
-                  length: queuedMessages.length || (projection.queue.blocked ? 1 : 0),
-                  error: projection.queue.blocked
+                  length: queuedMessages.length || (projection?.queue?.blocked ? 1 : 0),
+                  error: projection?.queue?.blocked
                     ? { message: projection.queue.blocked.error }
                     : null,
                   onOpen: () => setQueueDialogOpen(true),
+                  editor: queuedPromptEditing.editor,
                   items: queuedMessages.map((message) => {
                     // Annotation requests are frozen briefs, and removing one
                     // cancels it, so both stay behind the dialog.
                     const inline = !webAnnotationQueueOrigin(message);
-                    const note = queuedRowSteerNote(message);
+                    const editState = queuedPromptEditing.editState(message.id);
+                    const note = editState
+                      ? queuedPromptEditNote(editState)
+                      : queuedRowSteerNote(message);
                     const attachments = queuedPromptAttachments(message);
                     return {
                       id: message.id,
                       text: message.text,
                       ...(attachments.length > 0 ? { attachments } : {}),
                       ...(note ? { note } : {}),
+                      ...(editState ? { editState } : {}),
                       onSteer:
                         steerQueuedPrompt && canSteerQueuedPrompt(message)
                           ? () => runInlineQueueAction(() => steerQueuedPrompt(message))
                           : undefined,
-                      onEdit: inline
-                        ? () => runInlineQueueAction(() => editQueuedPrompt(message))
-                        : undefined,
+                      onEdit:
+                        inline && editState !== "local"
+                          ? () =>
+                              runInlineQueueAction(() =>
+                                queuedPromptEditing.edit(message, editQueuedPrompt),
+                              )
+                          : undefined,
+                      onRelease:
+                        editState === "review"
+                          ? () =>
+                              runInlineQueueAction(() => queuedPromptEditing.release(message.id))
+                          : undefined,
                       onRemove: inline
                         ? () => runInlineQueueAction(() => removeQueued(message.id))
                         : undefined,
@@ -4744,7 +4828,11 @@ export function SharedNativeAgentController({
                   onOpenWebAnnotationRequest={(requestId) =>
                     openWebAnnotationRequest(data.environmentId, requestId, composeScope)
                   }
-                  onEdit={editQueuedPrompt}
+                  onEdit={async (message) => {
+                    await queuedPromptEditing.edit(message, editQueuedPrompt);
+                    // The editor (or the composer) is below the dialog.
+                    setQueueDialogOpen(false);
+                  }}
                   onMove={async (fromIndex, toIndex) => {
                     const message = queuedMessages[fromIndex];
                     if (!message || fromIndex === toIndex) return;
@@ -4788,7 +4876,16 @@ export function SharedNativeAgentController({
                             {attachments} attachment{attachments === 1 ? "" : "s"}
                           </span>
                         ) : null}
-                        {steerNote ? <span>{steerNote}</span> : null}
+                        {(() => {
+                          const editState = queuedPromptEditing.editState(message.id);
+                          return editState ? (
+                            <span data-testid="queued-prompt-edit-state">
+                              {queuedPromptEditNote(editState)}
+                            </span>
+                          ) : steerNote ? (
+                            <span>{steerNote}</span>
+                          ) : null;
+                        })()}
                       </>
                     );
                   }}
@@ -4818,11 +4915,27 @@ export function SharedNativeAgentController({
           <AgentPlatformIcon platform={platform} className="h-16 w-16" />
         </span>
         <p className="text-sm">
-          {resumeDialogOpen
-            ? `Choose a ${label} session to resume.`
-            : `Resuming the ${label} session...`}
+          {resumeSaveFailed
+            ? `Ready to resume the ${label} session when the tab is saved.`
+            : resumeDialogOpen
+              ? `Choose a ${label} session to resume.`
+              : `Resuming the ${label} session...`}
         </p>
-        {resumeDialog}
+        {resumeSaveFailed ? (
+          <>
+            <p className="text-sm">The new tab could not be saved.</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void retryResumeSave()}
+            >
+              Retry saving tab and resume
+            </Button>
+          </>
+        ) : (
+          resumeDialog
+        )}
       </div>
     );
   }

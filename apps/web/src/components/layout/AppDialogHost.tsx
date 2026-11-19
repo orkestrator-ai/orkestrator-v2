@@ -1,5 +1,8 @@
 import { lazy, useEffect, useRef } from "react";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
+import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
+import { useDockerAvailabilityReady } from "@/contexts/DockerAvailabilityContext";
+import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
 import {
   createProjectUpdateHandler,
@@ -72,6 +75,15 @@ function AppDialogContent() {
           environmentId={request.environmentId}
           section={request.section}
           sectionRequest={requestSequence}
+        />
+      );
+    case "create-environment":
+      return (
+        <CreateEnvironmentHost
+          key={requestSequence}
+          requestSequence={requestSequence}
+          projectId={request.projectId}
+          handoff={request.handoff}
         />
       );
     case "repository-settings":
@@ -211,4 +223,56 @@ function DeleteProjectHost({ projectId }: { projectId: string }) {
       }}
     />
   );
+}
+
+function CreateEnvironmentHost({
+  requestSequence,
+  projectId,
+  handoff,
+}: {
+  requestSequence: number;
+  projectId: string;
+  handoff?: CreateEnvironmentHandoff;
+}) {
+  const project = useProjectStore((state) =>
+    state.projects.find((candidate) => candidate.id === projectId),
+  );
+  const projectsLoaded = useProjectStore((state) => state.hasLoaded);
+  const projectsLoading = useProjectStore((state) => state.isLoading);
+  const { windowScope } = useScopesWithCommandFallback();
+  const configReady = useConfigStore((state) => state.hasLoaded);
+  const dockerReady = useDockerAvailabilityReady();
+  const { createEnvironment, updateEnvironment, startEnvironment } = useEnvironments(null);
+  const ready = Boolean(project && projectsLoaded && configReady && dockerReady);
+  useEffect(() => {
+    if (ready) return;
+    const close = () => closeCreateRequest(requestSequence);
+    if (projectsLoaded && !projectsLoading && !project) {
+      close();
+      return;
+    }
+    // A pending command-node handoff is superseded by subsequent navigation.
+    return windowScope.selection.subscribe(close);
+  }, [project, projectsLoaded, projectsLoading, ready, requestSequence, windowScope]);
+
+  if (!project || !ready) return null;
+  return (
+    <CreateEnvironmentFlowDialog
+      open
+      onOpenChange={(open) => {
+        if (!open) closeCreateRequest(requestSequence);
+      }}
+      projectId={projectId}
+      projectName={project.name}
+      handoff={handoff}
+      createEnvironment={createEnvironment}
+      updateEnvironment={updateEnvironment}
+      startEnvironment={startEnvironment}
+    />
+  );
+}
+
+function closeCreateRequest(sequence: number): void {
+  const dialogs = useAppDialogStore.getState();
+  if (dialogs.requestSequence === sequence) dialogs.close();
 }

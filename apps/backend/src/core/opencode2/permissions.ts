@@ -270,6 +270,17 @@ export function openCode2TurnRules(
     ...(turn.workflowResultTool
       ? openCode2WorkflowTurnRules(turn.workflowResultTool, turn.workflowResultExtraTools)
       : []),
+    ...(turn.readOnly
+      ? [
+          "request_credential",
+          "get_credential_request",
+          "list_credential_grants",
+          "run_with_credential",
+          "http_request_with_credential",
+          "get_credential_operation",
+          "cancel_credential_operation",
+        ].map((name) => ({ action: `*_${name}`, resource: "*", effect: "deny" as const }))
+      : []),
   ]);
 }
 

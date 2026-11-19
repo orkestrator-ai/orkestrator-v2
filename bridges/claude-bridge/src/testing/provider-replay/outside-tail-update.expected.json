@@ -126,9 +126,7 @@
     ],
     "liveTail": {
       "startIndex": 2,
-      "revisedOutsideTail": [
-        1
-      ]
+      "revisedOutsideTail": [1]
     },
     "extra": {
       "providerSessionId": "derived from the bridge id"
@@ -198,9 +196,7 @@
     ],
     "liveTail": {
       "startIndex": 2,
-      "revisedOutsideTail": [
-        1
-      ]
+      "revisedOutsideTail": [1]
     },
     "extra": {
       "providerSessionId": "derived from the bridge id"
@@ -282,9 +278,7 @@
     ],
     "liveTail": {
       "startIndex": 3,
-      "revisedOutsideTail": [
-        1
-      ]
+      "revisedOutsideTail": [1]
     },
     "extra": {
       "providerSessionId": "derived from the bridge id"

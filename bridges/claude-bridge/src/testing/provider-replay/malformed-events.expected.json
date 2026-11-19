@@ -9,11 +9,7 @@
     "pending": [],
     "drift": {
       "unknownEvents": 3,
-      "unknownKinds": [
-        "block:future_block",
-        "future_frame_type",
-        "system:future_system_subtype"
-      ]
+      "unknownKinds": ["block:future_block", "future_frame_type", "system:future_system_subtype"]
     },
     "rows": [
       {

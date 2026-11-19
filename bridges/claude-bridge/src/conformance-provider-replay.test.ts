@@ -83,7 +83,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function permissionRequest(frame: unknown): Record<string, unknown> | undefined {
   if (!isRecord(frame) || frame.type !== "control_request" || !isRecord(frame.request)) return;
-  return frame.request.subtype === "can_use_tool" ? { ...frame.request, id: frame.request_id } : undefined;
+  return frame.request.subtype === "can_use_tool"
+    ? { ...frame.request, id: frame.request_id }
+    : undefined;
 }
 
 function withDerivedId(frame: unknown, sessionId: string): unknown {
@@ -174,7 +176,8 @@ runProviderReplaySuite({
               const session = createSession("Provider replay");
               sessionId = track(session.id);
             }
-            const policy = typeof step.args.policy === "string" ? POLICIES[step.args.policy] : undefined;
+            const policy =
+              typeof step.args.policy === "string" ? POLICIES[step.args.policy] : undefined;
             if (step.args.policy !== undefined && !policy) throw new Error("unknown policy");
             if (policy) getSession(sessionId)!.executionPolicy = policy;
             watch(

@@ -121,7 +121,8 @@ export function parseProviderReplayFixture(name: string, text: string): Provider
         throw new Error(`${name}:${lineNumber}: source must be recorded or synthetic`);
       }
       for (const field of ["scenario", "provider", "providerVersion", "description"] as const) {
-        if (!nonEmpty(value[field])) throw new Error(`${name}:${lineNumber}: header lacks ${field}`);
+        if (!nonEmpty(value[field]))
+          throw new Error(`${name}:${lineNumber}: header lacks ${field}`);
       }
       header = value as unknown as ProviderReplayHeader;
       continue;

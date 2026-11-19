@@ -156,10 +156,7 @@ export function providerReplayFixtureNames(fixtureDir: string): string[] {
     .sort();
 }
 
-export function readProviderReplayFixture(
-  fixtureDir: string,
-  name: string,
-): ProviderReplayFixture {
+export function readProviderReplayFixture(fixtureDir: string, name: string): ProviderReplayFixture {
   return parseProviderReplayFixture(name, readFileSync(join(fixtureDir, name), "utf8"));
 }
 

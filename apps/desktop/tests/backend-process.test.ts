@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
 import {
   access,
@@ -46,7 +46,31 @@ import { DEFAULT_TEST_TIMEOUT_MS } from "../../../tests/default-test-timeout";
 
 const directories: string[] = [];
 const processes: BackendProcess[] = [];
+/**
+ * The supervisor talks to a real backend over loopback, as the Electron main
+ * process does, so it needs the runtime's own Web platform. A run from the
+ * repository root preloads Happy DOM (`tests/register-dom.ts`), whose window
+ * fetch applies browser CORS to the backend's answers and whose AbortSignal
+ * and Response Bun's fetch and server refuse. Pin the native constructors the
+ * preload captured for this file and give the DOM ones back when it finishes.
+ */
+type NativeWebPlatform = Pick<
+  typeof globalThis,
+  "fetch" | "AbortController" | "AbortSignal" | "Response"
+>;
+const NATIVE_WEB_PLATFORM_NAMES = ["fetch", "AbortController", "AbortSignal", "Response"] as const;
+const nativeWebPlatform = Reflect.get(
+  globalThis,
+  Symbol.for("orkestrator.tests.native-web-platform"),
+) as NativeWebPlatform | undefined;
+const domWebPlatform = Object.fromEntries(
+  NATIVE_WEB_PLATFORM_NAMES.map((name) => [name, globalThis[name]]),
+) as NativeWebPlatform;
+if (nativeWebPlatform) Object.assign(globalThis, nativeWebPlatform);
 const originalFetch = globalThis.fetch;
+afterAll(() => {
+  if (nativeWebPlatform) Object.assign(globalThis, domWebPlatform);
+});
 
 function stubFetch(
   implementation: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,

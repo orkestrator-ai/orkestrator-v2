@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readProviderStatus } from "../native-agent-provider.js";
 import { claudeConnection, codexConnection, httpProvider } from "../agent-provider-test-support.js";
+import { bridgeSessionErrorFields } from "./transport.js";
 
 /**
  * The bridges' structured usage-limit signal (`errorCode: "usage-limit"`
@@ -43,5 +44,19 @@ describe("bridge usage-limit errorCode", () => {
       status: "error",
       error: "Overloaded",
     });
+  });
+});
+
+describe("bridge failureReason", () => {
+  test("a known reason travels beside the error only", () => {
+    expect(bridgeSessionErrorFields({ error: "API error", failureReason: "billing" })).toEqual({
+      error: "API error",
+      failureReason: "billing",
+    });
+    // An unknown value, or a reason with no error, is dropped.
+    expect(bridgeSessionErrorFields({ error: "API error", failureReason: "nope" })).toEqual({
+      error: "API error",
+    });
+    expect(bridgeSessionErrorFields({ failureReason: "billing" })).toEqual({});
   });
 });

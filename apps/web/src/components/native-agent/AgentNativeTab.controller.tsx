@@ -83,6 +83,8 @@ import {
   mergeArtifactPublications,
 } from "@/lib/chat/artifact-publication-merge";
 import { BackgroundTaskChildrenContext } from "@/components/chat/NativeMessage.shared";
+import { ProviderFailureActionsContext } from "@/components/chat/provider-failure-actions";
+import { useProviderFailureRecovery } from "./useProviderFailureRecovery";
 import {
   NativeChangeScopeContext,
   type NativeChangeScope,
@@ -2687,6 +2689,39 @@ export function SharedNativeAgentController({
     [submit],
   );
 
+  // A failed turn's Retry goes through `submit` like a typed prompt. Its
+  // request id is the failure's own, so it must not linger on the draft for
+  // the user's next message once the retry has been handed over.
+  const sendPreparedRetry = useCallback(
+    async (text: string, requestId: string) => {
+      const sent = await submit(text, requestId, true, undefined, {
+        literal: true,
+        noQueue: true,
+      });
+      const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
+      if (current.requestId === requestId && !current.text.trim()) {
+        updateDraft(sessionKey, { requestId: undefined });
+      }
+      return sent;
+    },
+    [composeDrafts, sessionKey, submit, updateDraft],
+  );
+  const failureRecovery = useProviderFailureRecovery({
+    messages,
+    sendPrepared: sendPreparedRetry,
+    draftInUse:
+      draft.text.trim().length > 0 || draft.attachments.length > 0 || draft.annotations.length > 0,
+    sendUnavailableReason:
+      sendingHeldReason ??
+      (isRunning || isProviderTurnActive
+        ? "Wait for the current turn to finish."
+        : sendLocked
+          ? "Sending is not available right now."
+          : undefined),
+    modelChangeAvailable:
+      Boolean(composer) && !settingsLocked && resolvedComposer.models.length > 1,
+  });
+
   useEffect(() => {
     sendAsTextRef.current = () => {
       const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
@@ -4297,6 +4332,7 @@ export function SharedNativeAgentController({
                   />
                 ) : null}
                 <AgentModelPicker
+                  openRequest={failureRecovery.modelPickerOpenRequest}
                   models={resolvedComposer.models}
                   favorites={favorites}
                   enabledPlatforms={[platform]}
@@ -4693,27 +4729,29 @@ export function SharedNativeAgentController({
         <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
           <GoalDetailLoaderContext.Provider value={loadGoalDetail}>
             <SuborkGroupActionsContext.Provider value={suborkActions}>
-              <div className="@container flex h-full min-h-0 flex-col">
-                <ThreadChangesHeader
-                  environmentId={data.environmentId}
-                  logicalSessionKey={sessionKey}
-                  turnActive={isTurnActive}
-                  containment={<EnvironmentContainmentTag environmentId={data.environmentId} />}
-                />
-                <div className="min-h-0 flex-1">{chatShell}</div>
-                {floatingNotices && agentPrompts.length > 0 ? (
-                  <HumanPromptBanner prompts={agentPrompts} />
+              <ProviderFailureActionsContext.Provider value={failureRecovery.actions}>
+                <div className="@container flex h-full min-h-0 flex-col">
+                  <ThreadChangesHeader
+                    environmentId={data.environmentId}
+                    logicalSessionKey={sessionKey}
+                    turnActive={isTurnActive}
+                    containment={<EnvironmentContainmentTag environmentId={data.environmentId} />}
+                  />
+                  <div className="min-h-0 flex-1">{chatShell}</div>
+                  {floatingNotices && agentPrompts.length > 0 ? (
+                    <HumanPromptBanner prompts={agentPrompts} />
+                  ) : null}
+                </div>
+                {openSubork && openSuborkView ? (
+                  <SuborkTranscriptDialog
+                    environmentId={data.environmentId}
+                    containerId={data.containerId}
+                    batchId={openSubork.batchId}
+                    subork={openSuborkView}
+                    onClose={() => setOpenSubork(null)}
+                  />
                 ) : null}
-              </div>
-              {openSubork && openSuborkView ? (
-                <SuborkTranscriptDialog
-                  environmentId={data.environmentId}
-                  containerId={data.containerId}
-                  batchId={openSubork.batchId}
-                  subork={openSuborkView}
-                  onClose={() => setOpenSubork(null)}
-                />
-              ) : null}
+              </ProviderFailureActionsContext.Provider>
             </SuborkGroupActionsContext.Provider>
           </GoalDetailLoaderContext.Provider>
         </RichTranscriptScopeContext.Provider>

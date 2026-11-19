@@ -35,6 +35,7 @@ import {
   sessionSnapshotBudget,
   bridgeFetch,
   bridgeSnapshotTurnRunId,
+  bridgeSessionErrorFields,
   normalizeProviderAuthNotice,
   normalizeProviderReadiness,
 } from "./transport.js";
@@ -388,7 +389,7 @@ export async function readHttpBridgeSessionState(input: {
     ...(typeof payload.completionBlockedByBackgroundTasks === "boolean"
       ? { completionBlockedByBackgroundTasks: payload.completionBlockedByBackgroundTasks }
       : {}),
-    ...(typeof payload.error === "string" ? { error: payload.error } : {}),
+    ...bridgeSessionErrorFields(payload),
   };
 }
 

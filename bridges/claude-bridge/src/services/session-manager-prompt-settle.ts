@@ -1,4 +1,5 @@
 import { USAGE_LIMIT_ERROR_CODE } from "@orkestrator/protocol/agent-usage-limits";
+import { claudeFailureReason } from "./claude-api-errors.js";
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
 import type { PromptOptions } from "../types/index.js";
 import { claudePermissionMode, claudeTurnPolicy } from "./claude-query-config.js";
@@ -230,6 +231,7 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
     session.abortController = turn.beforeStartup.abortController;
     session.error = turn.beforeStartup.error;
     session.errorCode = turn.beforeStartup.errorCode;
+    session.failureReason = turn.beforeStartup.failureReason;
     session.interruption = turn.beforeStartup.interruption;
     session.interruptedRequestId = turn.beforeStartup.interruptedRequestId;
     session.inProgressUsage = turn.beforeStartup.inProgressUsage;
@@ -293,6 +295,9 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
     session.error = failure;
     // The provider's own refusal, so the backend need not match the wording.
     session.errorCode = turn.rateLimitRejected && !killedBy ? USAGE_LIMIT_ERROR_CODE : undefined;
+    session.failureReason = killedBy
+      ? undefined
+      : claudeFailureReason(turn.apiErrorCode, turn.rateLimitRejected);
     session.interruption = killedBy ? "restart" : undefined;
     session.interruptedRequestId = killedBy ? turn.dispatchRequestId : undefined;
     session.abortController = undefined;

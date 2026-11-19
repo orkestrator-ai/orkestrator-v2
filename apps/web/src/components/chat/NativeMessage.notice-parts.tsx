@@ -6,7 +6,7 @@
  * populated by an adapter from a different vendor event, and none of them may
  * learn which. A provider with no source for a kind simply never emits it.
  */
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
 import { AlertTriangle, Info, RefreshCw, Scissors, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -14,6 +14,9 @@ import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import { InlineMessageMarkdown, MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { FilePart } from "./NativeMessage.file-parts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
+import { RichMessageContext } from "@/lib/chat/rich-identity";
+import { ProviderFailureAlert } from "./ProviderFailureAlert";
+import { AgentPlatformContext } from "./NativeMessage.shared";
 
 function formatTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
@@ -147,10 +150,23 @@ const STATUS_CLASSES = {
  * A short provider status line, in the flow rather than in a panel.
  *
  * Deliberately one line and not expandable: anything that needs more room than
- * this is either a message or an error that ended the turn, and both already
- * have their own presentation.
+ * this is either a message or an error that ended the turn, and both have
+ * their own presentation. An error line is the latter, so it renders as the
+ * shared failure alert (`ProviderFailureAlert`).
  */
 export function StatusPart({ part }: { part: Extract<NativeMessagePart, { type: "status" }> }) {
+  // A reply's own error line is how Codex, Pi and a Claude startup failure
+  // say the turn failed: it gets the same presentation as any failed turn.
+  if (part.severity === "error") return <TurnFailureStatusPart part={part} />;
+  return <StatusLine part={part} />;
+}
+
+/**
+ * The status line as written, for anything that is not a turn failure, and
+ * for an error line nested inside another part (a sub-agent's own failure is
+ * its tool's outcome, not the turn's).
+ */
+export function StatusLine({ part }: { part: Extract<NativeMessagePart, { type: "status" }> }) {
   const severity = part.severity ?? "info";
   const Icon = STATUS_ICONS[severity];
   const content = useMemo(() => part.content.trim(), [part.content]);
@@ -222,5 +238,19 @@ export function ImagePart({
         eagerPreview
       />
     </div>
+  );
+}
+
+function TurnFailureStatusPart({ part }: { part: Extract<NativeMessagePart, { type: "status" }> }) {
+  const row = useContext(RichMessageContext);
+  const platform = useContext(AgentPlatformContext);
+  if (!part.content.trim()) return null;
+  return (
+    <ProviderFailureAlert
+      text={part.content}
+      platform={platform}
+      placement="inline"
+      {...(row ? { failureId: row.messageId, occurredAt: row.createdAt } : {})}
+    />
   );
 }

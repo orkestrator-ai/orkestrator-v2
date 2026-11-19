@@ -688,6 +688,11 @@ export interface ProviderInteractiveSnapshot {
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;
   error?: string;
+  /**
+   * The provider-neutral reason for `error`, when the bridge translated one
+   * from the provider's own code. Absent: `error`'s text classifies it.
+   */
+  failureReason?: import("@orkestrator/protocol/provider-failures").ProviderFailureReason;
 }
 
 /** Transcript-only provider read. Optional metadata must never be fetched here. */

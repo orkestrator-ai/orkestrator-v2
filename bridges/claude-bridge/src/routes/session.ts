@@ -440,6 +440,11 @@ session.get("/:id", async (c) => {
     ...(sessionData.status === "error" && sessionData.errorCode
       ? { errorCode: sessionData.errorCode }
       : {}),
+    // The provider-neutral reason, beside the failure only, when the SDK's
+    // API error code settled it; otherwise the backend reads `error`'s text.
+    ...(sessionData.status === "error" && sessionData.failureReason
+      ? { failureReason: sessionData.failureReason }
+      : {}),
     // Structured, so a workflow continues the turn without matching text.
     // Only beside the failure it explains; the next turn clears it.
     ...(sessionData.status === "error" && sessionData.interruption

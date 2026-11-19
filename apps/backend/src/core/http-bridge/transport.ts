@@ -1,4 +1,8 @@
 import { turnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
+import {
+  providerFailureReason,
+  type ProviderFailureReason,
+} from "@orkestrator/protocol/provider-failures";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import { POLICY_WIDENING_REFUSED_CODE } from "@orkestrator/protocol/execution-policy-narrowing";
 import { isContentRevision } from "@orkestrator/protocol/session-activity-batch";
@@ -350,6 +354,20 @@ export function sessionSnapshotBudget(
  * workflow can tell it from a newer request whose turn has not started yet.
  * Older bridges omit it.
  */
+/**
+ * A session snapshot's failed-turn `error` and, beside it only, the
+ * provider-neutral `failureReason` the bridge translated from the provider's
+ * own code. Bridges without one send none and the text classifies instead.
+ */
+export function bridgeSessionErrorFields(payload: Record<string, unknown>): {
+  error?: string;
+  failureReason?: ProviderFailureReason;
+} {
+  if (typeof payload.error !== "string") return {};
+  const failureReason = providerFailureReason(payload.failureReason);
+  return { error: payload.error, ...(failureReason ? { failureReason } : {}) };
+}
+
 export function throwExplainedTurnFailure(
   agent: ProviderAgent,
   body: Record<string, unknown>,

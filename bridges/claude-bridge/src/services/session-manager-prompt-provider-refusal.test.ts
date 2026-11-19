@@ -87,6 +87,8 @@ describe("provider refusal log level", () => {
       expect(session.status).toBe("error");
       expect(session.error).toBe("Claude ended the turn on an API error.");
       expect(session.errorCode).toBeUndefined();
+      // The error text says nothing; the SDK's code is what names the reason.
+      expect(session.failureReason).toBe("provider-unavailable");
       // The route reads this marker to keep its own completion log a non-error.
       expect((rejection as { providerRefused?: unknown }).providerRefused).toBe(true);
       expect((rejection as { usageLimited?: unknown }).usageLimited).toBeUndefined();
@@ -128,6 +130,7 @@ describe("provider refusal log level", () => {
       expect(session.status).toBe("error");
       expect(session.error).toBe("Claude ended the turn on an API error.");
       expect(session.errorCode).toBeUndefined();
+      expect(session.failureReason).toBe("authentication");
       expect((rejection as { providerRefused?: unknown }).providerRefused).toBe(true);
       expect(logs.bridgeErrorLines()).toEqual([]);
       expect(logs.warnLines()).toContain(

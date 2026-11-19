@@ -147,6 +147,21 @@ describe("StatusPart", () => {
     }
   });
 
+  test("an error line is the turn's failure, explained like any other", () => {
+    const { container } = render(
+      <StatusPart
+        part={part("status", {
+          content: "Codex ran out of room in the model's context window.",
+          severity: "error",
+        })}
+      />,
+    );
+    expect(screen.getByText("Conversation too long")).toBeTruthy();
+    expect(
+      container.querySelector("[data-provider-failure]")?.getAttribute("data-provider-failure"),
+    ).toBe("context-exhausted");
+  });
+
   test("an empty status is no row at all, not an empty one", () => {
     const { container } = render(<StatusPart part={part("status", { content: "   " })} />);
     expect(container.firstChild).toBeNull();

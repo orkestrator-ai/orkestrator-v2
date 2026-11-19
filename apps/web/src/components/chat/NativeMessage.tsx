@@ -5,7 +5,9 @@ import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { writeText } from "@/lib/native/clipboard";
-import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
+import { MessageShell } from "@/components/chat/MessageShell";
+import { ProviderFailureAlert } from "@/components/chat/ProviderFailureAlert";
+import { NATIVE_TERMINAL_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-terminal-rows";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeAuthenticationFailureMessage } from "@/lib/claude-auth";
@@ -185,13 +187,18 @@ export const NativeMessage = memo(function NativeMessage({
     return formatResponseDuration(previousMessage.createdAt, message.createdAt);
   }, [isUser, isError, isSystem, previousMessage, message.createdAt]);
 
-  // Render error messages with special styling
+  // A provider's inline error row: the shared failure presentation, with the
+  // platform's own sign-in where it has one.
   if (isError) {
     return (
-      <MessageErrorAlert
-        content={message.content}
+      <ProviderFailureAlert
+        text={message.content}
+        failure={message.failure}
+        platform={platform}
+        failureId={message.id}
+        occurredAt={message.createdAt}
         timestampLabel={formatTranscriptTimestamp(message.createdAt, localDay)}
-        action={
+        signIn={
           openCodeAuthProvider ? (
             <OpenCodeAuthRecoveryAction
               providerId={openCodeAuthProvider}
@@ -200,6 +207,29 @@ export const NativeMessage = memo(function NativeMessage({
           ) : undefined
         }
       />
+    );
+  }
+
+  // The backend's row for a turn that ended on a provider error. Claude's
+  // sign-in is a card of its own, which follows the explanation.
+  if (isSystem && message.id.startsWith(NATIVE_TERMINAL_ERROR_MESSAGE_ID_PREFIX)) {
+    return (
+      <>
+        <ProviderFailureAlert
+          text={message.content}
+          failure={message.failure}
+          platform={platform}
+          failureId={message.id}
+          occurredAt={message.createdAt}
+        />
+        {isClaudeAuthError ? (
+          <ClaudeAuthRecoveryCard
+            error={message.content}
+            failureAt={message.createdAt}
+            containerId={containerId}
+          />
+        ) : null}
+      </>
     );
   }
 

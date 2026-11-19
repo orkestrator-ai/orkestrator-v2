@@ -388,6 +388,39 @@ put on a failed turn's last row. A kept stop result is consumed by the full
 read the stop answers with, so it is not on the state view. The transcript
 view, its tokens and the restart preview stay the provider's rows only.
 
+### Failure presentation
+
+Every failed turn renders through one component, `ProviderFailureAlert`: the
+backend's terminal error row, a provider's inline error row (`error-…`) and the
+error `status` line Codex, Pi and a Claude startup failure put on a reply. It
+names a normalised reason (`@orkestrator/protocol/provider-failures`):
+authentication, usage limit, rate limit, billing, model unavailable,
+conversation too long, provider unavailable, or a plain turn failure. One table
+gives each reason its title and explanation, whichever provider failed, and
+the provider's own message stays under Details.
+
+The reason comes from the provider's structured code when it gave one, and from
+the error text otherwise. The Claude bridge translates the SDK's API error code
+and the Codex bridge app-server's `codexErrorInfo` into `failureReason`, sent
+beside `error` on the session snapshot only while the turn is failed. The
+backend puts it on the terminal error row as `failure.reason`, with the reset
+time of a quota window the provider reported used up (`failure.resetsAt`). The
+text classifier is permanent: Cursor, Grok, OpenCode and Pi have no code, and
+neither do older bridges or rows recorded before the field. Claude's failure
+text is often only "Claude ended the turn on an API error.", so its code is
+what names the reason.
+
+Each reason lists candidate remedies (sign in, retry, change model), and the
+host offers only those it can perform, on the transcript's last row only. A
+usage limit and a billing refusal offer no retry. Retry sends one continuation
+prompt through the tab's ordinary submit path under a request id derived from
+the failure row (`providerFailureRetryRequestId`), so two presses run one turn,
+and it is disabled while the composer holds a draft or sending is held. Change
+model opens the composer's model picker. Sign-in is the platform's own control
+(Claude's recovery card, OpenCode's credential action). A reset time is shown
+only when the provider stated one as a time; otherwise the provider's own words
+are quoted as its words.
+
 ### One request per round
 
 A visible tab polls, so what a round costs matters more than what one read

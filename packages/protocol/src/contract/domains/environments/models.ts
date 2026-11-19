@@ -468,14 +468,26 @@ export const clientEnvironmentFields = {
   setupStartedAt: optionalString,
   setupCompletedAt: optionalString,
   /**
-   * Agent work finished here and no client has opened it since.
+   * Agent work finished here and no client has shown it since.
    *
-   * A fact about the environment, not about one window: whichever client opens
-   * it clears the badge everywhere, because the work has now been seen.
+   * A fact about the environment, not about one window: whichever client shows
+   * the result (in a foreground window, on the session's own tab when
+   * `unreadSessionKeys` names one) clears the badge everywhere, because the
+   * work has now been seen.
    */
   hasUnreadWork: optionalBoolean,
   /** What most recently lit `hasUnreadWork`; cleared with it. */
   unreadReason: Schema.optional(EnvironmentUnreadReasonSchema),
+  /**
+   * The agent sessions (logical session keys) whose results lit
+   * `hasUnreadWork` and have not been viewed yet. Absent or empty while the
+   * badge is set means the unread work belongs to the environment as a whole
+   * (a terminal, a pipeline, a client marking it unread), so viewing the
+   * environment acknowledges it. When present, a client acknowledges the
+   * badge only by showing one of these sessions; the badge clears once every
+   * key has been acknowledged. Bounded; cleared with the badge.
+   */
+  unreadSessionKeys: Schema.optional(mutableArray(Schema.String)),
   /** Bounded content-free dedupe keys for agent events that requested attention. */
   agentAttentionKeys: Schema.optional(mutableArray(Schema.String)),
   /** Durable intent to open the configured agent once setup is ready. */

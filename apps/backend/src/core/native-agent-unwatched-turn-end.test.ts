@@ -153,7 +153,12 @@ describe("a bridge that dies mid-turn", () => {
     test(`${agent}: rings agent_failed, once`, async () => {
       const { reasons, unread } = await bridgeDiesMidTurn(agent);
       expect(reasons).toEqual(["agent_failed"]);
-      expect(unread).toMatchObject({ hasUnreadWork: true, unreadReason: "agent_failed" });
+      // Attributed to the session, so only its tab acknowledges the badge.
+      expect(unread).toMatchObject({
+        hasUnreadWork: true,
+        unreadReason: "agent_failed",
+        unreadSessionKeys: ["tab-1"],
+      });
     });
   }
 

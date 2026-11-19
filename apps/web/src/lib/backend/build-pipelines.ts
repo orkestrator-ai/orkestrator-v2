@@ -434,12 +434,14 @@ export function createBuildPipelinesApi(client: BackendClient) {
     environmentId: string,
     unread: boolean,
     expectedLastActivityAt?: string | null,
+    sessionKeys?: readonly string[],
   ): Promise<Environment> {
     return asWebModel<Environment>(
       domain().set_environment_unread({
         environmentId,
         unread,
         ...(expectedLastActivityAt === undefined ? {} : { expectedLastActivityAt }),
+        ...(sessionKeys === undefined ? {} : { sessionKeys: [...sessionKeys] }),
       }),
     );
   }

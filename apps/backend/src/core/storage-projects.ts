@@ -366,6 +366,46 @@ function raisesAttention(
   return isInputNeededAttentionReason(reasonAfter) && !isInputNeededAttentionReason(reasonBefore);
 }
 
+/** At most this many sessions are attributed to one unread badge. */
+const MAX_UNREAD_SESSION_KEYS = 32;
+/** A logical session key longer than this is not attributed. */
+const MAX_UNREAD_SESSION_KEY_LENGTH = 2_048;
+
+function isUnreadSessionKey(value: unknown): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && value.length <= MAX_UNREAD_SESSION_KEY_LENGTH
+  );
+}
+
+/**
+ * Records which session's result just lit the unread badge, so a client
+ * acknowledges it only by showing that session (`unreadSessionKeys`).
+ *
+ * The badge is attributed only while every reason it is lit for belongs to a
+ * session. An unattributed source (a terminal, a pipeline, an aggregate edge)
+ * makes it environment-wide, and an attributed result arriving on a badge that
+ * is already environment-wide keeps it so: viewing the environment must still
+ * acknowledge what lit it first. A list that would overflow its bound also
+ * falls back to environment-wide rather than forgetting a session.
+ */
+function attributeUnreadWork(
+  environment: Environment,
+  unreadBefore: boolean,
+  sessionKey: string | undefined,
+): void {
+  const existing = Array.isArray(environment.unreadSessionKeys)
+    ? environment.unreadSessionKeys.filter(isUnreadSessionKey)
+    : [];
+  if (!isUnreadSessionKey(sessionKey) || (unreadBefore && existing.length === 0)) {
+    delete environment.unreadSessionKeys;
+    return;
+  }
+  const keys = unreadBefore ? existing.filter((key) => key !== sessionKey) : [];
+  keys.push(sessionKey);
+  if (keys.length > MAX_UNREAD_SESSION_KEYS) delete environment.unreadSessionKeys;
+  else environment.unreadSessionKeys = keys;
+}
+
 /** A project still owns environments; removal would orphan them. */
 export class ProjectHasEnvironmentsError extends Error {
   constructor(
@@ -1294,6 +1334,8 @@ export class ProjectsRepository {
           environment.hasUnreadWork = updates.hasUnreadWork;
         }
         if (!environment.hasUnreadWork) delete environment.unreadReason;
+        // A direct write says nothing about which session it is for.
+        delete environment.unreadSessionKeys;
       }
       if ("setupScriptsComplete" in updates) {
         if (updates.setupScriptsComplete == null) environment.setupScriptsComplete = false;
@@ -1899,6 +1941,7 @@ export class ProjectsRepository {
       if (failedEnd) {
         environment.hasUnreadWork = true;
         environment.unreadReason = "agent_failed";
+        attributeUnreadWork(environment, unreadBefore, undefined);
       } else if (completionTransition) {
         // The aggregate alone cannot say what ended, so it must not replace a
         // failure nobody has read with "completed its work".
@@ -1907,6 +1950,7 @@ export class ProjectsRepository {
         environment.hasUnreadWork = true;
         if (nextAggregate === "waiting") environment.unreadReason = "agent_waiting";
         else if (!unreadFailure) environment.unreadReason = "agent_finished";
+        attributeUnreadWork(environment, unreadBefore, undefined);
       }
       // The lease itself must persist: its expiry is enforced from disk.
       this.saveEnvironment(environment);
@@ -2029,6 +2073,7 @@ export class ProjectsRepository {
       environment.lastActivityAt = normalizedActivityAt;
       environment.hasUnreadWork = true;
       environment.unreadReason = "terminal_finished";
+      attributeUnreadWork(environment, unreadBefore, undefined);
       this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (!unreadBefore) this.notifyAttention(environment);
@@ -2047,6 +2092,10 @@ export class ProjectsRepository {
    * than dropping a real completion as stale. Callers must invoke this exactly
    * once per observed per-session transition. The separate completion token
    * lets readers observe this edge while the aggregate remains working.
+   *
+   * `sessionKey` is the logical session key of the session that completed,
+   * when the caller knows it; the badge is then acknowledged by viewing that
+   * session rather than the environment (`attributeUnreadWork`).
    */
   async recordEnvironmentSessionCompletion(
     environmentId: string,
@@ -2056,6 +2105,7 @@ export class ProjectsRepository {
       "agent_finished" | "agent_failed" | "agent_waiting"
     > = "agent_finished",
     completionKey?: string,
+    sessionKey?: string,
   ): Promise<Environment> {
     if (!isAgentActivityTimestamp(occurredAt)) {
       throw new Error("occurredAt must be a valid ISO timestamp");
@@ -2090,6 +2140,7 @@ export class ProjectsRepository {
       const unreadFailure = unreadBefore && reasonBefore === "agent_failed";
       environment.hasUnreadWork = true;
       if (reason !== "agent_finished" || !unreadFailure) environment.unreadReason = reason;
+      attributeUnreadWork(environment, unreadBefore, sessionKey);
       this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (raisesAttention(unreadBefore, reasonBefore, environment.unreadReason)) {
@@ -2113,6 +2164,7 @@ export class ProjectsRepository {
       EnvironmentUnreadReason,
       "agent_question" | "setup_approval"
     > = "agent_question",
+    sessionKey?: string,
   ): Promise<{ environment: Environment; recorded: boolean }> {
     if (!isAgentActivityTimestamp(occurredAt)) {
       throw new Error("occurredAt must be a valid ISO timestamp");
@@ -2151,6 +2203,7 @@ export class ProjectsRepository {
       const reasonBefore = environment.unreadReason;
       environment.hasUnreadWork = true;
       environment.unreadReason = reason;
+      attributeUnreadWork(environment, unreadBefore, sessionKey);
       this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (raisesAttention(unreadBefore, reasonBefore, reason)) this.notifyAttention(environment);
@@ -2176,10 +2229,21 @@ export class ProjectsRepository {
     });
   }
 
+  /**
+   * Marks or clears the unread badge.
+   *
+   * A clear is refused (the record is returned unchanged) when the activity
+   * token moved past `expectedLastActivityAt`, so viewing an older result
+   * cannot clear a newer one. `sessionKeys` acknowledges only those sessions'
+   * results: the keys are removed from `unreadSessionKeys` and the badge
+   * clears once none remain. A badge with no attributed sessions is
+   * environment-wide and any clear acknowledges it.
+   */
   async setEnvironmentUnread(
     environmentId: string,
     unread: boolean,
     expectedLastActivityAt?: string | null,
+    sessionKeys?: readonly string[],
   ): Promise<Environment> {
     if (
       expectedLastActivityAt !== undefined &&
@@ -2187,6 +2251,16 @@ export class ProjectsRepository {
       typeof expectedLastActivityAt !== "string"
     ) {
       throw new Error("expectedLastActivityAt must be a string or null");
+    }
+    if (
+      sessionKeys !== undefined &&
+      (!Array.isArray(sessionKeys) ||
+        sessionKeys.length > MAX_UNREAD_SESSION_KEYS ||
+        !sessionKeys.every(isUnreadSessionKey))
+    ) {
+      throw new Error(
+        `sessionKeys must be at most ${MAX_UNREAD_SESSION_KEYS} non-empty session keys`,
+      );
     }
     return this.enqueueEnvironmentMutation(async () => {
       const environment = await this.requireEnvironment(environmentId);
@@ -2200,9 +2274,25 @@ export class ProjectsRepository {
       }
       if (environment.hasUnreadWork === unread) return environment;
 
+      const attributed = Array.isArray(environment.unreadSessionKeys)
+        ? environment.unreadSessionKeys.filter(isUnreadSessionKey)
+        : [];
+      if (!unread && sessionKeys !== undefined && attributed.length > 0) {
+        const acknowledged = new Set(sessionKeys);
+        const remaining = attributed.filter((key) => !acknowledged.has(key));
+        if (remaining.length === attributed.length) return environment;
+        if (remaining.length > 0) {
+          environment.unreadSessionKeys = remaining;
+          this.saveEnvironment(environment);
+          this.context.changes.announce("environment", environmentId, environment.projectId);
+          return environment;
+        }
+      }
+
       environment.hasUnreadWork = unread;
       if (unread) environment.unreadReason = "marked_unread";
       else delete environment.unreadReason;
+      delete environment.unreadSessionKeys;
       this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;

@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as backend from "@/lib/backend";
 import { environmentStore } from "@/stores/environmentStore";
 import { uiStore } from "@/stores/uiStore";
+import { paneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import type { TabInfo } from "@/types/paneLayout";
 import type { Environment } from "@/types";
 import { mockToast, resetSonnerMocks } from "../../../../tests/mocks/sonner";
 import { useUnreadEnvironmentSync } from "./useUnreadEnvironmentSync";
@@ -44,6 +46,7 @@ afterEach(() => {
   setUnread.mockRestore();
   appCommandStore(environmentStore).setState({ environments: [] });
   appCommandStore(uiStore).setState({ selectedEnvironmentId: null });
+  appCommandStore(paneLayoutStore).setState({ environments: new Map(), hydration: new Map() });
 });
 
 describe("useUnreadEnvironmentSync", () => {
@@ -200,5 +203,159 @@ test("an obscured home toasts and clears unread work only when Home becomes visi
   expect(mockToast.mock.calls[0]?.[0]).toBe("Agent ready for input");
   expect(mockToast.mock.calls[0]?.[1]).toMatchObject({
     description: "Project home: You can send another message while background work continues.",
+  });
+});
+
+describe("seen means in the foreground", () => {
+  test("a selection in an unfocused window keeps the badge until the window is focused", () => {
+    const hasFocus = spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
+      expect(setUnread).not.toHaveBeenCalled();
+      expect(mockToast).not.toHaveBeenCalled();
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-1")?.hasUnreadWork,
+      ).toBe(true);
+
+      hasFocus.mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(setUnread).toHaveBeenCalledTimes(1);
+      expect(setUnread).toHaveBeenCalledWith("env-1", false, "2026-09-15T08:00:00.000Z");
+      // The selection was never seen, so returning to it still explains the bell.
+      expect(mockToast).toHaveBeenCalledTimes(1);
+    } finally {
+      hasFocus.mockRestore();
+    }
+  });
+
+  test("an agent finishing while the window is in the background is not consumed", () => {
+    appCommandStore(environmentStore).setState({
+      environments: [environment({ hasUnreadWork: false })],
+    });
+    const hasFocus = spyOn(document, "hasFocus").mockReturnValue(true);
+    try {
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
+      hasFocus.mockReturnValue(false);
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      act(() => {
+        appCommandStore(environmentStore).getState().updateEnvironment("env-1", {
+          hasUnreadWork: true,
+          unreadReason: "agent_finished",
+          lastActivityAt: "2026-09-15T09:00:00.000Z",
+        });
+      });
+      expect(setUnread).not.toHaveBeenCalled();
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-1")?.hasUnreadWork,
+      ).toBe(true);
+
+      hasFocus.mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(setUnread).toHaveBeenCalledWith("env-1", false, "2026-09-15T09:00:00.000Z");
+    } finally {
+      hasFocus.mockRestore();
+    }
+  });
+});
+
+describe("seen means the session's tab is on screen", () => {
+  const sessionKey = (tabId: string) => `env-env-1:${tabId}`;
+
+  function showTabs(activeTabId: string, hydration: "pending" | "done" = "done") {
+    const tabs = [
+      { id: "tab-a", type: "agent-native" },
+      { id: "tab-b", type: "agent-native" },
+    ] as TabInfo[];
+    const layout: EnvironmentPaneState = {
+      root: { kind: "leaf", id: "pane-1", tabs, activeTabId },
+      activePaneId: "pane-1",
+      containerId: null,
+    };
+    appCommandStore(paneLayoutStore).setState({
+      environments: new Map([["env-1", layout]]),
+      hydration: new Map([["env-1", hydration]]),
+    });
+  }
+
+  test("opening another tab of the environment does not clear the session's result", () => {
+    appCommandStore(environmentStore).setState({
+      environments: [
+        environment({ unreadReason: "agent_finished", unreadSessionKeys: [sessionKey("tab-a")] }),
+      ],
+    });
+    showTabs("tab-b");
+    renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
+
+    expect(setUnread).not.toHaveBeenCalled();
+    // Activation still says why the bell rang.
+    expect(mockToast).toHaveBeenCalledTimes(1);
+    expect(
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-1")?.hasUnreadWork,
+    ).toBe(true);
+
+    act(() => appCommandStore(paneLayoutStore).getState().setActiveTab("pane-1", "tab-a", "env-1"));
+
+    expect(setUnread).toHaveBeenCalledTimes(1);
+    expect(setUnread).toHaveBeenCalledWith("env-1", false, "2026-09-15T08:00:00.000Z", [
+      sessionKey("tab-a"),
+    ]);
+    expect(mockToast).toHaveBeenCalledTimes(1);
+    expect(appCommandStore(environmentStore).getState().getEnvironmentById("env-1")).toMatchObject({
+      hasUnreadWork: false,
+      unreadSessionKeys: undefined,
+    });
+  });
+
+  test("viewing one of two sessions leaves the other unread", async () => {
+    appCommandStore(environmentStore).setState({
+      environments: [
+        environment({
+          unreadReason: "agent_finished",
+          unreadSessionKeys: [sessionKey("tab-a"), sessionKey("tab-b")],
+        }),
+      ],
+    });
+    showTabs("tab-a");
+    renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
+
+    expect(setUnread).toHaveBeenCalledTimes(1);
+    expect(setUnread).toHaveBeenCalledWith("env-1", false, "2026-09-15T08:00:00.000Z", [
+      sessionKey("tab-a"),
+    ]);
+    expect(appCommandStore(environmentStore).getState().getEnvironmentById("env-1")).toMatchObject({
+      hasUnreadWork: true,
+      unreadSessionKeys: [sessionKey("tab-b")],
+    });
+    await act(async () => {
+      persistResolvers[0]!(
+        environment({ unreadReason: "agent_finished", unreadSessionKeys: [sessionKey("tab-b")] }),
+      );
+      await Promise.resolve();
+    });
+    expect(setUnread).toHaveBeenCalledTimes(1);
+    expect(appCommandStore(environmentStore).getState().getEnvironmentById("env-1")).toMatchObject({
+      hasUnreadWork: true,
+      unreadSessionKeys: [sessionKey("tab-b")],
+    });
+  });
+
+  test("waits for the restored layout before deciding", () => {
+    appCommandStore(environmentStore).setState({
+      environments: [environment({ unreadSessionKeys: [sessionKey("tab-a")] })],
+    });
+    showTabs("tab-a", "pending");
+    renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
+    expect(setUnread).not.toHaveBeenCalled();
+    expect(mockToast).not.toHaveBeenCalled();
+
+    act(() => appCommandStore(paneLayoutStore).getState().finishHydration("env-1"));
+    expect(setUnread).toHaveBeenCalledTimes(1);
+    expect(mockToast).toHaveBeenCalledTimes(1);
   });
 });

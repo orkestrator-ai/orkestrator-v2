@@ -124,6 +124,8 @@ export interface NativeAgentLaunchActivityReconcilerHost {
     environmentId: string,
     sessionKey: string,
     itemIds: readonly string[],
+    /** The session's logical key, which the unread badge is attributed to. */
+    logicalSessionKey?: string,
   ): Promise<void>;
   recordRevisedUsage?(
     session: PersistedNativeAgentSession,
@@ -1019,6 +1021,7 @@ export class NativeAgentLaunchActivityReconciler {
                     new Date(this.host.now()).toISOString(),
                     "agent_failed",
                     completionKey(session),
+                    session.logicalSessionKey,
                   );
                   attentionRecordedEnvironments.add(session.environmentId);
                 }
@@ -1036,6 +1039,7 @@ export class NativeAgentLaunchActivityReconciler {
                     session.environmentId,
                     session.key,
                     observation.asyncQuestionItemIds,
+                    session.logicalSessionKey,
                   );
                 } catch (error) {
                   // A badge persistence failure is not evidence that the bridge
@@ -1435,6 +1439,7 @@ export class NativeAgentLaunchActivityReconciler {
           new Date(this.host.now()).toISOString(),
           reason,
           state === "waiting" ? undefined : completionKey(session),
+          session.logicalSessionKey,
         );
         attentionRecorded = true;
       }

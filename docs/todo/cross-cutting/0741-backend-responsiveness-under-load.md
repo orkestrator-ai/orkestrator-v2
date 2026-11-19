@@ -334,9 +334,10 @@ is 1.2 MiB today and may grow to its 32 MiB limit.
   moves, which any writer in any process bumps. A rebuild reads the
   serialized rows from the connection's revision-validated cache
   (`StorageDatabase.readStoreSerialized`, `StorageContext.loadStoreSerialized`)
-  and parses only rows whose serialized value changed. Every read-only path
-  uses it: the pull-tab lookups, directory, inboxes, batch reads, summary,
-  inbox snapshot, status, sent lists, conversations, pending and interrupted
+  and parses only rows whose serialized value changed. At the time, every
+  read-only path used it, including the pull-tab lookups, directory, inboxes,
+  batch reads, summary, inbox snapshot, status, sent lists, conversations,
+  pending and interrupted
   injects, the budget-hold notice, the hourly-release pre-check, and the
   idempotent-replay check of `sendAgentMail`. A store buffered by
   `atomically`, one stored whole, or one with an unreadable row reads through
@@ -712,6 +713,42 @@ stall is inconclusive, so task 6 remains open pending live evidence.
   and every write bumps one, including other processes' writes and
   `StorageDatabase.rows()`. So a snapshot is never older than a `load` made
   at the same moment.
+
+  **Follow-up (2026-11-19).** Under concurrent agents some tab writes almost
+  every call, so a read rarely finds the read model current, and a rebuild
+  still sorts every row and walks every message. Per-mailbox row reads were
+  added beside the read model for the reads that name a mailbox or an
+  environment: the inbox, a read message, the caller's identity (the pull-tab
+  lookups, which now read one environment's key range), one environment's
+  directory (the MCP handshake), scoped transcript batches and a delivery
+  status (a bounded, verified location hint). Acknowledge, seen and discard
+  commit one mailbox row. The project directory, sent lists, inject sweep and
+  summaries stay on the read
+  model. See [storage.md](../../architecture/storage.md) for the design and
+  `apps/backend/scripts/agent-mail-store-bench.ts` (`…AfterWriteMs`) for the
+  measurement.
+
+  *Measured* on beelink (16 CPUs) on 2026-11-19, base commit `0007f0e66` and
+  this change run alternately twice each with `--iterations 50`, at a load
+  average of 34 to 46 from other work. CPU ms per read made right after
+  another tab's send (100 environments × 6 tabs; 600 messages is about 1.2 MB
+  of mail, 6,000 about 11 MB):
+
+  | Read | Base, 600 | Base, 6,000 | Change, 600 | Change, 6,000 |
+  | --- | --- | --- | --- | --- |
+  | Identity (pull-tab lookup) | 2.24, 2.27 | 13.9, 13.0 | 0.25, 0.26 | 0.51, 0.44 |
+  | One environment's directory | 3.13, 4.13 | 14.8, 16.5 | 0.85, 1.01 | 2.91, 3.84 |
+  | Inbox | 3.49, 3.63 | 17.7, 16.1 | 0.92, 0.80 | 3.44, 3.08 |
+  | Message status | 3.03, 2.89 | 12.0, 12.8 | 0.13, 0.14 | 0.16, 0.14 |
+  | Send then acknowledge (`ackMs`) | 19.8, 21.3 | 129, 126 | 16.4, 16.0 | 77.3, 66.2 |
+
+  The inbox and directory still grow with the size of the mailboxes they read
+  (ten times as many messages each at 6,000), not with the rest of the store.
+  The send itself is unchanged (57–70 ms CPU at 6,000) and is what is left
+  of `ackMs`. These measurements used the earlier benchmark, which grew the
+  measured mailboxes alongside the rest of the store. The benchmark now keeps
+  the read target fixed and writes unrelated mail through a second connection.
+  It also times acknowledge and seen independently of send.
 
 ### Task 5: share one frozen snapshot rather than hand out copies
 

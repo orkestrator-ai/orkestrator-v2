@@ -1,3 +1,4 @@
+import { projectLandingBoardTab } from "./window-grouping";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -111,6 +112,8 @@ export function openRepository(spec: {
   connectionId: string;
   projectId: string;
   coordinatorGated: boolean;
+  onCommandNode: boolean;
+  commandHasCopy: boolean;
   /** Always open the coordinator rather than the project's last tab. */
   coordinator?: boolean;
   title: string;
@@ -122,7 +125,13 @@ export function openRepository(spec: {
       ? {}
       : spec.coordinator
         ? { boardTab: "coordinator" as const }
-        : { landingTab: "coordinator" as const }),
+        : {
+            landingTab: projectLandingBoardTab(
+              "repository",
+              spec.onCommandNode,
+              spec.commandHasCopy,
+            ),
+          }),
     title: spec.title,
   });
   useMachineViewStore

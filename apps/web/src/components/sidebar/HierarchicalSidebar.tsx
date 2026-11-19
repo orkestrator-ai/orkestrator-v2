@@ -1,3 +1,4 @@
+import { useManualOrderSupported } from "@/lib/portal/portal-layout";
 import { MOBILE_SHELL_MEDIA_QUERY, noteDrawerNavigation } from "@/lib/mobile-shell";
 import { useSidebarHydration } from "./useSidebarHydration";
 import { useSelectedEnvironmentActions } from "./useSelectedEnvironmentActions";
@@ -68,26 +69,31 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { Environment, EnvironmentType, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
 import { SidebarBottomBar } from "./SidebarBottomBar";
-import { useRevealMachineProject } from "@/components/federation/useRevealMachineProject";
+import {
+  expandMachineProject,
+  useRevealMachineProject,
+} from "@/components/federation/useRevealMachineProject";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { MachinesFilter } from "@/components/federation/MachinesFilter";
 import { MachineDot, MachineHomeIcon, ProjectIconImage } from "@/components/federation/MachineDot";
-import { machineTextClass } from "@/lib/federation/machine-colors";
+import { FederatedActivityList } from "@/components/federation/FederatedSidebarSections";
 import {
-  FederatedActivityList,
-  MachineSectionList,
-  MergedProjectList,
-} from "@/components/federation/FederatedSidebarSections";
+  RepositoryEnvironmentList,
+  type BoundEnvironmentRendering,
+} from "@/components/federation/RepositoryEnvironmentList";
+import { MachineTiles } from "@/components/federation/MachineTiles";
 import { useBoundCollapseSync } from "@/components/federation/useBoundCollapseSync";
 import { useMachineViews } from "@/components/federation/useMachineViews";
-import { ALL_MACHINES, filterMachines, type MachineView } from "@/lib/federation/aggregate";
+import { filterMachines, type MachineView } from "@/lib/federation/aggregate";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { isSelectedEnvironmentReachable } from "@/lib/federation/selected-environments";
 import { applySidebarModifierSelection } from "@/lib/sidebar-selection";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
+  ENVIRONMENT_ORDERING_OPTIONS,
+  isEnvironmentOrdering,
   nextSidebarView,
   sidebarGroupingOptions,
   sidebarViewForChoice,
@@ -362,30 +368,24 @@ export function HierarchicalSidebar() {
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const setEnvironmentSortMode = useUIChromeStore((state) => state.setEnvironmentSortMode);
   const setActivitySortOrder = useUIChromeStore((state) => state.setActivitySortOrder);
-  // Multi-machine presentation. This sidebar's own machine keeps its full
-  // tree; other machines appear as their own sections, or merged into one
-  // projection when grouped by project/repository or sorted by activity.
+  // Multi-machine presentation (design EL01). With other machines, every
+  // repository lists its environments across machines, ordered by machine or
+  // by hand, or one activity list across machines; machine tiles filter both.
   const federation = useFederation();
   const machineViews = useMachineViews();
   const revealMachineProject = useRevealMachineProject();
+  const manualOrderSupported = useManualOrderSupported();
   const machineFilter = useMachineViewStore((state) => state.machineFilter);
   const machineGrouping = useMachineViewStore((state) => state.grouping);
   const setMachineGrouping = useMachineViewStore((state) => state.setGrouping);
-  // The phone layout's overlay stays a full list, closest to compact when
-  // grouped by repository; the choice is kept for desktop widths.
+  const environmentOrdering = useMachineViewStore((state) => state.environmentOrdering);
+  const setEnvironmentOrdering = useMachineViewStore((state) => state.setEnvironmentOrdering);
+  // The phone layout's overlay stays the full list; the choice is kept for
+  // desktop widths.
   const compactActive = machineGrouping === "compact" && !isMobile;
-  const listGrouping = machineGrouping === "compact" ? "repository" : machineGrouping;
   const openMachinePanel = openMachineWorkspace;
   const visibleMachines = useMemo(
-    () =>
-      federation.enabled
-        ? filterMachines(
-            machineViews,
-            machineViews.some((machine) => machine.connectionId === machineFilter)
-              ? machineFilter
-              : ALL_MACHINES,
-          )
-        : [],
+    () => (federation.enabled ? filterMachines(machineViews, machineFilter) : []),
     [federation.enabled, machineFilter, machineViews],
   );
   const boundMachineView = machineViews.find((machine) => machine.bound) ?? null;
@@ -396,23 +396,23 @@ export function HierarchicalSidebar() {
   const openProjectCopy = useProjectCopyStore((state) => state.open);
   const remoteMachinesVisible = visibleMachines.filter((machine) => !machine.bound);
   // Machines are listed in the command node's order, whichever one this window
-  // works on. Merged lists hide a machine that is not connected; its projects
+  // works on. The list hides a machine that is not connected; its projects
   // keep their place for when it is back.
-  const federatedMode: "machine" | "activity" | "project" | "repository" | null =
-    !federation.enabled
-      ? null
-      : remoteMachinesVisible.length === 0
-        ? environmentSortMode === "activity"
-          ? null
-          : "machine"
-        : environmentSortMode === "activity"
-          ? "activity"
-          : listGrouping;
-  const mergedShownIds = useMemo(
+  const federatedMode: "activity" | "repository" | null = !federation.enabled
+    ? null
+    : environmentSortMode === "activity"
+      ? remoteMachinesVisible.length === 0
+        ? null
+        : "activity"
+      : "repository";
+  const repositoryShownIds = useMemo(
     () => new Set(visibleMachines.filter(isMachineShown).map((machine) => machine.connectionId)),
     [visibleMachines],
   );
-  const openedRepositoryKey = useMachineViewStore((state) => state.openedRepository?.projectKey);
+  const repositoryListedIds = useMemo(
+    () => new Set(visibleMachines.map((machine) => machine.connectionId)),
+    [visibleMachines],
+  );
   useBoundCollapseSync(
     federation.enabled ? (boundMachineView?.backendId ?? null) : null,
     projects,
@@ -512,25 +512,21 @@ export function HierarchicalSidebar() {
     [setEnvironmentSortMode, setMachineGrouping],
   );
 
-  // "By project" and "by repository" change nothing until another machine is shown.
-  const mergedModesAvailable = federation.enabled && remoteMachinesVisible.some(isMachineShown);
   useEffect(
     () =>
       onAppShortcut("rotate-sidebar-grouping", () => {
         const chrome = useUIChromeStore.getState();
         if (!isMobile && !chrome.sidebarOpen) chrome.toggleSidebar();
-        const views = useMachineViewStore.getState();
         const next = nextSidebarView(
           {
-            grouping: views.grouping,
-            groupingBeforeCompact: views.groupingBeforeCompact,
+            grouping: useMachineViewStore.getState().grouping,
             sortMode: useUIChromeStore.getState().environmentSortMode,
           },
-          { mergedModes: mergedModesAvailable, compact: !isMobile },
+          { compact: !isMobile },
         );
         if (next) applySidebarView(next);
       }),
-    [applySidebarView, isMobile, mergedModesAvailable],
+    [applySidebarView, isMobile],
   );
 
   // Compact has no environment rows to act on.
@@ -755,13 +751,23 @@ export function HierarchicalSidebar() {
 
   const revealProject = useCallback(
     (projectId: string) => {
+      if (federatedMode === "repository" && boundMachineView) {
+        expandMachineProject(machineViews, boundMachineView, projectId);
+      }
       setProjectCollapsed(projectId, false);
       const project = projectsById.get(projectId);
       if (project?.folder) {
         setProjectFolderCollapsed(project.folder, false);
       }
     },
-    [projectsById, setProjectCollapsed, setProjectFolderCollapsed],
+    [
+      boundMachineView,
+      federatedMode,
+      machineViews,
+      projectsById,
+      setProjectCollapsed,
+      setProjectFolderCollapsed,
+    ],
   );
 
   const handleSearchSelectProject = useCallback(
@@ -1036,26 +1042,6 @@ export function HierarchicalSidebar() {
       </DndContext>
     );
 
-  const renderMergedBoundProject = (
-    projectId: string,
-    sortableId: string,
-    label: string | undefined,
-  ) => {
-    const project = projectsById.get(projectId);
-    if (!project) return null;
-    // A repository member is named by its machine, in the machine's colour.
-    if (federatedMode === "repository") {
-      return renderProjectGroup(project, {
-        sortableId,
-        label,
-        labelClassName: machineTextClass(boundMachineView?.colorToken),
-        machineIcon: projectIconOnly(project),
-        openedByHeading: openedRepositoryKey === sortableId,
-      });
-    }
-    return renderProjectGroup(project, { sortableId, label, machineIcon: boundHomeIcon(project) });
-  };
-
   const handleBoundEnvironmentDrop = (activeId: string, overId: string) => {
     const reorder = resolveSidebarReorder(
       activeId,
@@ -1083,11 +1069,56 @@ export function HierarchicalSidebar() {
     return home ? renderActivityHome(home) : null;
   };
 
+  const boundRendering: BoundEnvironmentRendering = {
+    renderEnvironment: (environmentId) => {
+      const environment = sidebarEnvironments.find((entry) => entry.id === environmentId);
+      return environment ? (
+        <EnvironmentItem
+          environment={environment}
+          isSelected={selectedEnvironmentId === environment.id}
+          onSelect={handleSelectEnvironment}
+          onDelete={deleteEnvironment}
+          onStart={startEnvironment}
+          onStop={stopEnvironment}
+          onRestart={restartEnvironment}
+          onFork={handleForkEnvironment}
+          isMultiSelectMode={isMultiSelectMode}
+          isChecked={selectedEnvironmentIds.includes(environment.id)}
+        />
+      ) : null;
+    },
+    selectedEnvironmentId,
+    onDragEnd: handleBoundEnvironmentDrop,
+    renderHome: (projectId) => {
+      const home = allEnvironments.find(
+        (environment) =>
+          environment.projectId === projectId &&
+          environment.projectHome &&
+          !environment.deletionRequestedAt &&
+          environment.lifecycleOperation !== "deleting",
+      );
+      return home ? (
+        <ProjectHomeActivity
+          home={home}
+          projectName={projectsById.get(projectId)?.name ?? "Unknown project"}
+          compact
+        />
+      ) : null;
+    },
+    onCreate: handleOpenCreateEnvDialog,
+  };
+
   const groupingOptions = sidebarGroupingOptions({
-    federated: federation.enabled,
     sortMode: environmentSortMode,
     compact: compactActive,
   });
+  // The ordering choice exists only where environments of several machines share a list.
+  const showOrdering =
+    federation.enabled &&
+    manualOrderSupported &&
+    !compactActive &&
+    environmentSortMode === "project" &&
+    machineViews.length > 1;
   const groupingValue = groupingOptions.some((option) => option.value === machineGrouping)
     ? machineGrouping
     : "";
@@ -1147,19 +1178,35 @@ export function HierarchicalSidebar() {
                 </DropdownMenuRadioGroup>
               </>
             ) : null}
+            {showOrdering ? (
+              <>
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  Order environments
+                </DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={environmentOrdering}
+                  onValueChange={(value) => {
+                    if (isEnvironmentOrdering(value)) setEnvironmentOrdering(value);
+                  }}
+                >
+                  {ENVIRONMENT_ORDERING_OPTIONS.map((option) => (
+                    <DropdownMenuRadioItem key={option.value} value={option.value}>
+                      {option.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </>
+            ) : null}
           </>
         )}
         <DropdownMenuLabel className="text-xs text-muted-foreground">
-          {federation.enabled && !compactActive && environmentSortMode === "project"
-            ? "Group machines"
-            : "Sidebar view"}
+          Sidebar view
         </DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={groupingValue}
           onValueChange={(value) => {
             const view = sidebarViewForChoice(value, {
               grouping: machineGrouping,
-              groupingBeforeCompact: useMachineViewStore.getState().groupingBeforeCompact,
               sortMode: environmentSortMode,
             });
             if (view) applySidebarView(view);
@@ -1314,6 +1361,8 @@ export function HierarchicalSidebar() {
         />
       )}
 
+      {compactActive ? null : <MachineTiles machines={machineViews} />}
+
       {/* Projects List */}
       {compactActive ? (
         <CompactRepositoryList
@@ -1340,30 +1389,27 @@ export function HierarchicalSidebar() {
                 onCreateBound={handleOpenCreateEnvDialog}
                 boundWaitingCount={waitingEnvironmentCount}
               />
-            ) : federatedMode === "project" || federatedMode === "repository" ? (
-              <MergedProjectList
+            ) : federatedMode === "repository" && boundMachineView ? (
+              <RepositoryEnvironmentList
                 machines={machineViews}
-                shownIds={mergedShownIds}
-                mode={federatedMode}
-                renderBoundProject={renderMergedBoundProject}
-                onBoundEnvironmentDragEnd={handleBoundEnvironmentDrop}
+                shownIds={repositoryShownIds}
+                listedIds={repositoryListedIds}
+                ordering={environmentOrdering}
+                bound={boundRendering}
                 boundLoading={projectsLoading && projects.length === 0}
                 onAddProject={() => setShowAddProjectDialog(true)}
               />
-            ) : federatedMode === "machine" && boundMachineView ? (
-              <MachineSectionList
-                machines={machineViews}
-                shown={visibleMachines}
-                renderBound={() => localTree}
-              />
-            ) : federatedMode === "machine" ? (
+            ) : federatedMode === "repository" ? (
               // This window's machine is not identified yet; its tree comes first.
               <>
                 {localTree}
-                <MachineSectionList
+                <RepositoryEnvironmentList
                   machines={machineViews}
-                  shown={remoteMachinesVisible}
-                  renderBound={() => null}
+                  shownIds={repositoryShownIds}
+                  listedIds={repositoryListedIds}
+                  ordering={environmentOrdering}
+                  bound={boundRendering}
+                  showEmptyState={false}
                 />
               </>
             ) : (

@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  Copy,
   Folder,
   FolderMinus,
   FolderOpen,
@@ -15,6 +16,7 @@ import {
   Pencil,
   Plus,
   Settings2,
+  Trash2,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -57,6 +59,21 @@ export interface RepositoryMenuActions {
   openGithub?: () => void;
   openSettings: () => void;
   newEnvironment: () => void;
+  /**
+   * The repository's copies on its other machines: with no per-machine
+   * headings under the repository, the menu is where an environment is
+   * created on one of them.
+   */
+  /** Copies the member's project to another machine. */
+  copyToMachine?: () => void;
+  /** Opens the member's Delete project confirmation on its machine. */
+  deleteProject?: () => void;
+  newEnvironmentOn?: ReadonlyArray<{
+    key: string;
+    machineName: string;
+    writable: boolean;
+    onSelect: () => void;
+  }>;
 }
 
 interface SortableProjectFolderProps {
@@ -87,6 +104,15 @@ interface SortableProjectFolderProps {
   openMachineName?: string;
   /** A repository group's context menu. */
   repositoryMenu?: RepositoryMenuActions;
+  /**
+   * A + button where the chevron was (design EL01): collapse stays in the
+   * context menu and on the keyboard (Left collapses, Right expands).
+   */
+  addAction?: { label: string; title: string; disabled?: boolean; onAdd: () => void };
+  /** Shown between the heading and its + button (project home activity). */
+  trailing?: ReactNode;
+  /** Chosen in the project search: highlighted, and scrolled into view on each `revealRevision`. */
+  revealRevision?: number | null;
   children: ReactNode;
 }
 
@@ -115,12 +141,21 @@ export function SortableProjectFolder({
   selected = false,
   openMachineName,
   repositoryMenu,
+  addAction,
+  trailing,
+  revealRevision = null,
   children,
 }: SortableProjectFolderProps) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [draftName, setDraftName] = useState(name);
   const renameInputId = useId();
   const suppressClick = useRef(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const revealed = revealRevision !== null;
+  useEffect(() => {
+    if (revealRevision === null) return;
+    rowRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [revealRevision]);
 
   const { active } = useDndContext();
   const {
@@ -178,11 +213,17 @@ export function SortableProjectFolder({
   // The whole heading is the drag handle. A repository heading also opens on
   // click, so its keyboard drag starts on Space only and Enter keeps the
   // native activation that opens it.
+  // Without a chevron, Left and Right collapse and expand it from the keyboard.
   const headingListeners =
     onOpen && listeners
       ? {
           ...listeners,
           onKeyDown: (event: KeyboardEvent) => {
+            if (addAction && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+              event.preventDefault();
+              if ((event.key === "ArrowLeft") !== isCollapsed) onToggleCollapse();
+              return;
+            }
             if (event.code === "Space") listeners.onKeyDown?.(event);
           },
         }
@@ -193,7 +234,7 @@ export function SortableProjectFolder({
       {...headingListeners}
       ref={setActivatorNodeRef}
       type="button"
-      aria-expanded={onOpen ? undefined : !isCollapsed}
+      aria-expanded={onOpen && !addAction ? undefined : !isCollapsed}
       aria-current={selected ? "page" : undefined}
       aria-label={onOpen ? `Open ${label}${destination}` : undefined}
       title={
@@ -256,13 +297,15 @@ export function SortableProjectFolder({
         </div>
       ) : null}
       <div
+        ref={rowRef}
+        data-revealed={revealed || undefined}
         className={cn(
           "relative mx-1 flex items-center rounded-lg border transition-colors",
           // A drop lands inside the folder rather than beside it, so the whole
           // header is highlighted rather than an insertion line being drawn.
           isOver && !isDragging && canHighlightDrop
             ? "border-primary/70 bg-primary/10"
-            : selected
+            : selected || revealed
               ? "border-transparent bg-linear-to-r from-selected to-selected-edge text-selected-foreground"
               : "border-transparent hover:bg-hover",
         )}
@@ -310,25 +353,43 @@ export function SortableProjectFolder({
           heading
         )}
 
-        {/* The chevron collapses independently of navigation and dragging. */}
-        <button
-          type="button"
-          aria-expanded={!isCollapsed}
-          aria-label={isCollapsed ? `Expand folder ${label}` : `Collapse folder ${label}`}
-          className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleCollapse();
-          }}
-        >
-          <ChevronRight
-            aria-hidden="true"
-            className={cn(
-              "h-4 w-4 text-muted-foreground transition-transform duration-200",
-              !isCollapsed && "rotate-90",
-            )}
-          />
-        </button>
+        {trailing}
+        {addAction ? (
+          <button
+            type="button"
+            aria-label={addAction.label}
+            title={addAction.title}
+            disabled={addAction.disabled}
+            data-testid="repository-new-environment"
+            className="mr-1 shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-white/[0.07] hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            onClick={(event) => {
+              event.stopPropagation();
+              addAction.onAdd();
+            }}
+          >
+            <Plus aria-hidden="true" className="h-4 w-4" />
+          </button>
+        ) : (
+          // The chevron collapses independently of navigation and dragging.
+          <button
+            type="button"
+            aria-expanded={!isCollapsed}
+            aria-label={isCollapsed ? `Expand folder ${label}` : `Collapse folder ${label}`}
+            className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleCollapse();
+            }}
+          >
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                "h-4 w-4 text-muted-foreground transition-transform duration-200",
+                !isCollapsed && "rotate-90",
+              )}
+            />
+          </button>
+        )}
       </div>
 
       {/*
@@ -429,6 +490,18 @@ function RepositoryMenuItems({
         <Plus className="mr-2 h-4 w-4" />
         New environment
       </ContextMenuItem>
+      {actions.newEnvironmentOn?.map((other) => (
+        <ContextMenuItem key={other.key} disabled={!other.writable} onClick={other.onSelect}>
+          <Plus className="mr-2 h-4 w-4" />
+          New environment on {other.machineName}
+        </ContextMenuItem>
+      ))}
+      {actions.copyToMachine ? (
+        <ContextMenuItem disabled={!actions.writable} onClick={actions.copyToMachine}>
+          <Copy className="mr-2 h-4 w-4" />
+          Copy to Machine…
+        </ContextMenuItem>
+      ) : null}
       <ContextMenuSeparator />
       <ContextMenuItem onClick={onToggleCollapse}>
         {isCollapsed ? (
@@ -438,6 +511,19 @@ function RepositoryMenuItems({
         )}
         {isCollapsed ? "Expand" : "Collapse"}
       </ContextMenuItem>
+      {actions.deleteProject ? (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            variant="destructive"
+            disabled={!actions.writable}
+            onClick={actions.deleteProject}
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Delete project on {actions.machineName}…
+          </ContextMenuItem>
+        </>
+      ) : null}
     </>
   );
 }

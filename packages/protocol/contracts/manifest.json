@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1025,
-    "defined": 1025,
+    "commands": 1026,
+    "defined": 1026,
     "untyped": 0,
     "events": 45
   },
@@ -8898,6 +8898,15 @@
       "critical": [],
       "argsDigest": "sha256:aa23803e28cf28fe8c52c8c564368012503896f02356fb23ec851ce4e163a98a",
       "resultDigest": "sha256:c7c6232cd86a2ff8b4894faee55ce6f094c8951db27a9d829f9c1fe8cea2e525"
+    },
+    "update_repository_environment_order": {
+      "domain": "nodes",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4d794f3013936decbfb4cc6cff62df2d4731f64bf873e63a7a994976425c90d2",
+      "resultDigest": "sha256:2abd6e32eee2c36ff155af5ea9e7defb44ebef754e6297343929d71425cc1a4b"
     },
     "update_scheduled_job": {
       "domain": "system",

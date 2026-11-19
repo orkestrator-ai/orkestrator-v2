@@ -13,6 +13,7 @@ import {
   portalLayoutStore,
   startPortalLayout,
   updatePortalLayout,
+  updateRepositoryEnvironmentOrder,
 } from "./portal-layout";
 
 let handlers: Map<string, (payload: unknown) => void>;
@@ -163,3 +164,30 @@ test("a pre-write read cannot overwrite a later optimistic write", async () => {
   expect(getPortalLayout().revision).toBe(3);
   expect(getPortalLayout().machineOrder).toEqual(["bk_new"]);
 });
+
+test("a legacy command node receives no Manual write", async () => {
+  await start();
+  await expect(
+    updateRepositoryEnvironmentOrder({ repositoryKey: "one", order: ["a"] }),
+  ).rejects.toThrow("Update the command node");
+  expect(invoke.mock.calls.map(([command]) => command)).toEqual(["get_portal_layout"]);
+});
+
+for (const oldBackend of ["refuses", "does not acknowledge"] as const) {
+  test(`a command node that ${oldBackend} a Manual write reconciles the optimistic order`, async () => {
+    invoke.mockResolvedValue({ ...layout(4), manualOrderSupported: true });
+    await start();
+    const update = { repositoryKey: "one", order: ["a"] };
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "get_portal_layout") return layout(2);
+      if (oldBackend === "refuses") throw new Error(unknownBackendCommandMessage(command));
+      return layout(2);
+    });
+    await expect(updateRepositoryEnvironmentOrder(update)).rejects.toThrow(
+      "Update the command node",
+    );
+    expect(invoke.mock.calls[1]).toEqual(["update_repository_environment_order", update]);
+    expect(getPortalLayout().environmentOrder).toEqual({});
+    expect(getPortalLayout().manualOrderSupported).toBeUndefined();
+  });
+}

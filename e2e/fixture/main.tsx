@@ -37,9 +37,9 @@ import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
 import { EnvironmentAttentionFixture } from "./EnvironmentAttentionFixture";
-import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
+import { RepositoryEnvironmentListFixture } from "../../apps/web/src/test/RepositoryEnvironmentListFixture";
 import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
-import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
+import { RemoteEnvironmentRowsFixture } from "../../apps/web/src/test/RemoteEnvironmentRowsFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { CursorScreenRecordingFixture } from "./CursorScreenRecordingFixture";
 import { NativeMessageSpacingFixture } from "./NativeMessageSpacingFixture";
@@ -2170,13 +2170,15 @@ function fixtureForPath() {
       </Suspense>
     );
   }
-  if (window.location.pathname === "/merged-project-list") return <MergedProjectListFixture />;
+  if (window.location.pathname === "/repository-environment-list")
+    return <RepositoryEnvironmentListFixture />;
   if (window.location.pathname === "/project-search-machines")
     return <ProjectSearchMachinesFixture />;
   if (window.location.pathname === "/environment-status-marker")
     return <EnvironmentStatusMarkerFixture />;
   if (window.location.pathname === "/environment-attention") return <EnvironmentAttentionFixture />;
-  if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
+  if (window.location.pathname === "/remote-environment-rows")
+    return <RemoteEnvironmentRowsFixture />;
   if (window.location.pathname === "/agent-account-status") return <AgentAccountStatusFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings")

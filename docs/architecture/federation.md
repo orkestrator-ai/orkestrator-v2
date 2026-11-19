@@ -452,6 +452,24 @@ or under the single old name `relayed-node-event` from an older command node,
 so both are listened to. The command node's own resources need no relay:
 `subscribeCommandNodeEvents` listens on the portal channel directly.
 
+### Push subscriptions to other nodes
+
+A view in another node's scope subscribes to push through the window's
+command node, never on the leaf (design D10 of to-do
+[8102](../todo/transcripts-and-observation/8102-push-event-layer.md); the
+wire is in [push-events.md](push-events.md#relayed-nodes)). The leaf scope's
+push client sends its set with `nodeId` on the command scope's own stream
+(`pushRouteFor`, `lib/push/push-subscriptions.ts`), and acts on that stream's
+changes that name its node. On the command node,
+`NodePushSubscriptionController` (`core/nodes/node-push-subscriptions.ts`,
+owned by `NodePortal`) reference-counts every window's keys per node and
+holds one union on the push connection of the relay's shared stream to that
+node (`NodeEventRelay.holdForPush` keeps that stream open while a key is held,
+asking only for the `push.` prefix). The leaf call carries the command
+node's own node credential, and a workspace grant cannot make a `nodeId` set
+(it cannot use the relay either). A command node that does not offer
+`nodes: true` leaves leaf keys on their polling cadence.
+
 ### Explicit-owner actions and unknown outcomes
 
 `federated-actions.ts` takes the concrete `EnvironmentRef`/`ProjectRef` it was

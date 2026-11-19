@@ -12,23 +12,27 @@ flow over, with the bridge state revision from 6680 as its change signal.
 Analysed 2026-11-19 against `main` at `5e9835d0a`. Phase 1 (2026-11-15) wrote
 the design and the polling baseline. On 2026-11-19 the user's ticket
 ("Push live updates efficiently with performance budgets") asked for the
-layer to be built, which answers the design review that tasks 2 to 5 waited
-on. The layer's core and the `native-session` topic are built (task 3) and
-the living doc is [push-events.md](../../architecture/push-events.md)
-(task 5). A shared backend observer reconciles each subscribed session.
-Qualified idle Claude and Codex bridges can wake it through their existing
-observation stream and content revision. Task 2 remains open for full bridge
-state revision coverage. See [Assumptions and decisions](#assumptions-and-decisions).
+layer to be built, which answers the design review that tasks 2 to 7 waited
+on. Every task is built: the layer's core and the `native-session` topic
+(task 3), bridge state revisions in all five HTTP bridges as the observer's
+change signal (task 2), the `environment`, `workflow` and `tool-output`
+topics (task 4), the command-node subscription controller (task 6) and the
+measurement against the baseline (task 7, on a deterministic fixture and the
+credential-free live spec B). The living doc is
+[push-events.md](../../architecture/push-events.md) (task 5). The only item
+left is the billed real-Claude rerun of baseline A, which needs the user and
+is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+See [Assumptions and decisions](#assumptions-and-decisions).
 
 ### Tasks
 
 1. **Design and baseline**: write the layer's design and take the before-measurement per the efficiency rules, before any code. Status: done (2026-11-15).
-2. **Bridge state revision**: every bridge moves a revision on every state change and answers a conditional state read `unchanged`; Pi sends its composer and model list only when they changed. Status: open.
+2. **Bridge state revision**: every bridge moves a revision on every state change and answers a conditional state read `unchanged`; Pi sends its composer and model list only when they changed. Status: done (2026-11-19).
 3. **The layer's core and the live agent view over push**: subscriptions on the existing event stream, the `native-session` topic, the recovery poll, and removing the 500 ms poll while push is healthy. Status: done (2026-11-19).
-4. **Further surfaces**: measure the other live surfaces' request volume, then move them onto the layer one at a time, highest volume first. Status: open.
-5. **Promote the design to a living doc**: [push-events.md](../../architecture/push-events.md), linked from `event-snapshot-recovery.md` and `recurring-work.md`. Status: done (2026-11-19); this file stays until tasks 2, 4, 6 and 7 are done.
-6. **Node subscription controller (D10)**: let a window subscribe to a node it reaches through a command node, through a controller on the command node that unions and reference-counts downstream sets. Status: open.
-7. **Measure the result against the baseline**: repeat baselines A and B on the new commit, one and two viewers, and the reconnect and inactive-view cases. Status: open.
+4. **Further surfaces**: measure the other live surfaces' request volume, then move them onto the layer one at a time, highest volume first. Status: done (2026-11-19) for the surfaces the ticket names (environment lifecycle, attention, workflow status, command output); the remaining polls are listed under task 4.
+5. **Promote the design to a living doc**: [push-events.md](../../architecture/push-events.md), linked from `event-snapshot-recovery.md` and `recurring-work.md`. Status: done (2026-11-19); this file keeps the design and the decision record.
+6. **Node subscription controller (D10)**: let a window subscribe to a node it reaches through a command node, through a controller on the command node that unions and reference-counts downstream sets. Status: done (2026-11-19).
+7. **Measure the result against the baseline**: repeat baselines A and B on the new commit, one and two viewers, and the reconnect and inactive-view cases. Status: done (2026-11-19) on the deterministic fixture and live spec B; the billed real-Claude rerun of baseline A is in the manual-test checklist.
 
 ### 1. Design and baseline
 
@@ -113,7 +117,31 @@ Codex little on its own; its value is as the layer's change signal. The
 design for this task is [D7](#d7-bridge-revisions-the-change-signal). Bridge
 rules: [`bridges/AGENTS.md`](../../../bridges/AGENTS.md).
 
-**Investigation.** Designed (D7); not built. Waits on the user's review.
+**Investigation.** Built 2026-11-19. A shared contract
+(`packages/protocol/src/bridge-state-revision.ts`, its `node/` half and
+`node/bridge-observation-stream.ts`) gives each session a `stateRevision`
+(`<process generation>:<counter>`, the counter process-wide so a revision is
+never reused) and a separate `transcriptRevision`. A mutation site or the
+bridge's event fan-out bumps it synchronously, and every state read also
+compares a digest of what it returns, so an `unchanged` answer is always
+correct and a forgotten bump only delays a push to the 30 s backstop. Claude,
+Codex, Cursor, Pi and the ACP bridge carry both revisions on their
+`?observe=1` frames (Cursor, Pi and ACP gained the stream) and answer a
+matching `knownStateRevision` with `{ unchanged: true, stateRevision }`.
+Which fields share the state revision is listed per bridge in
+[bridges/AGENTS.md](../../../bridges/AGENTS.md). Pi's composer has its own
+`composerRevision`, so the model list is sent only when it moved. The
+backend sends `knownStateRevision`, reuses its cached body, Codex config and
+Pi queue on `unchanged`, and reads the side routes only after the revision
+moved. `observation-stream.ts` consumes all five bridges, and the
+`native-session` observer reads running and idle sessions only on a bridge's
+hint (spaced at least 150 ms) plus a 30 s backstop while the stream is live
+and advertises revisions; it falls back to the old cadence otherwise. Each
+bridge has a revision harness test that fails when a mutation changes the
+state read without moving the revision. OpenCode stays cadence-based (its
+`/api/event` stream is not wired). Measured: a quiet running session costs
+the bridge 8 requests a minute instead of 600
+([push-events.md](../../architecture/push-events.md#measured-result)).
 
 **Decisions.**
 
@@ -189,10 +217,34 @@ stream separately.
 [recurring-work.md](../../architecture/recurring-work.md); candidates are in
 D9 step 4.
 
-**Investigation.** Depends on 3. Each surface is its own change with its own
-before and after numbers. The first step is a measurement of every renderer
-command's request rate on a busy profile (the gateway's
-`/__orkestrator/metrics` command buckets), so the order rests on numbers.
+**Investigation.** Done 2026-11-19 for the surfaces the ticket names, in
+[push-events.md](../../architecture/push-events.md):
+
+- **`environment`** (key: environment id; parts `lifecycle`, `attention`,
+  `sessions`): sidebar attention rows, the hover card, recovery copies and
+  rebuild progress (recurring-work C30 to C32) read on frames and fall to
+  the 30 s recovery poll while healthy. `attention` is an urgent part, so a
+  pending approval or question bypasses the per-key throttle while another
+  session floods.
+- **`workflow`** (key: `build-pipeline/<id>`, `multi-review/<id>` or
+  `graph-run/<id>`; parts `status`, `progress`, `result`): the live workflow
+  inspector (C20) moves from 4 s to frames plus the recovery poll. The
+  pipeline, Multi Review, graph run and scheduled-job views were already
+  event-led (they re-read on `resource-changed` and poll nothing).
+- **`tool-output`** (key: session plus tool call id; part `output`), with
+  the bounded read `get_native_agent_tool_output` (tail, range and
+  before-reads with byte cursors, `truncatedBefore`, `complete`, anchors and
+  a 64 KiB cap): an expanded running tool row subscribes, appends from its
+  cursor and offers "Load earlier"; collapsing releases it.
+
+The inventory came from the code's cadences rather than a busy profile's
+`/metrics` buckets. Polls left in place, by exposure: C23 (`ToPipelineButton`,
+2 s whenever the environment toolbar has an active tab), C24
+(`AutoPipelineTab`, 1.5 s, also while hidden), C22 (`useMultiReviewPrPhase`,
+2 s), C06 (review validation output, 2 s in a modal), C05 and C21 (a running
+reviewer's transcript, 4 s; a per-reviewer observer would add bridge reads
+while it streams), C02 (Files panel) and C07 (initialization logs). None is
+environment lifecycle, attention, workflow status or command output.
 
 **Decisions.**
 
@@ -237,8 +289,21 @@ keeps polling.
 shares one leaf stream per node across every window, which is why a window
 must not subscribe on the leaf directly.
 
-**Investigation.** Not built. The client already treats a stream without an
-offer as unavailable, so nothing breaks meanwhile.
+**Investigation.** Built 2026-11-19 as D10 describes
+(`apps/backend/src/core/nodes/node-push-subscriptions.ts`). The offer says
+`nodes: true`; `push_set_subscriptions` takes an optional `nodeId`, each node
+namespace of a connection has its own `setRevision` order (at most 64
+namespaces), and change entries carry `nodeId`. The controller holds one
+union per leaf on the relay's shared stream with its own `setRevision`
+counter, reference-counts keys across windows, copies the leaf's stamps into
+each window's answer, fans leaf frames into each window's coalescing map,
+checks the leaf `seq`, and on a gap, a leaf resync, a replaced upstream
+stream or the relay's resync hint re-sends the union and sends each affected
+window a `node-reset` resync for that node. A workspace grant is refused a
+`nodeId` set. Leaf scopes in the web client ride the command node's stream.
+Tested with unit tests, the real `NodeEventRelay` over `TestNodeNetwork`,
+and a gateway test with two windows on one fake leaf. Not run live across
+two profiles.
 
 **Decisions.**
 
@@ -256,9 +321,30 @@ specs that took the baseline.
 **Context.** [How to repeat it](#the-polling-baseline-2026-11-15). Push
 metrics are in `/__orkestrator/metrics` under `push`.
 
-**Investigation.** Not run. The unit and gateway tests show a quiet running
-view sends no reads but the 30 s recovery poll and that two viewers share one
-observer read per round; that is not a measurement.
+**Investigation.** Done 2026-11-19; the full table is in
+[push-events.md](../../architecture/push-events.md#measured-result).
+
+- **Deterministic fixture** (`apps/backend/tests/push-acceptance-fixture.ts`,
+  real gateway, push layer, `NativeAgentService` and `HttpBridgeProvider`
+  against a counting fake Claude bridge, manual clock). Quiet running
+  session: 120 to 2 reads a minute per viewer (98.3% fewer), 172,560 to
+  2,876 wire bytes a minute per viewer, bridge requests 600 a minute to 8.2
+  with a revisions bridge. A second viewer adds no bridge reads (polling
+  doubled them). Change to view, p95: 201 ms for a continuously streamed
+  delta, 51 ms for a single change, 52 ms for an announced one, against 452
+  to 751 ms polling. Streaming costs one read per frame per viewer (383 a
+  minute) and 766 bridge requests a minute for any number of viewers.
+- **Faults through the real gateway:** a dropped stream, a duplicate frame, a
+  `seq` gap and a backend restart (new push layer, new generation) all end
+  on the authoritative state.
+- **Thirty minutes, slow real socket** (slow tier): gateway queue peaked at
+  4.3 MB (under the 8 MiB hard limit), hub pending at 2 entries, heap flat
+  across view cycles, every subscriber structure at zero after the views
+  closed.
+- **Live spec B** (credential-free, Claude, isolated profile): bridge state
+  polls with two viewers 40 in 20 s against the baseline's 80.
+- **Not run:** baseline A with real Claude (billed), in the manual-test
+  checklist.
 
 **Decisions.**
 
@@ -377,10 +463,8 @@ Stop and reset each profile afterwards (`dev:stop`, `dev:reset`).
 
 ### The design (draft for review)
 
-Status: drafted 2026-11-15; D1 to D6, D8 and D11 are built (2026-11-19) with
-the changes recorded under [Assumptions and decisions](#assumptions-and-decisions).
-D7 (bridge revisions) is task 2 and D10 (node subscription controller) is
-task 6. What was built is described in
+Status: drafted 2026-11-15; D1 to D11 are built (2026-11-19) with the
+changes recorded under [Assumptions and decisions](#assumptions-and-decisions). What was built is described in
 [push-events.md](../../architecture/push-events.md).
 
 #### D1. Goals and non-goals
@@ -880,8 +964,8 @@ expectations to measure in task 3, not results.
 Each is decided in the task that builds it, unless the user decides it in
 the review:
 
-1. **Throttle**: 500 ms or 250 ms per key while it keeps changing (D6;
-   recommended 500 ms).
+1. **Throttle**: decided 2026-11-19 at 150 ms (see "Task 7: the 250 ms
+   target sets the spacing" below).
 2. **Recovery poll**: 30 s while healthy (D8), or longer once the
    `push.recovery-found-change` counter has stayed at zero for a release.
 3. **Discovery in the topic**: carried as a part of `native-session`
@@ -897,7 +981,11 @@ the review:
 
 - The one-viewer real-Claude figures come from one run (they agree with
   1202's 2.1 requests a second) and the two-viewer figures from two. Repeat
-  both on the same host when task 3 measures its result.
+  both on the same host in the billed baseline A rerun (manual-test
+  checklist).
+- The node subscription controller has not run across two live profiles
+  (D12's `federation-two-profile-fake-model.ts` case); it is covered by unit,
+  relay and gateway tests with a fake leaf.
 
 ## Related
 
@@ -980,8 +1068,9 @@ reads take the observer's settled answer for 750 ms
   at all. Cons: five bridges' mutation sites and a revision harness each
   before any client benefits.
 
-Task 2 stays open: when it lands, the observer can read on the bridge's
-wakeup and skip quiet rounds.
+Task 2 landed the same day: on a bridge with revisions the observer reads
+only on the bridge's hints plus a 30 s backstop (see the task 2 entry
+below); the cadence above is the fallback.
 
 ### Task 3: the old cadence stays as the fallback (2026-11-19)
 
@@ -1004,6 +1093,96 @@ re-subscribes and the answer's stamps say what moved.
 manifest and the domain client know it), but the gateway answers it, because
 only the gateway knows which credential opened the stream. The registry's
 handler answers `refused` to an in-process caller.
+
+### Task 2: a read-time digest backs every bump (2026-11-19)
+
+Each bridge bumps the state revision at its mutation sites, and every state
+read also digests what it returns and moves the revision when the digest
+differs.
+
+- **Bump plus read-time digest (chosen).** Pros: an `unchanged` answer is
+  always correct even where a mutation site was missed; a missed bump costs
+  latency up to the 30 s backstop, never a stale view. Cons: one digest per
+  state read.
+- **Bumps only.** Pros: no digest work. Cons: a forgotten site makes the
+  backend keep a stale body indefinitely.
+
+The per-bridge harness tests still fail when a mutation changes the state
+read without a bump, so missed sites are caught rather than relied on.
+
+### Task 2: OpenCode stays on the cadence (2026-11-19)
+
+OpenCode is not an HTTP bridge, and its own `/api/event` stream (open
+question 5) was not wired as a change signal. Its observer keeps the old
+cadence; nothing regresses, and the question stays open below.
+
+### Task 4: the topics the ticket names, then the rest by exposure (2026-11-19)
+
+The ticket named environment lifecycle, attention summaries, workflow status
+and command output. They became the `environment`, `workflow` and
+`tool-output` topics. Views that were already event-led (pipelines, Multi
+Review, graph runs, scheduled jobs) gained no subscription, since a
+subscription would only add reads there.
+
+- **Move only surfaces with a poll to retire (chosen).** Pros: every move
+  saves requests. Cons: event-led views keep relying on the replayed
+  `resource-changed` events, which already have gap recovery.
+- **Subscribe every workflow view.** Pros: one mechanism everywhere. Cons:
+  adds observer reads with no poll removed.
+
+The remaining polls (C02, C05 to C07, C21 to C24) are listed under task 4 in
+order of exposure; none carries the ticket's surfaces.
+
+### Task 4: attention is an urgent part (2026-11-19)
+
+Topics can declare `urgentParts`; `environment` declares `attention`, as
+`native-session`'s state changes already were. An approval or question goes
+out within the 50 ms coalescing window even while the same or another key is
+throttled, so a verbose session cannot delay another session's decision.
+
+### Task 4: the tool-output tail reads through the existing detail path (2026-11-19)
+
+The `tool-output` topic holds the owning session through the
+`native-session` observer instead of reading the provider again, and the
+read slices the call's body from the shared detail cache. A settled call
+expanded after it finished still uses the full detail read, because
+question, wakeup and artifact parsing need the whole output.
+
+### Task 6: every leaf scope goes through the command node (2026-11-19)
+
+Leaf scopes reached directly by a browser already received the leaf's own
+offer through the raw relay, so each window held its own leaf connection.
+Following D10, every leaf scope now subscribes through the command node.
+Against a command node that does not offer `nodes: true` (only a desktop app
+talking to an older remote command node), leaf keys poll.
+
+### Task 7: the 250 ms target sets the spacing (2026-11-19)
+
+The ticket's p95 under 250 ms on a local deterministic fixture applies to a
+continuously streamed delta as well. With the per-key transcript throttle and
+the bridge wake floor at 500 ms the fixture measured p95 551 ms, at 200 ms
+251 ms, and at 150 ms 201 ms. Both now share `PUSH_KEY_THROTTLE_MS` = 150 ms,
+and a throttled frame goes out at its deadline without a second coalescing
+wait.
+
+- **150 ms (chosen).** Pros: meets the target with margin; a bridge round is
+  two requests, so the bridge still costs less than two polling viewers.
+  Cons: while streaming each viewer reads up to once per frame (383 a minute
+  against 120 polling), and one viewer's bridge cost rises from 600 to 766
+  requests a minute.
+- **500 ms (D6's recommendation).** Pros: fewer reads while streaming. Cons:
+  misses the ticket's latency target by more than double.
+
+A bridge hint also no longer drops the observer's settled answer (it cost
+one extra provider round per frame); backend-originated invalidations still
+do.
+
+### Task 7: real-Claude baseline A stays a manual item (2026-11-19)
+
+Baseline A uses real Claude turns and is billed, so it cannot run in an
+unattended build. The deterministic fixture covers the same workload
+(`running-quiet`, one and two viewers) and live spec B ran credential-free;
+the billed rerun is in the manual-test checklist.
 
 ### Task 1: review corrections to the draft (2026-11-15)
 

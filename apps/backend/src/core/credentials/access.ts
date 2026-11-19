@@ -2,6 +2,7 @@ import { assertCredentialPolicy } from "./policy.js";
 import { randomUUID } from "node:crypto";
 import {
   CREDENTIAL_HTTP_METHODS,
+  CREDENTIAL_ANY_TAB,
   CREDENTIAL_LIMITS,
   CREDENTIAL_TIMING,
   CredentialError,
@@ -39,6 +40,13 @@ import { newCredentialEntryId } from "./vault.js";
  */
 
 /** The authenticated agent caller: from its tool credential, never its arguments. */
+/**
+ * The authenticated agent caller: from its tool credential, never its
+ * arguments. `tabId` is the calling tab, or `CREDENTIAL_ANY_TAB` for an
+ * environment-wide connection (OpenCode). Grants belong to the environment,
+ * so the tab only picks the session whose execution policy applies and the
+ * tab that shows a request.
+ */
 export interface CredentialCaller {
   environmentId: string;
   projectId: string;
@@ -60,6 +68,8 @@ export interface CredentialRequestInput {
   authUsername?: unknown;
   methods?: unknown;
   suggestedConnection?: unknown;
+  /** Environment-wide callers only: the tab to show the request on. */
+  tabHint?: unknown;
 }
 
 export interface CredentialApprovalInput {
@@ -220,12 +230,6 @@ export class CredentialAccess {
     }
     const use: CredentialUse = input.use;
     const { session, runtime } = await this.bindingContext(caller);
-    if (!session?.providerSessionId) {
-      throw new CredentialError(
-        "UNSUPPORTED_RUNTIME",
-        "The tab has no conversation to bind a credential to.",
-      );
-    }
     let requestBinding: CredentialBinding | undefined;
     let command: string | undefined;
     let http: CredentialHttpPolicy | undefined;
@@ -262,7 +266,7 @@ export class CredentialAccess {
       revision: 1,
       environmentId: caller.environmentId,
       projectId: caller.projectId,
-      tabId: caller.tabId,
+      tabId: placementTab(caller, input.tabHint),
       label,
       purpose,
       use,
@@ -274,20 +278,22 @@ export class CredentialAccess {
       createdAt: now,
       expiresAt: now + CREDENTIAL_TIMING.requestWaitMs,
       internal: {
-        agent: session.agent,
-        logicalSessionKey: session.logicalSessionKey,
-        providerSessionId: session.providerSessionId,
+        agent: session?.agent ?? null,
+        logicalSessionKey: session?.logicalSessionKey ?? "",
+        // Only so a pending request is cancelled when the conversation that
+        // asked ends; a grant is not tied to any conversation.
+        providerSessionId: session?.providerSessionId ?? null,
         runtimeIdentity: runtime.identity,
       },
     };
     this.context.records.transaction((rows) => {
       const pending = rows
         .requests(caller.environmentId)
-        .filter((request) => request.tabId === caller.tabId && request.state === "pending");
+        .filter((request) => request.tabId === record.tabId && request.state === "pending");
       if (pending.length >= CREDENTIAL_LIMITS.maxPendingRequestsPerTab) {
         throw new CredentialError(
           "REQUEST_LIMIT",
-          "This tab already has four credential requests waiting for a person.",
+          "Four credential requests are already waiting for a person here.",
         );
       }
       rows.putRequest(record);
@@ -296,7 +302,7 @@ export class CredentialAccess {
     return publicRecord(record);
   }
 
-  /** A request of the caller's own tab, optionally waiting for a decision. */
+  /** A request of the caller's environment, optionally waiting for a decision. */
   async getRequest(
     caller: CredentialCaller,
     requestId: string,
@@ -307,10 +313,9 @@ export class CredentialAccess {
       if (
         !request ||
         request.environmentId !== caller.environmentId ||
-        request.tabId !== caller.tabId ||
         request.projectId !== caller.projectId
       ) {
-        throw new CredentialError("REQUEST_NOT_FOUND", "No such request for this tab.");
+        throw new CredentialError("REQUEST_NOT_FOUND", "No such request in this environment.");
       }
       return request;
     };
@@ -327,15 +332,13 @@ export class CredentialAccess {
     return { request: publicRecord(request), grant: grant ? publicRecord(grant) : null };
   }
 
-  /** The caller tab's grants that are still active. */
+  /** The caller environment's grants that are still active. */
   listCallerGrants(caller: CredentialCaller): CredentialGrantRecord[] {
     return this.context.records
       .listGrants(caller.environmentId)
       .filter(
         (grant) =>
-          grant.tabId === caller.tabId &&
-          grant.projectId === caller.projectId &&
-          grantUnusableReason(this.context, grant) === null,
+          grant.projectId === caller.projectId && grantUnusableReason(this.context, grant) === null,
       )
       .map((grant) => publicRecord(grant));
   }
@@ -359,19 +362,13 @@ export class CredentialAccess {
     const lifetimeMs = clampCredentialGrantLifetime(input.lifetimeMs);
     const maxUses = parseMaxUses(input.maxUses);
 
-    // The tab must still run the conversation and runtime that asked.
+    // The environment must still have the runtime the request was made in.
     const { session, runtime } = await this.bindingContext(request);
-    if (
-      (session?.providerSessionId ?? null) !== request.internal.providerSessionId ||
-      runtime.identity !== request.internal.runtimeIdentity
-    ) {
-      this.cancelRequest(
-        request.id,
-        "The conversation or its environment changed since the request.",
-      );
+    if (runtime.identity !== request.internal.runtimeIdentity) {
+      this.cancelRequest(request.id, "The environment changed since the request.");
       throw new CredentialError(
         "REQUEST_STALE",
-        "The agent's conversation or environment changed since it asked; the request was cancelled.",
+        "The environment was rebuilt, moved or stopped since the agent asked; the request was cancelled.",
       );
     }
 
@@ -457,8 +454,9 @@ export class CredentialAccess {
       uses: 0,
       state: "active",
       internal: {
-        logicalSessionKey: request.internal.logicalSessionKey,
-        providerSessionId: request.internal.providerSessionId,
+        // Grants belong to the environment, not to a conversation.
+        logicalSessionKey: "",
+        providerSessionId: null,
         runtimeIdentity: runtime.identity,
         ...(connectionPin
           ? { connectionRevision: connectionPin.revision, valueVersion: connectionPin.valueVersion }
@@ -659,28 +657,19 @@ export class CredentialAccess {
         this.cancelRequest(request.id, "The tab started a new conversation.");
       }
     }
-    this.endGrants(
-      (grant) =>
-        grant.tabId === tabId && grant.internal.providerSessionId === retiredProviderSessionId,
-      "invalidated",
-      "The tab started a new conversation.",
-      environmentId,
-    );
+    // Grants are the environment's: they outlive the conversation.
   }
 
-  /** A tab closed: its pending requests are cancelled and its grants end. */
+  /**
+   * A tab closed: its pending requests are cancelled (the agent that asked is
+   * gone). Grants belong to the environment and stay.
+   */
   tabClosed(environmentId: string, tabId: string): void {
     for (const request of this.context.records.listRequests(environmentId)) {
       if (request.tabId === tabId && request.state === "pending") {
         this.cancelRequest(request.id, "The tab was closed.");
       }
     }
-    this.endGrants(
-      (grant) => grant.tabId === tabId,
-      "revoked",
-      "The tab was closed.",
-      environmentId,
-    );
   }
 
   /** Everything an environment had ends; its records are removed. */
@@ -690,6 +679,18 @@ export class CredentialAccess {
       this.context.notify(request.id);
     }
   }
+}
+
+/**
+ * Which tab shows a request: the caller's own tab, or, for an
+ * environment-wide caller, the tab id the agent was told in its turn
+ * instructions (a placement hint only: it grants nothing), else every tab.
+ */
+function placementTab(caller: CredentialCaller, hint: unknown): string {
+  if (caller.tabId !== CREDENTIAL_ANY_TAB) return caller.tabId;
+  return typeof hint === "string" && /^[A-Za-z0-9_.:-]{1,200}$/u.test(hint)
+    ? hint
+    : CREDENTIAL_ANY_TAB;
 }
 
 function parseMaxUses(value: unknown): number | null {

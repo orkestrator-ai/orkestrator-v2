@@ -159,20 +159,28 @@ describe("requests and approval", () => {
     ).rejects.toThrow("REQUEST_STALE");
   });
 
-  test("a conversation that changed since the request cancels it", async () => {
+  test("a new conversation does not stale a request; a changed runtime cancels it", async () => {
     const h = await harness();
+    const kept = await h.service.requestAccess(h.caller, {
+      label: "Token",
+      purpose: "x",
+      use: "command",
+      bindingName: "TOKEN",
+    });
+    replaceConversation(h);
+    const approved = await h.service.approve({
+      requestId: kept.id,
+      revision: kept.revision,
+      source: { kind: "value", value: TEST_SECRET },
+    });
+    expect(approved.grant.state).toBe("active");
     const request = await h.service.requestAccess(h.caller, {
       label: "Token",
       purpose: "x",
       use: "command",
       bindingName: "TOKEN",
     });
-    h.sessions.set("env-1\0tab-1", {
-      agent: "claude",
-      logicalSessionKey: "env-env-1:tab-1",
-      providerSessionId: "provider-session-new",
-      policy: interactivePolicy(),
-    });
+    h.runtimes.set("env-1", { ...h.runtimes.get("env-1")!, identity: "worktree:/moved" });
     await expect(
       h.service.approve({
         requestId: request.id,
@@ -180,7 +188,11 @@ describe("requests and approval", () => {
         source: { kind: "value", value: TEST_SECRET },
       }),
     ).rejects.toThrow("REQUEST_STALE");
-    expect(h.service.tabSnapshot({ environmentId: "env-1" }).requests[0]?.state).toBe("cancelled");
+    expect(
+      h.service
+        .tabSnapshot({ environmentId: "env-1" })
+        .requests.find((each) => each.id === request.id)?.state,
+    ).toBe("cancelled");
   });
 
   test("unsafe binding names and bad hosts are refused", async () => {
@@ -244,12 +256,22 @@ describe("requests and approval", () => {
 });
 
 describe("authorization at every use", () => {
-  test("another tab cannot use a copied grant id", async () => {
+  test("any tab of the environment may use a grant; another environment or project may not", async () => {
     const h = await harness();
     const grant = await grantCommand(h);
     const other = { ...h.caller, tabId: "tab-2" };
+    const result = await h.service.runCommand(other, {
+      grantId: grant.id,
+      command: "true",
+      waitMs: 20_000,
+    });
+    expect(result.state).toBe("succeeded");
+    expect(h.service.listCallerGrants(other).map((each) => each.id)).toEqual([grant.id]);
     await expect(
-      h.service.runCommand(other, { grantId: grant.id, command: "true" }),
+      h.service.runCommand(
+        { ...h.caller, environmentId: "env-2" },
+        { grantId: grant.id, command: "true" },
+      ),
     ).rejects.toThrow("GRANT_NOT_FOUND");
     await expect(
       h.service.runCommand(
@@ -259,19 +281,30 @@ describe("authorization at every use", () => {
     ).rejects.toThrow("GRANT_NOT_FOUND");
   });
 
-  test("a new conversation in the same tab ends the grant", async () => {
+  test("a new conversation in the tab keeps the environment's grant", async () => {
     const h = await harness();
     const grant = await grantCommand(h);
-    h.sessions.set("env-1\0tab-1", {
-      agent: "claude",
-      logicalSessionKey: "env-env-1:tab-1",
-      providerSessionId: "provider-session-replaced",
-      policy: interactivePolicy(),
+    replaceConversation(h);
+    h.service.conversationRetired("env-1", "env-env-1:tab-1", "provider-session-1");
+    const result = await h.service.runCommand(h.caller, {
+      grantId: grant.id,
+      command: "true",
+      waitMs: 20_000,
+    });
+    expect(result.state).toBe("succeeded");
+    expect(h.service.tabSnapshot({ environmentId: "env-1" }).grants).toHaveLength(1);
+  });
+
+  test("the calling tab's execution policy applies, not the requesting tab's", async () => {
+    const h = await harness();
+    const grant = await grantCommand(h);
+    h.sessions.set("env-1\0tab-2", {
+      ...h.sessions.get("env-1\0tab-2")!,
+      policy: interactivePolicy({ approvals: "deny" }),
     });
     await expect(
-      h.service.runCommand(h.caller, { grantId: grant.id, command: "true" }),
-    ).rejects.toThrow("SCOPE_MISMATCH");
-    expect(h.service.tabSnapshot({ environmentId: "env-1" }).grants).toHaveLength(0);
+      h.service.runCommand({ ...h.caller, tabId: "tab-2" }, { grantId: grant.id, command: "true" }),
+    ).rejects.toThrow("POLICY_DENIED");
   });
 
   test("a replaced runtime (rebuilt container, moved worktree) ends the grant", async () => {
@@ -828,7 +861,7 @@ describe("connections", () => {
 });
 
 describe("lifecycle", () => {
-  test("closing the tab cancels its requests and ends its grants", async () => {
+  test("closing the tab cancels its pending requests; the environment keeps its grants", async () => {
     const h = await harness();
     const grant = await grantCommand(h);
     const pending = await h.service.requestAccess(h.caller, {
@@ -839,11 +872,13 @@ describe("lifecycle", () => {
     });
     h.service.tabClosed("env-1", "tab-1");
     const snapshot = h.service.tabSnapshot({ environmentId: "env-1" });
-    expect(snapshot.grants).toHaveLength(0);
+    expect(snapshot.grants.map((each) => each.id)).toEqual([grant.id]);
     expect(snapshot.requests.find((request) => request.id === pending.id)?.state).toBe("cancelled");
-    await expect(
-      h.service.runCommand(h.caller, { grantId: grant.id, command: "true" }),
-    ).rejects.toThrow("ACCESS_REVOKED");
+    const result = await h.service.runCommand(
+      { ...h.caller, tabId: "tab-2" },
+      { grantId: grant.id, command: "true", waitMs: 20_000 },
+    );
+    expect(result.state).toBe("succeeded");
   });
 
   test("deleting the environment removes every record", async () => {
@@ -996,9 +1031,7 @@ describe("credential policy and dispatch", () => {
             });
       const failure = call.catch((error: unknown) => error);
       await read.entered;
-      if (use === "http") replaceConversation(h);
-      else
-        h.runtimes.set("env-1", { ...h.runtimes.get("env-1")!, identity: "worktree:/replacement" });
+      h.runtimes.set("env-1", { ...h.runtimes.get("env-1")!, identity: "worktree:/replacement" });
       read.release();
       expect(await failure).toMatchObject({ code: "SCOPE_MISMATCH" });
       expect(sends + spawner.spawned.length).toBe(0);
@@ -1175,15 +1208,18 @@ describe("credential policy and dispatch", () => {
     ).toEqual([true]);
   });
 
-  test("retained output and idempotent replay stay with the originating conversation", async () => {
+  test("retained output and idempotent replay stay with the environment, not another project", async () => {
     const h = await harness();
     const grant = await grantCommand(h);
     const input = { grantId: grant.id, command: "true", idempotencyKey: "keep" };
-    const run = await h.service.runCommand(h.caller, input);
-    expect((await h.service.getOperation(h.caller, run.id, 0)).stdout?.text).toContain("ran:true");
+    const run = await h.service.runCommand(h.caller, { ...input, waitMs: 20_000 });
     replaceConversation(h);
-    await expect(h.service.getOperation(h.caller, run.id, 0)).rejects.toThrow("SCOPE_MISMATCH");
-    await expect(h.service.runCommand(h.caller, input)).rejects.toThrow("SCOPE_MISMATCH");
+    const other = { ...h.caller, tabId: "tab-2" };
+    expect((await h.service.getOperation(other, run.id, 0)).stdout?.text).toContain("ran:true");
+    expect((await h.service.runCommand(other, input)).id).toBe(run.id);
+    await expect(
+      h.service.getOperation({ ...h.caller, projectId: "project-2" }, run.id, 0),
+    ).rejects.toThrow("SCOPE_MISMATCH");
     expect(spawner.spawned).toHaveLength(1);
   });
 

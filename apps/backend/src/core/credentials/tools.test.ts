@@ -71,13 +71,66 @@ async function call(tabId: string | undefined, method: string, params?: Record<s
 }
 
 describe("credential tools", () => {
-  test("a tab-scoped connection lists them; an environment-wide one does not", async () => {
-    const tab = await call("tab-1", "tools/list");
-    const names = tab.body.result?.tools?.map((tool) => tool.name) ?? [];
-    for (const name of CREDENTIAL_TOOLS) expect(names).toContain(name);
-    const shared = await call(undefined, "tools/list");
-    const sharedNames = shared.body.result?.tools?.map((tool) => tool.name) ?? [];
-    for (const name of CREDENTIAL_TOOLS) expect(sharedNames).not.toContain(name);
+  test("both tab-scoped and environment-wide (OpenCode) connections list them", async () => {
+    for (const tabId of ["tab-1", undefined]) {
+      const listed = await call(tabId, "tools/list");
+      const names = listed.body.result?.tools?.map((tool) => tool.name) ?? [];
+      for (const name of CREDENTIAL_TOOLS) expect(names).toContain(name);
+    }
+  });
+
+  test("an environment-wide request shows on the tab it names, and its grant works for every tab", async () => {
+    const asked = await call(undefined, "tools/call", {
+      name: "request_credential",
+      arguments: {
+        label: "API token",
+        purpose: "Run the integration tests",
+        use: "command",
+        envVar: "API_TOKEN",
+        tabId: "tab-2",
+        waitSeconds: 0,
+      },
+    });
+    const requestId =
+      (asked.body.result?.structuredContent as { requestId: string } | undefined)?.requestId ??
+      "missing";
+    const onTab = h.service.tabSnapshot({ environmentId: "env-1", tabId: "tab-2" });
+    expect(onTab.requests.map((each) => each.id)).toEqual([requestId]);
+    expect(h.service.tabSnapshot({ environmentId: "env-1", tabId: "tab-1" }).requests).toEqual([]);
+    const [pending] = onTab.requests;
+    const { grant } = await h.service.approve({
+      requestId: pending!.id,
+      revision: pending!.revision,
+      source: { kind: "value", value: TEST_SECRET },
+    });
+    for (const tabId of [undefined, "tab-1"]) {
+      const run = await call(tabId, "tools/call", {
+        name: "run_with_credential",
+        arguments: { grantId: grant.id, command: "make test", waitSeconds: 20 },
+      });
+      expect(run.body.result?.structuredContent).toMatchObject({ state: "succeeded" });
+      expect(run.raw).not.toContain(TEST_SECRET);
+    }
+  });
+
+  test("an environment-wide request without a tab id shows on every tab", async () => {
+    const asked = await call(undefined, "tools/call", {
+      name: "request_credential",
+      arguments: {
+        label: "Key",
+        purpose: "x",
+        use: "command",
+        envVar: "API_TOKEN",
+        waitSeconds: 0,
+      },
+    });
+    const requestId =
+      (asked.body.result?.structuredContent as { requestId: string } | undefined)?.requestId ??
+      "missing";
+    for (const tabId of ["tab-1", "tab-2"]) {
+      const snapshot = h.service.tabSnapshot({ environmentId: "env-1", tabId });
+      expect(snapshot.requests.map((each) => each.id)).toEqual([requestId]);
+    }
   });
 
   test("request, approve and run: the agent sees a grant and filtered output only", async () => {
@@ -126,7 +179,7 @@ describe("credential tools", () => {
     expect(status.raw).not.toContain(TEST_SECRET);
   });
 
-  test("another tab's connection cannot see or use the grant", async () => {
+  test("another tab of the environment sees and uses the grant", async () => {
     const request = await h.service.requestAccess(h.caller, {
       label: "API token",
       purpose: "x",
@@ -142,12 +195,14 @@ describe("credential tools", () => {
       name: "list_credential_grants",
       arguments: {},
     });
-    expect(listed.body.result?.structuredContent).toEqual({ grants: [] });
+    const grants =
+      (listed.body.result?.structuredContent as { grants: { grantId: string }[] } | undefined)
+        ?.grants ?? [];
+    expect(grants.map((each) => each.grantId)).toEqual([grant.id]);
     const run = await call("tab-2", "tools/call", {
       name: "run_with_credential",
-      arguments: { grantId: grant.id, command: "true" },
+      arguments: { grantId: grant.id, command: "true", waitSeconds: 20 },
     });
-    expect(run.body.result?.isError).toBe(true);
-    expect(run.body.result?.content?.[0]?.text).toContain("GRANT_NOT_FOUND");
+    expect(run.body.result?.structuredContent).toMatchObject({ state: "succeeded" });
   });
 });

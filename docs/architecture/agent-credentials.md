@@ -11,15 +11,17 @@ was built and why, where it departs from that plan.
 An agent calls `request_credential`. A card appears above the composer of the
 tab that asked. The person picks a saved credential or types a value, picks
 how long the grant lasts, and allows it. The backend stores the value (in the
-system keychain, or in memory for a one-off), creates a **grant** bound to
-that tab, its conversation and its runtime, and the agent receives the grant
-id. The agent then uses the grant through `run_with_credential` (the backend
+system keychain, or in memory for a one-off), creates a **grant** for the
+**environment** (bound to its runtime), and the agent receives the grant id.
+Every agent tab in that environment, OpenCode included, may use the grant.
+The agent then uses the grant through `run_with_credential` (the backend
 runs a command with the value in that command's environment or a private
 file) or `http_request_with_credential` (the backend sends one HTTPS request
 to an approved host with the value attached). Output is filtered for the value
-before the agent sees it. Grants end on expiry, use limit, revocation, tab
-close, a new conversation in the tab, a rebuilt or moved runtime, a change to
-the saved credential, environment deletion, and (for one-off values) restart.
+before the agent sees it. Grants end on expiry, use limit, revocation, a
+rebuilt or moved runtime, a change to the saved credential, environment
+deletion, and (for one-off values) restart. Closing a tab or starting a new
+conversation does not end them; it only cancels that tab's pending requests.
 
 ```mermaid
 sequenceDiagram
@@ -64,11 +66,14 @@ retired vault entries awaiting removal. Values are never in the database.
   one authorizes nothing.
 - **Request**: what the agent asked for (label, purpose, use, binding or HTTP
   policy, an optional exact command, an optional suggested connection name),
-  bound internally to the tab's conversation (`providerSessionId`) and
-  runtime. States: `pending`, `granted`, `declined`, `expired`, `cancelled`.
-  Waits 10 minutes for a person. A tab may have four pending at once.
-- **Grant**: the effective permission the backend computed: tab, project,
-  runtime, source (connection with its pinned value version, or a temporary
+  and the runtime it was made in. Its `tabId` is the tab that shows the card:
+  the asking tab, or for OpenCode the tab id the agent passes (a placement
+  hint only), or `*` for every agent tab of the environment. States: `pending`,
+  `granted`, `declined`, `expired`, `cancelled`. Waits 10 minutes for a
+  person. A tab may have four pending at once; a pending request is cancelled
+  when its tab closes or the conversation that asked ends.
+- **Grant**: the effective permission the backend computed: environment,
+  project, runtime, the tab that asked (for display only), source (connection with its pinned value version, or a temporary
   value), use, binding or HTTP policy, exact command if any,
   lifetime (15 minutes to 8 hours; 1 hour by default), use limit, use count.
   States: `active`, `revoked`, `expired`, `invalidated`, each ended grant with
@@ -89,27 +94,30 @@ capacity. Open requests and grants also stay in their stores until settled.
 Every `run_with_credential` and `http_request_with_credential` call passes the
 same checks, in `CredentialOperations.authorize`:
 
-1. The caller is the tab named by its own agent-tools credential (never an
-   argument). The grant must belong to that environment, project and tab.
+1. The caller is identified by its own agent-tools credential (never an
+   argument): a tab, or for OpenCode the whole environment. The grant must
+   belong to that environment and project. Any tab of the environment may use
+   it.
 2. The grant is active, not past its wall-clock expiry, not past its lifetime
    on the issuing process's monotonic clock (a clock moved backwards does not
    extend it), and has uses left. A temporary grant is usable only in the
    process that holds its value.
-3. The tab still runs the conversation the grant was issued to, and the
-   environment still has the same runtime (container id, worktree path,
-   coordinator checkout). A mismatch **ends** the grant.
+3. The environment still has the same runtime (container id, worktree path,
+   coordinator checkout). A mismatch **ends** the grant. Conversations do not
+   matter: a new conversation in any tab keeps using the grant.
 4. A connection-backed grant's connection still exists, has the pinned value
    version, still allows the project and (for HTTP) still allows every host
    of the grant. A mismatch ends the grant. Renaming a connection does not;
    changing its projects or hosts ends its grants when it is saved.
-5. The use matches the grant (`command` vs `http`), the session's execution
-   policy allows it (below), and a command-bound grant gets exactly its
+5. The use matches the grant (`command` vs `http`), the **calling** session's
+   execution policy allows it (below; for OpenCode, or a tab with no session
+   record yet, the environment's interactive policy), and a command-bound grant gets exactly its
    command.
 6. One transaction rechecks the grant, applies the idempotency key and the
    per-tab bound (four open operations), counts the use and records the
    operation. Concurrent calls cannot exceed the use limit.
 7. The value is read after admission. Dispatch rechecks both expiry clocks,
-   the current conversation, the runtime and the policy. It atomically claims
+   the runtime and the calling session's policy. It atomically claims
    the reservation before spawning or sending. Cancellation, shutdown or a
    scope change during preparation can end a reservation and refund its use.
 
@@ -191,7 +199,7 @@ characters are refused at intake, because they cannot be filtered usefully.
 
 This catches accidental echoes. It does not stop code that transforms the
 value some other way, writes it to a file, or sends it over the network. The
-card says so: "Code running in this task will be able to read this
+card says so: "Code running in this environment will be able to read this
 credential."
 
 ## Storage
@@ -221,14 +229,17 @@ and the decisions below.
 
 ## Agent tools
 
-Registered on the general agent-tools server for **tab-scoped** connections
-only (`credentials/tools.ts`):
+Registered on the general agent-tools server for every connection
+(`credentials/tools.ts`). On OpenCode's environment-wide connection the
+caller is the environment; `request_credential` takes an optional `tabId`
+(the mailbox tab id from the turn's instructions) only to choose which tab
+shows the card.
 
 | Tool | Does |
 | --- | --- |
 | `request_credential` | Asks for a credential: `use` `command` (with `envVar`, optional `delivery: file`, optional exact `command`) or `http` (with `hosts`, `auth`, optional `header`/`username`/`methods`). Waits up to `waitSeconds` for a decision. |
 | `get_credential_request` | A request's state, waiting while a person decides; the grant once granted. |
-| `list_credential_grants` | The tab's usable grants (after a compaction the agent can find them again). |
+| `list_credential_grants` | The environment's usable grants (after a compaction the agent can find them again). |
 | `run_with_credential` | Runs a command with the grant. |
 | `http_request_with_credential` | Sends one trusted HTTPS request with the grant. |
 | `get_credential_operation` | The state and filtered output of a use, waiting for it to finish. |
@@ -331,8 +342,8 @@ Each records the choice, the alternatives considered and why.
   reference must be delivered and recovered (after a lost answer, a
   compaction, a restart) and it narrows nothing: the tab credential already
   authenticates the caller per tab, and a copied id fails every other scope.
-- **Why:** same authority, simpler recovery. A copied grant id is useless outside its tab, conversation and runtime.
-  Retained operation results and replay are scoped to the originating project and conversation.
+- **Why:** same authority, simpler recovery. A copied grant id is useless outside its environment, project and runtime.
+  Retained operation results and replay are scoped to the environment and project.
 
 ### 4. Ways to use a credential: runner and trusted HTTP; no provider-shell injection
 
@@ -358,7 +369,7 @@ Each records the choice, the alternatives considered and why.
   and it would be a new container lifecycle with its own image, mounts and
   cleanup.
 - **Why:** no execution privilege is added, and the honest disclosure ("code in
-  this task can read it") holds in both cases. A dedicated sandbox can be a
+  this environment can read it") holds in both cases. A dedicated sandbox can be a
   later runtime adapter.
 
 ### 6. Approvals require a full session (`admin`)
@@ -421,6 +432,21 @@ Each records the choice, the alternatives considered and why.
   about to run, on top of the card's exact-command rule; under the default
   `auto-approve` nothing extra is asked.
 
+### 12. Grants belong to the environment, not a tab or conversation
+
+- **Chosen:** a grant can be used by every agent tab of its environment,
+  across conversations, until it expires, runs out, is revoked or its runtime
+  changes. The calling tab's execution policy still applies to each use.
+- **Alternative: bind to the asking tab and its conversation** (the first
+  version, following the plan's per-task grants). Pro: a new conversation
+  starts with no credentials. Con: OpenCode, whose tool connection is one per
+  environment, could not use credentials at all; and the binding was not a
+  real boundary, because every agent in an environment shares its workspace,
+  user and (in a container) its processes.
+- **Why:** the environment is the actual isolation boundary, so it is the
+  honest scope, and it makes the feature work on every platform. Approval
+  still happens per environment, and revocation is one click in Settings.
+
 ## Known limits of this release
 
 - A tool call waits at most 110 seconds. Some MCP clients time a tool call out
@@ -443,10 +469,9 @@ Each records the choice, the alternatives considered and why.
   provider-specific trusted operations (GitHub App tokens and the like).
 - Standing rules ("always allow this connection for this project"): every
   grant needs an approval on its card today.
-- Delegating a grant to another task, and cross-machine raw transfer: a grant
-  never leaves its tab or its machine.
-- Environment-wide connections (OpenCode's shared agent-tools server) get no
-  credential tools, because no tab identity is available to bind a grant to.
+- Sharing a grant with another environment, and cross-machine raw transfer: a
+  grant never leaves its environment or its machine. (Saved credentials are
+  shared per project; each environment needs its own approval.)
 - Revoking a credential at its provider.
 
 ## Tests

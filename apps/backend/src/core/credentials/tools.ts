@@ -15,9 +15,10 @@ import type { CredentialService } from "./service.js";
 
 /**
  * The agent's credential tools (docs/architecture/agent-credentials.md,
- * "Agent tools"). Registered only on a tab-scoped connection: the tab is the
- * identity a grant binds to, so an environment-wide connection (OpenCode's
- * shared server) gets none of them.
+ * "Agent tools"). A grant belongs to the environment: any agent tab in it may
+ * use it. On OpenCode's environment-wide connection the caller is the whole
+ * environment; `request_credential` then takes the tab id from the turn's
+ * instructions, only to show the card on that tab.
  *
  * No tool returns a value. A grant is used through `run_with_credential` or
  * `http_request_with_credential`, which resolve it inside the backend.
@@ -117,7 +118,7 @@ export function registerCredentialTools(
     {
       title: "Ask a person for a credential",
       description:
-        "Ask the person to grant this task the use of a secret (API key, token, password). They choose a saved credential or enter one privately; you never see the value. use=command runs your commands with it in an environment variable (envVar) or a private file (delivery=file, envVar holds the path); give command to ask for one exact command only. use=http lets Orkestrator send HTTPS requests to the listed hosts with it attached (auth=bearer, header or basic). Waits up to waitSeconds for the decision.",
+        "Ask the person to grant this environment the use of a secret (API key, token, password); every agent in the environment can then use the grant. They choose a saved credential or enter one privately; you never see the value. use=command runs your commands with it in an environment variable (envVar) or a private file (delivery=file, envVar holds the path); give command to ask for one exact command only. use=http lets Orkestrator send HTTPS requests to the listed hosts with it attached (auth=bearer, header or basic). If your turn's instructions give your mailbox tab id, pass it as tabId so the request shows on your tab. Waits up to waitSeconds for the decision.",
       inputSchema: toolInput(
         Schema.Struct({
           label: str({ trim: true, min: 1, max: CREDENTIAL_LIMITS.labelMaxChars }),
@@ -132,6 +133,7 @@ export function registerCredentialTools(
           username: Schema.optionalKey(str({ max: CREDENTIAL_LIMITS.usernameMaxChars })),
           methods: Schema.optionalKey(Schema.Array(Schema.Literals(CREDENTIAL_HTTP_METHODS))),
           suggestedConnection: Schema.optionalKey(str({ max: CREDENTIAL_LIMITS.nameMaxChars })),
+          tabId: Schema.optionalKey(str({ max: 200 })),
           waitSeconds,
         }),
       ),
@@ -151,6 +153,7 @@ export function registerCredentialTools(
         authUsername: input.username,
         methods: input.methods,
         suggestedConnection: input.suggestedConnection,
+        tabHint: input.tabId,
       });
       const answer = await host.getRequest(caller, request.id, waitMs(input.waitSeconds));
       return result(requestView(answer.request, answer.grant));
@@ -162,7 +165,7 @@ export function registerCredentialTools(
     {
       title: "Check a credential request",
       description:
-        "The state of a credential request this tab made, waiting up to waitSeconds while a person decides. When granted, it returns the grantId to use.",
+        "The state of a credential request made in this environment, waiting up to waitSeconds while a person decides. When granted, it returns the grantId to use.",
       inputSchema: toolInput(Schema.Struct({ requestId: str({ min: 1, max: 100 }), waitSeconds })),
       annotations: { readOnlyHint: true, idempotentHint: true, ...NO_HINTS },
     },
@@ -175,9 +178,9 @@ export function registerCredentialTools(
   server.registerTool(
     "list_credential_grants",
     {
-      title: "List this tab's credential grants",
+      title: "List this environment's credential grants",
       description:
-        "Credential grants this tab may still use, with what each allows and when it ends.",
+        "Credential grants agents in this environment may still use, with what each allows and when it ends.",
       inputSchema: toolInput(Schema.Struct({})),
       annotations: { readOnlyHint: true, idempotentHint: true, ...NO_HINTS },
     },
@@ -189,7 +192,7 @@ export function registerCredentialTools(
     {
       title: "Run a command with a granted credential",
       description:
-        'Run a shell command in this task\'s workspace with the granted credential in its environment variable (or private file). Never put the value in the command; refer to the variable, for example `npm publish` with NPM_TOKEN or `curl -H "Authorization: Bearer $API_TOKEN" ...`. Output is filtered for the value. Returns within waitSeconds; a longer run answers `running` with an operationId for get_credential_operation. Use an idempotencyKey so a retry after a lost answer does not run it twice.',
+        'Run a shell command in this environment\'s workspace with the granted credential in its environment variable (or private file). Never put the value in the command; refer to the variable, for example `npm publish` with NPM_TOKEN or `curl -H "Authorization: Bearer $API_TOKEN" ...`. Output is filtered for the value. Returns within waitSeconds; a longer run answers `running` with an operationId for get_credential_operation. Use an idempotencyKey so a retry after a lost answer does not run it twice.',
       inputSchema: toolInput(
         Schema.Struct({
           grantId: str({ min: 1, max: 100 }),

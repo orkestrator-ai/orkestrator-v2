@@ -200,7 +200,7 @@ describe("credential cancellation while a real command runs", () => {
     });
   });
 
-  test("retiring a conversation cancels its running grant without another tool call", async () => {
+  test("retiring a conversation leaves the environment's grant and its run alone", async () => {
     const h = await harness();
     const grant = await grantCommand(h);
     const run = await waitForCommand(h, grant.id);
@@ -212,8 +212,11 @@ describe("credential cancellation while a real command runs", () => {
       oldSession.logicalSessionKey,
       oldSession.providerSessionId!,
     );
-    expect(h.service.overview().grants).toEqual([]);
+    expect(h.service.overview().grants.map((each) => each.id)).toEqual([grant.id]);
     const records = h.storage.credentialRecordStore();
+    expect(records.getOperation(run.id)?.state).toBe("running");
+    // Revoking is what stops it.
+    h.service.revokeGrant(grant.id);
     for (
       let attempt = 0;
       attempt < 100 && records.getOperation(run.id)?.state === "running";
@@ -224,7 +227,6 @@ describe("credential cancellation while a real command runs", () => {
       state: "outcome_unknown",
       error: "Cancelled.",
     });
-    await expect(h.service.getOperation(h.caller, run.id, 0)).rejects.toThrow("SCOPE_MISMATCH");
   });
 
   test("an in-flight one-use grant remains in Settings and a second backend can revoke it", async () => {

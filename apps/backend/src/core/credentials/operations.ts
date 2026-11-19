@@ -105,11 +105,13 @@ export class CredentialOperations {
   ) {}
 
   /**
-   * Every check a use must pass, in order: the grant belongs to this tab and
-   * is live; the tab still runs the conversation and runtime the grant was
-   * bound to; a connection still has the revision and value it pinned; the
-   * session's execution policy allows this kind of use. A binding failure
-   * ends the grant: nothing later can make it valid again.
+   * Every check a use must pass, in order: the grant belongs to this
+   * environment and project and is live; the environment still has the
+   * runtime the grant was bound to; a connection still has the value it
+   * pinned and still allows the project and hosts; the calling session's
+   * execution policy allows this kind of use. Any tab of the environment may
+   * use a grant. A binding failure ends the grant: nothing later can make it
+   * valid again.
    */
   private async authorize(
     caller: CredentialCaller,
@@ -122,10 +124,9 @@ export class CredentialOperations {
     if (
       !grant ||
       grant.environmentId !== caller.environmentId ||
-      grant.tabId !== caller.tabId ||
       grant.projectId !== caller.projectId
     ) {
-      throw new CredentialError("GRANT_NOT_FOUND", "No such grant for this tab.");
+      throw new CredentialError("GRANT_NOT_FOUND", "No such grant in this environment.");
     }
     const unusable = grantUnusableReason(this.context, grant, reservation !== undefined);
     if (unusable && !reservation) throw unusable;
@@ -141,16 +142,6 @@ export class CredentialOperations {
       this.context.host.session(caller.environmentId, caller.tabId),
       this.context.host.runtime(caller.environmentId),
     ]);
-    if (
-      (session?.providerSessionId ?? null) !== grant.internal.providerSessionId ||
-      (session && session.logicalSessionKey !== grant.internal.logicalSessionKey)
-    ) {
-      this.invalidateBinding(
-        grant,
-        "This tab started a new conversation; grants of the earlier one ended.",
-        reservation,
-      );
-    }
     if (!runtime || runtime.identity !== grant.internal.runtimeIdentity) {
       this.invalidateBinding(
         grant,
@@ -279,10 +270,7 @@ export class CredentialOperations {
         internal: {
           idempotencyKey: idempotencyKey ?? null,
           fingerprint: print,
-          scope: {
-            projectId: grant.projectId,
-            providerSessionId: grant.internal.providerSessionId,
-          },
+          scope: { projectId: grant.projectId, providerSessionId: null },
           bootId: this.context.bootId,
         },
       };
@@ -313,20 +301,17 @@ export class CredentialOperations {
       if (!grant) throw new CredentialError("ACCESS_EXPIRED", "The grant ended.");
       const unusable = grantUnusableReason(this.context, grant, true);
       if (unusable) throw unusable;
-      const binding = this.context.host.dispatchBinding?.(grant.environmentId, grant.tabId, agent);
+      // The calling tab's session decides the policy; the runtime must be
+      // the one the grant was issued for.
+      const binding = this.context.host.dispatchBinding?.(
+        grant.environmentId,
+        current.tabId,
+        agent,
+      );
       if (binding) {
         const { session, runtime } = binding;
-        if (
-          !runtime ||
-          runtime.identity !== grant.internal.runtimeIdentity ||
-          !session ||
-          session.providerSessionId !== grant.internal.providerSessionId ||
-          session.logicalSessionKey !== grant.internal.logicalSessionKey
-        ) {
-          throw new CredentialError(
-            "SCOPE_MISMATCH",
-            "The conversation or runtime changed before dispatch.",
-          );
+        if (!runtime || runtime.identity !== grant.internal.runtimeIdentity) {
+          throw new CredentialError("SCOPE_MISMATCH", "The runtime changed before dispatch.");
         }
         assertCredentialPolicy(grant.use, session, runtime, grant.command);
       }
@@ -530,7 +515,7 @@ export class CredentialOperations {
     try {
       await this.authorize(caller, grant.id, "command", operation);
       if (this.context.records.getOperation(operation.id)?.state !== "reserved") return;
-      launch = await this.context.host.launch(grant.environmentId, grant.tabId);
+      launch = await this.context.host.launch(grant.environmentId, operation.tabId);
       const { agent } = await this.authorize(caller, grant.id, "command", operation);
       const identity =
         launch.target === "container"
@@ -736,7 +721,7 @@ export class CredentialOperations {
           "The approved hostname does not resolve exclusively to public addresses.",
         );
       }
-      release = await this.context.host.beginUse?.(grant.environmentId, grant.tabId);
+      release = await this.context.host.beginUse?.(grant.environmentId, operation.tabId);
       const { agent } = await this.authorize(caller, grant.id, "http", operation);
       this.dispatch(operation, agent);
       dispatched = true;
@@ -804,33 +789,19 @@ export class CredentialOperations {
   // --- Reading, waiting, cancelling ---------------------------------------------
 
   private async owned(caller: CredentialCaller, operationId: string): Promise<StoredOperation> {
-    const session = await this.context.host.session(caller.environmentId, caller.tabId);
     const operation = this.context.records.getOperation(operationId);
-    if (
-      !operation ||
-      operation.environmentId !== caller.environmentId ||
-      operation.tabId !== caller.tabId
-    ) {
-      throw new CredentialError("REQUEST_NOT_FOUND", "No such credential operation for this tab.");
+    if (!operation || operation.environmentId !== caller.environmentId) {
+      throw new CredentialError(
+        "REQUEST_NOT_FOUND",
+        "No such credential operation in this environment.",
+      );
     }
     const grant = operation.internal.scope
       ? null
       : this.context.records.getGrant(operation.grantId);
-    const scope =
-      operation.internal.scope ??
-      (grant && {
-        projectId: grant.projectId,
-        providerSessionId: grant.internal.providerSessionId,
-      });
-    if (
-      !scope ||
-      scope.projectId !== caller.projectId ||
-      scope.providerSessionId !== (session?.providerSessionId ?? null)
-    ) {
-      throw new CredentialError(
-        "SCOPE_MISMATCH",
-        "This operation belongs to another conversation or project.",
-      );
+    const projectId = operation.internal.scope?.projectId ?? grant?.projectId;
+    if (projectId !== caller.projectId) {
+      throw new CredentialError("SCOPE_MISMATCH", "This operation belongs to another project.");
     }
     return operation;
   }

@@ -1,3 +1,4 @@
+import { CREDENTIAL_ANY_TAB } from "@orkestrator/protocol/agent-credentials";
 import type {
   CredentialConnection,
   CredentialGrantRecord,
@@ -162,7 +163,7 @@ export class CredentialService {
       .listRequests(input.environmentId)
       .filter(
         (request) =>
-          (!input.tabId || request.tabId === input.tabId) &&
+          (!input.tabId || request.tabId === input.tabId || request.tabId === CREDENTIAL_ANY_TAB) &&
           (request.state === "pending" ||
             (request.decidedAt ?? request.createdAt) > now - RECENT_SETTLED_MS),
       )
@@ -174,11 +175,7 @@ export class CredentialService {
       });
     const grants = this.context.records
       .listGrants(input.environmentId)
-      .filter(
-        (grant) =>
-          (!input.tabId || grant.tabId === input.tabId) &&
-          grantUnusableReason(this.context, grant) === null,
-      )
+      .filter((grant) => grantUnusableReason(this.context, grant) === null)
       .map((grant) => publicRecord(grant));
     const projectId = input.projectId ?? requests[0]?.projectId ?? grants[0]?.projectId ?? null;
     return {

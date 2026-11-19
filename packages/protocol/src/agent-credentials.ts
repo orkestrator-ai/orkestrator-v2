@@ -13,6 +13,13 @@
  * shape its forms, and the backend to enforce them.
  */
 
+/**
+ * The tab id of a caller that cannot name its tab: OpenCode's agent tools
+ * connection belongs to the whole environment. A request with this tab is
+ * shown on every agent tab of the environment.
+ */
+export const CREDENTIAL_ANY_TAB = "*";
+
 /** How an agent may use a granted credential. */
 export const CREDENTIAL_USES = ["command", "http"] as const;
 export type CredentialUse = (typeof CREDENTIAL_USES)[number];
@@ -487,5 +494,5 @@ export function describeCredentialUse(
     : "";
   return record.command
     ? `Only the command shown, ${binding}`.trim()
-    : `Commands this task runs, ${binding}`.trim();
+    : `Commands agents run in this environment, ${binding}`.trim();
 }

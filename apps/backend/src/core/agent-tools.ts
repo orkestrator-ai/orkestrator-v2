@@ -84,6 +84,7 @@ import {
   registerTranscriptArtifactTools,
   type TranscriptArtifactToolHost,
 } from "./transcript-artifacts/index.js";
+import { CREDENTIAL_ANY_TAB } from "@orkestrator/protocol/agent-credentials";
 import {
   CREDENTIAL_TOOL_INSTRUCTIONS,
   registerCredentialTools,
@@ -944,12 +945,16 @@ async function createAgentToolServer(
   // workflow-result branches above returned without them. Environment-wide
   // credentials must additionally present a per-turn artifact grant.
   const artifactTools = artifacts ?? null;
-  // Credential tools bind every grant to the tab that asked, so only a
-  // tab-scoped credential gets them (not OpenCode's environment-wide one).
-  const credentialCaller =
-    credentialTools && scope.tabId
-      ? { environmentId: scope.environmentId, projectId: scope.projectId, tabId: scope.tabId }
-      : null;
+  // Credential grants belong to the environment. A tab-scoped credential
+  // names its tab (whose policy applies and whose card shows a request);
+  // OpenCode's environment-wide one is the environment as a whole.
+  const credentialCaller = credentialTools
+    ? {
+        environmentId: scope.environmentId,
+        projectId: scope.projectId,
+        tabId: scope.tabId ?? CREDENTIAL_ANY_TAB,
+      }
+    : null;
   const server = new McpServer(
     { name: "orkestrator", version: "1.0.0" },
     {

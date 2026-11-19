@@ -94,7 +94,7 @@ describe("CredentialRequestCard", () => {
       <CredentialRequestCard request={request()} connections={[]} vault={VAULT} />,
     );
     expect(
-      screen.getByText(/Code running in this task will be able to read this credential/u),
+      screen.getByText(/Code running in this environment will be able to read this credential/u),
     ).toBeTruthy();
     expect(screen.getByText("$NPM_TOKEN")).toBeTruthy();
     const allow = screen.getByRole("button", { name: "Allow" }) as HTMLButtonElement;

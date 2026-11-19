@@ -52,7 +52,7 @@ export function createCredentialHost(context: CommandContext): CredentialHost {
       const environment = session?.policy
         ? null
         : await context.storage.getEnvironment(environmentId);
-      return sessionInfo(session, environment);
+      return sessionInfo(session, environment) ?? environmentSessionInfo(environment);
     },
 
     async runtime(environmentId) {
@@ -86,7 +86,10 @@ export function createCredentialHost(context: CommandContext): CredentialHost {
           )
         : undefined;
       if (environment?.tabTeardownIntents?.[tabId]) return { session: null, runtime: null };
-      return { session: sessionInfo(session, environment), runtime: runtimeInfo(environment) };
+      return {
+        session: sessionInfo(session, environment) ?? environmentSessionInfo(environment),
+        runtime: runtimeInfo(environment),
+      };
     },
 
     async beginUse(environmentId, tabId) {
@@ -202,6 +205,21 @@ function sessionInfo(
         : environment
           ? resolveEnvironmentExecutionPolicy(environment, session.origin)
           : null),
+  };
+}
+
+/**
+ * The policy for a caller with no session record of its own: OpenCode's
+ * environment-wide connection, or a tab whose record is not written yet. The
+ * environment's interactive policy applies, never "no policy".
+ */
+function environmentSessionInfo(environment: Environment | null): CredentialSessionInfo | null {
+  if (!environment) return null;
+  return {
+    agent: null,
+    logicalSessionKey: "",
+    providerSessionId: null,
+    policy: resolveEnvironmentExecutionPolicy(environment, "interactive-native"),
   };
 }
 

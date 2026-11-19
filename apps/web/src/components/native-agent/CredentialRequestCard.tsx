@@ -194,8 +194,8 @@ export function CredentialRequestCard({
             <p className="flex items-start gap-1.5 text-amber-200">
               <ShieldAlert className="mt-px size-3.5 shrink-0" aria-hidden />
               <span>
-                Code running in this task will be able to read this credential. Orkestrator filters
-                it from the output the agent sees, but the code itself can copy it.
+                Code running in this environment will be able to read this credential. Orkestrator
+                filters it from the output the agent sees, but the code itself can copy it.
               </span>
             </p>
             <p className="text-muted-foreground">
@@ -211,7 +211,7 @@ export function CredentialRequestCard({
                 </>
               )}
               {request.command === undefined
-                ? " to commands the agent runs in this task."
+                ? " to commands agents run in this environment."
                 : " to this command only:"}
             </p>
             {request.command !== undefined ? (

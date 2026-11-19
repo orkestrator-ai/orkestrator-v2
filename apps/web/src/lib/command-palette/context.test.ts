@@ -173,11 +173,11 @@ describe("palette context", () => {
     expect(context.environment?.remote?.machine.name).toBe("mbp3");
     const target = commandTarget(command("environment.stop"), context);
     expect(target.machine?.connectionId).toBe("bk_mbp3");
-    expect(describeTargetMachine(target, true)).toBe("mbp3");
+    expect(describeTargetMachine(target)).toBe("mbp3");
   });
 
   test("an offline machine keeps its environment but refuses commands that write", () => {
-    const offline = { ...mbp3, transport: "disconnected" as const };
+    const offline = { ...mbp3, transport: "unreachable" as const };
     const context = remoteContext(offline);
     expect(context.environment?.name).toBe("build-modal-steps");
     expect(commandAvailability(command("environment.open-changes"), context)).toEqual({
@@ -193,7 +193,7 @@ describe("palette context", () => {
   });
 
   test("a target the offline machine has not reported is unknown, not deleted", () => {
-    const offline = { ...mbp3, transport: "disconnected" as const };
+    const offline = { ...mbp3, transport: "unreachable" as const };
     const context = remoteContext(offline, "never-reported");
     expect(context.environmentMissing).toBe(false);
     expect(context.targetUnknown).toBe(true);

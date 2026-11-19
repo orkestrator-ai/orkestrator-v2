@@ -8,6 +8,7 @@ import { localContext, machineView } from "./palette.test-fixtures";
 import {
   commandInMachineScope,
   noteRecentCommand,
+  PALETTE_COMMAND_LIMIT,
   RECENT_COMMAND_LIMIT,
   searchCommands,
 } from "./search";
@@ -109,6 +110,8 @@ describe("searchCommands", () => {
     expect(ids(results.settings)).toContain("settings.environment");
     expect(ids(results.settings)).toContain("settings.network");
     expect(ids(results.settings)).not.toContain("settings.schedules");
+    // The whole group, past the per-query limit: every enabled section and both scoped ones.
+    expect(results.settings.length).toBeGreaterThan(PALETTE_COMMAND_LIMIT);
   });
 
   test("the machine filter narrows commands by their target's machine", () => {

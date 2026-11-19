@@ -74,13 +74,9 @@ function MachineLabel({ machine }: { machine: PaletteMachine }) {
 }
 
 /** The accessible name of a command row: what it does, to what, where. */
-export function commandAccessibleLabel(
-  command: CommandDescriptor,
-  target: CommandTarget,
-  multiMachine: boolean,
-): string {
+export function commandAccessibleLabel(command: CommandDescriptor, target: CommandTarget): string {
   const what = describeTarget(target);
-  const where = describeTargetMachine(target, multiMachine);
+  const where = describeTargetMachine(target);
   return [command.label, what ? `for ${what}` : null, `on ${where}`].filter(Boolean).join(", ");
 }
 
@@ -109,10 +105,11 @@ export function CommandRow({
   const { command, target, availability } = result;
   const reasonId = useId();
   const reason = unavailableText(availability);
-  const shortcut = useMemo(
-    () => (command.shortcut ? appShortcutKeys(command.shortcut, detectShortcutPlatform()) : null),
-    [command.shortcut],
-  );
+  const shortcut = useMemo(() => {
+    if (!command.shortcut) return null;
+    const platform = detectShortcutPlatform();
+    return appShortcutKeys(command.shortcut, platform).join(platform === "mac" ? "" : "+");
+  }, [command.shortcut]);
   const targetText = describeTarget(target);
   return (
     <button
@@ -125,7 +122,7 @@ export function CommandRow({
       data-available={availability.available ? "true" : "false"}
       aria-selected={isActive}
       aria-disabled={availability.available ? undefined : true}
-      aria-label={commandAccessibleLabel(command, target, context.multiMachine)}
+      aria-label={commandAccessibleLabel(command, target)}
       aria-describedby={reason ? reasonId : undefined}
       onMouseEnter={onHighlight}
       onClick={() => onSelect(result)}
@@ -157,7 +154,7 @@ export function CommandRow({
           aria-hidden="true"
           className="hidden shrink-0 rounded-[5px] border border-border/70 bg-zinc-900 px-1.5 py-px font-sans text-[11px] text-zinc-400 sm:inline"
         >
-          {shortcut.join("")}
+          {shortcut}
         </kbd>
       ) : null}
     </button>
@@ -290,7 +287,6 @@ export function CommandConfirmPanel({
   command,
   target,
   availability,
-  multiMachine,
   onBack,
   onConfirm,
 }: {
@@ -298,7 +294,6 @@ export function CommandConfirmPanel({
   target: CommandTarget;
   /** The command's availability for the frozen target, read now. */
   availability: CommandAvailability;
-  multiMachine: boolean;
   onBack: () => void;
   onConfirm: () => void;
 }) {
@@ -337,7 +332,7 @@ export function CommandConfirmPanel({
           className="min-w-0 truncate text-zinc-200"
           data-testid="command-palette-confirm-machine"
         >
-          {describeTargetMachine(target, multiMachine)}
+          {describeTargetMachine(target)}
         </dd>
       </dl>
       {!availability.available ? (

@@ -411,8 +411,8 @@ export function describeTarget(target: CommandTarget): string {
 }
 
 /** The target's machine as words: "this window", or the machine with its state. */
-export function describeTargetMachine(target: CommandTarget, multiMachine: boolean): string {
-  if (!target.machine) return multiMachine && target.project ? "this machine" : "this window";
+export function describeTargetMachine(target: CommandTarget): string {
+  if (!target.machine) return target.project || target.environment ? "this machine" : "this window";
   const state = target.machine.availability === "live" ? "" : ` (${target.machine.availability})`;
   return `${target.machine.name}${target.machine.bound ? ", this machine" : ""}${state}`;
 }

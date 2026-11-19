@@ -122,7 +122,9 @@ export function searchCommands({
     right.score - left.score ||
     Number(right.availability.available) - Number(left.availability.available) ||
     (catalogueIndex.get(left.command.id) ?? 0) - (catalogueIndex.get(right.command.id) ?? 0);
-  const cap = tokens.length === 0 && filter === "all" ? suggestionLimit : limit;
+  // A category on an empty query lists the whole group (the catalogue is bounded).
+  const cap =
+    tokens.length === 0 ? (filter === "all" ? suggestionLimit : Number.POSITIVE_INFINITY) : limit;
   return {
     actions: results.actions.sort(compare).slice(0, cap),
     settings: results.settings.sort(compare).slice(0, cap),

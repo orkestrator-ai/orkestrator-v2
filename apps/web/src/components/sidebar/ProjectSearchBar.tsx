@@ -787,9 +787,10 @@ export function ProjectSearchBar({
   ].join(", ");
   const showsDestinations = projectFilter !== null;
   const destinationCount = results.projects.length + results.environments.length;
-  const destinationEmptyText = !showsDestinations
-    ? null
-    : destinationCount > 0
+  // In All, a query that matches only commands shows them without a
+  // destination "no match" line above; the line stays when nothing matches.
+  const destinationEmptyText =
+    !showsDestinations || destinationCount > 0 || (filter === "all" && hasQuery && rows.length > 0)
       ? null
       : sources.every((source) => source.projects.length === 0)
         ? "No projects yet"
@@ -999,7 +1000,6 @@ export function ProjectSearchBar({
               command={confirmation.command}
               target={confirmation.target}
               availability={confirmationAvailability}
-              multiMachine={context.multiMachine}
               onBack={backFromConfirmation}
               onConfirm={confirmCommand}
             />

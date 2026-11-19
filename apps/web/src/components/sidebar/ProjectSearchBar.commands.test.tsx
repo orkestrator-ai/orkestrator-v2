@@ -123,7 +123,7 @@ describe("ProjectSearchBar commands", () => {
     expect(actions.textContent).toContain("Suggested actions");
     const stop = screen.getByTestId("command-palette-item-environment.stop");
     expect(stop.getAttribute("aria-label")).toBe(
-      "Stop environment, for build-modal-steps · orkestrator-v2, on this window",
+      "Stop environment, for build-modal-steps · orkestrator-v2, on this machine",
     );
     expect(screen.getByTestId("command-palette-item-environment.open-changes")).toBeTruthy();
     // The recent destinations stay first.

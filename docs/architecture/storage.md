@@ -98,6 +98,7 @@ the change journal.
 | `EnvironmentIsolationRepository` | `storage-environment-isolation.ts` | No store of its own: reserves a local environment's host port block ([environment-isolation.md](environment-isolation.md)) as `isolationPortBase` on its environment row, chosen and written under the environment store's lease so two environments are never handed the same block; row reservation removed on deletion, with bound ports excluded by host probes before reassignment |
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
 | `PermissionRulesRepository` | `storage-permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |
+| `CredentialsRepository` | `storage-credentials.ts` | Adapts the agent credential records ([agent-credentials.md](agent-credentials.md)): `credential-connections` (one row per saved credential) and `credential-requests`, `credential-grants`, `credential-operations` (owned by the environment, at most 400 rows each per environment, settled rows pruned first). Metadata only: values live in the credential vault, never in the database; the store owns its row transactions and announces the `credential` resource |
 
 A store written by more than one repository is written under the same lease
 by each, or only through transactions; the guard checks that per store. The
@@ -885,6 +886,11 @@ filesystem. Its full record of tasks 1 to 4 (runs, samplers, the A/B arms):
   so its change-tracking ledger did less work there than on btrfs.
 
 ## Provider secrets at rest
+
+Credentials agents use in tasks are a separate store with its own vault (the
+system keychain where one works); see
+[agent-credentials.md](agent-credentials.md#storage). This section covers only
+the provider sign-in keys.
 
 **Accepted risk (2026-11-05, security finding L17):** the stored provider secrets
 are plaintext in owner-only files. No keychain or `safeStorage` storage path

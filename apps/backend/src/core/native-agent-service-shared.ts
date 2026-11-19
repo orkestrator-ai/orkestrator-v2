@@ -431,6 +431,11 @@ export function isAgentTurnEndTransition(
 }
 
 export interface NativeAgentServiceOptions {
+  onConversationRetired?: (
+    environmentId: string,
+    logicalSessionKey: string,
+    retiredProviderSessionId: string,
+  ) => void;
   provider?: (
     input: EnsureNativeAgentSessionInput,
     environment: Environment,

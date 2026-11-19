@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const PHASES = [
   "preparing",
@@ -74,6 +74,16 @@ function overlapping(boxes: Box[]): Array<[number, number]> {
     }),
   );
   return pairs;
+}
+
+async function expectBadgeMatchesInspectorActions(badge: Box, header: Locator, singleRow: boolean) {
+  const actions = header.getByRole("button");
+  await expect(actions.first()).toBeVisible();
+  for (const action of await actions.all()) {
+    const box = (await action.boundingBox())!;
+    expect(Math.abs(badge.height - box.height)).toBeLessThanOrEqual(1);
+    if (singleRow) expect(Math.abs(badge.y - box.y)).toBeLessThanOrEqual(1);
+  }
 }
 
 // One test per phase, so each page load has its own time budget: twelve in
@@ -794,6 +804,7 @@ for (const viewport of [
     expect(overlapping([badgeBox, headerBox])).toEqual([]);
     expect(badgeBox.y).toBeLessThan(headerBox.y + headerBox.height);
     expect(badgeBox.y + badgeBox.height).toBeLessThanOrEqual((await body.boundingBox())!.y + 1);
+    await expectBadgeMatchesInspectorActions(badgeBox, header, viewport.width >= 1024);
     const tailBox = (await tail.boundingBox())!;
     expect(tailBox.height).toBeGreaterThanOrEqual(448);
     expect(inside(tailBox, (await inspector.boundingBox())!)).toBe(true);
@@ -1046,6 +1057,22 @@ for (const phase of ["ready", "interactive", "reviewing", "consolidating"]) {
   });
 }
 
+test("findings and reviewer actions share one row at the wrap threshold", async ({ page }) => {
+  // Reviewer 2 has three actions in this phase. At 840px the wider badge
+  // pushed that group onto the next line.
+  await page.setViewportSize({ width: 840, height: 900 });
+  await page.goto("/multi-review-flow?phase=ready&longTranscript");
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 2 ·/ })
+    .click();
+  const inspector = page.getByTestId("multi-review-inspector");
+  const header = inspector.getByRole("heading", { level: 2 }).first().locator("xpath=..");
+  await expect(header.getByRole("button")).toHaveCount(3);
+  const badge = page.getByTestId("multi-review-findings-badge");
+  await badge.scrollIntoViewIfNeeded();
+  await expectBadgeMatchesInspectorActions((await badge.boundingBox())!, header, true);
+});
+
 test("findings stay reachable, fit the viewport and scroll internally", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4&manyFindings&paneControls");
   const badge = page.getByTestId("multi-review-findings-badge");
@@ -1056,9 +1083,10 @@ test("findings stay reachable, fit the viewport and scroll internally", async ({
   const header = inspector.getByRole("heading", { level: 2 }).first();
   const badgeBox = (await badge.boundingBox())!;
   expect(overlapping([badgeBox, (await header.boundingBox())!])).toEqual([]);
+  const { width, height } = page.viewportSize()!;
+  await expectBadgeMatchesInspectorActions(badgeBox, header.locator("xpath=.."), width >= 1024);
   await badge.click();
   await expect(panel).toBeInViewport();
-  const { width, height } = page.viewportSize()!;
   expect(inside((await panel.boundingBox())!, { x: 0, y: 0, width, height })).toBe(true);
   const list = panel.getByRole("list");
   await expect(panel.getByRole("listitem")).toHaveCount(41);
@@ -1083,6 +1111,8 @@ test("findings stay reachable, fit the viewport and scroll internally", async ({
   await badge.press("Escape");
   await expect(panel).toHaveCount(0);
   await expect(badge).toBeFocused();
+  await expect(badge).toHaveCSS("outline-style", "solid");
+  await expect(badge).toHaveCSS("outline-offset", "2px");
   await badge.click();
   await header.click();
   await expect(panel).toHaveCount(0);

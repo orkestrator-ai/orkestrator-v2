@@ -423,6 +423,13 @@ describe("Orkestrator control MCP server", () => {
       "approve_environment_setup",
       "approve_project_setup_commands",
       "approve_setup_commands_on_nodes",
+      // Only a person grants an agent a credential or stores one.
+      "approve_credential_request",
+      "decline_credential_request",
+      "create_credential_connection",
+      "update_credential_connection",
+      "replace_credential_connection_value",
+      "delete_credential_connection",
     ];
     for (const command of approvalOnly) {
       await expect(checked.invoke(command, {})).rejects.toThrow("Coordinator capability denied");

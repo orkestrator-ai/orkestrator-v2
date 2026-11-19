@@ -120,6 +120,8 @@ export async function deleteEnvironment(
       // Agents lose tool access first: nothing an agent calls back into may act
       // on an environment that is being taken apart.
       context.agentTools?.revokeEnvironment(environmentId);
+      // Credential grants end with the tool access that used them.
+      revokeEnvironmentCredentials(context, environmentId);
       await context.suborks?.deleteEnvironment(environmentId);
       await stopEnvironmentReviewValidation(environmentId, context);
       await stopEnvironmentExecWorkers(environmentId, context);
@@ -395,6 +397,8 @@ export async function deleteEnvironment(
         });
       }
       context.agentTools?.revokeEnvironment(environmentId);
+      // Credential grants end with the tool access that used them.
+      revokeEnvironmentCredentials(context, environmentId);
       await seedFs.rm(seedFilesDir(storage.getDataDir(), environmentId), {
         recursive: true,
         force: true,
@@ -498,5 +502,18 @@ export function deleteEnvironmentTask(
   } catch (error) {
     environments.endDelete(environmentId);
     throw error;
+  }
+}
+
+/** Ends an environment's credential requests, grants and runs; never blocks deletion. */
+function revokeEnvironmentCredentials(context: CommandContext, environmentId: string): void {
+  try {
+    context.credentials?.environmentDeleted(environmentId);
+  } catch (error) {
+    environmentLog.warn("delete.step-failed", {
+      environmentId,
+      step: "credentials",
+      error: formatLogError(error, { message: false }),
+    });
   }
 }

@@ -25,6 +25,7 @@
 import * as Schema from "effect/Schema";
 import { defineCommand } from "../../command.js";
 import { configDomain } from "./domain.js";
+import { CREDENTIAL_COMMANDS } from "./credential-commands.js";
 import {
   AppConfigSchema,
   ApproveAndRememberResultSchema,
@@ -473,4 +474,5 @@ export const CONFIG_COMMANDS = [
   deleteProjectPermissionRulesCommand,
   approveNativeAgentInteractionAndRememberCommand,
   listExternalPermissionRulesCommand,
+  ...CREDENTIAL_COMMANDS,
 ] as const;

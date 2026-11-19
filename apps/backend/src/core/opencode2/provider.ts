@@ -310,7 +310,6 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     const text = boundedText(this.workflow.shapePrompt(prompt, options));
     this.registerSession(sessionId);
     if (this.coordinator) await this.coordinator.prepare();
-    await this.workflow.prepare(sessionId, options);
     // Command resolution, files, model, effort and agent; nothing is dispatched yet.
     const prepared = await this.features.prepareSend(sessionId, prompt, options);
     await this.coordinator?.pinAgent(sessionId);

@@ -581,6 +581,8 @@ export interface ProviderSendOptions {
     design?: boolean;
     url: string;
     token: string;
+    /** Alternate authentication for a read-only turn, with credential tools disabled. */
+    readOnlyToken?: string;
     /** Signed one-attempt argument for providers using a persistent MCP broker. */
     workflowResultCapability?: string;
     /**

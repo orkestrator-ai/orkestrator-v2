@@ -257,6 +257,8 @@ import { useConversationScrollTarget } from "./useConversationScrollTarget";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
+import { PlanCardScopeContext } from "@/components/chat/plan-card-context";
+import { useAgentPlanCardScope } from "./AgentNativeTab.plan-card";
 import {
   completedTurnElapsedSeconds,
   findLatestBackendTurnElapsedSeconds,
@@ -3058,15 +3060,16 @@ export function SharedNativeAgentController({
   const composerModelId = composer?.selectedModelId;
   const composerReasoningId = composer?.selectedReasoningId;
   const composerFastModeEnabled = composer?.fastModeEnabled;
+  // With a prompt, asks the agent to implement; without one, only leaves plan mode.
   const switchPlanToBuild = useCallback(
-    async (implement: boolean) => {
+    async (implementPrompt?: string) => {
       if (planTransitionPending) return;
       setPlanTransitionPending(true);
       try {
         await updateControls({ mode: "build" });
         setDismissedPlanReviewId(latestAssistantMessageId ?? null);
-        if (implement) {
-          const outcome = await send("The plan is approved. Exit plan mode and implement it.", {
+        if (implementPrompt) {
+          const outcome = await send(implementPrompt, {
             model: composerModelId,
             reasoningEffort: composerReasoningId,
             mode: "build",
@@ -3092,6 +3095,14 @@ export function SharedNativeAgentController({
       updateControls,
     ],
   );
+  const planCards = useAgentPlanCardScope({
+    messages,
+    historyComplete: !canLoadEarlierHistory,
+    reviewApplies: showPlanReview,
+    latestAssistantMessageId,
+    pending: planTransitionPending,
+    switchPlanToBuild,
+  });
 
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
@@ -3596,13 +3607,20 @@ export function SharedNativeAgentController({
         {MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE}
       </div>
     ) : null,
-    showPlanReview ? (
+    // The plan card in the latest reply carries these actions itself; the
+    // pinned card covers a plan with no card (Codex) or one scrolled out of view.
+    showPlanReview && !planCards.actionsOnLatestCard ? (
       <CodexPlanModeCard
         key="plan-review"
         className="mx-0 my-0"
         isSubmitting={planTransitionPending}
-        onApproveAndBuild={() => switchPlanToBuild(true)}
-        onSwitchToBuild={() => switchPlanToBuild(false)}
+        onApproveAndBuild={() =>
+          switchPlanToBuild(
+            planCards.pinnedImplementPrompt ??
+              "The plan is approved. Exit plan mode and implement it.",
+          )
+        }
+        onSwitchToBuild={() => switchPlanToBuild()}
         onDismiss={() => setDismissedPlanReviewId(latestAssistantMessage?.id ?? null)}
       />
     ) : null,
@@ -4700,7 +4718,11 @@ export function SharedNativeAgentController({
                   turnActive={isTurnActive}
                   containment={<EnvironmentContainmentTag environmentId={data.environmentId} />}
                 />
-                <div className="min-h-0 flex-1">{chatShell}</div>
+                <div className="min-h-0 flex-1">
+                  <PlanCardScopeContext.Provider value={planCards.scope}>
+                    {chatShell}
+                  </PlanCardScopeContext.Provider>
+                </div>
                 {floatingNotices && agentPrompts.length > 0 ? (
                   <HumanPromptBanner prompts={agentPrompts} />
                 ) : null}

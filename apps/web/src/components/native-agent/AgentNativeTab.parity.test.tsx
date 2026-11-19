@@ -4710,8 +4710,84 @@ describe("AgentNativeTab", () => {
       },
     );
 
-    test("Cursor createPlan without planReview still offers approve and dismiss", async () => {
+    test("Cursor plan card carries the actions, bound to the current revision", async () => {
+      dispatchNativeAgentIntentMock.mockClear();
       fixtureState.renderVirtualizedMessages = true;
+      seedProjection({
+        composer: { selectedModeId: "plan" },
+        messages: [
+          {
+            id: "assistant-plan-1",
+            role: "assistant",
+            content: "First approach.",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "Plan",
+                toolName: "createPlan",
+                toolUseId: "plan-1",
+                toolState: "success",
+                toolOutput: "# Queue discovery\n\nUse a queue.",
+              },
+            ],
+            createdAt: "2026-09-08T10:00:00.000Z",
+          },
+          {
+            id: "user-revise",
+            role: "user",
+            content: "Use a stream instead.",
+            parts: [{ type: "text", content: "Use a stream instead." }],
+            createdAt: "2026-09-08T10:01:00.000Z",
+          },
+          {
+            id: "assistant-plan-2",
+            role: "assistant",
+            content: "Revised approach.",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "Plan",
+                toolName: "createPlan",
+                toolUseId: "plan-2",
+                toolState: "success",
+                toolOutput: "# Split discovery\n\nDo the work.",
+              },
+            ],
+            createdAt: "2026-09-08T10:02:00.000Z",
+          },
+        ],
+      });
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-cursor-create-plan" data={identity("cursor")} isActive />,
+      );
+
+      const current = await screen.findByRole("region", {
+        name: "Implementation plan: Split discovery",
+      });
+      const previous = screen.getByRole("region", { name: "Superseded plan: Queue discovery" });
+      expect(within(current).getByText("Current plan")).toBeTruthy();
+      expect(within(previous).getByText("Superseded")).toBeTruthy();
+      expect(within(previous).getByText("Use a queue.")).toBeTruthy();
+      expect(within(previous).queryByRole("button", { name: "Implement this plan" }) === null).toBe(
+        true,
+      );
+      // The card in the latest reply holds the actions, so the pinned card steps aside.
+      expect(screen.queryByRole("button", { name: "Approve plan" }) === null).toBe(true);
+
+      fireEvent.click(within(current).getByRole("button", { name: "Implement this plan" }));
+
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { mode: "build" },
+      });
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        prompt: 'The plan "Split discovery" is approved. Exit plan mode and implement it.',
+        mode: "build",
+      });
+    });
+
+    test("pinned review names the current plan when the latest reply has none", async () => {
+      dispatchNativeAgentIntentMock.mockClear();
       seedProjection({
         composer: { selectedModeId: "plan" },
         messages: [
@@ -4724,27 +4800,40 @@ describe("AgentNativeTab", () => {
                 type: "tool-invocation",
                 content: "Plan",
                 toolName: "createPlan",
+                toolUseId: "plan-1",
                 toolState: "success",
                 toolOutput: "# Split discovery\n\nDo the work.",
               },
             ],
             createdAt: "2026-09-08T10:00:00.000Z",
           },
+          {
+            id: "user-question",
+            role: "user",
+            content: "Why a split?",
+            parts: [{ type: "text", content: "Why a split?" }],
+            createdAt: "2026-09-08T10:01:00.000Z",
+          },
+          {
+            id: "assistant-answer",
+            role: "assistant",
+            content: "Because it isolates discovery.",
+            planReview: true,
+            parts: [{ type: "text", content: "Because it isolates discovery." }],
+            createdAt: "2026-09-08T10:02:00.000Z",
+          },
         ],
       });
       renderInAppCommandScope(
-        <AgentNativeTab tabId="tab-cursor-create-plan" data={identity("cursor")} isActive />,
+        <AgentNativeTab tabId="tab-cursor-plan-scrolled" data={identity("cursor")} isActive />,
       );
 
-      expect(await screen.findByRole("button", { name: "Approve plan" })).toBeTruthy();
-      expect(screen.getByRole("heading", { name: "Split discovery" })).toBeTruthy();
-      expect(screen.getByText("Do the work.")).toBeTruthy();
+      fireEvent.click(await screen.findByRole("button", { name: "Approve plan" }));
 
-      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-      await waitFor(() =>
-        expect(screen.queryByRole("button", { name: "Approve plan" }) === null).toBe(true),
-      );
-      expect(screen.getByRole("heading", { name: "Split discovery" })).toBeTruthy();
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        prompt: 'The plan "Split discovery" is approved. Exit plan mode and implement it.',
+      });
     });
 
     test("approving a Cursor plan switches to build and asks the agent to implement", async () => {

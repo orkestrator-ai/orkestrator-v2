@@ -323,6 +323,7 @@ function MessagePartContent({
             toolArgs={part.toolArgs}
             toolOutput={part.toolOutput}
             toolError={part.toolError}
+            toolUseId={part.toolUseId}
             deferredDetails={deferredDetails}
           />
         );

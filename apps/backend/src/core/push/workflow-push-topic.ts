@@ -1,10 +1,15 @@
 import { randomBytes } from "node:crypto";
 import { RESOURCE_CHANGED_EVENT, type ResourceChange } from "@orkestrator/protocol/resource-events";
 import {
+  NATIVE_AGENT_ACTIVITY_EVENT,
+  parseNativeAgentActivityAnnouncement,
+} from "@orkestrator/protocol/native-agent-observation";
+import {
   WORKFLOW_PUSH_PARTS,
   WORKFLOW_PUSH_TOPIC,
   formatWorkflowPushKey,
   isWorkflowPushKind,
+  parseAutoPipelinePushId,
   parseWorkflowPushKey,
   type PushStamp,
   type WorkflowPushKey,
@@ -16,6 +21,18 @@ import type { PushHubTimers, PushResolveAnswer, PushTopicProvider } from "./push
 const log = createLogger("push");
 
 export { WORKFLOW_PUSH_TOPIC };
+
+/**
+ * The resources whose change (id: the environment id) can move an
+ * environment's Auto-pipeline offer: its record (deletion, project home), its
+ * tabs' sessions (a pending dispatch or steer, a title) and its pane layout
+ * (which tabs are open).
+ */
+const AUTO_PIPELINE_WAKE_RESOURCES: ReadonlySet<string> = new Set([
+  "environment",
+  "native-agent-session",
+  "pane-layout",
+]);
 
 /** After a failed summary read the key is read again after this, doubling. */
 export const WORKFLOW_OBSERVE_ERROR_MS = 2_000;
@@ -31,6 +48,12 @@ export interface WorkflowPushSummary {
   revision: number;
   status: string;
   terminal: boolean;
+  /**
+   * A digest of what the view reads, for a kind whose state has no record
+   * revision (`auto-pipeline`: its offer and drafts are partly process-local).
+   * Held in memory and compared, never logged or sent.
+   */
+  digest?: string;
 }
 
 export interface WorkflowPushTopicOptions {
@@ -85,7 +108,8 @@ export function workflowChangedParts(
   if (
     previous.revision !== next.revision ||
     previous.status !== next.status ||
-    previous.terminal !== next.terminal
+    previous.terminal !== next.terminal ||
+    previous.digest !== next.digest
   ) {
     parts.push("progress");
   }
@@ -94,7 +118,8 @@ export function workflowChangedParts(
 }
 
 /**
- * The `workflow` topic: build pipelines, Multi Reviews and graph runs.
+ * The `workflow` topic: build pipelines, Multi Reviews, graph runs and an
+ * environment's Auto-pipeline offer and drafts.
  *
  * Unlike `native-session` it runs no poller. Every save of a run's record
  * announces a `resource-changed` for its kind and id, and every backend event
@@ -114,6 +139,8 @@ export class WorkflowPushTopic implements PushTopicProvider {
   private readonly timers: PushHubTimers;
   private readonly processGeneration = randomBytes(6).toString("base64url");
   private generationCounter = 0;
+  /** Subscribed `auto-pipeline` keys, so other events skip the scan. */
+  private autoPipelineKeys = 0;
   private readonly counters = { reads: 0, readFailures: 0, changes: 0, wakes: 0 };
 
   constructor(private readonly options: WorkflowPushTopicOptions) {
@@ -154,6 +181,7 @@ export class WorkflowPushTopic implements PushTopicProvider {
       retryMs: WORKFLOW_OBSERVE_ERROR_MS,
       stopped: false,
     });
+    if (parsed.kind === "auto-pipeline") this.autoPipelineKeys += 1;
   }
 
   release(key: string): void {
@@ -162,6 +190,7 @@ export class WorkflowPushTopic implements PushTopicProvider {
     entry.stopped = true;
     this.cancelRetry(entry);
     this.observed.delete(key);
+    if (entry.parsed.kind === "auto-pipeline") this.autoPipelineKeys -= 1;
   }
 
   /**
@@ -170,15 +199,44 @@ export class WorkflowPushTopic implements PushTopicProvider {
    * costs a string comparison.
    */
   observeEvent(event: string, payload: unknown): void {
-    if (this.observed.size === 0 || event !== RESOURCE_CHANGED_EVENT) return;
+    if (this.observed.size === 0) return;
+    if (event === NATIVE_AGENT_ACTIVITY_EVENT) {
+      // A tab's turn starting or ending changes whether it may be drafted from.
+      const announcement = parseNativeAgentActivityAnnouncement(payload);
+      if (announcement) this.wakeAutoPipeline(announcement.environmentId);
+      return;
+    }
+    if (event !== RESOURCE_CHANGED_EVENT) return;
     const change = payload as Partial<ResourceChange> | null;
-    if (!change || !isWorkflowPushKind(change.resource) || typeof change.id !== "string") return;
+    if (!change || typeof change.id !== "string") return;
+    if (AUTO_PIPELINE_WAKE_RESOURCES.has(change.resource as string)) {
+      this.wakeAutoPipeline(change.id);
+      return;
+    }
+    // `auto-pipeline` is no resource kind, so it never reaches here.
+    if (!isWorkflowPushKind(change.resource)) return;
     const entry = this.observed.get(
       formatWorkflowPushKey({ kind: change.resource, id: change.id }),
     );
     if (!entry) return;
     this.counters.wakes += 1;
     void this.refresh(entry);
+  }
+
+  /**
+   * The environment's Auto-pipeline offer or drafts may have moved (the
+   * service said so, or its tabs, layout, sessions or turn activity did):
+   * read every subscribed `auto-pipeline` key of that environment. The keys
+   * are few (one per toolbar and Auto-pipeline tab shown), so this scans them.
+   */
+  wakeAutoPipeline(environmentId: string): void {
+    if (this.autoPipelineKeys === 0) return;
+    for (const entry of this.observed.values()) {
+      if (entry.parsed.kind !== "auto-pipeline") continue;
+      if (parseAutoPipelinePushId(entry.parsed.id)?.environmentId !== environmentId) continue;
+      this.counters.wakes += 1;
+      void this.refresh(entry);
+    }
   }
 
   /** Read one subscribed run now (tests, and callers that know it moved). */

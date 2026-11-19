@@ -32,6 +32,12 @@ export const PUSH_LOG_AREAS = defineLogAreas({
       "workflow.read-failed":
         "A workflow run's summary read failed; it retries after a pause and the views keep their recovery poll.",
       "workflow.publish-failed": "Announcing a workflow run's change to its subscribers threw.",
+      "review-transcript.read-failed":
+        "A Multi Review reviewer or step record read failed; it retries after a pause and the views keep their recovery poll.",
+      "review-transcript.probe-failed":
+        "The fallback transcript read of a reviewer whose bridge announces no revisions failed; the next probe tries again.",
+      "review-transcript.publish-failed":
+        "Announcing a reviewer transcript's change to its subscribers threw.",
       "environment.read-failed":
         "An environment observer's record or registry read failed; it retries after a pause and the views keep their recovery poll.",
     },

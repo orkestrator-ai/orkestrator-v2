@@ -309,6 +309,7 @@ import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-
 import { createGraphRunTranscriptCapture } from "./graph-run-transcripts.js";
 import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
 import { autoPipelineToolHost, createAutoPipelineService } from "./auto-pipeline-wiring.js";
+import { AutoPipelineService, onAutoPipelineChange } from "./auto-pipeline.js";
 import { GraphDescribeService } from "./graph-describe-service.js";
 import { GraphMockRuns } from "./graph-mock-launch.js";
 import { installGraphMockExecutors } from "./graph-mock-provider.js";
@@ -340,6 +341,9 @@ export class OrkestratorBackend {
    * a connection here per event stream; topics observe what clients subscribe.
    */
   readonly push: BackendPush;
+  /** The `workflow` topic's `auto-pipeline` reads; built once the context exists. */
+  private autoPipelineReadService: AutoPipelineService | null = null;
+  private stopAutoPipelineWakes: (() => void) | null = null;
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
@@ -633,8 +637,28 @@ export class OrkestratorBackend {
       },
       // The `workflow` topic compares each subscribed run's record revision
       // and phase; the record's own `resource-changed` wakes it.
-      workflows: { readSummary: createWorkflowSummaryReader(storage) },
+      // `auto-pipeline` keys compare the toolbar offer and a tab's draft
+      // state; the service announces its own changes (below).
+      workflows: {
+        readSummary: createWorkflowSummaryReader(storage, () => this.autoPipelineReads()),
+      },
+      // The `review-transcript` topic reads the Multi Review record; the
+      // service is built later, so it is looked up at read time.
+      reviewTranscripts: {
+        readTarget: async (key) => {
+          if (!this.multiReviews) throw new Error("Multi Review is unavailable");
+          return this.multiReviews.transcriptPushTarget(key);
+        },
+        bridgeAnnounces: (target) => this.multiReviews?.transcriptBridgeAnnounces(target) ?? false,
+        probeTranscript: async (key, token) => {
+          if (!this.multiReviews) throw new Error("Multi Review is unavailable");
+          return this.multiReviews.transcriptPushProbe(key, token);
+        },
+      },
     });
+    this.stopAutoPipelineWakes = onAutoPipelineChange(storage, (environmentId) =>
+      this.push.workflows?.wakeAutoPipeline(environmentId),
+    );
     // History survives a restart through one database row (#2287).
     this.machineLoad = new MachineLoadSampler({
       historyStore: {
@@ -1659,6 +1683,8 @@ export class OrkestratorBackend {
           usageLimitStops: this.accountAutoSwitch,
           openCodeWorkflow,
         },
+        onTranscriptHint: (environmentId, agent, providerSessionId, parts) =>
+          this.push.reviewTranscripts?.hint(environmentId, agent, providerSessionId, parts),
         resolveAgentToolConnection,
         resolveWorkerToolConnection: (environmentId, projectId, target, tabId) =>
           this.agentTools.connection(environmentId, projectId, target, tabId),
@@ -3309,11 +3335,28 @@ export class OrkestratorBackend {
     this.stopLogPolicyListener = policy.stop;
   }
 
+  /**
+   * The Auto-pipeline service the push layer reads through. Its `sources`
+   * and `state` read storage and the process-local outcomes (shared by
+   * storage), so this instance never drafts and needs no ports.
+   */
+  private autoPipelineReads(): AutoPipelineService | null {
+    if (!this.context) return null;
+    this.autoPipelineReadService ??= new AutoPipelineService(this.context, () => {
+      throw new Error("The push layer's Auto-pipeline reads never draft");
+    });
+    return this.autoPipelineReadService;
+  }
+
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
     // Observers read sessions on timers of their own; stop them first.
-    stopStepNow("push", () => this.push.dispose());
+    stopStepNow("push", () => {
+      this.stopAutoPipelineWakes?.();
+      this.stopAutoPipelineWakes = null;
+      this.push.dispose();
+    });
     stopStepNow("agent-test-dispatch-hold", () => this.uninstallDispatchHold?.());
     // Each synchronous stop is guarded: one that throws is logged and the rest
     // still run, since an exception here would skip the drain and every close.

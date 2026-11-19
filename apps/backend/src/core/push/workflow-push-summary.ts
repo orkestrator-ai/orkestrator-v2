@@ -7,7 +7,8 @@ import {
   isMultiReviewTerminalPhase,
   type MultiReviewPhase,
 } from "@orkestrator/protocol/multi-review";
-import type { WorkflowPushKey } from "@orkestrator/protocol/push-events";
+import { createHash } from "node:crypto";
+import { parseAutoPipelinePushId, type WorkflowPushKey } from "@orkestrator/protocol/push-events";
 import type { WorkflowPushSummary } from "./workflow-push-topic.js";
 
 /** The storage reads the `workflow` topic's summaries come from. */
@@ -29,6 +30,20 @@ function statusOf(snapshot: unknown, field: "phase"): string {
   return typeof value === "string" ? value.slice(0, STATUS_MAX_LENGTH) : "unknown";
 }
 
+/**
+ * The Auto-pipeline reads an `auto-pipeline` key compares: the toolbar's
+ * offer for the environment and one tab's draft. Both read storage and
+ * in-memory activity only, never a bridge (`AutoPipelineService`).
+ */
+export interface WorkflowSummaryAutoPipeline {
+  sources(environmentId: string): Promise<{ available: boolean; sources: unknown[] }>;
+  state(environmentId: string, tabId: string): { phase: string };
+}
+
+function digestOf(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("base64url");
+}
+
 function isRunNotFound(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === "run-not-found";
 }
@@ -40,9 +55,33 @@ function isRunNotFound(error: unknown): boolean {
  */
 export function createWorkflowSummaryReader(
   storage: WorkflowSummaryStorage,
+  /** Looked up per read; without it an `auto-pipeline` key is `missing`. */
+  autoPipeline?: () => WorkflowSummaryAutoPipeline | null,
 ): (key: WorkflowPushKey) => Promise<WorkflowPushSummary | null> {
   return async ({ kind, id }) => {
     switch (kind) {
+      case "auto-pipeline": {
+        const target = parseAutoPipelinePushId(id);
+        const service = autoPipeline?.() ?? null;
+        if (!target || !service) return null;
+        // No record revision: the digest of the view's own answer is compared.
+        if (target.tabId === undefined) {
+          const offer = await service.sources(target.environmentId);
+          return {
+            revision: 0,
+            status: offer.available ? "available" : "unavailable",
+            terminal: false,
+            digest: digestOf(offer),
+          };
+        }
+        const state = service.state(target.environmentId, target.tabId);
+        return {
+          revision: 0,
+          status: state.phase.slice(0, STATUS_MAX_LENGTH),
+          terminal: state.phase === "promoted",
+          digest: digestOf(state),
+        };
+      }
       case "build-pipeline": {
         const record = await storage.getBuildPipeline(id);
         if (!record) return null;

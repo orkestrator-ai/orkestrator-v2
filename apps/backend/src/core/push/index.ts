@@ -32,6 +32,12 @@ import {
   type EnvironmentPushTopicOptions,
 } from "./environment-push-topic.js";
 import {
+  REVIEW_TRANSCRIPT_PUSH_TOPIC,
+  ReviewTranscriptPushTopic,
+  type ReviewTranscriptPushTopicMetrics,
+  type ReviewTranscriptPushTopicOptions,
+} from "./review-transcript-push-topic.js";
+import {
   WORKFLOW_PUSH_TOPIC,
   WorkflowPushTopic,
   type WorkflowPushTopicMetrics,
@@ -49,6 +55,11 @@ export { ToolOutputPushTopic, TOOL_OUTPUT_PUSH_TOPIC } from "./tool-output-push-
 export { EnvironmentPushTopic, ENVIRONMENT_PUSH_TOPIC } from "./environment-push-topic.js";
 export { WorkflowPushTopic, WORKFLOW_PUSH_TOPIC } from "./workflow-push-topic.js";
 export { createWorkflowSummaryReader } from "./workflow-push-summary.js";
+export {
+  ReviewTranscriptPushTopic,
+  REVIEW_TRANSCRIPT_PUSH_TOPIC,
+  type ReviewTranscriptTarget,
+} from "./review-transcript-push-topic.js";
 
 export interface PushLayerMetrics extends PushMetricsSnapshot {
   versions: readonly number[];
@@ -59,6 +70,7 @@ export interface PushLayerMetrics extends PushMetricsSnapshot {
     environment?: EnvironmentPushTopicMetrics;
     workflow?: WorkflowPushTopicMetrics;
     "tool-output"?: ToolOutputPushTopicMetrics;
+    "review-transcript"?: ReviewTranscriptPushTopicMetrics;
   };
 }
 
@@ -116,6 +128,14 @@ export interface BackendPushOptions {
    * Reviews, graph runs). Without it the topic is not offered.
    */
   workflows?: Pick<WorkflowPushTopicOptions, "readSummary">;
+  /**
+   * The Multi Review reads the `review-transcript` topic compares and probes.
+   * Without them the topic is not offered.
+   */
+  reviewTranscripts?: Pick<
+    ReviewTranscriptPushTopicOptions,
+    "readTarget" | "bridgeAnnounces" | "probeTranscript"
+  >;
   hub?: PushHubOptions;
 }
 
@@ -168,6 +188,7 @@ export class BackendPush implements PushGatewayPort {
   readonly toolOutputs: ToolOutputPushTopic;
   readonly environments: EnvironmentPushTopic | null;
   readonly workflows: WorkflowPushTopic | null;
+  readonly reviewTranscripts: ReviewTranscriptPushTopic | null;
 
   constructor(options: BackendPushOptions) {
     this.hub = new PushHub(options.hub);
@@ -239,6 +260,19 @@ export class BackendPush implements PushGatewayPort {
         })
       : null;
     if (this.workflows) this.hub.registerTopic(this.workflows);
+    const reviewReads = options.reviewTranscripts;
+    this.reviewTranscripts = reviewReads
+      ? new ReviewTranscriptPushTopic({
+          readTarget: (key) => reviewReads.readTarget(key),
+          bridgeAnnounces: (target) => reviewReads.bridgeAnnounces(target),
+          probeTranscript: (key, token) => reviewReads.probeTranscript(key, token),
+          publish: (key, stamp, parts) =>
+            this.hub.publish(REVIEW_TRANSCRIPT_PUSH_TOPIC, key, stamp, parts),
+          timers: options.hub?.timers,
+          now: options.hub?.now,
+        })
+      : null;
+    if (this.reviewTranscripts) this.hub.registerTopic(this.reviewTranscripts);
   }
 
   /** Whether a node subscription controller is attached (design D10). */
@@ -277,6 +311,7 @@ export class BackendPush implements PushGatewayPort {
     this.nativeSessions.observeEvent(event, payload);
     this.environments?.observeEvent(event, payload);
     this.workflows?.observeEvent(event, payload);
+    this.reviewTranscripts?.observeEvent(event, payload);
   }
 
   metrics(): PushLayerMetrics {
@@ -290,6 +325,9 @@ export class BackendPush implements PushGatewayPort {
         [TOOL_OUTPUT_PUSH_TOPIC]: this.toolOutputs.metrics(),
         ...(this.environments ? { [ENVIRONMENT_PUSH_TOPIC]: this.environments.metrics() } : {}),
         ...(this.workflows ? { [WORKFLOW_PUSH_TOPIC]: this.workflows.metrics() } : {}),
+        ...(this.reviewTranscripts
+          ? { [REVIEW_TRANSCRIPT_PUSH_TOPIC]: this.reviewTranscripts.metrics() }
+          : {}),
       },
     };
   }
@@ -301,6 +339,7 @@ export class BackendPush implements PushGatewayPort {
     this.nativeSessions.dispose();
     this.environments?.dispose();
     this.workflows?.dispose();
+    this.reviewTranscripts?.dispose();
     this.hub.dispose();
   }
 }

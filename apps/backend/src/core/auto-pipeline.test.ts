@@ -7,6 +7,7 @@ setDefaultTimeout(30_000);
 import {
   AutoPipelineService,
   MAX_ACTIVE_DRAFTS,
+  onAutoPipelineChange,
   parseAutoPipelineResult,
   type AutoPipelinePorts,
 } from "./auto-pipeline.js";
@@ -1205,4 +1206,62 @@ test("a session longer than adoption accepts still confirms, keeping a bounded t
     },
     { realKanban: true },
   );
+});
+
+test("every change the tab's state read can show is announced for its environment", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    await storage.updateEnvironment("env-1", { createdFromCommit: "1".repeat(40) });
+    const agents = fakeNativeAgents({
+      storage,
+      onDispatch: async () => {
+        await auto.submitDraft("env-1", "original-tab", result);
+      },
+    });
+    const context = draftContext(storage, buildPipelines, undefined, agents);
+    const auto: AutoPipelineService = new AutoPipelineService(context, () =>
+      gitPorts(async () => provider),
+    );
+    const announced: string[] = [];
+    const stop = onAutoPipelineChange(storage, (environmentId) => announced.push(environmentId));
+    try {
+      const drafting = auto.draft("env-1", "original-tab");
+      // Drafting began: the toolbar and the Auto-pipeline tab re-read now.
+      expect(announced).toEqual(["env-1"]);
+      const draft = await drafting;
+      // The submitted draft and the end of drafting.
+      expect(announced.length).toBeGreaterThanOrEqual(3);
+      const afterDraft = announced.length;
+      auto.saveEdits(draft.id, { title: "t", description: "d", acceptanceCriteria: ["c"] });
+      expect(announced).toHaveLength(afterDraft + 1);
+      expect(new Set(announced)).toEqual(new Set(["env-1"]));
+    } finally {
+      stop();
+    }
+    // Unsubscribed: nothing more is heard.
+    const before = announced.length;
+    const record = storage.latestAutoPipelineDraft("env-1", "original-tab", {
+      includeReviewed: true,
+    });
+    auto.saveEdits(record!.draft.id, { title: "u", description: "d", acceptanceCriteria: ["c"] });
+    expect(announced).toHaveLength(before);
+  });
+});
+
+test("a refused drafting request is announced so the tab can show why", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    const context = draftContext(storage, buildPipelines);
+    const auto = new AutoPipelineService(context, () => gitPorts(async () => provider));
+    const announced: string[] = [];
+    const stop = onAutoPipelineChange(storage, (environmentId) => announced.push(environmentId));
+    try {
+      // No base commit: drafting fails, and its failure is announced once it ends.
+      await auto.draft("env-1", "original-tab").catch(() => undefined);
+      expect(auto.state("env-1", "original-tab").phase).toBe("failed");
+      expect(announced.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      stop();
+    }
+  });
 });

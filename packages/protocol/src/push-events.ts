@@ -47,7 +47,13 @@ export type PushStreamState =
 export const PUSH_SET_SUBSCRIPTIONS_COMMAND = "push_set_subscriptions";
 
 /** Topics this protocol version defines. A later surface adds one. */
-export const PUSH_TOPICS = ["native-session", "environment", "tool-output", "workflow"] as const;
+export const PUSH_TOPICS = [
+  "native-session",
+  "environment",
+  "tool-output",
+  "workflow",
+  "review-transcript",
+] as const;
 export type PushTopic = (typeof PUSH_TOPICS)[number];
 export const NATIVE_SESSION_PUSH_TOPIC = "native-session" satisfies PushTopic;
 
@@ -427,8 +433,18 @@ export function parseToolOutputPushKey(key: string): ToolOutputPushKey | null {
  * already has. Completion is whatever that read says, never the frame.
  */
 export const WORKFLOW_PUSH_TOPIC = "workflow" satisfies PushTopic;
-/** The workflow kinds a key can name; each is also its `resource-changed` kind. */
-export const WORKFLOW_PUSH_KINDS = ["build-pipeline", "multi-review", "graph-run"] as const;
+/**
+ * The workflow kinds a key can name. The first three are also their run's
+ * `resource-changed` kind; `auto-pipeline` (one environment's promotion
+ * offer, or one tab's draft) is woken by the Auto-pipeline service and by
+ * the environment's session, layout and activity events instead.
+ */
+export const WORKFLOW_PUSH_KINDS = [
+  "build-pipeline",
+  "multi-review",
+  "graph-run",
+  "auto-pipeline",
+] as const;
 export type WorkflowPushKind = (typeof WORKFLOW_PUSH_KINDS)[number];
 /**
  * `progress`: the run's record moved (every change names it). `status`: its
@@ -463,5 +479,100 @@ export function parseWorkflowPushKey(key: string): WorkflowPushKey | null {
   // oxlint-disable-next-line no-control-regex -- refusing control characters is the point
   if (id.length === 0 || !/^[^\s/\u0000-\u001f\u007f]+$/u.test(id)) return null;
   if (pushUtf8Bytes(id) > WORKFLOW_PUSH_ID_MAX_BYTES) return null;
+  if (kind === "auto-pipeline" && !parseAutoPipelinePushId(id)) return null;
   return { kind, id };
+}
+
+/**
+ * What an `auto-pipeline` workflow key names: an environment's promotion
+ * offer (`get_auto_pipeline_sources`, the toolbar's "To pipeline") when
+ * `tabId` is absent, or one source tab's draft (`get_auto_pipeline_state`,
+ * the Auto-pipeline tab) when it is present.
+ */
+export interface AutoPipelinePushTarget {
+  environmentId: string;
+  tabId?: string;
+}
+
+/**
+ * The key's id: `<environmentId>` or `<environmentId>:<encoded tabId>`. The
+ * tab id is percent-encoded, so it holds no `/`, `:` or whitespace.
+ */
+export function formatAutoPipelinePushId(target: AutoPipelinePushTarget): string {
+  return target.tabId === undefined
+    ? target.environmentId
+    : `${target.environmentId}:${encodeURIComponent(target.tabId)}`;
+}
+
+export function parseAutoPipelinePushId(id: string): AutoPipelinePushTarget | null {
+  const colon = id.indexOf(":");
+  if (colon === -1) return id.length > 0 ? { environmentId: id } : null;
+  const environmentId = id.slice(0, colon);
+  const encoded = id.slice(colon + 1);
+  if (environmentId.length === 0 || encoded.length === 0) return null;
+  let tabId: string;
+  try {
+    tabId = decodeURIComponent(encoded);
+  } catch {
+    return null;
+  }
+  // One spelling per tab, so two keys never name the same draft.
+  if (encodeURIComponent(tabId) !== encoded || tabId.trim().length === 0) return null;
+  return { environmentId, tabId };
+}
+
+// ---------------------------------------------------------------------------
+// The `review-transcript` topic
+// ---------------------------------------------------------------------------
+
+/**
+ * A Multi Review reviewer's transcript, or a preparation, consolidation or
+ * Fix step's (docs/architecture/push-events.md, "The `review-transcript`
+ * topic"). The frame says the reviewer's record or its provider session's
+ * transcript moved; the view reads it with the conditional transcript read it
+ * already has (`get_multi_review_reviewer_transcript`,
+ * `get_multi_review_step_transcript`).
+ */
+export const REVIEW_TRANSCRIPT_PUSH_TOPIC = "review-transcript" satisfies PushTopic;
+/**
+ * `status`: the reviewer's (or step session's) record moved: status,
+ * dispatch, report, error, progress or a replaced session. `transcript`: its
+ * provider session's transcript moved.
+ */
+export const REVIEW_TRANSCRIPT_PUSH_PARTS = ["status", "transcript"] as const;
+export type ReviewTranscriptPushPart = (typeof REVIEW_TRANSCRIPT_PUSH_PARTS)[number];
+export const REVIEW_TRANSCRIPT_STEP_KINDS = ["prepare", "consolidate", "address-findings"] as const;
+/** A workflow or reviewer id longer than this (UTF-8) makes no key. */
+export const REVIEW_TRANSCRIPT_PUSH_ID_MAX_BYTES = 256;
+
+export type ReviewTranscriptPushKey =
+  | { workflowId: string; reviewerId: string; step?: undefined }
+  | {
+      workflowId: string;
+      step: (typeof REVIEW_TRANSCRIPT_STEP_KINDS)[number];
+      reviewerId?: undefined;
+    };
+
+/** `<workflowId>/reviewer/<reviewerId>` or `<workflowId>/step/<step>`. */
+export function formatReviewTranscriptPushKey(key: ReviewTranscriptPushKey): string {
+  return key.step === undefined
+    ? `${key.workflowId}/reviewer/${key.reviewerId}`
+    : `${key.workflowId}/step/${key.step}`;
+}
+
+// oxlint-disable-next-line no-control-regex -- refusing control characters is the point
+const REVIEW_TRANSCRIPT_ID = /^[^\s/\u0000-\u001f\u007f]+$/u;
+
+export function parseReviewTranscriptPushKey(key: string): ReviewTranscriptPushKey | null {
+  const parts = key.split("/");
+  if (parts.length !== 3) return null;
+  const [workflowId, kind, target] = parts as [string, string, string];
+  if (!REVIEW_TRANSCRIPT_ID.test(workflowId) || !REVIEW_TRANSCRIPT_ID.test(target)) return null;
+  if (pushUtf8Bytes(workflowId) > REVIEW_TRANSCRIPT_PUSH_ID_MAX_BYTES) return null;
+  if (pushUtf8Bytes(target) > REVIEW_TRANSCRIPT_PUSH_ID_MAX_BYTES) return null;
+  if (kind === "reviewer") return { workflowId, reviewerId: target };
+  if (kind === "step" && (REVIEW_TRANSCRIPT_STEP_KINDS as readonly string[]).includes(target)) {
+    return { workflowId, step: target as (typeof REVIEW_TRANSCRIPT_STEP_KINDS)[number] };
+  }
+  return null;
 }

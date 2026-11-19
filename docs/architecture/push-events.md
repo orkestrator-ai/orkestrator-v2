@@ -2,10 +2,12 @@
 
 The push event layer tells a client that something it shows has moved, so a
 mounted view reads when there is something to read instead of polling on a
-timer. It carries four topics: the live agent view (`native-session`),
-environment lifecycle and attention (`environment`), workflow run status
-(`workflow`) and the opt-in output tail of an expanded running tool row
-(`tool-output`). A later surface adds a topic rather than a poller. Windows
+timer. It carries five topics: the live agent view (`native-session`),
+environment lifecycle and attention (`environment`), workflow run status and
+the Auto-pipeline offer and drafts (`workflow`), the opt-in output tail of an
+expanded running tool row (`tool-output`) and a Multi Review reviewer's or
+step's transcript (`review-transcript`). A later surface adds a topic rather
+than a poller. Windows
 reach other machines' topics through their command node (see
 [Relayed nodes](#relayed-nodes)). The design and its baseline are in to-do
 [8102](../todo/transcripts-and-observation/8102-push-event-layer.md); this file
@@ -35,7 +37,8 @@ old cadence.
 | Command definitions (`push_set_subscriptions`, `get_push_metrics`) | `packages/protocol/src/contract/domains/system/push-subscriptions.ts` |
 | Hub: per-connection sets, coalescing map, throttle, bounds, metrics | `apps/backend/src/core/push/push-hub.ts` |
 | `native-session` topic: one observer per subscribed session | `apps/backend/src/core/push/native-session-push-topic.ts` |
-| `workflow` topic: run summaries woken by their record's `resource-changed` | `apps/backend/src/core/push/workflow-push-topic.ts`, `workflow-push-summary.ts` |
+| `workflow` topic: run summaries woken by their record's `resource-changed`; Auto-pipeline offers and drafts woken by the service | `apps/backend/src/core/push/workflow-push-topic.ts`, `workflow-push-summary.ts`, `onAutoPipelineChange` in `apps/backend/src/core/auto-pipeline.ts` |
+| `review-transcript` topic: reviewer and step transcripts, woken by record saves and the reviewer bridge's hints | `apps/backend/src/core/push/review-transcript-push-topic.ts`, `apps/backend/src/core/multi-review-transcript-push.ts` |
 | `environment` topic: lifecycle and attention digests per subscribed environment | `apps/backend/src/core/push/environment-push-topic.ts` |
 | `tool-output` topic: one tool call's output, riding its session's observer | `apps/backend/src/core/push/tool-output-push-topic.ts` |
 | Bounded tool output read (`get_native_agent_tool_output`): slicing, anchors, bounds | `packages/protocol/src/native-agent-tool-output.ts`, `apps/backend/src/core/native-agent-tool-output-reads.ts` |
@@ -268,7 +271,10 @@ One workflow run's status summary
   `graph-run` (each also its `resource-changed` kind) and the run's record
   id: no `/`, whitespace or control characters, at most 256 bytes
   (`formatWorkflowPushKey`, `parseWorkflowPushKey`). A workflow snapshot's
-  `workflowId` is the kind and its `runId` the id.
+  `workflowId` is the kind and its `runId` the id. Kind `auto-pipeline`
+  names an environment's Auto-pipeline offer (id: the environment id) or one
+  source tab's draft (id: `<environmentId>:<percent-encoded tabId>`,
+  `formatAutoPipelinePushId`).
 - **Parts:** `progress` (the run's record moved; every change names it),
   `status` (its phase or status changed) and `result` (it entered or left a
   terminal phase: `complete` or `failed` for a pipeline,
@@ -287,18 +293,81 @@ One workflow run's status summary
   is `missing`; a run with a baseline answers its stamp without reading.
 - **Completion is never inferred** from a frame or a closed stream: `result`
   means "read again", and the view's read says whether the run finished.
+- **`auto-pipeline` keys** have no record revision: their offer and drafts
+  are partly process-local (drafting, failures, confirmations in progress).
+  The summary is a SHA-256 digest of what the view reads
+  (`AutoPipelineService.sources` for an offer, `.state` for a draft; storage
+  and in-memory activity only, never a bridge), held in memory and compared;
+  a digest-only change names `progress`, a phase change `status` too, and
+  `promoted` is terminal. They are woken by the service itself
+  (`onAutoPipelineChange`: drafting started, failed or ended, a draft
+  submitted or edited, a confirmation started or ended) and by the
+  environment's `environment`, `native-agent-session` and `pane-layout`
+  `resource-changed` and its turn activity announcements, which move which
+  tabs may be drafted from. Each wake reads every subscribed key of that
+  environment; other events cost a counter check.
 
 Subscribers today: the live workflow inspector of a workflow snapshot card
 (`useWorkflowLiveSnapshot` in `WorkflowLiveInspector.tsx`, read
 `transcript_artifact_workflow_live_snapshot`). While its subscription is
 healthy it reads on frames and every 30 s; otherwise it keeps its 4 s poll,
-and a terminal read stops it either way. The build pipeline, Multi Review
-and graph run views were already event-led (their stores re-read on
-`resource-changed`, C03) and have no poll to retire. The Multi Review
-reviewer tab (C05) and the flow-graph inspector's tails poll a reviewer's
-transcript, which a record save does not announce (Multi Review checkpoints
-reviewer progress only on status changes and its 60 s progress probe), so
-they keep their 4 s poll; see recurring-work.md.
+and a terminal read stops it either way. The toolbar's "To pipeline"
+(`ToPipelineButton.tsx`, C23) subscribes its environment's offer and the
+Auto-pipeline tab (`AutoPipelineTab.tsx`, C24) its source tab's draft; both
+read on frames and every 30 s while healthy and keep their 2 s and 1.5 s
+polls otherwise, through the read coordinator, so neither reads while the
+window is hidden. The Multi Review PR step (`useMultiReviewPrPhase.ts`, C22)
+subscribes the PR tab's `native-session` key the same way. The build
+pipeline, Multi Review and graph run views were already event-led (their
+stores re-read on `resource-changed`, C03) and have no poll to retire.
+
+### The `review-transcript` topic
+
+A Multi Review reviewer's transcript, or a preparation, consolidation or Fix
+step's (`apps/backend/src/core/push/review-transcript-push-topic.ts`, targets
+in `apps/backend/src/core/multi-review-transcript-push.ts`).
+
+| Key | Parts | Reads it announces |
+| --- | --- | --- |
+| `<workflowId>/reviewer/<reviewerId>` or `<workflowId>/step/<prepare\|consolidate\|address-findings>` (`formatReviewTranscriptPushKey`) | `status` (urgent), `transcript` | `get_multi_review_reviewer_transcript`, `get_multi_review_step_transcript` |
+
+- **Target.** From the workflow record only (no bridge): the provider session
+  the view shows (a step only while it owns its session), whether it is live
+  (running or pending), and a SHA-256 digest of what the view shows besides
+  the transcript (status, dispatch state, report, error, progress, stall,
+  start and end times, workflow phase). Compared in memory, never sent.
+- **Record saves.** Every save of the workflow announces `resource-changed`
+  for `multi-review`; it reads the target of that workflow's subscribed keys
+  and publishes `status` when the digest moved, and `transcript` too when the
+  reviewer was given another session.
+- **Bridge hints.** The Multi Review service's providers report their
+  bridge's observe-stream hints to the topic (`onTranscriptHint`). The stream
+  opens only when the topic first asks whether it announces revisions, so an
+  unwatched review holds none. A hint for the key's provider session that
+  names its transcript, or names nothing (lost continuity), publishes
+  `transcript` without any read: the viewers then make the conditional read
+  they already had. A state-only revision is ignored; the record's save
+  carries status.
+- **Spacing.** `transcript` goes out at most once a second per key
+  (`REVIEW_TRANSCRIPT_MIN_PUBLISH_MS`), trailing edge included, so a
+  streaming reviewer costs each viewer about one conditional read a second
+  instead of one per token; `status` is urgent and never waits for it.
+- **Fallback.** While the bridge does not announce revisions (its stream is
+  down or still connecting, or the platform has none, as OpenCode), a live
+  key is probed with that same conditional read: once at once to set the
+  baseline, then every 4 s, once for all its viewers, publishing
+  `transcript` when the source token moved. Each tick first asks the bridge
+  again, so a stream that comes back stops the probing and one that drops
+  resumes it. A settled reviewer is not probed.
+- **Resolve:** a workflow or reviewer that does not exist is `missing`; a
+  failed first read fails the resolve and retries after 2 s, doubling to
+  30 s, while the key stays subscribed.
+
+Subscribers: the reviewer tab (`MultiReviewReviewerTab.tsx`, C05) and the
+flow-graph inspector's reviewer and step tails (`useTranscriptTail` in
+`MultiReviewInspector.tsx`, C21). While healthy they read on frames and every
+30 s; otherwise they keep their 4 s poll. A workflow checkpoint still reads
+at once, as before.
 
 ### The `environment` topic
 

@@ -15,8 +15,10 @@ the design and the polling baseline. On 2026-11-19 the user's ticket
 layer to be built, which answers the design review that tasks 2 to 7 waited
 on. Every task is built: the layer's core and the `native-session` topic
 (task 3), bridge state revisions in all five HTTP bridges as the observer's
-change signal (task 2), the `environment`, `workflow` and `tool-output`
-topics (task 4), the command-node subscription controller (task 6) and the
+change signal (task 2), the `environment`, `workflow`, `tool-output` and
+`review-transcript` topics, with every workflow-status and transcript poll
+moved onto them (task 4), the command-node subscription controller (task 6)
+and the
 measurement against the baseline (task 7, on a deterministic fixture and the
 credential-free live spec B). The living doc is
 [push-events.md](../../architecture/push-events.md) (task 5). The only item
@@ -29,7 +31,7 @@ See [Assumptions and decisions](#assumptions-and-decisions).
 1. **Design and baseline**: write the layer's design and take the before-measurement per the efficiency rules, before any code. Status: done (2026-11-15).
 2. **Bridge state revision**: every bridge moves a revision on every state change and answers a conditional state read `unchanged`; Pi sends its composer and model list only when they changed. Status: done (2026-11-19).
 3. **The layer's core and the live agent view over push**: subscriptions on the existing event stream, the `native-session` topic, the recovery poll, and removing the 500 ms poll while push is healthy. Status: done (2026-11-19).
-4. **Further surfaces**: measure the other live surfaces' request volume, then move them onto the layer one at a time, highest volume first. Status: done (2026-11-19) for the surfaces the ticket names (environment lifecycle, attention, workflow status, command output); the remaining polls are listed under task 4.
+4. **Further surfaces**: measure the other live surfaces' request volume, then move them onto the layer one at a time, highest volume first. Status: done (2026-11-19) for every surface the ticket names (environment lifecycle, attention, workflow status including Auto-pipeline and the Multi Review PR step, reviewer and step transcripts, command output); the polls of surfaces it does not name (C02, C06, C07) are listed under task 4.
 5. **Promote the design to a living doc**: [push-events.md](../../architecture/push-events.md), linked from `event-snapshot-recovery.md` and `recurring-work.md`. Status: done (2026-11-19); this file keeps the design and the decision record.
 6. **Node subscription controller (D10)**: let a window subscribe to a node it reaches through a command node, through a controller on the command node that unions and reference-counts downstream sets. Status: done (2026-11-19).
 7. **Measure the result against the baseline**: repeat baselines A and B on the new commit, one and two viewers, and the reconnect and inactive-view cases. Status: done (2026-11-19) on the deterministic fixture and live spec B; the billed real-Claude rerun of baseline A is in the manual-test checklist.
@@ -237,14 +239,30 @@ D9 step 4.
   a 64 KiB cap): an expanded running tool row subscribes, appends from its
   cursor and offers "Load earlier"; collapsing releases it.
 
+- **Auto-pipeline** (2026-11-19, rework round 3): the `workflow` topic's
+  `auto-pipeline` kind, keyed by environment (the toolbar's offer, C23) or
+  environment and source tab (the Auto-pipeline tab's draft, C24), compares
+  a digest of `AutoPipelineService.sources` and `.state` and is woken by the
+  service and by the environment's session, layout and activity events. C24
+  also moved from a bare `setInterval` onto the read coordinator, so it no
+  longer reads while hidden.
+- **Multi Review PR step** (C22): subscribes the PR tab's `native-session`
+  key, as the live view does.
+- **`review-transcript`** (key: `<workflow>/reviewer/<id>` or
+  `<workflow>/step/<step>`; parts `status` (urgent), `transcript`): the
+  reviewer tab (C05) and the flow-graph inspector's tails (C21) read on
+  frames. Record saves announce `status`; the reviewer bridge's own
+  observe-stream hints announce `transcript` without any read, at most once a
+  second per key; a bridge without revisions is probed every 4 s once for
+  every viewer.
+
 The inventory came from the code's cadences rather than a busy profile's
-`/metrics` buckets. Polls left in place, by exposure: C23 (`ToPipelineButton`,
-2 s whenever the environment toolbar has an active tab), C24
-(`AutoPipelineTab`, 1.5 s, also while hidden), C22 (`useMultiReviewPrPhase`,
-2 s), C06 (review validation output, 2 s in a modal), C05 and C21 (a running
-reviewer's transcript, 4 s; a per-reviewer observer would add bridge reads
-while it streams), C02 (Files panel) and C07 (initialization logs). None is
-environment lifecycle, attention, workflow status or command output.
+`/metrics` buckets, ordered by exposure: C23 (2 s whenever the environment
+toolbar has an active tab), C24 (1.5 s, also while hidden), C22 (2 s), C05
+and C21 (4 s). Polls left in place, none on a surface the ticket names: C06
+(review validation output, 2 s in a modal), C02 (Files panel, already
+revision-led) and C07 (initialization logs, already shared across clients in
+the backend).
 
 **Decisions.**
 
@@ -1130,8 +1148,10 @@ subscription would only add reads there.
 - **Subscribe every workflow view.** Pros: one mechanism everywhere. Cons:
   adds observer reads with no poll removed.
 
-The remaining polls (C02, C05 to C07, C21 to C24) are listed under task 4 in
-order of exposure; none carries the ticket's surfaces.
+A verification pass judged that this left part of the ticket's
+workflow-status and transcript scope polled (C05, C21 to C24); rework round 3
+moved them (see below). The remaining polls (C02, C06, C07) are listed under
+task 4; none carries the ticket's surfaces.
 
 ### Task 4: attention is an urgent part (2026-11-19)
 
@@ -1183,6 +1203,47 @@ Baseline A uses real Claude turns and is billed, so it cannot run in an
 unattended build. The deterministic fixture covers the same workload
 (`running-quiet`, one and two viewers) and live spec B ran credential-free;
 the billed rerun is in the manual-test checklist.
+
+### Task 4: Auto-pipeline rides the `workflow` topic with a digest (2026-11-19)
+
+The toolbar's offer and a tab's draft have no record revision: drafting,
+failures and confirmations in progress are process-local outcomes. They
+became a fourth `workflow` kind whose summary is a SHA-256 digest of the
+view's own answer, held in memory.
+
+- **A `workflow` kind with a digest (chosen).** Pros: reuses the topic's
+  baseline, join, retry and release logic; the frame still says only "read
+  again". Cons: one more wake source than a record kind (the service and the
+  environment's session, layout and activity events).
+- **A topic of its own.** Pros: no optional field on the summary. Cons: a
+  second copy of the same observer for two keys.
+
+The service announces its own changes (`onAutoPipelineChange`, keyed by
+storage like its outcomes, because the command registry and the agent tools
+server each build an instance) rather than a new `resource-changed` kind,
+which would have widened the broadcast every client receives.
+
+### Task 4: reviewer transcripts are announced by their bridge's hints (2026-11-19)
+
+The reason the reviewer tab stayed on its poll was that a transcript move
+saves no record and a per-reviewer observer would double bridge reads while
+a reviewer streams. The `review-transcript` topic avoids both: the Multi
+Review service's providers report their bridge's observe-stream hints, and a
+hint publishes `transcript` without the backend reading anything, so the
+viewers' conditional read is the only bridge read.
+
+- **Bridge hints, no backend read (chosen).** Pros: no extra bridge read;
+  two viewers cost one hint. Cons: one more observe stream per Multi Review
+  environment and agent while a reviewer view is subscribed.
+- **A backend observer polling the conditional read.** Pros: works without
+  revisions. Cons: the observer's read plus each viewer's read on every
+  change. Kept only as the fallback for a bridge without revisions, at the
+  old 4 s cadence and once for every viewer.
+
+`transcript` frames are spaced at least 1 s apart per key: a reviewer
+streams many revisions a second and the tab and inspector are glance views
+over a bounded tail, so this is about one read a second instead of one per
+token (the old poll read every 4 s). `status` is urgent and never waits.
 
 ### Task 1: review corrections to the draft (2026-11-15)
 

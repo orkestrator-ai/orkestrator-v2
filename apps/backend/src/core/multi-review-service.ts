@@ -152,6 +152,9 @@ import {
   stalledMinutes,
 } from "./multi-review-progress.js";
 import { readTranscriptProgressSample } from "./transcript-progress.js";
+import { multiReviewTranscriptPushTarget } from "./multi-review-transcript-push.js";
+import type { ReviewTranscriptTarget } from "./push/review-transcript-push-topic.js";
+import type { ReviewTranscriptPushKey } from "@orkestrator/protocol/push-events";
 import {
   readMultiReviewStepTranscript,
   readMultiReviewStepToolDetails,
@@ -621,6 +624,19 @@ export interface MultiReviewServiceOptions extends Omit<
     ProviderDependencies,
     "planUsage" | "usageLimitStops" | "openCodeWorkflow"
   >;
+  /**
+   * Content-free observe-stream hints from this service's providers: a
+   * session (`providerSessionId`) of the environment's `agent` bridge moved,
+   * or the stream lost continuity (`undefined`). The push layer's
+   * `review-transcript` topic turns them into change frames. Must not throw
+   * or await.
+   */
+  onTranscriptHint?: (
+    environmentId: string,
+    agent: string,
+    providerSessionId: string | undefined,
+    parts?: readonly ("state" | "transcript")[],
+  ) => void;
   workflowResults?: WorkflowResultService;
   /** Each reviewer's own mailbox identity on turns without a result tool. */
   resolveWorkerToolConnection?: (
@@ -965,6 +981,41 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ...(reviewer.startedAt ? { startedAt: reviewer.startedAt } : {}),
       ...(reviewer.completedAt ? { completedAt: reviewer.completedAt } : {}),
     };
+  }
+
+  /**
+   * The push layer's `review-transcript` target for a reviewer or step: its
+   * provider session and a digest of what its view shows, from storage only.
+   * `null` when the workflow or reviewer is gone.
+   */
+  async transcriptPushTarget(key: ReviewTranscriptPushKey): Promise<ReviewTranscriptTarget | null> {
+    const record = await this.storage.getMultiReviewWorkflow(key.workflowId);
+    if (!record || !isMultiReviewWorkflow(record.snapshot)) return null;
+    return multiReviewTranscriptPushTarget(record.snapshot, key);
+  }
+
+  /**
+   * Whether the provider serving `target` announces its sessions' transcript
+   * revisions on a live observe stream (opened by this ask). Never creates a
+   * provider: without one, nothing streams and the topic probes instead.
+   */
+  transcriptBridgeAnnounces(
+    target: Pick<ReviewTranscriptTarget, "environmentId" | "agent">,
+  ): boolean {
+    const provider = this.providers.get(`${target.environmentId}:${target.agent}`);
+    return provider?.observationStreamRevisions?.() === true;
+  }
+
+  /** The `review-transcript` topic's fallback: the view's own conditional read, its token only. */
+  async transcriptPushProbe(
+    key: ReviewTranscriptPushKey,
+    knownSourceToken: string | undefined,
+  ): Promise<string | undefined> {
+    const read =
+      key.step === undefined
+        ? await this.reviewerTranscript(key.workflowId, key.reviewerId, knownSourceToken)
+        : await this.stepTranscript(key.workflowId, key.step, knownSourceToken);
+    return read.sourceToken;
   }
 
   /**
@@ -5771,8 +5822,20 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             const environment = await this.storage.getEnvironment(workflow.environmentId);
             if (!environment) throw new Error("Review environment no longer exists");
             const connection = await this.bridgeConnection(selection.agent, environment);
+            const onTranscriptHint = this.options.onTranscriptHint;
             return createBuildPipelineProvider(connection, {
               ...this.options.providerDependencies,
+              // The observe stream opens only once the push layer asks
+              // whether it announces revisions (a subscribed reviewer view).
+              ...(onTranscriptHint
+                ? {
+                    onObservationHint: (
+                      providerSessionId: string | undefined,
+                      parts?: readonly ("state" | "transcript")[],
+                    ) =>
+                      onTranscriptHint(environment.id, selection.agent, providerSessionId, parts),
+                  }
+                : {}),
               workflowResults: this.options.workflowResults,
               bridgeEnvironmentId: environment.id,
               refreshConnection: () => this.bridgeConnection(selection.agent, environment),

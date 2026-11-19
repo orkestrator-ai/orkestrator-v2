@@ -7,6 +7,7 @@ import {
   type PushStamp,
   type WorkflowPushKey,
 } from "@orkestrator/protocol/push-events";
+import { NATIVE_AGENT_ACTIVITY_EVENT } from "@orkestrator/protocol/native-agent-observation";
 import { ManualClock, flushMicrotasks } from "@orkestrator/protocol/testing/manual-clock";
 import {
   WORKFLOW_OBSERVE_ERROR_MS,
@@ -315,5 +316,125 @@ describe("BackendPush workflow topic end to end", () => {
     push.closeConnection(b);
     expect(push.metrics().topics.workflow?.observers).toBe(0);
     push.dispose();
+  });
+});
+
+describe("auto-pipeline workflow keys", () => {
+  const OFFER = formatWorkflowPushKey({ kind: "auto-pipeline", id: "env-1" });
+  const DRAFT = formatWorkflowPushKey({ kind: "auto-pipeline", id: "env-1:tab-1" });
+  const OTHER = formatWorkflowPushKey({ kind: "auto-pipeline", id: "env-2" });
+
+  function autoHarness() {
+    const h = harness();
+    h.records.set(OFFER, { revision: 0, status: "available", terminal: false, digest: "a" });
+    h.records.set(DRAFT, { revision: 0, status: "idle", terminal: false, digest: "x" });
+    h.records.set(OTHER, { revision: 0, status: "available", terminal: false, digest: "o" });
+    return h;
+  }
+
+  test("the service's wake re-reads only that environment's keys and publishes what moved", async () => {
+    const h = autoHarness();
+    for (const key of [OFFER, DRAFT, OTHER]) {
+      h.topic.retain(key);
+      await h.topic.resolve(key);
+    }
+    h.reads.length = 0;
+    h.records.set(DRAFT, { revision: 0, status: "drafting", terminal: false, digest: "y" });
+    h.topic.wakeAutoPipeline("env-1");
+    await h.settle();
+    expect(h.reads.sort()).toEqual([DRAFT, OFFER].sort());
+    expect(h.published).toEqual([
+      { key: DRAFT, stamp: expect.anything(), parts: ["status", "progress"] },
+    ]);
+
+    // A digest-only change (the same phase, new draft content) is progress.
+    h.records.set(DRAFT, { revision: 0, status: "drafting", terminal: false, digest: "z" });
+    h.topic.wakeAutoPipeline("env-1");
+    await h.settle();
+    expect(h.published.at(-1)?.parts).toEqual(["progress"]);
+  });
+
+  test("session, layout, environment and activity events of the environment wake its keys", async () => {
+    const h = autoHarness();
+    h.topic.retain(OFFER);
+    await h.topic.resolve(OFFER);
+    h.reads.length = 0;
+    h.topic.observeEvent("resource-changed", changed("native-agent-session", "env-1"));
+    await h.settle();
+    h.topic.observeEvent("resource-changed", changed("pane-layout", "env-1"));
+    await h.settle();
+    h.topic.observeEvent("resource-changed", changed("environment", "env-1"));
+    await h.settle();
+    h.topic.observeEvent(NATIVE_AGENT_ACTIVITY_EVENT, {
+      environment_id: "env-1",
+      state: "working",
+      agent: "claude",
+      logical_session_key: "env-env-1:tab-1",
+    });
+    await h.settle();
+    expect(h.reads).toEqual([OFFER, OFFER, OFFER, OFFER]);
+    // Another environment's events, and an unrelated resource, read nothing.
+    h.topic.observeEvent("resource-changed", changed("pane-layout", "env-9"));
+    h.topic.observeEvent("resource-changed", changed("kanban", "env-1"));
+    await h.settle();
+    expect(h.reads).toHaveLength(4);
+
+    h.records.set(OFFER, { revision: 0, status: "available", terminal: false, digest: "b" });
+    h.topic.observeEvent("resource-changed", changed("pane-layout", "env-1"));
+    await h.settle();
+    expect(h.published).toEqual([{ key: OFFER, stamp: expect.anything(), parts: ["progress"] }]);
+  });
+
+  test("without subscribed auto-pipeline keys, environment events cost no read", async () => {
+    const h = autoHarness();
+    h.topic.retain(PIPELINE);
+    await h.topic.resolve(PIPELINE);
+    h.topic.retain(OFFER);
+    h.topic.release(OFFER);
+    h.reads.length = 0;
+    h.topic.wakeAutoPipeline("env-1");
+    h.topic.observeEvent("resource-changed", changed("pane-layout", "env-1"));
+    await h.settle();
+    expect(h.reads).toEqual([]);
+  });
+
+  test("the summary reader digests the offer and a tab's state", async () => {
+    let offer = { available: true, sources: [{ tabId: "tab-1", label: "Claude" }] };
+    let phase = "idle";
+    const reader = createWorkflowSummaryReader(
+      {
+        getBuildPipeline: async () => null,
+        getMultiReviewWorkflow: async () => null,
+        graphRuns: { getGraphRun: async () => null },
+      },
+      () => ({
+        sources: async () => offer,
+        state: (_environmentId, tabId) => (tabId === "tab-1" ? { phase } : { phase: "idle" }),
+      }),
+    );
+    const first = await reader({ kind: "auto-pipeline", id: "env-1" });
+    expect(first).toMatchObject({ revision: 0, status: "available", terminal: false });
+    offer = {
+      available: true,
+      sources: [{ tabId: "tab-1", label: "Claude", disabledReason: "busy" } as never],
+    };
+    const second = await reader({ kind: "auto-pipeline", id: "env-1" });
+    expect(second?.digest).not.toBe(first?.digest);
+    expect(await reader({ kind: "auto-pipeline", id: "env-1:tab-1" })).toMatchObject({
+      status: "idle",
+      terminal: false,
+    });
+    phase = "promoted";
+    expect(await reader({ kind: "auto-pipeline", id: "env-1:tab-1" })).toMatchObject({
+      status: "promoted",
+      terminal: true,
+    });
+    // No service (an early backend) or a malformed id: the key is missing.
+    const bare = createWorkflowSummaryReader({
+      getBuildPipeline: async () => null,
+      getMultiReviewWorkflow: async () => null,
+      graphRuns: { getGraphRun: async () => null },
+    });
+    expect(await bare({ kind: "auto-pipeline", id: "env-1" })).toBeNull();
   });
 });

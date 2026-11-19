@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   PUSH_LIMITS,
+  formatAutoPipelinePushId,
+  formatReviewTranscriptPushKey,
+  formatWorkflowPushKey,
+  parseAutoPipelinePushId,
+  parseReviewTranscriptPushKey,
+  parseWorkflowPushKey,
   formatNativeSessionPushKey,
   parseNativeSessionPushKey,
   parsePushChangedPayload,
@@ -116,5 +122,59 @@ describe("native-session keys", () => {
     expect(pushUtf8Bytes("é")).toBe(2);
     expect(pushUtf8Bytes("€")).toBe(3);
     expect(pushUtf8Bytes("😀")).toBe(4);
+  });
+});
+
+describe("auto-pipeline workflow keys", () => {
+  test("an environment's offer and one tab's draft round-trip", () => {
+    const offer = formatWorkflowPushKey({
+      kind: "auto-pipeline",
+      id: formatAutoPipelinePushId({ environmentId: "env-1" }),
+    });
+    expect(offer).toBe("auto-pipeline/env-1");
+    expect(parseWorkflowPushKey(offer)).toEqual({ kind: "auto-pipeline", id: "env-1" });
+    const draftId = formatAutoPipelinePushId({ environmentId: "env-1", tabId: "tab a/b:c" });
+    expect(draftId).toBe("env-1:tab%20a%2Fb%3Ac");
+    expect(parseWorkflowPushKey(`auto-pipeline/${draftId}`)).toEqual({
+      kind: "auto-pipeline",
+      id: draftId,
+    });
+    expect(parseAutoPipelinePushId(draftId)).toEqual({
+      environmentId: "env-1",
+      tabId: "tab a/b:c",
+    });
+  });
+
+  test("a second spelling of a tab, or an empty part, is no key", () => {
+    expect(parseAutoPipelinePushId("env-1:%74ab")).toBeNull();
+    expect(parseAutoPipelinePushId(":tab")).toBeNull();
+    expect(parseAutoPipelinePushId("env-1:")).toBeNull();
+    expect(parseAutoPipelinePushId("env-1:%E0%A4%A")).toBeNull();
+    expect(parseWorkflowPushKey("auto-pipeline/env-1:%74ab")).toBeNull();
+  });
+});
+
+describe("review-transcript keys", () => {
+  test("a reviewer and a step round-trip", () => {
+    const reviewer = formatReviewTranscriptPushKey({ workflowId: "wf-1", reviewerId: "r-1" });
+    expect(reviewer).toBe("wf-1/reviewer/r-1");
+    expect(parseReviewTranscriptPushKey(reviewer)).toEqual({
+      workflowId: "wf-1",
+      reviewerId: "r-1",
+    });
+    const step = formatReviewTranscriptPushKey({ workflowId: "wf-1", step: "consolidate" });
+    expect(parseReviewTranscriptPushKey(step)).toEqual({
+      workflowId: "wf-1",
+      step: "consolidate",
+    });
+  });
+
+  test("unknown kinds, steps, separators and oversized ids are refused", () => {
+    expect(parseReviewTranscriptPushKey("wf-1/session/r-1")).toBeNull();
+    expect(parseReviewTranscriptPushKey("wf-1/step/review")).toBeNull();
+    expect(parseReviewTranscriptPushKey("wf-1/reviewer/r 1")).toBeNull();
+    expect(parseReviewTranscriptPushKey("wf-1/reviewer/r-1/extra")).toBeNull();
+    expect(parseReviewTranscriptPushKey("/reviewer/r-1")).toBeNull();
+    expect(parseReviewTranscriptPushKey(`wf-1/reviewer/${"r".repeat(257)}`)).toBeNull();
   });
 });

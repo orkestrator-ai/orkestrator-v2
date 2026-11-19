@@ -43,7 +43,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 
 The area fields are `kanban` (`KanbanStorage`), `linear` (`LinearStorage`), `coordinators`
 (`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
-`nodes` (`NodesStorage`), `machineLoadHistory` (`MachineLoadHistoryStorage`), `previewServices` (`PreviewServicesStorage`),
+`nodes` (`NodesStorage`), `machineLoadHistory` (`MachineLoadHistoryStorage`), `capabilities` (`CapabilitiesStorage`), `previewServices` (`PreviewServicesStorage`),
 `agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
 (`GraphTemplatesStorage`), `graphRuns` (`GraphRunsStorage`), `graphEffects`
 (`GraphEffectsStorage`), `clientState` (`ClientStateStorage`), `setupApprovals`
@@ -96,6 +96,7 @@ the change journal.
 | `SetupApprovalsRepository` | `storage-setup-approvals.ts` | `setup-approvals`: one row per project holding the hashes of the `setupLocal` command lists the user approved on this machine ([setup-approval.md](setup-approval.md)), bounded per project, oldest first out; deleted with the project |
 | `EnvironmentIsolationRepository` | `storage-environment-isolation.ts` | No store of its own: reserves a local environment's host port block ([environment-isolation.md](environment-isolation.md)) as `isolationPortBase` on its environment row, chosen and written under the environment store's lease so two environments are never handed the same block; row reservation removed on deletion, with bound ports excluded by host probes before reassignment |
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
+| `CapabilitiesRepository` | `storage-capabilities.ts` | `capabilities`: the Agent Capabilities envelope (packages, components, setups, assignments, operations, receipts, observations, updates, drift, activity, artifact refcounts, machines, inspections, approvals, request keys, imports, launches), written only through `updateStore` so every compare-and-swap is one transaction and pruned by count with in-flight records kept; `capability-executor`: this machine's accepted epoch and applied plan keys ([agent-capabilities-management.md](agent-capabilities-management.md)). Package bytes live in `capability-artifacts/`, never in a row |
 | `PermissionRulesRepository` | `storage-permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |
 
 A store written by more than one repository is written under the same lease

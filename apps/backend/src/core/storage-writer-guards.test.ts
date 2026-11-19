@@ -348,6 +348,7 @@ describe("StorageService store writers", () => {
       "agentAccounts",
       "agentHandoffs",
       "bugReports",
+      "capabilities",
       "clientState",
       "coordinatorNotices",
       "coordinators",

@@ -3011,6 +3011,13 @@ export class NativeAgentService {
             environment.environmentType === "local" ? "host" : "container",
           )
         : undefined;
+    await this.options.capabilityPreflight?.({
+      environmentId: input.environmentId,
+      ...(environment?.projectId ? { projectId: environment.projectId } : {}),
+      agent: input.agent,
+      logicalSessionKey: input.logicalSessionKey,
+      ...(input.policy ? { policy: input.policy } : {}),
+    });
     const options = {
       clientSessionKey: input.logicalSessionKey,
       model: input.model,

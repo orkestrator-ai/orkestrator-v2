@@ -6,6 +6,13 @@ export type ExtensionItem = {
   name: string;
   status: ExtensionStatus;
   source?: string;
+  /**
+   * The fully qualified id the provider keys the item on (`name@marketplace`),
+   * when it differs from the display name. Two marketplaces publishing the
+   * same short name keep two ids, which is what Agent Capabilities uses as a
+   * plugin's identity.
+   */
+  qualifiedId?: string;
 };
 
 export type AgentExtensionCatalog = {
@@ -48,7 +55,10 @@ function sortAndDedupeKeyed(entries: KeyedItem[]): ExtensionItem[] {
     const name = entry.item.name.trim();
     if (!name) continue;
     const key = entry.key.trim() || name;
-    byKey.set(key, { key, item: { ...entry.item, name } });
+    byKey.set(key, {
+      key,
+      item: { ...entry.item, name, ...(key !== name ? { qualifiedId: key } : {}) },
+    });
   }
   return [...byKey.values()]
     .sort(

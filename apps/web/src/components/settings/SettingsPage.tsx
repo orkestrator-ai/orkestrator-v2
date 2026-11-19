@@ -35,7 +35,7 @@ import {
 import { AgentPlatformIcon, DockerIcon } from "@/components/icons/AgentIcons";
 import { DockerSettings } from "@/components/docker";
 import { GlobalSettings } from "./GlobalSettings";
-import { SkillsSettings } from "./SkillsSettings";
+import { CapabilitiesSettings } from "./capabilities/CapabilitiesSettings";
 import { DiskUsageSettings } from "./DiskUsageSettings";
 import { UsageSettings } from "./usage/UsageSettings";
 import { McpSettings } from "./McpSettings";
@@ -100,7 +100,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
     label: "Pi",
     icon: <AgentPlatformIcon platform="pi" accent className="h-4 w-4" />,
   },
-  { id: "skills", label: "Skills and plugins", icon: <Sparkles className="h-4 w-4" /> },
+  { id: "capabilities", label: "Capabilities", icon: <Sparkles className="h-4 w-4" /> },
   { id: "terminal", label: "Terminal", icon: <Terminal className="h-4 w-4" /> },
   { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
   { id: "web-client", label: "Web client", icon: <Globe2 className="h-4 w-4" /> },
@@ -129,6 +129,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
  */
 const COMMAND_NODE_SECTIONS: ReadonlySet<GlobalSettingsSection | ""> = new Set([
   "machines",
+  "capabilities",
   "review",
   "messaging",
   "schedules",
@@ -171,7 +172,8 @@ export function SettingsScopeBanner({
     "opencode",
     "pi",
   ].includes(section);
-  const ownerName = section === "machines" || inherited ? commandNode.name : workspaceName;
+  const fleet = section === "capabilities";
+  const ownerName = section === "machines" || inherited || fleet ? commandNode.name : workspaceName;
   return (
     <div
       className={cn(
@@ -182,7 +184,7 @@ export function SettingsScopeBanner({
     >
       <MachineDot
         colorToken={
-          section === "machines" || inherited
+          section === "machines" || inherited || fleet
             ? commandNode.colorToken
             : (shownMachine?.colorToken ?? commandNode.colorToken)
         }
@@ -200,6 +202,11 @@ export function SettingsScopeBanner({
               This window is on <strong>{commandNode.name}</strong>.
             </>
           )
+        ) : fleet ? (
+          <>
+            Capabilities are managed by <strong>{commandNode.name}</strong> for every machine
+            enrolled in My setup.
+          </>
         ) : inherited ? (
           <>
             Preferences for <strong>{commandNode.name}</strong>, inherited by work on every machine
@@ -274,7 +281,8 @@ export function SettingsPage({
       onOpenChange={onOpenChange}
       title="Settings"
       menuItems={menuItems}
-      defaultSection={defaultSection}
+      // The old "Skills and plugins" link opens Capabilities on its installed-items view.
+      defaultSection={defaultSection === "skills" ? "capabilities" : defaultSection}
       sectionRequest={sectionRequest}
       headerStart={
         resolved.options.length > 1
@@ -297,16 +305,21 @@ export function SettingsPage({
           <MachineSettings key={machine ?? "command-node"} machine={machine} option={option}>
             <SettingsScopeBanner section={activeSection} machine={option} />
             {
-              // Skills is a read-only browser of the host's skill directories, not a
-              // config form, so it bypasses the auto-saving settings form.
+              // Capabilities (and its "skills" deep link) is a manager with its own
+              // commands, not a config form, so it bypasses the auto-saving settings form.
               activeSection === "machines" ? (
                 <MachinesSettings />
               ) : activeSection === "disk-usage" ? (
                 <DiskUsageSettings />
               ) : activeSection === "usage" ? (
                 <UsageSettings />
+              ) : activeSection === "capabilities" ? (
+                <CapabilitiesSettings
+                  key={`${sectionRequest ?? 0}-${defaultSection === "skills" ? "installed" : "library"}`}
+                  initialTab={defaultSection === "skills" ? "installed" : "library"}
+                />
               ) : activeSection === "skills" ? (
-                <SkillsSettings />
+                <CapabilitiesSettings initialTab="installed" />
               ) : activeSection === "mcp" ? (
                 <McpSettings />
               ) : activeSection === "mcp-servers" ? (

@@ -540,6 +540,20 @@ export interface NativeAgentServiceOptions {
     take(environmentId: string, tabId: string): { block: string; ids: string[] };
     delivered(ids: readonly string[], requestId: string): void;
   };
+  /**
+   * Agent Capabilities launch preflight (docs/architecture/agent-capabilities-management.md,
+   * "Runtime connection points"): resolves the session's frozen effective
+   * manifest before its provider session is created, and throws, with the
+   * reason, when a component the session's setups mark required cannot be
+   * delivered. Optional components never block.
+   */
+  capabilityPreflight?: (input: {
+    environmentId: string;
+    projectId?: string;
+    agent: string;
+    logicalSessionKey: string;
+    policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
+  }) => Promise<void>;
   resolveAgentToolConnection?: (
     environmentId: string,
     projectId: string,

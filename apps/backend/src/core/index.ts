@@ -136,6 +136,7 @@ import {
 } from "./shutdown-steps.js";
 
 const log = createLogger("backend");
+const capabilityLog = createLogger("capabilities");
 
 /** How long shutdown waits for web annotations to close before going on without them. */
 const WEB_ANNOTATIONS_CLOSE_TIMEOUT_MS = 5_000;
@@ -169,6 +170,8 @@ import {
   mcpContainerOptions,
 } from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/index.js";
+import { createCapabilityService } from "./capabilities/index.js";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import {
   createCommandRegistry,
@@ -984,6 +987,23 @@ export class OrkestratorBackend {
         recordCentralUsageReadings(context, readings, ownIdentities),
     });
     context.usageSync = this.usageSync;
+    // Agent Capabilities: the command node's authority over setups and
+    // packages, and this machine's executor (docs/architecture/agent-capabilities-management.md).
+    context.capabilities = createCapabilityService(context, {
+      selfId: () => this.nodes.selfIdentity(),
+      selfName: async () => (await this.nodes.selfProfile()).displayName,
+      machines: async () =>
+        (await this.nodes.listNodes()).nodes.map((node) => ({
+          nodeId: node.nodeId,
+          name: node.displayName || node.fallbackName,
+          connected: node.connection.state === "connected",
+        })),
+      link: (nodeId) => (isBackendId(nodeId) ? this.nodes.link(nodeId) : null),
+      isLeaf: () => this.nodes.isLeaf(),
+    });
+    this.nodeCoordination.onNodeConnected((nodeId) =>
+      context.capabilities?.noteNodeConnected(nodeId),
+    );
     this.nodePortal.readModel.onNodeEvent((event, payload) =>
       this.usageSync.handleNodeEvent(event, payload),
     );
@@ -1350,6 +1370,16 @@ export class OrkestratorBackend {
           const projectGit = context.projectGit;
           if (!projectGit) throw new Error("Project Git service is unavailable");
           return projectGit.beginTurnAfterMergeSync(projectId);
+        },
+        capabilityPreflight: async (input) => {
+          if (!context.capabilities || !isAgentPlatform(input.agent)) return;
+          await context.capabilities.preflightSession({
+            environmentId: input.environmentId,
+            ...(input.projectId ? { projectId: input.projectId } : {}),
+            provider: input.agent,
+            sessionKey: input.logicalSessionKey,
+            ...(input.policy ? { policy: input.policy } : {}),
+          });
         },
         resolveAgentToolConnection: async (environmentId, projectId, tabId, target) => {
           if (target === "container" && this.containerHostReachability) {
@@ -2926,6 +2956,15 @@ export class OrkestratorBackend {
       });
     });
     this.nodeCoordination.start();
+    // Capability reconciliation resumes whatever a previous run left in flight.
+    await this.context.capabilities
+      ?.init()
+      .then(() => this.context.capabilities?.start())
+      .catch((error: unknown) => {
+        capabilityLog.warn("service.init-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      });
     // Shared usage readings: once now, then a minute apart as a last resort for
     // anything an event did not trigger (a node with nothing new costs a collect).
     // `init()` can be re-entered by a supervisor retrying a partial startup;
@@ -3214,6 +3253,7 @@ export class OrkestratorBackend {
     stopStepNow("pr-auto-merge", () => this.prAutoMerge.dispose());
     // Closes node links and owned SSH tunnels only; nothing on any node stops.
     stopStepNow("node-coordination", () => this.nodeCoordination.dispose());
+    stopStepNow("capabilities", () => this.context.capabilities?.dispose());
     stopStepNow("usage-sync", () => {
       if (this.usageSyncTimer) clearInterval(this.usageSyncTimer);
       this.usageSyncTimer = null;

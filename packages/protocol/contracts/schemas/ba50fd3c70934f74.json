@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:ba50fd3c70934f7486c090fe22a4cec970df5e9bad0bc8ac4f487f4f6a736b22",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "ceiling": {},
+        "exclusions": {},
+        "graphNode": {},
+        "selections": {},
+        "setupIds": {},
+        "target": {},
+        "templateId": {}
+      },
+      "type": "object"
+    }
+  }
+}

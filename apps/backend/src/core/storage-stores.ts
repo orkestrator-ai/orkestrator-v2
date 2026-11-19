@@ -157,6 +157,32 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "coordinator-watched-pull-requests": { kind: "record", owner: ownerField("projectId") },
   // This machine's load history, one row (`storage-machine-load-history.ts`).
   "machine-load-history": { kind: "record" },
+  // Agent Capabilities (`storage-capabilities.ts`): the command node's setups,
+  // packages, operations and receipts; one row per record in each collection.
+  capabilities: {
+    kind: "envelope",
+    collections: [
+      "packages",
+      "components",
+      "setups",
+      "assignments",
+      "operations",
+      "receipts",
+      "observations",
+      "updates",
+      "drift",
+      "activity",
+      "artifacts",
+      "machines",
+      "inspections",
+      "approvals",
+      "requests",
+      "imports",
+      "launches",
+    ],
+  },
+  // This machine's capability executor record: the accepted epoch and applied plan keys.
+  "capability-executor": { kind: "document" },
 };
 
 /**

@@ -51,6 +51,7 @@ import { webAnnotationsClient } from "./domains/web-annotations/client.js";
 import { kanbanClient } from "./domains/kanban/client.js";
 import { accountsClient } from "./domains/accounts/client.js";
 import { mcpClient } from "./domains/mcp/client.js";
+import { capabilitiesClient } from "./domains/capabilities/client.js";
 import { agentMailClient } from "./domains/agent-mail/client.js";
 
 /**
@@ -85,6 +86,7 @@ export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
   kanbanClient,
   accountsClient,
   mcpClient,
+  capabilitiesClient,
   agentMailClient,
 ] as readonly DomainClientDef[]);
 

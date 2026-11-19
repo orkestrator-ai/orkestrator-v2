@@ -1,0 +1,582 @@
+/**
+ * Agent Capabilities end to end over real storage and real files: a command
+ * node and two leaves, each with its own SQLite store and provider homes,
+ * joined by fake node links that call the leaves' own executor handlers.
+ */
+import { afterEach, describe, expect, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import { MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
+import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
+
+import { StorageService } from "../storage.js";
+import { testCapabilityHomes } from "./native-ownership.js";
+import { CapabilityService } from "./service.js";
+
+interface Node {
+  id: string;
+  dir: string;
+  home: string;
+  storage: StorageService;
+  service: CapabilityService;
+  connected: boolean;
+  /** Throw after a successful apply, as a dropped link would. */
+  loseNextApplyAnswer: boolean;
+  applyCalls: Array<{ key: string; action: string; digest?: string }>;
+}
+
+const nodes: Node[] = [];
+
+afterEach(async () => {
+  for (const node of nodes.splice(0)) {
+    node.service.dispose();
+    node.storage.close?.();
+    await fs.rm(node.dir, { recursive: true, force: true });
+  }
+});
+
+async function makeNode(id: string, others: () => Node[], isCommand: boolean): Promise<Node> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `capabilities-${id}-`));
+  const home = path.join(dir, "home");
+  await fs.mkdir(home, { recursive: true });
+  const storage = new StorageService(path.join(dir, "data"));
+  await storage.init();
+  const node = {
+    id,
+    dir,
+    home,
+    storage,
+    connected: true,
+    loseNextApplyAnswer: false,
+    applyCalls: [],
+  } as unknown as Node;
+  node.service = new CapabilityService({
+    storage: { capabilities: storage.capabilities },
+    dataDir: path.join(dir, "data"),
+    selfId: async () => id,
+    selfName: async () => id,
+    machines: async () =>
+      isCommand
+        ? others().map((other) => ({
+            nodeId: other.id,
+            name: other.id,
+            connected: other.connected,
+          }))
+        : [],
+    link: (nodeId) => {
+      const leaf = others().find((other) => other.id === nodeId);
+      if (!leaf) return null;
+      return {
+        get connected() {
+          return leaf.connected;
+        },
+        invokeCommand: async (def: AnyCommandDef, args: unknown) => {
+          if (!leaf.connected) throw new Error("link down");
+          const record = args as Record<string, unknown>;
+          switch (def.name) {
+            case "get_capability_node_observation":
+              return leaf.service.executorObserve(record) as never;
+            case "stage_capability_node_artifact":
+              return leaf.service.executorStage(record) as never;
+            case "apply_capability_node_plan": {
+              for (const target of record.targets as Array<Record<string, string>>) {
+                leaf.applyCalls.push({
+                  key: target.key!,
+                  action: target.action!,
+                  digest: target.artifactDigest,
+                });
+              }
+              const answer = await leaf.service.executorApply(record);
+              if (leaf.loseNextApplyAnswer) {
+                leaf.loseNextApplyAnswer = false;
+                throw new Error("socket hang up");
+              }
+              return answer as never;
+            }
+            case "export_capability_node_item":
+              return leaf.service.executorExportItem(record) as never;
+            default:
+              throw new Error(`unexpected ${def.name}`);
+          }
+        },
+      };
+    },
+    isAuthority: () => isCommand,
+    emit: () => undefined,
+    homes: () => testCapabilityHomes(home),
+    inventory: {
+      providers: async () => AGENT_PLATFORMS.map((provider) => ({ provider, available: true })),
+    },
+  });
+  await node.service.init();
+  nodes.push(node);
+  return node;
+}
+
+async function fleet() {
+  const all: Node[] = [];
+  const command = await makeNode("bk_command", () => all.slice(1), true);
+  const leafA = await makeNode("bk_leaf_a", () => [], false);
+  const leafB = await makeNode("bk_leaf_b", () => [], false);
+  all.push(command, leafA, leafB);
+  return { command, leafA, leafB };
+}
+
+async function addSkill(command: Node, name: string, body: string, setupId = MY_SETUP_ID) {
+  const inspection = await command.service.authorPackage({
+    kind: "skill",
+    name,
+    description: `${name} skill`,
+    content: body,
+  });
+  const preview = await command.service.previewChange({
+    change: { kind: "add-to-setup", inspectionId: inspection.inspectionId, setupId },
+  });
+  const applied = await command.service.applyChange({
+    operationId: preview.operation.id,
+    approvedDigest: preview.operation.planDigest,
+  });
+  await command.service.reconciler.idle();
+  return { inspection, preview, applied };
+}
+
+const skillFile = (node: Node, root: string, name: string) =>
+  path.join(node.home, root, "skills", name, "SKILL.md");
+
+describe("add once, use wherever compatible", () => {
+  test("one skill reaches every enrolled machine as two shared copies, with honest statuses", async () => {
+    const { command, leafA, leafB } = await fleet();
+    const { inspection, preview } = await addSkill(
+      command,
+      "review",
+      "Review the change carefully.",
+    );
+    expect(inspection.compatibleProviders).toEqual([...AGENT_PLATFORMS]);
+    expect(preview.operation.requiresApproval).toBe(false);
+    // Two locations (Claude's and the shared one) on each of three machines.
+    expect(preview.operation.targets.filter((target) => target.action === "install")).toHaveLength(
+      6,
+    );
+    for (const node of [command, leafA, leafB]) {
+      expect(await fs.readFile(skillFile(node, ".claude", "review"), "utf8")).toContain(
+        "Review the change carefully.",
+      );
+      expect(await fs.readFile(skillFile(node, ".agents", "review"), "utf8")).toContain(
+        "Review the change carefully.",
+      );
+      const marker = JSON.parse(
+        await fs.readFile(
+          path.join(node.home, ".claude", "skills", "review", ".orkestrator-capability.json"),
+          "utf8",
+        ),
+      );
+      expect(marker.packageId).toBe(inspection.packageId);
+    }
+    const detail = await command.service.getPackage({ packageId: inspection.packageId });
+    // 3 machines x 6 providers.
+    expect(detail.availability).toHaveLength(18);
+    // A copy is never "ready" without runtime evidence.
+    expect(detail.availability.every((cell) => cell.status === "installed-next-session")).toBe(
+      true,
+    );
+    const cursor = detail.availability.find((cell) => cell.target.provider === "cursor");
+    expect(cursor?.verification).toBe("present");
+
+    const operation = await command.service.getOperation({ operationId: preview.operation.id });
+    expect(operation.state).toBe("completed");
+
+    // Re-applying the same desired state writes nothing.
+    leafA.applyCalls.length = 0;
+    await command.service.reconciler.reconcileAll("test");
+    expect(leafA.applyCalls).toEqual([]);
+  });
+
+  test("approval is for the exact plan: a changed plan invalidates it", async () => {
+    const { command } = await fleet();
+    const inspection = await command.service.authorPackage({
+      kind: "skill",
+      name: "lint",
+      content: "Lint.",
+    });
+    const preview = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: inspection.inspectionId },
+    });
+    await expect(
+      command.service.applyChange({
+        operationId: preview.operation.id,
+        approvedDigest: "sha256:wrong",
+      }),
+    ).rejects.toThrow("different plan");
+    // A machine leaving the setup changes the plan, so the approval no longer holds.
+    await command.service.setMachineEnrollment({ nodeId: "bk_leaf_a", enrolled: false });
+    await expect(
+      command.service.applyChange({
+        operationId: preview.operation.id,
+        approvedDigest: preview.operation.planDigest,
+      }),
+    ).rejects.toThrow("changed since the preview");
+    const fresh = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: inspection.inspectionId },
+    });
+    await expect(
+      command.service.applyChange({
+        operationId: fresh.operation.id,
+        approvedDigest: fresh.operation.planDigest,
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  test("a hook package needs approval and is never installed as a standalone hook", async () => {
+    const { command } = await fleet();
+    const inspection = await command.service.authorPackage({
+      kind: "hook",
+      name: "guard",
+      hook: { trigger: "PreToolUse", command: "./guard.sh" },
+    });
+    expect(inspection.approvalReasons[0]).toContain("./guard.sh");
+    const preview = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: inspection.inspectionId },
+    });
+    expect(preview.operation.requiresApproval).toBe(true);
+    expect(
+      preview.operation.targets.every(
+        (target) => target.action === "skip" && target.status === "unsupported",
+      ),
+    ).toBe(true);
+  });
+
+  test("a package with a secret cannot be added", async () => {
+    const { command } = await fleet();
+    const inspection = await command.service.authorPackage({
+      kind: "skill",
+      name: "leaky",
+      content: "token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+    });
+    expect(inspection.secretsFound).toEqual(["GitHub token"]);
+    await expect(
+      command.service.previewChange({
+        change: { kind: "add-to-setup", inspectionId: inspection.inspectionId },
+      }),
+    ).rejects.toThrow("GitHub token");
+  });
+});
+
+describe("remote safety", () => {
+  test("an offline machine gets the latest revision on reconnect, never the obsolete one", async () => {
+    const { command, leafB } = await fleet();
+    leafB.connected = false;
+    const first = await addSkill(command, "docs", "Version one.");
+    const firstDigest = first.inspection.artifactDigest;
+    const second = await command.service.authorPackage({
+      kind: "skill",
+      name: "docs",
+      content: "Version two.",
+      managedId:
+        first.inspection.source.kind === "managed" ? first.inspection.source.managedId : "",
+    });
+    const preview = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: second.inspectionId },
+    });
+    await command.service.applyChange({
+      operationId: preview.operation.id,
+      approvedDigest: preview.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    expect(leafB.applyCalls).toEqual([]);
+    const offlineCells = (
+      await command.service.getPackage({ packageId: second.packageId })
+    ).availability.filter((cell) => cell.target.nodeId === leafB.id);
+    expect(offlineCells.every((cell) => cell.status === "offline")).toBe(true);
+
+    leafB.connected = true;
+    command.service.noteNodeConnected(leafB.id);
+    await command.service.reconciler.idle();
+    expect(leafB.applyCalls.length).toBeGreaterThan(0);
+    expect(leafB.applyCalls.every((call) => call.digest !== firstDigest)).toBe(true);
+    expect(await fs.readFile(skillFile(leafB, ".claude", "docs"), "utf8")).toContain(
+      "Version two.",
+    );
+  });
+
+  test("an unknown outcome is read back before anything is sent again", async () => {
+    const { command, leafA } = await fleet();
+    leafA.loseNextApplyAnswer = true;
+    const { inspection } = await addSkill(command, "notes", "Take notes.");
+    const unknown = (
+      await command.service.getPackage({ packageId: inspection.packageId })
+    ).availability.filter(
+      (cell) => cell.target.nodeId === leafA.id && cell.target.provider === "claude",
+    );
+    expect(unknown[0]?.status).toBe("outcome-unknown");
+    const calls = leafA.applyCalls.length;
+    await command.service.reconciler.reconcileNode(leafA.id, "recheck");
+    await command.service.reconciler.idle();
+    // The bytes were there, so nothing was re-sent.
+    expect(leafA.applyCalls.length).toBe(calls);
+    const settled = (
+      await command.service.getPackage({ packageId: inspection.packageId })
+    ).availability.filter(
+      (cell) => cell.target.nodeId === leafA.id && cell.target.provider === "claude",
+    );
+    expect(settled[0]?.status).toBe("installed-next-session");
+  });
+
+  test("a leaf refuses a plan from an older command-node epoch", async () => {
+    const { leafA } = await fleet();
+    await leafA.service.executorObserve({ controllerId: "bk_new", epoch: 5 });
+    await expect(
+      leafA.service.executorObserve({ controllerId: "bk_old", epoch: 4 }),
+    ).rejects.toThrow("newer command node");
+    await expect(
+      leafA.service.executorObserve({ controllerId: "bk_other", epoch: 5 }),
+    ).rejects.toThrow("Another command node");
+  });
+
+  test("a leaf does not act as an authority", async () => {
+    const { leafA } = await fleet();
+    await expect(
+      leafA.service.authorPackage({ kind: "skill", name: "x", content: "y" }),
+    ).rejects.toThrow("command node");
+  });
+});
+
+describe("ownership and drift", () => {
+  test("a manually edited skill is reported and kept until the user decides", async () => {
+    const { command, leafA } = await fleet();
+    const { inspection } = await addSkill(command, "style", "Original.");
+    await fs.writeFile(skillFile(leafA, ".claude", "style"), "Edited by hand.");
+    await command.service.reconciler.reconcileNode(leafA.id, "test");
+    await command.service.reconciler.idle();
+    const drift = (await command.service.listDrift({})).drift.filter(
+      (entry) => entry.nodeId === leafA.id,
+    );
+    expect(drift).toHaveLength(1);
+    expect(drift[0]?.kind).toBe("modified");
+    expect(await fs.readFile(skillFile(leafA, ".claude", "style"), "utf8")).toBe("Edited by hand.");
+
+    await command.service.resolveDrift({ driftId: drift[0]!.id, decision: "replace" });
+    await command.service.reconciler.idle();
+    expect(await fs.readFile(skillFile(leafA, ".claude", "style"), "utf8")).toContain("Original.");
+    expect(
+      (await command.service.listDrift({})).drift.filter((entry) => entry.state === "open"),
+    ).toEqual([]);
+    expect(inspection.packageId).toBeTruthy();
+  });
+
+  test("an external skill with the same name is never overwritten", async () => {
+    const { command, leafA } = await fleet();
+    await fs.mkdir(path.join(leafA.home, ".claude", "skills", "mine"), { recursive: true });
+    await fs.writeFile(skillFile(leafA, ".claude", "mine"), "My own skill.");
+    await addSkill(command, "mine", "Managed version.");
+    expect(await fs.readFile(skillFile(leafA, ".claude", "mine"), "utf8")).toBe("My own skill.");
+    const drift = (await command.service.listDrift({})).drift.find(
+      (entry) => entry.nodeId === leafA.id,
+    );
+    expect(drift?.kind).toBe("unmanaged");
+  });
+
+  test("an existing installation can be adopted in place", async () => {
+    const { command } = await fleet();
+    await fs.mkdir(path.join(command.home, ".claude", "skills", "adopted"), { recursive: true });
+    await fs.writeFile(
+      skillFile(command, ".claude", "adopted"),
+      "---\nname: adopted\ndescription: x\n---\nMine",
+    );
+    const inventory = await command.service.getInventory({});
+    const item = inventory.items.find((entry) => entry.name === "adopted");
+    expect(item?.ownership).toBe("external");
+    const inspection = await command.service.adoptExternal({ itemId: item!.id });
+    const preview = await command.service.previewChange({
+      change: { kind: "adopt", inspectionId: inspection.inspectionId },
+    });
+    await command.service.applyChange({
+      operationId: preview.operation.id,
+      approvedDigest: preview.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    const after = await command.service.getInventory({});
+    expect(
+      after.items.find(
+        (entry) => entry.name === "adopted" && entry.locationId === "claude-user-skills",
+      )?.ownership,
+    ).toBe("managed");
+    expect(await fs.readFile(skillFile(command, ".claude", "adopted"), "utf8")).toContain("Mine");
+  });
+
+  test("removing a package from My setup keeps copies another setup still uses", async () => {
+    const { command } = await fleet();
+    const toolkit = await command.service.setSetup({
+      setup: { name: "Frontend", machineSelectors: ["*"] },
+    });
+    const { inspection } = await addSkill(command, "shared", "Shared skill.");
+    const again = await command.service.authorPackage({
+      kind: "skill",
+      name: "shared",
+      content: "Shared skill.",
+      managedId: (inspection.source as { managedId: string }).managedId,
+    });
+    const addToToolkit = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: again.inspectionId, setupId: toolkit.id },
+    });
+    await command.service.applyChange({
+      operationId: addToToolkit.operation.id,
+      approvedDigest: addToToolkit.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    const removal = await command.service.previewChange({
+      change: { kind: "remove-from-setup", packageId: inspection.packageId, setupId: MY_SETUP_ID },
+    });
+    expect(removal.operation.targets.some((target) => target.action === "remove")).toBe(false);
+    await command.service.applyChange({
+      operationId: removal.operation.id,
+      approvedDigest: removal.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    expect(await fs.readFile(skillFile(command, ".claude", "shared"), "utf8")).toContain(
+      "Shared skill.",
+    );
+
+    const last = await command.service.previewChange({
+      change: { kind: "remove-from-setup", packageId: inspection.packageId, setupId: toolkit.id },
+    });
+    expect(last.operation.targets.some((target) => target.action === "remove")).toBe(true);
+    await command.service.applyChange({
+      operationId: last.operation.id,
+      approvedDigest: last.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    await expect(fs.stat(skillFile(command, ".claude", "shared"))).rejects.toThrow();
+  });
+});
+
+describe("setups", () => {
+  test("a stale write is refused instead of overwriting", async () => {
+    const { command } = await fleet();
+    const created = await command.service.setSetup({ setup: { name: "Research" } });
+    await command.service.setSetup({
+      setup: { id: created.id, name: "Research v2" },
+      expectedRevision: created.revision,
+    });
+    await expect(
+      command.service.setSetup({
+        setup: { id: created.id, name: "Stale" },
+        expectedRevision: created.revision,
+      }),
+    ).rejects.toThrow("Someone else changed");
+  });
+
+  test("My setup cannot be deleted; a toolkit can", async () => {
+    const { command } = await fleet();
+    await expect(
+      command.service.deleteSetup({ setupId: MY_SETUP_ID, expectedRevision: 1 }),
+    ).rejects.toThrow("cannot be deleted");
+    const created = await command.service.setSetup({ setup: { name: "Review" } });
+    const list = await command.service.deleteSetup({
+      setupId: created.id,
+      expectedRevision: created.revision,
+    });
+    expect(list.setups.map((setup) => setup.id)).toEqual([MY_SETUP_ID]);
+  });
+
+  test("a session selection is narrowed by its permission ceiling", async () => {
+    const { command } = await fleet();
+    const inspection = await command.service.authorPackage({
+      kind: "mcp-server",
+      name: "docs",
+      mcp: { transport: "http", url: "https://docs.example.com/mcp" },
+    });
+    const preview = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: inspection.inspectionId },
+    });
+    await command.service.applyChange({
+      operationId: preview.operation.id,
+      approvedDigest: preview.operation.planDigest,
+    });
+    const effective = await command.service.getEffectiveResources({
+      target: { provider: "claude" },
+      ceiling: { denied: ["mcp:docs"] },
+    });
+    expect(effective.resolvedPackages).toEqual([]);
+    expect(effective.blocked[0]?.reason).toContain("mcp:docs");
+  });
+});
+
+describe("session launch", () => {
+  test("a required component the session's policy denies blocks the launch; the manifest is frozen otherwise", async () => {
+    const { command } = await fleet();
+    const inspection = await command.service.authorPackage({
+      kind: "mcp-server",
+      name: "tracker",
+      mcp: { transport: "http", url: "https://tracker.example.com/mcp" },
+    });
+    const preview = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: inspection.inspectionId, required: true },
+    });
+    await command.service.applyChange({
+      operationId: preview.operation.id,
+      approvedDigest: preview.operation.planDigest,
+    });
+    const denied = { approvals: "ask", capabilityPolicy: { deny: ["network"] } } as never;
+    await expect(
+      command.service.preflightSession({
+        environmentId: "env-1",
+        provider: "claude",
+        sessionKey: "s1",
+        policy: denied,
+      }),
+    ).rejects.toThrow("require a capability it cannot have");
+    const allowed = await command.service.preflightSession({
+      environmentId: "env-1",
+      provider: "claude",
+      sessionKey: "s2",
+    });
+    expect(allowed?.resolvedPackages).toHaveLength(1);
+    const view = await command.service.getSessionView({
+      sessionKey: "s2",
+      target: { provider: "claude" },
+    });
+    expect(view.launchManifestDigest).toBe(allowed?.manifestDigest);
+  });
+});
+
+describe("portable setups", () => {
+  test("export carries no machine ids or host paths and imports back to the same package graph", async () => {
+    const { command } = await fleet();
+    const toolkit = await command.service.setSetup({
+      setup: { name: "Frontend", machineSelectors: ["group:development", `machine:bk_leaf_a`] },
+    });
+    const inspection = await command.service.authorPackage({
+      kind: "skill",
+      name: "ui",
+      content: "UI rules.",
+    });
+    const preview = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: inspection.inspectionId, setupId: toolkit.id },
+    });
+    await command.service.applyChange({
+      operationId: preview.operation.id,
+      approvedDigest: preview.operation.planDigest,
+    });
+    const exported = await command.service.exportSetup({ setupIds: [toolkit.id] });
+    expect(exported.intent).toContain("frontend:");
+    expect(exported.intent).not.toContain("bk_leaf_a");
+    expect(exported.intent).not.toContain(command.home);
+    const lock = JSON.parse(exported.lock);
+    expect(lock.packages[0].artifactDigest).toBe(inspection.artifactDigest);
+
+    const importPreview = await command.service.previewImport({
+      intent: exported.intent,
+      lock: exported.lock,
+    });
+    expect(importPreview.valid).toBe(true);
+    expect(importPreview.packages[0]?.action).toBe("unchanged");
+    const tampered = await command.service.previewImport({
+      intent: exported.intent,
+      lock: exported.lock.replace(inspection.artifactDigest, `sha256:${"0".repeat(64)}`),
+    });
+    expect(tampered.packages[0]?.action).toBe("update");
+  });
+});

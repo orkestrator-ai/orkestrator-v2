@@ -60,6 +60,7 @@ import {
   type SettingsMenuItem,
 } from "@/components/settings/FullscreenSettingsLayout";
 import { SkillsSettings } from "@/components/settings/SkillsSettings";
+import { CapabilityScopeCard } from "@/components/settings/capabilities/CapabilityScopeCard";
 import { EnvironmentDiskUsageBreakdown } from "@/components/disk-usage/EnvironmentDiskUsageBreakdown";
 import type * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
@@ -273,6 +274,12 @@ function AgentExtensionSection({
 
   return (
     <section className="space-y-5" aria-label={`${copy.label} extensions`}>
+      <CapabilityScopeCard
+        scope="environment"
+        scopeId={environmentId}
+        environmentId={environmentId}
+        provider={catalog.agent}
+      />
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>
           {unavailableCollections === 2

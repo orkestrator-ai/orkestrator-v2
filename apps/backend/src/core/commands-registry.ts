@@ -22,6 +22,7 @@ import { registerTranscriptMediaCommands } from "./commands-registry-transcript-
 import { registerGraphMockCommands } from "./commands-registry-graph-mock.js";
 import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
+import { registerCapabilityCommands } from "./commands-registry-capabilities.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
 import { registerWebAnnotationCommands } from "./commands-registry-web-annotations.js";
 import {
@@ -355,6 +356,7 @@ export function createCommandRegistry(options: CommandRegistryOptions = {}): Com
   registerDesignCommands(register, dependencies);
   registerPreviewCommands(register);
   registerMcpManagementCommands(register);
+  registerCapabilityCommands(register);
   registerWebAnnotationCommands(register);
   registerTranscriptArtifactCommands(register);
   registerTranscriptArtifactPdfCommands(register, (name) => commands.get(name));

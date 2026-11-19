@@ -9,6 +9,7 @@ export type { GraphDescribeStorage } from "./storage-graph-describe.js";
 export type { SuborksStorage } from "./storage-suborks.js";
 export type { ClientStateStorage } from "./storage-client-state.js";
 export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
+export type { CapabilitiesStorage } from "./storage-capabilities.js";
 export type { EnvironmentIsolationStorage } from "./storage-environment-isolation.js";
 export type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
@@ -47,6 +48,7 @@ import type { GraphDescribeStorage } from "./storage-graph-describe.js";
 import type { SuborksStorage } from "./storage-suborks.js";
 import type { ClientStateStorage } from "./storage-client-state.js";
 import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
+import type { CapabilitiesStorage } from "./storage-capabilities.js";
 import type { EnvironmentIsolationStorage } from "./storage-environment-isolation.js";
 import type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
@@ -190,6 +192,8 @@ export class StorageService {
   readonly watchedPullRequests: WatchedPullRequestsStorage;
   /** This machine's load history (`machine-load.ts`, #2287). */
   readonly machineLoadHistory: MachineLoadHistoryStorage;
+  /** Agent Capabilities: setups, packages, operations, receipts (`capabilities/`). */
+  readonly capabilities: CapabilitiesStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -215,6 +219,7 @@ export class StorageService {
     this.environmentIsolation = this.repos.environmentIsolation;
     this.watchedPullRequests = this.repos.watchedPullRequests;
     this.machineLoadHistory = this.repos.machineLoadHistory;
+    this.capabilities = this.repos.capabilities;
   }
 
   async init(): Promise<void> {

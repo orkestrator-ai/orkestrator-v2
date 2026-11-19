@@ -138,7 +138,12 @@ export class NativeAgentProviderSessionMissingError extends Data.TaggedError(
 
 export type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
+export const REQUIRED_CONVERSATION_CHANGED =
+  "The destination conversation changed or is unavailable. Cancel this queued correction and choose a started agent chat.";
+
 export interface EnsureNativeAgentSessionInput {
+  /** A queued follow-up may only use the conversation the user chose. */
+  requireProviderSessionId?: string;
   environmentId: string;
   agent: BuildPipelineAgent;
   logicalSessionKey: string;

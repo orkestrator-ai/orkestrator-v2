@@ -466,6 +466,7 @@ with Monaco. That comparison supplies no change statistics or projections.
 | Edit and shell rows | `CanonicalToolPresentation` roles (payload, effect, observation) with backend hunks (`NativeMessage.change-parts.tsx`); legacy rows measured by `changes_measure_legacy_payload` |
 | Claude tmux transcript | the backend reading the JSONL stamps each `tool_use`'s path and payload sides on the line (`toolDiffs`, `tmux-transcript-tool-diffs.ts`); the store never interprets tool inputs, and counts come from `changes_measure_legacy_payload` |
 | Diff tab | historical `DiffIdentity` or explicit live current-file target; backend hunks, split/unified, whitespace view, previous/next change and file with a position counter and keyboard shortcuts (`]`/`[`, `}`/`{`, Alt+↑/↓, `diff-hunk-navigation.ts`); a live file can switch to its unstaged or staged diff and stage or unstage one hunk at a time (`DiffNavigationBar.tsx`, `useHunkStaging.ts`) |
+| Diff review comments | comments on a diff tab's lines and hunks, pinned to the `DiffIdentity` on screen with the lines they quote, sent to an agent chat as one queued correction request (see [Diff review comments](#diff-review-comments)) |
 | Restore | preview/apply dialog gated by the capability and the projection's `restore` action (`RestoreChangesButton.tsx`) |
 | Agent handoff | The backend writes the same serializer's text per tool call when it builds the handoff (`agentHandoffChangeSummaries`, `agent-handoffs.ts`); unmeasured calls say "changes: not measured" |
 | CLI | `orkestrator changes view <environment>` / `changes history <session>` |
@@ -473,6 +474,43 @@ with Monaco. That comparison supplies no change statistics or projections.
 Older clients that still read the legacy `toolDiff` shape receive
 backend-generated CountPolicyV1 counts in it (`legacyCompatibilityCounts`); a
 count the old shape cannot express exactly is omitted instead of guessed.
+
+### Diff review comments
+
+A diff tab opened for an environment lets the user comment on any line or
+hunk, collect several comments across files, and send the selected ones to one
+of the environment's agent chats as a single prompt. The renderer owns the
+review drafts and sends a prompt-queue entry bound to the chosen conversation.
+
+- **Anchor.** A comment records the `DiffIdentity` id, measurement, path id,
+  side (removed lines count on the old side, the rest on the new), line number
+  or hunk header, and a bounded copy of the lines it is about
+  (`diffCommentsStore.ts`). The request quotes that copy, so it stays precise
+  after the file moves on.
+- **Moved on.** The tray follows live invalidations for the commented files,
+  including closed tabs. Copy and Send resolve each selected live path again.
+  If the file cannot be checked, the request says so and quotes the captured
+  code. A live comment written against other content is
+  marked Outdated, listed above the file instead of under whatever line now
+  has its number, and its section of the request says the lines may have
+  moved. A historical identity never changes, so its comments are never
+  outdated; the request labels them as written on an earlier change.
+- **Delivery.** The request is appended to the chosen tab's backend prompt
+  queue (`enqueue_prompt_queue_message`, `preserveSessionMode`), so it runs
+  when the session is free whether or not the tab is mounted
+  (`diff-comment-delivery.ts`). The send snapshots `(id, revision)` pairs;
+  once the queue accepts it, only comments still at those revisions are
+  removed. An open edit keeps its draft after acknowledgement. New drafts
+  keep their original anchors through refreshes, and an environment with
+  pending review work is protected from cache eviction. A failed send keeps
+  everything. A started conversation is required, and the backend checks its
+  binding before enqueue and dispatch. The request id includes the snapshot,
+  tab and conversation, so
+  retrying the same batch finds the copy still waiting in the queue. As for
+  any queued prompt, an unsent draft in that chat holds the queue.
+- **Scope.** Comments are renderer state per node scope and environment,
+  bounded in count and size; they survive tab and environment switches but
+  not a renderer restart.
 
 ## Policies
 

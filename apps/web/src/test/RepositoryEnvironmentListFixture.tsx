@@ -8,12 +8,20 @@ import {
   toNodeProjectSummary,
   type NodeSummary,
 } from "@orkestrator/protocol/node-summaries";
-import { emptyPortalLayout, type PortalLayoutUpdate } from "@orkestrator/protocol/portal-layout";
+import {
+  applyRepositoryEnvironmentOrder,
+  emptyPortalLayout,
+  type PortalLayout,
+  type PortalLayoutUpdate,
+  type RepositoryEnvironmentOrderUpdate,
+} from "@orkestrator/protocol/portal-layout";
 import { FederationProvider, useFederation } from "@/components/federation/FederationProvider";
+import { MachinesFilter } from "@/components/federation/MachinesFilter";
 import { MachineTiles } from "@/components/federation/MachineTiles";
 import { RepositoryEnvironmentList } from "@/components/federation/RepositoryEnvironmentList";
 import { useRemoteMachineViews } from "@/components/federation/useMachineViews";
 import { useRevealMachineProject } from "@/components/federation/useRevealMachineProject";
+import { MobileAppShellLayout } from "@/components/layout/MobileAppShellLayout";
 import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { filterMachines } from "@/lib/federation/aggregate";
 import { isMachineShown, orderMachines } from "@/lib/federation/sidebar-layout";
@@ -255,11 +263,18 @@ function install() {
   const params = new URLSearchParams(location.search);
   const offline = new Set(params.getAll("offline"));
   const nodes = REPOSITORY_LIST_MACHINES.map((machine) =>
-    summary(machine, !offline.has(machine.name)),
+    summary(
+      params.get("empty") === machine.name ? { ...machine, projects: [] } : machine,
+      !offline.has(machine.name),
+    ),
   );
   const cpuByNode = new Map(REPOSITORY_LIST_MACHINES.map((m) => [m.nodeId, m.cpu]));
-  let layout = emptyPortalLayout();
-  portalLayoutStore.setState({ layout, loaded: true, error: null });
+  const liveLayout = params.has("command-node");
+  let layout: PortalLayout = {
+    ...emptyPortalLayout(),
+    ...(params.has("legacy-layout") ? {} : { manualOrderSupported: true }),
+  };
+  portalLayoutStore.setState({ layout, loaded: !liveLayout, error: null });
   useMachineViewStore.setState({
     machineFilter: [],
     grouping: "repository",
@@ -269,16 +284,34 @@ function install() {
     openedRepository: null,
   });
   const state = createStore(() => ({
-    updates: [] as PortalLayoutUpdate[],
+    updates: [] as Array<PortalLayoutUpdate | RepositoryEnvironmentOrderUpdate>,
     reorders: [] as Array<{ nodeId: unknown; projectId: unknown; environmentIds: unknown }>,
   }));
   window.orkestrator = {
     ...window.orkestrator!,
     listen: () => () => {},
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
+      if (
+        liveLayout &&
+        ["get_portal_layout", "update_repository_environment_order"].includes(command)
+      ) {
+        const response = await fetch("/__fixture/sidebar-command-node", {
+          method: "POST",
+          body: JSON.stringify({ command, args }),
+        });
+        if (!response.ok) throw new Error("Command node request failed");
+        const saved = await response.json();
+        if (command === "update_repository_environment_order") {
+          const update = args as unknown as RepositoryEnvironmentOrderUpdate;
+          state.setState((current) => ({ updates: [...current.updates, update] }));
+        }
+        return saved as T;
+      }
       switch (command) {
         case "get_node_status":
           return { nodeId: "bk_self", mode: "command" } as T;
+        case "list_nodes":
+          return { nodes: [] } as T;
         case "get_node_summaries":
           return { selfId: "bk_self", nodes: structuredClone(nodes) } as T;
         case "get_backend_profile":
@@ -294,6 +327,16 @@ function install() {
         case "update_portal_layout": {
           const update = args as PortalLayoutUpdate;
           layout = { ...layout, ...update, revision: layout.revision + 1 };
+          state.setState((current) => ({ updates: [...current.updates, update] }));
+          return layout as T;
+        }
+        case "update_repository_environment_order": {
+          const update = args as unknown as RepositoryEnvironmentOrderUpdate;
+          layout = {
+            ...layout,
+            environmentOrder: applyRepositoryEnvironmentOrder(layout.environmentOrder, update),
+            revision: layout.revision + 1,
+          };
           state.setState((current) => ({ updates: [...current.updates, update] }));
           return layout as T;
         }
@@ -361,8 +404,9 @@ function SidebarColumn() {
     <aside
       aria-label="Sidebar"
       data-testid="fixture-sidebar"
-      className="flex min-h-screen w-[340px] max-w-full flex-col bg-sidebar text-foreground shadow-[1px_0_0_var(--color-border)]"
+      className="flex h-full w-[340px] max-w-full flex-col bg-sidebar text-foreground shadow-[1px_0_0_var(--color-border)]"
     >
+      <MachinesFilter machines={machines} />
       <ProjectSearchBar
         projects={[]}
         environments={[]}
@@ -371,7 +415,7 @@ function SidebarColumn() {
         onSelectMachineProject={reveal}
       />
       <MachineTiles machines={machines} />
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto">
         <RepositoryEnvironmentList
           machines={machines}
           shownIds={shownIds}
@@ -393,6 +437,7 @@ function SidebarColumn() {
 let instance: ReturnType<typeof install> | undefined;
 export function RepositoryEnvironmentListFixture() {
   const [store] = useState(() => (instance ??= install()));
+  const phoneOverlay = new URLSearchParams(location.search).has("phone-overlay");
   const state = useStore(store);
   const filter = useMachineViewStore((value) => value.machineFilter);
   // What the central region shows: another node's workspace, and what it asked for.
@@ -401,7 +446,7 @@ export function RepositoryEnvironmentListFixture() {
     value.active ? value.requests[value.active.nodeId]?.request : undefined,
   );
   return (
-    <main className="min-h-screen bg-background">
+    <main className="h-dvh bg-background">
       <div hidden>
         <output data-testid="updates">{JSON.stringify(state.updates)}</output>
         <output data-testid="reorders">{JSON.stringify(state.reorders)}</output>
@@ -410,7 +455,22 @@ export function RepositoryEnvironmentListFixture() {
         <output data-testid="intent">{latest ? JSON.stringify(latest) : null}</output>
       </div>
       <FederationProvider>
-        <SidebarColumn />
+        {phoneOverlay ? (
+          <MobileAppShellLayout
+            selectedProjectId={null}
+            selectedEnvironmentId={null}
+            title="Repository list"
+            filesPanelOpen={false}
+            centralPanelStyle={{}}
+            actionBar={null}
+            agentInfoButton={null}
+            sidebar={<SidebarColumn />}
+            filesPanel={null}
+            onTitleBarMouseDown={() => {}}
+          />
+        ) : (
+          <SidebarColumn />
+        )}
       </FederationProvider>
     </main>
   );

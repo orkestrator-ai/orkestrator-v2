@@ -231,22 +231,13 @@ describe("manual ordering", () => {
     const { machines } = fleet();
     const entry = repositoryEntries(machines, all(machines), layout(), "mini").entries[0]!;
     const ordered = orderRepository(entry, machines, "manual", layout(), environmentsOf);
-    const next = manualOrderAfterDrop(
-      entry,
-      ordered,
-      machines,
-      layout({ environmentOrder: { other: [key("mini", "x")] } }),
-      key("beelink", "b2"),
-      key("mini", "m2"),
-    );
-    expect(next?.[REPO]).toEqual([
+    const next = manualOrderAfterDrop(ordered, key("beelink", "b2"), key("mini", "m2"));
+    expect(next).toEqual([
       key("mini", "m1"),
       key("beelink", "b2"),
       key("mini", "m2"),
       key("beelink", "b1"),
     ]);
-    // Other repositories' orders are kept as stored.
-    expect(next?.other).toEqual([key("mini", "x")]);
   });
 
   test("with a filter, hidden machines' environments keep their places", () => {
@@ -259,20 +250,50 @@ describe("manual ordering", () => {
     const entry = repositoryEntries(machines, new Set(["mini"]), stored, "mini").entries[0]!;
     const ordered = orderRepository(entry, machines, "manual", stored, environmentsOf);
     expect(ids(ordered.rows)).toEqual(["mini/m1", "mini/m2"]);
-    const next = manualOrderAfterDrop(
-      entry,
-      ordered,
-      machines,
-      stored,
-      key("mini", "m2"),
-      key("mini", "m1"),
-    );
-    expect(next?.[REPO]).toEqual([
+    const next = manualOrderAfterDrop(ordered, key("mini", "m2"), key("mini", "m1"));
+    expect(next).toEqual([
       key("mini", "m2"),
       key("beelink", "b1"),
       key("mini", "m1"),
       key("beelink", "b2"),
     ]);
+  });
+
+  test("a confirmed deletion cannot anchor a new same-machine row", () => {
+    const { mini, beelink } = fleet();
+    const stored = layout({
+      environmentOrder: { [REPO]: [key("mini", "m1"), key("beelink", "b1"), key("mini", "gone")] },
+    });
+    const active = [mini, beelink];
+    const entry = repositoryEntries(active, all(active), stored, "mini").entries[0]!;
+    expect(
+      orderRepository(entry, active, "manual", stored, environmentsOf).full.slice(0, 3),
+    ).toEqual([key("mini", "m1"), key("mini", "m2"), key("beelink", "b1")]);
+    const offline = [{ ...mini, transport: "unreachable" as const }, beelink];
+    const offlineEntry = repositoryEntries(offline, new Set(["beelink"]), stored, "mini")
+      .entries[0]!;
+    expect(orderRepository(offlineEntry, offline, "manual", stored, environmentsOf).full).toContain(
+      key("mini", "gone"),
+    );
+  });
+
+  test("a remote drop keeps saved local slots until the bound project snapshots arrive", () => {
+    const { mini, beelink } = fleet();
+    const saved = {
+      [REPO]: [key("beelink", "b1"), key("mini", "m1"), key("beelink", "b2"), key("mini", "m2")],
+    };
+    const stored = layout({ environmentOrder: saved });
+    const local = { ...mini, bound: true };
+    const loading = [{ ...local, environmentsByProject: new Map() }, beelink];
+    const entry = repositoryEntries(loading, all(loading), stored, "mini").entries[0]!;
+    const ordered = orderRepository(entry, loading, "manual", stored, environmentsOf);
+    const order = manualOrderAfterDrop(ordered, key("beelink", "b2"), key("beelink", "b1"))!;
+    const ready = [{ ...local, boundEnvironmentsComplete: true }, beelink];
+    const reloaded = layout({ environmentOrder: { [REPO]: order } });
+    const readyEntry = repositoryEntries(ready, all(ready), reloaded, "mini").entries[0]!;
+    expect(
+      ids(orderRepository(readyEntry, ready, "manual", reloaded, environmentsOf).rows),
+    ).toEqual(["beelink/b2", "mini/m1", "beelink/b1", "mini/m2"]);
   });
 
   test("a write drops environments a complete machine no longer has, and forgotten machines", () => {
@@ -281,12 +302,15 @@ describe("manual ordering", () => {
       pruneEnvironmentOrder(
         [key("mini", "m1"), key("mini", "gone"), key("ghost", "g1"), key("beelink", "b1")],
         machines,
+        [key("mini", "m1"), key("beelink", "b1")],
       ),
     ).toEqual([key("mini", "m1"), key("beelink", "b1")]);
     // An unreachable machine's entries are kept: its list may be stale.
     const offline = machines.map((entry) =>
       entry.connectionId === "mini" ? { ...entry, transport: "unreachable" as const } : entry,
     );
-    expect(pruneEnvironmentOrder([key("mini", "gone")], offline)).toEqual([key("mini", "gone")]);
+    expect(pruneEnvironmentOrder([key("mini", "gone")], offline, [])).toEqual([
+      key("mini", "gone"),
+    ]);
   });
 });

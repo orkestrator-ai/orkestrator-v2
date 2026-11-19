@@ -155,12 +155,17 @@ for (const source of ["bound", "remote"] as const) {
       truncated: false,
       loadedAt: null,
     };
+    const boundMachine = { ...machine, connectionId: "bound", bound: true, loadedAt: 1 };
     function List({ loading, shown = true }: { loading: boolean; shown?: boolean }) {
       return (
         <FederationProvider>
           <RepositoryEnvironmentList
-            machines={source === "remote" ? [{ ...machine, loadedAt: loading ? null : 1 }] : []}
-            shownIds={new Set(shown ? ["a"] : [])}
+            machines={
+              source === "remote"
+                ? [boundMachine, { ...machine, loadedAt: loading ? null : 1 }]
+                : [boundMachine]
+            }
+            shownIds={new Set(source === "remote" && shown ? ["bound", "a"] : ["bound"])}
             ordering="machine"
             bound={NO_BOUND_ROWS}
             boundLoading={source === "bound" && loading}

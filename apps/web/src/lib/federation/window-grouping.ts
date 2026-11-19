@@ -49,8 +49,11 @@ export function coordinatorDefersToCommandNode(grouping: WindowGrouping): boolea
 export function projectLandingTab(
   grouping: WindowGrouping,
   onCommandNode: boolean,
+  commandHasCopy = true,
 ): "home" | "coordinator" {
-  return !onCommandNode && coordinatorDefersToCommandNode(grouping) ? "home" : "coordinator";
+  return !onCommandNode && commandHasCopy && coordinatorDefersToCommandNode(grouping)
+    ? "home"
+    : "coordinator";
 }
 
 /**
@@ -62,6 +65,9 @@ export function projectLandingTab(
 export function projectLandingBoardTab(
   grouping: WindowGrouping,
   onCommandNode: boolean,
+  commandHasCopy = true,
 ): WorkspaceBoardTab | undefined {
-  return projectLandingTab(grouping, onCommandNode) === "coordinator" ? "coordinator" : undefined;
+  return projectLandingTab(grouping, onCommandNode, commandHasCopy) === "coordinator"
+    ? "coordinator"
+    : undefined;
 }

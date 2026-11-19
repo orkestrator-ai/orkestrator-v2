@@ -73,9 +73,10 @@ function renderList(
     projects: [],
     environments: {},
   },
+  withPeer = true,
 ) {
   installDesktopFake({
-    list: connectionList([remoteConnection("a", "Machine A", "teal")]),
+    list: connectionList(withPeer ? [remoteConnection("a", "Machine A", "teal")] : []),
     datasets: { a: remote },
     layout,
     respondPortal: (command, args) =>
@@ -194,12 +195,18 @@ test("a shift-click range follows the repository order", async () => {
 
 /** This window's machine with one environment and Machine A with one in the same repository. */
 function renderTwoMachines() {
-  renderList([project("p1", 0, "one")], [environment("a1", "p1", 0)], {}, [], {
-    projects: [{ id: "rp", name: "one", gitUrl: "git@github.com:acme/one.git", order: 0 }],
-    environments: {
-      rp: [{ id: "r1", projectId: "rp", name: "Env r1", status: "running" }],
+  renderList(
+    [project("p1", 0, "one")],
+    [environment("a1", "p1", 0)],
+    { manualOrderSupported: true },
+    [],
+    {
+      projects: [{ id: "rp", name: "one", gitUrl: "git@github.com:acme/one.git", order: 0 }],
+      environments: {
+        rp: [{ id: "r1", projectId: "rp", name: "Env r1", status: "running" }],
+      },
     },
-  });
+  );
 }
 
 const tile = (machine: string) =>
@@ -282,4 +289,31 @@ test("the sort menu orders environments by machine or by hand, with no machine g
   await waitFor(() =>
     expect(screen.getByTestId("federated-repository-list").dataset.ordering).toBe("manual"),
   );
+});
+
+test("a standalone full sidebar shows its bound CPU tile and has no Manual option", async () => {
+  renderList([], [], { manualOrderSupported: true }, [], undefined, false);
+  const tiles = await screen.findByRole("group", { name: "Machines shown in the list" });
+  await waitFor(() => expect(within(tiles).getAllByRole("button")).toHaveLength(1));
+  expect(within(tiles).getByRole("button", { name: /CPU .*shown$/ }).dataset.machine).toBe(
+    SELF_NODE_ID,
+  );
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By project" }));
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).queryByRole("menuitemradio", { name: "Manual" }) === null).toBe(true);
+});
+
+test("a selected local search result opens a collapsed repository hidden by a filter", async () => {
+  const collapsed = repositoryCollapseKey("github.com/acme/one");
+  renderList([project("p1", 0, "one")], [environment("a1", "p1", 0)], {}, [collapsed]);
+  await screen.findByRole("button", { name: /^Open acme\/one on / });
+  fireEvent.click(tile("bk_a"));
+  fireEvent.click(screen.getByTestId("project-search-trigger"));
+  const input = await screen.findByRole("combobox");
+  fireEvent.change(input, { target: { value: "Env a1" } });
+  const option = await screen.findByRole("option", { name: /^Env a1,/ });
+  fireEvent.click(option);
+  expect(await row("a1")).toBeTruthy();
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("a1");
+  expect(filter()).toEqual([]);
 });

@@ -10,19 +10,25 @@ export function repositoryCollapseKey(groupKey: string): string {
   return sidebarFolderKey("repository", groupKey);
 }
 
-/** Expands a project's repository and clears a filter that hides its machine, without changing the view or selection. */
+/** Expands a repository and clears a filter that hides the project’s machine. */
+export function expandMachineProject(
+  machines: readonly MachineView[],
+  machine: MachineView,
+  projectId: string,
+): void {
+  const project = machine.projects.find((entry) => entry.ref.projectId === projectId);
+  if (!project) return;
+  const views = useMachineViewStore.getState();
+  if (!shownMachineIds(machines, views.machineFilter).has(machine.connectionId)) {
+    views.setMachineFilter([]);
+  }
+  views.setFolderKeyCollapsed(repositoryCollapseKey(repositoryGroupKey(project)), false);
+}
+
 export function useExpandMachineProject(): (machine: MachineView, projectId: string) => void {
   const machines = useMachineViews();
   return useCallback(
-    (machine: MachineView, projectId: string) => {
-      const project = machine.projects.find((entry) => entry.ref.projectId === projectId);
-      if (!project) return;
-      const views = useMachineViewStore.getState();
-      if (!shownMachineIds(machines, views.machineFilter).has(machine.connectionId)) {
-        views.setMachineFilter([]);
-      }
-      views.setFolderKeyCollapsed(repositoryCollapseKey(repositoryGroupKey(project)), false);
-    },
+    (machine: MachineView, projectId: string) => expandMachineProject(machines, machine, projectId),
     [machines],
   );
 }

@@ -13,6 +13,7 @@ import {
   projectRef,
   type BackendId,
 } from "@orkestrator/protocol/federation";
+import { isNodeReadCommand } from "@orkestrator/protocol/command-nodes";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { repositoryCollapseKey } from "@/components/federation/useRevealMachineProject";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -147,9 +148,9 @@ function rowIdsOnScreen(): string[] {
 const rowWithId = (id: string) =>
   document.querySelector(`[data-environment-selection-id='${id}']`) as HTMLElement;
 
-/** What was sent to a machine, without the change counts its rows keep reading. */
+/** Mutations sent to a machine. Mounted rows and tiles also issue background reads. */
 const writesTo = (fake: ReturnType<typeof setup>["fake"], machine: string) =>
-  fake.callsTo(machine).filter((call) => call.command !== "changes_get_view");
+  fake.callsTo(machine).filter((call) => !isNodeReadCommand(call.command));
 
 async function everyRowDrawn() {
   await row("Own b1");
@@ -428,6 +429,11 @@ describe("bulk actions", () => {
     expect(items).toContain("On A on Machine A");
     expect(items).toContain("On B on Machine B");
     expect(items).toContain("On Down on Machine Down (unavailable, skipped)");
+    // Model a CPU read arriving while confirmation is open, regardless of timer scheduling.
+    await act(async () => {
+      await portalStore.invokeOnNode("bk_a" as BackendId, "get_system_usage");
+    });
+    expect(fake.callsTo("a", "get_system_usage").length).toBeGreaterThan(0);
     expect(writesTo(fake, "a")).toEqual([]);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete all" }));

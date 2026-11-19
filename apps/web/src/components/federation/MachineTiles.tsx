@@ -187,7 +187,7 @@ function MachineTile({
       }}
       className={cn(
         "relative flex size-10 shrink-0 cursor-pointer flex-col overflow-hidden rounded-lg outline-none transition-[opacity,filter,box-shadow]",
-        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
+        "focus-hairline",
         "forced-colors:border forced-colors:border-[CanvasText]",
         state === "selected" && "ring-2 ring-foreground/85 ring-offset-2 ring-offset-sidebar",
         state === "faded" && "opacity-40 brightness-50 saturate-50",

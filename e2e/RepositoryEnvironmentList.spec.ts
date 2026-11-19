@@ -1,5 +1,11 @@
 import { environmentKey, environmentRef, type BackendId } from "@orkestrator/protocol/federation";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { createInterface } from "node:readline";
 
 // The multi-machine sidebar's list (design EL01) over seven machines
 // (apps/web/src/test/RepositoryEnvironmentListFixture.tsx).
@@ -119,6 +125,20 @@ test("the heading's + opens New Environment on the machine the heading opens", a
   await expect(page.getByTestId("reorders")).toHaveText("[]");
 });
 
+test("a leaf-only repository lands on Coordinator from search and its heading", async ({
+  page,
+}) => {
+  await page.goto("/repository-environment-list");
+  await heading(page, "acme/telegram-scraper").click();
+  const intent = page.getByTestId("intent");
+  await expect(intent).toHaveText('{"projectId":"tg","landingTab":"coordinator"}');
+  await page.reload();
+  await page.getByTestId("project-search-trigger").click();
+  await page.getByRole("combobox", { name: "Search projects and environments" }).fill("telegram");
+  await page.getByRole("option", { name: "telegram-scraper, project on beelink2" }).click();
+  await expect(intent).toHaveText('{"projectId":"tg","landingTab":"coordinator"}');
+});
+
 test("dragging a heading reorders the repositories on the command node", async ({ page }) => {
   await page.goto("/repository-environment-list");
   await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
@@ -210,15 +230,14 @@ test("manually, a row moves across machines and the order is kept on the command
   const written = await updates(page);
   expect(written).toHaveLength(1);
   expect(written[0]).toEqual({
-    environmentOrder: {
-      [ORK]: [
-        key("mbp3", "desktop-smoke"),
-        key("mini", "sidebar-redesign"),
-        key("mini", "fix-merge-queue"),
-        key("beelink", "release-notes"),
-        key("mbp3", "perf-trace"),
-      ],
-    },
+    repositoryKey: ORK,
+    order: [
+      key("mbp3", "desktop-smoke"),
+      key("mini", "sidebar-redesign"),
+      key("mini", "fix-merge-queue"),
+      key("beelink", "release-notes"),
+      key("mbp3", "perf-trace"),
+    ],
   });
   // Nothing is written to the machines themselves.
   await expect(page.getByTestId("reorders")).toHaveText("[]");
@@ -294,3 +313,221 @@ test("an unavailable machine's tile dims and its environments leave the list", a
     .poll(() => rowsOf(page, ORK))
     .toEqual(["sidebar-redesign@mini", "fix-merge-queue@mini", "release-notes@beelink"]);
 });
+
+test("the 390 px sidebar fits seven tiles and keyboard and menu filters stay in sync", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/repository-environment-list?phone-overlay");
+  const sidebar = page.getByTestId("fixture-sidebar");
+  const tiles = page.getByRole("group", { name: "Machines shown in the list" });
+  await expect(tiles.getByRole("button")).toHaveCount(7);
+  for (const surface of [
+    page.getByRole("dialog", { name: "Projects and environments" }),
+    sidebar,
+    tiles,
+    sidebar.locator("[data-sidebar-scroll]"),
+  ]) {
+    expect(await surface.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+      true,
+    );
+  }
+  const mini = tile(page, "mini");
+  await mini.focus();
+  await expect(mini).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("filter")).toHaveText('["bk_mini"]');
+  await page.keyboard.press("Space");
+  await expect(page.getByTestId("filter")).toHaveText("[]");
+  await page.getByTestId("machines-filter").click();
+  const menu = page.getByRole("menu");
+  await menu.getByRole("menuitemcheckbox", { name: /^mbp3/ }).click();
+  await expect(tile(page, "mbp3")).toHaveAttribute("data-state", "selected");
+  await expect(mini).toHaveAttribute("data-state", "faded");
+  await menu.getByRole("menuitemcheckbox", { name: "All machines" }).click();
+  await expect(mini).toHaveAttribute("data-state", "all");
+});
+
+for (const scenario of ["empty", "offline"]) {
+  test(`an ${scenario} selected machine explains the filter and offers to clear it`, async ({
+    page,
+  }) => {
+    await page.goto(`/repository-environment-list?${scenario}=mbp3`);
+    await tile(page, "mbp3").click();
+    const message =
+      scenario === "empty"
+        ? "No projects on the selected machines"
+        : "Selected machines are unavailable";
+    await expect(page.getByText(message)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add your first project" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Clear machine filter" }).click();
+    await expect(heading(page, "acme/orkestrator-v2")).toBeVisible();
+  });
+}
+
+test("a command node without Manual ordering uses by-machine order", async ({ page }) => {
+  await page.goto("/repository-environment-list?ordering=manual&legacy-layout");
+  await expect(page.getByTestId("federated-repository-list")).toHaveAttribute(
+    "data-ordering",
+    "machine",
+  );
+  await drag(page, grip(page, "desktop-smoke"), row(page, "sidebar-redesign"));
+  await expect(page.getByTestId("updates")).toHaveText("[]");
+});
+
+test("two browsers save independent Manual orders across a command-node restart", async ({
+  page,
+  context,
+}) => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sidebar-command-node-"));
+  const token = randomUUID();
+  let commandNode: Awaited<ReturnType<typeof startCommandNode>> | undefined;
+  const writes: Promise<unknown>[] = [];
+  let releaseWrites!: () => void;
+  const bothDropped = new Promise<void>((resolve) => {
+    releaseWrites = resolve;
+  });
+  const serveLayout = async (route: Route) => {
+    const body = route.request().postDataJSON() as { command: string; args?: unknown };
+    if (body.command === "update_repository_environment_order") {
+      const pending = bothDropped.then(() => commandNode!.invoke(body));
+      writes.push(pending);
+      if (writes.length === 2) releaseWrites();
+      await route.fulfill({ json: await pending });
+      return;
+    }
+    expect(body.command).toBe("get_portal_layout");
+    await route.fulfill({ json: await commandNode!.invoke(body) });
+  };
+  try {
+    commandNode = await startCommandNode(dataDir, token);
+    const second = await context.newPage();
+    for (const client of [page, second]) {
+      await client.route("**/__fixture/sidebar-command-node", serveLayout);
+      await client.goto("/repository-environment-list?ordering=manual&command-node");
+      await expect(client.getByTestId("federated-repository-list")).toHaveAttribute(
+        "data-ordering",
+        "manual",
+      );
+    }
+    await drag(page, grip(page, "desktop-smoke"), row(page, "sidebar-redesign"));
+    await drag(second, grip(second, "pricing-page"), row(second, "blog-migration"));
+    await expect(page.getByTestId("updates")).toContainText(ORK);
+    await expect(second.getByTestId("updates")).toContainText("github.com/acme/website");
+    expect(writes).toHaveLength(2);
+    await commandNode.stop();
+    commandNode = await startCommandNode(dataDir, token);
+    for (const client of [page, second]) {
+      await client.reload();
+      await expect
+        .poll(() => rowsOf(client, ORK))
+        .toEqual([
+          "desktop-smoke@mbp3",
+          "sidebar-redesign@mini",
+          "fix-merge-queue@mini",
+          "release-notes@beelink",
+          "perf-trace@mbp3",
+        ]);
+      await expect
+        .poll(() => rowsOf(client, "github.com/acme/website"))
+        .toEqual(["pricing-page@omarchy-gram", "blog-migration@mini"]);
+      await expect(client.getByTestId("reorders")).toHaveText("[]");
+    }
+  } finally {
+    releaseWrites();
+    await commandNode?.stop();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+async function startCommandNode(dataDir: string, token: string) {
+  const startupStages: string[] = [];
+  const child = spawn(
+    "bun",
+    [
+      "--no-env-file",
+      "src/main.ts",
+      "--data-dir",
+      dataDir,
+      "--runtime-flavor",
+      "agent-test",
+      "--command-node",
+      "--host",
+      "127.0.0.1",
+      "--allow-non-tailscale-bind",
+      "--port",
+      "0",
+      "--control-port",
+      "0",
+      "--loopback-client-port",
+      "0",
+    ],
+    {
+      cwd: path.resolve(import.meta.dirname, "../apps/backend"),
+      env: {
+        PATH: process.env.PATH,
+        TMPDIR: process.env.TMPDIR,
+        NODE_ENV: "test",
+        ORKESTRATOR_GATEWAY_TOKEN: token,
+      },
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  const closed = new Promise<number | null>((resolve) => child.once("close", resolve));
+  const input = createInterface({ input: child.stdout });
+  const stop = async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    await closed;
+  };
+  try {
+    const origin = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Command node did not become ready")),
+        20_000,
+      );
+      const finish = (error: Error) => {
+        clearTimeout(timer);
+        reject(error);
+      };
+      child.once("error", finish);
+      void closed.then((code) =>
+        finish(
+          new Error(
+            `Command node exited before readiness (${code}), startup stages: ${startupStages.join(", ")}`,
+          ),
+        ),
+      );
+      input.on("line", (line) => {
+        if (!line.startsWith("{")) return;
+        if (!line.includes('"orkestrator-backend-ready"')) {
+          const startup = JSON.parse(line) as { phase?: string };
+          if (startup.phase) startupStages.push(startup.phase);
+          return;
+        }
+        const ready = JSON.parse(line) as { url: string };
+        clearTimeout(timer);
+        resolve(ready.url);
+      });
+    });
+    return {
+      stop,
+      async invoke(body: { command: string; args?: unknown }): Promise<unknown> {
+        const response = await fetch(new URL("/__orkestrator/invoke", origin), {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok)
+          throw new Error(`Command node refused ${body.command} (${response.status})`);
+        return ((await response.json()) as { result: unknown }).result;
+      },
+    };
+  } catch (error) {
+    await stop();
+    throw error;
+  } finally {
+    input.close();
+    child.stdout.resume();
+  }
+}

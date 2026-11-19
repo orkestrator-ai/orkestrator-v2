@@ -31,6 +31,8 @@ export interface MachineView {
   projects: readonly FederatedProject[];
   environmentsByProject: ReadonlyMap<string, readonly FederatedEnvironment[]>;
   truncated: boolean;
+  /** The bound scope has authoritative environment lists for all its projects. */
+  boundEnvironmentsComplete?: boolean;
   loadedAt: number | null;
   /**
    * The version and hello domains of its current connection, as the command

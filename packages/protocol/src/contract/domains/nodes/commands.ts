@@ -102,8 +102,19 @@ export const updatePortalLayoutCommand = defineCommand({
     projectOrder: optionalUnknown,
     projectFolders: optionalUnknown,
     repositoryOrder: optionalUnknown,
-    environmentOrder: optionalUnknown,
   }),
+  result: PortalLayoutSchema,
+  critical: [],
+});
+
+/** Saves one repository's Manual environment order on the command node. */
+export const updateRepositoryEnvironmentOrderCommand = defineCommand({
+  domain: nodesDomain,
+  name: "update_repository_environment_order",
+  since: 1,
+  access: "admin",
+  read: false,
+  args: Schema.Struct({ repositoryKey: Schema.String, order: Schema.Array(Schema.String) }),
   result: PortalLayoutSchema,
   critical: [],
 });
@@ -844,6 +855,7 @@ export const NODES_COMMANDS = [
   getNodeStatusCommand,
   getPortalLayoutCommand,
   updatePortalLayoutCommand,
+  updateRepositoryEnvironmentOrderCommand,
   setCommandNodeEnabledCommand,
   attachControllerCommand,
   detachControllerCommand,

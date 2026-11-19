@@ -792,6 +792,7 @@ with `MachinesFilter`:
   the machine's colour with three dark initials (`machineInitials`: omarchy-hp
   → OHP, beelink2 → BE2, mini → MIN), its bottom half a darker shade with the
   CPU percentage in white (`useMachineCpu`, the title bar's coordinated read).
+  The full sidebar also shows the bound machine’s tile when there are no peers.
   A machine that is not connected or has no current sample is dimmed and
   shows "—", never an old figure. A tile is a toggle button whose name gives
   the machine, its CPU and "shown" or "hidden"; its tooltip adds the status and
@@ -824,10 +825,17 @@ with `MachinesFilter`:
   (`reorder_environments`). **Manual** keeps one order per repository on the
   command node (`PortalLayout.environmentOrder`, keyed by repository identity,
   entries by environment key), so it survives restarts and is shared by every
-  client; a row can go anywhere in its repository. Until the user arranges a
+  client. A drop replaces one repository’s order through
+  `update_repository_environment_order`. The command node rejects an order
+  that would exceed the storage limit and keeps all saved positions. A command
+  node that does not advertise Manual ordering uses By machine. A row can go
+  anywhere in its repository. Until the user arranges a
   repository it is the by-machine order; a new environment goes after the
   last one of its own machine there; a drag among the rows a filter shows
-  leaves hidden machines' rows in their slots (`placeShown`). Switching back
+  leaves hidden machines' rows in their slots (`placeShown`). Positions are
+  kept while a machine is offline, truncated, or still loading its
+  environment lists. A confirmed deletion stops affecting insertion positions.
+  Switching back
   to By machine keeps the manual order for next time. Repository headings are
   dragged to reorder repositories (`repositoryOrder`).
 - **Sorting** keeps **By project** (the list above) and **By activity**, one

@@ -46,9 +46,18 @@ export interface PortalLayout {
    * to bottom. Absent from a layout written before 2.39.
    */
   environmentOrder: Record<string, string[]>;
+  /** The command node supports saving one repository’s order. */
+  manualOrderSupported?: true;
 }
 
-export type PortalLayoutUpdate = Partial<Omit<PortalLayout, "revision">>;
+export type PortalLayoutUpdate = Partial<
+  Omit<PortalLayout, "revision" | "environmentOrder" | "manualOrderSupported">
+>;
+
+export interface RepositoryEnvironmentOrderUpdate {
+  repositoryKey: string;
+  order: string[];
+}
 
 export function emptyPortalLayout(): PortalLayout {
   return {
@@ -111,7 +120,12 @@ function readEnvironmentOrder(value: unknown): Record<string, string[]> {
     if (!isEntry(key)) continue;
     const list = readEntries(entries).slice(0, MAX_ENVIRONMENT_ORDER_ENTRIES - total);
     if (list.length === 0) continue;
-    order[key] = list;
+    Object.defineProperty(order, key, {
+      value: list,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
     groups += 1;
     total += list.length;
   }
@@ -133,6 +147,7 @@ export function parsePortalLayout(value: unknown): PortalLayout {
     projectFolders: readFolders(value.projectFolders),
     repositoryOrder: readEntries(value.repositoryOrder),
     environmentOrder: readEnvironmentOrder(value.environmentOrder),
+    ...(value.manualOrderSupported === true ? { manualOrderSupported: true } : {}),
   };
 }
 
@@ -150,13 +165,7 @@ function strictEntries(value: unknown, label: string): string[] {
 /** Strict reader for an `update_portal_layout` request. */
 export function parsePortalLayoutUpdate(value: unknown): PortalLayoutUpdate {
   if (!isRecord(value)) throw new Error("Expected the layout update to be an object.");
-  const allowed = new Set([
-    "machineOrder",
-    "projectOrder",
-    "projectFolders",
-    "repositoryOrder",
-    "environmentOrder",
-  ]);
+  const allowed = new Set(["machineOrder", "projectOrder", "projectFolders", "repositoryOrder"]);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) throw new Error(`Unexpected layout field: ${key.slice(0, 64)}`);
   }
@@ -190,27 +199,34 @@ export function parsePortalLayoutUpdate(value: unknown): PortalLayoutUpdate {
     }
     update.projectFolders = folders;
   }
-  if (value.environmentOrder !== undefined) {
-    if (!isRecord(value.environmentOrder))
-      throw new Error("Expected environmentOrder to be an object.");
-    const groups = Object.entries(value.environmentOrder);
-    if (groups.length > MAX_PORTAL_LAYOUT_ENTRIES) {
-      throw new Error(`Expected at most ${MAX_PORTAL_LAYOUT_ENTRIES} environmentOrder groups.`);
-    }
-    const order: Record<string, string[]> = {};
-    let total = 0;
-    for (const [key, entries] of groups) {
-      if (!isEntry(key)) throw new Error("Expected environmentOrder keys to be non-empty strings.");
-      const list = strictEntries(entries, "environmentOrder");
-      total += list.length;
-      if (total > MAX_ENVIRONMENT_ORDER_ENTRIES) {
-        throw new Error(
-          `Expected at most ${MAX_ENVIRONMENT_ORDER_ENTRIES} environmentOrder entries in all.`,
-        );
-      }
-      if (list.length > 0) order[key] = list;
-    }
-    update.environmentOrder = order;
-  }
   return update;
+}
+
+export function parseRepositoryEnvironmentOrderUpdate(
+  value: unknown,
+): RepositoryEnvironmentOrderUpdate {
+  if (!isRecord(value) || !isEntry(value.repositoryKey)) {
+    throw new Error("Expected a non-empty repository key.");
+  }
+  return {
+    repositoryKey: value.repositoryKey,
+    order: strictEntries(value.order, "environment order"),
+  };
+}
+
+/** Apply one repository's order without evicting saved positions in any repository. */
+export function applyRepositoryEnvironmentOrder(
+  current: PortalLayout["environmentOrder"],
+  { repositoryKey, order }: RepositoryEnvironmentOrderUpdate,
+): PortalLayout["environmentOrder"] {
+  const next = { ...current, [repositoryKey]: order };
+  if (order.length === 0) delete next[repositoryKey];
+  const groups = Object.values(next);
+  if (
+    groups.length > MAX_PORTAL_LAYOUT_ENTRIES ||
+    groups.reduce((sum, entries) => sum + entries.length, 0) > MAX_ENVIRONMENT_ORDER_ENTRIES
+  ) {
+    throw new Error("The saved Manual order is full. Existing repository orders were kept.");
+  }
+  return next;
 }

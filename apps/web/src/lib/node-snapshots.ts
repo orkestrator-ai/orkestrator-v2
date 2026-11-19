@@ -509,7 +509,7 @@ export function undoSnapshotHydration(scope: NodeScope): boolean {
     const projects = scope.store(projectStore);
     if (!projects.getState().hasLoaded) projects.setState({ projects: [] });
     if (hydration.environments && !hasAuthoritativeReads(scope, ["environment"])) {
-      scope.store(environmentStore).setState({ environments: [] });
+      scope.store(environmentStore).getState().setEnvironments([]);
     }
     const config = scope.store(configStore);
     if (hydration.config && !config.getState().hasLoaded) {

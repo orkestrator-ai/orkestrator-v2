@@ -10,7 +10,7 @@ import {
   projectFolderDragId,
   resolveProjectArrangement,
 } from "@/lib/project-folders";
-import { resolveRepositoryArrangement, type MergedProject } from "@/lib/federation/sidebar-layout";
+import { moveEntry } from "@/lib/federation/sidebar-layout";
 
 type Args = Parameters<typeof sidebarCollisionDetection>[0];
 
@@ -98,7 +98,7 @@ describe("sidebarCollisionDetection", () => {
         args.droppableRects.set(id, rect(top, 120));
         args.droppableContainers.push(droppable(id, PROJECTS) as never);
       }
-      const targetHit = overId(args);
+      const targetHit = repository ? machineCollisionDetection(args)[0]?.id : overId(args);
       expect(targetHit).toBe(targetId);
       const projects = [
         { id: "project-a", name: "A", folder: source },
@@ -106,9 +106,14 @@ describe("sidebarCollisionDetection", () => {
         { id: "project-b", name: "B", folder: target },
         { id: "project-c", name: "C", folder: target },
       ];
-      const arrangement = repository
-        ? resolveRepositoryArrangement(sourceId, String(targetHit), projects as MergedProject[])
-        : resolveProjectArrangement(sourceId, String(targetHit), projects);
+      if (repository) {
+        expect(moveEntry([sourceId, targetId], sourceId, String(targetHit))).toEqual([
+          targetId,
+          sourceId,
+        ]);
+        return;
+      }
+      const arrangement = resolveProjectArrangement(sourceId, String(targetHit), projects);
       expect(arrangement).toEqual({
         projectIds: ["project-b", "project-c", "project-a", "project-d"],
         folders: {},

@@ -625,11 +625,18 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   node owns it.
 - **The sidebar order is the command node's.** The command node keeps the
   cross-machine order every client shows (`get_portal_layout`,
-  `update_portal_layout`, `portal-layout-changed`;
+  `update_portal_layout`, `update_repository_environment_order`,
+  `portal-layout-changed`;
   `@orkestrator/protocol/portal-layout`): the machine order (the machine
   tiles, and the environment list ordered by machine), the repository order,
   and each repository's hand-arranged environment order (`environmentOrder`,
-  used when the sidebar orders environments "Manual"). `projectOrder` and
+  used when the sidebar orders environments "Manual"). The Manual command
+  merges one repository order under the layout lease and persists it in
+  `portal-environment-order.json`. Older backends can rewrite
+  `portal-layout.json` during a downgrade without erasing those orders. On
+  re-upgrade, the read combines both stores. The read advertises
+  `manualOrderSupported` so renderers can use By machine with older command
+  nodes. `projectOrder` and
   `projectFolders`, written by the retired "by project" list, are kept and
   still seed the repository order's default. Which node the central region
   shows never moves anything. Until the user drags something, the command node

@@ -31,11 +31,15 @@ import {
   type OrderedRepository,
   type RepositoryEntry,
 } from "@/lib/federation/environment-list";
-import { openRepository } from "@/lib/federation/open-workspace";
+import { openMachineWorkspace, openRepository } from "@/lib/federation/open-workspace";
 import { repositoryIcon, repositoryTileColor } from "@/lib/federation/sidebar-layout";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
-import { updatePortalLayout, usePortalLayout } from "@/lib/portal/portal-layout";
-import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import {
+  updatePortalLayout,
+  updateRepositoryEnvironmentOrder,
+  useManualOrderSupported,
+  usePortalLayout,
+} from "@/lib/portal/portal-layout";
 import {
   machineCollisionDetection,
   machineKeyboardCoordinates,
@@ -138,7 +142,7 @@ export function RepositoryEnvironmentList({
   machines,
   shownIds,
   listedIds = shownIds,
-  ordering,
+  ordering: preferredOrdering,
   bound,
   boundLoading = false,
   onAddProject,
@@ -160,6 +164,8 @@ export function RepositoryEnvironmentList({
   showEmptyState?: boolean;
 }) {
   const layout = usePortalLayout();
+  const manualOrderSupported = useManualOrderSupported();
+  const ordering = manualOrderSupported ? preferredOrdering : "machine";
   const { portalState } = useFederation();
   const collapsedFolderKeys = useMachineViewStore((state) => state.collapsedFolderKeys);
   const setFolderKeyCollapsed = useMachineViewStore((state) => state.setFolderKeyCollapsed);
@@ -176,6 +182,10 @@ export function RepositoryEnvironmentList({
     [layout, machines, portalState.selfId, shownIds],
   );
   const commandNode = machines.find((machine) => machine.backendId === portalState.selfId);
+  const boundShown = machines.some(
+    (machine) => machine.bound && shownIds.has(machine.connectionId),
+  );
+  const filtered = listedIds.size < machines.length;
 
   const handleHeadingDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over) return;
@@ -197,6 +207,10 @@ export function RepositoryEnvironmentList({
     const coordinatorGated = opens.machine.bound && portalState.status?.mode === "leaf";
     const open = (coordinator = false) =>
       openRepository({
+        commandHasCopy: entry.allMembers.some(
+          (member) => member.machine.backendId === portalState.selfId,
+        ),
+        onCommandNode: opens.machine.backendId === portalState.selfId,
         repository: entry.key,
         projectKey: opens.id,
         connectionId: opens.machine.connectionId,
@@ -300,9 +314,8 @@ export function RepositoryEnvironmentList({
       >
         {ordered.rows.length > 0 ? (
           <RepositoryRows
-            entry={entry}
+            repositoryKey={entry.key}
             ordered={ordered}
-            machines={machines}
             ordering={ordering}
             bound={bound}
             onRemoteReorder={(row, overId) => reorder(row.machine, row.project, row.id, overId)}
@@ -320,13 +333,25 @@ export function RepositoryEnvironmentList({
       {showEmptyState && repositories.entries.length === 0 ? (
         <SidebarEmptyState
           loading={
-            boundLoading ||
+            (boundShown && boundLoading) ||
             machines.some(
               (machine) =>
                 !machine.bound && shownIds.has(machine.connectionId) && machine.loadedAt === null,
             )
           }
-          onAdd={onAddProject}
+          message={
+            !filtered
+              ? undefined
+              : shownIds.size > 0
+                ? "No projects on the selected machines"
+                : "Selected machines are unavailable"
+          }
+          onAdd={boundShown ? onAddProject : undefined}
+          onClearFilter={
+            filtered && !boundShown
+              ? () => useMachineViewStore.getState().setMachineFilter([])
+              : undefined
+          }
         />
       ) : null}
       <DndContext
@@ -359,21 +384,18 @@ function sameRun(left: ListedEnvironment, right: ListedEnvironment): boolean {
  * and a drop outside it is refused.
  */
 function RepositoryRows({
-  entry,
+  repositoryKey,
   ordered,
-  machines,
   ordering,
   bound,
   onRemoteReorder,
 }: {
-  entry: RepositoryEntry;
+  repositoryKey: string;
   ordered: OrderedRepository;
-  machines: readonly MachineView[];
   ordering: EnvironmentOrdering;
   bound: BoundEnvironmentRendering;
   onRemoteReorder: (row: ListedEnvironment, overId: string) => void;
 }) {
-  const layout = usePortalLayout();
   const multiSelecting = useUIStore((state) => state.selectedEnvironmentIds.length > 0);
   const [dragItem, setDragItem] = useState<SidebarDragItem>(null);
   const sensors = useSensors(
@@ -401,15 +423,9 @@ function RepositoryRows({
     const activeId = String(active.id);
     const overId = String(over.id);
     if (ordering === "manual") {
-      const environmentOrder = manualOrderAfterDrop(
-        entry,
-        ordered,
-        machines,
-        layout,
-        activeId,
-        overId,
-      );
-      if (environmentOrder) updatePortalLayout({ environmentOrder }).catch(reportLayoutError);
+      const order = manualOrderAfterDrop(ordered, activeId, overId);
+      if (order)
+        updateRepositoryEnvironmentOrder({ repositoryKey, order }).catch(reportLayoutError);
       return;
     }
     const target = byMachineDropTarget(rows, activeId, overId);

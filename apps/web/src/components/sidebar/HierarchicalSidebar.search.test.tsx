@@ -153,9 +153,10 @@ for (const { mode, offline } of [
       projectId: "tg",
       environmentId: null,
     });
-    // The repository list lands on Home, so no landing tab is sent.
+    // This leaf-only repository has its own coordinator.
     expect(useRemoteWorkspaceStore.getState().requests.bk_mbp3?.request).toEqual({
       projectId: "tg",
+      landingTab: "coordinator",
     });
   });
 }

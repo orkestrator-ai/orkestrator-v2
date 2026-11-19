@@ -8,6 +8,7 @@ import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 
 import { LeafControllerSettings } from "./nodes/node-controller-settings.js";
 import { StorageService } from "./storage.js";
+import { StorageContext } from "./storage-context.js";
 
 const record: NodeRecord = {
   nodeId: "bk_leaf" as never,
@@ -107,22 +108,79 @@ describe("portal sidebar layout", () => {
         projectFolders: {},
         repositoryOrder: [],
         environmentOrder: {},
+        manualOrderSupported: true,
       });
       await storage.nodes.updatePortalLayout({ machineOrder: ["bk_b", "bk_a"] });
-      const layout = await storage.nodes.updatePortalLayout({
+      await storage.nodes.updatePortalLayout({
         projectOrder: ['["bk_a","project","p"]'],
         projectFolders: { '["bk_a","project","p"]': "Work" },
-        environmentOrder: { "github.com/o/r": ['["bk_a","environment","e"]'] },
+      });
+      const layout = await storage.nodes.updateRepositoryEnvironmentOrder({
+        repositoryKey: "github.com/o/r",
+        order: ['["bk_a","environment","e"]'],
       });
       expect(layout).toEqual({
-        revision: 2,
+        revision: 3,
         machineOrder: ["bk_b", "bk_a"],
         projectOrder: ['["bk_a","project","p"]'],
         projectFolders: { '["bk_a","project","p"]': "Work" },
         repositoryOrder: [],
         environmentOrder: { "github.com/o/r": ['["bk_a","environment","e"]'] },
+        manualOrderSupported: true,
       });
       expect(await new StorageService(dataDir).nodes.getPortalLayout()).toEqual(layout);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+  test("imports an earlier EL01 order before a downgrade can rewrite the legacy file", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-nodes-"));
+    const legacy = new StorageContext(dataDir);
+    try {
+      const file = legacy.file("portal-layout.json");
+      await legacy.saveJson(file, { version: 1, revision: 1, environmentOrder: { repo: ["a"] } });
+      expect((await new StorageService(dataDir).nodes.getPortalLayout()).environmentOrder).toEqual({
+        repo: ["a"],
+      });
+      await legacy.saveJson(file, { version: 1, revision: 2, machineOrder: ["b"] });
+      expect(await new StorageService(dataDir).nodes.getPortalLayout()).toMatchObject({
+        revision: 2,
+        machineOrder: ["b"],
+        environmentOrder: { repo: ["a"] },
+      });
+    } finally {
+      legacy.close();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("independent repository saves survive concurrent clients and an older layout rewrite", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-nodes-"));
+    try {
+      const first = new StorageService(dataDir);
+      const second = new StorageService(dataDir);
+      await first.nodes.updatePortalLayout({ machineOrder: ["old-machine"] });
+      expect(await first.nodes.getPortalLayout()).toEqual(await second.nodes.getPortalLayout());
+      await Promise.all([
+        first.nodes.updateRepositoryEnvironmentOrder({ repositoryKey: "a", order: ["a2", "a1"] }),
+        second.nodes.updateRepositoryEnvironmentOrder({ repositoryKey: "b", order: ["b2", "b1"] }),
+      ]);
+      // The older layout writer serializes only its known fields to its original file.
+      const legacy = new StorageContext(dataDir);
+      await legacy.saveJson(legacy.file("portal-layout.json"), {
+        version: 1,
+        revision: 2,
+        machineOrder: ["new-machine"],
+        projectOrder: [],
+        projectFolders: {},
+        repositoryOrder: [],
+      });
+      legacy.close();
+      expect(await new StorageService(dataDir).nodes.getPortalLayout()).toMatchObject({
+        revision: 4,
+        machineOrder: ["new-machine"],
+        environmentOrder: { a: ["a2", "a1"], b: ["b2", "b1"] },
+      });
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

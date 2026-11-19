@@ -215,6 +215,7 @@ test("Manual follows the stored order across machines; By machine keeps machine 
   portalLayoutStore.setState({
     layout: {
       ...emptyPortalLayout(),
+      manualOrderSupported: true,
       environmentOrder: {
         [REPO]: [
           environmentKey(environmentRef("bk_bee" as BackendId, "b2")),

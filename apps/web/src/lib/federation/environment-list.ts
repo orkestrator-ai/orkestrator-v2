@@ -15,10 +15,7 @@
  *   machine's environments keep their places.
  */
 
-import {
-  MAX_ENVIRONMENT_ORDER_ENTRIES,
-  type PortalLayout,
-} from "@orkestrator/protocol/portal-layout";
+import type { PortalLayout } from "@orkestrator/protocol/portal-layout";
 import { parseEnvironmentKey } from "@orkestrator/protocol/federation";
 import {
   buildRepositoryTree,
@@ -235,10 +232,11 @@ export function orderRepository(
   const shown = environmentsByMachine(entry.members, machines, environmentsOf);
   if (ordering === "machine") return { rows: shown, full: shown.map((row) => row.id) };
   const everywhere = environmentsByMachine(entry.allMembers, machines, environmentsOf);
-  const full = mergeManualOrder(
-    layout.environmentOrder[entry.key] ?? [],
-    everywhere.map((row) => row.id),
-  );
+  const defaultIds = everywhere.map((row) => row.id);
+  const stored = Object.hasOwn(layout.environmentOrder, entry.key)
+    ? layout.environmentOrder[entry.key]!
+    : [];
+  const full = mergeManualOrder(pruneEnvironmentOrder(stored, machines, defaultIds), defaultIds);
   const byId = new Map(shown.map((row) => [row.id, row]));
   return { rows: full.flatMap((id) => byId.get(id) ?? []), full };
 }
@@ -263,21 +261,23 @@ export function byMachineDropTarget(
 
 /** Its summaries are complete, so a missing environment really is gone. */
 function isMachineComplete(machine: MachineView): boolean {
-  return isMachineShown(machine) && !machine.truncated && machine.loadedAt !== null;
+  return machine.bound
+    ? machine.boundEnvironmentsComplete === true
+    : isMachineShown(machine) &&
+        machine.freshness === "current" &&
+        !machine.truncated &&
+        machine.loadedAt !== null;
 }
 
 /** Drops entries of forgotten machines and of environments their (complete) machine no longer has. */
 export function pruneEnvironmentOrder(
   ids: readonly string[],
   machines: readonly MachineView[],
+  knownRepositoryRows: readonly string[],
 ): string[] {
+  if (ids.length === 0) return [];
   const byNode = new Map(machines.map((machine) => [machine.backendId as string, machine]));
-  const existing = new Set<string>();
-  for (const machine of machines) {
-    for (const environments of machine.environmentsByProject.values()) {
-      for (const environment of environments) existing.add(environment.key);
-    }
-  }
+  const existing = new Set(knownRepositoryRows);
   return ids.filter((id) => {
     const node = nodeOf(id);
     const machine = node === null ? undefined : byNode.get(node);
@@ -286,37 +286,18 @@ export function pruneEnvironmentOrder(
   });
 }
 
-/**
- * The next stored manual order after a drag among the shown rows, or null
- * for a no-op. Every other repository's order is kept as stored; the whole
- * record stays within its bound.
- */
+/** The next order for this repository, changing only the slots of shown rows. */
 export function manualOrderAfterDrop(
-  entry: RepositoryEntry,
   ordered: OrderedRepository,
-  machines: readonly MachineView[],
-  layout: Pick<PortalLayout, "environmentOrder">,
   activeId: string,
   overId: string,
-): Record<string, string[]> | null {
+): string[] | null {
   const next = moveEntry(
     ordered.rows.map((row) => row.id),
     activeId,
     overId,
   );
-  if (!next) return null;
-  const order = pruneEnvironmentOrder(placeShown(ordered.full, next), machines);
-  const others = Object.entries(layout.environmentOrder).filter(([key]) => key !== entry.key);
-  let budget = MAX_ENVIRONMENT_ORDER_ENTRIES - order.length;
-  const result: Record<string, string[]> = {};
-  for (const [key, list] of others) {
-    if (budget <= 0) break;
-    const kept = list.slice(0, budget);
-    result[key] = kept;
-    budget -= kept.length;
-  }
-  result[entry.key] = order.slice(0, MAX_ENVIRONMENT_ORDER_ENTRIES);
-  return result;
+  return next ? placeShown(ordered.full, next) : null;
 }
 
 /** The repository list entry a project belongs to (`RepositoryEntry.key`). */

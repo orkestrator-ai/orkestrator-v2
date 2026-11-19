@@ -1,3 +1,4 @@
+import { useManualOrderSupported } from "@/lib/portal/portal-layout";
 import { MOBILE_SHELL_MEDIA_QUERY, noteDrawerNavigation } from "@/lib/mobile-shell";
 import { useSidebarHydration } from "./useSidebarHydration";
 import { useSelectedEnvironmentActions } from "./useSelectedEnvironmentActions";
@@ -68,7 +69,10 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { Environment, EnvironmentType, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
 import { SidebarBottomBar } from "./SidebarBottomBar";
-import { useRevealMachineProject } from "@/components/federation/useRevealMachineProject";
+import {
+  expandMachineProject,
+  useRevealMachineProject,
+} from "@/components/federation/useRevealMachineProject";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useProjectCopyStore } from "@/stores/projectCopyStore";
@@ -370,6 +374,7 @@ export function HierarchicalSidebar() {
   const federation = useFederation();
   const machineViews = useMachineViews();
   const revealMachineProject = useRevealMachineProject();
+  const manualOrderSupported = useManualOrderSupported();
   const machineFilter = useMachineViewStore((state) => state.machineFilter);
   const machineGrouping = useMachineViewStore((state) => state.grouping);
   const setMachineGrouping = useMachineViewStore((state) => state.setGrouping);
@@ -746,13 +751,23 @@ export function HierarchicalSidebar() {
 
   const revealProject = useCallback(
     (projectId: string) => {
+      if (federatedMode === "repository" && boundMachineView) {
+        expandMachineProject(machineViews, boundMachineView, projectId);
+      }
       setProjectCollapsed(projectId, false);
       const project = projectsById.get(projectId);
       if (project?.folder) {
         setProjectFolderCollapsed(project.folder, false);
       }
     },
-    [projectsById, setProjectCollapsed, setProjectFolderCollapsed],
+    [
+      boundMachineView,
+      federatedMode,
+      machineViews,
+      projectsById,
+      setProjectCollapsed,
+      setProjectFolderCollapsed,
+    ],
   );
 
   const handleSearchSelectProject = useCallback(
@@ -1100,6 +1115,7 @@ export function HierarchicalSidebar() {
   // The ordering choice exists only where environments of several machines share a list.
   const showOrdering =
     federation.enabled &&
+    manualOrderSupported &&
     !compactActive &&
     environmentSortMode === "project" &&
     machineViews.length > 1;
@@ -1345,7 +1361,7 @@ export function HierarchicalSidebar() {
         />
       )}
 
-      {compactActive || !federation.enabled ? null : <MachineTiles machines={machineViews} />}
+      {compactActive ? null : <MachineTiles machines={machineViews} />}
 
       {/* Projects List */}
       {compactActive ? (

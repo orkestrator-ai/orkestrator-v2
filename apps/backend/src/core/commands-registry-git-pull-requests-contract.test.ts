@@ -33,7 +33,7 @@ describe("git and pull-requests registrations", () => {
     expect(map["pull-requests"]).toBeUndefined();
     expect(commands.helloDomains()).toMatchObject({
       git: { min: 1, max: 2 },
-      "pull-requests": { min: 1, max: 3 },
+      "pull-requests": { min: 1, max: 4 },
     });
   });
 

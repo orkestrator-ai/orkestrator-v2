@@ -35,6 +35,7 @@ import { ErrorNotice, SkeletonLines } from "./pull-request-shared";
 
 export interface PullRequestViewProps {
   pullRequest: GitHubPullRequestRef;
+  projectId?: string;
   initialView?: GitHubPullRequestViewTab;
   layout: "sidebar" | "page";
   /** Host buttons (expand-to-main-area / move-to-sidebar) rendered top-right next to the ⋯ menu. */
@@ -96,6 +97,7 @@ function OrderToggle({
 
 export function PullRequestView({
   pullRequest,
+  projectId,
   initialView = "summary",
   layout,
   headerActions,
@@ -241,6 +243,7 @@ export function PullRequestView({
         <div className={pageWidth}>
           <PullRequestHeader
             pullRequest={ref}
+            projectId={projectId}
             detail={detail}
             headerActions={headerActions}
             refreshing={loading && Boolean(detail)}

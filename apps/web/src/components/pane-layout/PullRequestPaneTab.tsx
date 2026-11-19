@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useNodeScope } from "@/lib/node-scope/providers";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PullRequestTabData } from "@/types/paneLayout";
@@ -25,6 +26,9 @@ export function PullRequestPaneTab({
 }: PullRequestPaneTabProps) {
   // The environment's node keeps its pane layout (plan item 3013).
   const paneLayouts = useNodeScope().store(paneLayoutStore);
+  const projectId = useEnvironmentStore(
+    (state) => state.getEnvironmentById(environmentId)?.projectId,
+  );
   const closeTab = useCallback(() => {
     const layout = paneLayouts.getState();
     const owner = layout.findPaneWithTab(tabId, environmentId);
@@ -51,6 +55,7 @@ export function PullRequestPaneTab({
         key={data.openRequest ?? 0}
         className="min-h-0 flex-1"
         pullRequest={data.ref}
+        projectId={projectId}
         initialView={data.view}
         layout="page"
         active={isActive}

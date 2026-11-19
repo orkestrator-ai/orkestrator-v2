@@ -1,3 +1,4 @@
+import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
 import { randomUUID } from "node:crypto";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import {
@@ -16,6 +17,8 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
 const log = createLogger("pull-request");
+const DESTINATION_HOLD =
+  "Pull request destination changed. Review the branch, then turn auto-merge off and on to confirm it again.";
 
 /**
  * Auto-merge: the backend merges an environment's open pull request as soon
@@ -303,13 +306,20 @@ export class PrAutoMergeController {
       }
       return;
     }
+    const target = await this.authorizedTarget(environment);
+    if (!target) {
+      if (environment.autoMergeError !== DESTINATION_HOLD) {
+        await this.recordError(environment, DESTINATION_HOLD);
+      }
+      return;
+    }
     const key = `${decision.kind}\0${environment.prUrl}`;
     const retry = this.retries.get(environmentId);
     if (retry?.waiting && retry.key === key) return;
     try {
       const attempted =
         decision.kind === "merge"
-          ? await this.merge(environment)
+          ? await this.merge(environment, target)
           : await this.launchResolve(environment);
       if (!attempted || this.closed) return;
       // Merge cleanup can remove the environment before the command returns.
@@ -465,6 +475,18 @@ export class PrAutoMergeController {
       : null;
   }
 
+  private async authorizedTarget(environment: Environment): Promise<string | null> {
+    const repository = await this.options.storage.getRepositoryConfig(environment.projectId);
+    const configured = defaultPrTargetBranch(repository.prBaseBranch);
+    const accepted = environment.autoMergeBaseRef ?? configured;
+    if (
+      (environment.autoMergeTargetBranch && environment.autoMergeTargetBranch !== configured) ||
+      (environment.prBaseBranch && environment.prBaseBranch !== accepted)
+    )
+      return null;
+    return configured;
+  }
+
   /** Read per decision, so a settings change applies at the next reading. */
   private async policy(): Promise<PrAutoMergePolicy> {
     const config = await this.options.storage.loadConfig();
@@ -489,7 +511,7 @@ export class PrAutoMergeController {
    * branch, and a cleanup the user already requested, through Merge &
    * Cleanup or by turning auto-merge on with cleanup, still runs.
    */
-  private async merge(environment: Environment): Promise<boolean> {
+  private async merge(environment: Environment, target: string): Promise<boolean> {
     const headSha = this.options.monitorState(environment.id)?.headSha;
     if (!headSha) return false;
     const current = await this.authorized(environment, "merge", headSha);
@@ -500,9 +522,11 @@ export class PrAutoMergeController {
       deleteBranch: !isProjectHomeEnvironment(current),
       cleanupAfterMerge:
         Boolean(current.cleanupAfterMergeRequestedAt) || current.autoMergeCleanup === true,
-      ...(current.autoMergeCleanup ? { autoMergeEnabledAt: current.autoMergeEnabledAt } : {}),
+      autoMergeEnabledAt: current.autoMergeEnabledAt,
       expectedHeadSha: headSha,
       expectedPrUrl: environment.prUrl,
+      expectedBaseRef: current.autoMergeBaseRef ?? target,
+      expectedTargetBranch: target,
     });
     return true;
   }
@@ -515,7 +539,8 @@ export class PrAutoMergeController {
       "resolve",
     );
     const repository = await this.options.storage.getRepositoryConfig(environment.projectId);
-    if (!(await this.authorized(environment, "resolve"))) return false;
+    const current = await this.authorized(environment, "resolve");
+    if (!current || !(await this.authorizedTarget(current)) || this.closed) return false;
     // Read before the launch: by the time it returns, the Resolve may have pushed.
     const headSha = this.options.monitorState(environment.id)?.headSha;
     const targetBranch = environment.prBaseBranch || repository.prBaseBranch?.trim() || "main";

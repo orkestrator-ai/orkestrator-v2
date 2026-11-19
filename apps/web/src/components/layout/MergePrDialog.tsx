@@ -34,6 +34,8 @@ export interface MergePrDialogProps {
   sourceBranch: ReactNode;
   /** The branch the PR merges into; render it red when `targetMismatch` is set. */
   targetBranch: ReactNode;
+  prIdentity?: string;
+  prLabel?: string;
   /**
    * The PR merges into a branch other than the project's configured target.
    * Every option that merges, now or later, then asks before it acts.
@@ -86,6 +88,8 @@ export function MergePrDialog({
   mergeability,
   sourceBranch,
   targetBranch,
+  prIdentity,
+  prLabel,
   targetMismatch = null,
   deletesBranch,
   mergeError,
@@ -95,7 +99,13 @@ export function MergePrDialog({
 }: MergePrDialogProps) {
   // The option waiting on the non-target branch confirmation, if any.
   const [pendingConfirm, setPendingConfirm] = useState<PendingMerge | null>(null);
-  const mergeDisabled = merge.disabledReason !== null;
+  const destinationUnknown = targetBranch == null;
+  const destinationMessage = "Waiting for GitHub to report the destination branch.";
+  const mergeDisabledReason =
+    merge.disabledReason ?? (destinationUnknown ? destinationMessage : null);
+  const autoMergeDisabledReason =
+    autoMergeCleanup.disabledReason ?? (destinationUnknown ? destinationMessage : null);
+  const mergeDisabled = mergeDisabledReason !== null;
   const autoMergeHoldNote =
     autoMergeCleanup.hold && !autoMergeCleanup.hold.transient
       ? `Auto-merge will wait: ${autoMergeCleanup.hold.message}`
@@ -116,10 +126,16 @@ export function MergePrDialog({
   };
 
   // A dialog closed from outside (a merge started elsewhere) forgets the step.
-  const [wasOpen, setWasOpen] = useState(open);
-  if (wasOpen !== open) {
-    setWasOpen(open);
-    if (!open) setPendingConfirm(null);
+  const confirmationKey = JSON.stringify([
+    open,
+    prIdentity,
+    targetMismatch?.actual,
+    targetMismatch?.configured,
+  ]);
+  const [previousConfirmationKey, setPreviousConfirmationKey] = useState(confirmationKey);
+  if (previousConfirmationKey !== confirmationKey) {
+    setPreviousConfirmationKey(confirmationKey);
+    setPendingConfirm(null);
   }
 
   if (pendingConfirm && targetMismatch) {
@@ -127,12 +143,13 @@ export function MergePrDialog({
       <AlertDialog open={open} onOpenChange={handleOpenChange}>
         <NonTargetBranchConfirmation
           mismatch={targetMismatch}
-          pending={pendingConfirm}
+          later={pendingConfirm.kind === "auto-merge-cleanup"}
+          prLabel={prLabel}
           // The option can stop being available while the question is open.
           acceptDisabled={
             pendingConfirm.kind === "merge"
               ? mergeDisabled
-              : autoMergeCleanup.disabledReason !== null ||
+              : autoMergeDisabledReason !== null ||
                 autoMergeCleanup.active ||
                 autoMergeCleanup.saving
           }
@@ -149,7 +166,13 @@ export function MergePrDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Merge pull request</AlertDialogTitle>
           <AlertDialogDescription>
-            Squash and merge {sourceBranch} into {targetBranch}.{" "}
+            {destinationUnknown ? (
+              destinationMessage
+            ) : (
+              <>
+                Squash and merge {sourceBranch} into {targetBranch}.
+              </>
+            )}{" "}
             {mergeability === "checking"
               ? "GitHub is still checking whether this pull request can be merged."
               : mergeability === "conflicts"
@@ -178,7 +201,7 @@ export function MergePrDialog({
         <div role="group" aria-label="Merge options" className="flex min-w-0 flex-col gap-2">
           <MergeOption
             description={
-              merge.disabledReason ??
+              mergeDisabledReason ??
               `Merge now. If the pull request is a draft, it will be marked ready for review first. ${
                 deletesBranch
                   ? "The feature branch will be deleted after merging if it is the PR head in the same repository."
@@ -200,7 +223,7 @@ export function MergePrDialog({
           {merge.offerCleanup !== false ? (
             <MergeOption
               description={
-                merge.disabledReason ??
+                mergeDisabledReason ??
                 "Merge now, then permanently delete this environment, but only after the merge is confirmed successful."
               }
             >
@@ -261,12 +284,12 @@ export function MergePrDialog({
           ) : null}
           <MergeOption
             description={
-              autoMergeCleanup.disabledReason ??
+              autoMergeDisabledReason ??
               (autoMergeCleanup.active
                 ? "Already on: this pull request merges when ready, then this environment is deleted. Use the auto-merge toggle to turn it off."
                 : "Merge as soon as GitHub reports the pull request ready, resolving conflicts as needed, then delete this environment.")
             }
-            note={autoMergeCleanup.disabledReason ? null : autoMergeHoldNote}
+            note={autoMergeDisabledReason ? null : autoMergeHoldNote}
           >
             <Button
               type="button"
@@ -274,7 +297,7 @@ export function MergePrDialog({
               variant="outline"
               className="w-full shrink-0 justify-start gap-2 sm:w-52 border-green-600 text-green-600 hover:text-green-700 dark:text-green-400"
               disabled={
-                autoMergeCleanup.disabledReason !== null ||
+                autoMergeDisabledReason !== null ||
                 autoMergeCleanup.active ||
                 autoMergeCleanup.saving
               }
@@ -303,20 +326,21 @@ type PendingMerge = { kind: "merge"; cleanupAfterMerge: boolean } | { kind: "aut
  * The last step before merging into a branch other than the configured
  * target: the user accepts, or goes back to the options.
  */
-function NonTargetBranchConfirmation({
+export function NonTargetBranchConfirmation({
   mismatch,
-  pending,
+  later,
+  prLabel = "this pull request",
   acceptDisabled,
   onBack,
   onAccept,
 }: {
   mismatch: PrTargetMismatch;
-  pending: PendingMerge;
+  later: boolean;
+  prLabel?: string;
   acceptDisabled: boolean;
   onBack: () => void;
   onAccept: () => void;
 }) {
-  const later = pending.kind === "auto-merge-cleanup";
   return (
     <AlertDialogContent data-testid="merge-non-target-confirmation">
       <AlertDialogHeader>
@@ -325,7 +349,7 @@ function NonTargetBranchConfirmation({
           Merge into non-target branch?
         </AlertDialogTitle>
         <AlertDialogDescription>
-          {later ? "Auto-merge will merge" : "This will merge"} this pull request into{" "}
+          {later ? "Auto-merge will merge" : "This will merge"} {prLabel} into{" "}
           <code className="font-mono text-xs font-medium text-failure break-all">
             {mismatch.actual}
           </code>
@@ -335,9 +359,14 @@ function NonTargetBranchConfirmation({
         </AlertDialogDescription>
       </AlertDialogHeader>
       <AlertDialogFooter>
-        <Button type="button" variant="outline" onClick={onBack}>
+        <AlertDialogCancel
+          onClick={(event) => {
+            event.preventDefault();
+            onBack();
+          }}
+        >
           Cancel
-        </Button>
+        </AlertDialogCancel>
         <Button type="button" variant="destructive" disabled={acceptDisabled} onClick={onAccept}>
           {later ? "Accept and turn on auto-merge" : "Accept and merge"}
         </Button>

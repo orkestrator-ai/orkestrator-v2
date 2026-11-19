@@ -88,12 +88,15 @@ function openExternal(url: string) {
  * whose GitHub remote is this pull request's repository. `null` when no
  * project tracks the repository or its target is ambiguous.
  */
-function useConfiguredPrTarget(pullRequest: GitHubPullRequestRef): string | null {
+function useConfiguredPrTarget(
+  pullRequest: GitHubPullRequestRef,
+  projectId?: string,
+): string | null {
   const projects = useProjectStore((state) => state.projects);
   const repositories = useConfigStore((state) => state.config.repositories);
   return useMemo(
-    () => configuredPrTargetForPullRequest(pullRequest, projects, repositories),
-    [pullRequest, projects, repositories],
+    () => configuredPrTargetForPullRequest(pullRequest, projects, repositories, projectId),
+    [pullRequest, projects, repositories, projectId],
   );
 }
 
@@ -101,13 +104,18 @@ export function MergeButton({
   pullRequest,
   detail,
   targetMismatch = null,
+  configuredTarget,
+  projectId,
 }: {
   pullRequest: GitHubPullRequestRef;
   detail: GitHubPullRequestDetail;
   /** The PR merges into a branch other than the project's configured target. */
   targetMismatch?: PrTargetMismatch | null;
+  configuredTarget?: string | null;
+  projectId?: string;
 }) {
   const merge = usePullRequestsStore((state) => state.merge);
+  const loadDetail = usePullRequestsStore((state) => state.loadDetail);
   const allowed = MERGE_METHOD_ORDER.filter((method) =>
     detail.allowedMergeMethods.includes(method),
   );
@@ -123,26 +131,40 @@ export function MergeButton({
     hasEnvironmentBranchOwnership(pullRequest, detail.headRef, environments);
   const [deleteBranch, setDeleteBranch] = useState(true);
   const shouldDeleteBranch = deleteBranch && canDeleteBranch;
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const confirmation = JSON.stringify([
+    pullRequest.owner,
+    pullRequest.repo,
+    pullRequest.number,
+    detail.baseRef,
+    projectId,
+    configuredTarget,
+    detail.headSha,
+  ]);
+  const [confirmedView, setConfirmedView] = useState<string | null>(null);
+  if (confirmedView !== null && confirmedView !== confirmation) setConfirmedView(null);
+  const confirmOpen = confirmedView === confirmation;
   const [merging, setMerging] = useState(false);
   const blocked = mergeBlockedReason(detail);
   const warning = blocked ? null : mergeWarning(detail);
   const reasonId = useId();
-  const disabled = Boolean(blocked) || merging || !method;
+  const disabled = Boolean(blocked) || merging || !method || !detail.baseRef.trim();
 
   const confirm = async () => {
-    if (!method) return;
+    if (!method || disabled || !confirmOpen) return;
     setMerging(true);
     try {
       const result = await merge(pullRequest, {
         method,
         deleteBranch: shouldDeleteBranch,
         expectedHeadSha: detail.headSha,
+        expectedBaseRef: detail.baseRef,
+        expectedTargetBranch: configuredTarget ?? null,
+        ...(projectId ? { projectId } : {}),
       });
       if (!result.merged) {
         throw new Error(result.message || "GitHub did not merge the pull request.");
       }
-      setConfirmOpen(false);
+      setConfirmedView(null);
       toast.success(`Merged #${pullRequest.number}`, {
         description:
           result.branchDeleted === false && shouldDeleteBranch
@@ -150,6 +172,8 @@ export function MergeButton({
             : result.message,
       });
     } catch (error) {
+      setConfirmedView(null);
+      await loadDetail(pullRequest);
       toast.error(errorMessage(error, "Could not merge the pull request."));
     } finally {
       setMerging(false);
@@ -178,7 +202,7 @@ export function MergeButton({
                 disabled={disabled}
                 data-target-mismatch={targetMismatch ? "true" : undefined}
                 aria-describedby={blocked || warning ? reasonId : undefined}
-                onClick={() => setConfirmOpen(true)}
+                onClick={() => setConfirmedView(confirmation)}
               >
                 {merging ? (
                   <Loader2 className="size-3.5 animate-spin" />
@@ -246,7 +270,12 @@ export function MergeButton({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <AlertDialog open={confirmOpen} onOpenChange={(open) => !merging && setConfirmOpen(open)}>
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(open) => {
+          if (!open && !merging) setConfirmedView(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
@@ -310,7 +339,7 @@ export function MergeButton({
           <AlertDialogFooter>
             <AlertDialogCancel disabled={merging}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              disabled={merging}
+              disabled={disabled}
               className={cn(targetMismatch && buttonVariants({ variant: "destructive" }))}
               onClick={(event) => {
                 event.preventDefault();
@@ -419,6 +448,7 @@ function PullRequestActionsMenu({
 export function PullRequestHeader({
   pullRequest,
   detail,
+  projectId,
   headerActions,
   onRefresh,
   refreshing,
@@ -426,12 +456,13 @@ export function PullRequestHeader({
   pullRequest: GitHubPullRequestRef;
   detail: GitHubPullRequestDetail | undefined;
   headerActions?: ReactNode;
+  projectId?: string;
   onRefresh: () => void;
   refreshing: boolean;
 }) {
   const url = detail?.htmlUrl ?? gitHubPullRequestUrl(pullRequest);
   const checkout = `gh pr checkout ${pullRequest.number} --repo ${pullRequest.owner}/${pullRequest.repo}`;
-  const configuredTarget = useConfiguredPrTarget(pullRequest);
+  const configuredTarget = useConfiguredPrTarget(pullRequest, projectId);
   const targetMismatch = prTargetMismatch({
     actualBase: detail?.baseRef,
     configuredBase: configuredTarget,
@@ -475,6 +506,8 @@ export function PullRequestHeader({
               pullRequest={pullRequest}
               detail={detail}
               targetMismatch={targetMismatch}
+              configuredTarget={configuredTarget}
+              projectId={projectId}
             />
           )}
           <PullRequestActionsMenu pullRequest={pullRequest} detail={detail} onRefresh={onRefresh} />

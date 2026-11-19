@@ -59,3 +59,30 @@ for (const { mergeable, state } of STATES) {
     await preview(page, testInfo, `${state}-dialog`);
   });
 }
+
+test("focuses Cancel after a keyboard merge request into a non-target branch", async ({
+  page,
+}, testInfo) => {
+  const presentation = testInfo.project.name === "mobile-chromium" ? "&presentation=grid" : "";
+  await page.goto(`/auto-merge-error?message=none&autoMerge=off&base=release${presentation}`);
+  await mergeButton(page).click();
+  const options = page.getByRole("group", { name: "Merge options" });
+  await options.getByRole("button", { name: "Merge PR" }).press("Enter");
+  const warning = page.getByRole("alertdialog", { name: "Merge into non-target branch?" });
+  await expect(warning).toContainText("pull request #7 into release");
+  const cancel = warning.getByRole("button", { name: "Cancel" });
+  await expect(cancel).toBeFocused();
+  await preview(page, testInfo, "review-confirmation");
+  await cancel.press("Enter");
+  await expect(options).toBeVisible();
+});
+
+test("describes an unknown base and withholds merge actions", async ({ page }, testInfo) => {
+  await page.goto("/auto-merge-error?message=none&autoMerge=off&unknownBase");
+  await mergeButton(page).click();
+  const dialog = page.getByRole("alertdialog", { name: "Merge pull request" });
+  await expect(dialog).toContainText("Waiting for GitHub to report the destination branch.");
+  await expect(dialog.getByRole("button", { name: "Merge PR" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "Auto-merge & Cleanup" })).toBeDisabled();
+  await preview(page, testInfo, "review-unknown-base");
+});

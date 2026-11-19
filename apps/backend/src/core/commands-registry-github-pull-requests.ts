@@ -1,3 +1,4 @@
+import { configuredPrTargetForPullRequest } from "@orkestrator/protocol/github-repository";
 import {
   gitHubPullRequestKey,
   isGitHubPullRequestRef,
@@ -239,7 +240,22 @@ export function registerGitHubPullRequestCommands(
       method: oneOf(args.method, MERGE_METHODS, "method"),
       deleteBranch: asRequiredBoolean(args.deleteBranch, "deleteBranch"),
       expectedHeadSha: optionalString(args.expectedHeadSha, "expectedHeadSha"),
+      expectedBaseRef: args.expectedBaseRef,
     };
+    if (args.expectedTargetBranch !== undefined) {
+      const [projects, config] = await Promise.all([
+        context.storage.loadProjects(),
+        context.storage.loadConfig(),
+      ]);
+      if (
+        configuredPrTargetForPullRequest(ref, projects, config.repositories, args.projectId) !==
+        args.expectedTargetBranch
+      ) {
+        throw new Error(
+          "The configured pull request target changed. Review the branch and confirm the merge again.",
+        );
+      }
+    }
     const environments = input.deleteBranch ? await context.storage.loadEnvironments() : [];
     const result = await withGitHubToken(context, (token) =>
       mergeGitHubPullRequest(token, ref, input, { environments }),

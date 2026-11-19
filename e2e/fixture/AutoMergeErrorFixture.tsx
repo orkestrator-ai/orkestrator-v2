@@ -1,3 +1,4 @@
+import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import { useEffect, useState } from "react";
 import { ActionBar } from "../../apps/web/src/components/layout/ActionBar";
 import { TerminalProvider, useTerminalContext } from "../../apps/web/src/contexts/TerminalContext";
@@ -19,6 +20,7 @@ function installFixture(
   message: string | undefined,
   hasMergeConflicts: boolean | null,
   autoMerge: boolean,
+  prBaseBranch: string | null,
 ) {
   delete window.orkestrator;
   window.orkestrator = {
@@ -41,6 +43,15 @@ function installFixture(
       },
     ],
   });
+  appCommandStore(useConfigStore.def).setState(({ config }) => ({
+    config: {
+      ...config,
+      repositories: {
+        ...config.repositories,
+        [PROJECT_ID]: { ...config.repositories[PROJECT_ID], prBaseBranch: "main" },
+      },
+    },
+  }));
   appCommandStore(useEnvironmentStore.def).setState({
     environments: [
       {
@@ -54,6 +65,7 @@ function installFixture(
         worktreePath: "/fixture/auto-merge-project/worktree",
         prUrl: "https://github.com/fixture/project/pull/7",
         prState: "open",
+        prBaseBranch,
         hasMergeConflicts,
         autoMerge,
         autoMergeError: message,
@@ -78,7 +90,14 @@ export function AutoMergeErrorFixture() {
   const mergeable = params.get("mergeable") ?? "yes";
   const hasMergeConflicts =
     mergeable === "conflicts" ? true : mergeable === "checking" ? null : false;
-  useState(() => installFixture(message, hasMergeConflicts, params.get("autoMerge") !== "off"));
+  useState(() =>
+    installFixture(
+      message,
+      hasMergeConflicts,
+      params.get("autoMerge") !== "off",
+      params.has("unknownBase") ? null : (params.get("base") ?? "main"),
+    ),
+  );
   return (
     <TerminalProvider>
       <div className="h-screen bg-background text-foreground">

@@ -128,6 +128,7 @@ export function ProjectPullRequestsView({ projectId }: { projectId: string }) {
             key={`${active.key}:${active.openRequest}`}
             className="min-h-0 flex-1"
             pullRequest={active.ref}
+            projectId={projectId}
             initialView={active.view}
             layout="page"
             onSummaryLoaded={(summary) => updateTab(projectId, active.key, summary)}

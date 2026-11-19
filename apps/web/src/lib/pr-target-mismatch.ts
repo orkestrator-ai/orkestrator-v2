@@ -6,8 +6,9 @@
  * the ticket view and the pull request screen all show the PR's real base in
  * red and ask before merging when this returns a mismatch.
  */
-import type { GitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
-import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
+import type { EnvironmentPrDestination } from "@/lib/backend/config-integrations";
+import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
+export { configuredPrTargetForPullRequest } from "@orkestrator/protocol/github-repository";
 
 /** The two settings fields the configured target is read from. */
 export type PrTargetRepositoryConfig = {
@@ -23,8 +24,7 @@ export type PrTargetMismatch = {
 };
 
 /**
- * The project's configured PR target: its PR base branch, else its default
- * branch, as the backend's PR monitor reads them. Blank values count as
+ * The project's configured PR target uses the same fallback as PR creation. Blank values count as
  * unset, because settings persist a cleared base as `""`. `null` when the
  * project's settings are not known, so nothing is flagged on a guess.
  */
@@ -32,7 +32,7 @@ export function configuredPrTargetBranch(
   repository: PrTargetRepositoryConfig | null | undefined,
 ): string | null {
   if (!repository) return null;
-  return repository.prBaseBranch?.trim() || repository.defaultBranch?.trim() || "main";
+  return defaultPrTargetBranch(repository.prBaseBranch);
 }
 
 /**
@@ -51,34 +51,21 @@ export function prTargetMismatch(input: {
   return { actual, configured };
 }
 
-type PrTargetProject = { id: string; gitUrl: string };
+export function environmentPrDestination(
+  prUrl: string | null | undefined,
+  actualBase: string | null | undefined,
+  configuredBase: string | null,
+): EnvironmentPrDestination | null {
+  const base = actualBase?.trim();
+  if (!prUrl || !base) return null;
+  return {
+    expectedPrUrl: prUrl,
+    expectedBaseRef: base,
+    ...(configuredBase ? { expectedTargetBranch: configuredBase } : {}),
+  };
+}
 
-/**
- * The configured target for a pull request opened by reference, found
- * through the project whose GitHub remote is the PR's repository. A pull
- * request in a repository no project tracks has no configured target. When
- * several projects track the repository and their settings disagree, the
- * target is ambiguous and nothing is flagged.
- */
-export function configuredPrTargetForPullRequest(
-  ref: Pick<GitHubPullRequestRef, "owner" | "repo">,
-  projects: readonly PrTargetProject[],
-  repositories: Readonly<Record<string, PrTargetRepositoryConfig | undefined>>,
-): string | null {
-  const owner = ref.owner.toLowerCase();
-  const repo = ref.repo.toLowerCase();
-  const targets = new Set<string>();
-  for (const project of projects) {
-    const parsed = parseGitHubRepositoryRemote(project.gitUrl);
-    if (!parsed.ok) continue;
-    if (
-      parsed.repository.owner.toLowerCase() !== owner ||
-      parsed.repository.name.toLowerCase() !== repo
-    ) {
-      continue;
-    }
-    const target = configuredPrTargetBranch(repositories[project.id]);
-    if (target) targets.add(target);
-  }
-  return targets.size === 1 ? ([...targets][0] ?? null) : null;
+export function pullRequestLabel(url: string | null | undefined): string {
+  const number = url?.match(/\/pull\/(\d+)/)?.[1];
+  return number ? `pull request #${number}` : "this pull request";
 }

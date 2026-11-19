@@ -5,8 +5,8 @@
  * web binds it per `lib/backend` client
  * (`apps/web/src/lib/node-scope/domains/pull-requests.ts`).
  *
- * - **Versions 3, 2 and 1** (a node whose hello advertises `pull-requests`):
- *   calls carry the envelope (the merge guards, `deleteBranch` and `method`, the
+ * - **Versions 4, 3, 2 and 1** (a node whose hello advertises `pull-requests`):
+ *   calls carry the envelope (the merge destination guards, `deleteBranch` and `method`, the
  *   review's `comments` and `commitId`, the review package's `expectedHead`,
  *   `validationPlan` and `additionalLimitations` are critical) and results
  *   are decoded with the command's schema.
@@ -36,7 +36,16 @@ const legacyPullRequestsApi = (
   context: DomainAdapterContext,
 ): PullRequestsApi => legacyCommandApi(context, PULL_REQUESTS_COMMANDS);
 
+// Older negotiated nodes reject unknown critical fields. A legacy node has no
+// envelope and cannot enforce these guards, so refuse before invoking it.
+function rejectLegacyDestination(args: { expectedBaseRef?: string }) {
+  if (args.expectedBaseRef !== undefined) {
+    throw new Error("Update the backend to verify the pull request destination before merging.");
+  }
+}
+
 export const pullRequestsClient = domainClient(pullRequestsDomain, {
+  4: pullRequestsApi,
   3: pullRequestsApi,
   // Version 3 only removed `merge_pr_local`, which only tests called
   // (2026-11-13), so version 2 peers take the same API. Adapter 2 goes when
@@ -46,5 +55,22 @@ export const pullRequestsClient = domainClient(pullRequestsDomain, {
   // peers take the same API. Adapter 1 goes when the support floor passes the
   // first Stable release with version 2.
   1: pullRequestsApi,
-  0: legacyPullRequestsApi,
+  0: (call, context) => {
+    const api = legacyPullRequestsApi(call, context);
+    return {
+      ...api,
+      async merge_environment_pr(args) {
+        rejectLegacyDestination(args);
+        return api.merge_environment_pr(args);
+      },
+      async merge_github_pull_request(args) {
+        rejectLegacyDestination(args);
+        return api.merge_github_pull_request(args);
+      },
+      async set_environment_auto_merge(args) {
+        rejectLegacyDestination(args);
+        return api.set_environment_auto_merge(args);
+      },
+    };
+  },
 });

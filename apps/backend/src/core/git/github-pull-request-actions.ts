@@ -210,6 +210,7 @@ export async function mergeGitHubPullRequest(
     method: GitHubPullRequestMergeMethod;
     deleteBranch: boolean;
     expectedHeadSha?: string;
+    expectedBaseRef?: string;
   },
   options: GitHubPullRequestRequestOptions & {
     environments?: readonly { id: string; branch: string | null; prUrl?: string | null }[];
@@ -223,7 +224,18 @@ export async function mergeGitHubPullRequest(
       ? undefined
       : requireCommitSha(input.expectedHeadSha, "Expected head SHA");
   const client = pullRequestClient(token, options);
-  const pull = input.deleteBranch ? await loadPullRequestRecord(client, ref) : null;
+  const pull =
+    input.deleteBranch || input.expectedBaseRef !== undefined
+      ? await loadPullRequestRecord(client, ref)
+      : null;
+  if (input.expectedBaseRef !== undefined) {
+    const base = isRecord(pull?.base) ? stringValue(pull.base.ref) : "";
+    if (base !== input.expectedBaseRef) {
+      throw validation(
+        "The pull request destination changed or could not be verified. Review the branch and confirm the merge again.",
+      );
+    }
+  }
 
   let data: unknown;
   try {
@@ -244,7 +256,7 @@ export async function mergeGitHubPullRequest(
     sha: optionalString(record.sha),
     message: optionalString(record.message),
   };
-  if (!merged || !pull) return result;
+  if (!merged || !pull || !input.deleteBranch) return result;
   if (isCrossRepositoryPull(pull)) return { ...result, branchDeleted: false };
   const head = isRecord(pull.head) ? pull.head : {};
   const headRef = stringValue(head.ref);

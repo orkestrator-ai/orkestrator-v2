@@ -85,6 +85,8 @@ import { LocalEnvironmentDeleteDialog } from "@/components/environments/LocalEnv
 import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
+import { pullRequestLabel } from "@/lib/pr-target-mismatch";
+import { useAutoMergeConfirmation } from "./useAutoMergeConfirmation";
 import { useAutoMergeToggle } from "./useAutoMergeToggle";
 import { MergePrDialog, prMergeability } from "./MergePrDialog";
 import { armAutoMergeCleanup } from "./auto-merge-cleanup";
@@ -409,9 +411,16 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     sourceBranch,
     mergeTargetBranch,
     mergeTargetMismatch,
+    mergeDestination,
+    mergePrIdentity,
   } = useActionBarController({ presentation });
   const coordinatorActivity = useCoordinatorActivity(selectedProjectId);
   const autoMerge = useAutoMergeToggle(selectedEnvironment ?? null);
+  const autoMergeConfirmation = useAutoMergeConfirmation(
+    mergePrIdentity,
+    mergeDestination,
+    autoMerge,
+  );
   const autoMergeHold = useAutoMergeHold(selectedEnvironment?.id ?? "", selectedEnvironment);
   const mergeability = prMergeability(hasMergeConflicts);
 
@@ -1313,6 +1322,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                               </p>
                             )}
                           </>
+                        ) : !mergeDestination ? (
+                          "Waiting for the destination branch."
+                        ) : mergeTargetMismatch ? (
+                          <p className="text-failure">
+                            Targets {mergeTargetMismatch.actual}. Project target is{" "}
+                            {mergeTargetMismatch.configured}.
+                          </p>
                         ) : (
                           "Merge this PR automatically once it is ready, resolving conflicts as needed"
                         )
@@ -1324,11 +1340,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         className={cn(
                           autoMerge.enabled &&
                             "border-green-600 bg-green-600/15 text-white hover:bg-green-600/25 hover:text-white",
+                          !autoMerge.enabled && mergeTargetMismatch && "text-failure",
                         )}
-                        onClick={() => void autoMerge.toggle()}
+                        onClick={autoMergeConfirmation.toggle}
                         aria-label="Auto-merge"
                         aria-pressed={autoMerge.enabled}
-                        disabled={autoMerge.saving}
+                        disabled={autoMergeConfirmation.disabled}
                       >
                         {autoMerge.saving ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -1804,15 +1821,20 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       </AlertDialog>
 
       {/* Merge PR options: merge, merge & cleanup, resolve, auto-merge & cleanup */}
+      {autoMergeConfirmation.confirmation}
       <MergePrDialog
         open={mergeDialogOpen}
         onOpenChange={setMergeDialogOpenClearingError}
         mergeability={mergeability}
         sourceBranch={<BranchName>{sourceBranch}</BranchName>}
         targetBranch={
-          <BranchName mismatch={mergeTargetMismatch !== null}>{mergeTargetBranch}</BranchName>
+          mergeTargetBranch && (
+            <BranchName mismatch={mergeTargetMismatch !== null}>{mergeTargetBranch}</BranchName>
+          )
         }
         targetMismatch={mergeTargetMismatch}
+        prIdentity={mergePrIdentity ?? undefined}
+        prLabel={pullRequestLabel(mergeDestination?.expectedPrUrl)}
         deletesBranch={Boolean(
           selectedEnvironment &&
           isEnvironmentOwnedBranch(selectedEnvironment.id, selectedEnvironment.branch),
@@ -1864,8 +1886,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           hold: autoMergeHold,
           onArm: () => {
             setMergeDialogOpenClearingError(false);
-            if (selectedEnvironment) {
-              void armAutoMergeCleanup(selectedEnvironment.id, autoMerge.set, autoMergeHold);
+            if (selectedEnvironment && mergeDestination) {
+              void armAutoMergeCleanup(
+                selectedEnvironment.id,
+                (enabled, cleanup) => autoMerge.set(enabled, cleanup, mergeDestination),
+                autoMergeHold,
+              );
             }
           },
         }}

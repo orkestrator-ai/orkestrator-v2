@@ -6,13 +6,11 @@ import {
 } from "./pr-target-mismatch";
 
 describe("configuredPrTargetBranch", () => {
-  test("reads the PR base branch, then the default branch, as the PR monitor does", () => {
+  test("uses the PR creation fallback when the PR base is blank", () => {
     expect(configuredPrTargetBranch({ prBaseBranch: "develop", defaultBranch: "main" })).toBe(
       "develop",
     );
-    expect(configuredPrTargetBranch({ prBaseBranch: "  ", defaultBranch: "master" })).toBe(
-      "master",
-    );
+    expect(configuredPrTargetBranch({ prBaseBranch: "  ", defaultBranch: "master" })).toBe("main");
     expect(configuredPrTargetBranch({ prBaseBranch: "", defaultBranch: "" })).toBe("main");
   });
 
@@ -50,8 +48,8 @@ describe("configuredPrTargetForPullRequest", () => {
           { id: "widget", gitUrl: "git@github.com:acme/widget.git" },
         ],
         {
-          other: { prBaseBranch: "release", defaultBranch: "main" },
-          widget: { prBaseBranch: "develop", defaultBranch: "main" },
+          other: { prBaseBranch: "release" },
+          widget: { prBaseBranch: "develop" },
         },
       ),
     ).toBe("develop");

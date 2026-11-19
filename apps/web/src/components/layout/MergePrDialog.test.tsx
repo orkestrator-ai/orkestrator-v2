@@ -205,3 +205,35 @@ describe("MergePrDialog", () => {
     expect(onMerge).toHaveBeenLastCalledWith(false);
   });
 });
+
+test("discards confirmation after a different PR with the same destination is selected", () => {
+  const mismatch = { actual: "release", configured: "main" };
+  const onMerge = mock(() => {});
+  const shared = props({ targetMismatch: mismatch, merge: { disabledReason: null, onMerge } });
+  const view = render(<MergePrDialog {...shared} prIdentity="environment-a/pr-1" />);
+  fireEvent.click(options().getByRole("button", { name: "Merge PR" }));
+  expect(screen.getByRole("button", { name: "Accept and merge" })).toBeTruthy();
+  view.rerender(<MergePrDialog {...shared} prIdentity="environment-b/pr-2" />);
+  expect(options().getByRole("button", { name: "Merge PR" })).toBeTruthy();
+  expect(onMerge).not.toHaveBeenCalled();
+});
+
+test("a cleared and restored mismatch requires a new selection", () => {
+  const shared = props({ targetMismatch: { actual: "release", configured: "main" } });
+  const view = render(<MergePrDialog {...shared} />);
+  fireEvent.click(options().getByRole("button", { name: "Merge PR" }));
+  view.rerender(<MergePrDialog {...shared} targetMismatch={null} />);
+  expect(options().getByRole("button", { name: "Merge PR" })).toBeTruthy();
+  view.rerender(<MergePrDialog {...shared} />);
+  expect(options().getByRole("button", { name: "Merge PR" })).toBeTruthy();
+});
+
+test("shows an unknown destination and disables both merge actions", () => {
+  render(<MergePrDialog {...props({ targetBranch: null })} />);
+  expect(screen.getByRole("alertdialog").textContent).toContain(
+    "Waiting for GitHub to report the destination branch.",
+  );
+  for (const name of ["Merge PR", "Merge & Cleanup", "Auto-merge & Cleanup"]) {
+    expect((options().getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+  }
+});

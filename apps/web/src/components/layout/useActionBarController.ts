@@ -70,7 +70,11 @@ import {
 } from "@/stores/paneLayoutStore";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
-import { configuredPrTargetBranch, prTargetMismatch } from "@/lib/pr-target-mismatch";
+import {
+  configuredPrTargetBranch,
+  environmentPrDestination,
+  prTargetMismatch,
+} from "@/lib/pr-target-mismatch";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { mergePrControl } from "@/lib/merge-pr-control";
 import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
@@ -198,7 +202,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       ? (state.environments.find((environment) => environment.id === deleteTargetId) ?? null)
       : null,
   );
-  const [mergeDialogOpenState, setMergeDialogOpenState] = useState(false);
+  const [mergeDialogIdentity, setMergeDialogIdentity] = useState<string | null>(null);
   const [mergingEnvironmentId, setMergingEnvironmentId] = useState<string | null>(null);
   // A row's "Merge PR" menu item selects its environment and asks for the
   // dialog the green button opens. Eligibility is checked once on admission;
@@ -221,20 +225,29 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     mergePrRequest.nodeId === actionBarNodeId &&
     mergePrRequest.environmentId === selectedEnvironmentId &&
     selectedMergePrControl?.disabled === false;
+  const mergePrIdentity = selectedEnvironment
+    ? JSON.stringify([actionBarNodeId, selectedEnvironment.id, selectedEnvironment.prUrl])
+    : null;
+  if (mergeDialogIdentity !== null && mergeDialogIdentity !== mergePrIdentity) {
+    setMergeDialogIdentity(null);
+  }
   const [handledMergePrNonce, setHandledMergePrNonce] = useState<number | null>(null);
   // Adjust this component's state before committing a new request, so later
   // readiness updates cannot dismiss a confirmation the user is reading.
   if (mergePrRequest && mergePrRequest.nonce !== handledMergePrNonce) {
     setHandledMergePrNonce(mergePrRequest.nonce);
-    if (mergePrRequested) setMergeDialogOpenState(true);
+    if (mergePrRequested) setMergeDialogIdentity(mergePrIdentity);
   }
-  const mergeDialogOpen = mergeDialogOpenState;
-  const setMergeDialogOpen = useCallback((open: boolean) => {
-    setMergeDialogOpenState(open);
-    if (open) return;
-    const request = useMergePrRequestStore.getState().request;
-    if (request) useMergePrRequestStore.getState().clearMergePrRequest(request.nonce);
-  }, []);
+  const mergeDialogOpen = mergeDialogIdentity !== null && mergeDialogIdentity === mergePrIdentity;
+  const setMergeDialogOpen = useCallback(
+    (open: boolean) => {
+      setMergeDialogIdentity(open ? mergePrIdentity : null);
+      if (open) return;
+      const request = useMergePrRequestStore.getState().request;
+      if (request) useMergePrRequestStore.getState().clearMergePrRequest(request.nonce);
+    },
+    [mergePrIdentity],
+  );
   useEffect(() => {
     if (mergePrRequest) {
       useMergePrRequestStore.getState().clearMergePrRequest(mergePrRequest.nonce);
@@ -2194,11 +2207,23 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     }
   }, [deleteEnvironment, deleteTargetId]);
 
+  const configuredMergeTarget = configuredPrTargetBranch(
+    selectedEnvironment && config.repositories[selectedEnvironment.projectId],
+  );
+  const mergeDestination = environmentPrDestination(
+    prUrl,
+    selectedEnvironment?.prBaseBranch,
+    configuredMergeTarget,
+  );
+  const mergeBase = mergeDestination?.expectedBaseRef;
+  const mergePrUrl = mergeDestination?.expectedPrUrl;
+  const mergeConfiguredTarget = mergeDestination?.expectedTargetBranch;
+
   // Handler for merging a PR, optionally deleting its environment after GitHub
   // confirms that the merge completed.
   const handleMergePR = useCallback(
     async (cleanupAfterMerge: boolean) => {
-      if (!selectedEnvironmentId || !prUrl) return;
+      if (!selectedEnvironmentId || !mergePrUrl || !mergeBase) return;
 
       // Close dialog immediately and show spinner on main button
       setMergeDialogOpen(false);
@@ -2213,8 +2238,13 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         const mergeResult = await backendForScope(actionBarScope).mergeEnvironmentPr(
           operationEnvironmentId,
           "squash",
-          true,
+          !selectedEnvironment?.projectHome,
           cleanupAfterMerge,
+          {
+            expectedPrUrl: mergePrUrl,
+            expectedBaseRef: mergeBase,
+            ...(mergeConfiguredTarget ? { expectedTargetBranch: mergeConfiguredTarget } : {}),
+          },
         );
         log.info("merge.completed", { outcome: mergeResult.outcome });
 
@@ -2264,8 +2294,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       activateProjectForCleanup,
       selectedEnvironment?.branch,
       selectedEnvironment?.name,
+      selectedEnvironment?.projectHome,
       selectedEnvironmentId,
-      prUrl,
+      mergeBase,
+      mergePrUrl,
+      mergeConfiguredTarget,
       setMergeDialogOpen,
     ],
   );
@@ -2279,11 +2312,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // and whether that is not the target set in the project's settings.
   const mergeTargetMismatch = prTargetMismatch({
     actualBase: selectedEnvironment?.prBaseBranch,
-    configuredBase: selectedProjectId
-      ? configuredPrTargetBranch(config.repositories[selectedProjectId])
-      : null,
+    configuredBase: configuredMergeTarget,
   });
-  const mergeTargetBranch = selectedEnvironment?.prBaseBranch?.trim() || targetBranch;
+  const mergeTargetBranch = mergeBase ?? null;
 
   return {
     isGrid,
@@ -2455,5 +2486,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     sourceBranch,
     mergeTargetBranch,
     mergeTargetMismatch,
+    mergeDestination,
+    mergePrIdentity,
   };
 }

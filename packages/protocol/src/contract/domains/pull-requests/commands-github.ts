@@ -242,10 +242,13 @@ export const mergeGitHubPullRequestCommand = defineCommand({
     method: oneOf("method", ["merge", "squash", "rebase"]),
     deleteBranch: Schema.Boolean,
     expectedHeadSha: optionalUnknown,
+    expectedBaseRef: Schema.optionalKey(Schema.NonEmptyString),
+    expectedTargetBranch: Schema.optionalKey(Schema.NullOr(Schema.NonEmptyString)),
+    projectId: Schema.optionalKey(Schema.NonEmptyString),
   }),
   result: GitHubPullRequestMergeResultSchema,
   // The compare-and-swap guard: ignored, a head pushed after the review merges.
-  critical: ["expectedHeadSha"],
+  critical: ["expectedHeadSha", "expectedBaseRef", "expectedTargetBranch", "projectId"],
 });
 
 export const updateGitHubPullRequestStateCommand = defineCommand({

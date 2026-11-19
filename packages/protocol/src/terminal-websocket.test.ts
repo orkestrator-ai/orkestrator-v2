@@ -105,6 +105,41 @@ describe("terminal WebSocket client control protocol", () => {
         }),
       ),
     ).toEqual({ type: "resize", channelId: 0, operationId: 3, cols: 1, rows: 0xffff });
+    // The size-ownership client id is optional and read leniently: a
+    // malformed one is dropped, never a reason to close the socket.
+    expect(
+      parseTerminalWebSocketClientControlFrame(
+        encodeJson({
+          type: "resize",
+          channelId: 1,
+          operationId: 4,
+          cols: 80,
+          rows: 24,
+          clientId: "w-1",
+        }),
+      ),
+    ).toEqual({
+      type: "resize",
+      channelId: 1,
+      operationId: 4,
+      cols: 80,
+      rows: 24,
+      clientId: "w-1",
+    });
+    for (const clientId of ["", "has space", 7, "x".repeat(129)]) {
+      expect(
+        parseTerminalWebSocketClientControlFrame(
+          encodeJson({
+            type: "resize",
+            channelId: 1,
+            operationId: 5,
+            cols: 80,
+            rows: 24,
+            clientId,
+          }),
+        ),
+      ).toEqual({ type: "resize", channelId: 1, operationId: 5, cols: 80, rows: 24 });
+    }
     expect(
       parseTerminalWebSocketClientControlFrame(
         encodeJson({

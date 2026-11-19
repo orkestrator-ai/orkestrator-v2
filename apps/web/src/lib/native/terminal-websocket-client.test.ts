@@ -417,9 +417,16 @@ describe("TerminalWebSocketClient", () => {
     );
     expect(await inputResult).toBe(true);
 
-    const resizeResult = client.resize("session-b", 120, 40);
+    const resizeResult = client.resize("session-b", 120, 40, "window-1");
     const resize = sentControls(first).findLast((frame) => frame.type === "resize")!;
-    expect(resize).toMatchObject({ type: "resize", channelId: 22, cols: 120, rows: 40 });
+    // The window's size-ownership id rides on the update; an older server ignores it.
+    expect(resize).toMatchObject({
+      type: "resize",
+      channelId: 22,
+      cols: 120,
+      rows: 40,
+      clientId: "window-1",
+    });
     first.receive(
       JSON.stringify({
         type: "operation-result",

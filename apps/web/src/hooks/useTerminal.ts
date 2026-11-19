@@ -17,6 +17,7 @@ import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createTerminalsApi } from "@/lib/backend/terminals";
 import { createWorkflowsApi } from "@/lib/backend/workflows";
+import { terminalSizeClientId } from "@/lib/terminal-size-client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { isAppCommandScope, onReconnectInScope } from "@/lib/node-scope-slots";
@@ -158,7 +159,17 @@ interface UseTerminalReturn {
   disconnect: () => Promise<void>;
   /** Publish a successful backend bootstrap only if this session still owns the hook. */
   markBootstrapped: (sessionId: string) => boolean;
+  /**
+   * Reports this view's geometry after a layout change. The backend applies it
+   * only while this window owns the shared terminal's size, or nobody does
+   * (`terminal-size-client.ts`).
+   */
   resize: (cols: number, rows: number) => Promise<void>;
+  /**
+   * Takes the shared terminal's size for this window and applies this
+   * geometry. For deliberate interaction only: focus, a click, typing.
+   */
+  claimSize: (cols: number, rows: number) => Promise<void>;
   write: (data: string) => Promise<void>;
   /** Tear down the current attachment and attach again from scratch. */
   reconnect: () => Promise<void>;
@@ -180,6 +191,8 @@ export function terminalBackendForScope(scope: NodeScope) {
       getTerminalSession: backend.getTerminalSession,
       getTerminalStateSnapshot: backend.getTerminalStateSnapshot,
       rejectTerminalSnapshot: backend.rejectTerminalSnapshot,
+      claimTerminalSize: backend.claimTerminalSize,
+      releaseTerminalSize: backend.releaseTerminalSize,
       resizeTerminal: backend.resizeTerminal,
       resumeTerminalInput: backend.resumeTerminalInput,
       startTerminalSession: backend.startTerminalSession,
@@ -400,6 +413,21 @@ export function useTerminal({
     setIsConnecting(false);
     setError(null);
   }, [terminalTargetIdentity, existingSessionId, cleanupEventListener, api]);
+
+  // A view that stops showing a session (unmounted, or moved to another
+  // session) gives up setting its size, so the clients still showing it are
+  // not held to this window's geometry until the lease lapses. The session
+  // itself keeps running: this releases the size, not the terminal.
+  useEffect(() => {
+    if (!sessionId) return;
+    return () => {
+      void Promise.resolve()
+        .then(() => api.releaseTerminalSize(sessionId, terminalSizeClientId()))
+        .catch((err: unknown) => {
+          log.debug("size.release-failed", () => ({ sessionId, error: formatLogError(err) }));
+        });
+    };
+  }, [api, sessionId]);
 
   // Unmount means "not currently visible", not "stop the terminal". Always
   // release only renderer consumption here; explicit disconnect/tab-close
@@ -1148,11 +1176,12 @@ export function useTerminal({
     async (newCols: number, newRows: number) => {
       if (!sessionId) return;
 
+      const clientId = terminalSizeClientId();
       try {
         if (isLocalRef.current) {
-          await api.resizeLocalTerminal(sessionId, newCols, newRows);
+          await api.resizeLocalTerminal(sessionId, newCols, newRows, clientId);
         } else {
-          await api.resizeTerminal(sessionId, newCols, newRows);
+          await api.resizeTerminal(sessionId, newCols, newRows, clientId);
         }
       } catch (err) {
         // Session not found errors are expected during cleanup/tab switching
@@ -1163,6 +1192,39 @@ export function useTerminal({
       }
     },
     [api, sessionId],
+  );
+
+  // A claim is not ordered against input (it is not a resize lifecycle
+  // command), so claiming while typing never holds keystrokes back. A backend
+  // that predates size ownership applies every resize anyway, so there the
+  // claim becomes an ordinary one; the answer is remembered per backend.
+  const claimUnsupportedRef = useRef<{ api: unknown; unsupported: boolean }>({
+    api: null,
+    unsupported: false,
+  });
+  const claimSize = useCallback(
+    async (newCols: number, newRows: number) => {
+      if (!sessionId) return;
+      if (claimUnsupportedRef.current.api !== api) {
+        claimUnsupportedRef.current = { api, unsupported: false };
+      }
+      if (!claimUnsupportedRef.current.unsupported) {
+        try {
+          if (await api.claimTerminalSize(sessionId, newCols, newRows, terminalSizeClientId())) {
+            return;
+          }
+          claimUnsupportedRef.current = { api, unsupported: true };
+        } catch (err) {
+          const errMsg = String(err);
+          if (!errMsg.includes("Session not found")) {
+            log.error("session.resize-failed", { sessionId, error: formatLogError(err) });
+          }
+          return;
+        }
+      }
+      await resize(newCols, newRows);
+    },
+    [api, resize, sessionId],
   );
 
   // Every way a keystroke can fail to reach a shell reports the same way. The
@@ -1295,6 +1357,7 @@ export function useTerminal({
     disconnect,
     markBootstrapped,
     resize,
+    claimSize,
     write,
     reconnect,
   };

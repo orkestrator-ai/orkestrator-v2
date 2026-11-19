@@ -327,8 +327,10 @@ describe("Electron backend command registry", () => {
       expect(commands.get("terminal_write")?.({ sessionId, data: "x" }, context)).toEqual({
         delivered: true,
       });
+      // A resize with no client id is an older client's: it applies while
+      // nobody owns the size, and never takes ownership.
       expect(commands.get("terminal_resize")?.({ sessionId, cols: 80, rows: 24 }, context)).toEqual(
-        { delivered: true },
+        { delivered: true, applied: true, owned: false },
       );
       expect(
         commands.get("terminal_write")?.({ sessionId: "missing-session", data: "x" }, context),
@@ -2764,7 +2766,7 @@ printf '["exists","missing"]'
 
     expect(
       commands.get("local_terminal_resize")?.({ sessionId, cols: 1_000, rows: 1_000 }, context),
-    ).toEqual({ delivered: true });
+    ).toEqual({ delivered: true, applied: true, owned: false });
     expect(ptyProcesses[0]?.resize).toHaveBeenCalledWith(1_000, 1_000);
     await context.runtime.terminals.history.flush();
   });

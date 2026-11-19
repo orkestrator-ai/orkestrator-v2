@@ -1390,7 +1390,12 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
         typeof operation.args.cols === "number" &&
         typeof operation.args.rows === "number" &&
         (await terminalSocket
-          .resize(operation.sessionId, operation.args.cols, operation.args.rows)
+          .resize(
+            operation.sessionId,
+            operation.args.cols,
+            operation.args.rows,
+            typeof operation.args.clientId === "string" ? operation.args.clientId : undefined,
+          )
           .catch(() => false))
       ) {
         return undefined;

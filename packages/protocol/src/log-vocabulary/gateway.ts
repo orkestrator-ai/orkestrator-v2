@@ -51,6 +51,8 @@ export const GATEWAY_LOG_AREAS = defineLogAreas({
       "subscription-failed": "A terminal subscription failed.",
       "operation-failed":
         "A terminal operation failed. Fixed text: the operation can hold terminal input.",
+      "size-release-failed":
+        "A closed terminal WebSocket could not give up its client's size ownership; the lease still lapses.",
     },
   },
   "gateway.tailscale": {

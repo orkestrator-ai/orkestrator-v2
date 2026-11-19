@@ -32,6 +32,7 @@ import {
 // @/lib/native/clipboard is centrally mocked in tests/setup.ts.
 
 const resizeMock = mock(async () => {});
+const claimSizeMock = mock(async (_cols: number, _rows: number) => {});
 const connectMock = mock(async () => {});
 const reconnectMock = mock(async () => {});
 const writeMock = mock(async (_data: string) => {});
@@ -130,6 +131,7 @@ mock.module("@/hooks/useTerminal", () => ({
       reconnect: reconnectMock,
       markBootstrapped,
       resize: resizeMock,
+      claimSize: claimSizeMock,
       write: writeMock,
     };
   },
@@ -552,6 +554,7 @@ describe("PersistentTerminal", () => {
     portalTerminalIsOpened = true;
     cleanup();
     resizeMock.mockClear();
+    claimSizeMock.mockClear();
     connectMock.mockReset();
     connectMock.mockImplementation(async () => {});
     reconnectMock.mockReset();
@@ -1616,6 +1619,45 @@ describe("PersistentTerminal", () => {
       ),
     );
     expect(persistentSessionStore.updateSessionActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims the shared terminal size when typing, but not on every keystroke", async () => {
+    setMobileViewport(true);
+    persistentSessionStore.getSessionsByEnvironment = () => [
+      {
+        id: "connected-session",
+        environmentId: "env-1",
+        containerId: "container-1",
+        tabId: "tab-1",
+        sessionType: "plain",
+        status: "connected",
+        hasLaunchedCommand: false,
+      },
+    ];
+
+    renderInAppCommandScope(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Up arrow" })).toBeTruthy());
+    // Fitting the pane on mount is layout, which only updates a size this
+    // window already owns: it never claims.
+    expect(claimSizeMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Up arrow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Down arrow" }));
+    // Two keys inside the claim interval send one claim, not one per key.
+    await waitFor(() => expect(claimSizeMock).toHaveBeenCalledTimes(1));
   });
 
   it("publishes the write function only for connected terminals", async () => {

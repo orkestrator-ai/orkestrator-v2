@@ -87,6 +87,11 @@ const writeTerminalMock = mock(async (_sessionId: string, _data: string) => true
 const resumeTerminalInputMock = mock(
   async (_sessionId: string, _options?: { local?: boolean }) => true,
 );
+// True: the backend knows size ownership. False: it predates the command.
+const claimTerminalSizeMock = mock(
+  async (_sessionId: string, _cols: number, _rows: number, _clientId: string) => true,
+);
+const releaseTerminalSizeMock = mock(async (_sessionId: string, _clientId: string) => undefined);
 
 const realBackendSnapshot = { ...realBackend };
 mock.module("@/lib/backend", () => ({
@@ -106,12 +111,15 @@ mock.module("@/lib/backend", () => ({
   writeLocalTerminal: writeLocalTerminalMock,
   writeTerminal: writeTerminalMock,
   resumeTerminalInput: resumeTerminalInputMock,
+  claimTerminalSize: claimTerminalSizeMock,
+  releaseTerminalSize: releaseTerminalSizeMock,
 }));
 
 const listenMock = listen as ReturnType<typeof mock>;
 const unlistenMock = mock(() => undefined);
 
 const { decodeTerminalOutputPayload, useTerminal } = await import("./useTerminal");
+const { terminalSizeClientId } = await import("@/lib/terminal-size-client");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -135,6 +143,8 @@ describe("useTerminal reconnect behavior", () => {
     writeLocalTerminalMock.mockClear();
     writeTerminalMock.mockClear();
     resumeTerminalInputMock.mockClear();
+    claimTerminalSizeMock.mockClear();
+    releaseTerminalSizeMock.mockClear();
     toastErrorMock.mockClear();
     toastDismissMock.mockClear();
     listenMock.mockClear();
@@ -167,6 +177,8 @@ describe("useTerminal reconnect behavior", () => {
     writeLocalTerminalMock.mockImplementation(async () => true);
     writeTerminalMock.mockImplementation(async () => true);
     resumeTerminalInputMock.mockImplementation(async () => true);
+    claimTerminalSizeMock.mockImplementation(async () => true);
+    releaseTerminalSizeMock.mockImplementation(async () => undefined);
     listenMock.mockImplementation(async () => unlistenMock);
   });
 
@@ -773,8 +785,80 @@ describe("useTerminal reconnect behavior", () => {
       await result.current.write("echo ok\r");
     });
 
-    expect(resizeTerminalMock).toHaveBeenCalledWith("session-new-container", 132, 43);
+    // Every size update names this window, so the backend can tell its
+    // owner's layout changes from another client's.
+    expect(resizeTerminalMock).toHaveBeenCalledWith(
+      "session-new-container",
+      132,
+      43,
+      terminalSizeClientId(),
+    );
     expect(writeTerminalMock).toHaveBeenCalledWith("session-new-container", "echo ok\r");
+  });
+
+  it("claims the size through its own command, for container and local sessions alike", async () => {
+    const { result } = renderHookInAppCommandScope(() =>
+      useTerminal({ containerId: "container-1", isLocal: false, persistSession: true }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+    await waitFor(() => expect(result.current.sessionId).toBe("session-new-container"));
+
+    await act(async () => {
+      await result.current.claimSize(132, 43);
+    });
+
+    expect(claimTerminalSizeMock).toHaveBeenCalledWith(
+      "session-new-container",
+      132,
+      43,
+      terminalSizeClientId(),
+    );
+    expect(resizeTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to an ordinary resize once, and then always, on a backend without claims", async () => {
+    claimTerminalSizeMock.mockImplementation(async () => false);
+    const { result } = renderHookInAppCommandScope(() =>
+      useTerminal({ containerId: "container-1", isLocal: false, persistSession: true }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+    await waitFor(() => expect(result.current.sessionId).toBe("session-new-container"));
+
+    await act(async () => {
+      await result.current.claimSize(132, 43);
+      await result.current.claimSize(100, 30);
+    });
+
+    expect(claimTerminalSizeMock).toHaveBeenCalledTimes(1);
+    expect(resizeTerminalMock.mock.calls.map((call) => call.slice(1, 3))).toEqual([
+      [132, 43],
+      [100, 30],
+    ]);
+  });
+
+  it("gives up the size when the view stops showing the session, keeping the session", async () => {
+    const { result, unmount } = renderHookInAppCommandScope(() =>
+      useTerminal({ containerId: "container-1", isLocal: false, persistSession: true }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+    await waitFor(() => expect(result.current.sessionId).toBe("session-new-container"));
+    expect(releaseTerminalSizeMock).not.toHaveBeenCalled();
+
+    unmount();
+
+    await waitFor(() =>
+      expect(releaseTerminalSizeMock).toHaveBeenCalledWith(
+        "session-new-container",
+        terminalSizeClientId(),
+      ),
+    );
+    expect(detachTerminalMock).not.toHaveBeenCalled();
   });
 
   it("uses local terminal operations for local resize, write, and disconnect", async () => {
@@ -798,7 +882,12 @@ describe("useTerminal reconnect behavior", () => {
       await result.current.disconnect();
     });
 
-    expect(resizeLocalTerminalMock).toHaveBeenCalledWith("session-new-local", 100, 30);
+    expect(resizeLocalTerminalMock).toHaveBeenCalledWith(
+      "session-new-local",
+      100,
+      30,
+      terminalSizeClientId(),
+    );
     expect(writeLocalTerminalMock).toHaveBeenCalledWith("session-new-local", "pwd\r");
     expect(closeLocalTerminalSessionMock).toHaveBeenCalledWith("session-new-local");
   });

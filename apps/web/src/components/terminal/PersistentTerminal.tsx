@@ -4,6 +4,7 @@ import "@xterm/xterm/css/xterm.css";
 import { writeText } from "@/lib/native/clipboard";
 import { createTerminalTargetIdentity } from "@/hooks/terminal-target-identity";
 import { useTerminal } from "@/hooks/useTerminal";
+import { useTerminalSizeClaim } from "./use-terminal-size-claim";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -849,6 +850,7 @@ export function PersistentTerminal({
     connect,
     markBootstrapped,
     resize,
+    claimSize,
     write,
     reconnect,
   } = useTerminal({
@@ -1311,6 +1313,22 @@ export function PersistentTerminal({
     },
     [isActive, isEnvironmentVisible, resize],
   );
+  // Focus, a click or typing here takes the shared terminal's size for this
+  // window; layout changes alone only update a size this window already owns.
+  const { claim: claimTerminalSize, claimOnInput: claimTerminalSizeOnInput } = useTerminalSizeClaim(
+    {
+      terminal,
+      fitAddon,
+      wrapperRef: terminalRef,
+      canClaim: isActive && isEnvironmentVisible && isConnected,
+      opened: terminalIsOpened,
+      claimSize,
+    },
+  );
+  const claimTerminalSizeOnInputRef = useRef(claimTerminalSizeOnInput);
+  useEffect(() => {
+    claimTerminalSizeOnInputRef.current = claimTerminalSizeOnInput;
+  }, [claimTerminalSizeOnInput]);
   const scheduleFit = useCallback(() => {
     if (!fitAddon || !terminal) return;
     if (fitAnimationFrameRef.current !== null) {
@@ -1518,6 +1536,7 @@ export function PersistentTerminal({
     const dataDisposable = terminal.onData((data) => {
       writeRef.current(data);
       updateActivityThrottledRef.current();
+      claimTerminalSizeOnInputRef.current();
     });
     terminalInputDisposables.set(terminal, dataDisposable);
 
@@ -2013,13 +2032,16 @@ export function PersistentTerminal({
     setActivePane(paneId, environmentId);
     if (isActive) {
       terminal.focus();
+      // An already-focused terminal fires no focus event, so the click claims.
+      claimTerminalSize();
     }
-  }, [environmentId, isActive, terminal, paneId, setActivePane]);
+  }, [claimTerminalSize, environmentId, isActive, terminal, paneId, setActivePane]);
 
   const handleMobileKeyInput = useCallback(
     (data: string) => {
       void writeRef.current(resolveTerminalKeyData(data, terminal.modes.applicationCursorKeysMode));
       updateActivityThrottledRef.current();
+      claimTerminalSizeOnInputRef.current();
     },
     [terminal],
   );

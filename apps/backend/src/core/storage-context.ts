@@ -26,6 +26,7 @@ import {
   type SerializedStore,
   type StorageDatabase,
 } from "./storage-database.js";
+import type { RowSelection, SelectedStoreRows } from "./storage-database-queries.js";
 import {
   commitWithLegacyJsonCleanup,
   type LegacyJsonCleanup,
@@ -779,6 +780,25 @@ export class StorageContext {
     if (store === null) throw new Error("loadStoreSerialized requires a database store");
     if (this.openAtomicScope()?.writes.has(store)) return undefined;
     return this.database.readStoreSerialized(store);
+  }
+
+  /**
+   * Selected rows of one collection of a database store, serialized and
+   * unparsed, with the committed revision; see
+   * {@link StorageDatabase.readStoreRowsSerialized}. `undefined` inside an
+   * atomic scope that buffers a write to the store, as for
+   * {@link loadStoreSerialized}.
+   */
+  loadStoreRowsSerialized(
+    filePath: string,
+    collection: string,
+    selection: RowSelection,
+    options: { documentKnownAt?: number } = {},
+  ): SelectedStoreRows | null | undefined {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("loadStoreRowsSerialized requires a database store");
+    if (this.openAtomicScope()?.writes.has(store)) return undefined;
+    return this.database.readStoreRowsSerialized(store, collection, selection, options);
   }
 
   /**

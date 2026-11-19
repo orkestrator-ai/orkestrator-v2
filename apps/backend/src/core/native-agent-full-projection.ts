@@ -54,6 +54,7 @@ import {
   type NativeAgentProjectionContext,
   goalProjectionField,
 } from "./native-agent-projection-context.js";
+import { nativeAgentQueueEditingField } from "./native-agent-queue-editing.js";
 
 const log = createLogger("native-agent");
 
@@ -678,6 +679,10 @@ export class NativeAgentFullProjection {
       const terminalMessages = nativeTerminalMessages({
         notices: snapshot.notices,
         error: snapshot.error,
+        failedTurn: snapshot.failedTurn,
+        failureRequestId: resolved.session.dispatchedRequestIds?.at(-1),
+        ...(snapshot.failureReason ? { failureReason: snapshot.failureReason } : {}),
+        ...(snapshot.rateLimits ? { rateLimits: snapshot.rateLimits } : {}),
         stopNotice,
         turnStartedAt: snapshot.turnStartedAt,
       });
@@ -724,6 +729,7 @@ export class NativeAgentFullProjection {
             input.environmentId,
             resolved.session.key,
             attentionItemIds,
+            resolved.session.logicalSessionKey,
           );
         } catch (error) {
           // Attention is auxiliary projection metadata. A deleted environment
@@ -865,6 +871,7 @@ export class NativeAgentFullProjection {
                   queue.messages,
                 ),
                 ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
+                ...nativeAgentQueueEditingField(queue),
                 ...(queue.dispatchError
                   ? {
                       blocked: {

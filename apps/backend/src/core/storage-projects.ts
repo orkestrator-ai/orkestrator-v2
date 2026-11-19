@@ -25,6 +25,7 @@ import { parseEnvironmentDiffBaseOverride } from "@orkestrator/protocol/diff-sta
 import {
   isEnvironmentAttentionReason,
   isInputNeededAttentionReason,
+  preferredUnreadReason,
 } from "@orkestrator/protocol/environment-attention";
 import { isEnvironmentDeletionStep } from "@orkestrator/protocol/node-summaries";
 import type { AgentActivityCompletionOutcome, EnvironmentUnreadReason } from "./models.js";
@@ -364,6 +365,99 @@ function raisesAttention(
 ): boolean {
   if (!unreadBefore) return true;
   return isInputNeededAttentionReason(reasonAfter) && !isInputNeededAttentionReason(reasonBefore);
+}
+
+/** At most this many sessions are attributed to one unread badge. */
+const MAX_UNREAD_SESSION_KEYS = 32;
+/** A logical session key longer than this is not attributed. */
+const MAX_UNREAD_SESSION_KEY_LENGTH = 2_048;
+
+function isUnreadSessionKey(value: unknown): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && value.length <= MAX_UNREAD_SESSION_KEY_LENGTH
+  );
+}
+
+type UnreadSessionEntry = NonNullable<Environment["unreadSessionEntries"]>[number];
+
+function unreadSessions(environment: Environment): UnreadSessionEntry[] {
+  if (!environment.hasUnreadWork) return [];
+  return (
+    environment.unreadSessionEntries ??
+    (environment.unreadSessionKeys ?? []).filter(isUnreadSessionKey).map((sessionKey) => ({
+      sessionKey,
+      reason: environment.unreadReason ?? "agent_finished",
+      activityAt: environment.lastActivityAt ?? new Date(0).toISOString(),
+    }))
+  );
+}
+
+function unreadEnvironmentReason(environment: Environment): EnvironmentUnreadReason | undefined {
+  if (!environment.hasUnreadWork) return undefined;
+  return (
+    environment.unreadEnvironmentReason ??
+    (environment.unreadSessionKeys?.length || environment.unreadSessionOverflow
+      ? undefined
+      : (environment.unreadReason ?? "marked_unread"))
+  );
+}
+
+/** Publish the compatibility fields and the entries in the same durable write. */
+function writeUnreadWork(
+  environment: Environment,
+  sessions: UnreadSessionEntry[],
+  environmentReason: EnvironmentUnreadReason | undefined,
+  overflow = false,
+): void {
+  environment.unreadRevision = (environment.unreadRevision ?? 0) + 1;
+  environment.hasUnreadWork = sessions.length > 0 || environmentReason !== undefined || overflow;
+  if (sessions.length) {
+    environment.unreadSessionEntries = sessions;
+    environment.unreadSessionKeys = sessions.map(({ sessionKey }) => sessionKey);
+  } else {
+    delete environment.unreadSessionEntries;
+    delete environment.unreadSessionKeys;
+  }
+  if (environmentReason) environment.unreadEnvironmentReason = environmentReason;
+  else delete environment.unreadEnvironmentReason;
+  if (overflow) environment.unreadSessionOverflow = true;
+  else delete environment.unreadSessionOverflow;
+  const reason = preferredUnreadReason(environmentReason, sessions, overflow);
+  if (reason) environment.unreadReason = reason;
+  else delete environment.unreadReason;
+}
+
+function attributeUnreadWork(
+  environment: Environment,
+  reason: EnvironmentUnreadReason,
+  sessionKey?: string,
+): void {
+  const sessions = unreadSessions(environment);
+  const environmentReason = unreadEnvironmentReason(environment);
+  const overflow = environment.unreadSessionOverflow === true;
+  if (!isUnreadSessionKey(sessionKey)) {
+    // The environment-wide entry represents the latest work in that source.
+    // Retain a failure over a generic agent success from an aggregate edge.
+    const next =
+      reason === "agent_finished" && environmentReason === "agent_failed"
+        ? environmentReason
+        : reason;
+    writeUnreadWork(environment, sessions, next, overflow);
+    return;
+  }
+  const remaining = sessions.filter((entry) => entry.sessionKey !== sessionKey);
+  if (remaining.length >= MAX_UNREAD_SESSION_KEYS) {
+    writeUnreadWork(environment, sessions, environmentReason, true);
+    return;
+  }
+  const previous = sessions.find((entry) => entry.sessionKey === sessionKey);
+  remaining.push({
+    sessionKey,
+    reason:
+      reason === "agent_finished" && previous?.reason === "agent_failed" ? previous.reason : reason,
+    activityAt: environment.lastActivityAt ?? new Date(0).toISOString(),
+  });
+  writeUnreadWork(environment, remaining, environmentReason, overflow);
 }
 
 /** A project still owns environments; removal would orphan them. */
@@ -1050,6 +1144,7 @@ export class ProjectsRepository {
           // update could never take the equality bail-out below.
           const alreadyCleared =
             environment.agentActivityState === "idle" &&
+            environment.hasWaitingNativeTab !== true &&
             isRecord(environment.agentActivitySources) &&
             Object.keys(environment.agentActivitySources).length === 0 &&
             isRecord(environment.frontendAgentActivityObservers) &&
@@ -1057,6 +1152,7 @@ export class ProjectsRepository {
           if (!alreadyCleared) {
             environment.agentActivityState = "idle";
             environment.agentActivitySources = {};
+            delete environment.hasWaitingNativeTab;
             environment.frontendAgentActivityObservers = {};
             environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
               environment.agentActivityUpdatedAt,
@@ -1288,12 +1384,14 @@ export class ProjectsRepository {
         else if (isPortNumber(value)) environment[field] = value;
       }
 
-      if ("hasUnreadWork" in updates) {
-        if (updates.hasUnreadWork == null) environment.hasUnreadWork = false;
-        else if (typeof updates.hasUnreadWork === "boolean") {
-          environment.hasUnreadWork = updates.hasUnreadWork;
-        }
-        if (!environment.hasUnreadWork) delete environment.unreadReason;
+      if (updates.hasUnreadWork === true) {
+        if (!unreadEnvironmentReason(environment))
+          attributeUnreadWork(environment, "marked_unread");
+      } else if (
+        "hasUnreadWork" in updates &&
+        (updates.hasUnreadWork === false || updates.hasUnreadWork == null)
+      ) {
+        writeUnreadWork(environment, [], undefined);
       }
       if ("setupScriptsComplete" in updates) {
         if (updates.setupScriptsComplete == null) environment.setupScriptsComplete = false;
@@ -1760,6 +1858,7 @@ export class ProjectsRepository {
     options: {
       completionAttention?: boolean;
       completionOutcome?: AgentActivityCompletionOutcome;
+      hasWaitingNativeTab?: boolean;
     } = {},
   ): Promise<Environment> {
     if (!isOneOf(state, AGENT_ACTIVITY_STATES)) {
@@ -1842,6 +1941,14 @@ export class ProjectsRepository {
         };
       }
 
+      const startedWaiting =
+        source === "native-agent" &&
+        options.hasWaitingNativeTab === true &&
+        environment.hasWaitingNativeTab !== true;
+      if (source === "native-agent" && options.hasWaitingNativeTab !== undefined) {
+        if (options.hasWaitingNativeTab) environment.hasWaitingNativeTab = true;
+        else delete environment.hasWaitingNativeTab;
+      }
       environment.agentActivitySources = sources;
       environment.frontendAgentActivityObservers = observers;
       environment.agentActivityState = aggregateEnvironmentAgentActivity(sources, observers);
@@ -1883,30 +1990,25 @@ export class ProjectsRepository {
           (previousAggregate === "working" &&
             ((nextAggregate === "idle" && options.completionOutcome !== "none") ||
               nextAggregate === "waiting")));
-      if (activityTransition || failedEnd || completionTransition) {
+      if (activityTransition || startedWaiting || failedEnd || completionTransition) {
         const previousLastActivityAt = Date.parse(environment.lastActivityAt ?? "");
         environment.lastActivityAt = new Date(
           Math.max(
             acceptedOccurredTime,
             Number.isFinite(previousLastActivityAt)
-              ? previousLastActivityAt
+              ? previousLastActivityAt + (failedEnd || completionTransition ? 1 : 0)
               : Number.NEGATIVE_INFINITY,
           ),
         ).toISOString();
       }
       const unreadBefore = environment.hasUnreadWork === true;
       const reasonBefore = environment.unreadReason;
-      if (failedEnd) {
-        environment.hasUnreadWork = true;
-        environment.unreadReason = "agent_failed";
-      } else if (completionTransition) {
-        // The aggregate alone cannot say what ended, so it must not replace a
-        // failure nobody has read with "completed its work".
-        const unreadFailure =
-          environment.hasUnreadWork === true && environment.unreadReason === "agent_failed";
-        environment.hasUnreadWork = true;
-        if (nextAggregate === "waiting") environment.unreadReason = "agent_waiting";
-        else if (!unreadFailure) environment.unreadReason = "agent_finished";
+      if (failedEnd) attributeUnreadWork(environment, "agent_failed");
+      else if (completionTransition) {
+        attributeUnreadWork(
+          environment,
+          nextAggregate === "waiting" ? "agent_waiting" : "agent_finished",
+        );
       }
       // The lease itself must persist: its expiry is enforced from disk.
       this.saveEnvironment(environment);
@@ -2027,8 +2129,7 @@ export class ProjectsRepository {
 
       const unreadBefore = environment.hasUnreadWork === true;
       environment.lastActivityAt = normalizedActivityAt;
-      environment.hasUnreadWork = true;
-      environment.unreadReason = "terminal_finished";
+      attributeUnreadWork(environment, "terminal_finished");
       this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (!unreadBefore) this.notifyAttention(environment);
@@ -2047,6 +2148,10 @@ export class ProjectsRepository {
    * than dropping a real completion as stale. Callers must invoke this exactly
    * once per observed per-session transition. The separate completion token
    * lets readers observe this edge while the aggregate remains working.
+   *
+   * `sessionKey` is the logical session key of the session that completed,
+   * when the caller knows it; the badge is then acknowledged by viewing that
+   * session rather than the environment (`attributeUnreadWork`).
    */
   async recordEnvironmentSessionCompletion(
     environmentId: string,
@@ -2056,6 +2161,7 @@ export class ProjectsRepository {
       "agent_finished" | "agent_failed" | "agent_waiting"
     > = "agent_finished",
     completionKey?: string,
+    sessionKey?: string,
   ): Promise<Environment> {
     if (!isAgentActivityTimestamp(occurredAt)) {
       throw new Error("occurredAt must be a valid ISO timestamp");
@@ -2087,9 +2193,7 @@ export class ProjectsRepository {
       ).toISOString();
       const unreadBefore = environment.hasUnreadWork === true;
       const reasonBefore = environment.unreadReason;
-      const unreadFailure = unreadBefore && reasonBefore === "agent_failed";
-      environment.hasUnreadWork = true;
-      if (reason !== "agent_finished" || !unreadFailure) environment.unreadReason = reason;
+      attributeUnreadWork(environment, reason, sessionKey);
       this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (raisesAttention(unreadBefore, reasonBefore, environment.unreadReason)) {
@@ -2113,6 +2217,7 @@ export class ProjectsRepository {
       EnvironmentUnreadReason,
       "agent_question" | "setup_approval"
     > = "agent_question",
+    sessionKey?: string,
   ): Promise<{ environment: Environment; recorded: boolean }> {
     if (!isAgentActivityTimestamp(occurredAt)) {
       throw new Error("occurredAt must be a valid ISO timestamp");
@@ -2149,11 +2254,11 @@ export class ProjectsRepository {
       environment.lastActivityAt = new Date(acceptedTime).toISOString();
       const unreadBefore = environment.hasUnreadWork === true;
       const reasonBefore = environment.unreadReason;
-      environment.hasUnreadWork = true;
-      environment.unreadReason = reason;
+      attributeUnreadWork(environment, reason, sessionKey);
       this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
-      if (raisesAttention(unreadBefore, reasonBefore, reason)) this.notifyAttention(environment);
+      if (raisesAttention(unreadBefore, reasonBefore, environment.unreadReason))
+        this.notifyAttention(environment);
       return { environment, recorded: true };
     });
   }
@@ -2176,10 +2281,20 @@ export class ProjectsRepository {
     });
   }
 
+  /**
+   * Marks or clears the unread badge.
+   *
+   * A clear is refused (the record is returned unchanged) when the activity
+   * token moved past `expectedLastActivityAt`, so viewing an older result
+   * cannot clear a newer one. A nonempty list acknowledges the named
+   * sessions. An empty list or an activity-token-only clear acknowledges
+   * environment-wide work. A clear without either is an explicit dismissal.
+   */
   async setEnvironmentUnread(
     environmentId: string,
     unread: boolean,
     expectedLastActivityAt?: string | null,
+    sessionKeys?: readonly string[],
   ): Promise<Environment> {
     if (
       expectedLastActivityAt !== undefined &&
@@ -2187,6 +2302,16 @@ export class ProjectsRepository {
       typeof expectedLastActivityAt !== "string"
     ) {
       throw new Error("expectedLastActivityAt must be a string or null");
+    }
+    if (
+      sessionKeys !== undefined &&
+      (!Array.isArray(sessionKeys) ||
+        sessionKeys.length > MAX_UNREAD_SESSION_KEYS ||
+        !sessionKeys.every(isUnreadSessionKey))
+    ) {
+      throw new Error(
+        `sessionKeys must be at most ${MAX_UNREAD_SESSION_KEYS} non-empty session keys`,
+      );
     }
     return this.enqueueEnvironmentMutation(async () => {
       const environment = await this.requireEnvironment(environmentId);
@@ -2198,11 +2323,30 @@ export class ProjectsRepository {
       ) {
         return environment;
       }
-      if (environment.hasUnreadWork === unread) return environment;
-
-      environment.hasUnreadWork = unread;
-      if (unread) environment.unreadReason = "marked_unread";
-      else delete environment.unreadReason;
+      if (unread) {
+        if (unreadEnvironmentReason(environment)) return environment;
+        attributeUnreadWork(environment, "marked_unread");
+      } else {
+        if (environment.hasUnreadWork === false) return environment;
+        if (sessionKeys === undefined && expectedLastActivityAt === undefined) {
+          writeUnreadWork(environment, [], undefined);
+        } else {
+          const sessions = unreadSessions(environment);
+          const environmentReason = unreadEnvironmentReason(environment);
+          const acknowledged = new Set(sessionKeys);
+          const remaining = sessions.filter((entry) => !acknowledged.has(entry.sessionKey));
+          const remainingReason = sessionKeys?.length ? environmentReason : undefined;
+          if (remaining.length === sessions.length && remainingReason === environmentReason) {
+            return environment;
+          }
+          writeUnreadWork(
+            environment,
+            remaining,
+            remainingReason,
+            environment.unreadSessionOverflow,
+          );
+        }
+      }
       this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;

@@ -1,4 +1,8 @@
 import { turnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
+import {
+  providerFailureReason,
+  type ProviderFailureReason,
+} from "@orkestrator/protocol/provider-failures";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import { POLICY_WIDENING_REFUSED_CODE } from "@orkestrator/protocol/execution-policy-narrowing";
 import { isContentRevision } from "@orkestrator/protocol/session-activity-batch";
@@ -16,6 +20,7 @@ import {
   type ProviderActivityObservation,
   type ProviderAgent,
   type ProviderSendOptions,
+  type ProviderSessionStateSnapshot,
   ProviderSessionFailedError,
   type ProviderTurnInterruption,
   BridgePolicyWideningRefusedError,
@@ -350,6 +355,36 @@ export function sessionSnapshotBudget(
  * workflow can tell it from a newer request whose turn has not started yet.
  * Older bridges omit it.
  */
+/**
+ * A session snapshot's failed-turn `error` and, beside it only, the
+ * provider-neutral `failureReason` the bridge translated from the provider's
+ * own code. Bridges without one send none and the text classifies instead.
+ */
+export function bridgeSessionErrorFields(payload: Record<string, unknown>): {
+  error?: string;
+  failureReason?: ProviderFailureReason;
+  failedTurn?: ProviderSessionStateSnapshot["failedTurn"];
+} {
+  if (typeof payload.error !== "string") return {};
+  const failureReason = providerFailureReason(payload.failureReason);
+  const raw = asRecord(payload.failedTurn);
+  const id = raw?.id;
+  const occurredAt = normalizedFailureTime(raw?.occurredAt);
+  const resetsAt = normalizedFailureTime(raw?.resetsAt);
+  return {
+    error: payload.error,
+    ...(failureReason ? { failureReason } : {}),
+    ...(typeof id === "string" && id.length > 0 && id.length <= 512 && occurredAt
+      ? { failedTurn: { id, occurredAt, ...(resetsAt ? { resetsAt } : {}) } }
+      : {}),
+  };
+}
+
+function normalizedFailureTime(value: unknown): string | undefined {
+  const ms = typeof value === "string" && value.length <= 64 ? Date.parse(value) : NaN;
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+}
+
 export function throwExplainedTurnFailure(
   agent: ProviderAgent,
   body: Record<string, unknown>,

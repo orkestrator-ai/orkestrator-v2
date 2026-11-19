@@ -337,6 +337,7 @@ export interface NativeImagePart extends NativeBasePart {
  */
 export interface NativeStatusPart extends NativeBasePart {
   type: "status";
+  failure?: import("@orkestrator/protocol/provider-failures").ProviderFailureDescriptor;
 }
 
 export interface NativeToolGroupPart extends NativeBasePart {
@@ -462,6 +463,12 @@ export interface NativeMessage {
   goalStatus?: GoalStatusPresentation;
   /** A client-only `ask_agents` call, derived from the session snapshot. */
   suborkGroup?: import("@orkestrator/protocol/suborks").NativeAgentSuborkBatchView;
+  /**
+   * What the provider said about a failed turn, on the backend's terminal
+   * error row: its structured reason and a verified reset time. The renderer
+   * classifies the row's text when this is absent.
+   */
+  failure?: import("@orkestrator/protocol/provider-failures").ProviderFailureDescriptor;
 }
 
 /**

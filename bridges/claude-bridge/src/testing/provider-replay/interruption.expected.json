@@ -1,0 +1,103 @@
+[
+  {
+    "label": "mid-turn",
+    "activity": "working",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Run the full test suite",
+        "textLength": 23,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Run the full test suite"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the suite now.",
+        "textLength": 23,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the suite now."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "pending"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Run the full test suite",
+        "textLength": 23,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Run the full test suite"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the suite now.",
+        "textLength": 23,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the suite now."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "failure",
+            "error": true
+          }
+        ]
+      },
+      {
+        "role": "system",
+        "text": "Interrupted by user",
+        "textLength": 19,
+        "parts": [
+          {
+            "type": "status",
+            "text": "Interrupted by user"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  }
+]

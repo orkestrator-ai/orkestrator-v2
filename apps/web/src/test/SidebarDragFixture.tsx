@@ -5,6 +5,10 @@ import {
 import { useState } from "react";
 import { DndContext } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
+import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
+import { NativeInteractionAnchor } from "@/components/native-agent/NativeInteractionAnchor";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useUIStore } from "@/stores/uiStore";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 import {
@@ -33,6 +37,40 @@ import { appCommandStore } from "@/test/app-command-store";
 
 const ALIGNMENT_ICON =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+const ATTENTION_TAB = "waiting-agent";
+const ATTENTION_QUESTION = "Choose a deployment window";
+const HOME_QUESTION = "Choose the project review window";
+
+function attentionRegistry(environmentId: string): AgentRegistrySnapshot {
+  const detail = environmentId === "p-env-2" ? HOME_QUESTION : ATTENTION_QUESTION;
+  return {
+    generatedAt: new Date().toISOString(),
+    environments: [],
+    entries: [
+      {
+        projectId: "p",
+        environmentId,
+        environmentName: environmentId,
+        tabId: ATTENTION_TAB,
+        ownerKind: "environment",
+        kind: "native",
+        agent: "claude",
+        displayName: "Claude",
+        tabOrdinal: 2,
+        state: "waiting",
+        pending: {
+          interactionId: "question-target",
+          kind: "question",
+          label: "Question",
+          detail,
+          since: Date.now() - 4 * 60_000,
+          count: 2,
+        },
+      },
+    ],
+  };
+}
+
 const LONG_NAME = "a-machine-or-checkout-name-long-enough-that-it-has-to-truncate-in-the-sidebar";
 
 /** `?activity-sort`: an environment in each state the "By activity" list orders by. */
@@ -81,6 +119,7 @@ function install() {
   // names, mail badges, another machine's copy of the repository, and a
   // project with no repository, which stays outside every group.
   const alignment = params.has("alignment");
+  const attentionTarget = params.has("attention-target");
   const activitySort = params.has("activity-sort");
   // `?merge-ready`: `p-env-1` and `q-env-1` have a PR ready to merge, while
   // `p-env-2`'s is blocked, so the two can be compared side by side.
@@ -158,6 +197,14 @@ function install() {
               ? "waiting"
               : "idle",
           agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
+          ...(attentionTarget && project.id === "p" && index < 3
+            ? {
+                status: "running" as const,
+                agentActivityState: "working" as const,
+                hasWaitingNativeTab: true,
+                projectHome: index === 2,
+              }
+            : {}),
         })),
       );
   const calls = createStore<{ writes: Array<{ command: string; args: unknown }> }>(() => ({
@@ -314,6 +361,12 @@ function install() {
           return undefined as T;
         case "get_connections":
           return { activeConnectionId: "local", connections: [] } as T;
+        case "get_agent_registry":
+          return (
+            attentionTarget && typeof args?.environmentId === "string"
+              ? attentionRegistry(args.environmentId)
+              : { generatedAt: new Date().toISOString(), entries: [], environments: [] }
+          ) as T;
         case "list_node_outcomes":
           return [] as T;
         case COORDINATOR_ACTIVITY_COMMAND:
@@ -433,17 +486,84 @@ function setAlignmentActivity(state: CoordinatorActivityState | null) {
   void appCommandStore(coordinatorActivityStore).getState().refresh();
 }
 
+function AttentionTargetTranscript() {
+  const environmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const activeTabId = usePaneLayoutStore((state) =>
+    environmentId ? state.getActivePane(environmentId)?.activeTabId : null,
+  );
+  if (!environmentId) return null;
+  function hydrate(id: string) {
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .finishHydration(id, {
+        activePaneId: "attention-pane",
+        containerId: null,
+        root: {
+          kind: "leaf",
+          id: "attention-pane",
+          activeTabId: "working-agent",
+          tabs: [
+            { id: "working-agent", type: "plain" },
+            {
+              id: ATTENTION_TAB,
+              type: "agent-native",
+              nativeAgentData: { environmentId: id, platform: "claude" },
+            },
+          ],
+        },
+      });
+  }
+  if (activeTabId !== ATTENTION_TAB)
+    return (
+      <button type="button" onClick={() => hydrate(environmentId)}>
+        Finish layout hydration
+      </button>
+    );
+  return (
+    <section
+      aria-label="Agent transcript"
+      className="max-h-44 overflow-auto rounded border border-border p-2"
+    >
+      <div aria-hidden="true" className="h-72" />
+      <NativeInteractionAnchor
+        active
+        environmentId={environmentId}
+        tabId={ATTENTION_TAB}
+        interactionId="other-question"
+      >
+        <div className="mb-4 rounded bg-muted p-2">Other pending question</div>
+      </NativeInteractionAnchor>
+      {!new URLSearchParams(location.search).has("settled") && (
+        <NativeInteractionAnchor
+          active
+          environmentId={environmentId}
+          tabId={ATTENTION_TAB}
+          interactionId="question-target"
+        >
+          <div className="rounded bg-muted p-2">
+            {environmentId === "p-env-2" ? HOME_QUESTION : ATTENTION_QUESTION}
+          </div>
+        </NativeInteractionAnchor>
+      )}
+    </section>
+  );
+}
+
 let instance: ReturnType<typeof install> | undefined;
 export function SidebarDragFixture() {
   const [calls] = useState(() => (instance ??= install()));
   const { writes } = useStore(calls);
-  const alignment = new URLSearchParams(location.search).has("alignment");
+  const params = new URLSearchParams(location.search);
+  const alignment = params.has("alignment");
+  const attentionTarget = params.has("attention-target");
   return (
     <DockerAvailabilityProvider available={false}>
       <TerminalProvider>
         <FederationProvider>
           <main className="h-screen max-w-sm bg-background text-foreground">
-            <output data-testid="sidebar-writes">{JSON.stringify(writes)}</output>
+            {!attentionTarget && (
+              <output data-testid="sidebar-writes">{JSON.stringify(writes)}</output>
+            )}
             {alignment ? (
               <div>
                 {(["working", "waiting", null] as const).map((state) => (
@@ -458,6 +578,7 @@ export function SidebarDragFixture() {
                 ))}
               </div>
             ) : null}
+            {attentionTarget && <AttentionTargetTranscript />}
             <HierarchicalSidebar />
             {alignment ? <HouseRepositoryGroup /> : null}
           </main>

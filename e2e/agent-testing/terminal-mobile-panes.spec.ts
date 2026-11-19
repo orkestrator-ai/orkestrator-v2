@@ -64,7 +64,18 @@ function commandOf(request: Request): { command?: string; args?: Record<string, 
   }
 }
 
-test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
+test.beforeEach(async ({ page }) => {
+  await acknowledgeDockerReachabilityWarning(page);
+  // This scenario uses local worktrees, including on hosts without Docker access.
+  for (const name of [
+    "Continue without Docker",
+    "Continue without Claude",
+    "Continue without GitHub CLI",
+  ]) {
+    const button = page.getByRole("button", { name, exact: true });
+    await page.addLocatorHandler(button, async () => button.click());
+  }
+});
 
 test("a shell in a hidden phone pane keeps working and its size while away, and shows the result on return", async ({
   page,
@@ -194,11 +205,15 @@ test("a shell in a hidden phone pane keeps working and its size while away, and 
         rows: Number(rows),
         cols: Number(cols),
       }));
+    // A click or typing claims the size (`claim_terminal_size`) as well as
+    // layout updating it, so both set the PTY's size.
     const workResizes = () =>
       sent
         .filter(
           (entry) =>
-            entry.command === "local_terminal_resize" && entry.args.sessionId === sessionId,
+            (entry.command === "local_terminal_resize" ||
+              entry.command === "claim_terminal_size") &&
+            entry.args.sessionId === sessionId,
         )
         .map(({ args }) => ({ rows: Number(args.rows), cols: Number(args.cols) }));
     await expect.poll(async () => (await sizes()).length).toBe(1);

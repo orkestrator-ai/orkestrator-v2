@@ -12,6 +12,7 @@ export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 export type { EnvironmentIsolationStorage } from "./storage-environment-isolation.js";
 export type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
+export type { PromptQueueEditsStorage } from "./storage-prompt-queue-edits.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
 export type { LinearStorage } from "./storage-linear.js";
@@ -50,6 +51,7 @@ import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { EnvironmentIsolationStorage } from "./storage-environment-isolation.js";
 import type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
+import type { PromptQueueEditsStorage } from "./storage-prompt-queue-edits.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { RemovedProjectSweepResult } from "./storage-kanban-removed-projects.js";
 import type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
@@ -190,6 +192,8 @@ export class StorageService {
   readonly watchedPullRequests: WatchedPullRequestsStorage;
   /** This machine's load history (`machine-load.ts`, #2287). */
   readonly machineLoadHistory: MachineLoadHistoryStorage;
+  /** In-place edits of queued prompts (`@orkestrator/protocol/prompt-queue-edit`). */
+  readonly promptQueueEdits: PromptQueueEditsStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -215,6 +219,7 @@ export class StorageService {
     this.environmentIsolation = this.repos.environmentIsolation;
     this.watchedPullRequests = this.repos.watchedPullRequests;
     this.machineLoadHistory = this.repos.machineLoadHistory;
+    this.promptQueueEdits = this.repos.promptQueueEdits;
   }
 
   async init(): Promise<void> {
@@ -578,6 +583,7 @@ export class StorageService {
     options: {
       completionAttention?: boolean;
       completionOutcome?: AgentActivityCompletionOutcome;
+      hasWaitingNativeTab?: boolean;
     } = {},
   ): Promise<Environment> {
     return this.repos.projects.setEnvironmentAgentActivity(
@@ -611,12 +617,14 @@ export class StorageService {
       "agent_finished" | "agent_failed" | "agent_waiting"
     > = "agent_finished",
     completionKey?: string,
+    sessionKey?: string,
   ): Promise<Environment> {
     return this.repos.projects.recordEnvironmentSessionCompletion(
       environmentId,
       occurredAt,
       reason,
       completionKey,
+      sessionKey,
     );
   }
 
@@ -625,12 +633,14 @@ export class StorageService {
     attentionKeys: readonly string[],
     occurredAt: string,
     reason?: "agent_question" | "setup_approval",
+    sessionKey?: string,
   ): Promise<{ environment: Environment; recorded: boolean }> {
     return this.repos.projects.recordEnvironmentAgentAttention(
       environmentId,
       attentionKeys,
       occurredAt,
       reason,
+      sessionKey,
     );
   }
 
@@ -638,8 +648,14 @@ export class StorageService {
     environmentId: string,
     unread: boolean,
     expectedLastActivityAt?: string | null,
+    sessionKeys?: readonly string[],
   ): Promise<Environment> {
-    return this.repos.projects.setEnvironmentUnread(environmentId, unread, expectedLastActivityAt);
+    return this.repos.projects.setEnvironmentUnread(
+      environmentId,
+      unread,
+      expectedLastActivityAt,
+      sessionKeys,
+    );
   }
 
   reorderEnvironments(projectId: string, environmentIds: string[]): Promise<Environment[]> {

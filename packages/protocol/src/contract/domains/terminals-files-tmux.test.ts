@@ -32,9 +32,13 @@ const INTERNAL = new Set([
   "reconcile_claude_state_polling",
 ]);
 
+/** Added after the domain reached version 2 (terminal size ownership). */
+const SINCE_VERSION_2 = new Set(["claim_terminal_size", "release_terminal_size"]);
+
 const HOT_PATH = new Set([
   "terminal_write",
   "terminal_resize",
+  "claim_terminal_size",
   "local_terminal_write",
   "local_terminal_resize",
   "get_terminal_output_buffer",
@@ -60,13 +64,13 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("terminals, files and claude-tmux definitions", () => {
-  it("define 25, 28 and 29 commands, each since version 1 of its domain", () => {
-    expect(TERMINALS_COMMANDS).toHaveLength(25);
+  it("define 27, 28 and 29 commands, each since version 1 of its domain or added in 2", () => {
+    expect(TERMINALS_COMMANDS).toHaveLength(27);
     expect(FILES_COMMANDS).toHaveLength(28);
     expect(CLAUDE_TMUX_COMMANDS).toHaveLength(29);
     expect(new Set(ALL.map((def) => def.name)).size).toBe(ALL.length);
     for (const def of ALL) {
-      expect(def.since).toBe(1);
+      expect([def.name, def.since]).toEqual([def.name, SINCE_VERSION_2.has(def.name) ? 2 : 1]);
       // terminals is at 2 since attach_terminal was removed (2026-11-10).
       expect(def.domain.version).toBe(def.domain.name === "terminals" ? 2 : 1);
       expect(def.domain.min).toBe(1);

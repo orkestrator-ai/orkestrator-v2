@@ -467,7 +467,7 @@ export function registerBuildPipelineCommands(
 
   register(
     setEnvironmentUnreadCommand,
-    async ({ environmentId, unread, expectedLastActivityAt }, { storage }) =>
+    async ({ environmentId, unread, expectedLastActivityAt, sessionKeys }, { storage }) =>
       toClientEnvironment(
         await storage.setEnvironmentUnread(
           asString(environmentId, "environmentId"),
@@ -475,6 +475,7 @@ export function registerBuildPipelineCommands(
           expectedLastActivityAt === undefined || expectedLastActivityAt === null
             ? expectedLastActivityAt
             : asString(expectedLastActivityAt, "expectedLastActivityAt"),
+          sessionKeys,
         ),
       ),
   );

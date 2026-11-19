@@ -327,8 +327,10 @@ describe("Electron backend command registry", () => {
       expect(commands.get("terminal_write")?.({ sessionId, data: "x" }, context)).toEqual({
         delivered: true,
       });
+      // A resize with no client id is an older client's: it applies while
+      // nobody owns the size, and never takes ownership.
       expect(commands.get("terminal_resize")?.({ sessionId, cols: 80, rows: 24 }, context)).toEqual(
-        { delivered: true },
+        { delivered: true, applied: true, owned: false },
       );
       expect(
         commands.get("terminal_write")?.({ sessionId: "missing-session", data: "x" }, context),
@@ -816,7 +818,7 @@ describe("Electron backend command registry", () => {
       );
 
       await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
-        "fetch --no-recurse-submodules origin main",
+        "fetch --no-recurse-submodules --no-write-fetch-head origin +refs/heads/main:refs/remotes/origin/main",
       );
     });
   });
@@ -1568,7 +1570,7 @@ exit 1
       `#!/bin/sh
 if [ "$1" = "exec" ]; then
   case "$*" in
-    *"git fetch origin"*)
+    *"ORKESTRATOR_FETCH_END"*)
       printf 'FETCH\\n' >> "$FAKE_DOCKER_EXEC_LOG"
       printf '%s' '${fetchResponse}'
       ;;
@@ -2764,7 +2766,7 @@ printf '["exists","missing"]'
 
     expect(
       commands.get("local_terminal_resize")?.({ sessionId, cols: 1_000, rows: 1_000 }, context),
-    ).toEqual({ delivered: true });
+    ).toEqual({ delivered: true, applied: true, owned: false });
     expect(ptyProcesses[0]?.resize).toHaveBeenCalledWith(1_000, 1_000);
     await context.runtime.terminals.history.flush();
   });

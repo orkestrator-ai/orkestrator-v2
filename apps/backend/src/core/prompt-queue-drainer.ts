@@ -8,6 +8,7 @@ import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-r
 import type { StorageService } from "./storage.js";
 import type { Environment } from "./models.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
+import { promptQueueHeadHeldByEdit } from "@orkestrator/protocol/prompt-queue-edit";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -294,6 +295,8 @@ export class PromptQueueDrainer {
 
     const queue = await this.storage.getPromptQueue(queueKey);
     if (!queue || queue.dispatchError) return;
+    // An edit holds the head; finishing it wakes this queue again.
+    if (queue.inFlight === undefined && promptQueueHeadHeldByEdit(queue)) return;
     if (queue.environmentId !== target.environmentId) {
       // A persisted queue is a trust boundary. Never let the owner field and
       // the environment encoded in its routing key select different targets.

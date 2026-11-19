@@ -15,6 +15,7 @@ import type {
 import {
   BUILD_PIPELINE_AGENTS,
   nativeAgentSessionStorageKey,
+  REQUIRED_CONVERSATION_CHANGED,
   nonBlank,
   readProviderStatus,
   isEnvironmentReadyForAgents,
@@ -31,6 +32,7 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { NativeQueueScheduling } from "./native-agent-queue-scheduling.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
+import { promptQueueHeadHeldByEdit } from "@orkestrator/protocol/prompt-queue-edit";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 import {
   queueBoolean,
@@ -573,6 +575,8 @@ export class NativeAgentPromptQueueDispatcher {
     }
     if (queue.dispatchError) return;
     if (queue.inFlight === undefined && queue.messages.length === 0) return;
+    // An edit holds the head; finishing it wakes this queue again.
+    if (queue.inFlight === undefined && promptQueueHeadHeldByEdit(queue)) return;
     const environment = await this.host.assertEnvironmentLive(queue.environmentId);
     // The launch path has always required this; so must the drain path. A
     // stopped or still-provisioning environment must not be started by a
@@ -602,14 +606,27 @@ export class NativeAgentPromptQueueDispatcher {
       return;
     }
     const mode = queueExecutionMode(agent, head);
-    const session = await this.host.ensureSession({
-      environmentId: queue.environmentId,
-      agent,
-      logicalSessionKey,
-      model: queueString(head, "model"),
-      reasoningEffort: queueReasoningEffort(head),
-      phase: mode === "plan" ? "review" : "build",
-    });
+    const requiredSessionId = queueString(head, "requireProviderSessionId");
+    let session: PersistedNativeAgentSession;
+    try {
+      session = await this.host.ensureSession({
+        environmentId: queue.environmentId,
+        agent,
+        logicalSessionKey,
+        model: queueString(head, "model"),
+        reasoningEffort: queueReasoningEffort(head),
+        phase: mode === "plan" ? "review" : "build",
+        ...(requiredSessionId ? { requireProviderSessionId: requiredSessionId } : {}),
+      });
+    } catch (error) {
+      if (!requiredSessionId || !(error instanceof PromptRejectedError)) throw error;
+      const reservation = await this.storage.reservePromptQueueHeadForDispatch(queueKey);
+      if (reservation && queueString(reservation.message, "id") === queueString(head, "id")) {
+        await this.storage.failPromptQueueDispatch(queueKey, reservation.requestId, error.message);
+        this.clearQueueBackoff(queueKey);
+      }
+      return;
+    }
     const provider = await this.host.provider({
       environmentId: queue.environmentId,
       agent,
@@ -807,6 +824,19 @@ export class NativeAgentPromptQueueDispatcher {
         return;
       }
     }
+    const destinationId = queueString(message, "requireProviderSessionId");
+    if (
+      message.requireProviderSessionId !== undefined &&
+      destinationId !== session.providerSessionId
+    ) {
+      await this.storage.failPromptQueueDispatch(
+        queueKey,
+        reservation.requestId,
+        REQUIRED_CONVERSATION_CHANGED,
+      );
+      this.clearQueueBackoff(queueKey);
+      return;
+    }
     try {
       await this.host.dispatchPrompt({
         environmentId: queue.environmentId,
@@ -817,6 +847,7 @@ export class NativeAgentPromptQueueDispatcher {
         phase: queueExecutionMode(agent, message) === "plan" ? "review" : "build",
         mode: queueDispatchMode(agent, message),
         ...(requiredMode === "plan" ? { requireSessionMode: requiredMode } : {}),
+        ...(destinationId ? { requireProviderSessionId: destinationId } : {}),
         fastMode: queueFastMode(agent, message),
         subAgent: queueString(message, "agent"),
         executionAgent: queueString(message, "executionAgent") ?? queueString(message, "agent"),

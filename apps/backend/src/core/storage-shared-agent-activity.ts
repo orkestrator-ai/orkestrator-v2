@@ -68,6 +68,7 @@ export function agentActivityStructureFingerprint(environment: Environment): str
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return JSON.stringify({
     state: environment.agentActivityState ?? null,
+    hasWaitingNativeTab: environment.hasWaitingNativeTab === true,
     sources: states(environment.agentActivitySources),
     observers: states(environment.frontendAgentActivityObservers),
   });

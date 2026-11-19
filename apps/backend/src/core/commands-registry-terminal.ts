@@ -22,8 +22,10 @@ import {
   getTerminalSessionCommand,
   getTerminalStateSnapshotCommand,
   launchTerminalJobCommand,
+  claimTerminalSizeCommand,
   listTerminalSessionsCommand,
   localTerminalResizeCommand,
+  releaseTerminalSizeCommand,
   localTerminalWriteCommand,
   startLocalTerminalSessionCommand,
   startTerminalSessionCommand,
@@ -32,6 +34,7 @@ import {
   terminalSnapshotFailedCommand,
   terminalWriteCommand,
 } from "@orkestrator/protocol/contract/domains/terminals";
+import { parseTerminalSizeClientId } from "@orkestrator/protocol/terminal-size-ownership";
 import {
   checkContainerWorkspacePathsCommand,
   copyExternalFileCommand,
@@ -106,9 +109,12 @@ import { isSafeRelativePath } from "@orkestrator/protocol/web-annotations-valida
 import { parseFileWritePrecondition } from "@orkestrator/protocol/file-write-precondition";
 import {
   CONTAINER_WRITE_CONFLICT_EXIT,
-  assertLocalFileUnchanged,
+  CONTAINER_WRITE_METADATA_EXIT,
+  CONTAINER_WRITE_ACCESS_EXIT,
+  CONTAINER_WRITE_NOT_FILE_EXIT,
   containerFileWriteScript,
   fileWriteConflictError,
+  fileWriteNotRegularFileError,
   serializeFileWrite,
 } from "./file-write-precondition.js";
 import path from "node:path";
@@ -332,6 +338,38 @@ function snapshotResponse<T>(
 
 function refreshRequested(value: unknown): boolean {
   return value === true;
+}
+
+/**
+ * One size update or claim of a container or local PTY, through the session's
+ * size owner (`terminal-size-ownership.ts`). A client that does not own the
+ * size has its update refused in band (`applied: false`) rather than as an
+ * error, because the PTY is there and a failure would read as a dead
+ * terminal. The owner resending the size it last set (a claim repeated while
+ * typing) changes nothing, so the PTY and its history are left alone.
+ */
+function resizeTerminalSession(
+  runtime: CommandContext["runtime"],
+  args: { sessionId: string; cols?: unknown; rows?: unknown; clientId?: unknown },
+  claim: boolean,
+): { delivered: boolean; applied?: boolean; owned?: boolean } {
+  const id = args.sessionId;
+  const terminalProcess = runtime.terminals.process(id);
+  if (!terminalProcess) return { delivered: false };
+  const cols = asTerminalDimension(args.cols, 80);
+  const rows = asTerminalDimension(args.rows, 24);
+  const decision = runtime.terminals.sizeOwnership.decide(
+    id,
+    parseTerminalSizeClientId(args.clientId),
+    claim,
+    { cols, rows },
+    () => terminalProcess.resize(cols, rows),
+  );
+  if (!decision.apply) return { delivered: true, applied: false, owned: false };
+  if (!decision.unchanged) {
+    resizeTerminalHistoryBestEffort(runtime.terminals.history, id, cols, rows);
+  }
+  return { delivered: true, applied: true, owned: decision.owned };
 }
 
 function resizeTerminalHistoryBestEffort(
@@ -646,14 +684,21 @@ export function registerTerminalCommands(
     runtime.terminals.recordInputActivity(id, terminalData, context);
     return { delivered: true };
   });
-  register(terminalResizeCommand, ({ sessionId: id, cols, rows }, { runtime }) => {
-    const terminalProcess = runtime.terminals.process(id);
-    if (!terminalProcess) return { delivered: false };
-    const resolvedCols = asTerminalDimension(cols, 80);
-    const resolvedRows = asTerminalDimension(rows, 24);
-    terminalProcess.resize(resolvedCols, resolvedRows);
-    resizeTerminalHistoryBestEffort(runtime.terminals.history, id, resolvedCols, resolvedRows);
-    return { delivered: true };
+  register(terminalResizeCommand, (args, { runtime }) =>
+    resizeTerminalSession(runtime, args, false),
+  );
+  register(claimTerminalSizeCommand, (args, { runtime }) =>
+    resizeTerminalSession(runtime, args, true),
+  );
+  register(releaseTerminalSizeCommand, ({ clientId, sessionId, disconnected }, { runtime }) => {
+    const owner = parseTerminalSizeClientId(clientId);
+    if (owner === null) return { released: 0 };
+    return {
+      released: runtime.terminals.sizeOwnership.release(owner, {
+        ...(typeof sessionId === "string" ? { sessionId } : {}),
+        disconnected: disconnected === true,
+      }),
+    };
   });
   register(detachTerminalCommand, ({ sessionId }, { runtime }) => {
     runtime.terminals.explicitlyCloseSession(sessionId);
@@ -944,15 +989,9 @@ export function registerTerminalCommands(
     runtime.terminals.recordInputActivity(id, terminalData, context);
     return { delivered: true };
   });
-  register(localTerminalResizeCommand, ({ sessionId: id, cols, rows }, { runtime }) => {
-    const terminalProcess = runtime.terminals.process(id);
-    if (!terminalProcess) return { delivered: false };
-    const resolvedCols = asTerminalDimension(cols, 80);
-    const resolvedRows = asTerminalDimension(rows, 24);
-    terminalProcess.resize(resolvedCols, resolvedRows);
-    resizeTerminalHistoryBestEffort(runtime.terminals.history, id, resolvedCols, resolvedRows);
-    return { delivered: true };
-  });
+  register(localTerminalResizeCommand, (args, { runtime }) =>
+    resizeTerminalSession(runtime, args, false),
+  );
   register(closeLocalTerminalSessionCommand, ({ sessionId }, { runtime }) => {
     runtime.terminals.explicitlyCloseSession(sessionId);
   });
@@ -1114,12 +1153,20 @@ export function registerTerminalCommands(
           if (canonicalWorktreePath(currentRoot) !== canonical)
             throw new Error("The worktree moved; refresh before saving");
           try {
-            return await (precondition
-              ? serializeFileWrite(`local:${canonical}:${relativePath}`, async () => {
-                  await assertLocalFileUnchanged(currentRoot, relativePath, precondition);
-                  return writeFileBase64(currentRoot, relativePath, data);
-                })
-              : writeFileBase64(currentRoot, relativePath, data));
+            // The helper checks the digest after the payload is staged beside
+            // the target and immediately before the atomic rename.
+            // A symlink and its referent share the worktree's write queue.
+            return await serializeFileWrite(`local:${canonical}`, () =>
+              writeFileBase64(
+                currentRoot,
+                relativePath,
+                data,
+                precondition &&
+                  ("sha256" in precondition
+                    ? { expectedSha256: precondition.sha256 }
+                    : { expectedAbsent: true }),
+              ),
+            );
           } finally {
             // A write this backend makes is a known mutation, like a delete or
             // move: the file tree and Changes must not wait for a watcher hint,
@@ -1452,7 +1499,7 @@ export function registerTerminalCommands(
       const target = validateRelativeFilePath(filePath);
       const precondition = parseFileWritePrecondition(expected);
       const fullPath = workspaceFilePath(target);
-      assertBase64PayloadWithinLimit(data);
+      const normalized = assertBase64PayloadWithinLimit(data);
       if (isAnnotationEvidencePath(target)) {
         // App-owned evidence: no symbolic link anywhere on the path, exclusive
         // temp file, atomic rename. A workspace cannot redirect this write.
@@ -1469,16 +1516,32 @@ export function registerTerminalCommands(
         // A refused precondition exits before reading stdin, which is expected.
         await runContainerWrite(
           id,
-          ["bash", "-lc", containerFileWriteScript(fullPath, precondition)],
-          data,
+          [
+            "bash",
+            "-lc",
+            containerFileWriteScript(fullPath, precondition, base64DecodedByteLength(normalized)),
+          ],
+          normalized,
           {
-            errorForExit: (code) =>
-              code === CONTAINER_WRITE_CONFLICT_EXIT ? fileWriteConflictError() : undefined,
+            errorForExit: (code) => {
+              switch (code) {
+                case CONTAINER_WRITE_CONFLICT_EXIT:
+                  return fileWriteConflictError();
+                case CONTAINER_WRITE_NOT_FILE_EXIT:
+                  return fileWriteNotRegularFileError();
+                case CONTAINER_WRITE_METADATA_EXIT:
+                  return new Error(
+                    "Cannot save: the existing file's access metadata could not be preserved",
+                  );
+                case CONTAINER_WRITE_ACCESS_EXIT:
+                  return new Error("Cannot save: the existing file is not writable");
+              }
+            },
           },
         );
         return fullPath;
       };
-      return precondition ? serializeFileWrite(`container:${id}:${fullPath}`, write) : write();
+      return serializeFileWrite(`container:${id}`, write);
     },
     ASYNC_HANDLER,
   );

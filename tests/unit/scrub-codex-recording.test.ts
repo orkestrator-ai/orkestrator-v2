@@ -303,6 +303,46 @@ describe("scrub-codex-recording", () => {
     expect(lines[3]).toBe("not json at all");
   });
 
+  test("strips provider-specific content while keeping event and wire shapes", () => {
+    const input = [
+      { replay: 1, bridge: "acp", description: "fixture header" },
+      {
+        frame: {
+          type: "user",
+          message: { content: [{ type: "tool_result", content: "private file" }] },
+        },
+      },
+      { frame: { type: "tool_call", toolName: "read", input: { path: "private path" } } },
+      {
+        rawLine: JSON.stringify({
+          method: "fs/write_text_file",
+          params: { content: "private write" },
+        }),
+      },
+      { rawLine: '"private JSON string"' },
+      { rawLine: "{ malformed private line" },
+    ]
+      .map((line) => JSON.stringify(line))
+      .join("\n");
+    const { output } = stripContent(input);
+    expect(output).not.toContain("private");
+    expect(output.split("\n").map((line) => JSON.parse(line))).toEqual([
+      { replay: 1, bridge: "acp", description: "fixture header" },
+      { frame: { type: "user", message: { content: [{ type: "tool_result", content: "" }] } } },
+      { frame: { type: "tool_call", toolName: "read", input: { path: "" } } },
+      { rawLine: JSON.stringify({ method: "fs/write_text_file", params: { content: "" } }) },
+      { rawLine: '""' },
+      { rawLine: "{" },
+    ]);
+  });
+
+  test("keeps the canonical home placeholder and detects other home paths", () => {
+    const rules = buildRedactions({ home: "/home/user", user: "user" });
+    expect(scrub("/home/user/project", rules).totalHits).toBe(0);
+    expect(scrub("/home/user-alice/project", rules).output).toBe("/home/user/project");
+    expect(scrub("/home/alice/project", rules).totalHits).toBeGreaterThan(0);
+  });
+
   test("parses flags in any position and rejects unknown ones", () => {
     expect(parseArguments(["in.jsonl"])).toEqual({
       inputPath: "in.jsonl",

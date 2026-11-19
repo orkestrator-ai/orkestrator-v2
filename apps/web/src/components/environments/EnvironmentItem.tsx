@@ -10,6 +10,7 @@ import { useEnvironmentPrMergeState } from "@/hooks/useEnvironmentNameSignal";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isLocalDeletionRetryable } from "@/lib/federation/selected-environments";
+import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { mergePrControl } from "@/lib/merge-pr-control";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
@@ -18,7 +19,7 @@ import { useBuildPipelineStore, useEnvironmentDiffStore, useEnvironmentStore } f
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import type { Environment, EnvironmentType } from "@/types";
-import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
+import { EnvironmentAgentSummary, LOCAL_AGENT_SUMMARY_SOURCE } from "./EnvironmentAgentSummary";
 import { EnvironmentRow, type EnvironmentRowChanges } from "./EnvironmentRow";
 import { localEnvironmentRowFacts } from "./environment-row-facts";
 
@@ -74,7 +75,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const dockerAvailable = useDockerAvailability();
   const localCheckoutAvailable = useLocalEnvironmentAvailable(environment.projectId);
   // The row's environment is on the node of the scope it renders in.
-  const nodeId = useScopesWithCommandFallback().scope.nodeId;
+  const scope = useScopesWithCommandFallback().scope;
+  const nodeId = scope.nodeId;
   // The owning machine is named whenever this client can show several machines.
   const { boundMachine: windowMachine, supported: multiMachineClient } = useFederation();
   const boundMachine = multiMachineClient ? windowMachine : null;
@@ -191,6 +193,24 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       tooltip={tooltip}
       tooltipDetails={environment}
       agentSummary={<EnvironmentAgentSummary environmentId={environment.id} open={tooltip.open} />}
+      attentionSource={LOCAL_AGENT_SUMMARY_SOURCE}
+      onOpenAttention={(tabId, interactionId) => {
+        onSelect(environment.id);
+        // Focuses the tab once the environment's layout has it, as a worker link does.
+        if (tabId) {
+          openCoordinatorWorkTarget(
+            {
+              type: "worker-tab",
+              projectId: environment.projectId,
+              environmentId: environment.id,
+              tabId,
+              interactionId,
+            },
+            undefined,
+            scope,
+          );
+        }
+      }}
       deleteNotice={(open) => (
         <DesignEnvironmentDeletionNotice environmentId={environment.id} open={open} />
       )}

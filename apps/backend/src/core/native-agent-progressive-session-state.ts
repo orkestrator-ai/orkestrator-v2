@@ -39,6 +39,7 @@ import {
   type NativeAgentProjectionContext,
   goalProjectionField,
 } from "./native-agent-projection-context.js";
+import { nativeAgentQueueEditingField } from "./native-agent-queue-editing.js";
 
 const log = createLogger("native-agent");
 
@@ -292,7 +293,12 @@ export class NativeAgentProgressiveSessionState {
     const terminalMessages = nativeTerminalMessages({
       notices: stateSnapshot.notices,
       error: stateSnapshot.error,
+      failedTurn: stateSnapshot.failedTurn,
+      failureRequestId: resolved.session.dispatchedRequestIds?.at(-1),
+      ...(stateSnapshot.failureReason ? { failureReason: stateSnapshot.failureReason } : {}),
+      ...(stateSnapshot.rateLimits ? { rateLimits: stateSnapshot.rateLimits } : {}),
       turnStartedAt: stateSnapshot.turnStartedAt,
+      now: this.host.now(),
     });
     return {
       identity: this.context.reads.progressiveIdentity(
@@ -358,6 +364,7 @@ export class NativeAgentProgressiveSessionState {
                 queue.messages,
               ),
               ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
+              ...nativeAgentQueueEditingField(queue),
               ...(queue.dispatchError
                 ? {
                     blocked: {
@@ -450,6 +457,7 @@ export class NativeAgentProgressiveSessionState {
               epoch,
               input.forceSnapshot === true,
               phases.own(() => this.readProgressiveSessionState(input, phases)),
+              input.freshSource,
             ),
           );
       if (!value) {

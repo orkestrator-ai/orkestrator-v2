@@ -4,6 +4,7 @@ import "@xterm/xterm/css/xterm.css";
 import { writeText } from "@/lib/native/clipboard";
 import { createTerminalTargetIdentity } from "@/hooks/terminal-target-identity";
 import { useTerminal } from "@/hooks/useTerminal";
+import { useTerminalSizeClaim } from "./use-terminal-size-claim";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -849,6 +850,7 @@ export function PersistentTerminal({
     connect,
     markBootstrapped,
     resize,
+    claimSize,
     write,
     reconnect,
   } = useTerminal({
@@ -1311,6 +1313,22 @@ export function PersistentTerminal({
     },
     [isActive, isEnvironmentVisible, resize],
   );
+  // A click, tap or user input takes the shared terminal's size for this
+  // window; layout changes alone only update a size this window already owns.
+  const { claim: claimTerminalSize, claimOnInput: claimTerminalSizeOnInput } = useTerminalSizeClaim(
+    {
+      terminal,
+      fitAddon,
+      wrapperRef: terminalRef,
+      canClaim: isActive && isEnvironmentVisible && isConnected,
+      sessionId,
+      claimSize,
+    },
+  );
+  const claimTerminalSizeOnInputRef = useRef(claimTerminalSizeOnInput);
+  useEffect(() => {
+    claimTerminalSizeOnInputRef.current = claimTerminalSizeOnInput;
+  }, [claimTerminalSizeOnInput]);
   const scheduleFit = useCallback(() => {
     if (!fitAddon || !terminal) return;
     if (fitAnimationFrameRef.current !== null) {
@@ -1536,6 +1554,7 @@ export function PersistentTerminal({
       // binding without submitting the prompt.
       if (key === "enter" && isShift && !isCtrl && !isMeta && !isAlt) {
         event.preventDefault();
+        claimTerminalSizeOnInputRef.current();
         terminal.input("\n");
         return false;
       }
@@ -1589,10 +1608,14 @@ export function PersistentTerminal({
         // Prevent default to stop browser from firing a paste event
         // (which would cause xterm to paste a second time)
         event.preventDefault();
+        claimTerminalSizeOnInputRef.current();
         void handlePaste();
         return false;
       }
 
+      if (!["Alt", "Control", "Meta", "Shift", "Dead", "Process", "CapsLock"].includes(event.key)) {
+        claimTerminalSizeOnInputRef.current();
+      }
       return true;
     });
 
@@ -2013,13 +2036,15 @@ export function PersistentTerminal({
     setActivePane(paneId, environmentId);
     if (isActive) {
       terminal.focus();
+      claimTerminalSize();
     }
-  }, [environmentId, isActive, terminal, paneId, setActivePane]);
+  }, [claimTerminalSize, environmentId, isActive, terminal, paneId, setActivePane]);
 
   const handleMobileKeyInput = useCallback(
     (data: string) => {
       void writeRef.current(resolveTerminalKeyData(data, terminal.modes.applicationCursorKeysMode));
       updateActivityThrottledRef.current();
+      claimTerminalSizeOnInputRef.current();
     },
     [terminal],
   );
@@ -2336,6 +2361,8 @@ export function PersistentTerminal({
           <div
             ref={terminalRef}
             onClick={handleTerminalClick}
+            onInputCapture={claimTerminalSizeOnInput}
+            onPasteCapture={claimTerminalSizeOnInput}
             {...cornerHover.terminalHoverProps}
             className={cn(
               "absolute inset-x-0 top-0",
@@ -2349,7 +2376,14 @@ export function PersistentTerminal({
           <ContextMenuItem onClick={() => void handleCopySelection()} disabled={!hasSelection}>
             Copy
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => void handlePaste()}>Paste</ContextMenuItem>
+          <ContextMenuItem
+            onClick={() => {
+              claimTerminalSizeOnInput();
+              void handlePaste();
+            }}
+          >
+            Paste
+          </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onClick={handleSelectAll}>Select all</ContextMenuItem>
         </ContextMenuContent>

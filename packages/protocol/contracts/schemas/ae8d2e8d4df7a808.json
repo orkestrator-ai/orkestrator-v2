@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:ae8d2e8d4df7a808715394368362efa7144d1f7df9e9e03f7089c0abf9e85e01",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "forceSnapshot": {},
+        "freshSource": {
+          "type": "boolean"
+        },
+        "knownToken": {},
+        "liveWindow": {},
+        "logicalSessionKey": {
+          "type": "string"
+        },
+        "patchVersion": {},
+        "viewVersion": {}
+      },
+      "required": ["agent", "environmentId", "logicalSessionKey"],
+      "type": "object"
+    }
+  }
+}

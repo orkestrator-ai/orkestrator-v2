@@ -14,6 +14,7 @@
  * Cursor credential path and the bridge token.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { LOCAL_BRIDGE_READY_PREFIX } from "@orkestrator/protocol/node/local-bridge-readiness";
 import {
   existsSync,
   mkdirSync,
@@ -265,7 +266,7 @@ describe("the bridge process", () => {
     async () => {
       const { packageRoot, workspace, elsewhere } = fixture();
 
-      const cwd = await runBridgeScript({
+      const stdout = await runBridgeScript({
         from: packageRoot,
         workspace,
         body: `await import(${JSON.stringify(configModule)});
@@ -276,7 +277,7 @@ describe("the bridge process", () => {
         process.exit(0);`,
       });
 
-      expect(cwd).toBe(realpathSync(workspace));
+      expect(stdout).toBe(`${LOCAL_BRIDGE_READY_PREFIX}0\n${realpathSync(workspace)}`);
     },
     PROCESS_TEST_TIMEOUT_MS,
   );

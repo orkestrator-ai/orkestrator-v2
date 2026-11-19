@@ -364,6 +364,39 @@ settled are in [remote-bandwidth.md](../development/remote-bandwidth.md).
 `e2e/SseGzipStreaming.spec.ts` prove incremental delivery directly, through
 HTTP/1.1 and HTTP/2 test proxies, and in real browsers.
 
+### Terminal size ownership
+
+One terminal can be open on several clients at once (a desktop window, a
+browser, a phone), and each fits it to its own pane. The PTY has one size, so
+the backend keeps one size owner per session
+(`apps/backend/src/core/terminal-size-ownership.ts`; the rule is described in
+`packages/protocol/src/terminal-size-ownership.ts`):
+
+- **Claim.** A click, tap, or keyboard or paste input sends `claim_terminal_size`, which
+  makes the window the owner and applies its geometry. Keyboard and paste
+  input claims are throttled to once per 5 s. It is not a resize
+  lifecycle command, so it is never queued behind or ahead of the terminal's
+  input and claiming while typing does not delay keystrokes.
+- **Update.** Layout changes (a window resize, a phone rotating, a pane
+  opening) send the ordinary resize (`terminal_resize`, `local_terminal_resize`
+  or the socket's `resize` frame) with the window's `clientId`. It applies only
+  when that window owns the size or nobody does, in which case the window
+  becomes the owner. A refused update answers `{ delivered: true, applied:
+  false }`: the PTY is there, so it is not a failure.
+
+Every client keeps receiving output; only the geometry is owned. The window's
+id is kept in `sessionStorage` (`apps/web/src/lib/terminal-size-client.ts`), so a
+reload is still the same client. Fresh navigations mint an id even when a
+duplicated tab inherits the original tab’s storage. Ownership ends when the
+last view in the window stops showing the session and pending size requests
+settle (`release_terminal_size`), 30 s after its terminal socket closes (the
+socket remembers ids from subscriptions and resizes), after 10 minutes with
+no resize or claim from the owner, or with the PTY. A resize without a client
+id comes from an older client: it applies only while nobody owns the size and
+never takes ownership, which is what every resize did before. An older backend
+ignores the id and answers `claim_terminal_size` with `unknown-command`, and the
+renderer then sends an ordinary resize.
+
 ### Through Tailscale Serve
 
 Serve is the reference route for remote measurements, with the direct tailnet

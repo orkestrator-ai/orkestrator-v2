@@ -162,6 +162,7 @@ describe("environments commands", () => {
         "controlRequestId",
         "delegationBaseBranch",
         "delegationBaseCommit",
+        "worktreeBaseCommit",
       ],
       discard_recovery_copy: ["expectedRevision", "operationId"],
       recreate_environment: [

@@ -14,6 +14,7 @@ import {
   readQueuedAttachmentTranscript,
   recordQueuedAttachmentSteer,
 } from "./queued-attachment-transcript";
+import { CursorPlanCardFixture } from "./CursorPlanCardFixture";
 import { NativeDockNoticeFixture } from "./NativeDockNoticeFixture";
 import { AutoPipelineFixture, installAutoPipelineFixture } from "./AutoPipelineFixture";
 import {
@@ -34,6 +35,7 @@ import { NativeResumeSessionFixture } from "./NativeResumeSessionFixture";
 import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
+import { EnvironmentAttentionFixture } from "./EnvironmentAttentionFixture";
 import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
 import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
@@ -63,6 +65,7 @@ import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
 import { FeaturesComposeFixture, TerminalComposeFixture } from "./ComposeFramesFixture";
+import { QueuedPromptEditFixture } from "./QueuedPromptEditFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
@@ -251,6 +254,9 @@ const FocusHairlineFixture = lazy(async () => {
   fixture.installFocusHairlineFixture();
   return { default: fixture.FocusHairlineFixture };
 });
+const ProviderFailureFixture = lazy(async () => ({
+  default: (await import("./ProviderFailureFixture")).ProviderFailureFixture,
+}));
 const MailTilesFixture = lazy(async () => ({
   default: (await import("./MailTilesFixture")).MailTilesFixture,
 }));
@@ -326,6 +332,9 @@ function CreateEnvironmentFixture() {
       <CreateEnvironmentDialog
         open={open}
         onOpenChange={setOpen}
+        projectId={
+          window.location.search.includes("launchBase=") ? "launch-base-fixture" : undefined
+        }
         onCreate={async (options) => {
           window.lastCreateEnvironmentOptions = options;
         }}
@@ -333,6 +342,32 @@ function CreateEnvironmentFixture() {
       />
     </main>
   );
+}
+
+function installLaunchBaseFixture(state: string) {
+  window.orkestrator = {
+    invoke: async <T,>(command: string, args?: { retry?: boolean }) => {
+      if (command !== "get_project_base_branch_tip") throw new Error(`Unknown command: ${command}`);
+      if (state === "resolving") return new Promise<T>(() => {});
+      if (state === "unavailable") {
+        return {
+          branch: "main",
+          commit: null,
+          launchEligible: false,
+          unavailableReason: "The project's origin remote is missing",
+        } as T;
+      }
+      const fresh = state === "fresh" || args?.retry;
+      return {
+        branch: "main",
+        ref: state === "local" ? "main" : "origin/main",
+        commit: (fresh ? "a1" : "c3").repeat(20),
+        launchEligible: true,
+        fetched: fresh === true,
+        ...(state === "stale" && !fresh ? { fetchError: "Remote unavailable" } : {}),
+      } as T;
+    },
+  } as Window["orkestrator"];
 }
 
 /** Installed before the fixture renders. */
@@ -1486,17 +1521,26 @@ function installDiffViewerFixture() {
     statusParam === "new" ? "new" : statusParam === "deleted" ? "deleted" : "modified";
   const filePath = diffViewerFixturePath;
   const baselineVersion = `${params.get("branch") ?? "main"}@${diffFixtureObjectId}`;
+  const staging = params.has("staging");
   const body = liveDiffFixtureBody({ path: filePath, status, baselineVersion });
 
   window.orkestrator = {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
       switch (command) {
         case "changes_resolve_live_detail":
-          assertFixtureArgs(command, args, { resourceKey: diffFixtureResourceKey, path: filePath });
+          assertFixtureArgs(command, args, {
+            resourceKey: diffFixtureResourceKey,
+            ...(args?.pathId ? { pathId: body.files[0]?.pathId } : { path: filePath }),
+          });
           return { kind: "identity", identity: body.identity } as T;
         case "changes_get_diff":
           assertFixtureArgs(command, args, { diffIdentityId: body.identity.id });
           return body as T;
+        case "changes_get_capabilities":
+          if (!staging) throw new Error("Staging disabled in this fixture");
+          return { hunkStaging: true } as T;
+        case "changes_stage_hunk":
+          return { kind: "applied", action: "stage", pathId: body.files[0]?.pathId } as T;
         case "changes_get_view":
           // The shared projection subscription; the viewer does not depend on it.
           return {
@@ -1514,21 +1558,28 @@ function installDiffViewerFixture() {
 function DiffViewerFixture() {
   const filePath = diffViewerFixturePath;
   const [viewFileCount, setViewFileCount] = useState(0);
+  const [secondActive, setSecondActive] = useState(false);
+  const twoTabs = new URLSearchParams(window.location.search).has("staging");
+  const target = {
+    kind: "live",
+    resourceKey: diffFixtureResourceKey,
+    path: filePath,
+    title: "frontend-state-audit.md",
+  } as const;
 
   return (
-    <main className="h-screen bg-background text-foreground">
-      <section data-testid="diff-viewer-pane" className="relative h-full w-full">
+    <main className="flex h-screen flex-col bg-background text-foreground">
+      {twoTabs && (
+        <button onClick={() => setSecondActive((active) => !active)}>Switch diff tab</button>
+      )}
+      <section data-testid="diff-viewer-pane" className="relative min-h-0 w-full flex-1">
         <DiffViewerTab
-          target={{
-            kind: "live",
-            resourceKey: diffFixtureResourceKey,
-            path: filePath,
-            title: "frontend-state-audit.md",
-          }}
+          target={target}
           filePath={filePath}
-          isActive
+          isActive={!secondActive}
           onSwitchToFileView={() => setViewFileCount((count) => count + 1)}
         />
+        {twoTabs && <DiffViewerTab target={target} filePath={filePath} isActive={secondActive} />}
       </section>
       <output data-testid="view-file-count" className="sr-only">
         {viewFileCount}
@@ -2022,6 +2073,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/queued-prompt-edit") return <QueuedPromptEditFixture />;
   if (window.location.pathname === "/tab-styles") return <TabStylesFixture />;
   if (window.location.pathname === "/html-preview") return <HtmlPreviewFixture />;
   if (window.location.pathname === "/annotation-destination-layout")
@@ -2037,6 +2089,13 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/coordinator-pane-tree") return <CoordinatorPaneTreeFixture />;
   if (window.location.pathname === "/add-project") return <AddProjectDialogFixture />;
+  if (window.location.pathname === "/provider-failure") {
+    return (
+      <Suspense fallback={null}>
+        <ProviderFailureFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/mail-tiles") {
     return (
       <Suspense fallback={null}>
@@ -2114,6 +2173,7 @@ function fixtureForPath() {
     return <ProjectSearchMachinesFixture />;
   if (window.location.pathname === "/environment-status-marker")
     return <EnvironmentStatusMarkerFixture />;
+  if (window.location.pathname === "/environment-attention") return <EnvironmentAttentionFixture />;
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
   if (window.location.pathname === "/agent-account-status") return <AgentAccountStatusFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
@@ -2269,6 +2329,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/review-validation-output") {
     return <ReviewValidationOutputFixture />;
   }
+  if (window.location.pathname === "/cursor-plan-card") return <CursorPlanCardFixture />;
   if (window.location.pathname === "/native-dock-notice") return <NativeDockNoticeFixture />;
   if (window.location.pathname === "/native-refresh-shimmer") {
     return <NativeRefreshShimmerFixture />;
@@ -2405,6 +2466,8 @@ if (window.location.pathname === "/diff-base") installDiffBaseFixture();
 if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
 if (window.location.pathname === "/status-readability") installStatusReadabilityFixture();
 if (window.location.pathname === "/tab-styles") installTabStylesFixture();
+const launchBaseState = new URLSearchParams(window.location.search).get("launchBase");
+if (window.location.pathname === "/" && launchBaseState) installLaunchBaseFixture(launchBaseState);
 // The app's window scope and command scope, as `App.tsx` mounts them: a
 // per-node store hook outside a provider throws in a development renderer.
 createRoot(document.getElementById("root")!).render(

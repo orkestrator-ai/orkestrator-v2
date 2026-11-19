@@ -44,7 +44,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 The area fields are `kanban` (`KanbanStorage`), `linear` (`LinearStorage`), `coordinators`
 (`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
 `nodes` (`NodesStorage`), `machineLoadHistory` (`MachineLoadHistoryStorage`), `previewServices` (`PreviewServicesStorage`),
-`agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
+`agentAccounts` (`AgentAccountsStorage`), `promptQueueEdits` (`PromptQueueEditsStorage`), `graphTemplates`
 (`GraphTemplatesStorage`), `graphRuns` (`GraphRunsStorage`), `graphEffects`
 (`GraphEffectsStorage`), `clientState` (`ClientStateStorage`), `setupApprovals`
 (`SetupApprovalsStorage`), `environmentIsolation` (`EnvironmentIsolationStorage`), `suborks` (`SuborksStorage`), `watchedPullRequests`
@@ -71,6 +71,7 @@ the change journal.
 | `NativeAgentDeliveries` | `storage-native-deliveries.ts` | The dispatch and steer journals on a session record, and a queued steer's reservation and settlement in the prompt queue |
 | `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, row reads and row writes, and the restore of claims older backends left on disk |
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
+| `PromptQueueEditsRepository` | `storage-prompt-queue-edits.ts` | In-place edits of queued prompts, reached as `storage.promptQueueEdits`: the edit lease (`editLeases` on the queue row) that the dispatch and steer reservations respect, its renewal, and the commit of text and attachments together ([native-agent-service.md](native-agent-service.md#editing-a-queued-prompt-in-place)) |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
 | `AgentMailRepository` | `storage-agent-mail.ts` | Agent mail: sending, replies, per-message state, conversations, deletion and retention (an environment's deletion is planned in `storage-agent-mail-deletion.ts`) |
@@ -110,16 +111,42 @@ which any writer in any process bumps. A rebuild reads the serialized rows
 from the connection's revision-validated cache (`loadStoreSerialized`) and
 re-parses only rows whose serialized value changed, so an unchanged store
 costs one revision query and a send re-parses about three rows instead of
-every mailbox. Read-modify-write paths still take a mutable copy with `load()`
-inside `enqueue`. The 32 MiB limit is checked on the serialized rows the save
+every mailbox. Reads that name one mailbox or one environment skip the
+read model altogether, because any write anywhere moves the revision and a
+rebuild walks every message: an inbox (`getAgentMailMailbox`), a read
+message, a caller's identity (`listAgentMailPullTabIds`,
+`resolveUniqueAgentMailPullTabId`), one environment's directory (the agent
+MCP handshake), transcript mailbox batches and delivery status read rows by
+key through `AgentMailStore.mailbox`, `mailboxesById`, `environmentMailboxes`
+and `messageStatus`
+(`loadStoreRowsSerialized`: named keys, or the `environmentId\0` key range,
+since every mailbox id is `environmentId\0tabId`). They parse only those rows,
+reusing the read model's or an earlier keyed read's parse of an unchanged
+value (`storage-agent-mail-keyed-rows.ts`, bounded to 512 rows and 8 Mi
+characters), and check the envelope's version once per committed revision.
+A status read finds the message's mailbox from a bounded location hint learnt
+from rows this process parsed or wrote, verified against the row, then its
+counterpart row. A miss searches the whole store and records the matching
+key. A store held whole, buffered by `atomically` or with an unreadable row
+reads through `snapshot()` as before. Acknowledge, seen and discard change one message of one mailbox, so
+they read that mailbox by key and commit its row alone (`saveRows` with
+`revision: "next"` and the queue derived from the committed one), falling back
+to `load()` and `save()` where the store cannot take a row write. Other
+read-modify-write paths still take a mutable copy with `load()` inside
+`enqueue`. The 32 MiB limit is checked on the serialized rows the save
 writes anyway (`maxBytes` on `saveSensitiveJson`), not by serializing the
 store a second time. Deleting an environment's mail plans its change from
 `snapshot()` under the lease and commits only the rows it changes
 (`saveRows`, through `updateStoreRows`): the removed mailboxes and idempotency
 records, the rewritten mailboxes, the new counterparts, and the envelope's
-revision and inject queue. A change that shrinks the store always commits, even
-past the limit. Inside an atomic scope, or while a retired JSON copy of the
-store remains, it falls back to `load()` and `save()`.
+revision and inject queue. SQLite maintains the row-byte total in the same
+transaction as each row change, including writes from other connections. A
+store that predates the total gets a one-time backfill on its first capped
+row update. Row updates invalidate the whole-store cache after commit, and
+subsequent keyed reads load only their requested rows. A change that shrinks
+the store always commits, even past the limit. Inside an atomic scope, or
+while a retired JSON copy of the store remains, it falls back to `load()`
+and `save()`.
 
 Every repository takes the one `StorageContext` (`this.context`), the
 `StorageFiles` path helpers (`this.files.kanbanFile()`) and the

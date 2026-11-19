@@ -18,7 +18,7 @@
     "kanban": { "current": 2, "adapters": [2, 1, 0] },
     "mcp": { "current": 1, "adapters": [1, 0] },
     "multi-review": { "current": 1, "adapters": [1, 0] },
-    "native-sessions": { "current": 4, "adapters": [4, 3, 2, 1, 0] },
+    "native-sessions": { "current": 5, "adapters": [5, 4, 3, 2, 1, 0] },
     "node-files": { "current": 1, "adapters": [1, 0] },
     "node-mail": { "current": 1, "adapters": [1, 0] },
     "nodes": { "current": 1, "adapters": [1, 0] },

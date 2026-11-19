@@ -115,6 +115,7 @@ const dispatchArgs = Schema.Struct({
   ...sessionCreation,
   prompt: optionalUnknown,
   requestId: optionalUnknown,
+  failureSessionId: optionalString,
   command: optionalUnknown,
   approvalMode: optionalUnknown,
   images: optionalUnknown,
@@ -135,6 +136,7 @@ const dispatchArgs = Schema.Struct({
 // approvalMode, interactionPolicy, executionProfileId: safety options.
 const dispatchCritical = [
   "requestId",
+  "failureSessionId",
   "command",
   "schema",
   "images",
@@ -276,6 +278,7 @@ export const getNativeAgentTranscriptUpdateCommand = defineCommand({
   args: Schema.Struct({
     ...sessionKey,
     ...progressive,
+    freshSource: Schema.optionalKey(Schema.Boolean),
     liveWindow: optionalUnknown,
     patchVersion: optionalUnknown,
   }),
@@ -291,7 +294,11 @@ export const getNativeAgentSessionStateUpdateCommand = defineCommand({
   since: 1,
   access: "workspace",
   read: true,
-  args: Schema.Struct({ ...sessionKey, ...progressive }),
+  args: Schema.Struct({
+    ...sessionKey,
+    ...progressive,
+    freshSource: Schema.optionalKey(Schema.Boolean),
+  }),
   result: ViewUpdateSchema,
   critical: [],
 });

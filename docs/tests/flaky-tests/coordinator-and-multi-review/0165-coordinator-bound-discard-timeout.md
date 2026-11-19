@@ -1,7 +1,7 @@
 # Coordinator bound discard confirmations timeout under aggregate load
 
 - **ID:** 0165
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-09-26
 - **Test:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches`
 - **File:** `apps/backend/src/core/coordinator-service.test.ts`
@@ -789,4 +789,22 @@ assertion, timeout or skip was changed for validation.
   and none has been recorded since. No change was needed.
 - **Verification:** `mise run test:logged -- --name coord-coordinator-service -- bun --cwd=apps/backend test ./src/core/coordinator-service.test.ts`:
   pass (13.3 s).
+
+## Recurrence — 2026-11-19, worktree launch base review fixes
+
+- Base `0007f0e669b0f9ac0c1abc215ff466c17c3bfc07` contains both fixes cited above.
+  `mise run flaky:recurrence -- 0165 --base 0007f0e669b0f9ac0c1abc215ff466c17c3bfc07 --registry-ref origin/main`
+  confirmed the recurrence.
+- The four-file targeted backend run used
+  `mise run test:logged -- --name address-backend -- bun --cwd=apps/backend test ./src/core/commands-local-worktree.test.ts ./src/core/coordinator-service.test.ts ./src/core/commands-registry-coordinator-contract.test.ts ./tests/commands-registry-environments-create.test.ts --parallel=2 --only-failures`.
+  It reported 152 passes and one failure in 200.22 seconds. In
+  `apps/backend/src/core/coordinator-service.test.ts`,
+  `project coordinator > bound discard confirmations refuse stale and reused tokens`
+  exceeded its 30-second budget at 37,776.19 ms. The browser suite also ran on
+  the same host. The failed log was retained as
+  `orkestrator-test-run.IzTD6j/address-backend.log.gz`.
+- The complete owning file passed in 170.3 seconds with
+  `mise run test:logged -- --name address-coordinator-isolated -- bun --cwd=apps/backend test ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`.
+  The timeout recurred with the larger budget when the Git-heavy case ran
+  alongside other suites. No code, assertion, or timeout was changed for it.
 

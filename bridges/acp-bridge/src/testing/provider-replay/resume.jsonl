@@ -1,0 +1,15 @@
+{"replay":1,"bridge":"acp","scenario":"resume","source":"synthetic","provider":"grok","providerVersion":"1.0.88","description":"A completed turn, a bridge restart over the same state directory, then a second turn: the new agent replays the history during session/load and the bridge keeps the transcript it already holds."}
+{"action":"prompt","text":"What is in the README?"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-1","content":{"type":"text","text":"It describes a replay fixture."}}}}}
+{"frame":{"jsonrpc":"2.0","id":"$prompt","result":{"stopReason":"end_turn"}}}
+{"action":"settle"}
+{"action":"restart"}
+{"action":"observe","label":"restarted"}
+{"action":"prompt","text":"And the licence?"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"user_message_chunk","messageId":"hist-user-1","content":{"type":"text","text":"What is in the README?"}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-1","content":{"type":"text","text":"It describes a replay fixture."}}}}}
+{"frame":{"jsonrpc":"2.0","id":"$load","result":{}}}
+{"action":"await-prompt"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-2","content":{"type":"text","text":"MIT."}}}}}
+{"frame":{"jsonrpc":"2.0","id":"$prompt","result":{"stopReason":"end_turn"}}}
+{"action":"settle"}

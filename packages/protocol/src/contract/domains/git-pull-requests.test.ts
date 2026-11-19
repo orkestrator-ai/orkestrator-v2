@@ -40,10 +40,13 @@ import {
 const ADMIN = new Set(["changes_get_diagnostics"]);
 const INTERNAL = new Set(["pr_monitor_agent_turn_completed", "pr_monitor_probe_environment"]);
 /** Commands added after a domain's first version, with the version that added them. */
-const LATER: Record<string, number> = { get_github_pull_request_file_patch: 4 };
+const ADDED_SINCE: Record<string, number> = {
+  changes_stage_hunk: 2,
+  get_github_pull_request_file_patch: 4,
+};
 
 const DOMAINS = [
-  { domain: gitDomain, commands: GIT_COMMANDS as readonly AnyCommandDef[], count: 22, version: 2 },
+  { domain: gitDomain, commands: GIT_COMMANDS as readonly AnyCommandDef[], count: 23, version: 2 },
   {
     domain: pullRequestsDomain,
     commands: PULL_REQUESTS_COMMANDS as readonly AnyCommandDef[],
@@ -63,7 +66,7 @@ describe("git and pull-requests definitions", () => {
         expect(def.domain).toBe(domain);
         expect({ name: def.name, since: def.since }).toEqual({
           name: def.name,
-          since: LATER[def.name] ?? 1,
+          since: ADDED_SINCE[def.name] ?? 1,
         });
         expect(def.encoded).toBe(false);
       }

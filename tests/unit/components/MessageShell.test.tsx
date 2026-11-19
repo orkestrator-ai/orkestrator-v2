@@ -4,7 +4,6 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
   LONG_PRESS_DELAY_MS,
   MessageShell,
-  MessageErrorAlert,
 } from "../../../apps/web/src/components/chat/MessageShell";
 import { type ControlledTimeout, installControlledTimeout } from "../../helpers/controlled-timeout";
 
@@ -797,55 +796,5 @@ describe("MessageShell", () => {
 
     expect(screen.queryByText("1:00 PM") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Fork" }) === null).toBe(true);
-  });
-});
-
-describe("MessageErrorAlert", () => {
-  test("renders error content and timestamp", () => {
-    const { container } = render(
-      <MessageErrorAlert content="Something went wrong" timestampLabel="2:00 PM" />,
-    );
-
-    expect(container.textContent).toContain("Something went wrong");
-    expect(container.textContent).toContain("2:00 PM");
-  });
-
-  test("applies responsive padding and min-w-0", () => {
-    const { container } = render(<MessageErrorAlert content="Error" timestampLabel="2:00 PM" />);
-
-    const outerDiv = container.firstElementChild as HTMLElement;
-    expect(outerDiv.className).toContain("px-2");
-    expect(outerDiv.className).toContain("@sm:px-4");
-
-    const contentDiv = outerDiv.querySelector(".max-w-3xl") as HTMLElement;
-    expect(contentDiv.className).toContain("min-w-0");
-  });
-
-  test("renders with break-words for long error messages", () => {
-    const { container } = render(
-      <MessageErrorAlert
-        content="A very long error message that should wrap properly at narrow widths"
-        timestampLabel="2:00 PM"
-      />,
-    );
-
-    const errorText = container.querySelector(".text-failure.break-words") as HTMLElement;
-    expect(errorText).not.toBeNull();
-    expect(errorText.textContent).toContain("A very long error message");
-  });
-
-  test("renders optional details and action content", () => {
-    render(
-      <MessageErrorAlert
-        content="Authentication failed"
-        details="Original API error details"
-        action={<button type="button">Retry login</button>}
-        timestampLabel="2:00 PM"
-      />,
-    );
-
-    expect(screen.getByText("Authentication failed")).toBeTruthy();
-    expect(screen.getByText("Original API error details")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Retry login" })).toBeTruthy();
   });
 });

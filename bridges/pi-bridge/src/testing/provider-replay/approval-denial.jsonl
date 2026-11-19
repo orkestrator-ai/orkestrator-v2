@@ -1,0 +1,15 @@
+{"replay":1,"bridge":"pi","scenario":"approval-denial","source":"synthetic","provider":"@earendil-works/pi-coding-agent","providerVersion":"1.5.2","description":"Under an ask policy Pi's tool_call hook parks a bash call; the user denies it, Pi reports the blocked call and answers without it."}
+{"action":"prompt","text":"Delete the build directory","policy":"ask"}
+{"frame":{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"timestamp":1767225600000}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Removing it."}}}
+{"frame":{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"stopReason":"toolUse","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"timestamp":1767225601000}}}
+{"frame":{"type":"tool_call","toolCallId":"call-rm","toolName":"bash","input":{"command":"rm -rf build"}}}
+{"action":"observe","label":"parked"}
+{"action":"answer","decision":"deny"}
+{"frame":{"type":"tool_execution_start","toolCallId":"call-rm","toolName":"bash","args":{"command":"rm -rf build"}}}
+{"frame":{"type":"tool_execution_end","toolCallId":"call-rm","toolName":"bash","result":{"content":[{"type":"text","text":"The user denied this tool call."}]},"isError":true}}
+{"frame":{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"timestamp":1767225600000}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Understood, the build directory stays."}}}
+{"frame":{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"stopReason":"stop","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"timestamp":1767225601000}}}
+{"frame":{"type":"agent_settled","aborted":false}}
+{"action":"end"}

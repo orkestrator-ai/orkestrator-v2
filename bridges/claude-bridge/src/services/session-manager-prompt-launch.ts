@@ -1,4 +1,5 @@
 import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { replayRecorder } from "./replay-recorder.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
@@ -77,6 +78,7 @@ async function consumeClaudeRuntime(
   try {
     for await (const message of frames) {
       if (runtime.abortController.signal.aborted) break;
+      replayRecorder?.frame(runtime.session.id, message);
       noteClaudeRuntimeFrame(runtime);
       const turn = routeClaudeFrame(runtime, message);
       try {
@@ -140,6 +142,8 @@ function endClaudeRuntime(
     session.status = "error";
     session.error = claudeProcessKilledMessage(killedBy);
     session.errorCode = undefined;
+    session.failedTurn = undefined;
+    session.failureReason = undefined;
     session.interruption = "restart";
     // The latest turn the SDK took, which is what the mark names after a
     // bridge restart too.
@@ -195,6 +199,8 @@ function releaseOrphanedForeground(runtime: ClaudeRuntime, error: unknown): void
   session.status = "error";
   session.error = error instanceof Error ? error.message : String(error);
   session.errorCode = undefined;
+  session.failedTurn = undefined;
+  session.failureReason = undefined;
   eventEmitter.emit({ type: "session.error", sessionId, data: { error: session.error } });
 }
 

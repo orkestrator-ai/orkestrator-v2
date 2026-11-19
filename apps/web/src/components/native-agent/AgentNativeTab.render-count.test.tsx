@@ -27,6 +27,7 @@ import type {
   NativeAgentViewIdentity,
 } from "@orkestrator/protocol/native-agent";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realBackend from "@/lib/backend";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -228,6 +229,10 @@ mock.module("@/lib/backend", () => ({
   getFileTree: async () => [],
   getLocalFileTreeSnapshot: getLocalFileTreeSnapshotMock,
   removePromptQueueMessage: removeQueuedMock,
+  // A node that predates in-place edits: editing loads the prompt into the composer.
+  beginPromptQueueMessageEdit: async () => {
+    throw new Error(unknownBackendCommandMessage("begin_prompt_queue_message_edit"));
+  },
   runUserCommand: runUserCommandMock,
   listUserCommands: async () => ({ commands: [] }),
 }));

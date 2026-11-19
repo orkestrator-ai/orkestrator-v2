@@ -61,3 +61,24 @@ mise run test:logged -- --name merge-linear-owning-browser -- env -u NODE_ENV \
   bunx playwright test --config e2e/playwright.config.ts e2e/LinearBoardDrag.spec.ts \
   --workers=1 --retries=0 --output=output/visual-previews/merge-linear-check/owning-drag
 ```
+
+## Merge validation on 2026-11-19
+
+The merge combined feature head `8073fa0c8a6a4f60c4894312201efc7b6a4dd32d`
+with target base `c2af4eebbabc6b130716e0445670639d6e0aada6`. The aggregate
+command was `mise run test:logged -- --name merge-browser-suite -- mise run test:browser`.
+The five-worker run recorded 1,864 passed, 154 skipped, seven failed, five
+interrupted and 50 not run before the 30-minute watchdog.
+
+The mobile Chromium case `scrolling during drag keeps the pointer's before placement`
+in `e2e/LinearBoardDrag.spec.ts:25` timed out after 30 seconds. The scroll
+offset reached 2 px against a threshold of more than 200 px.
+
+```sh
+env -u NODE_ENV mise run test:logged -- --name merge-browser-LinearBoardDrag -- \
+  bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- \
+  bunx playwright test --config e2e/playwright.config.ts --workers=1 --retries=0 \
+  --output=output/playwright/merge-LinearBoardDrag e2e/LinearBoardDrag.spec.ts
+```
+
+All six owning cases passed with one worker in 23.6 seconds. The recurrence check confirmed case 9991 is open on the target base.

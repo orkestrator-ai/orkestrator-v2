@@ -64,6 +64,7 @@ import { EnvironmentDiskUsageBreakdown } from "@/components/disk-usage/Environme
 import type * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { DomainTestResult, Environment, PortMapping, PortProtocol } from "@/types";
+import { EnvironmentStartingCommit } from "./EnvironmentStartingCommit";
 import { EnvironmentPreviewServices } from "./EnvironmentPreviewServices";
 import { EnvironmentRebuildSection } from "./EnvironmentRebuildSection";
 import { EnvironmentMoveSection } from "./EnvironmentMoveSection";
@@ -866,6 +867,7 @@ export function EnvironmentSettingsDialog({
               />
               {nameError && <p className="text-sm text-failure">{nameError}</p>}
             </div>
+            <EnvironmentStartingCommit environment={environment} />
             {isLocalEnvironment && (
               <div className="space-y-4">
                 <Label>Environment type</Label>

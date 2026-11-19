@@ -1,0 +1,7 @@
+{"replay":1,"bridge":"pi","source":"recorded","provider":"@earendil-works/pi-coding-agent","providerVersion":"1.5.2","scenario":"interruption","description":"Captured Pi SDK shell start and aborted agent_settled event. Other message payloads were omitted."}
+{"action":"prompt","text":"Run sleep 12."}
+{"frame":{"type":"tool_execution_start","toolCallId":"recorded-tool","toolName":"bash","args":{"command":"sleep 12","timeout":20}}}
+{"action":"observe","label":"mid-turn"}
+{"action":"interrupt","awaitProvider":true}
+{"frame":{"type":"agent_settled","aborted":true}}
+{"action":"end"}

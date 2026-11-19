@@ -15,6 +15,8 @@ export const WEB_CHAT_LOG_AREAS = defineLogAreas({
       "question.dismiss-failed": "An agent's question could not be dismissed.",
       "rich-block.render-failed": "A rich block's renderer failed and its source is shown instead.",
       "rich-block.copy-failed": "A rich block's copy action could not write to the clipboard.",
+      "plan.copy-failed": "A plan card's Markdown could not be copied to the clipboard.",
+      "plan.export-failed": "A plan card's Markdown could not be saved as a file.",
       "scroll-viewport.not-found":
         "The scroll viewport was still missing when polling for it ended.",
     },

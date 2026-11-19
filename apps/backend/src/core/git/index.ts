@@ -24,6 +24,12 @@
 //   `backend-runtime.ts`;
 // - `pr-required-checks.ts` (imports `commands-review.ts`), for
 //   `commands-pr-monitor.ts`.
+export {
+  backgroundBranchFetchRefspec,
+  backgroundFetchArgs,
+  backgroundFetchRefspec,
+  NO_WRITE_FETCH_HEAD,
+} from "./background-fetch.js";
 export { containerGitBlobReadCommand, decodeGitBatchOutput, readGitBlob } from "./blob-read.js";
 export {
   parseGitDiffSummary,
@@ -107,7 +113,7 @@ export {
   type GitHubIssueStatus,
   type GitHubRepositoryRef,
 } from "./github.js";
-export { runRemoteGit } from "./noninteractive-env.js";
+export { isMissingRemoteRefFailure, runRemoteGit } from "./noninteractive-env.js";
 export { classifyPrDetectionFailure } from "./pr-monitor-policy.js";
 export { type PrDetection, type PrMonitorKanbanTask, type PrMonitorTarget } from "./pr-monitor.js";
 export {

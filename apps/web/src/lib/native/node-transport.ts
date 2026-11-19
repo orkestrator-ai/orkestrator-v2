@@ -16,6 +16,7 @@
  * `web-gateway.ts` composes the two into today's `window.orkestrator`.
  */
 import { GatewayHttpError } from "@/lib/native/gateway-http-error";
+import { terminalSizeClientId } from "@/lib/terminal-size-client";
 import {
   BACKEND_HELLO_PATH,
   parseBackendHello,
@@ -1234,11 +1235,15 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
     startTerminalEventFallback(stream);
     const sessionId = stream.event.slice(TERMINAL_OUTPUT_EVENT_PREFIX.length);
     const socket = ensureTerminalSocket();
-    stream.socketUnlisten = socket.subscribe(sessionId, async (payload: TerminalSocketPayload) => {
-      const callbacks = listeners.get(stream.event);
-      if (!callbacks) return;
-      await Promise.all(Array.from(callbacks, (callback) => callback(payload)));
-    });
+    stream.socketUnlisten = socket.subscribe(
+      sessionId,
+      async (payload: TerminalSocketPayload) => {
+        const callbacks = listeners.get(stream.event);
+        if (!callbacks) return;
+        await Promise.all(Array.from(callbacks, (callback) => callback(payload)));
+      },
+      terminalSizeClientId(),
+    );
     void socket.ready(sessionId).catch(() => startTerminalEventFallback(stream));
   };
 
@@ -1390,7 +1395,12 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
         typeof operation.args.cols === "number" &&
         typeof operation.args.rows === "number" &&
         (await terminalSocket
-          .resize(operation.sessionId, operation.args.cols, operation.args.rows)
+          .resize(
+            operation.sessionId,
+            operation.args.cols,
+            operation.args.rows,
+            typeof operation.args.clientId === "string" ? operation.args.clientId : undefined,
+          )
           .catch(() => false))
       ) {
         return undefined;

@@ -1,5 +1,13 @@
 import path from "node:path";
-import { runCommand } from "../shell.js";
+import { CommandFailedError, runCommand } from "../shell.js";
+
+/** The remote answered and confirmed the requested branch does not exist. */
+export function isMissingRemoteRefFailure(error: unknown): boolean {
+  if (!(error instanceof CommandFailedError) || error.timedOut) return false;
+  return /couldn't find remote ref|could not find remote ref/i.test(
+    `${error.stderr}\n${error.message}`,
+  );
+}
 
 /** Keep the executable's original shell spelling, including quoted paths. */
 function openSshExecutable(command: string, variant: string | undefined): string | null {

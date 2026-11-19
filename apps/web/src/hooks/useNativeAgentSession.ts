@@ -1,3 +1,5 @@
+import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
+import { unreadResultActivityAt, type UnreadResultRead } from "@/lib/unread-result-view";
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import { toast } from "sonner";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -37,6 +39,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { getNativeAgentLiveUpdate } from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
+import type { PromptQueueEditFinish } from "@/lib/prompt-queue-edit";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { errorCode, ipcErrorText } from "@orkestrator/protocol/contract/ipc-error";
 import {
@@ -49,6 +52,12 @@ import {
 } from "@/lib/native-agent-sync-capabilities";
 import type { PermissionRuleChoiceInput } from "@/lib/backend/permission-rules";
 import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-accounting";
+import {
+  checkHistoryPageFence,
+  historyPageSession,
+  sameHistoryPageSession,
+  type HistoryPageFence,
+} from "@/lib/native-history-page-fence";
 import {
   NativeDiscoveryReadSchedule,
   nativeSessionReadDemand,
@@ -465,6 +474,7 @@ interface UseNativeAgentSessionOptions {
 
 export interface NativeAgentSendOptions {
   requestId?: string;
+  failureSessionId?: string;
   model?: string;
   reasoningEffort?: string;
   mode?: "build" | "plan";
@@ -561,6 +571,11 @@ export function useNativeAgentSession<TMessage = unknown>({
    */
   const scope = useNodeScope();
   const projectionStore = scope.store(nativeAgentProjectionStore);
+  const unreadActivityAt = useEnvironmentStore((state) =>
+    unreadResultActivityAt(state.getEnvironmentById(environmentId), sessionKey),
+  );
+  const [unreadRead, setUnreadRead] = useState<UnreadResultRead>();
+  const unreadReadRef = useRef<UnreadResultRead>(undefined);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
@@ -785,7 +800,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   const historyUnpageableRef = useRef(sharedSyncCache?.historyUnpageable === true);
   /** Rows before the live tail may be out of date until a re-read settles. */
   const heldHistoryReconcileOwedRef = useRef(false);
-  const heldHistoryReconcileRunRef = useRef<object | null>(null);
+  const heldHistoryReconcileRunRef = useRef<{ superseded: boolean } | null>(null);
   const heldHistoryReconcileStartedAtRef = useRef(0);
   const historyMessagesRef = useRef<TMessage[]>(
     (sharedSyncCache?.historyMessages as TMessage[] | undefined) ?? [],
@@ -801,8 +816,13 @@ export function useNativeAgentSession<TMessage = unknown>({
   const historyEvictionRef = useRef(
     projectionStore.getState().historyEvictions.get(sessionKey) ?? 0,
   );
+  /** The newest live-tail read; history pages never move it. */
   const refreshSequenceRef = useRef(0);
-  /** The newest history page request; an older one in flight is superseded. */
+  /**
+   * The newest history page request; an older one in flight is superseded.
+   * Separate from `refreshSequenceRef`, so tail reads and pages never cancel
+   * each other (`native-history-page-fence.ts`).
+   */
   const historyPageSequenceRef = useRef(0);
   const projectionOperationEpochRef = useRef(0);
   const refreshesInFlightRef = useRef(0);
@@ -1188,6 +1208,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     (
       incoming: NativeAgentTranscriptView<TMessage>,
       token: string,
+      messagesAtRequest: TMessage[] | undefined,
       delta?: {
         deletedMessageIds: readonly string[];
         /** Rows the delta upserted or patched; the rest of the view is held. */
@@ -1265,6 +1286,16 @@ export function useNativeAgentSession<TMessage = unknown>({
           value.historyReconciliationToken;
       const historyEpochChanged =
         previousEpoch !== value.historyEpoch || (heldHistoryStale && !value.historyCursor);
+      // State can already have installed this generation while the cursor
+      // and retained rows still belong to the previous transcript.
+      const pagingSessionChanged =
+        syncLiveProjectionRef.current !== null &&
+        !sameHistoryPageSession(syncLiveProjectionRef.current, {
+          platform,
+          environmentId,
+          sessionId: value.identity.providerSessionId || undefined,
+          generation: value.identity.sourceGeneration,
+        });
       const evictionGeneration = projectionStore.getState().historyEvictions.get(sessionKey) ?? 0;
       const evicted = evictionGeneration !== progressiveHistoryEvictionRef.current;
       const deleted = deletedMessageIds?.length ? new Set(deletedMessageIds) : undefined;
@@ -1310,6 +1341,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       let retained =
         current &&
         !identityChanged &&
+        !pagingSessionChanged &&
         !historyEpochChanged &&
         !evicted &&
         firstLiveIndex > 0 &&
@@ -1325,8 +1357,31 @@ export function useNativeAgentSession<TMessage = unknown>({
               return !liveIds.has(id);
             })
           : [];
+      let needsHistoryReconcile = false;
+      if (revised && retained.length > 0 && messagesAtRequest !== current?.messages) {
+        const heldAtRequest = new Set(messagesAtRequest);
+        for (const message of retained) {
+          const id = (message as { id?: unknown })?.id;
+          if (typeof id !== "string" || heldAtRequest.has(message)) continue;
+          const replacement = revised.get(id);
+          if (
+            replacement === undefined ||
+            JSON.stringify(replacement) === JSON.stringify(message)
+          ) {
+            continue;
+          }
+          // A page or history walk installed this copy during the tail read.
+          // The responses have no comparable row versions. Preserve the copy
+          // on screen and resolve the conflict with a fresh history walk.
+          revised.delete(id);
+          needsHistoryReconcile = true;
+        }
+      }
       // Before the byte accounting below, so it measures the copies kept.
       retained = withRevisedMessages(retained, revised, liveIds);
+      if (needsHistoryReconcile && heldHistoryReconcileRunRef.current) {
+        heldHistoryReconcileRunRef.current.superseded = true;
+      }
       /*
        * Retention is a client-side buffer and gets the same explicit ceiling
        * sync materialization applies to its retained pages. Exceeding it
@@ -1345,7 +1400,8 @@ export function useNativeAgentSession<TMessage = unknown>({
         retained = [];
         retainedBytes = 0;
       }
-      const heldHistoryReconcileOwed = heldHistoryStale && retained.length > 0;
+      const heldHistoryReconcileOwed =
+        (heldHistoryStale || needsHistoryReconcile) && retained.length > 0;
       /*
        * The live tail no longer starts at any row this tab holds, so nothing
        * on screen can be stitched to it. A single oversized newest row does
@@ -1372,6 +1428,7 @@ export function useNativeAgentSession<TMessage = unknown>({
        */
       const pagingCarriesOver =
         !identityChanged &&
+        !pagingSessionChanged &&
         !historyEpochChanged &&
         !evicted &&
         syncLiveProjectionRef.current !== null;
@@ -1867,7 +1924,17 @@ export function useNativeAgentSession<TMessage = unknown>({
     }) => {
       if (!enabled) return null;
       const background = options?.manual === false;
-      const round = background ? options.round : undefined;
+      // Sample the badge before issuing any read. A response already in
+      // flight when this event arrived cannot cover it.
+      const unreadActivityAt = unreadResultActivityAt(
+        scope.store(environmentStore).getState().getEnvironmentById(environmentId),
+        sessionKey,
+      );
+      const readUnread =
+        backgroundRefreshEnabledRef.current &&
+        unreadActivityAt !== undefined &&
+        unreadReadRef.current?.activityAt !== unreadActivityAt;
+      const round = background && !readUnread ? options.round : undefined;
       const send = <T>(command: string, input: object, run: () => Promise<T>): Promise<T> =>
         round ? round.request(command, input, run) : run();
       // A background read is never worth issuing while the session is still
@@ -1920,7 +1987,9 @@ export function useNativeAgentSession<TMessage = unknown>({
           operationEpoch === projectionOperationEpochRef.current;
         let transcriptMissing = false;
         let stateMissing = false;
+        let messagesAtRequest = projectionRef.current?.messages;
         const requestTranscript = (forceSnapshot: boolean) => {
+          messagesAtRequest = projectionRef.current?.messages;
           const input = {
             ...identity,
             viewVersion: 1 as const,
@@ -1928,7 +1997,8 @@ export function useNativeAgentSession<TMessage = unknown>({
             ...(nativeTranscriptPatchesSupported(scope)
               ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
               : {}),
-            ...(forceSnapshot
+            ...(readUnread ? { freshSource: true } : {}),
+            ...(forceSnapshot || readUnread
               ? { forceSnapshot: true }
               : progressiveTranscriptTokenRef.current
                 ? { knownToken: progressiveTranscriptTokenRef.current }
@@ -1950,7 +2020,11 @@ export function useNativeAgentSession<TMessage = unknown>({
         const liveTranscriptToken = progressiveTranscriptTokenRef.current;
         const liveStateToken = progressiveStateTokenRef.current;
         const liveUpdate =
-          background && liveTranscriptToken && liveStateToken && nativeLiveUpdateSupported(scope)
+          background &&
+          !readUnread &&
+          liveTranscriptToken &&
+          liveStateToken &&
+          nativeLiveUpdateSupported(scope)
             ? readLiveUpdate<TMessage>(scope, send, {
                 ...identity,
                 viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
@@ -1962,6 +2036,8 @@ export function useNativeAgentSession<TMessage = unknown>({
                   : {}),
               })
             : null;
+        let unreadTranscriptIdentity: NativeAgentViewIdentity | undefined;
+        let unreadStateIdentity: NativeAgentViewIdentity | undefined;
         const applyTranscriptUpdate = (
           update: NativeAgentTranscriptUpdate<TMessage>,
           requestedWithToken: boolean,
@@ -1970,7 +2046,15 @@ export function useNativeAgentSession<TMessage = unknown>({
             applyProgressiveTranscript(
               update.value as NativeAgentTranscriptView<TMessage>,
               update.token,
+              messagesAtRequest,
             );
+            if (
+              readUnread &&
+              update.value.freshness !== "cached" &&
+              lastTranscriptViewRef.current?.identity === update.value.identity
+            ) {
+              unreadTranscriptIdentity = update.value.identity;
+            }
             return "applied";
           }
           if (update.status === "delta") {
@@ -1982,7 +2066,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             ) {
               const merged = applyNativeAgentTranscriptDelta(current, update.delta);
               if (merged) {
-                applyProgressiveTranscript(merged, update.token, {
+                applyProgressiveTranscript(merged, update.token, messagesAtRequest, {
                   deletedMessageIds: update.delta.deletedMessageIds,
                   deliveredIds: new Set(
                     [
@@ -2102,7 +2186,8 @@ export function useNativeAgentSession<TMessage = unknown>({
           ...(progressiveStateTokenRef.current
             ? { knownToken: progressiveStateTokenRef.current }
             : {}),
-          ...(options?.manual === true ? { forceSnapshot: true } : {}),
+          ...(readUnread ? { freshSource: true } : {}),
+          ...(readUnread || options?.manual === true ? { forceSnapshot: true } : {}),
         };
         const requestState = () =>
           send("session-state", stateInput, () =>
@@ -2115,7 +2200,8 @@ export function useNativeAgentSession<TMessage = unknown>({
           .then((update) => {
             if (!stillCurrent()) return;
             if (update.status === "snapshot") {
-              applyProgressiveState(update.value, update.token);
+              const applied = applyProgressiveState(update.value, update.token);
+              if (readUnread && applied) unreadStateIdentity = update.value.identity;
             } else if (update.status === "unchanged") {
               progressiveStateTokenRef.current = update.token;
               markSessionStateAvailability("current");
@@ -2208,6 +2294,20 @@ export function useNativeAgentSession<TMessage = unknown>({
         }
 
         await Promise.allSettled([transcriptRead, stateRead]);
+        if (
+          stillCurrent() &&
+          unreadActivityAt !== undefined &&
+          unreadTranscriptIdentity?.providerSessionId &&
+          unreadStateIdentity &&
+          sameProgressiveIdentity(unreadTranscriptIdentity, unreadStateIdentity)
+        ) {
+          const read = {
+            activityAt: unreadActivityAt,
+            sessionId: unreadTranscriptIdentity.providerSessionId,
+          };
+          unreadReadRef.current = read;
+          setUnreadRead(read);
+        }
         // A superseding refresh owns the flag from here on; clearing it would
         // report that tab as settled while its newer read is still running.
         if (stillCurrent()) setSessionStateRefreshing(false);
@@ -2276,6 +2376,8 @@ export function useNativeAgentSession<TMessage = unknown>({
       beginSessionStateRefresh,
       discoverySchedule,
       enabled,
+      environmentId,
+      sessionKey,
       flushPendingReconcile,
       identity,
       markSessionStateAvailability,
@@ -2655,6 +2757,17 @@ export function useNativeAgentSession<TMessage = unknown>({
   }, [coordinatedInvalidate]);
 
   useEffect(() => {
+    if (
+      enabled &&
+      isActive &&
+      unreadActivityAt !== undefined &&
+      unreadRead?.activityAt !== unreadActivityAt
+    ) {
+      coordinatedInvalidate();
+    }
+  }, [enabled, isActive, unreadActivityAt, unreadRead, coordinatedInvalidate]);
+
+  useEffect(() => {
     const unsubscribeChange = onResourceChanged(
       "native-agent-session",
       (change) => {
@@ -2738,6 +2851,7 @@ export function useNativeAgentSession<TMessage = unknown>({
                 : "Agent Session",
           prompt: text,
           requestId,
+          ...(options.failureSessionId ? { failureSessionId: options.failureSessionId } : {}),
           model: options.model,
           reasoningEffort: options.reasoningEffort,
           mode: options.mode,
@@ -2756,6 +2870,13 @@ export function useNativeAgentSession<TMessage = unknown>({
         await refresh();
         return outcome;
       } catch (error) {
+        if (options.failureSessionId && incompatibility(error)?.code === "unsupported-field") {
+          pendingDispatchRef.current = null;
+          return {
+            outcome: "rejected",
+            error: "This machine needs an update before it can retry a failed turn.",
+          };
+        }
         // Keep the stable request id. If the transport failed after acceptance,
         // an explicit retry is deduplicated by the backend/provider journal.
         await refresh();
@@ -2956,6 +3077,49 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [scope, environmentId, queueKey, refresh],
   );
+  // In-place edits (`@/lib/prompt-queue-edit`): the backend holds the item
+  // back from delivery while the lease stands.
+  const beginQueuedEdit = useCallback(
+    async (messageId: string, options: { takeOver?: boolean } = {}) => {
+      try {
+        return await backendForScope(scope).beginPromptQueueMessageEdit({
+          queueKey,
+          environmentId,
+          messageId,
+          ...(options.takeOver ? { takeOver: true } : {}),
+        });
+      } finally {
+        await refresh().catch(() => undefined);
+      }
+    },
+    [scope, environmentId, queueKey, refresh],
+  );
+  const renewQueuedEdit = useCallback(
+    (messageId: string, leaseId: string) =>
+      backendForScope(scope).renewPromptQueueMessageEdit({
+        queueKey,
+        environmentId,
+        messageId,
+        leaseId,
+      }),
+    [scope, environmentId, queueKey],
+  );
+  const finishQueuedEdit = useCallback(
+    async (messageId: string, leaseId: string, finish: PromptQueueEditFinish) => {
+      try {
+        return await backendForScope(scope).finishPromptQueueMessageEdit({
+          queueKey,
+          environmentId,
+          messageId,
+          leaseId,
+          ...finish,
+        });
+      } finally {
+        await refresh().catch(() => undefined);
+      }
+    },
+    [scope, environmentId, queueKey, refresh],
+  );
   const retryQueue = useCallback(async () => {
     await backendForScope(scope).retryPromptQueueDispatch(queueKey);
     return refresh();
@@ -3092,6 +3256,9 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (requestedOperationEpoch !== projectionOperationEpochRef.current) {
         return projectionRef.current;
       }
+      if (!sameHistoryPageSession(syncLiveProjectionRef.current, projectionRef.current)) {
+        return projectionRef.current;
+      }
       const before = historyCursorRef.current;
       if (!before) {
         if (historyUnpageableRef.current) return projectionRef.current;
@@ -3116,10 +3283,21 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (budget.messages <= 0 || budget.bytes <= 0) {
         return retireLoadEarlierControl();
       }
-      const pageSequence = ++historyPageSequenceRef.current;
-      // A read already in flight answers for the tail before this page; drop it
-      // and let the next poll read the tail afresh.
-      refreshSequenceRef.current += 1;
+      /*
+       * The page's own request identity. It deliberately leaves
+       * `refreshSequenceRef` alone: a tail read already in flight still
+       * answers for the current tail, and the page merges into whichever tail
+       * is current when it lands, so neither has to cancel the other.
+       */
+      const currentFence = (): HistoryPageFence => ({
+        sequence: historyPageSequenceRef.current,
+        operationEpoch: projectionOperationEpochRef.current,
+        session: historyPageSession(syncLiveProjectionRef.current),
+        historyEpoch: historyEpochRef.current,
+        cursor: historyCursorRef.current,
+      });
+      historyPageSequenceRef.current += 1;
+      const requestedFence = currentFence();
       const rowIdentity = (message: TMessage): unknown => (message as { id?: unknown }).id;
       // The held rows as this page found them. A poll that lands while the page
       // is in flight can revise one of them (`revisedMessages`); that copy is
@@ -3137,25 +3315,28 @@ export function useNativeAgentSession<TMessage = unknown>({
       /*
        * A mutation that landed while the page was in flight owns the transcript
        * now, and a later page supersedes this one. Installing it would merge
-       * history into a live tail it no longer describes.
+       * history into a live tail it no longer describes. Nor may it land on
+       * another session generation, or on a history a read found rewritten.
        *
        * A poll that landed meanwhile does not retire the page. The page is
        * merged below into whatever live tail is current, and a poll keeps the
        * paging state while the history it describes stands; when it does not
-       * (a rotated epoch, a collapse to the live tail), the poll replaced the
-       * cursor this page was fetched behind, and that is what fences it.
+       * (a rotated epoch, a new generation, a collapse to the live tail), the
+       * poll replaced the epoch, session or cursor this page was fetched
+       * against, and that is what fences it (`checkHistoryPageFence`).
        * Retiring the page on every poll lost each page slower than the
        * 500–1500 ms cadence, so on a busy host a click on "Load earlier
        * messages" did nothing and automatic paging stalled (flakes 0483, 1602).
        */
+      const syncLive = syncLiveProjectionRef.current;
+      const current = projectionRef.current;
       if (
-        pageSequence !== historyPageSequenceRef.current ||
-        requestedOperationEpoch !== projectionOperationEpochRef.current ||
-        historyCursorRef.current !== before
+        !current ||
+        checkHistoryPageFence(requestedFence, currentFence()) !== "current" ||
+        !sameHistoryPageSession(syncLive, current)
       ) {
         return projectionRef.current;
       }
-      const syncLive = syncLiveProjectionRef.current;
       const token = syncTokenRef.current;
       /*
        * `historyEpochRef` is the epoch of the view that named this cursor, and
@@ -3168,21 +3349,11 @@ export function useNativeAgentSession<TMessage = unknown>({
         await refresh({ manual: true });
         return projectionRef.current;
       }
-      const current = projectionRef.current;
-      const live =
-        current &&
-        current.platform === syncLive.platform &&
-        current.environmentId === syncLive.environmentId &&
-        current.sessionId === syncLive.sessionId &&
-        current.generation === syncLive.generation
-          ? {
-              ...current,
-              messages: syncLive.messages,
-              ...(syncLive.messageWindow
-                ? { messageWindow: syncLive.messageWindow }
-                : { messageWindow: undefined }),
-            }
-          : syncLive;
+      const live = {
+        ...current,
+        messages: syncLive.messages,
+        messageWindow: syncLive.messageWindow,
+      };
       const pageMessageId = (message: TMessage): unknown => (message as { id?: unknown }).id;
       const liveIds = new Set(live.messages.map(pageMessageId));
       const held = new Map(
@@ -3313,14 +3484,16 @@ export function useNativeAgentSession<TMessage = unknown>({
     if (progressiveTranscriptTokenRef.current === undefined) return;
     // An owed remount requests a fresh snapshot before walking. Its temporary
     // delta base includes held rows, so it cannot yet identify the live tail.
-    const run = {};
+    const run = { superseded: false };
     heldHistoryReconcileRunRef.current = run;
     heldHistoryReconcileStartedAtRef.current = Date.now();
     const operationEpoch = projectionOperationEpochRef.current;
     const stillCurrent = () =>
       backgroundRefreshEnabledRef.current &&
       heldHistoryReconcileRunRef.current === run &&
+      !run.superseded &&
       operationEpoch === projectionOperationEpochRef.current &&
+      sameProgressiveIdentity(progressiveIdentityRef.current, view.identity) &&
       lastTranscriptViewRef.current !== null &&
       sameProgressiveIdentity(lastTranscriptViewRef.current.identity, view.identity) &&
       lastTranscriptViewRef.current.historyEpoch === view.historyEpoch;
@@ -3448,6 +3621,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     transcriptAvailability,
     transcriptRefreshing,
     transcriptError,
+    unreadRead,
     sessionStateAvailability,
     sessionStateRefreshing,
     sessionStateError,
@@ -3466,6 +3640,9 @@ export function useNativeAgentSession<TMessage = unknown>({
     removeQueued,
     steerQueued,
     moveQueued,
+    beginQueuedEdit,
+    renewQueuedEdit,
+    finishQueuedEdit,
     retryQueue,
     retryRecoverableDispatch,
     discardRecoverableDispatch,

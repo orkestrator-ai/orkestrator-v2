@@ -1,3 +1,4 @@
+import { promptQueueEditLeases } from "@orkestrator/protocol/prompt-queue-edit";
 import { promptQueueKeyMatchesEnvironment } from "./storage-shared-records.js";
 import { restoreLegacyPromptQueueClaims } from "./storage-record-upgrades.js";
 import type { PersistedPromptQueue } from "./models.js";
@@ -111,6 +112,11 @@ export class PromptQueueStore {
             previous.dispatchError?.messageFingerprint,
       );
     const removedOrigins = this.promptQueueRemovedOrigins(previous, messages);
+    // An edit lease follows its item wherever it moves, and leaves with it.
+    const queuedIds = new Set(messages.map((candidate) => isRecord(candidate) && candidate.id));
+    const editLeases = promptQueueEditLeases(previous).filter((lease) =>
+      queuedIds.has(lease.messageId),
+    );
     return {
       queueKey,
       environmentId,
@@ -119,6 +125,7 @@ export class PromptQueueStore {
       ...(previous?.inFlight ? { inFlight: previous.inFlight } : {}),
       ...(failedMessageStillUnchanged ? { dispatchError: previous!.dispatchError } : {}),
       ...(removedOrigins.length > 0 ? { removedOrigins } : {}),
+      ...(editLeases.length > 0 ? { editLeases } : {}),
       updatedAt: nowIso(),
       revision: (previous?.revision ?? 0) + 1,
     };

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { FAKE_BRIDGE_STARTUP } from "./fake-bridge-startup.js";
 
 // Exercise the actual main.ts startup call and a real catalogue subprocess.
 // Only the backend composition root is replaced, so no user data, Docker or
@@ -27,6 +28,7 @@ printf '%s' "$PATH"
     await writeFile(
       path.join(bridge, "index.js"),
       `
+      ${FAKE_BRIDGE_STARTUP}
       await Bun.write(process.env.ORKESTRATOR_STARTUP_PROBE_CAPTURE, JSON.stringify({
         url: Object.hasOwn(process.env, "ORKESTRATOR_AGENT_MCP_URL"),
         token: Object.hasOwn(process.env, "ORKESTRATOR_AGENT_MCP_TOKEN"),
@@ -35,6 +37,7 @@ printf '%s' "$PATH"
         if (new URL(request.url).pathname === "/global/health") return new Response("ok");
         return Response.json({ source: "app-server", models: [{ id: "fixture" }] });
       }});
+      announceBridgeReady();
     `,
     );
     await writeFile(

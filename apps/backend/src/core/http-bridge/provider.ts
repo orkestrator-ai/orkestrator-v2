@@ -100,6 +100,7 @@ import {
 } from "./transport.js";
 import { closeBridgeSessionRetaining } from "../bridge-session-close.js";
 import { compactBridgeSession } from "./compact.js";
+import { synchronizeBridgeBugReportPolicy } from "./bug-report-policy.js";
 import { HttpBridgeTranscriptReader } from "./transcript-reader.js";
 import { HttpBridgeActivityBatchReader } from "./activity-batch.js";
 import { bridgeChangeEvidenceSource } from "./change-evidence.js";
@@ -1006,23 +1007,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
-  async synchronizeBugReportSessionPolicy(
-    sessionId: string,
-    policy: NativeAgentExecutionPolicy,
-  ): Promise<void> {
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}/config`,
-      { method: "POST", body: JSON.stringify({ policy: this.wirePolicy(policy) }) },
-      this.fetchImpl,
-    );
-    await assertOkWithErrorDetail(response, "Bug report session policy update");
-    if (this.agent === "codex") {
-      const result = asRecord(await boundedJson(response, "Bug report session policy update"));
-      if (result?.durable !== true) {
-        throw new ProviderUnavailableError("Codex could not save the bug report session policy");
-      }
-    }
+  synchronizeBugReportSessionPolicy(sessionId: string, policy: NativeAgentExecutionPolicy) {
+    const { agent, connection, fetchImpl } = this;
+    return synchronizeBridgeBugReportPolicy({ agent, connection, fetchImpl, sessionId, policy });
   }
 
   async updateInteractiveControls(

@@ -124,10 +124,10 @@ test("the client the user last interacted with sets a shared terminal's size, an
     viewport: { width: 980, height: 900 },
   });
   try {
-    await Promise.all([
-      fetchModulesOutsideChromium(phoneContext),
-      fetchModulesOutsideChromium(observerContext),
-    ]);
+    // Awaited one at a time: the browser-suite guard recognizes a route only
+    // as its own awaited call (e2e/agent-testing/browser-test.test.ts).
+    await fetchModulesOutsideChromium(phoneContext);
+    await fetchModulesOutsideChromium(observerContext);
     await invoke("start_environment", { environmentId: environment.id });
     const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
       environmentId: environment.id,

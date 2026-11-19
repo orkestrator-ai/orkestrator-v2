@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { announceFakeBridgeReady } from "../../tests/fake-bridge-startup.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
@@ -84,7 +85,10 @@ function stubBridgeSpawn(respond: (spawned: ProbeSpawn, child: FakeChild) => unk
     spawns.push(spawned);
     const child = createFakeChild();
     children.push(child);
-    void Promise.resolve(respond(spawned, child));
+    // A real bridge announces its bind once it listens; startup waits for it.
+    void Promise.resolve(respond(spawned, child)).then(() =>
+      announceFakeBridgeReady(child.stdout, spawned.env.PORT ?? ""),
+    );
     return child;
   }) as never;
 }

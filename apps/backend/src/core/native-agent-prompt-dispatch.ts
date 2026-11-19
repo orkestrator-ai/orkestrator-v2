@@ -1,3 +1,4 @@
+import { bugReportInitialApprovalMode, validBugReportApprovalMode } from "./bug-report-runtime.js";
 import {
   PROVIDER_FAILURE_RETRY_ID_PREFIX,
   providerFailureRetryRequestId,
@@ -1442,11 +1443,19 @@ export class NativeAgentPromptDispatch {
                     : (preparation.effort ?? input.reasoningEffort),
                 parameterValues: durable.controls?.parameterValues,
                 persistDefaults: durable.controls?.persistDefaults,
-                approvalMode: resolveNativeAgentApprovalMode(
-                  durable.agent,
-                  durable.policy,
-                  durable.controls?.approvalMode,
-                ),
+                approvalMode:
+                  bugReportIdFromRuntimeId(durable.environmentId) &&
+                  (durable.agent === "claude" || durable.agent === "codex")
+                    ? (validBugReportApprovalMode(
+                        durable.agent,
+                        durable.policy,
+                        durable.controls?.approvalMode,
+                      ) ?? bugReportInitialApprovalMode(durable.agent))
+                    : resolveNativeAgentApprovalMode(
+                        durable.agent,
+                        durable.policy,
+                        durable.controls?.approvalMode,
+                      ),
                 agentMcp,
                 ...(artifactGrant ? { artifactGrant } : {}),
                 ...(tabMail ? { tabMail } : {}),

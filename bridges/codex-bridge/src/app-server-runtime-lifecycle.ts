@@ -1,3 +1,4 @@
+import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
 import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { promptThreadConfig } from "./prompt-thread-config.js";
 import { codexCoordinatorPolicy, isCoordinatorReadOnlyEnvironment } from "./codex-config.js";
@@ -2355,10 +2356,20 @@ export class CodexRuntimeLifecycle {
   toEngineConfig(body: Record<string, unknown>): EngineTurnConfig {
     const mode: ConversationMode = body.mode === "plan" ? "plan" : "build";
     const coordinatorReadOnly = isCoordinatorReadOnlyEnvironment(process.env);
+    const reportWorkspace = process.env[BUG_REPORT_WORKSPACE_ENV];
     const requestedPolicy = isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined;
     const policy: NativeAgentExecutionPolicy | undefined = coordinatorReadOnly
       ? codexCoordinatorPolicy()
-      : requestedPolicy;
+      : (requestedPolicy ??
+        (reportWorkspace
+          ? {
+              id: "interactive-host",
+              sandbox: "provider",
+              approvals: "ask",
+              projectResources: false,
+              networkAccess: "full",
+            }
+          : undefined));
     const model =
       typeof body.model === "string" && body.model.trim().length > 0
         ? body.model.trim()
@@ -2403,12 +2414,13 @@ export class CodexRuntimeLifecycle {
       reasoningEffort,
       // Explicit null clears a previously set tier rather than inheriting it.
       serviceTier: body.fastMode === true ? "fast" : null,
-      cwd: this.ctx.options.cwd,
+      cwd: reportWorkspace ?? this.ctx.options.cwd,
+      ...(reportWorkspace ? { excludeTemporaryWriteRoots: true } : {}),
       approvalPolicy:
-        policy?.approvals === "ask"
-          ? "on-request"
-          : policy?.approvals === "deny"
-            ? "never"
+        policy?.approvals === "deny"
+          ? "never"
+          : policy?.approvals === "ask" || reportWorkspace
+            ? "on-request"
             : "never",
       // A coordinator policy is process authority supplied by the trusted
       // backend launcher. It is deliberately independent of conversation mode
@@ -2416,7 +2428,7 @@ export class CodexRuntimeLifecycle {
       sandbox:
         coordinatorReadOnly || mode === "plan" || policy?.approvals === "deny"
           ? "read-only"
-          : policy?.sandbox === "provider"
+          : policy?.sandbox === "provider" || reportWorkspace
             ? "workspace-write"
             : "danger-full-access",
       networkAccessEnabled: policy ? policy.networkAccess === "full" : true,

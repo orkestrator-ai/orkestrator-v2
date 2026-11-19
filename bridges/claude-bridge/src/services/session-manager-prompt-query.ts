@@ -1,3 +1,4 @@
+import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
 import type { CanUseTool, HookCallback, Options } from "@anthropic-ai/claude-agent-sdk";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
@@ -17,6 +18,7 @@ import { claudeSystemPromptAppend } from "./system-prompt-append.js";
 import {
   claudeAsksForApproval,
   claudeManagedSettings,
+  claudeBugReportSettings,
   effectiveClaudeChrome,
   claudePermissionMode,
   claudePolicyPermissionMode,
@@ -149,7 +151,8 @@ export async function resolveQueryPlan(
     readOnly: options?.readOnly === true,
     includeLocalSettings: options?.includeLocalSettings === true,
   };
-  const settingSources = claudeTurnSettingSources(session, options);
+  const reportWorkspace = process.env[BUG_REPORT_WORKSPACE_ENV];
+  const settingSources = reportWorkspace ? [] : claudeTurnSettingSources(session, options);
   session.commandDiscoveryInputs.includeLocalSettings = settingSources.includes("local");
   // The CLI reads the checkout's CLAUDE.md or AGENTS.md only with the
   // `project` source, which also loads its hooks and settings. Without it the
@@ -186,7 +189,7 @@ export async function resolveQueryPlan(
       cwd,
       process.env,
       options?.agentMcp,
-      mcpSourceScopeForPolicy(policy),
+      reportWorkspace ? "none" : mcpSourceScopeForPolicy(policy),
       // A graph node loads only the user servers it was granted (item 404).
       userMcpServerFilter(policy),
     ),
@@ -437,7 +440,10 @@ export function claudeQueryOptions(
     ultracode,
     queryEnvironment,
   } = plan;
-  const managedSettings = claudeManagedSettings(policy);
+  const reportWorkspace = process.env[BUG_REPORT_WORKSPACE_ENV];
+  const managedSettings = reportWorkspace
+    ? { allowManagedHooksOnly: true, disableSkillShellExecution: true }
+    : claudeManagedSettings(policy);
   const readOnlyTurnRole = readOnlyRefusalRole(session.executionPolicy, options?.readOnly === true);
   const latestTurnHook =
     (pick: (target: ClaudeRuntimeTurn) => HookCallback): HookCallback =>
@@ -544,8 +550,9 @@ export function claudeQueryOptions(
     // Fast mode (priority service tier) and Ultracode are Claude Code
     // flag-layer settings, so the user can opt into each per prompt. The
     // CLI keeps neither across processes, and each turn is its own query.
-    ...((fastMode || ultracode) && {
+    ...((fastMode || ultracode || reportWorkspace) && {
       settings: {
+        ...(reportWorkspace ? claudeBugReportSettings(reportWorkspace) : {}),
         ...(fastMode && { fastMode: true }),
         ...(ultracode && { ultracode: true }),
       },
@@ -565,6 +572,7 @@ export function claudeQueryOptions(
     // `strictMcpConfig`: without it the CLI loads every server of its
     // settings sources itself, whatever the inline set says.
     ...claudeUserMcpQueryOptions(policy),
+    ...(reportWorkspace ? { strictMcpConfig: true } : {}),
     // Load plugins from user config
     plugins: pluginCount > 0 ? plugins : undefined,
     hooks: {

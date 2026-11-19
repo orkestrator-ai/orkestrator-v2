@@ -1,4 +1,6 @@
+import { bugReportImageRoots } from "./bug-report-scratch.js";
 import type { CommandContext } from "./commands-context.js";
+import type { ReadableHostRoot } from "./path-safety.js";
 import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
 import { getWorktreeBaseDir } from "./worktrees/index.js";
 
@@ -8,12 +10,13 @@ import { getWorktreeBaseDir } from "./worktrees/index.js";
  * an `environmentId`) both confine to exactly this list, so a route can never
  * read more than the RPC it replaces.
  *
- * Built per read from the current environments, so a removed custom worktree
- * stops being readable at once.
+ * Built per read from the current environments and open bug reports, so a
+ * removed custom worktree, or a discarded report's images, stop being readable
+ * at once.
  */
 export async function readableHostFileRoots(
   context: Pick<CommandContext, "storage" | "worktreeDir">,
-): Promise<string[]> {
+): Promise<ReadableHostRoot[]> {
   // Worktrees created in a folder the user chose are readable one by one,
   // never the chosen folder as a whole.
   const customWorktrees = (await context.storage.loadEnvironments())
@@ -31,5 +34,8 @@ export async function readableHostFileRoots(
     // A coordinator's pasted images are staged in application data, never
     // in the checkout it must not touch; its transcript names them there.
     coordinatorAttachmentsRoot(context.storage.getDataDir()),
+    // A bug report has no environment row; its window captures and pasted
+    // images sit in its scratch directory, which its transcript names.
+    ...(await bugReportImageRoots(context.storage.bugReports)),
   ];
 }

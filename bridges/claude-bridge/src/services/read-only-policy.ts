@@ -1,3 +1,4 @@
+import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
 import type { HookCallback, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import {
   coordinatorCapabilityPolicy,
@@ -1137,6 +1138,14 @@ export function effectiveExecutionPolicy(
   requested: NativeAgentExecutionPolicy | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): NativeAgentExecutionPolicy | undefined {
-  if (!processExecutionPolicyIsCoordinator(env)) return requested;
-  return coordinatorProcessPolicy();
+  if (processExecutionPolicyIsCoordinator(env)) return coordinatorProcessPolicy();
+  if (!env[BUG_REPORT_WORKSPACE_ENV]) return requested;
+  return {
+    id: requested?.id ?? "interactive-host",
+    approvals: requested?.approvals ?? "ask",
+    networkAccess: requested?.networkAccess ?? "full",
+    ...requested,
+    sandbox: "provider",
+    projectResources: false,
+  };
 }

@@ -204,12 +204,18 @@ export class FakeOpenCode2Server {
     return `http://127.0.0.1:${this.server.port}`;
   }
 
-  client(): OpenCode2Client {
+  client(options: { inProcess?: boolean } = {}): OpenCode2Client {
+    const fetchFromFixture = (input: RequestInfo | URL, init?: RequestInit) =>
+      this.handle(new Request(input, init));
     return new OpenCode2Client({
       baseUrl: this.baseUrl,
       password: "pw",
       directory: "/work",
       timeoutMs: 2_000,
+      // The combined changed-tests run shares global fetch with GitHub stubs.
+      ...(options.inProcess
+        ? { fetch: Object.assign(fetchFromFixture, { preconnect: () => {} }) }
+        : {}),
     });
   }
 

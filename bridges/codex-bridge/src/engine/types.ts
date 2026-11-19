@@ -280,7 +280,9 @@ export interface EngineTurnConfig {
   serviceTier?: string | null;
   cwd?: string;
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
-  approvalPolicy?: "never" | "on-request" | "untrusted";
+  approvalPolicy?: import("../app-server/generated/typescript/v2/AskForApproval.js").AskForApproval;
+  /** A reporter may write its workspace without the ambient temporary directories. */
+  excludeTemporaryWriteRoots?: boolean;
   /** Who answers approvals; absent means the user. */
   approvalsReviewer?: "user" | "auto_review";
   networkAccessEnabled?: boolean;

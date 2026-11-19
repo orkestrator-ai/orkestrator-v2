@@ -862,7 +862,7 @@ re-read the saved login before refreshing, and back off after failed renewal.
 The owner retains the rotated refresh token; only the renewed access token is
 handed over. Agent-test profiles never renew a borrowed host login.
 App-server's `chatgptAuthTokens` login would avoid the file but needs the
-`experimentalApi` capability, which the bridge leaves off.
+`experimentalApi` capability, which the coordinator bridge leaves off.
 
 Either token cannot be renewed by the coordinator, so its expiry is recorded
 (`LocalServerRuntime.launchedTokenExpiry`). Within five minutes of expiry an idle
@@ -1655,7 +1655,7 @@ names another version.
   Keychain credential as the account login, so each added Claude account signs
   in to those servers again.
 - Codex keeps its login in `$CODEX_HOME/auth.json`. Its `chatgptAuthTokens`
-  login needs the `experimentalApi` capability, which the bridge leaves off,
+  login needs the `experimentalApi` capability, which account-management bridges leave off,
   and is memory-only.
 - Codex 0.164.0 accepts the access-only `auth.json` in a local home: `codex
   login status` reads it as a ChatGPT login and backend requests carry its

@@ -9,6 +9,7 @@ import path from "node:path";
 import { type BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 
 import { COORDINATOR_AGENTS_MD_RULE } from "@orkestrator/protocol/agents-md-orkestrator";
+import { nativeAgentApprovalModes } from "@orkestrator/protocol/native-agent";
 import {
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
@@ -91,6 +92,7 @@ function createProviderStub(
     stopBackgroundTask?: NativeAgentRuntimeProvider["stopBackgroundTask"];
     dismissSuggestedPrompt?: NativeAgentRuntimeProvider["dismissSuggestedPrompt"];
     updateInteractiveControls?: NativeAgentRuntimeProvider["updateInteractiveControls"];
+    synchronizeBugReportSessionPolicy?: NativeAgentRuntimeProvider["synchronizeBugReportSessionPolicy"];
     slashCommands?: NativeAgentRuntimeProvider["slashCommands"];
     refreshCatalog?: NativeAgentRuntimeProvider["refreshCatalog"];
     prepareDispatch?: NativeAgentRuntimeProvider["prepareDispatch"];
@@ -137,6 +139,7 @@ function createProviderStub(
     modelCatalog,
     rawModelCatalog,
     updateInteractiveControls,
+    synchronizeBugReportSessionPolicy: behaviour.synchronizeBugReportSessionPolicy,
     slashCommands,
     refreshCatalog,
     structured: async () => null,
@@ -176,8 +179,9 @@ function createProviderStub(
  */
 async function createOpenCodeLifecycleProvider(existing: readonly string[]) {
   const server = new FakeOpenCode2Server();
+  const client = server.client({ inProcess: true });
   const ids = new Map<string, string>();
-  for (const name of existing) ids.set(name, (await server.client().createSession({})).id);
+  for (const name of existing) ids.set(name, (await client.createSession({})).id);
   const provider = createNativeAgentProvider(
     {
       agent: "opencode",
@@ -193,7 +197,7 @@ async function createOpenCodeLifecycleProvider(existing: readonly string[]) {
           directory: "/workspace",
           generation: "g1",
         }),
-        createProvider: () => new OpenCode2Provider(server.client(), { monitorEvents: false }),
+        createProvider: () => new OpenCode2Provider(client, { monitorEvents: false }),
       },
     },
   );
@@ -3251,7 +3255,7 @@ test("ambiguous retry preserves one command block and never acknowledges a newer
 });
 
 describe("bug report session authority", () => {
-  test("forces provider sandbox and ask approvals, prefixes the first prompt once, and rejects mismatches", async () => {
+  test("forces provider sandbox, starts in the asking mode, prefixes the first prompt once, and rejects mismatches", async () => {
     const provider = createProviderStub("codex");
     await withService(
       { prefix: "ork-report-trust-", provider: async () => provider.provider },
@@ -3277,11 +3281,18 @@ describe("bug report session authority", () => {
           },
         };
         const session = await service.ensureSession(input);
-        expect((await storage.getNativeAgentSession(session.key))?.policy).toMatchObject({
+        const stored = await storage.getNativeAgentSession(session.key);
+        // The policy allows every approval mode so the user can pick one, but
+        // a new report starts in the asking mode.
+        expect(stored?.policy).toMatchObject({
           sandbox: "provider",
-          approvals: "ask",
+          approvals: "auto-approve",
           projectResources: false,
         });
+        expect(stored?.controls?.approvalMode).toBe("on-request");
+        const offered = nativeAgentApprovalModes("codex", stored?.policy);
+        expect(offered.length).toBeGreaterThan(1);
+        expect(offered.filter((mode) => mode.disabled)).toEqual([]);
         expect((await storage.bugReports.getBugReport("r1"))?.briefedAt).toBeUndefined();
         await expect(service.ensureSession({ ...input, agent: "claude" })).rejects.toThrow(
           "different agent",
@@ -3313,6 +3324,165 @@ describe("bug report session authority", () => {
       },
     );
   });
+
+  for (const { agent, ask, choice, wrongPlatform } of [
+    { agent: "claude", ask: "default", choice: "acceptEdits", wrongPlatform: "never" },
+    { agent: "codex", ask: "on-request", choice: "untrusted", wrongPlatform: "bypassPermissions" },
+  ] as const) {
+    test.each([undefined, "retired-mode", wrongPlatform, choice])(
+      `${agent} forwards a valid first-turn choice for %s and otherwise asks`,
+      async (requested) => {
+        const provider = createProviderStub(agent);
+        await withService(
+          { prefix: "ork-report-first-mode-", provider: async () => provider.provider },
+          async ({ storage, service }) => {
+            await storage.bugReports.createBugReport({
+              id: "mode",
+              createdAt: "t",
+              tabId: "t",
+              scratchDir: "/tmp/report",
+              agent,
+            });
+            const input = {
+              environmentId: "bug-report:mode",
+              logicalSessionKey: "report-tab",
+              agent,
+              prompt: "First",
+              requestId: "first",
+              approvalMode: requested,
+            };
+            expect(await service.dispatchIntent(input)).toMatchObject({ outcome: "accepted" });
+            const expected = requested === choice ? choice : ask;
+            const key = nativeAgentSessionStorageKey(
+              input.environmentId,
+              agent,
+              input.logicalSessionKey,
+            );
+            expect((await storage.getNativeAgentSession(key))?.controls?.approvalMode).toBe(
+              expected,
+            );
+            expect(provider.send.mock.calls[0]![2]?.approvalMode).toBe(expected);
+          },
+        );
+      },
+    );
+
+    test(`${agent} upgrades an existing asking conversation in place and applies the next choice`, async () => {
+      const synchronizeBugReportSessionPolicy = mock<
+        NonNullable<NativeAgentRuntimeProvider["synchronizeBugReportSessionPolicy"]>
+      >(async () => undefined);
+      const provider = createProviderStub(agent, { synchronizeBugReportSessionPolicy });
+      await withService(
+        { prefix: "ork-report-upgrade-", provider: async () => provider.provider },
+        async ({ storage, service }) => {
+          await storage.bugReports.createBugReport({
+            id: "legacy",
+            createdAt: "t",
+            tabId: "t",
+            scratchDir: "/tmp/report",
+            agent,
+          });
+          const input = {
+            environmentId: "bug-report:legacy",
+            logicalSessionKey: "report-tab",
+            agent,
+          };
+          const key = nativeAgentSessionStorageKey(
+            input.environmentId,
+            agent,
+            input.logicalSessionKey,
+          );
+          await storage.getOrCreateNativeAgentSession(
+            {
+              ...input,
+              key,
+              policy: {
+                id: "interactive-host",
+                sandbox: "provider",
+                approvals: "ask",
+                networkAccess: "full",
+                projectResources: false,
+              },
+            },
+            async () => "existing-thread",
+          );
+          const migrated = await service.ensureSession(input);
+          expect(migrated).toMatchObject({
+            providerSessionId: "existing-thread",
+            policy: { approvals: "auto-approve" },
+            controls: { approvalMode: ask },
+          });
+          expect(synchronizeBugReportSessionPolicy).toHaveBeenCalledTimes(1);
+          expect(synchronizeBugReportSessionPolicy).toHaveBeenCalledWith(
+            "existing-thread",
+            expect.objectContaining({ approvals: "auto-approve" }),
+          );
+          await service.updateProjectionControls({ ...input, update: { approvalMode: choice } });
+          expect(
+            await service.dispatchIntent({ ...input, prompt: "Next", requestId: "next" }),
+          ).toMatchObject({ outcome: "accepted" });
+          expect(provider.send.mock.calls[0]![0]).toBe("existing-thread");
+          expect(provider.send.mock.calls[0]![2]?.approvalMode).toBe(choice);
+          expect(provider.createSession).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    test.each([ask, choice])(
+      `${agent} preserves %s when the provider replaces a report conversation`,
+      async (mode) => {
+        const provider = createProviderStub(agent);
+        provider.status.mockImplementation(async (id) =>
+          id === "missing-thread" ? "missing" : "idle",
+        );
+        await withService(
+          { prefix: "ork-report-replace-", provider: async () => provider.provider },
+          async ({ storage, service }) => {
+            await storage.bugReports.createBugReport({
+              id: "replace",
+              createdAt: "t",
+              tabId: "t",
+              scratchDir: "/tmp/report",
+              agent,
+            });
+            const input = {
+              environmentId: "bug-report:replace",
+              logicalSessionKey: "report-tab",
+              agent,
+            };
+            const key = nativeAgentSessionStorageKey(
+              input.environmentId,
+              agent,
+              input.logicalSessionKey,
+            );
+            await storage.getOrCreateNativeAgentSession(
+              {
+                ...input,
+                key,
+                controls: { approvalMode: mode },
+                policy: {
+                  id: "interactive-host",
+                  sandbox: "provider",
+                  approvals: "auto-approve",
+                  networkAccess: "full",
+                  projectResources: false,
+                },
+              },
+              async () => "missing-thread",
+            );
+            expect(
+              await service.dispatchIntent({ ...input, prompt: "Next", requestId: "next" }),
+            ).toMatchObject({ outcome: "accepted" });
+            expect(await storage.getNativeAgentSession(key)).toMatchObject({
+              providerSessionId: "provider-session",
+              controls: { approvalMode: mode },
+            });
+            expect(provider.send.mock.calls[0]![2]?.approvalMode).toBe(mode);
+          },
+        );
+      },
+    );
+  }
 
   test("keeps a failed first send retryable without duplicating its briefing", async () => {
     const provider = createProviderStub("codex");

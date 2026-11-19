@@ -1006,6 +1006,25 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
+  async synchronizeBugReportSessionPolicy(
+    sessionId: string,
+    policy: NativeAgentExecutionPolicy,
+  ): Promise<void> {
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/config`,
+      { method: "POST", body: JSON.stringify({ policy: this.wirePolicy(policy) }) },
+      this.fetchImpl,
+    );
+    await assertOkWithErrorDetail(response, "Bug report session policy update");
+    if (this.agent === "codex") {
+      const result = asRecord(await boundedJson(response, "Bug report session policy update"));
+      if (result?.durable !== true) {
+        throw new ProviderUnavailableError("Codex could not save the bug report session policy");
+      }
+    }
+  }
+
   async updateInteractiveControls(
     sessionId: string,
     update: NativeAgentControlUpdate,

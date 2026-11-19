@@ -6,8 +6,9 @@
  * token holder *widen* a session's policy would let an injected agent turn
  * `approvals: "ask"` into `"auto-approve"` and drop its own sandbox. Changes
  * through the bridge are therefore accepted only when every axis stays the same
- * or gets stricter; widening needs a new bridge process, whose sessions take
- * their policy from the backend again.
+ * or gets stricter; general policy widening needs a new bridge process. The
+ * dedicated report bridges separately admit the backend-signed upgrade of
+ * the legacy approval picker while enforcing their process-owned sandbox.
  *
  * Each axis is compared on what the bridge actually enforces. Where an axis
  * cannot be shown to be no wider (an unknown shape, a changed policy id), the

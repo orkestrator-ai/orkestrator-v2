@@ -85,11 +85,21 @@ coordinator's is:
 
 A report gets no Agent Tools MCP: it belongs to no project.
 
-Its policy is `interactive-host` with the override in
-`BUG_REPORT_EXECUTION_POLICY_OVERRIDE`: provider sandbox and approvals `ask`.
-The agent can read the host but write only inside its scratch directory, and
-every escalation or non-read-only command needs the user's approval. The
-briefing tells it never to file anything; filing is the sheet's button.
+Its policy uses the provider sandbox and disables project resources. Claude
+and Codex offer the approval picker and start in Ask (Claude `default` and
+Codex `on-request`). Existing Ask-only conversations gain the picker when
+idle and retain their conversation and asking selection. If a provider
+conversation goes missing, its replacement keeps the saved valid selection
+or starts in Ask. OpenCode keeps its asking policy.
+
+Claude configures its SDK to confine Write, Edit and NotebookEdit to the
+report workspace in every mode and disables unsandboxed Bash. Codex keeps
+workspace-write in Full access and removes ambient temporary write roots.
+Auto review cannot approve a sandbox escape or grant extra permissions.
+The dedicated reporter bridge opts into app-server's granular approval
+capability during its handshake.
+Codex's asking modes can still present a sandbox escalation to the user.
+The briefing tells the agent to leave filing to the sheet's button.
 
 ## Machines
 
@@ -123,6 +133,14 @@ renderer entry, and the briefing tells the agent to redact them.
 **Capture window** captures the window, with the sheet stepped aside so it
 shows what the user was looking at, into the report's `screenshots/` on the
 node it reports on, and attaches it to the next message.
+The `screenshots/` folder of every open report is one of the readable host
+roots (`readableHostFileRoots`, through `bugReportImageRoots` in
+`bug-report-scratch.ts`), so the transcript can show a capture or pasted image
+from it. The reader opens the scratch and screenshots directories relative
+to the trusted temporary directory, without following links, on both a
+direct read and each content stream open. Discard revokes access to the
+report's images. Window captures can be at most 10 MiB, the transcript's
+base64 read limit.
 Pasted images use `write_bug_report_attachment` in both the assigned and
 unassigned composers. The command resolves the scratch directory from the
 stored report ID and writes a generated filename through the confined report

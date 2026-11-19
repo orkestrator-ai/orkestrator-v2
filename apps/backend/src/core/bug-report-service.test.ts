@@ -19,11 +19,14 @@ import {
 import {
   bugReportBridgeFieldNames,
   bugReportBridgeIdentityFromFields,
+  bugReportExecutionPolicyOverride,
+  bugReportInitialApprovalMode,
   bugReportRuntimeEnvironment,
   bugReportReaperEnvironments,
   updateBugReportBridgeFromEnvironment,
   resolveBugReportRuntime,
 } from "./bug-report-runtime.js";
+import { nativeAgentApprovalModes } from "@orkestrator/protocol/native-agent";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { localServerFields } from "./commands-local-server-lifecycle.js";
@@ -101,6 +104,41 @@ describe("bug report service", () => {
       title: "Sidebar crashes on resize",
       body: "## Summary\nIt crashes.",
     });
+  });
+
+  test("accepts captures at the transcript limit and reports oversized captures", async () => {
+    const context = await createContext();
+    const { report } = await createBugReport(context, {});
+    scratchDirs.push(report!.scratchDir);
+    const limit = 10 * 1024 * 1024;
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const captureOfSize = (size: number) => {
+      // Pad a 1×1 PNG with a checksummed ancillary text chunk before IEND.
+      const chunk = Buffer.alloc(size - png.length, 65);
+      chunk.writeUInt32BE(chunk.length - 12);
+      chunk.write("tEXtfixture\0", 4);
+      chunk.writeUInt32BE(Bun.hash.crc32(chunk.subarray(4, -4)), chunk.length - 4);
+      return Buffer.concat([png.subarray(0, -12), chunk, png.subarray(-12)], size).toString(
+        "base64",
+      );
+    };
+    const commands = createCommandRegistry();
+    const saved = await saveBugReportScreenshot(context, report!.id, captureOfSize(limit));
+    const readContext = {
+      ...context,
+      worktreeDir: path.join(context.storage.getDataDir(), "worktrees"),
+    };
+    const rendered = await commands.get("read_file_base64")!(
+      { filePath: saved.path } as never,
+      readContext,
+    );
+    expect(Buffer.from(rendered as string, "base64").length).toBe(limit);
+    await expect(
+      saveBugReportScreenshot(context, report!.id, captureOfSize(limit + 1)),
+    ).rejects.toThrow("10 MiB preview limit");
   });
 
   test("rejects agents the flow does not offer", async () => {
@@ -417,12 +455,31 @@ describe("bug report runtime", () => {
       status: "running",
       localClaudePort: 4100,
       claudeBridgePid: 77,
-      agentSettings: { executionPolicy: { sandbox: "provider", approvals: "ask" } },
+      agentSettings: { executionPolicy: { sandbox: "provider", approvals: "auto-approve" } },
     });
     expect(
       bugReportBridgeIdentityFromFields("claude", { localClaudePort: null, claudeBridgePid: null }),
     ).toEqual({ changed: true });
     expect(bugReportBridgeIdentityFromFields("claude", { name: "x" })).toEqual({ changed: false });
+  });
+
+  test("lets a mode-picking platform choose any approval mode, starting in the asking one", () => {
+    for (const agent of ["claude", "codex"] as const) {
+      const policy = bugReportExecutionPolicyOverride(agent);
+      expect(policy).toEqual({
+        sandbox: "provider",
+        approvals: "auto-approve",
+        projectResources: false,
+      });
+      const modes = nativeAgentApprovalModes(agent, { approvals: "auto-approve" });
+      expect(modes.filter((mode) => mode.disabled)).toEqual([]);
+      const initial = bugReportInitialApprovalMode(agent);
+      expect(modes.find((mode) => mode.id === initial)?.kind).toBe("ask");
+    }
+    // OpenCode has no approval-mode picker: its policy keeps asking.
+    expect(bugReportInitialApprovalMode("opencode")).toBeUndefined();
+    expect(bugReportExecutionPolicyOverride("opencode").approvals).toBe("ask");
+    expect(bugReportExecutionPolicyOverride(undefined).approvals).toBe("ask");
   });
 
   for (const agent of ["claude", "codex", "opencode"] as const) {

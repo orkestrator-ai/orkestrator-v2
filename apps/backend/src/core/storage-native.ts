@@ -612,6 +612,42 @@ export class NativeAgentSessionsRepository {
     });
   }
 
+  /** Upgrade a live report's approval ceiling without replacing its conversation or controls. */
+  async upgradeBugReportSessionPolicy(
+    expected: PersistedNativeAgentSession,
+    policy: NonNullable<PersistedNativeAgentSession["policy"]>,
+    fallbackApprovalMode: string,
+    synchronize: () => Promise<void> | undefined,
+  ): Promise<PersistedNativeAgentSession> {
+    return this.enqueueNativeAgentSessionMutation(expected.key, async () => {
+      const current = await this.readNativeAgentSessionUnderLease(expected.key);
+      if (
+        !current ||
+        !bugReportIdFromRuntimeId(current.environmentId) ||
+        current.providerSessionId !== expected.providerSessionId
+      )
+        throw new Error("Bug report session changed during policy upgrade");
+      if (current.policy?.approvals !== "ask") return current;
+      await this.assertEnvironmentAcceptsBackgroundState(
+        current.environmentId,
+        "Bug report session",
+      );
+      await synchronize();
+      const updated = {
+        ...nativeAgentSessionWithControls(current, {
+          approvalMode:
+            current.controls?.approvalMode === "untrusted" && current.agent === "codex"
+              ? "untrusted"
+              : fallbackApprovalMode,
+        }),
+        policy,
+      };
+      await this.saveNativeAgentSession(expected.key, updated);
+      this.announceNativeAgentRecord(updated, "record-policy");
+      return updated;
+    });
+  }
+
   /** Trusted service boundary only: retain the conversation while research settings change. */
   async transitionCoordinatorResearchPolicy(
     expected: PersistedNativeAgentSession,

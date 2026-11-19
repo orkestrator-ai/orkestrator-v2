@@ -17,9 +17,23 @@ import {
 } from "@/stores/sidebarActionStore";
 import type { Environment, Project } from "@/types";
 import { useCommandRuntime } from "@/components/command-palette/useCommandPalette";
+import { invoke as nativeInvoke } from "@/lib/native/backend";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { createSessionKey } from "@/lib/utils";
+import {
+  peekNativeAgentResumeRequest,
+  resetNativeAgentResumeRequests,
+} from "@/lib/native-agent-resume-requests";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import {
+  conversationScrollTargetKey,
+  resetConversationScrollTargets,
+  useConversationScrollTargetStore,
+} from "@/stores/conversationScrollTargetStore";
 import { ProjectSearchBar } from "./ProjectSearchBar";
 
 const initialMachineView = useMachineViewStore.getState();
+const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
 const project: Project = {
   id: "project-1",
@@ -115,6 +129,10 @@ describe("ProjectSearchBar commands", () => {
     cleanup();
     select(null);
     useMachineViewStore.setState(initialMachineView, true);
+    invokeMock.mockImplementation(() => Promise.resolve());
+    resetNativeAgentResumeRequests();
+    resetConversationScrollTargets();
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
   });
 
   test("shows its context and suggests that environment's actions", async () => {
@@ -455,5 +473,137 @@ describe("ProjectSearchBar commands", () => {
     fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     expect(await screen.findByLabelText("Filter results: Settings")).toBeTruthy();
     expect(screen.getByTestId("command-palette-item-settings.environment")).toBeTruthy();
+  });
+  /** An agent chat in the context environment, with one loaded message, and a past-session list. */
+  function seedConversations() {
+    const listed: string[] = [];
+    invokeMock.mockImplementation(async (command: string, args?: { agent?: string }) => {
+      if (command !== "list_native_agent_resumable_sessions") return undefined;
+      listed.push(String(args?.agent));
+      return [
+        {
+          sessionId: "past-1",
+          title: "Investigate arm64 linker",
+          updatedAt: "2026-11-18T10:00:00.000Z",
+        },
+        { sessionId: "open-1", title: "arm64 chat already open" },
+      ];
+    });
+    act(() => {
+      const layouts = appCommandStore(paneLayoutStore).getState();
+      // A fresh layout: earlier tests leave tabs in this environment's.
+      layouts.reset("env-container");
+      layouts.initialize("container-1", "env-container");
+      layouts.addTab(
+        layouts.getActivePaneId("env-container")!,
+        {
+          id: "tab-chat",
+          type: "agent-native",
+          displayTitle: "deploy chat",
+          nativeAgentData: {
+            platform: "codex",
+            environmentId: "env-container",
+            containerId: "container-1",
+            isLocal: false,
+            sessionId: "open-1",
+          },
+        },
+        "env-container",
+      );
+      layouts.addTab(
+        layouts.getActivePaneId("env-container")!,
+        { id: "tab-shell", type: "plain" },
+        "env-container",
+      );
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(createSessionKey("env-container", "tab-chat"), {
+          platform: "codex",
+          environmentId: "env-container",
+          sessionId: "open-1",
+          messages: [
+            {
+              id: "m-1",
+              role: "assistant",
+              content: "The arm64 build failed at link time.",
+              parts: [],
+              createdAt: "2026-11-19T00:00:00.000Z",
+            },
+          ],
+        } as never);
+    });
+    return listed;
+  }
+
+  test("History finds a loaded message and opens its tab at that message", async () => {
+    renderPalette();
+    select("env-container");
+    seedConversations();
+    const input = await openPalette();
+    fireEvent.change(input, { target: { value: "arm64 link" } });
+    const row = await screen.findByTestId("command-palette-message-m-1");
+    expect(row.getAttribute("aria-label")).toContain("Agent reply in deploy chat");
+    expect(row.textContent).toContain("arm64 build failed at link time");
+    expect(screen.getByTestId("command-palette-history-messages").textContent).toContain(
+      "Messages",
+    );
+
+    fireEvent.click(row);
+    const key = conversationScrollTargetKey({
+      nodeId: appCommandScope().nodeId,
+      environmentId: "env-container",
+      tabId: "tab-chat",
+    });
+    expect(useConversationScrollTargetStore.getState().targets.get(key)?.messageId).toBe("m-1");
+    await waitFor(() => expectDomAbsent(screen.queryByRole("dialog"), "closed palette"));
+  });
+
+  test("History lists past sessions once per palette session and resumes one in a new tab", async () => {
+    renderPalette();
+    select("env-container");
+    const listed = seedConversations();
+    const input = await openPalette();
+    fireEvent.change(input, { target: { value: "arm64" } });
+    const past = await screen.findByTestId("command-palette-session-past-1");
+    expect(past.getAttribute("aria-label")).toBe(
+      "Investigate arm64 linker, Codex session in build-modal-steps; resumes it in a new tab",
+    );
+    // The conversation already open in a tab is listed under Open tabs, not here.
+    expectDomAbsent(screen.queryByTestId("command-palette-session-open-1"), "open conversation");
+    fireEvent.change(input, { target: { value: "linker" } });
+    await screen.findByTestId("command-palette-session-past-1");
+    // Typing filters the list read once; only the platform of an open tab is read.
+    expect(listed).toEqual(["codex"]);
+
+    fireEvent.click(screen.getByTestId("command-palette-session-past-1"));
+    const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-container");
+    const opened = tabs.find((tab) => !["tab-chat", "tab-shell"].includes(tab.id));
+    expect(opened?.type).toBe("agent-native");
+    expect(opened?.nativeAgentData).toMatchObject({
+      platform: "codex",
+      environmentId: "env-container",
+    });
+    expect(opened?.nativeAgentData?.sessionId).toBeUndefined();
+    const request = peekNativeAgentResumeRequest({
+      nodeId: appCommandScope().nodeId,
+      environmentId: "env-container",
+      tabId: opened!.id,
+    });
+    expect(request).toMatchObject({ platform: "codex", sessionId: "past-1" });
+    await waitFor(() => expectDomAbsent(screen.queryByRole("dialog"), "closed palette"));
+  });
+
+  test("History explains why past sessions are not listed", async () => {
+    renderPalette({ ...container, status: "stopped" });
+    select("env-container");
+    seedConversations();
+    const input = await openPalette();
+    for (let index = 0; index < 5; index += 1) {
+      fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    }
+    expect(await screen.findByLabelText("Filter results: History")).toBeTruthy();
+    expect((await screen.findByTestId("command-palette-history-sessions")).textContent).toContain(
+      "Start build-modal-steps to list its past sessions.",
+    );
   });
 });

@@ -7,10 +7,14 @@
  * It reads only what the pane layouts already hold (tab ids, types and their
  * chrome titles), never a transcript, prompt or file content, and it is
  * bounded: at most `scanLimit` tabs are looked at and `resultLimit`
- * returned, yielding to input between chunks. Searching message text across
- * past sessions is a separate provider (plan item 11) that can be added
- * behind the same interface.
+ * returned, yielding to input between chunks.
+ *
+ * Two more History sources answer through the same provider interface, each
+ * with its own status: messages already loaded in open agent tabs
+ * (`history-messages.ts`) and the frozen environment's past conversations
+ * (`history-sessions.ts`).
  */
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { TabType } from "@/contexts/TerminalContext";
 import type { TabInfo } from "@/types/paneLayout";
 import { parseProjectSearchQuery, scoreHaystacks } from "@/lib/project-search";
@@ -30,8 +34,8 @@ export interface HistoryTabSource {
   tabs: Iterable<TabInfo>;
 }
 
-export interface HistoryResult {
-  /** Unique in the palette, qualified by machine: `history:<machine>:<environment>:<tab>`. */
+interface HistoryResultBase {
+  /** Unique in the palette and qualified by machine (`history:<machine>:…`). */
   rowId: string;
   title: string;
   kind: string;
@@ -40,9 +44,38 @@ export interface HistoryResult {
   projectName: string;
   environmentId: string;
   environmentName: string;
-  tabId: string;
   score: number;
 }
+
+/** An open tab. */
+export interface TabHistoryResult extends HistoryResultBase {
+  source: "tab";
+  tabId: string;
+}
+
+/** One message already loaded in an open agent tab; opening it scrolls there. */
+export interface MessageHistoryResult extends HistoryResultBase {
+  source: "message";
+  tabId: string;
+  messageId: string;
+  /**
+   * A short excerpt around the match, shown in the row only. Never logged,
+   * stored or put in the command registry.
+   */
+  snippet: string;
+}
+
+/** A conversation the environment's agent can resume; opening it resumes it in a new tab. */
+export interface SessionHistoryResult extends HistoryResultBase {
+  source: "session";
+  platform: AgentPlatform;
+  /** The provider's resumable session id, as the resume picker lists it. */
+  sessionId: string;
+  activityAt: string | null;
+}
+
+export type HistoryResult = TabHistoryResult | MessageHistoryResult | SessionHistoryResult;
+export type HistorySource = HistoryResult["source"];
 
 const TAB_KIND_LABELS: Readonly<Record<TabType, string>> = {
   plain: "Terminal",
@@ -106,12 +139,12 @@ export function createTabHistoryProvider({
   machine: () => PaletteMachine | null;
   scanLimit?: number;
   resultLimit?: number;
-}): PaletteProvider<HistoryResult> {
+}): PaletteProvider<TabHistoryResult> {
   return {
     search: async (query, signal) => {
       const tokens = parseProjectSearchQuery(query);
       const owner = machine();
-      const rows: HistoryResult[] = [];
+      const rows: TabHistoryResult[] = [];
       let scanned = 0;
       let layouts = 0;
       let truncated = false;
@@ -138,6 +171,7 @@ export function createTabHistoryProvider({
           );
           if (score === null) continue;
           rows.push({
+            source: "tab",
             rowId: historyRowId(owner, source.environmentId, tab.id),
             title,
             kind,

@@ -11,7 +11,7 @@ The app-level shortcuts are:
 
 | Shortcut | Opens | Owner |
 | --- | --- | --- |
-| ⌘K / Ctrl+K | The command palette: projects, environments, actions, settings and open tabs ([command-palette.md](command-palette.md)) | the window's shell |
+| ⌘K / Ctrl+K | The command palette: projects, environments, actions, settings and history: open tabs, loaded messages and past sessions ([command-palette.md](command-palette.md)) | the window's shell |
 | ⌘⇧/ / Ctrl+Shift+/ (⌘? / Ctrl+?) | The keyboard shortcuts dialog | the focused app document (the window's renderer) |
 | ⌘, / Ctrl+, | Global settings (`GlobalSettingsHost`) | the window's shell |
 | ⌘T / Ctrl+T | A new agent tab, except while environment setup runs | the workspace on show (the command node's or another node's) |

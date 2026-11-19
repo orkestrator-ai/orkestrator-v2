@@ -1064,8 +1064,8 @@ the checks on the user's real machines are in the
 (`apps/web/src/lib/project-search.ts`), are the only search over projects and
 environments. The ⌘K shortcut and the sidebar's "Search projects,
 environments..." field open the same dialog, so they behave identically.
-The same dialog is the command palette, which adds actions, settings and open
-tabs around these results ([command-palette.md](command-palette.md)).
+The same dialog is the command palette, which adds actions, settings and
+history (open tabs, loaded messages, past sessions) around these results ([command-palette.md](command-palette.md)).
 
 - **Sources.** This machine's rows come from its full stores
   (`localSearchSource`); every other machine's from its summaries, or from

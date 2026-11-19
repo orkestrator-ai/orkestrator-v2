@@ -39,6 +39,7 @@ import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture
 import { EnvironmentAttentionFixture } from "./EnvironmentAttentionFixture";
 import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
 import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
+import { CommandPaletteHistoryFixture } from "./CommandPaletteHistoryFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { CursorScreenRecordingFixture } from "./CursorScreenRecordingFixture";
@@ -2172,6 +2173,8 @@ function fixtureForPath() {
   if (window.location.pathname === "/merged-project-list") return <MergedProjectListFixture />;
   if (window.location.pathname === "/project-search-machines")
     return <ProjectSearchMachinesFixture />;
+  if (window.location.pathname === "/command-palette-history")
+    return <CommandPaletteHistoryFixture />;
   if (window.location.pathname === "/environment-status-marker")
     return <EnvironmentStatusMarkerFixture />;
   if (window.location.pathname === "/environment-attention") return <EnvironmentAttentionFixture />;

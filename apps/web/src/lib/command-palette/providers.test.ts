@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { TabInfo } from "@/types/paneLayout";
-import { createTabHistoryProvider, paletteTabTitle, type HistoryResult } from "./history";
+import { createTabHistoryProvider, paletteTabTitle, type TabHistoryResult } from "./history";
 import {
   PaletteQueryRunner,
   providerView,
@@ -199,7 +199,7 @@ describe("tab history provider", () => {
     });
     const controller = new AbortController();
     const all = await provider.search("", controller.signal);
-    expect(all.rows.map((row: HistoryResult) => row.tabId).slice(0, 2)).toEqual(["t1", "t2"]);
+    expect(all.rows.map((row: TabHistoryResult) => row.tabId).slice(0, 2)).toEqual(["t1", "t2"]);
     expect(all.rows).toHaveLength(5);
     expect(all.partial).toBe(true);
     expect(all.rows.some((row) => row.tabId === "hidden")).toBe(false);

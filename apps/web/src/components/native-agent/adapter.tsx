@@ -97,6 +97,12 @@ export interface AgentNativeTabProps {
   composerHint?: ReactNode;
   /** Open the shared resume dialog as soon as the controller mounts. */
   initialResumeOpen?: boolean;
+  /**
+   * A conversation the tab was opened to resume (`native-agent-resume-requests`):
+   * the tab resumes it through the picker's own handler once `ready` reports
+   * the tab saved, and opens the picker instead when it does not.
+   */
+  initialResume?: { sessionId: string; ready: Promise<boolean> };
 }
 
 /** Provider metadata consumed by the one shared native-agent controller. */

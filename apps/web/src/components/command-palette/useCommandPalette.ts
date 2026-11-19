@@ -9,18 +9,39 @@ import { useStore } from "zustand";
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import { toast } from "sonner";
 import { createLogger } from "@orkestrator/protocol/logger";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { runFederatedEnvironmentPower } from "@/components/federation/useFederatedEnvironmentActions";
 import { useMachineViews } from "@/components/federation/useMachineViews";
+import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { requestAppShortcut } from "@/lib/app-shortcuts";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { buildPaletteContext } from "@/lib/command-palette/context";
 import {
   createTabHistoryProvider,
+  paletteTabTitle,
   type HistoryResult,
+  type HistorySource,
   type HistoryTabSource,
+  type MessageHistoryResult,
+  type SessionHistoryResult,
+  type TabHistoryResult,
 } from "@/lib/command-palette/history";
+import {
+  openPastSessionTab,
+  requestMessageScroll,
+} from "@/lib/command-palette/history-destinations";
+import {
+  createMessageHistoryProvider,
+  type MessageHistorySource,
+} from "@/lib/command-palette/history-messages";
+import {
+  createPastSessionLoader,
+  createSessionHistoryProvider,
+} from "@/lib/command-palette/history-sessions";
 import type {
   CommandRuntime,
   CommandTarget,
@@ -31,6 +52,7 @@ import type {
 import {
   PaletteQueryRunner,
   providerView,
+  type PaletteProvider,
   type PaletteProviderState,
   type PaletteProviderStatus,
 } from "@/lib/command-palette/providers";
@@ -49,6 +71,8 @@ import { useConfigStore } from "@/stores/configStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { getAllLeaves, paneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { createSessionKey } from "@/lib/utils";
 import {
   claimSidebarAction,
   releaseSidebarAction,
@@ -59,6 +83,12 @@ import type { Environment, Project } from "@/types";
 import type { PaneNode, TabInfo } from "@/types/paneLayout";
 
 const log = createLogger("web.command-palette");
+
+/**
+ * The logical session key the palette lists past sessions under. It names no
+ * tab, so the backend's list excludes no conversation for it.
+ */
+const PALETTE_SESSION_LIST_KEY = "command-palette-history";
 
 /** The sidebar's own handlers for this window's environments and projects. */
 export interface CommandPaletteHandlers {
@@ -332,12 +362,12 @@ export function useCommandRuntime({
 }
 
 /** Opens a History row's tab on its own machine, as an attention line opens one. */
-function openHistoryResult(result: HistoryResult): void {
+function openHistoryTab(result: HistoryResult, tabId: string): void {
   const workTarget = {
     type: "worker-tab" as const,
     projectId: result.projectId,
     environmentId: result.environmentId,
-    tabId: result.tabId,
+    tabId,
   };
   noteDrawerNavigation();
   if (!result.machine || result.machine.bound) {
@@ -358,34 +388,130 @@ function* historyTabs(node: PaneNode): IterableIterator<TabInfo> {
   else for (const child of node.children) yield* historyTabs(child);
 }
 
+interface HistoryEnvironmentMetadata {
+  environments: ReadonlyMap<string, { name: string; projectId: string }>;
+  projects: ReadonlyMap<string, string>;
+}
+
+/** Each environment's layout, the palette's own environment first. */
+function* orderedLayouts(
+  layouts: ReadonlyMap<string, EnvironmentPaneState>,
+  first: string | null,
+): IterableIterator<[string, EnvironmentPaneState]> {
+  const selected = first ? layouts.get(first) : undefined;
+  if (first && selected) yield [first, selected];
+  for (const entry of layouts) {
+    if (entry[0] !== first) yield entry;
+  }
+}
+
 function* historySources(
   layouts: ReadonlyMap<string, EnvironmentPaneState>,
   first: string | null,
-  metadata: ReadonlyMap<string, { name: string; projectId: string }>,
-  projectNames: ReadonlyMap<string, string>,
+  metadata: HistoryEnvironmentMetadata,
 ): IterableIterator<HistoryTabSource | null> {
-  function describe(environmentId: string, layout: EnvironmentPaneState) {
-    const environment = metadata.get(environmentId);
-    return environment
+  for (const [environmentId, layout] of orderedLayouts(layouts, first)) {
+    const environment = metadata.environments.get(environmentId);
+    yield environment
       ? {
           environmentId,
           environmentName: environment.name,
           projectId: environment.projectId,
-          projectName: projectNames.get(environment.projectId) ?? "",
+          projectName: metadata.projects.get(environment.projectId) ?? "",
           tabs: historyTabs(layout.root),
         }
       : null;
   }
+}
 
-  const selected = first ? layouts.get(first) : undefined;
-  if (first && selected) yield describe(first, selected);
-  for (const [id, layout] of layouts) {
-    if (id !== first) yield describe(id, layout);
+/** The open agent tabs whose loaded messages the message source searches. */
+function* messageSources(
+  layouts: ReadonlyMap<string, EnvironmentPaneState>,
+  first: string | null,
+  metadata: HistoryEnvironmentMetadata,
+  projections: () => ReadonlyMap<string, { messages?: readonly unknown[] }>,
+): IterableIterator<MessageHistorySource> {
+  for (const [environmentId, layout] of orderedLayouts(layouts, first)) {
+    const environment = metadata.environments.get(environmentId);
+    if (!environment) continue;
+    for (const tab of historyTabs(layout.root)) {
+      if (tab.type !== "agent-native" || tab.embeddedIn) continue;
+      const sessionKey = createSessionKey(environmentId, tab.id);
+      yield {
+        environmentId,
+        environmentName: environment.name,
+        projectId: environment.projectId,
+        projectName: metadata.projects.get(environment.projectId) ?? "",
+        tabId: tab.id,
+        tabTitle: paletteTabTitle(tab).title,
+        messages: () => projections().get(sessionKey)?.messages,
+      };
+    }
   }
 }
 
-/** Search only the frozen owner's layout and invalidate on each change to its inputs. */
+/** Resume-capable platforms of the environment's open agent tabs, and the conversations they hold. */
+function pastSessionPlatforms(layout: EnvironmentPaneState | undefined): {
+  platforms: AgentPlatform[];
+  openSessionIds: Set<string>;
+} {
+  const platforms = new Set<AgentPlatform>();
+  const openSessionIds = new Set<string>();
+  if (layout) {
+    for (const tab of historyTabs(layout.root)) {
+      const data = tab.type === "agent-native" ? tab.nativeAgentData : undefined;
+      if (!data?.platform) continue;
+      if (data.sessionId) openSessionIds.add(data.sessionId);
+      if (nativeAgentCapabilities(data.platform).resume) platforms.add(data.platform);
+    }
+  }
+  return { platforms: Array.from(platforms).sort(), openSessionIds };
+}
+
+export interface HistoryGroupView<Row> {
+  status: PaletteProviderStatus;
+  rows: Row[];
+  /** Why the group has nothing to search, when it says so. */
+  note?: string;
+}
+
+/**
+ * Runs `create(request)`'s provider for each new request (its identity is
+ * the request), discarding answers for older ones.
+ */
+function useProviderAnswer<Request extends { query: string }, Row>(
+  request: Request | null,
+  create: (request: Request) => PaletteProvider<Row>,
+): HistoryGroupView<Row> {
+  const createRef = useRef(create);
+  useEffect(() => {
+    createRef.current = create;
+  });
+  const [state, setState] = useState<{
+    request: Request;
+    answer: PaletteProviderState<Row>;
+  } | null>(null);
+  useEffect(() => {
+    if (!request) return;
+    const runner = new PaletteQueryRunner(createRef.current(request), (answer) =>
+      setState({ request, answer }),
+    );
+    runner.run(request.query, request.query);
+    return () => runner.dispose();
+  }, [request]);
+  return providerView(state?.request === request ? state.answer : null, request?.query ?? null);
+}
+
+const IDLE_GROUP = { status: "idle" as const, rows: [] };
+
+/**
+ * The History group's three sources, each with its own status: open tabs,
+ * messages loaded in open agent tabs, and the frozen environment's past
+ * conversations. Only the frozen owner's state is searched, and each request
+ * is invalidated whenever its inputs change.
+ */
 export function useHistorySearch({
+  open,
   context,
   query,
   enabled,
@@ -393,6 +519,7 @@ export function useHistorySearch({
   projects,
   machines,
 }: {
+  open: boolean;
   context: PaletteContext;
   query: string;
   enabled: boolean;
@@ -401,7 +528,9 @@ export function useHistorySearch({
   machines: readonly MachineView[];
 }): {
   status: PaletteProviderStatus;
-  rows: HistoryResult[];
+  tabs: HistoryGroupView<TabHistoryResult>;
+  messages: HistoryGroupView<MessageHistoryResult>;
+  sessions: HistoryGroupView<SessionHistoryResult>;
   openResult: (result: HistoryResult) => boolean;
 } {
   const { windowScope } = useScopesWithCommandFallback();
@@ -412,11 +541,17 @@ export function useHistorySearch({
     : machineScope(windowScope, { machine, project: null, environment: null });
   const layoutStore = (scope ?? windowScope.commandScope()).store(paneLayoutStore);
   const layouts = useStore(layoutStore, (state) => (enabled && scope ? state.environments : null));
+  const first = context.environment?.id ?? null;
+  // The palette's environment's tabs, read while it is open so the past
+  // sessions are listed once per palette session, not once per keystroke.
+  const frozenLayout = useStore(layoutStore, (state) =>
+    open && scope && first ? state.environments.get(first) : undefined,
+  );
   const view =
     machine && !machine.bound
       ? machines.find((entry) => entry.connectionId === machine.connectionId)
       : undefined;
-  const metadata = useMemo(() => {
+  const metadata = useMemo<HistoryEnvironmentMetadata | null>(() => {
     if (!enabled || !scope) return null;
     if (view) {
       const environments = new Map<string, { name: string; projectId: string }>();
@@ -433,7 +568,6 @@ export function useHistorySearch({
       projects: new Map(projects.map((project) => [project.id, project.name])),
     };
   }, [enabled, scope, view, environments, projects]);
-  const first = context.environment?.id ?? null;
   const ownerKey = machine?.connectionId ?? null;
   // The identity changes even in an A → B → A query sequence or after reopening.
   const request = useMemo(
@@ -444,51 +578,199 @@ export function useHistorySearch({
   useEffect(() => {
     machineRef.current = machine;
   }, [machine]);
-  const [state, setState] = useState<{
-    request: typeof request;
-    answer: PaletteProviderState<HistoryResult>;
-  } | null>(null);
 
-  useEffect(() => {
-    if (!request) return;
-    const provider = createTabHistoryProvider({
+  const tabs = useProviderAnswer(request, (current) =>
+    createTabHistoryProvider({
+      machine: () => machineRef.current,
+      sources: () => historySources(current.layouts, current.first, current.metadata),
+    }),
+  );
+  const projectionScope = scope;
+  const messages = useProviderAnswer(request, (current) =>
+    createMessageHistoryProvider({
       machine: () => machineRef.current,
       sources: () =>
-        historySources(
-          request.layouts,
-          request.first,
-          request.metadata.environments,
-          request.metadata.projects,
-        ),
-    });
-    const runner = new PaletteQueryRunner(provider, (answer) => setState({ request, answer }));
-    runner.run(request.query, request.query);
-    return () => runner.dispose();
-  }, [request]);
+        projectionScope
+          ? messageSources(
+              current.layouts,
+              current.first,
+              current.metadata,
+              () => projectionScope.store(nativeAgentProjectionStore).getState().projections,
+            )
+          : [],
+    }),
+  );
 
-  const resultView =
-    enabled && !scope
-      ? { status: "failed" as const, rows: [] }
-      : providerView(state?.request === request ? state.answer : null, request?.query ?? null);
+  // Past sessions: the palette's own environment, while it is running.
+  const environment = context.environment;
+  const sessionsRunnable =
+    environment !== null && context.agentTabBlock !== "unavailable" && !context.targetUnknown;
+  const { platforms, openSessionIds } = useMemo(
+    () => pastSessionPlatforms(frozenLayout),
+    [frozenLayout],
+  );
+  const platformsKey = platforms.join(",");
+  const backendScope = scope;
+  // One loader per palette session, environment and platform set.
+  const environmentId = environment?.id ?? null;
+  const environmentName = environment?.name ?? "";
+  const environmentProjectId = environment?.projectId ?? "";
+  const loader = useMemo(
+    () =>
+      open && backendScope && environmentId && sessionsRunnable && platformsKey
+        ? createPastSessionLoader({
+            platforms: platformsKey.split(",") as AgentPlatform[],
+            list: (platform) =>
+              backendForScope(backendScope).listNativeAgentResumableSessions({
+                environmentId,
+                agent: platform,
+                logicalSessionKey: createSessionKey(environmentId, PALETTE_SESSION_LIST_KEY),
+              }),
+          })
+        : null,
+    [open, backendScope, environmentId, sessionsRunnable, platformsKey],
+  );
+  const projectName = environmentId
+    ? (projects.find((project) => project.id === environmentProjectId)?.name ??
+      view?.projects.find((project) => project.ref.projectId === environmentProjectId)?.name ??
+      "")
+    : "";
+  const sessionRequest = useMemo(
+    () =>
+      enabled && loader && environmentId
+        ? {
+            query,
+            loader,
+            openSessionIds,
+            environment: {
+              id: environmentId,
+              name: environmentName,
+              projectId: environmentProjectId,
+              projectName,
+            },
+          }
+        : null,
+    [
+      enabled,
+      loader,
+      query,
+      openSessionIds,
+      environmentId,
+      environmentName,
+      environmentProjectId,
+      projectName,
+    ],
+  );
+  const sessionsAnswer = useProviderAnswer(sessionRequest, (current) =>
+    createSessionHistoryProvider({
+      loader: current.loader,
+      environment: current.environment,
+      machine: () => machineRef.current,
+      openSessionIds: current.openSessionIds,
+      platformLabel: (platform) => findNativeAgentAdapter(platform)?.label ?? platform,
+    }),
+  );
+  const sessions: HistoryGroupView<SessionHistoryResult> =
+    !enabled || !environment
+      ? IDLE_GROUP
+      : !sessionsRunnable
+        ? {
+            ...IDLE_GROUP,
+            status: "ready",
+            note: `Start ${environment.name} to list its past sessions.`,
+          }
+        : !platformsKey
+          ? {
+              ...IDLE_GROUP,
+              status: "ready",
+              note: `Open an agent tab in ${environment.name} to list that agent's past sessions.`,
+            }
+          : sessionsAnswer;
+
+  const unreachable = enabled && !scope;
+  const groups = {
+    tabs: unreachable ? { status: "failed" as const, rows: [] } : tabs,
+    messages: unreachable ? { status: "failed" as const, rows: [] } : messages,
+    sessions,
+  };
+  const statuses = [groups.tabs.status, groups.messages.status, groups.sessions.status];
+  const status: PaletteProviderStatus = statuses.includes("loading")
+    ? "loading"
+    : statuses.every((entry) => entry === "idle")
+      ? "idle"
+      : statuses.includes("failed")
+        ? "failed"
+        : statuses.includes("partial")
+          ? "partial"
+          : "ready";
+
+  /** The row's owner is still this window's or still listed, and its environment is still its project's. */
+  const ownerStillListed = (result: HistoryResult): boolean => {
+    const owner = result.machine;
+    if (
+      owner &&
+      !owner.bound &&
+      !machines.some(
+        (entry) => entry.connectionId === owner.connectionId && entry.backendId === owner.backendId,
+      )
+    )
+      return false;
+    return metadata?.environments.get(result.environmentId)?.projectId === result.projectId;
+  };
+  const tabStillOpen = (environmentId: string, tabId: string): boolean => {
+    const pane = layoutStore.getState().findPaneWithTab(tabId, environmentId);
+    return Boolean(pane?.tabs.some((tab) => tab.id === tabId && !tab.embeddedIn));
+  };
 
   return {
-    ...resultView,
+    status,
+    ...groups,
     openResult: (result) => {
-      if (!scope || !resultView.rows.includes(result)) return false;
-      const owner = result.machine;
-      if (
-        owner &&
-        !owner.bound &&
-        !machines.some(
-          (view) => view.connectionId === owner.connectionId && view.backendId === owner.backendId,
+      if (!scope || !ownerStillListed(result)) return false;
+      if (result.source === "tab") {
+        if (!groups.tabs.rows.includes(result) || !tabStillOpen(result.environmentId, result.tabId))
+          return false;
+        openHistoryTab(result, result.tabId);
+        return true;
+      }
+      if (result.source === "message") {
+        if (
+          !groups.messages.rows.includes(result) ||
+          !tabStillOpen(result.environmentId, result.tabId)
         )
-      )
+          return false;
+        requestMessageScroll(scope, result);
+        openHistoryTab(result, result.tabId);
+        return true;
+      }
+      // A past session opens a new tab in the palette's own environment only.
+      if (!groups.sessions.rows.includes(result) || result.environmentId !== environment?.id)
         return false;
-      if (metadata?.environments.get(result.environmentId)?.projectId !== result.projectId)
+      const block = context.agentTabBlock;
+      if (block) {
+        toast.error(`Cannot open a tab in ${result.environmentName}`, {
+          description:
+            block === "setup"
+              ? "Wait for its setup to finish."
+              : block === "limit"
+                ? "It has the most tabs it can hold. Close one first."
+                : "Start it first.",
+        });
         return false;
-      const pane = layoutStore.getState().findPaneWithTab(result.tabId, result.environmentId);
-      if (!pane?.tabs.some((tab) => tab.id === result.tabId && !tab.embeddedIn)) return false;
-      openHistoryResult(result);
+      }
+      // This window's own list knows its environments before the scope's store may.
+      const ownRecord =
+        !machine || machine.bound
+          ? environments.find((entry) => entry.id === result.environmentId)
+          : undefined;
+      const tabId = openPastSessionTab(scope, result, ownRecord);
+      if (!tabId) {
+        toast.error(`Could not open a tab in ${result.environmentName}`, {
+          description: "Open the environment, then try again.",
+        });
+        return false;
+      }
+      openHistoryTab(result, tabId);
       return true;
     },
   };
@@ -497,7 +779,7 @@ export function useHistorySearch({
 export type PaletteActivationKind =
   | { kind: "command"; commandId: string }
   | { kind: "destination"; destination: "project" | "environment" }
-  | { kind: "history" };
+  | { kind: "history"; source: HistorySource };
 
 /**
  * Content-free measurement for one palette session: what was activated (a
@@ -534,7 +816,7 @@ export function usePaletteMeasurement(open: boolean) {
               ? ended.activated.commandId
               : ended.activated.kind === "destination"
                 ? `destination.${ended.activated.destination}`
-                : "history",
+                : `history.${ended.activated.source}`,
         activatedAfterMs: ended.activatedAfterMs ?? -1,
         openForMs: Math.round(performance.now() - ended.openedAt),
         noResultQueries: ended.noResultQueries,

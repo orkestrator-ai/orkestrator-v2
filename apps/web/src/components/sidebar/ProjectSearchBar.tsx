@@ -472,6 +472,7 @@ export function ProjectSearchBar({
   const historyEnabled =
     open && filterShowsGroup(filter, "history") && (hasQuery || filter === "history");
   const history = useHistorySearch({
+    open,
     context,
     query,
     enabled: historyEnabled,
@@ -479,16 +480,40 @@ export function ProjectSearchBar({
     projects,
     machines: paletteMachines,
   });
-  const historyRows = useMemo(
-    () =>
-      history.rows.filter((row) =>
+  // History's three sources, in their fixed order, each filtered to the machine filter.
+  const historyGroups = useMemo(() => {
+    const inScope = <Row extends HistoryResult>(rows: Row[]) =>
+      rows.filter((row) =>
         commandInMachineScope(
           { machine: row.machine, project: null, environment: null },
           machineFilter,
         ),
-      ),
-    [history.rows, machineFilter],
-  );
+      );
+    return [
+      {
+        key: "tabs",
+        heading: "Open tabs",
+        failure: "Open tabs could not be searched.",
+        view: history.tabs,
+        rows: inScope<HistoryResult>(history.tabs.rows),
+      },
+      {
+        key: "messages",
+        heading: "Messages",
+        failure: "Loaded messages could not be searched.",
+        view: history.messages,
+        rows: inScope<HistoryResult>(history.messages.rows),
+      },
+      {
+        key: "sessions",
+        heading: "Past sessions",
+        failure: "Past sessions could not be listed. The environment's agent may not be reachable.",
+        view: history.sessions,
+        rows: inScope<HistoryResult>(history.sessions.rows),
+      },
+    ] as const;
+  }, [history.messages, history.sessions, history.tabs, machineFilter]);
+  const historyRows = useMemo(() => historyGroups.flatMap((group) => group.rows), [historyGroups]);
 
   // Fixed group order: destinations, actions, settings, history. A late
   // History answer can only add rows at the end.
@@ -759,7 +784,7 @@ export function ProjectSearchBar({
 
   const handleHistory = (result: HistoryResult) => {
     if (!history.openResult(result)) return;
-    measurement.activated({ kind: "history" });
+    measurement.activated({ kind: "history", source: result.source });
     closeAfterActivation();
   };
 
@@ -1068,29 +1093,43 @@ export function ProjectSearchBar({
                   </section>
                 ) : null}
 
-                {historyEnabled && (historyRows.length > 0 || history.status !== "ready") ? (
-                  <section data-testid="command-palette-history">
-                    <PaletteGroupHeading status={history.status}>Open tabs</PaletteGroupHeading>
-                    {history.status === "failed" ? (
-                      <p className="px-3 text-[11px] text-amber-400/90">
-                        Open tabs could not be searched.
-                      </p>
-                    ) : null}
-                    <div className="space-y-0.5">
-                      {historyRows.map((result) => (
-                        <HistoryRow
-                          key={result.rowId}
-                          result={result}
-                          multiMachine={context.multiMachine}
-                          isActive={result.rowId === activeRowId}
-                          onHighlight={() => setChosenRowId(result.rowId)}
-                          onSelect={handleHistory}
-                          rowRef={rowRef(result.rowId)}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
+                {historyEnabled
+                  ? historyGroups.map((group) =>
+                      group.rows.length > 0 ||
+                      (group.view.status !== "ready" && group.view.status !== "idle") ||
+                      (group.view.note && filter === "history") ? (
+                        <section
+                          key={group.key}
+                          data-testid={`command-palette-history-${group.key}`}
+                        >
+                          <PaletteGroupHeading status={group.view.status}>
+                            {group.heading}
+                          </PaletteGroupHeading>
+                          {group.view.status === "failed" ? (
+                            <p className="px-3 text-[11px] text-amber-400/90">{group.failure}</p>
+                          ) : group.view.note && group.rows.length === 0 ? (
+                            <p className="px-3 text-[11px] text-muted-foreground">
+                              {group.view.note}
+                            </p>
+                          ) : null}
+                          <div className="space-y-0.5">
+                            {group.rows.map((result) => (
+                              <HistoryRow
+                                key={result.rowId}
+                                result={result}
+                                multiMachine={context.multiMachine}
+                                isActive={result.rowId === activeRowId}
+                                onHighlight={() => setChosenRowId(result.rowId)}
+                                onSelect={handleHistory}
+                                rowRef={rowRef(result.rowId)}
+                                now={now}
+                              />
+                            ))}
+                          </div>
+                        </section>
+                      ) : null,
+                    )
+                  : null}
 
                 {noResults ? (
                   <p

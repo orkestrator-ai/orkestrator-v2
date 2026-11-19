@@ -2,7 +2,8 @@
 
 Status: Living. The ⌘K / Ctrl+K palette as built: one entry point for
 destinations (projects and environments on every machine), actions, precise
-settings and open tabs.
+settings and history: open tabs, messages loaded in open agent tabs, and past
+conversations.
 
 ⌘K, and the sidebar's "Search projects, environments..." field, open the same
 dialog (`ProjectSearchBar`). Its project and environment search is unchanged
@@ -22,8 +23,16 @@ Opening the palette shows a context line, then results in a fixed group order:
    every matching action, available ones before unavailable ones.
 4. **Settings**: Settings sections and the target's environment and
    repository settings.
-5. **Open tabs** (History): the open conversation, terminal and view tabs on
-   the context's machine, searched asynchronously.
+5. **History**, three sources searched asynchronously, each under its own
+   heading and status:
+   - **Open tabs**: the open conversation, terminal and view tabs on the
+     context's machine.
+   - **Messages**: messages already loaded in that machine's open agent tabs
+     that contain every word typed. Opening one opens its tab scrolled to the
+     message.
+   - **Past sessions**: the context environment's conversations its agents can
+     resume, as the agent tab's "Resume session" picker lists them. Opening
+     one resumes it in a new agent tab.
 
 Alt+Down and Alt+Up cycle the category filter (All, Projects, Environments,
 Actions, Settings, History); the Filter menu has the same list plus the
@@ -47,7 +56,11 @@ an app shortcut shows it.
 | Context from the frozen selection and live sources | `apps/web/src/lib/command-palette/context.ts` |
 | Ranking, machine scope, recents | `apps/web/src/lib/command-palette/search.ts` |
 | Asynchronous providers, generations | `apps/web/src/lib/command-palette/providers.ts` |
-| Open-tabs History provider | `apps/web/src/lib/command-palette/history.ts` |
+| History result types, open-tabs provider | `apps/web/src/lib/command-palette/history.ts` |
+| Messages provider (loaded transcripts) | `apps/web/src/lib/command-palette/history-messages.ts` |
+| Past-sessions provider (resume lists) | `apps/web/src/lib/command-palette/history-sessions.ts` |
+| History destinations: message scroll, resume in a new tab | `apps/web/src/lib/command-palette/history-destinations.ts` |
+| Resume request a new agent tab reads on mount | `apps/web/src/lib/native-agent-resume-requests.ts` |
 | Selection by row identity | `apps/web/src/lib/command-palette/selection.ts` |
 | Settings sections, labels and aliases (shared with Settings' menu) | `apps/web/src/lib/settings-catalog.ts` |
 | React context, runtime, History hook, measurement | `apps/web/src/components/command-palette/useCommandPalette.ts` |
@@ -134,7 +147,7 @@ backend and their state comes back through the normal snapshots.
 ## Asynchronous results
 
 A provider (`PaletteProvider`) answers a query later. `PaletteQueryRunner`
-runs one request; the History hook makes one runner per query and
+runs one request; the History hook makes one runner per source, query and
 owner snapshot and disposes it in the effect cleanup, which aborts the scan and
 discards any late answer. `providerView` shows `loading` until the answer for
 the current request arrives, so an older query's rows are never shown under a
@@ -148,12 +161,46 @@ highlighted. Only when that row disappears does the highlight move, visibly,
 to the first row. Enter while an IME composition is open commits the text and
 runs nothing.
 
-The History provider reads only tab chrome (type, display title, a pull
-request's title, a file's name) from the context machine's pane layouts,
-the context environment first, at most 400 layouts and 400 tabs scanned and 20 results returned,
-yielding to input every 100. It never reads transcripts, prompts or file
-contents. The closed-session and message-jump acceptance criterion remains open.
-Plan item 11 needs to supply bounded message search and stable destinations.
+### History sources
+
+**Open tabs** reads only tab chrome (type, display title, a pull request's
+title, a file's name) from the context machine's pane layouts, the context
+environment first, at most 400 layouts and 400 tabs scanned and 20 results
+returned, yielding to input every 100.
+
+**Messages** reads the messages each open agent tab already holds in its node
+scope's `nativeAgentProjectionStore`; it fetches nothing, so earlier pages a
+tab has not loaded, and tabs that have loaded nothing, are not searched. Only
+user and agent messages count, and only for a non-empty query: every word must
+appear. It reads at most 2,000 messages (newest first in each tab) and the
+first 8,000 characters of each, returns at most 12 rows and 3 per tab, and
+yields every 200 messages. A row shows a one-line excerpt around the match;
+the query and the excerpt are display state only, never logged, stored or put
+in the command catalogue. Opening a row parks a `conversationScrollTargetStore`
+request (the one "Open full conversation" uses) and then opens the tab, so the
+chat scrolls to the message and highlights it once it is shown, or drops the
+request after its bounded wait.
+
+**Past sessions** calls `list_native_agent_resumable_sessions`, the resume
+picker's own list, on the context environment's machine, once per palette
+session and platform; typing filters that answer locally. It lists only the
+platforms the environment already has an agent tab for, because listing
+resolves the platform's bridge and a search must not start one. It needs a
+running environment (otherwise the group says so) and leaves out archived
+conversations and ones already open in a tab. One platform failing marks the
+group `partial`; all failing marks it `failed`. Titles are the provider's;
+no message content is read.
+
+Opening a past session adds an agent tab for that platform to the context
+environment (refused, with a reason, while setup runs, at the tab limit or
+when the environment is not running), parks a resume request for it
+(`native-agent-resume-requests.ts`: keyed by node, environment and tab,
+bounded, expiring after a minute), and saves the layout. The new tab reads
+the request on mount, starts no conversation of its own while it waits, and
+once the save succeeds runs the picker's own resume handler with the chosen
+conversation. If the save fails it opens the picker instead. A resume that
+fails reports through the picker's existing error path. The tab is created
+on the frozen target only, so a window switch cannot move it.
 
 ## Keyboard, pointer, touch and focus
 
@@ -179,7 +226,8 @@ component state.
 
 The `web.command-palette` log area writes, when the palette closes, one
 `session.closed` entry: what was activated (a static command ID,
-`destination.project`, `destination.environment` or `history`), milliseconds
+`destination.project`, `destination.environment`, or `history.tab`,
+`history.message` or `history.session`), milliseconds
 from opening to activation, how long it was open, how many queries found
 nothing, and how many unavailable commands were chosen. `command.unavailable`
 records a chosen unavailable command's ID and reason category, and
@@ -189,9 +237,12 @@ targets are set yet: they wait for a baseline from these entries.
 
 ## Not built
 
-- A message-text history search (plan item 11) and a shared back/forward
-  destination stack (plan item 16): the History provider interface and the
-  `openMachineWorkspace` destination contract are where they plug in.
+- A backend-side transcript index (plan item 11): Messages searches only what
+  open tabs have loaded, so a closed conversation is found by its title under
+  Past sessions, not by its text. A backend search can be added as another
+  History source behind the same provider interface.
+- A shared back/forward destination stack (plan item 16): the
+  `openMachineWorkspace` destination contract is where it plugs in.
 - Starting a preview service: Orkestrator registers services that a terminal
   or agent starts; it has no start action to delegate to. Browser previews'
   settings are reachable ("Browser previews").

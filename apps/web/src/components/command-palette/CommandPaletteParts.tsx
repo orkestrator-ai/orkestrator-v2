@@ -1,8 +1,10 @@
 import { useId, useMemo } from "react";
 import {
+  ArchiveRestore,
   ArrowRight,
   Copy,
   History,
+  MessageSquare,
   Play,
   RotateCw,
   Settings2,
@@ -26,6 +28,7 @@ import type { CommandResult } from "@/lib/command-palette/search";
 import type { HistoryResult } from "@/lib/command-palette/history";
 import type { PaletteProviderStatus } from "@/lib/command-palette/providers";
 import { cn } from "@/lib/utils";
+import { formatRelativeTime } from "@/lib/format-relative-time";
 
 export function paletteOptionId(rowId: string): string {
   return `project-search-option-${rowId}`;
@@ -167,6 +170,23 @@ export function CommandRow({
   );
 }
 
+/** What a History row says it opens, for its accessible name. */
+function historyRowLabel(result: HistoryResult, where: string): string {
+  if (result.source === "message") {
+    return `${result.kind} in ${result.title}: ${result.snippet}. In ${result.environmentName}${where}; opens the tab at this message`;
+  }
+  if (result.source === "session") {
+    return `${result.title}, ${result.kind} in ${result.environmentName}${where}; resumes it in a new tab`;
+  }
+  return `${result.title}, ${result.kind} tab in ${result.environmentName}${where}`;
+}
+
+function historyRowTestId(result: HistoryResult): string {
+  if (result.source === "message") return `command-palette-message-${result.messageId}`;
+  if (result.source === "session") return `command-palette-session-${result.sessionId}`;
+  return `command-palette-history-${result.tabId}`;
+}
+
 export function HistoryRow({
   result,
   multiMachine,
@@ -174,6 +194,7 @@ export function HistoryRow({
   onHighlight,
   onSelect,
   rowRef,
+  now,
 }: {
   result: HistoryResult;
   multiMachine: boolean;
@@ -181,8 +202,20 @@ export function HistoryRow({
   onHighlight: () => void;
   onSelect: (result: HistoryResult) => void;
   rowRef?: (node: HTMLButtonElement | null) => void;
+  /** When the palette opened, for a past session's relative time. */
+  now?: Date;
 }) {
   const where = result.machine ? ` on ${result.machine.name}` : "";
+  const Icon =
+    result.source === "message"
+      ? MessageSquare
+      : result.source === "session"
+        ? ArchiveRestore
+        : History;
+  const detail =
+    result.source === "session" && result.activityAt
+      ? `${result.kind} · ${formatRelativeTime(result.activityAt, now)}`
+      : result.kind;
   return (
     <button
       ref={rowRef}
@@ -190,16 +223,23 @@ export function HistoryRow({
       id={paletteOptionId(result.rowId)}
       role="option"
       tabIndex={-1}
-      data-testid={`command-palette-history-${result.tabId}`}
+      data-testid={historyRowTestId(result)}
       aria-selected={isActive}
-      aria-label={`${result.title}, ${result.kind} tab in ${result.environmentName}${where}`}
+      aria-label={historyRowLabel(result, where)}
       onMouseEnter={onHighlight}
       onClick={() => onSelect(result)}
       className={cn(ROW_CLASS, rowStateClass(isActive))}
     >
-      <History className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate text-sm">{result.title}</span>
-      <span className="hidden shrink-0 text-[11px] text-zinc-500 sm:inline">{result.kind}</span>
+      <Icon className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-sm">{result.title}</span>
+        {result.source === "message" ? (
+          <span className="line-clamp-2 break-words text-[11px] text-zinc-400">
+            {result.snippet}
+          </span>
+        ) : null}
+      </span>
+      <span className="hidden shrink-0 text-[11px] text-zinc-500 sm:inline">{detail}</span>
       <span className="max-w-40 shrink truncate rounded-md bg-zinc-800/80 px-1.5 py-0.5 text-[11px] text-zinc-400">
         {result.environmentName}
       </span>

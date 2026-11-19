@@ -341,6 +341,7 @@ export function SharedNativeAgentController({
   initialFastMode,
   initialExecutionProfileId,
   initialResumeOpen,
+  initialResume,
   ownsGlobalShortcuts,
   isReviewTab,
   hideStructuredOutput,
@@ -486,7 +487,10 @@ export function SharedNativeAgentController({
   const [queueEditPending, setQueueEditPending] = useState(false);
   // Reserve synchronously: events can arrive before React commits the disabled UI.
   const queueEditPendingRef = useRef(false);
-  const [resumeDialogOpen, setResumeDialogOpen] = useState(initialResumeOpen === true);
+  // A tab opened to resume a chosen conversation skips the picker.
+  const [resumeDialogOpen, setResumeDialogOpen] = useState(
+    initialResumeOpen === true && !initialResume,
+  );
   /**
    * A tab opened only to resume creates no provider session of its own. The
    * backend resumes into a tab with no mapping, so the session is created only
@@ -3706,6 +3710,68 @@ export function SharedNativeAgentController({
       ? unreadRead
       : undefined,
   );
+  /** The picker's resume handler; a tab opened to resume a chosen conversation runs it too. */
+  const resumeChosenSession = (providerSessionId: string) => {
+    setResumeDialogOpen(false);
+    const sourceSessionId = projection?.sessionId;
+    if (heldSubmit && providerSessionId !== heldSessionId) {
+      settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
+    }
+    // A tab still waiting on its resume choice has no composer of its
+    // own; the resumed conversation keeps its settings.
+    void resume(
+      providerSessionId,
+      composer
+        ? {
+            modelId: composer.selectedModelId,
+            reasoningId: composer.selectedReasoningId,
+            fastMode: composer.fastModeEnabled ?? undefined,
+            mode: composer.selectedModeId,
+            executionProfileId: effectiveComposeProfileId,
+            includeLocalSettings: composer.includeLocalSettings,
+            promptSuggestions: composer.promptSuggestionsEnabled,
+          }
+        : undefined,
+    )
+      .then(() => {
+        setAwaitingResumeChoice(false);
+        if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
+          clearTabAgentHandoff(tabId, data.environmentId);
+        }
+        clearPersistedVirtuosoState(sessionKey);
+        scrollToBottom();
+      })
+      .catch((error) => {
+        setAwaitingResumeChoice(false);
+        toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`);
+      });
+  };
+  const resumeChosenSessionRef = useRef(resumeChosenSession);
+  useEffect(() => {
+    resumeChosenSessionRef.current = resumeChosenSession;
+  });
+  // Resume the conversation this tab was opened for, once the caller has
+  // saved the tab, as the picker resumes only after its lock is saved. A tab
+  // that could not be saved offers the picker instead.
+  const initialResumeStarted = useRef(false);
+  useEffect(() => {
+    if (!initialResume || initialResumeStarted.current) return;
+    initialResumeStarted.current = true;
+    void initialResume.ready.then(
+      (saved) => {
+        if (saved) {
+          resumeChosenSessionRef.current(initialResume.sessionId);
+          return;
+        }
+        toast.error("The new tab could not be saved", {
+          description: "Choose the conversation to resume again.",
+        });
+        setResumeDialogOpen(true);
+      },
+      () => setResumeDialogOpen(true),
+    );
+  }, [initialResume]);
+
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -4000,41 +4066,7 @@ export function SharedNativeAgentController({
         currentSessionId={projection?.sessionId}
         fetchSessions={fetchResumableSessions}
         {...(canArchiveResumable ? { onArchive: setResumableArchived } : {})}
-        onResume={(providerSessionId) => {
-          setResumeDialogOpen(false);
-          const sourceSessionId = projection?.sessionId;
-          if (heldSubmit && providerSessionId !== heldSessionId) {
-            settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
-          }
-          // A tab still waiting on its resume choice has no composer of its
-          // own; the resumed conversation keeps its settings.
-          void resume(
-            providerSessionId,
-            composer
-              ? {
-                  modelId: composer.selectedModelId,
-                  reasoningId: composer.selectedReasoningId,
-                  fastMode: composer.fastModeEnabled ?? undefined,
-                  mode: composer.selectedModeId,
-                  executionProfileId: effectiveComposeProfileId,
-                  includeLocalSettings: composer.includeLocalSettings,
-                  promptSuggestions: composer.promptSuggestionsEnabled,
-                }
-              : undefined,
-          )
-            .then(() => {
-              setAwaitingResumeChoice(false);
-              if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
-                clearTabAgentHandoff(tabId, data.environmentId);
-              }
-              clearPersistedVirtuosoState(sessionKey);
-              scrollToBottom();
-            })
-            .catch((error) => {
-              setAwaitingResumeChoice(false);
-              toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`);
-            });
-        }}
+        onResume={resumeChosenSession}
       />
     ) : null;
   // The same gate the composer applies to a typed `/steer`.

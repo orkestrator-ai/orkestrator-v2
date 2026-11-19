@@ -173,6 +173,7 @@ import {
 } from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/index.js";
 import { createCapabilityService } from "./capabilities/index.js";
+import { remoteScopedEnvironments } from "./capabilities/scoped-sources.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import {
@@ -1007,6 +1008,9 @@ export class OrkestratorBackend {
         (await this.nodes.status()).controllers.some(
           (controller) => Date.now() - Date.parse(controller.lastContactAt) < 3 * NODE_HEARTBEAT_MS,
         ),
+      // Which environments live on another machine, for project setups in its worktrees.
+      remoteEnvironments: async (nodeId) =>
+        remoteScopedEnvironments(await this.nodePortal.summaries([nodeId]), nodeId),
     });
     this.nodeCoordination.onNodeConnected((nodeId) =>
       context.capabilities?.noteNodeConnected(nodeId),

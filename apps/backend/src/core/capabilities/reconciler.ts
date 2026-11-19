@@ -103,6 +103,12 @@ export interface CapabilityReconcilerDeps {
    * (`scoped-delivery.ts`), which follow their own assignments.
    */
   afterSelfPass?(): Promise<void>;
+  /**
+   * After every pass over another machine: project setups in that machine's
+   * worktrees (`scoped-remote.ts`). `recheck` asks for another observation
+   * soon, after an unanswered write.
+   */
+  afterNodePass?(nodeId: string): Promise<{ recheck: boolean }>;
 }
 
 /** Classifies a transport failure into the vocabulary above. */
@@ -121,6 +127,7 @@ export function classifyTransportError(error: unknown, command: string): Error {
 
 export class CapabilityReconciler {
   private readonly running = new Map<string, Promise<void>>();
+  private readonly scopedRuns = new Set<Promise<void>>();
   private readonly again = new Set<string>();
   private readonly rechecks = new Map<string, ReturnType<typeof setTimeout>>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -153,7 +160,8 @@ export class CapabilityReconciler {
 
   /** Waits for every pass in flight (tests, shutdown). */
   async idle(): Promise<void> {
-    while (this.running.size > 0) await Promise.allSettled(this.running.values());
+    while (this.running.size > 0 || this.scopedRuns.size > 0)
+      await Promise.allSettled([...this.running.values(), ...this.scopedRuns]);
   }
 
   async reconcileAll(reason: string): Promise<void> {
@@ -179,6 +187,41 @@ export class CapabilityReconciler {
     }
   }
 
+  private async runAfterNodePass(nodeId: string): Promise<void> {
+    if (this.disposed || !this.deps.afterNodePass || !this.deps.isAuthority()) return;
+    try {
+      const { recheck } = await this.deps.afterNodePass(nodeId);
+      if (recheck) this.scheduleRecheck(nodeId);
+    } catch (error) {
+      log.warn("reconcile.scoped-failed", { error: formatLogError(error, { message: false }) });
+    }
+  }
+
+  /**
+   * Worktree and account copies only, on every machine: after a change whose
+   * operation has no machine-wide target (a project toolkit's contents), so
+   * project setups follow without a full pass over every machine. A machine
+   * whose full pass is running gets its scoped pass at the end of it.
+   */
+  reconcileScoped(): Promise<void> {
+    if (this.disposed || !this.deps.isAuthority()) return Promise.resolve();
+    const run = (async () => {
+      const selfId = await this.deps.selfId();
+      const machines = await this.deps.machines().catch(() => []);
+      const connected = machines.filter((machine) => machine.connected);
+      await Promise.all(
+        [selfId, ...connected.map((machine) => machine.nodeId)].map((nodeId) => {
+          // A full pass in flight ends with this machine's scoped pass.
+          const running = this.running.get(nodeId);
+          if (running) return running;
+          return nodeId === selfId ? this.runAfterSelfPass() : this.runAfterNodePass(nodeId);
+        }),
+      );
+    })().finally(() => this.scopedRuns.delete(run));
+    this.scopedRuns.add(run);
+    return run;
+  }
+
   /** One machine; concurrent calls share a pass, and a call during one runs once more after it. */
   reconcileNode(nodeId: string, reason: string): Promise<void> {
     if (this.disposed || !this.deps.isAuthority()) return Promise.resolve();
@@ -199,6 +242,7 @@ export class CapabilityReconciler {
         if (!this.again.has(nodeId) || this.disposed) break;
       }
       if (nodeId === (await this.deps.selfId())) await this.runAfterSelfPass();
+      else await this.runAfterNodePass(nodeId);
     })().finally(() => this.running.delete(nodeId));
     this.running.set(nodeId, run);
     return run;

@@ -29,6 +29,7 @@ import {
   shortDigest,
   StatusBadge,
 } from "./capability-format";
+import { AdminPolicySection } from "./AdminPolicySection";
 import { AdoptLocalChangesDialog, MergeLocalChangesDialog } from "./LocalChangesDialogs";
 import { ManifestSignatureNote } from "./ManifestSignatureNote";
 import { RegistriesSection } from "./RegistriesSection";
@@ -380,6 +381,7 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
         ) : null}
       </section>
       <RegistriesSection />
+      <AdminPolicySection />
     </div>
   );
 }

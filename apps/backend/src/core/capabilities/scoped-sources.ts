@@ -1,10 +1,13 @@
 /**
  * This backend's worktrees, added accounts and containers, as scoped
- * delivery reads them (`scoped-delivery.ts`, `container-staging.ts`).
- * Nothing here writes: environments and accounts are listed, and a
- * container's record is read from its labels and its inputs revision.
+ * delivery reads them (`scoped-delivery.ts`, `container-staging.ts`), and
+ * other machines' environments as the command node's read model knows them
+ * (`scoped-remote.ts`). Nothing here writes: environments and accounts are
+ * listed, and a container's record is read from its labels and its inputs
+ * revision.
  */
 import { DEFAULT_AGENT_ACCOUNT_ID } from "@orkestrator/protocol/agent-accounts";
+import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 
 import { agentAccountHome } from "../agent-accounts-homes.js";
 import type { CommandContext } from "../commands-context.js";
@@ -12,7 +15,28 @@ import { DOCKER_LABEL_CAPABILITIES_DIGEST, DOCKER_LABEL_INPUTS_REVISION } from "
 import { containerLabel } from "../portable-input-status.js";
 import { readInputsManifest } from "../portable-inputs.js";
 import { readContainerCapabilityDelivery } from "./container-staging.js";
-import type { ScopedAccount, ScopedTargetSources } from "./scoped-delivery.js";
+import type { ScopedAccount, ScopedEnvironment, ScopedTargetSources } from "./scoped-delivery.js";
+
+/**
+ * One machine's environments from node summaries (ids, project ids and
+ * types; never a path), or null while its summaries have never been read.
+ * Environments being deleted are left out.
+ */
+export function remoteScopedEnvironments(
+  summaries: NodeSummariesResult,
+  nodeId: string,
+): ScopedEnvironment[] | null {
+  const node = summaries.nodes.find((entry) => entry.nodeId === nodeId);
+  if (!node || node.loadedAt === null) return null;
+  return node.environments
+    .filter((environment) => !environment.deleting && environment.environmentType !== undefined)
+    .map((environment) => ({
+      id: environment.ref.environmentId,
+      name: environment.name,
+      projectId: environment.projectId,
+      environmentType: environment.environmentType!,
+    }));
+}
 
 export function capabilityScopedSources(context: CommandContext): ScopedTargetSources {
   return {

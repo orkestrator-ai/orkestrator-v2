@@ -535,3 +535,142 @@ describe("added accounts", () => {
     expect(await exists(path.join(hostSkills, "review", "SKILL.md"))).toBe(true);
   });
 });
+
+describe("launch deliveries for targets with their own copies", () => {
+  test("a container reads its staged record, so a drifted host copy does not block it", async () => {
+    const fixture = await makeFixture();
+    const packageId = await addToSetup(
+      fixture,
+      { kind: "skill", name: "lint", content: "Lint it." },
+      MY_SETUP_ID,
+      true,
+    );
+    const hostSkill = path.join(fixture.home, ".claude", "skills", "lint", "SKILL.md");
+    expect(await exists(hostSkill)).toBe(true);
+    const staging = await fixture.service.prepareContainerStaging({
+      environmentId: "env-c",
+      projectId: "proj-1",
+      providers: ["claude"],
+      stages: ["claude"],
+    });
+    const record = await stageContainerCapabilities(
+      staging.plan,
+      fixture.service.artifacts,
+      path.join(fixture.dir, "revision"),
+    );
+    expect(record.items.map((item) => item.status)).toEqual(["staged"]);
+    fixture.container.evidence = {
+      containerId: "ctr-1",
+      inputsRevision: "rev-1",
+      labelDigest: record.digest,
+      record,
+    };
+    await fs.writeFile(hostSkill, "Edited on the host.");
+    const launch = {
+      environmentId: "env-c",
+      projectId: "proj-1",
+      environmentIncarnation: "ctr-1",
+      provider: "claude" as const,
+      sessionKey: "c1",
+    };
+
+    expect((await fixture.service.preflightSession(launch))?.launchBlockers).toEqual([]);
+    const recorded = (await fixture.storage.capabilities.loadCapabilityState()).launches.c1;
+    expect(recorded?.deliveries).toEqual([
+      {
+        packageId,
+        componentId: record.items[0]!.componentId,
+        locationId: "container:claude-user-skills",
+        digest: record.items[0]!.digest!,
+      },
+    ]);
+    // The host itself does read the edited copy.
+    await expect(
+      fixture.service.preflightSession({
+        environmentId: "env-h",
+        provider: "claude",
+        sessionKey: "h1",
+      }),
+    ).rejects.toThrow("not verified on this machine");
+  });
+
+  test("a container staged with an older revision is blocked with the rebuild remedy", async () => {
+    const fixture = await makeFixture();
+    await addToSetup(
+      fixture,
+      { kind: "skill", name: "lint", content: "Lint it." },
+      MY_SETUP_ID,
+      true,
+    );
+    const staging = await fixture.service.prepareContainerStaging({
+      environmentId: "env-c",
+      providers: ["claude"],
+      stages: ["claude"],
+    });
+    const record = await stageContainerCapabilities(
+      staging.plan,
+      fixture.service.artifacts,
+      path.join(fixture.dir, "revision"),
+    );
+    // The host copy is intact; only the container's record is behind.
+    fixture.container.evidence = {
+      containerId: "ctr-1",
+      inputsRevision: "rev-1",
+      labelDigest: record.digest,
+      record: {
+        ...record,
+        items: record.items.map((item) => ({ ...item, packageDigest: `sha256:${"0".repeat(64)}` })),
+      },
+    };
+    await expect(
+      fixture.service.preflightSession({
+        environmentId: "env-c",
+        environmentIncarnation: "ctr-1",
+        provider: "claude",
+        sessionKey: "c1",
+      }),
+    ).rejects.toThrow("staged with an older revision of lint; rebuild it");
+  });
+
+  test("a worktree's matching project copy satisfies a required component and is recorded", async () => {
+    const fixture = await makeFixture();
+    const { worktree } = await repository(fixture);
+    fixture.environments = [
+      { id: "env-w", projectId: "proj-1", environmentType: "local", worktreePath: worktree },
+    ];
+    const toolkit = await fixture.service.setSetup({ setup: { name: "Project tools" } });
+    const packageId = await addToSetup(
+      fixture,
+      { kind: "skill", name: "docs", content: "Write docs." },
+      toolkit.id,
+      true,
+    );
+    await fixture.service.assignSetup({
+      scope: "project",
+      scopeId: "proj-1",
+      setupIds: [toolkit.id],
+    });
+    await settle(fixture);
+    // Nothing machine-wide: the worktree's own copy is the delivery.
+    expect(await exists(path.join(fixture.home, ".claude", "skills", "docs"))).toBe(false);
+    const launch = {
+      environmentId: "env-w",
+      projectId: "proj-1",
+      provider: "claude" as const,
+      sessionKey: "w1",
+    };
+    expect((await fixture.service.preflightSession(launch))?.launchBlockers).toEqual([]);
+    const state = await fixture.storage.capabilities.loadCapabilityState();
+    const receipt = Object.values(state.receipts).find(
+      (entry) => entry.environmentId === "env-w" && entry.locationId === "project-claude-skills",
+    );
+    expect(state.launches.w1?.deliveries).toEqual([
+      {
+        packageId,
+        componentId: receipt!.componentId,
+        locationId: "project-claude-skills",
+        digest: receipt!.digest,
+      },
+    ]);
+  });
+});

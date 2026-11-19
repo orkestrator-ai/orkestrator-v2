@@ -149,8 +149,15 @@ export interface CapabilityExecutorDeps {
   now?: () => string;
 }
 
-/** Plan entries are untrusted input from a peer: validate every field. */
-export function parseNodePlanTargets(value: unknown): NodePlanTarget[] {
+/**
+ * Plan entries are untrusted input from a peer: validate every field.
+ * `isLocation` names the locations the plan may write: the machine-wide
+ * table by default, a worktree's project directories for a scoped plan.
+ */
+export function parseNodePlanTargets(
+  value: unknown,
+  isLocation: (locationId: string) => boolean = (id) => capabilityLocation(id) !== undefined,
+): NodePlanTarget[] {
   if (!Array.isArray(value))
     throw new CapabilityError("invalid-request", "Expected a list of plan targets.");
   if (value.length > 2_000)
@@ -175,7 +182,7 @@ export function parseNodePlanTargets(value: unknown): NodePlanTarget[] {
     if (!isComponentKind(raw?.kind))
       throw new CapabilityError("invalid-request", "Plan kind is not valid.");
     const locationId = optional("locationId");
-    if (locationId && !capabilityLocation(locationId)) {
+    if (locationId && !isLocation(locationId)) {
       throw new CapabilityError("invalid-request", "Plan location is not valid.");
     }
     const pathOrKey = typeof raw.pathOrKey === "string" ? raw.pathOrKey : "";
@@ -584,6 +591,7 @@ export class CapabilityExecutor {
         key: target.key,
         status: "installed-next-session",
         verification: "enabled",
+        digest: target.artifactDigest,
         replayed: true,
       };
     }
@@ -600,13 +608,13 @@ export class CapabilityExecutor {
       ...(previous?.mcp ? { previous: previous.mcp } : {}),
       ...(target.force ? { force: true } : {}),
     });
-    if (result.status === "installed-next-session" || result.status === "ready") {
-      this.record(target, target.artifactDigest, result.ownership);
-    }
+    const installed = result.status === "installed-next-session" || result.status === "ready";
+    if (installed) this.record(target, target.artifactDigest, result.ownership);
     return {
       key: target.key,
       status: result.status,
       verification: result.status === "ready" ? "enabled" : "present",
+      ...(installed ? { digest: target.artifactDigest } : {}),
       ...(result.reason ? { reason: result.reason } : {}),
     };
   }

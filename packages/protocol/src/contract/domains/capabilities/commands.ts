@@ -57,6 +57,7 @@ import type {
   CapabilitySetup,
   EffectiveAgentResources,
 } from "../../../capability-resources.js";
+import type { CapabilityAdminPolicyView } from "../../../capability-admin-policy.js";
 import type { CapabilityRegistryList } from "../../../capability-registry.js";
 import { isNodeReadCommand } from "../../../command-nodes.js";
 import { defineCommand, type CommandAccess, type WireSchema } from "../../command.js";
@@ -187,6 +188,13 @@ export const CapabilityRegistryListSchema = modelRecord<CapabilityRegistryList>(
   revision: Schema.Finite,
   registries: Schema.Array(OpenObject),
   requireSignedManifests: Schema.Boolean,
+});
+
+export const CapabilityAdminPolicySchema = modelRecord<CapabilityAdminPolicyView>()({
+  revision: Schema.Finite,
+  forbiddenSources: Strings,
+  forbiddenComponents: Strings,
+  blocked: Schema.Array(OpenObject),
 });
 
 export const CapabilityRegistryPackageListSchema = modelRecord<CapabilityRegistryPackageList>()({
@@ -554,6 +562,27 @@ export const applyCapabilityNodePlanCommand = capabilityCommand(
   OpenObject,
 );
 
+/**
+ * Project setups in worktrees on that machine (`scoped-remote.ts`): the
+ * command node names each environment by id and the copies it expects
+ * (location id, component name and path, never a directory); the machine
+ * resolves the environment to its own worktree and answers the digests on
+ * disk and which planned copies would collide (tracked, behind a link).
+ */
+export const getCapabilityNodeEnvironmentObservationCommand = capabilityCommand(
+  "get_capability_node_environment_observation",
+  "internal",
+  ["controllerId", "epoch", "environments"],
+  OpenObject,
+);
+/** Writes a scoped plan into one worktree on that machine, with the same rules as its own. */
+export const applyCapabilityNodeEnvironmentPlanCommand = capabilityCommand(
+  "apply_capability_node_environment_plan",
+  "internal",
+  ["controllerId", "epoch", "operationId", "environmentId", "targets", "keep"],
+  OpenObject,
+);
+
 /** One installed item's files, for adopting an installation that exists only on that machine. */
 export const exportCapabilityNodeItemCommand = capabilityCommand(
   "export_capability_node_item",
@@ -605,6 +634,25 @@ export const setCapabilityManifestPolicyCommand = capabilityCommand(
   "admin",
   ["requireSignedManifests"],
   CapabilityRegistryListSchema,
+);
+// Administrator policy (`admin-policy.ts`).
+export const getCapabilityAdminPolicyCommand = capabilityCommand(
+  "get_capability_admin_policy",
+  "workspace",
+  [],
+  CapabilityAdminPolicySchema,
+);
+/**
+ * Replaces `forbiddenSources` (package id prefixes) and/or
+ * `forbiddenComponents` (package ids, component ids, `kind:<kind>`),
+ * compared against the policy's `expectedRevision`. Policy wins over every
+ * setup; each machine is reconciled.
+ */
+export const setCapabilityAdminPolicyCommand = capabilityCommand(
+  "set_capability_admin_policy",
+  "admin",
+  ["expectedRevision", "forbiddenSources", "forbiddenComponents"],
+  CapabilityAdminPolicySchema,
 );
 /** A registry's packages for the Add dialog; fetches the index from the command node. */
 export const listCapabilityRegistryPackagesCommand = capabilityCommand(
@@ -659,9 +707,13 @@ export const CAPABILITIES_COMMANDS = [
   setCapabilityRegistryCommand,
   setCapabilityManifestPolicyCommand,
   listCapabilityRegistryPackagesCommand,
+  getCapabilityAdminPolicyCommand,
+  setCapabilityAdminPolicyCommand,
   getCapabilityNodeObservationCommand,
   stageCapabilityNodeArtifactCommand,
   applyCapabilityNodePlanCommand,
+  getCapabilityNodeEnvironmentObservationCommand,
+  applyCapabilityNodeEnvironmentPlanCommand,
   exportCapabilityNodeItemCommand,
   stageCapabilityNodeHandoverCommand,
   answerCapabilityNodeLaunchCommand,

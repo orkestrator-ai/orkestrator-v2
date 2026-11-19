@@ -44,6 +44,8 @@ import { ClaudePluginAdapter } from "./provider-adapters/claude-plugins.js";
 import { toggleCodexPlugin } from "./provider-adapters/codex-plugins.js";
 import { providerCli } from "./provider-adapters/provider-cli.js";
 import { CapabilityError } from "./security.js";
+import type { ScopedEnvironment } from "./scoped-delivery.js";
+import { projectMcpLocationFor } from "./scoped-locations.js";
 import { capabilityScopedSources } from "./scoped-sources.js";
 import { CapabilityService } from "./service.js";
 
@@ -63,16 +65,26 @@ function mcpRequestId(key: string): string {
   return `cap-${createHash("sha256").update(key).digest("hex").slice(0, 32)}`;
 }
 
-/** MCP writes through MCP management: never a second editor. */
+/**
+ * MCP writes through MCP management: never a second editor. Without a scope
+ * the backend user's configuration; with an environment scope, that
+ * environment's target and the provider's project MCP file in its worktree
+ * (`PROJECT_MCP_LOCATIONS`, `project-mcp.ts`), and only that file.
+ */
 export function mcpManagementInstaller(
   service: () => McpManagementService | undefined,
+  scope?: { environmentId: string },
 ): McpInstaller {
   const backendTarget = async (provider: AgentPlatform) => {
     const mcp = service();
     if (!mcp) return { error: "MCP management is not available on this machine." } as const;
-    const list = await mcp.listTargets({});
-    const target = list.targets.find(
-      (entry) => entry.provider === provider && entry.context.kind === "backend",
+    const list = await mcp.listTargets(scope ? { environmentId: scope.environmentId } : {});
+    const target = list.targets.find((entry) =>
+      scope
+        ? entry.provider === provider &&
+          entry.context.kind === "environment" &&
+          entry.context.environmentId === scope.environmentId
+        : entry.provider === provider && entry.context.kind === "backend",
     );
     if (!target)
       return { error: `No ${provider} MCP configuration is managed on this machine.` } as const;
@@ -80,6 +92,12 @@ export function mcpManagementInstaller(
     const snapshot = await mcp.snapshot({ targetId: target.targetId });
     return { mcp, target, snapshot } as const;
   };
+  /** Where a new server goes: the backend's default source, or the provider's project file. */
+  const writeSource = (
+    provider: AgentPlatform,
+    found: { target: { defaultSourceId: string | null } },
+  ): string | null | undefined =>
+    scope ? projectMcpLocationFor(provider)?.sourceId : found.target.defaultSourceId;
   return {
     async configured(provider, definition) {
       const found = await backendTarget(provider);
@@ -125,14 +143,27 @@ export function mcpManagementInstaller(
           reason: "A local MCP definition already uses this name and was left untouched.",
         };
       }
-      const sourceId = identity?.sourceId ?? target.defaultSourceId;
+      const sourceId = identity?.sourceId ?? writeSource(provider, found);
       const source = snapshot.sources.find((entry) => entry.sourceId === sourceId);
       if (!sourceId || !source || !source.writable) {
         return {
           status: "unsupported",
-          reason: source?.readOnlyReason ?? "No writable MCP configuration for this provider.",
+          reason:
+            source?.readOnlyReason ??
+            (scope
+              ? `${provider} has no writable project MCP file Orkestrator manages in this worktree.`
+              : "No writable MCP configuration for this provider."),
         };
       }
+      // A project file the provider is set to ignore here would install nothing it loads.
+      if (scope && source.trust === "excluded") {
+        return {
+          status: "unsupported",
+          reason: source.trustReason ?? "This provider does not load project MCP servers here.",
+        };
+      }
+      const trustNote =
+        scope && source.trust === "unknown" && source.trustReason ? source.trustReason : undefined;
       const mutation: McpMutation = {
         requestId: mcpRequestId(`${requestId}:${source.revision}:${force === true}`),
         targetId: target.targetId,
@@ -180,6 +211,7 @@ export function mcpManagementInstaller(
         }
         return {
           status: "installed-next-session",
+          ...(trustNote ? { reason: trustNote } : {}),
           ownership: {
             sourceId: identity.sourceId,
             fingerprint: identity.fingerprint,
@@ -306,6 +338,8 @@ export interface CapabilityNodeAccess {
   isLeaf(): boolean;
   /** Leaf: an attached command node was in contact recently enough to answer a launch. */
   controllerReachable?(): Promise<boolean>;
+  /** Another machine's environments (federation read model), for its worktrees' project setups. */
+  remoteEnvironments?(nodeId: string): Promise<ScopedEnvironment[] | null>;
 }
 
 /** Builds the service for this backend. */
@@ -348,6 +382,7 @@ export function createCapabilityService(
     // A leaf asks its command node to resolve a launch on its own event stream.
     requestLaunch: (payload) => context.emit(capabilityLaunchRequestedEvent, payload),
     ...(nodes.controllerReachable ? { controllerReachable: nodes.controllerReachable } : {}),
+    ...(nodes.remoteEnvironments ? { remoteEnvironments: nodes.remoteEnvironments } : {}),
     homes,
     inventory: {
       managedPlugins: () => claudePlugins.observe(),
@@ -415,7 +450,12 @@ export function createCapabilityService(
           }),
     },
     mcp: mcpManagementInstaller(() => context.mcpManagement),
-    scoped: capabilityScopedSources(context),
+    scoped: {
+      ...capabilityScopedSources(context),
+      // A project setup's MCP servers, into each worktree's project MCP file.
+      projectMcp: (environmentId) =>
+        mcpManagementInstaller(() => context.mcpManagement, { environmentId }),
+    },
     claudePlugins,
   });
 }

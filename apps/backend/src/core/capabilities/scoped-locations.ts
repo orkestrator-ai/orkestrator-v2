@@ -185,6 +185,92 @@ export function containerCapabilityLocations(staged: ReadonlySet<string>): Scope
   });
 }
 
+/**
+ * The project MCP file each provider reads from a worktree, as MCP
+ * management models it (`mcp-management/providers.ts`): the source id it
+ * gives that file, which delivery requires, so a server is written only
+ * through MCP management's own editor for exactly that file. `alsoVisibleTo`
+ * names providers that also read the file (Grok reads Claude's `.mcp.json`
+ * unless its Claude import prompt was dismissed).
+ */
+export interface ProjectMcpLocation {
+  id: string;
+  provider: AgentPlatform;
+  /** The file under the worktree, `/`-separated. */
+  relative: string;
+  /** MCP management's source id for that file in an environment target. */
+  sourceId: string;
+  format: "json" | "toml";
+  /** The key holding the server map. */
+  serverKey: string;
+  alsoVisibleTo: readonly AgentPlatform[];
+}
+
+export const PROJECT_MCP_LOCATIONS: readonly ProjectMcpLocation[] = Object.freeze([
+  {
+    id: "project-mcp-claude",
+    provider: "claude",
+    relative: ".mcp.json",
+    sourceId: "claude:project",
+    format: "json",
+    serverKey: "mcpServers",
+    alsoVisibleTo: ["grok"],
+  },
+  {
+    id: "project-mcp-codex",
+    provider: "codex",
+    relative: ".codex/config.toml",
+    sourceId: "codex:project",
+    format: "toml",
+    serverKey: "mcp_servers",
+    alsoVisibleTo: [],
+  },
+  {
+    id: "project-mcp-cursor",
+    provider: "cursor",
+    relative: ".cursor/mcp.json",
+    sourceId: "cursor:project",
+    format: "json",
+    serverKey: "mcpServers",
+    alsoVisibleTo: ["grok"],
+  },
+  {
+    id: "project-mcp-grok",
+    provider: "grok",
+    relative: ".grok/config.toml",
+    sourceId: "grok:project",
+    format: "toml",
+    serverKey: "mcp_servers",
+    alsoVisibleTo: [],
+  },
+  {
+    id: "project-mcp-opencode",
+    provider: "opencode",
+    relative: "opencode.json",
+    sourceId: "opencode:project-opencode.json",
+    format: "json",
+    serverKey: "mcp",
+    alsoVisibleTo: [],
+  },
+  {
+    id: "project-mcp-pi",
+    provider: "pi",
+    relative: ".pi/mcp.json",
+    sourceId: "pi:project",
+    format: "json",
+    serverKey: "mcpServers",
+    alsoVisibleTo: [],
+  },
+]);
+
+export function projectMcpLocation(id: string): ProjectMcpLocation | undefined {
+  return PROJECT_MCP_LOCATIONS.find((location) => location.id === id);
+}
+
+export function projectMcpLocationFor(provider: AgentPlatform): ProjectMcpLocation | undefined {
+  return PROJECT_MCP_LOCATIONS.find((location) => location.provider === provider);
+}
+
 export function projectCapabilityLocation(id: string): ScopedLocation | undefined {
   return PROJECT_CAPABILITY_LOCATIONS.find((location) => location.id === id);
 }

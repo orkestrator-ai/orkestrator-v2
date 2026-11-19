@@ -3,9 +3,11 @@
  * "Authority" and "Runtime connection points").
  *
  * - {@link verifyLaunchDeliveries}: at launch, every recorded installation of
- *   a required component that the provider can see must be observed on the
- *   host with exactly the recorded bytes; the launch record lists the
- *   observed digests.
+ *   a required component that the provider can see must be observed with
+ *   exactly the recorded bytes: a container's staged record or an account's
+ *   private copy when that is all the target reads, otherwise the host's
+ *   copies (and a worktree's own copy beside them); the launch record lists
+ *   the observed digests.
  * - {@link LeafLaunchAuthority}: a leaf's store holds no setups, so its
  *   native launch asks the command node. A leaf has no link to its command
  *   node (links go from command node to leaf), so the request is an event on
@@ -42,6 +44,16 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
 import type { CapabilityLink } from "./node-transport.js";
 import { sha256 } from "./planning.js";
+import {
+  parseContainerCapabilityRecord,
+  type ContainerCapabilityRecord,
+} from "./container-staging.js";
+import {
+  revisionComponent,
+  scopedRequiredDelivery,
+  type ScopedEvidence,
+} from "./scoped-delivery.js";
+import { projectCapabilityLocation, projectMcpLocation } from "./scoped-locations.js";
 import { CapabilityError } from "./security.js";
 import type {
   CapabilityExecutorState,
@@ -93,15 +105,26 @@ export function stateHasRequired(state: CapabilityState): boolean {
 
 /**
  * The installed bytes behind the resolved packages, as observed at launch.
- * For a required package, every machine-wide copy the provider reads must be
- * observed, managed, unchanged and equal to the recorded digest; anything
- * else is a launch blocker. The deliveries list exactly what was observed.
+ *
+ * A target with its own copies answers from them first
+ * (`scopedRequiredDelivery`): a container reads only what was staged into
+ * its inputs revision, and an account with a private directory only its own
+ * copy, so the host's copies are not theirs to check; a stale or missing
+ * staged record blocks a required component with the rebuild remedy. A
+ * worktree's verified project copy is listed, but the host's copies are
+ * still checked: the provider reads both, and Claude ranks a personal skill
+ * above a project one. Otherwise, for a required package, every
+ * machine-wide copy the provider reads must be observed, managed, unchanged
+ * and equal to the recorded digest. The deliveries list exactly what was
+ * observed.
  */
 export function verifyLaunchDeliveries(input: {
   state: CapabilityState;
   effective: EffectiveAgentResources;
   inventory: Pick<CapabilityInventory, "items"> | undefined;
   required: ReadonlySet<string>;
+  /** The target's own copies (`ScopedCapabilityDelivery.launchEvidence`). */
+  scopedEvidence?: ScopedEvidence;
 }): {
   deliveries: CapabilityLaunchDelivery[];
   blockers: Array<{ componentId: string; reason: string }>;
@@ -113,6 +136,25 @@ export function verifyLaunchDeliveries(input: {
   for (const pkg of effective.resolvedPackages) {
     const required = input.required.has(pkg.id);
     for (const componentId of pkg.components) {
+      const component = revisionComponent(state, pkg.id, componentId, pkg.artifactDigest) ??
+        state.components[componentId] ?? { id: componentId, name: componentId };
+      const scoped = scopedRequiredDelivery({
+        state,
+        target,
+        ...(input.scopedEvidence ? { evidence: input.scopedEvidence } : {}),
+        component,
+        digest: pkg.artifactDigest,
+      });
+      if (scoped.kind === "refused") {
+        if (required) blockers.push({ componentId, reason: scoped.reason });
+        continue;
+      }
+      if (scoped.kind === "verified") {
+        for (const entry of scoped.deliveries) {
+          deliveries.push({ packageId: pkg.id, componentId, ...entry });
+        }
+        if (scoped.exclusive) continue;
+      }
       const receipts = Object.values(state.receipts).filter(
         (receipt) =>
           receipt.nodeId === target.nodeId &&
@@ -247,6 +289,106 @@ function manifestDigestFor(effective: EffectiveAgentResources): string {
       policy: effective.permissionPolicyDigest,
     }),
   );
+}
+
+// --- A leaf's own copies (worktree, container) --------------------------------
+
+/**
+ * What a leaf reports with a launch about the target's own copies, ids and
+ * digests only: the managed copies in the environment's worktree (project
+ * directories and project MCP files), or the capability record staged into
+ * its container with the container's label.
+ */
+export interface LeafScopedReport {
+  project?: Array<{ locationId: string; componentId: string; digest: string }>;
+  container?: {
+    containerId: string;
+    labelDigest: string | null;
+    record: ContainerCapabilityRecord | null;
+  };
+}
+
+const MAX_REPORTED_SCOPED = 2_000;
+
+/** A leaf's report, bounded: it is input from a peer. */
+export function parseLeafScopedReport(value: unknown): LeafScopedReport | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const report: LeafScopedReport = {};
+  if (Array.isArray(record.project)) {
+    report.project = record.project.slice(0, MAX_REPORTED_SCOPED).flatMap((raw: unknown) => {
+      const entry = (raw ?? {}) as Record<string, unknown>;
+      const locationId = text(entry.locationId);
+      const componentId = text(entry.componentId);
+      const digest = text(entry.digest, 200);
+      return locationId && componentId && digest ? [{ locationId, componentId, digest }] : [];
+    });
+  }
+  const container = (record.container ?? null) as Record<string, unknown> | null;
+  const containerId = container ? text(container.containerId) : undefined;
+  if (container && containerId) {
+    report.container = {
+      containerId,
+      labelDigest: text(container.labelDigest, 200) ?? null,
+      record: parseContainerCapabilityRecord(container.record),
+    };
+  }
+  return report;
+}
+
+/** The scoped evidence a leaf's report gives for its launch target, against the receipts here. */
+export function scopedEvidenceFromReport(
+  state: CapabilityState,
+  target: CapabilityTarget,
+  report: LeafScopedReport | undefined,
+): ScopedEvidence | undefined {
+  if (!report) return undefined;
+  const evidence: ScopedEvidence = {};
+  if (report.container && target.environmentIncarnation !== undefined) {
+    evidence.container = { ...report.container, inputsRevision: "" };
+  }
+  if (report.project && target.environmentId && target.environmentIncarnation === undefined) {
+    const observed = new Map<string, string | null>();
+    for (const receipt of Object.values(state.receipts)) {
+      if (receipt.nodeId !== target.nodeId || receipt.environmentId !== target.environmentId)
+        continue;
+      const seen = report.project.find(
+        (entry) =>
+          entry.locationId === receipt.locationId && entry.componentId === receipt.componentId,
+      );
+      observed.set(receipt.id, seen?.digest ?? null);
+    }
+    evidence.project = { environmentId: target.environmentId, observed };
+  }
+  return evidence;
+}
+
+/** The digest a scoped delivery holds now, from the leaf's own report; undefined: not scoped. */
+function scopedDeliveryDigest(
+  delivery: CapabilityLaunchDelivery,
+  report: LeafScopedReport | undefined,
+): string | null | undefined {
+  if (delivery.locationId.startsWith("container:")) {
+    const container = report?.container;
+    if (!container?.record || container.labelDigest !== container.record.digest) return null;
+    const locationId = delivery.locationId.slice("container:".length);
+    const item = container.record.items.find(
+      (entry) =>
+        entry.componentId === delivery.componentId &&
+        entry.locationId === locationId &&
+        entry.status === "staged",
+    );
+    return item ? (item.digest ?? item.packageDigest) : null;
+  }
+  if (projectCapabilityLocation(delivery.locationId) || projectMcpLocation(delivery.locationId)) {
+    return (
+      report?.project?.find(
+        (entry) =>
+          entry.locationId === delivery.locationId && entry.componentId === delivery.componentId,
+      )?.digest ?? null
+    );
+  }
+  return undefined;
 }
 
 // --- Validation of peer input --------------------------------------------------
@@ -410,6 +552,8 @@ export interface LeafLaunchAuthorityDeps {
   controllerReachable(): Promise<boolean>;
   /** Emits `node-capability-launch-requested` on this machine's event stream. */
   request?(payload: { requestId: string; request: unknown }): void;
+  /** The target's own copies on this machine (`RemoteScopedDelivery.leafReport`). */
+  scopedReport?(target: CapabilityTarget): Promise<LeafScopedReport | undefined>;
   now(): string;
 }
 
@@ -437,14 +581,15 @@ export class LeafLaunchAuthority {
   /** Resolves a launch on this leaf: the command node's answer, a valid cached one, or fail closed. */
   async preflight(request: LaunchRequest): Promise<LeafLaunchResult> {
     const inventory = await this.deps.observeSelf().catch(() => undefined);
+    const report = await this.deps.scopedReport?.(request.target).catch(() => undefined);
     const key = launchCacheKey(request);
     const answered =
       this.deps.request && (await this.deps.controllerReachable().catch(() => false))
-        ? await this.ask(request, key, inventory)
+        ? await this.ask(request, key, inventory, report)
         : null;
     if (answered) {
       // The command node judged our report; check the bytes did not move since.
-      const local = this.localDeliveryCheck(answered.answer, inventory);
+      const local = this.localDeliveryCheck(answered.answer, inventory, report);
       return {
         effective: withBlockers(
           { ...answered.answer.effective, target: request.target },
@@ -454,13 +599,14 @@ export class LeafLaunchAuthority {
         resolvedBy: answered.controllerId,
       };
     }
-    return this.fromCache(request, key, inventory);
+    return this.fromCache(request, key, inventory, report);
   }
 
   private ask(
     request: LaunchRequest,
     key: string,
     inventory: CapabilityInventory | undefined,
+    report: LeafScopedReport | undefined,
   ): Promise<{ answer: LeafAnswer; controllerId: string; epoch: number } | null> {
     const requestId = `cap_launch_${randomBytes(12).toString("hex")}`;
     return new Promise((resolve) => {
@@ -491,6 +637,7 @@ export class LeafLaunchAuthority {
             ...(request.templateId ? { templateId: request.templateId } : {}),
             ...(request.graphNode ? { graphNode: request.graphNode } : {}),
             inventory: compactInventory(inventory),
+            ...(report ? { scoped: report } : {}),
           },
         });
       } catch (error) {
@@ -551,11 +698,23 @@ export class LeafLaunchAuthority {
   private localDeliveryCheck(
     answer: Pick<LeafAnswer, "deliveries" | "required">,
     inventory: CapabilityInventory | undefined,
+    report: LeafScopedReport | undefined,
   ): { blockers: Array<{ componentId: string; reason: string }> } {
     const required = new Set(answer.required);
     const blockers: Array<{ componentId: string; reason: string }> = [];
+    const changed = (componentId: string) =>
+      blockers.push({
+        componentId,
+        reason: "A required capability changed on this machine since the command node checked it.",
+      });
     for (const delivery of answer.deliveries) {
       if (!required.has(delivery.componentId)) continue;
+      // A worktree's or container's own copy is checked against this machine's report.
+      const scoped = scopedDeliveryDigest(delivery, report);
+      if (scoped !== undefined) {
+        if (scoped !== delivery.digest) changed(delivery.componentId);
+        continue;
+      }
       const observed = inventory?.items.find(
         (item) =>
           item.ownership === "managed" &&
@@ -577,6 +736,7 @@ export class LeafLaunchAuthority {
     request: LaunchRequest,
     key: string,
     inventory: CapabilityInventory | undefined,
+    report: LeafScopedReport | undefined,
   ): Promise<LeafLaunchResult> {
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
@@ -589,7 +749,7 @@ export class LeafLaunchAuthority {
       cached.epoch === executor.epoch &&
       cached.appliedDigest === appliedDigest(executor);
     if (cached && fresh) {
-      const local = this.localDeliveryCheck(cached, inventory);
+      const local = this.localDeliveryCheck(cached, inventory, report);
       const effective: EffectiveAgentResources = {
         ...cached.effective,
         target: request.target,
@@ -645,6 +805,7 @@ export interface LeafLaunchAnswerDeps {
       templateId?: string;
       graphNode?: string;
       launchInventory?: CapabilityInventory;
+      scopedEvidence?: ScopedEvidence;
       forLaunch: true;
     },
   ): EffectiveAgentResources;
@@ -703,6 +864,12 @@ export async function answerLeafLaunch(
   const ceiling = parseCeiling(request.ceiling);
   const templateId = text(request.templateId);
   const graphNode = text(request.graphNode);
+  // The worktree's or container's own copies, as the leaf reported them.
+  const scopedEvidence = scopedEvidenceFromReport(
+    state,
+    target,
+    parseLeafScopedReport(request.scoped),
+  );
   const resolved = deps.resolve(state, {
     target,
     sessionKey,
@@ -711,6 +878,7 @@ export async function answerLeafLaunch(
     ...(templateId ? { templateId } : {}),
     ...(graphNode ? { graphNode } : {}),
     ...(launchInventory ? { launchInventory } : {}),
+    ...(scopedEvidence ? { scopedEvidence } : {}),
   });
   const required = requiredPackageIds(state, resolved);
   const checked = verifyLaunchDeliveries({
@@ -718,6 +886,7 @@ export async function answerLeafLaunch(
     effective: resolved,
     inventory: launchInventory,
     required,
+    ...(scopedEvidence ? { scopedEvidence } : {}),
   });
   const effective = withBlockers(resolved, checked.blockers);
   const requiredComponents = effective.resolvedPackages

@@ -186,9 +186,15 @@ export interface CapabilityImportRecord {
 export interface CapabilitySettings {
   /** Package id prefixes whose updates may apply without approval when nothing escalates. */
   trustedSources: string[];
-  /** System/organisation restrictions. */
+  /**
+   * System/organisation restrictions (`admin-policy.ts`): package id prefixes,
+   * and exact package or component ids or `kind:<kind>`.
+   */
   forbiddenSources: string[];
   forbiddenComponents: string[];
+  /** Bumped on every policy change; `set_capability_admin_policy` compares it. Absent is 0. */
+  policyRevision?: number;
+  policyUpdatedAt?: string;
   /** Newly enrolled machines follow My setup. */
   enrollNewMachines: boolean;
   lastUpdateCheckAt?: string;
@@ -319,6 +325,8 @@ export interface CapabilityMcpOwnership {
   fingerprint: string;
   provider: AgentPlatform;
   name: string;
+  /** A worktree's project MCP file Orkestrator created (`project-mcp.ts`): excluded from Git, deleted when empty. */
+  createdFile?: boolean;
 }
 
 export interface CapabilityExecutorState {

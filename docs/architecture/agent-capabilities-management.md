@@ -119,7 +119,9 @@ updated.
 its native launch preflight asks the command node. Links run from command node
 to leaf, so the leaf emits `node-capability-launch-requested` on its own event
 stream (which the command node follows) with the target, the permission
-ceiling and its managed copies (ids and digests only). The command node
+ceiling, its managed copies and the target's own copies (the managed copies
+in the environment's worktree, or its container's staged record and label;
+ids and digests only). The command node
 resolves the target against the authoritative state, records the launch
 (`<nodeId>|<sessionKey>`, with the observed deliveries and `resolvedBy`), and
 answers with `answer_capability_node_launch` (`internal`, admitted only at the
@@ -134,10 +136,17 @@ a required component blocks the launch ("command node unreachable") and
 optional ones are a warning. Whether anything is required comes from the last
 answer; a leaf that never had one does not block.
 
-**Launch deliveries.** On every launch, each recorded machine-wide copy of a
-required component that the provider reads must be observed, managed,
-unchanged and equal to its receipt's digest; the launch record lists exactly
-the observed digests (`deliveries`).
+**Launch deliveries.** On every launch, a required component is checked
+where the target reads it (`verifyLaunchDeliveries`): a container only
+against the record staged into its inputs revision, and an added account with
+a private directory only against its own copy, so a drifted host copy does
+not block them (a stale or missing staged record blocks with the rebuild
+remedy). Otherwise each recorded machine-wide copy the provider reads must be
+observed, managed, unchanged and equal to its receipt's digest; in a worktree
+that holds even when its project copy matches, because the provider reads
+both and Claude ranks a personal skill above a project one. The launch record
+lists exactly the observed digests (`deliveries`, with `container:<location>`,
+`account:<location>` and project location ids for those copies).
 
 ## Resolution
 
@@ -149,7 +158,7 @@ Two passes (`resolveEffectiveAgentResources`):
    selections. A later layer may override a version (reported as a conflict
    diagnostic) or exclude a component. Exclusions are `<selector>|<id>`.
    Administrator policy (`forbiddenSources`, `forbiddenComponents`) wins over
-   every layer.
+   every layer (see "Administrator policy").
 2. **Permission ceiling**: the session's denied capabilities and MCP grant.
    An MCP server the policy denies (`mcp:<server>`, no grant, or `network`
    denied for a networked server) is `blocked`; a hook is blocked when shell is
@@ -158,6 +167,34 @@ Two passes (`resolveEffectiveAgentResources`):
 Then each component is checked against the provider's support matrix. A
 required component that is unsupported or blocked is a **launch blocker**;
 an optional one is skipped with a warning.
+
+## Administrator policy
+
+Settings → Capabilities → Setups → Policy edits two lists in the store's
+settings (`admin-policy.ts`, `@orkestrator/protocol/capability-admin-policy`):
+
+- **Forbidden sources**: package id prefixes. `git:github.com/org/` forbids
+  that organisation's repositories (an https or SSH address is accepted and
+  canonicalised the way package ids are), `registry:<id>/` a whole registry
+  (`registry:<id>` gains its slash, so it cannot match `registry:<id>2/`),
+  `git:` every Git package; `marketplace:`, `local:` and `managed:` prefixes
+  work the same way.
+- **Forbidden components**: an exact package id, an exact component id
+  (`<packageId>#<kind>:<key>`), or a whole kind (`kind:hook`; a bare kind is
+  accepted).
+
+`get_capability_admin_policy` (workspace) returns both lists, the policy's own
+revision and the library packages the policy blocks now (with the matching
+entry and whether a setup uses them). `set_capability_admin_policy` (admin)
+replaces the lists it names if `expectedRevision` is still the policy's
+revision (`settings.policyRevision`; a stale one is a `conflict`); every entry
+is validated by the same parser the form uses, and one bad entry refuses the
+edit. A change is recorded in Activity (`admin-policy`) and every machine is
+reconciled: the resolver blocks what the policy forbids ("Administrator policy
+forbids this source/component", shown as **Blocked by policy** wherever the
+package is assigned, and a launch blocker when required), so installed copies
+are removed on the next pass and nothing new is fetched from a forbidden
+source.
 
 ## Shared locations and isolation
 
@@ -194,9 +231,10 @@ linked again its receipts are forgotten and the host copy is left alone.
 
 **Project setups in a worktree.** Project and environment assignments
 (including imports from `orkestrator.capabilities.yaml`) are written into each
-local worktree of that project, never into the shared homes, after this
-machine's reconcile pass and before a launch from the worktree
-(`scoped-delivery.ts`, locations in `scoped-locations.ts`):
+local worktree of that project, never into the shared homes, after that
+machine's reconcile pass, after any applied change, and before a launch from a
+worktree on the command node (`scoped-delivery.ts`, locations in
+`scoped-locations.ts`, the writer in `worktree-writer.ts`):
 
 | Project directory | Read by | May also be read by |
 | --- | --- | --- |
@@ -221,6 +259,48 @@ directory reached through a link is a collision: reported on the receipt and
 left alone. A managed copy edited by hand is a Local changes entry, kept until
 the user decides. A copy is removed only when no project or environment
 assignment still selects it; the exclude block goes with the last one.
+
+**Worktrees on other machines** (`scoped-remote.ts`). The command node lists
+each machine's local-worktree environments from its federation read model
+(environment id, project id and type; never a path), adds every environment
+it holds receipts for there, and plans each exactly like its own. One bounded
+read, `get_capability_node_environment_observation` (`internal`), names the
+copies by location id and component and returns their digests on disk and
+which planned copies would collide; the artifacts then travel over the
+existing chunked transfer and `apply_capability_node_environment_plan`
+(`internal`) writes them. The machine resolves the environment id to its own
+worktree from its own environment store, accepts only keys of that
+environment (`<its node>|env:<environment>|…`) at project locations, and
+writes with the same rules (collisions re-checked before writing,
+`info/exclude`, markers, atomic writes), behind the executor's epoch. The
+command node keeps the receipts; it marks them before each write, so a lost
+answer is settled from the next observation (confirmed, restored or planned
+afresh), never re-sent blindly. An environment the machine no longer has
+releases its receipts; one it has but cannot reach keeps them.
+
+**Project MCP servers.** A project setup's MCP server goes into the project
+MCP file the provider reads in that worktree, written by that machine's MCP
+management through the environment's target and that file's source only (its
+editors, revisions and ownership fingerprints; `project-mcp.ts`):
+
+| Provider | File | Loaded when |
+| --- | --- | --- |
+| Claude | `.mcp.json` (Grok also reads it) | native sessions load project servers |
+| Codex | `.codex/config.toml` | the project is trusted in Codex |
+| Cursor, Pi | `.cursor/mcp.json`, `.pi/mcp.json` | the environment's policy turns project resources on |
+| Grok | `.grok/config.toml` | the folder is trusted in Grok, or the environment's policy turns project resources on |
+| OpenCode | `opencode.json` | project configuration is not disabled |
+
+A provider set to ignore the file there is reported unsupported with MCP
+management's reason; an unknown trust is installed with that reason. Only the
+definition is written: a server with environment or header keys is
+`needs-auth` until the user supplies the values on that machine (a matching
+local definition counts), and nothing is written for it. A file Orkestrator
+creates is listed in `info/exclude` and deleted when its last server goes and
+nothing else is in it; an untracked file the user already had is edited in
+place and never excluded or deleted; a tracked file, or one behind a link, is
+a collision; a same-named server Orkestrator did not add is left alone. A hand
+edit is a Local changes entry (keep or replace).
 
 ## Provider support
 
@@ -305,8 +385,13 @@ whose entry is already a table: no entry is added or removed, inline or dotted
 layouts stay read-only, a linked or oversized file is refused, only `enabled`
 changes (checked by re-parsing), the file keeps its mode and is replaced only
 if unchanged since it was read, and the result is confirmed with Codex's own
-list. Installing Codex plugins stays with Codex. There is no toggle in the
-Capabilities page yet; the command and the web client function exist.
+list. Installing Codex plugins stays with Codex. Capabilities → Installed on
+this machine → Plugins → Codex shows an "Enable <plugin>" switch in a
+plugin's details (`AgentPluginsBrowser.tsx`); it reads Codex's list back after
+the change and reports a refusal in an alert. It is disabled, with the reason,
+for a plugin Codex reports without its marketplace, for a failed or pending
+one, and when Settings shows another machine (the command only edits the
+machine that answers). Other providers have no switch.
 
 ### Qualification against the pinned binaries
 
@@ -433,14 +518,17 @@ Catalogue names are insufficient to identify the installed revision.
 - **Session launch**: native launches and graph activations resolve the target
   and its policy before provider work begins. A required component needs
   a matching observed delivery for that target (`scopedRequiredDelivery`):
-  - a local worktree: its project copies are brought up to date first, and a
-    project receipt whose bytes match on disk qualifies; otherwise the host's;
+  - a local worktree: its project copies are brought up to date first (on the
+    command node), and a project receipt whose bytes match on disk qualifies
+    and is recorded; a host copy the provider also reads must still match. On
+    a leaf, the leaf reports its worktree's managed copies with the launch;
   - an added account: the host receipt when the account links that directory
     (or will link it at launch), its own receipt and matching bytes when the
     directory is private;
   - a container: the record staged into its inputs revision, whose digest must
     equal the container's `orkestrator-capabilities-digest` label and whose
-    entry for the component must be the required revision.
+    entry for the component must be the required revision; host copies are
+    not checked (a leaf sends its container's record and label).
   The launch manifest records the selected revisions for diagnostics.
   Provider homes are shared and existing sessions can still see changes there.
 - **Containers**: a container never receives a write from outside. At
@@ -625,17 +713,23 @@ previewed again.
 
 Live conformance against Grok Build, Pi and the Cursor SDK (no pinned binary
 outside Orkestrator's toolchain and no credential-free listing), a live
-Orkestrator OpenCode 2 session loading delivered agents and commands, a
-Capabilities page toggle for Codex plugins, isolated provider
+Orkestrator OpenCode 2 session loading delivered agents and commands, switching
+another machine's Codex plugins from this window, isolated provider
 homes per session (exclusive claims are reported as not enforceable instead),
-organisation policy editing in the UI, writing into a running container (a
+writing into a running container (a
 container takes a changed setup on its next rebuild, which the environment
-card offers), project delivery into a worktree on another machine (only the
-command node's own local worktrees are written), project MCP servers (a
-project toolkit's MCP servers are reported as not delivered to the worktree)
-and adopting a worktree copy's local changes as a new revision (keep and
-replace work) are not implemented; see
+card offers) and adopting a worktree copy's local changes as a new revision
+(keep and replace work) are not implemented; see
 [8314](../todo/cross-cutting/8314-agent-capabilities-follow-ups.md).
+A worktree on another machine is delivered and verified at launch, but its
+environment card is answered by that machine, whose store holds no receipts,
+so the card shows no copies there (the package's "Where available" on the
+command node does); a leaf stages its containers from its own store, which
+holds no setups. Project MCP servers are proven through the real MCP
+management service's read-back (`project-mcp.test.ts`), not by a provider
+loading them; OpenCode is written only when its project configuration is
+`opencode.json`. A personal copy at another revision with the same name
+shadows a worktree's project copy in Claude.
 A Claude plugin loads all of its parts: an exception on one part (a skill, a
 hook) cannot be enforced while the plugin itself is selected, and when Codex
 is not among the providers a plugin's portable skill is placed for, that copy
@@ -651,8 +745,7 @@ Package registries and signed manifests are proven with in-memory indexes,
 tarballs and Git fakes (`registry.test.ts`, `registry-service.test.ts`,
 `manifest-signing.test.ts`), not against a published registry. Registry
 packages carry no per-file provenance beyond the index entry; a registry's
-signing key is pinned by hand (no key rotation or revocation list), and
-`forbiddenSources` is still edited outside the UI. Registry access needs no
+signing key is pinned by hand (no key rotation or revocation list). Registry access needs no
 credentials: an index or tarball behind authentication cannot be used.
 
 Command-node handover of capabilities is proven over the real `NodeService`

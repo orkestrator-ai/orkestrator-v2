@@ -38,6 +38,7 @@ import type {
   PackageSource,
 } from "@orkestrator/protocol/capability-resources";
 
+import type { CapabilityAdminPolicyView } from "@orkestrator/protocol/capability-admin-policy";
 import type { CapabilityRegistryList } from "@orkestrator/protocol/capability-registry";
 
 import { capabilitiesOn } from "@/lib/node-scope/domains/capabilities";
@@ -287,6 +288,17 @@ export function createCapabilitiesApi(client: BackendClient) {
         registryId,
         ...(query ? { query } : {}),
       }) as Promise<CapabilityRegistryPackageList>,
+    getCapabilityAdminPolicy: () =>
+      api().get_capability_admin_policy({}) as Promise<CapabilityAdminPolicyView>,
+    /** Replaces the lists given, if the policy is still at `expectedRevision`. */
+    setCapabilityAdminPolicy: (
+      expectedRevision: number,
+      lists: { forbiddenSources?: string[]; forbiddenComponents?: string[] },
+    ) =>
+      api().set_capability_admin_policy({
+        expectedRevision,
+        ...lists,
+      }) as Promise<CapabilityAdminPolicyView>,
     previewCapabilityImport: (input: { intent?: string; lock?: string; projectId?: string }) =>
       api().preview_capability_import(input) as Promise<CapabilityImportPreview>,
     importCapabilitySetup: (previewId: string) =>
@@ -353,4 +365,12 @@ export const {
   previewCapabilityImport,
   importCapabilitySetup,
   verifyAgentCapability,
+  listCapabilityRegistries,
+  saveCapabilityRegistry,
+  removeCapabilityRegistry,
+  setCapabilityManifestPolicy,
+  listCapabilityRegistryPackages,
+  getCapabilityAdminPolicy,
+  setCapabilityAdminPolicy,
+  getCapabilityEnvironmentDelivery,
 } = capabilitiesApi;

@@ -20,6 +20,7 @@ import { StorageService } from "../storage.js";
 import type { TestNode, TestNodeNetwork } from "../nodes/node-network-test-support.js";
 import type { NodeServiceOptions } from "../nodes/node-service.js";
 import { testCapabilityHomes } from "./native-ownership.js";
+import type { ScopedEnvironment } from "./scoped-delivery.js";
 import { CapabilityService } from "./service.js";
 
 export interface CapabilityNode {
@@ -36,6 +37,14 @@ export interface CapabilityNode {
   reachable: boolean;
   /** Fail the next handover stage call of this part (a dropped transfer). */
   failNextStage?: "artifact" | "state";
+  /** This machine's own environments (its environment store). */
+  environments: ScopedEnvironment[];
+  /** Other machines' environments, as this node's read model reports them. */
+  remoteEnvironments: Map<string, ScopedEnvironment[]>;
+  /** Scoped plans this machine's executor received for its worktrees, in order. */
+  environmentApplyCalls: Array<{ environmentId: string; keys: string[] }>;
+  /** Apply the next worktree plan, then lose its answer (the outcome is unknown). */
+  loseNextEnvironmentAnswer?: boolean;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -83,6 +92,9 @@ export async function addCapabilityNode(
     home,
     applyCalls: [],
     reachable: true,
+    environments: [],
+    remoteEnvironments: new Map(),
+    environmentApplyCalls: [],
   } as unknown as CapabilityNode;
   const service = node.service;
   entry.cap = new CapabilityService({
@@ -106,6 +118,8 @@ export async function addCapabilityNode(
     requestLaunch: (payload) => node.emit(CAPABILITY_LAUNCH_REQUESTED_EVENT, payload),
     controllerReachable: async () =>
       entry.reachable && (await service.status()).controllers.length > 0,
+    scoped: { environments: async () => entry.environments },
+    remoteEnvironments: async (nodeId) => entry.remoteEnvironments.get(nodeId) ?? null,
   });
   if (options.launchAnswerTimeoutMs !== undefined)
     entry.cap.leafLaunch.answerTimeoutMs = options.launchAnswerTimeoutMs;
@@ -127,6 +141,20 @@ export async function addCapabilityNode(
         });
       }
       return entry.cap.executorApply(args);
+    },
+    get_capability_node_environment_observation: (args) =>
+      entry.cap.executorObserveEnvironments(args),
+    apply_capability_node_environment_plan: async (args) => {
+      entry.environmentApplyCalls.push({
+        environmentId: String(args.environmentId),
+        keys: ((args.targets ?? []) as Array<Record<string, string>>).map((target) => target.key!),
+      });
+      const answer = await entry.cap.executorApplyEnvironmentPlan(args);
+      if (entry.loseNextEnvironmentAnswer) {
+        entry.loseNextEnvironmentAnswer = false;
+        throw new Error("The connection dropped before the answer arrived.");
+      }
+      return answer;
     },
     export_capability_node_item: (args) => entry.cap.executorExportItem(args),
     stage_capability_node_handover: (args) => {

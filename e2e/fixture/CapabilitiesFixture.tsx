@@ -12,7 +12,16 @@ import type {
   CapabilityUpdateProposal,
   EffectiveAgentResources,
 } from "@orkestrator/protocol/capability-resources";
+import {
+  capabilityPolicyPackageMatch,
+  parseForbiddenComponent,
+  parseForbiddenSource,
+  type CapabilityAdminPolicyView,
+} from "@orkestrator/protocol/capability-admin-policy";
+import type { CapabilityRegistryList } from "@orkestrator/protocol/capability-registry";
 import type {
+  CapabilityDriftMerge,
+  CapabilityEnvironmentDelivery,
   CapabilityImportPreview,
   CapabilitySessionView,
   CapabilitySourceInspection,
@@ -38,6 +47,12 @@ import { CapabilityScopeCard } from "../../apps/web/src/components/settings/capa
  * project and environment cards and a graph agent node's Toolkits section.
  * `?offline` makes the build box offline everywhere (stale data);
  * `window.capabilityFixtureFailNext(command, message)` fails the next call.
+ *
+ * Also answered: registries and the signed-manifest policy, the
+ * administrator policy (with its revision compare-and-swap), a merge of
+ * local changes with one text conflict, an environment's delivery (a
+ * worktree, and a stale container), a signed import preview, and the
+ * Installed view's Codex plugins with their enable switch.
  */
 
 declare global {
@@ -143,6 +158,20 @@ const setups: CapabilitySetup[] = [
     exclusions: [],
     parentSetupIds: [],
     updatePolicy: "approve",
+    updatedAt: NOW,
+  },
+  {
+    id: "team-baseline",
+    name: "Team baseline",
+    revision: 3,
+    packageSelections: [{ packageId: "managed:release-notes", version: "latest" }],
+    providerSelectors: [],
+    // "Use on every enrolled machine": inherited by every project and environment.
+    machineSelectors: ["*"],
+    targetSelectors: [],
+    exclusions: [],
+    parentSetupIds: [],
+    updatePolicy: "trusted-auto",
     updatedAt: NOW,
   },
 ];
@@ -483,6 +512,7 @@ function effective(scopeKey: string, provider: AgentPlatform): EffectiveAgentRes
     target: { nodeId: "bk_desk", provider },
     setupRevisions: [
       { id: "my-setup", revision: 4 },
+      { id: "team-baseline", revision: 3 },
       ...toolkits.map((id) => ({ id, revision: 1 })),
     ],
     resolvedPackages: [
@@ -563,7 +593,244 @@ const importPreview: CapabilityImportPreview = {
     },
   ],
   approvalReasons: ["docs-search connects to docs.example.com."],
+  signature: {
+    status: "untrusted",
+    keyId: "5d41402abc4b2a76b9719d911017c592",
+    fingerprint: "5d41 402a bc4b 2a76 b971 9d91 1017 c592",
+    publicKey: "O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik",
+  },
+  requireSignedManifests: false,
   valid: true,
+};
+
+const registries: CapabilityRegistryList = {
+  revision: 1,
+  registries: [
+    {
+      id: "team",
+      label: "Team registry",
+      indexUrl: "https://registry.example.com/index.json",
+      signingKeyId: "0123456789abcdef0123456789abcdef",
+      addedAt: NOW,
+      updatedAt: NOW,
+      lastFetchedAt: NOW,
+      packageCount: 12,
+    },
+  ],
+  requireSignedManifests: false,
+  signingKey: {
+    keyId: "ab".repeat(16),
+    fingerprint: "abab abab abab abab abab abab abab abab",
+  },
+};
+
+/** The administrator policy, edited with a compare-and-swap on its revision. */
+const adminPolicy = {
+  revision: 2,
+  forbiddenSources: ["git:github.com/untrusted-org/", "registry:legacy/"],
+  forbiddenComponents: [] as string[],
+};
+
+function adminPolicyView(): CapabilityAdminPolicyView {
+  const blocked = packages.flatMap((pkg) => {
+    const entry = capabilityPolicyPackageMatch(
+      adminPolicy,
+      pkg.id,
+      pkg.kinds.map((kind) => ({ id: `${pkg.id}#${kind}:${pkg.displayName}`, kind })),
+    );
+    return entry === undefined
+      ? []
+      : [
+          {
+            packageId: pkg.id,
+            displayName: pkg.displayName,
+            entry,
+            assigned: pkg.assignedSetupIds.length > 0,
+          },
+        ];
+  });
+  return { ...structuredClone(adminPolicy), updatedAt: NOW, blocked, blockedTruncated: 0 };
+}
+
+function setAdminPolicy(args: Record<string, unknown>): CapabilityAdminPolicyView {
+  if (args.expectedRevision !== adminPolicy.revision) {
+    throw new Error(
+      "The policy changed since it was loaded. Review the current policy and try again.",
+    );
+  }
+  for (const [key, parse] of [
+    ["forbiddenSources", parseForbiddenSource],
+    ["forbiddenComponents", parseForbiddenComponent],
+  ] as const) {
+    const list = args[key];
+    if (!Array.isArray(list)) continue;
+    adminPolicy[key] = list.map((raw: string) => {
+      const parsed = parse(raw);
+      if ("error" in parsed) throw new Error(`"${raw}" in ${key}: ${parsed.error}`);
+      return parsed.value;
+    });
+  }
+  adminPolicy.revision += 1;
+  return adminPolicyView();
+}
+
+const MERGE_MARKED =
+  "---\nname: review\n---\nCheck the change.\n<<<<<<< local\nAlso run the linter before approving.\n||||||| base\nRun the tests.\n=======\nRun the tests and the type checker.\n>>>>>>> configured\nSummarise the risk.\n";
+
+function driftMerge(resolved: boolean): CapabilityDriftMerge {
+  return {
+    driftId: "drift-1",
+    nodeId: "bk_laptop",
+    packageId: "managed:review",
+    displayName: "review",
+    baseRevision: "a1b2c3d4e5f6",
+    configuredRevision: "b2c3d4e5f6a7",
+    basis: DIGEST("5"),
+    conflicts: resolved ? 0 : 1,
+    unmergeable: [],
+    files: [
+      {
+        path: "SKILL.md",
+        componentId: "managed:review#skill:",
+        outcome: resolved ? "merged" : "conflict",
+        ...(resolved
+          ? {}
+          : {
+              conflict: {
+                kind: "text" as const,
+                base: "---\nname: review\n---\nCheck the change.\nRun the tests.\nSummarise the risk.\n",
+                local:
+                  "---\nname: review\n---\nCheck the change.\nAlso run the linter before approving.\nSummarise the risk.\n",
+                configured:
+                  "---\nname: review\n---\nCheck the change.\nRun the tests and the type checker.\nSummarise the risk.\n",
+                merged: MERGE_MARKED,
+                hunks: [
+                  {
+                    line: 5,
+                    base: "Run the tests.\n",
+                    local: "Also run the linter before approving.\n",
+                    configured: "Run the tests and the type checker.\n",
+                  },
+                ],
+              },
+            }),
+      },
+      { path: "references/checklist.md", componentId: "managed:review#skill:", outcome: "local" },
+    ],
+    ...(resolved
+      ? {
+          operation: {
+            ...operation(
+              "op-merge",
+              "add-to-setup",
+              [
+                target("m1", "bk_laptop", "claude", "managed:review#skill:", "update", "pending", {
+                  fromDigest: DIGEST("a"),
+                }),
+                target("m2", "bk_desk", "claude", "managed:review#skill:", "update", "pending", {
+                  fromDigest: DIGEST("a"),
+                }),
+              ],
+              [
+                "Publish the merge of the local changes and the configured revision as the package's new revision.",
+              ],
+            ),
+          },
+        }
+      : {}),
+  };
+}
+
+function environmentDelivery(environmentId: string): CapabilityEnvironmentDelivery {
+  if (environmentId === "env-container") {
+    return {
+      environmentId,
+      kind: "container",
+      installedDigest: DIGEST("6"),
+      currentDigest: DIGEST("f"),
+      stale: true,
+      stagedAt: "2026-11-18T16:00:00.000Z",
+      items: [
+        {
+          componentId: "managed:review#skill:",
+          name: "review",
+          kind: "skill",
+          packageId: "managed:review",
+          providers: ["claude", "codex"],
+          locationLabel: "~/.claude/skills",
+          status: "restart-required",
+          installedDigest: DIGEST("6"),
+          currentDigest: DIGEST("a"),
+          reason: "Rebuild the container to stage the current revision.",
+        },
+        {
+          componentId: "managed:release-notes#prompt:",
+          name: "release-notes",
+          kind: "prompt",
+          packageId: "managed:release-notes",
+          providers: ["claude"],
+          locationLabel: "~/.claude/commands",
+          status: "installed-next-session",
+          installedDigest: DIGEST("c"),
+          currentDigest: DIGEST("c"),
+        },
+      ],
+    };
+  }
+  return {
+    environmentId,
+    kind: "worktree",
+    stale: false,
+    items: [
+      {
+        componentId: "managed:review#skill:",
+        name: "review",
+        kind: "skill",
+        packageId: "managed:review",
+        providers: ["claude"],
+        locationId: "project-claude-skills",
+        locationLabel: ".claude/skills",
+        status: "ready",
+        installedDigest: DIGEST("a"),
+        currentDigest: DIGEST("a"),
+      },
+      {
+        componentId: "managed:review#skill:",
+        name: "review",
+        kind: "skill",
+        packageId: "managed:review",
+        providers: ["codex"],
+        locationId: "project-agents-skills",
+        locationLabel: ".agents/skills",
+        status: "installed-next-session",
+        installedDigest: DIGEST("9"),
+        currentDigest: DIGEST("a"),
+        alsoVisibleTo: ["cursor", "opencode", "pi"],
+      },
+    ],
+  };
+}
+
+/** The Installed view's provider plugins; Codex's carry their switchable flag. */
+const agentPlugins: Record<
+  string,
+  Array<{ name: string; status: string; source?: string; qualifiedId?: string }>
+> = {
+  claude: [{ name: "vercel", status: "configured", source: "claude-plugins-official" }],
+  codex: [
+    {
+      name: "linear",
+      status: "configured",
+      source: "openai-curated",
+      qualifiedId: "linear@openai-curated",
+    },
+    {
+      name: "figma",
+      status: "disabled",
+      source: "openai-curated",
+      qualifiedId: "figma@openai-curated",
+    },
+  ],
 };
 
 function answer(command: string, args: Record<string, unknown>): unknown {
@@ -646,6 +913,20 @@ function answer(command: string, args: Record<string, unknown>): unknown {
     case "author_capability_package":
       return inspection;
     case "preview_capability_change":
+      if ((args.change as { kind?: string }).kind === "adopt-drift") {
+        return {
+          replayed: false,
+          operation: operation(
+            "op-adopt",
+            "add-to-setup",
+            [
+              target("a1", "bk_laptop", "claude", "managed:review#skill:", "update", "pending"),
+              target("a2", "bk_desk", "claude", "managed:review#skill:", "update", "pending"),
+            ],
+            ["Publish the local changes on Laptop as the package's next revision."],
+          ),
+        };
+      }
       return { replayed: false, operation: addPlan(args) };
     case "apply_capability_change": {
       const applied = addPlan({ change: {} });
@@ -746,6 +1027,54 @@ function answer(command: string, args: Record<string, unknown>): unknown {
           detail: "Files present.",
         })),
       };
+    case "list_capability_registries":
+      return registries;
+    case "list_capability_registry_packages":
+      return {
+        registryId: args.registryId,
+        packages: [
+          {
+            qualifiedId: "team/review",
+            displayName: "Review",
+            description: "Reviews a change against the team's checklist.",
+            latest: "1.2.0",
+            versions: ["1.2.0", "1.1.0", "1.0.0"],
+          },
+          {
+            qualifiedId: "team/release-notes",
+            displayName: "Release notes",
+            description: "Drafts release notes from merged pull requests.",
+            latest: "0.4.1",
+            versions: ["0.4.1"],
+          },
+        ],
+        truncated: 0,
+      };
+    case "set_capability_registry":
+    case "set_capability_manifest_policy":
+      return registries;
+    case "get_capability_admin_policy":
+      return adminPolicyView();
+    case "set_capability_admin_policy":
+      return setAdminPolicy(args);
+    case "merge_capability_drift":
+      return driftMerge(Array.isArray(args.resolutions));
+    case "get_capability_environment_delivery":
+      return environmentDelivery(String(args.environmentId));
+    case "list_agent_skills":
+      return { provider: args.provider, roots: [], skills: [], errors: [] };
+    case "list_agent_plugins":
+      return { agent: args.provider, plugins: agentPlugins[String(args.provider)] ?? [] };
+    case "set_capability_plugin_enabled": {
+      const plugin = agentPlugins.codex!.find((entry) => entry.qualifiedId === args.qualifiedId);
+      if (plugin) plugin.status = args.enabled ? "configured" : "disabled";
+      return {
+        provider: "codex",
+        qualifiedId: args.qualifiedId,
+        enabled: args.enabled,
+        changed: true,
+      };
+    }
     case "set_capability_package_state":
     case "set_capability_setup":
     case "manage_capability_exception":
@@ -827,6 +1156,14 @@ function ScopesSurface() {
         scopeId="env-1"
         projectId="project-1"
         environmentId="env-1"
+      />
+      <h1 className="text-sm font-semibold">Container environment settings</h1>
+      <CapabilityScopeCard
+        scope="environment"
+        scopeId="env-container"
+        projectId="project-1"
+        environmentId="env-container"
+        onRebuild={() => undefined}
       />
       <div className="max-w-sm rounded-md border border-border p-3">
         <FormSection title="Toolkits">

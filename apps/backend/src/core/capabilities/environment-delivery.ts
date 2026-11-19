@@ -26,7 +26,7 @@ import {
   type ContainerCapabilityPlan,
   type ContainerCapabilityRecord,
 } from "./container-staging.js";
-import { projectCapabilityLocation } from "./scoped-locations.js";
+import { projectCapabilityLocation, projectMcpLocation } from "./scoped-locations.js";
 import {
   desiredProjectState,
   revisionComponent,
@@ -44,6 +44,15 @@ export interface EnvironmentDeliveryContext {
   resolve(state: CapabilityState, target: CapabilityTarget): EffectiveAgentResources;
   sources: ScopedTargetSources;
   now(): string;
+}
+
+/** A worktree location's label: a project directory, or a project MCP file. */
+function projectLocationLabel(locationId: string): string {
+  return (
+    projectCapabilityLocation(locationId)?.label ??
+    projectMcpLocation(locationId)?.relative ??
+    locationId
+  );
 }
 
 /** Every stage name a container can have: each provider and the shared skills root. */
@@ -114,7 +123,7 @@ export async function environmentDeliveryView(
         packageId: receipt.packageId,
         providers: receipt.providers,
         locationId: receipt.locationId,
-        locationLabel: projectCapabilityLocation(receipt.locationId)?.label ?? receipt.locationId,
+        locationLabel: projectLocationLabel(receipt.locationId),
         status: receipt.status,
         installedDigest: receipt.packageDigest,
         currentDigest: state.packages[receipt.packageId]?.artifactDigest ?? receipt.packageDigest,
@@ -146,8 +155,7 @@ export async function environmentDeliveryView(
         packageId: installation.packageId,
         providers: installation.providers,
         locationId: installation.locationId,
-        locationLabel:
-          projectCapabilityLocation(installation.locationId)?.label ?? installation.locationId,
+        locationLabel: projectLocationLabel(installation.locationId),
         status: "pending",
         currentDigest: installation.digest,
         ...(installation.alsoVisibleTo.length > 0

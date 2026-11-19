@@ -329,7 +329,7 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
   - **`codex -c plugins."<id>".enabled=false` per session.**
     - Pros: no file edit.
     - Cons: a per-launch override, not the persisted state the user sees in Codex.
-- **Surface.** `set_capability_plugin_enabled` (admin, on the machine that answers) and the web client function. No Capabilities page toggle yet. Claude answers `unsupported` (managed plugins follow setups; external ones are switched in Claude); other providers answer `unsupported`.
+- **Surface.** `set_capability_plugin_enabled` (admin, on the machine that answers), the web client function, and an "Enable <plugin>" switch in Capabilities → Installed on this machine → Plugins → Codex (disabled with its reason for another machine, a plugin without a reported marketplace, or a failed/pending one; `AgentPluginsBrowser.test.tsx`). Claude answers `unsupported` (managed plugins follow setups; external ones are switched in Claude); other providers answer `unsupported`.
 
 ### Task 7: where the container's manifest is recorded
 
@@ -356,7 +356,7 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 - **Git.** Paths go into `info/exclude` of the Git common directory in a block per environment (`# >>> orkestrator capabilities env-<id> >>>`); blocks of environments this machine no longer has are dropped. `git ls-files` decides tracked collisions; if it fails, nothing is written (a directory outside any repository is written without an exclude). The tracked `.gitignore` is never edited.
 - **Which packages.** Only packages a project or environment setup selects, minus what the machine-wide copies already give that provider at that revision, so Claude does not see the same skill twice.
 - **Locations.** Project paths follow the providers' documentation (OpenCode, Pi and Codex docs checked through Context7; Claude Code, Cursor and Grok as `acp-provider-config.ts` and the bridges read them). Coverage counts only documented readers; `mayAlsoRead` (Cursor and Grok for `.claude/skills` and `.agents/skills`, Pi for `.claude/skills`) only widens `alsoVisibleTo`.
-- **Scope.** The command node's own local worktrees. A leaf's worktrees would need the executor to resolve an environment id locally; not done.
+- **Scope.** The command node's own local worktrees at first; worktrees on other machines followed (see "Task 7: project delivery into worktrees on other machines").
 
 ### Task 7: added-account verification
 
@@ -368,6 +368,56 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
     - Pros: the linked case uses the host receipt; a private directory gets real, verified delivery; credentials are never involved.
     - Cons: a private directory receives only what the machine-wide installations hold (setups are not per account).
 - **Re-linking.** A receipt whose directory is linked again is forgotten without touching files, because the path now reaches the host's copy.
+
+### Task 5 and 7: launch deliveries for targets with their own copies
+
+- **Problem.** `verifyLaunchDeliveries` checked the host's copies for every target, so a container whose staged record matched was blocked by a drifted host copy it never reads.
+- **Options.**
+  - **Ask `scopedRequiredDelivery` first and skip the host check when the target reads no host copy (container, private account directory) (chosen).**
+    - Pros: one rule shared with the resolver; the staged record's refusal (with "rebuild") is the blocker; deliveries name the copy actually read (`container:<location>`, `account:<location>`, project location ids).
+    - Cons: a worktree still checks host copies (below).
+  - **Skip the host check for every scoped target, worktrees included.**
+    - Pros: simpler.
+    - Cons: a false pass. Claude ranks a personal skill above a project one (Claude Code skills docs, "Resolve skills that share a name"), so a drifted `~/.claude/skills` copy of the same revision is what a worktree session runs.
+- A worktree's verified project copy is recorded in `deliveries`; host copies of the same revision the provider reads must still match. A personal copy at another revision with the same name also shadows the project copy in Claude; that is not detected yet.
+- **Leaves.** The leaf's launch request carries the target's own copies (worktree managed copies, or its container's record and label; ids and digests, reasons stripped) as `scoped`; the command node maps them onto its receipts as scoped evidence, and the leaf re-checks scoped deliveries against a fresh report.
+
+### Task 7: project delivery into worktrees on other machines
+
+- **Which environments live where.** The command node's federation read model (node summaries: environment id, project id, type, deletion state) lists each machine's local worktrees; environments it holds receipts for are always asked about too. A node never read yet answers `null` and nothing changes.
+  - **Alternative: the machine lists its environments in the observation.** Pros: never stale. Cons: needs a second round trip before the plan can be probed for collisions. The machine's answer is authoritative anyway (`missing` releases receipts), so the read model's staleness only delays.
+- **Transport.** Two `internal` commands instead of widening `apply_capability_node_plan`: an older leaf answers `unknown-command` and nothing is written, and the machine-wide plan keeps its strict location table. Keys must start with `<that node>|env:<environment>|` and locations must be project locations; the worktree path never travels.
+- **One pass, two places.** `runScopedPass` takes an IO (observe, apply): local for this machine, remote for another. The remote IO marks receipts `outcomeUnknown` before writing; the next pass settles them from the observation (planned digest → confirmed; previous digest → restored; anything else → planned afresh, with the executor's ownership rules deciding).
+- **Triggers.** After each machine's reconcile pass (`afterNodePass`), and after every applied change (`reconcileScoped`), since a project toolkit's change has no machine-wide target. A recheck is scheduled after an unknown outcome.
+- **Not done.** The environment card of a remote worktree is answered by that machine, whose store holds no receipts.
+
+### Task 7: project MCP servers
+
+- **Options.**
+  - **Write through MCP management's environment target and the provider's project source (chosen).**
+    - Pros: its editors (format-preserving JSON and TOML), revisions, symlink and root checks, and ownership fingerprints; project trust comes from the same model the MCP servers settings show.
+    - Cons: the target must exist on the machine that owns the worktree (it does for local environments).
+  - **Write the JSON ourselves like file components.**
+    - Pros: no dependency on MCP management's targets.
+    - Cons: a second editor for the same files; TOML (Codex, Grok) would need another.
+- **Which file.** A fixed table (`PROJECT_MCP_LOCATIONS`) of the file and the source id MCP management gives it; delivery requires that source, so OpenCode with an `opencode.jsonc` is reported unsupported instead of writing a second file.
+- **Ownership of the file.** Recorded on the executor's MCP ownership (`createdFile`): a file Orkestrator created is excluded from Git and deleted once its last server is removed and it holds only an empty server map; an untracked file the user had is edited in place and kept; a tracked one is a collision.
+- **Credentials.** As for machine-wide MCP: env and header keys only, `needs-auth` until the user's own definition supplies them; nothing is written for such a server.
+- **Proof.** `project-mcp.test.ts` over the real `McpManagementService` and a real Git worktree.
+
+### Administrator policy editing
+
+- **Options for the read.**
+  - **Fold the policy into `list_capability_registries`.**
+    - Pros: no new read; the Setups view already loads it.
+    - Cons: mixes organisation policy into the registry list and its revision (the whole store's), so any change elsewhere looks like a policy conflict.
+  - **A dedicated `get_capability_admin_policy` / `set_capability_admin_policy` pair with its own revision (chosen).**
+    - Pros: compare-and-swap only conflicts on a policy change (`settings.policyRevision`); the view can list what the policy blocks now.
+    - Cons: two more commands in the contract.
+- **Edit shape.** Whole-list replacement per list (chosen) rather than add/remove operations: the CAS already serialises administrators, and the form sends the list it showed.
+- **Validation.** One browser-safe parser (`capability-admin-policy.ts`) used by the form and the command: Git addresses canonicalised like package ids, `registry:<id>` gains its slash, component entries are a kind (`kind:hook`), a component id or a package id. `kind:` entries are new; the resolver checks them through the same `capabilityPolicyDenial`.
+- **Effect.** Activity (`admin-policy`) and `reconcileAll("admin-policy")`, so forbidden copies are removed on the next pass.
+- **Proof.** `admin-policy.test.ts` (normalisation, refusals, CAS conflict, Activity, a forbidden source and a forbidden kind blocking on a machine's plan), `AdminPolicySection.test.tsx`, and the policy check in `e2e/CapabilitiesAccessibility.spec.ts`.
 
 ## Related
 

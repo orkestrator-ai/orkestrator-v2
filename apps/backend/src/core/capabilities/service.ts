@@ -107,6 +107,7 @@ import {
 } from "./manifest-signing.js";
 import { inspectRegistrySource, registryLatestVersion, type RegistryFetch } from "./registry.js";
 import { CapabilityRegistryCommands } from "./registry-settings.js";
+import { CapabilityAdminPolicyCommands } from "./admin-policy.js";
 import { collectCapabilityInventory, type InventorySources } from "./inventory.js";
 import {
   answerLeafLaunch,
@@ -140,9 +141,11 @@ import {
 import {
   ScopedCapabilityDelivery,
   scopedRequiredDelivery,
+  type ScopedEnvironment,
   type ScopedEvidence,
   type ScopedTargetSources,
 } from "./scoped-delivery.js";
+import { RemoteScopedDelivery } from "./scoped-remote.js";
 import { effectiveReceiptStatus } from "./runtime-evidence.js";
 import { CapabilityError, treeDigest, type PackageFile } from "./security.js";
 import {
@@ -211,6 +214,8 @@ export interface CapabilityServiceDeps {
   registryFetch?: RegistryFetch;
   /** This machine's worktrees, added accounts and containers (`scoped-delivery.ts`). */
   scoped?: ScopedTargetSources;
+  /** Another machine's environments, from the federation read model (`scoped-remote.ts`). */
+  remoteEnvironments?(nodeId: string): Promise<ScopedEnvironment[] | null>;
   now?: () => string;
 }
 
@@ -310,10 +315,14 @@ export class CapabilityService {
   readonly executor: CapabilityExecutor;
   readonly reconciler: CapabilityReconciler;
   readonly scoped: ScopedCapabilityDelivery;
+  /** Project setups in worktrees on other machines (`scoped-remote.ts`). */
+  readonly remoteScoped: RemoteScopedDelivery;
   /** Local changes: keep, replace, adopt and merge; adopting installed items (`drift.ts`). */
   readonly drift: CapabilityDriftWorkflow;
   /** Package registries and the signed-manifest policy (`registry-settings.ts`). */
   readonly registries: CapabilityRegistryCommands;
+  /** Administrator policy: forbidden sources and components (`admin-policy.ts`). */
+  readonly adminPolicy: CapabilityAdminPolicyCommands;
   /** Command-node handover, receiving side (`handover.ts`). */
   readonly handoverReceiver: CapabilityHandoverReceiver;
   /** Leaf launch preflight answered by the command node (`launch-authority.ts`). */
@@ -358,6 +367,13 @@ export class CapabilityService {
       assertAuthority: () => this.assertAuthority(),
       announce: () => void this.announce({ packageIds: [], setupIds: [], operationIds: [] }),
     });
+    this.adminPolicy = new CapabilityAdminPolicyCommands({
+      storage: deps.storage.capabilities,
+      now: () => this.now(),
+      assertAuthority: () => this.assertAuthority(),
+      announce: (packageIds) => void this.announce({ packageIds, setupIds: [], operationIds: [] }),
+      reconcileAll: (reason) => void this.reconciler.reconcileAll(reason),
+    });
     this.executor = new CapabilityExecutor({
       storage: deps.storage,
       artifacts: this.artifacts,
@@ -372,11 +388,12 @@ export class CapabilityService {
       executor: this.executor,
       artifacts: this.artifacts,
     });
-    const transport = routedTransport({
+    const remote = remoteTransport({
       selfId: deps.selfId,
-      local: { ...local },
-      remote: remoteTransport({ selfId: deps.selfId, link: deps.link, artifacts: this.artifacts }),
+      link: deps.link,
+      artifacts: this.artifacts,
     });
+    const transport = routedTransport({ selfId: deps.selfId, local: { ...local }, remote });
     this.scoped = new ScopedCapabilityDelivery({
       ...deps.scoped,
       storage: deps.storage,
@@ -388,11 +405,27 @@ export class CapabilityService {
       changed: () => void this.announce({ packageIds: [], setupIds: [], operationIds: [] }),
       now: () => this.now(),
     });
+    this.remoteScoped = new RemoteScopedDelivery({
+      ...deps.scoped,
+      storage: deps.storage,
+      artifacts: this.artifacts,
+      homes: () => this.deps.homes(),
+      selfId: deps.selfId,
+      resolve: (state, target) =>
+        this.resolveFor(state, { target, ceiling: UNRESTRICTED_CAPABILITY_CEILING }),
+      link: deps.link,
+      ...(deps.remoteEnvironments ? { remoteEnvironments: deps.remoteEnvironments } : {}),
+      stage: (nodeId, epoch, digest) => remote.stage(nodeId, epoch, digest),
+      noteNames: (names) => this.scoped.noteRemoteNames(names),
+      changed: () => void this.announce({ packageIds: [], setupIds: [], operationIds: [] }),
+      now: () => this.now(),
+    });
     this.reconciler = new CapabilityReconciler({
       storage: deps.storage,
       artifacts: this.artifacts,
       selfId: deps.selfId,
       afterSelfPass: () => this.scoped.runAll(),
+      afterNodePass: (nodeId) => this.remoteScoped.deliverNode(nodeId),
       machines: deps.machines,
       transport,
       isAuthority: () => this.deps.isAuthority(),
@@ -415,6 +448,7 @@ export class CapabilityService {
       admitEpoch: (controllerId, epoch) => this.executor.admitEpoch(controllerId, epoch),
       controllerReachable: async () => (await this.deps.controllerReachable?.()) ?? false,
       ...(deps.requestLaunch ? { request: deps.requestLaunch } : {}),
+      scopedReport: (target) => this.remoteScoped.leafReport(target),
       now: () => this.now(),
     });
   }
@@ -1486,6 +1520,8 @@ export class CapabilityService {
     });
     const nodes = [...new Set(result.record.targets.map((target) => target.target.nodeId))];
     for (const nodeId of nodes) void this.reconciler.reconcileNode(nodeId, "apply");
+    // Worktrees follow project toolkits on every machine, targeted or not.
+    void this.reconciler.reconcileScoped();
     if (nodes.length === 0) {
       this.deps.storage.capabilities.mutateCapabilityState((current) => {
         const record = current.operations[operationId];
@@ -2487,6 +2523,7 @@ export class CapabilityService {
       effective: resolved,
       inventory: launchInventory,
       required: requiredPackageIds(state, resolved),
+      ...(scopedEvidence ? { scopedEvidence } : {}),
     });
     const effective = withBlockers(resolved, checked.blockers);
     this.launchEvidence.set(effective, { deliveries: checked.deliveries });
@@ -2624,6 +2661,18 @@ export class CapabilityService {
     this.executor.admitEpoch(asText(args.controllerId, "controllerId"), Number(args.epoch));
     const targets = parseNodePlanTargets(args.targets);
     return { results: await this.executor.apply(targets) };
+  }
+
+  /** `get_capability_node_environment_observation`: this machine's worktrees, for its command node. */
+  async executorObserveEnvironments(args: Record<string, unknown>) {
+    this.executor.admitEpoch(asText(args.controllerId, "controllerId"), Number(args.epoch));
+    return this.remoteScoped.observeForController(args);
+  }
+
+  /** `apply_capability_node_environment_plan`: a project setup into one worktree here. */
+  async executorApplyEnvironmentPlan(args: Record<string, unknown>) {
+    this.executor.admitEpoch(asText(args.controllerId, "controllerId"), Number(args.epoch));
+    return this.remoteScoped.applyForController(args);
   }
 
   async executorExportItem(

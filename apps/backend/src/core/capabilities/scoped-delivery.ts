@@ -41,31 +41,40 @@ import {
 } from "@orkestrator/protocol/capability-resources-support";
 
 import type { CapabilityArtifactStore } from "./artifact-store.js";
-import { CapabilityExecutor, type NodePlanResult, type NodePlanTarget } from "./executor.js";
 import {
-  installName,
-  installedDigest,
-  readLocationIndex,
-  type CapabilityHomes,
-} from "./native-ownership.js";
+  CapabilityExecutor,
+  componentFiles,
+  type McpInstaller,
+  type NodePlanResult,
+  type NodePlanTarget,
+} from "./executor.js";
+import { installName, installedDigest, type CapabilityHomes } from "./native-ownership.js";
 import { desiredStateForNode, type NodeDesiredState } from "./planning.js";
+import { defaultGitRunner, type GitRunner } from "./project-git.js";
 import {
-  defaultGitRunner,
-  excludePatterns,
-  gitCommonDir,
-  linkedAncestor,
-  trackedPaths,
-  writeExcludeBlock,
-  type GitRunner,
-} from "./project-git.js";
+  observeProjectMcpEntries,
+  projectMcpExcludeFiles,
+  projectMcpInstaller,
+} from "./project-mcp.js";
+import { OutcomeUnknownError } from "./reconciler.js";
 import {
   alsoVisibleAt,
   PROJECT_CAPABILITY_LOCATIONS,
   planScopedLocations,
   projectCapabilityLocation,
+  projectMcpLocation,
+  projectMcpLocationFor,
+  type ProjectMcpLocation,
 } from "./scoped-locations.js";
-import { CAPABILITY_LOCATION_INDEX, removeManagedPath } from "./security.js";
+import { treeDigest } from "./security.js";
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import {
+  dropEmptyIndexes,
+  projectLocator,
+  syncWorktreeExclude,
+  worktreeCollisions,
+  type WorktreeEntry,
+} from "./worktree-writer.js";
 import type { CapabilityState, InstallationReceipt } from "./types.js";
 
 /** A local or container environment, as far as delivery needs it. */
@@ -93,6 +102,8 @@ export interface ScopedTargetSources {
   accounts?(): Promise<ScopedAccount[]>;
   /** The capability record of the container an environment runs now (`container-staging.ts`). */
   containerDelivery?(environmentId: string): Promise<ContainerDeliveryEvidence | null>;
+  /** MCP management for one environment's project MCP files (`project-mcp.ts`). */
+  projectMcp?(environmentId: string): McpInstaller | undefined;
   git?: GitRunner;
 }
 
@@ -216,6 +227,13 @@ export function desiredProjectState(
     }
   >();
   const undeliverable: ScopedUndeliverable[] = [];
+  const mcpWanted: Array<{
+    location: ProjectMcpLocation;
+    component: CapabilityComponent;
+    packageId: string;
+    digest: string;
+    provider: AgentPlatform;
+  }> = [];
   for (const provider of AGENT_PLATFORMS) {
     const resolved = resolve(state, {
       nodeId,
@@ -237,6 +255,28 @@ export function desiredProjectState(
             entry.providers.includes(provider),
         );
         if (served) continue;
+        if (component.kind === "mcp-server") {
+          // Into the provider's project MCP file, through MCP management (`project-mcp.ts`).
+          const location = projectMcpLocationFor(provider);
+          if (!location) {
+            undeliverable.push({
+              provider,
+              componentId,
+              packageId: pkg.id,
+              status: "unsupported",
+              reason: `${provider} reads no project MCP file, so a project setup cannot give it MCP servers; add them to My setup instead.`,
+            });
+            continue;
+          }
+          mcpWanted.push({
+            location,
+            component,
+            packageId: pkg.id,
+            digest: pkg.artifactDigest,
+            provider,
+          });
+          continue;
+        }
         if (!FILE_KINDS.has(component.kind)) {
           undeliverable.push({
             provider,
@@ -244,9 +284,7 @@ export function desiredProjectState(
             packageId: pkg.id,
             status: "unsupported",
             reason:
-              component.kind === "mcp-server"
-                ? "A project toolkit delivers files into the worktree; its MCP servers need My setup or the project's own MCP configuration."
-                : "Only skills, commands, prompts and subagents are delivered into a worktree.",
+              "Only skills, commands, prompts, subagents and MCP servers are delivered into a worktree.",
           });
           continue;
         }
@@ -292,6 +330,22 @@ export function desiredProjectState(
         reason: `${provider} reads no project directory Orkestrator can write a ${entry.component.kind} to.`,
       });
     }
+  }
+  for (const entry of mcpWanted) {
+    const key = projectReceiptKey(nodeId, environment.id, entry.location.id, entry.component.id);
+    const previous = byKey.get(key);
+    if (previous && previous.digest !== entry.digest) conflicts.add(key);
+    byKey.set(key, {
+      key,
+      nodeId,
+      locationId: entry.location.id,
+      componentId: entry.component.id,
+      packageId: entry.packageId,
+      digest: entry.digest,
+      providers: [entry.provider],
+      alsoVisibleTo: entry.location.alsoVisibleTo.filter((provider) => provider !== entry.provider),
+      references: scopedReferences(state, environment, entry.packageId),
+    });
   }
   for (const key of conflicts) {
     const entry = byKey.get(key)!;
@@ -403,11 +457,32 @@ export function desiredAccountState(
 
 type Located = { location: CapabilityLocation; directory: string };
 
+/**
+ * How a pass reads and writes its scope's copies: on this machine through
+ * its own executor (the default), or on another machine over the node link
+ * (`scoped-remote.ts`), whose answer can be lost.
+ */
+export interface ScopedPassIO {
+  /** The digest on disk of each receipt's copy; a receipt absent from the map was not readable. */
+  observe(
+    state: CapabilityState,
+    receipts: readonly InstallationReceipt[],
+  ): Promise<Map<string, string | null>>;
+  /** Throws {@link OutcomeUnknownError} when the writes may or may not have happened. */
+  apply(targets: NodePlanTarget[]): Promise<NodePlanResult[]>;
+  /** Mark receipts before writing, so a lost answer is settled by observation. */
+  durable?: boolean;
+}
+
 export interface ScopedPassInput {
   nodeId: string;
   scope: { environmentId?: string; accountHomeId?: string };
   desired: ScopedInstallation[];
-  locate(locationId: string): Located | undefined;
+  /** This machine's directories for the scope; required without `io`. */
+  locate?(locationId: string): Located | undefined;
+  /** A local worktree scope's checkout, for its project MCP files. */
+  worktree?: string;
+  io?: ScopedPassIO;
   /** A reason the installation must not be written (a tracked path, a link), checked first. */
   collisions?: ReadonlyMap<string, string>;
   /** False when the receipts' directory is no longer this scope's own (an account re-linked). */
@@ -458,28 +533,6 @@ export async function observeScopedReceipts(
   return observed;
 }
 
-/** A file location whose last managed file was removed keeps no empty index behind. */
-async function dropEmptyIndexes(
-  targets: readonly NodePlanTarget[],
-  results: readonly NodePlanResult[],
-  locate: (locationId: string) => Located | undefined,
-): Promise<void> {
-  const removed = new Set(
-    results.filter((result) => result.status === "ready").map((result) => result.key),
-  );
-  const directories = new Set<string>();
-  for (const target of targets) {
-    if (target.action !== "remove" || !removed.has(target.key) || !target.locationId) continue;
-    const located = locate(target.locationId);
-    if (located?.location.layout === "file") directories.add(located.directory);
-  }
-  for (const directory of directories) {
-    const index = await readLocationIndex(directory);
-    if (Object.keys(index.files).length > 0) continue;
-    await removeManagedPath(directory, CAPABILITY_LOCATION_INDEX).catch(() => false);
-  }
-}
-
 /**
  * Observe, record drift, plan and apply one scope's copies with a located
  * executor, then record receipts. Receipts of other scopes are untouched.
@@ -487,13 +540,22 @@ async function dropEmptyIndexes(
 export async function runScopedPass(
   deps: Pick<ScopedDeliveryDeps, "storage" | "artifacts" | "homes" | "now">,
   input: ScopedPassInput,
-): Promise<{ changed: boolean }> {
+): Promise<{ changed: boolean; unknown?: boolean }> {
   const now = () => (deps.now ?? (() => new Date().toISOString()))();
-  const state = await deps.storage.capabilities.loadCapabilityState();
-  const existing = Object.values(state.receipts).filter((receipt) =>
+  const io = input.io ?? localScopedIO(deps, input);
+  let state = await deps.storage.capabilities.loadCapabilityState();
+  let existing = Object.values(state.receipts).filter((receipt) =>
     inScope(receipt, input.nodeId, input.scope),
   );
-  const observed = await observeScopedReceipts(state, existing, input.locate);
+  const observed = await io.observe(state, existing);
+  // A write whose answer was lost is settled from what is on disk, never re-sent blindly.
+  const settledUnknown = await settleUnknownOutcomes(deps, state, existing, observed);
+  if (settledUnknown) {
+    state = await deps.storage.capabilities.loadCapabilityState();
+    existing = Object.values(state.receipts).filter((receipt) =>
+      inScope(receipt, input.nodeId, input.scope),
+    );
+  }
   const desiredByKey = new Map(input.desired.map((entry) => [entry.key, entry]));
   const driftKeys = new Set<string>();
   const forceKeys = new Set<string>();
@@ -547,6 +609,7 @@ export async function runScopedPass(
       componentName: component.name,
       pathOrKey: component.pathOrKey,
       locationId: installation.locationId,
+      ...(component.kind === "mcp-server" ? { provider: installation.providers[0]! } : {}),
       artifactDigest: installation.digest,
       ...(forceKeys.has(installation.key) ? { force: true } : {}),
     });
@@ -574,23 +637,25 @@ export async function runScopedPass(
       componentName: component?.name ?? receipt.componentId.split(":").pop() ?? "component",
       pathOrKey: component?.pathOrKey ?? "",
       locationId: receipt.locationId,
+      ...(component?.kind === "mcp-server" ? { provider: receipt.providers[0]! } : {}),
       ...(forceKeys.has(receipt.id) ? { force: true } : {}),
     });
   }
 
   let results: NodePlanResult[] = [];
+  let unknown = false;
   if (targets.length > 0) {
-    const executor = new CapabilityExecutor({
-      storage: deps.storage,
-      artifacts: deps.artifacts,
-      homes: deps.homes,
-      locate: input.locate,
-      ...(deps.now ? { now: deps.now } : {}),
-    });
-    results = await executor.apply(targets);
-    await dropEmptyIndexes(targets, results, input.locate);
+    if (io.durable) markPendingWrites(deps, targets);
+    try {
+      results = await io.apply(targets);
+    } catch (error) {
+      if (!(error instanceof OutcomeUnknownError)) throw error;
+      unknown = true;
+    }
   }
   if (
+    !unknown &&
+    !settledUnknown &&
     results.length === 0 &&
     newDrift.length === 0 &&
     healed.length === 0 &&
@@ -659,6 +724,30 @@ export async function runScopedPass(
         reason,
       });
     }
+    if (unknown) {
+      for (const target of targets) {
+        const live = current.receipts[target.key];
+        const installation = desiredByKey.get(target.key);
+        if (live) {
+          live.outcomeUnknown = true;
+          live.pendingWrite = {
+            action: target.action,
+            ...(target.artifactDigest ? { packageDigest: target.artifactDigest } : {}),
+          };
+        } else if (installation && target.action !== "remove") {
+          current.receipts[target.key] = {
+            ...receiptFor(installation, {
+              status: "outcome-unknown",
+              verification: "requested",
+              digest: "",
+              reason: "Checking what the machine applied.",
+            }),
+            outcomeUnknown: true,
+            pendingWrite: { action: target.action, packageDigest: installation.digest },
+          };
+        }
+      }
+    }
     for (const result of results) {
       const target = byKey.get(result.key);
       if (!target) continue;
@@ -666,6 +755,9 @@ export async function runScopedPass(
         if (result.status === "ready") {
           delete current.receipts[result.key];
           delete current.drift[`drift:${result.key}`];
+        } else if (current.receipts[result.key]) {
+          delete current.receipts[result.key]!.outcomeUnknown;
+          delete current.receipts[result.key]!.pendingWrite;
         }
         continue;
       }
@@ -693,7 +785,153 @@ export async function runScopedPass(
     }
     return { result: undefined, changed: true };
   });
-  return { changed: true };
+  return { changed: true, ...(unknown ? { unknown: true } : {}) };
+}
+
+/** A receipt with bytes on disk to compare, or an unanswered write to settle. */
+export function observable(receipt: InstallationReceipt): boolean {
+  return receipt.outcomeUnknown === true || (receipt.status !== "failed" && !!receipt.digest);
+}
+
+/** This machine's own executor over the scope's located directories. */
+function localScopedIO(
+  deps: Pick<ScopedDeliveryDeps, "storage" | "artifacts" | "homes" | "now" | "projectMcp">,
+  input: ScopedPassInput,
+): ScopedPassIO {
+  const locate = input.locate;
+  if (!locate) throw new Error("A local scoped pass needs its locations.");
+  const environmentId = input.scope.environmentId;
+  const base = environmentId && input.worktree ? deps.projectMcp?.(environmentId) : undefined;
+  const mcp =
+    base && environmentId && input.worktree
+      ? projectMcpInstaller(base, {
+          storage: deps.storage,
+          nodeId: input.nodeId,
+          environmentId,
+          worktree: input.worktree,
+        })
+      : undefined;
+  return {
+    observe: async (state, receipts) => {
+      const observed = await observeScopedReceipts(state, receipts, locate);
+      const mcpKeys = receipts
+        .filter((receipt) => projectMcpLocation(receipt.locationId) && observable(receipt))
+        .map((receipt) => receipt.id);
+      for (const [key, digest] of await observeProjectMcpEntries(deps.storage, mcp, mcpKeys))
+        observed.set(key, digest);
+      return observed;
+    },
+    apply: async (targets) => {
+      const executor = new CapabilityExecutor({
+        storage: deps.storage,
+        artifacts: deps.artifacts,
+        homes: deps.homes,
+        locate,
+        ...(mcp ? { mcp } : {}),
+        ...(deps.now ? { now: deps.now } : {}),
+      });
+      const results = await executor.apply(targets);
+      await dropEmptyIndexes(targets, results, locate);
+      return results;
+    },
+  };
+}
+
+/** Before a write whose answer can be lost: what was about to happen, per receipt. */
+function markPendingWrites(
+  deps: Pick<ScopedDeliveryDeps, "storage">,
+  targets: readonly NodePlanTarget[],
+): void {
+  deps.storage.capabilities.mutateCapabilityState((current) => {
+    let changed = false;
+    for (const target of targets) {
+      const receipt = current.receipts[target.key];
+      if (!receipt) continue;
+      receipt.outcomeUnknown = true;
+      receipt.pendingWrite = {
+        action: target.action,
+        ...(target.artifactDigest ? { packageDigest: target.artifactDigest } : {}),
+      };
+      changed = true;
+    }
+    return { result: undefined, changed };
+  });
+}
+
+/** The digest a scoped receipt's pending write leaves on disk, from the package artifact. */
+async function expectedScopedDigest(
+  artifacts: CapabilityArtifactStore,
+  state: CapabilityState,
+  receipt: InstallationReceipt,
+): Promise<string | undefined> {
+  const digest = receipt.pendingWrite?.packageDigest ?? receipt.packageDigest;
+  // A project MCP server is observed by the package digest its executor recorded.
+  if (projectMcpLocation(receipt.locationId)) return digest || undefined;
+  const location =
+    projectCapabilityLocation(receipt.locationId) ?? capabilityLocation(receipt.locationId);
+  const component = revisionComponent(state, receipt.packageId, receipt.componentId, digest);
+  if (!location || !component || !digest) return undefined;
+  const files = componentFiles(await artifacts.get(digest), component);
+  if (files.length === 0) return undefined;
+  if (location.layout === "directory") return treeDigest(files);
+  return treeDigest([{ ...files[0]!, path: entryName(component, "file") }]);
+}
+
+/**
+ * Settles receipts whose last write went unanswered, from the observation:
+ * the planned bytes are there (confirmed), the previous bytes are still
+ * there (the write did not land; planned again), a removal left nothing
+ * (gone), or anything else (forgotten, so the pass plans it afresh and the
+ * executor's ownership rules decide).
+ */
+async function settleUnknownOutcomes(
+  deps: Pick<ScopedDeliveryDeps, "storage" | "artifacts">,
+  state: CapabilityState,
+  receipts: readonly InstallationReceipt[],
+  observed: ReadonlyMap<string, string | null>,
+): Promise<boolean> {
+  const outcomes = new Map<
+    string,
+    { kind: "confirm"; digest: string } | { kind: "restore" } | { kind: "forget" }
+  >();
+  for (const receipt of receipts) {
+    if (!receipt.outcomeUnknown || !observed.has(receipt.id)) continue;
+    const seen = observed.get(receipt.id) ?? null;
+    if (receipt.pendingWrite?.action === "remove") {
+      outcomes.set(receipt.id, seen === null ? { kind: "forget" } : { kind: "restore" });
+      continue;
+    }
+    const expected = await expectedScopedDigest(deps.artifacts, state, receipt).catch(
+      () => undefined,
+    );
+    if (expected && seen === expected)
+      outcomes.set(receipt.id, { kind: "confirm", digest: expected });
+    else if (receipt.digest && seen === receipt.digest)
+      outcomes.set(receipt.id, { kind: "restore" });
+    else outcomes.set(receipt.id, { kind: "forget" });
+  }
+  if (outcomes.size === 0) return false;
+  deps.storage.capabilities.mutateCapabilityState((current) => {
+    for (const [id, outcome] of outcomes) {
+      const receipt = current.receipts[id];
+      if (!receipt) continue;
+      if (outcome.kind === "forget") {
+        delete current.receipts[id];
+        continue;
+      }
+      if (outcome.kind === "confirm") {
+        receipt.digest = outcome.digest;
+        receipt.packageDigest = receipt.pendingWrite?.packageDigest ?? receipt.packageDigest;
+        receipt.verification = "present";
+      }
+      receipt.status = "installed-next-session";
+      delete receipt.reason;
+      delete receipt.outcomeUnknown;
+      delete receipt.pendingWrite;
+    }
+    return { result: undefined, changed: true };
+  });
+  return true;
 }
 
 // --- Evidence for launch preflight ----------------------------------------------
@@ -720,10 +958,26 @@ export interface ContainerDeliveryEvidence {
 }
 
 export type ScopedRequirement =
-  | { kind: "verified" }
+  | {
+      kind: "verified";
+      /** The target's own copies that hold the required revision (location ids are scoped). */
+      deliveries: Array<{ locationId: string; digest: string }>;
+      /**
+       * True when the target reads no machine-wide copy of the component (a
+       * container, a private account directory). A worktree also reads the
+       * host's copies, and Claude ranks a personal skill above a project one,
+       * so those must still hold their recorded bytes.
+       */
+      exclusive: boolean;
+    }
   | { kind: "refused"; reason: string }
   /** The machine-wide copy is what this target loads: check the host receipts. */
   | { kind: "host" };
+
+/** A container's staged copy, as a launch delivery's location id. */
+export function containerDeliveryLocation(locationId: string): string {
+  return `container:${locationId}`;
+}
 
 /**
  * Whether a required component at `digest` is delivered for a container,
@@ -760,7 +1014,24 @@ export function scopedRequiredDelivery(input: {
         entry.status === "staged" &&
         entry.providers.includes(target.provider),
     );
-    if (item?.packageDigest === digest) return { kind: "verified" };
+    if (item?.packageDigest === digest) {
+      return {
+        kind: "verified",
+        exclusive: true,
+        deliveries: container.record.items
+          .filter(
+            (entry) =>
+              entry.componentId === component.id &&
+              entry.status === "staged" &&
+              entry.packageDigest === digest &&
+              entry.providers.includes(target.provider),
+          )
+          .map((entry) => ({
+            locationId: containerDeliveryLocation(entry.locationId),
+            digest: entry.digest ?? entry.packageDigest,
+          })),
+      };
+    }
     return {
       kind: "refused",
       reason: item
@@ -809,14 +1080,23 @@ export function scopedRequiredDelivery(input: {
     ) {
       return { kind: "host" };
     }
-    const own = Object.values(state.receipts).some(
+    const own = Object.values(state.receipts).filter(
       (receipt) =>
         receipt.nodeId === target.nodeId &&
         receipt.accountHomeId === target.accountHomeId &&
         account.entries[receipt.locationId] === "private" &&
         scopedMatch(receipt, account.observed),
     );
-    if (own) return { kind: "verified" };
+    if (own.length > 0) {
+      return {
+        kind: "verified",
+        exclusive: true,
+        deliveries: own.map((receipt) => ({
+          locationId: `account:${receipt.locationId}`,
+          digest: receipt.digest,
+        })),
+      };
+    }
     return {
       kind: "refused",
       reason: `This account keeps its own copy of its ${target.provider} configuration, and the required revision of ${component.name} is not verified there yet.`,
@@ -827,20 +1107,27 @@ export function scopedRequiredDelivery(input: {
     evidence?.project?.environmentId === target.environmentId
   ) {
     const project = evidence.project;
-    const verified = Object.values(state.receipts).some(
+    const verified = Object.values(state.receipts).filter(
       (receipt) =>
         receipt.nodeId === target.nodeId &&
         receipt.environmentId === target.environmentId &&
         scopedMatch(receipt, project.observed),
     );
-    if (verified) return { kind: "verified" };
+    if (verified.length > 0) {
+      return {
+        kind: "verified",
+        exclusive: false,
+        deliveries: verified.map((receipt) => ({
+          locationId: receipt.locationId,
+          digest: receipt.digest,
+        })),
+      };
+    }
   }
   return { kind: "host" };
 }
 
 // --- The service-facing class ----------------------------------------------------
-
-const EXCLUDE_OWNER_PREFIX = "env-";
 
 /**
  * Runs the scoped passes for this machine, one at a time, and answers
@@ -849,6 +1136,8 @@ const EXCLUDE_OWNER_PREFIX = "env-";
 export class ScopedCapabilityDelivery {
   private chain: Promise<unknown> = Promise.resolve();
   private names = new Map<string, string>();
+  /** Worktrees on other machines, named by the command node's last pass over them. */
+  private remoteNames = new Map<string, string>();
 
   constructor(private readonly deps: ScopedDeliveryDeps) {}
 
@@ -908,12 +1197,12 @@ export class ScopedCapabilityDelivery {
 
   /** The project locations of one worktree. */
   projectLocator(worktree: string): (locationId: string) => Located | undefined {
-    return (locationId) => {
-      const location = projectCapabilityLocation(locationId);
-      return location
-        ? { location, directory: path.join(worktree, ...location.relative.split("/")) }
-        : undefined;
-    };
+    return projectLocator(worktree);
+  }
+
+  /** Names for worktrees on other machines (`scoped-remote.ts`). */
+  noteRemoteNames(names: ReadonlyMap<string, string>): void {
+    for (const [key, name] of names) this.remoteNames.set(key, name);
   }
 
   /** An account's own directories, standing in for the host's. */
@@ -930,9 +1219,14 @@ export class ScopedCapabilityDelivery {
   }
 
   private async forgetGoneEnvironments(known: ReadonlySet<string>): Promise<boolean> {
+    const nodeId = await this.deps.selfId();
     const state = await this.deps.storage.capabilities.loadCapabilityState();
+    // Worktrees on other machines are settled by their own pass (`scoped-remote.ts`).
     const gone = Object.values(state.receipts).filter(
-      (receipt) => receipt.environmentId !== undefined && !known.has(receipt.environmentId),
+      (receipt) =>
+        receipt.nodeId === nodeId &&
+        receipt.environmentId !== undefined &&
+        !known.has(receipt.environmentId),
     );
     if (gone.length === 0) return false;
     // The worktree went with its environment; there is nothing left to remove.
@@ -975,97 +1269,81 @@ export class ScopedCapabilityDelivery {
     if (installations.length === 0 && existing.length === 0) return false;
 
     const locate = this.projectLocator(worktree);
-    const relativeEntry = (
-      installation: Pick<ScopedInstallation, "packageId" | "componentId" | "digest" | "locationId">,
-    ) => {
-      const location = projectCapabilityLocation(installation.locationId);
+    const entryOf = (
+      key: string,
+      installation: Pick<ScopedInstallation, "packageId" | "componentId" | "locationId">,
+      digest: string,
+    ): WorktreeEntry[] => {
       const component = revisionComponent(
         state,
         installation.packageId,
         installation.componentId,
-        installation.digest,
+        digest,
       );
-      if (!location || !component) return null;
-      return {
-        location,
-        relative: `${location.relative}/${entryName(component, location.layout)}`,
-        directory: location.layout === "directory",
-      };
+      return component
+        ? [
+            {
+              key,
+              locationId: installation.locationId,
+              componentName: component.name,
+              pathOrKey: component.pathOrKey,
+            },
+          ]
+        : [];
     };
 
     // Collisions: a path the repository tracks, or a directory reached through a link.
-    const collisions = new Map<string, string>();
     const git = this.git();
-    const commonDir = await gitCommonDir(git, worktree);
-    const candidates = installations.flatMap((installation) => {
-      const entry = relativeEntry(installation);
-      return entry ? [{ installation, ...entry }] : [];
-    });
-    if (commonDir) {
-      const paths = new Set<string>();
-      for (const candidate of candidates) {
-        paths.add(candidate.relative);
-        if (!candidate.directory)
-          paths.add(`${candidate.location.relative}/.orkestrator-capabilities.json`);
-      }
-      let tracked: Set<string>;
-      try {
-        tracked = await trackedPaths(git, worktree, [...paths]);
-      } catch {
-        // Without the index's answer nothing can be shown to be safe to write.
-        tracked = new Set(paths);
-      }
-      for (const candidate of candidates) {
-        const index = `${candidate.location.relative}/.orkestrator-capabilities.json`;
-        if (tracked.has(candidate.relative) || (!candidate.directory && tracked.has(index))) {
-          collisions.set(
-            candidate.installation.key,
-            `${candidate.relative} is tracked in this repository; Orkestrator never replaces a tracked file. Rename the component or remove the file from the repository.`,
-          );
-        }
-      }
-    }
-    for (const candidate of candidates) {
-      if (collisions.has(candidate.installation.key)) continue;
-      const linked = await linkedAncestor(worktree, candidate.location.relative);
-      if (linked) {
-        collisions.set(
-          candidate.installation.key,
-          `${linked} in this worktree is a link or a file; Orkestrator does not write through it.`,
-        );
-      }
-    }
+    const candidates = installations.flatMap((installation) =>
+      entryOf(installation.key, installation, installation.digest),
+    );
+    const collisions = await worktreeCollisions(git, worktree, candidates);
 
     // Exclude before writing, so no status ever shows the copies.
-    const owner = `${EXCLUDE_OWNER_PREFIX}${environment.id}`;
-    const writable = candidates.filter((candidate) => !collisions.has(candidate.installation.key));
-    const kept = existing.flatMap((receipt) => {
-      if (receipt.status === "failed") return [];
-      const entry = relativeEntry({ ...receipt, digest: receipt.packageDigest });
-      return entry ? [entry] : [];
-    });
-    const keepOwner = (name: string) =>
-      !name.startsWith(EXCLUDE_OWNER_PREFIX) || known.has(name.slice(EXCLUDE_OWNER_PREFIX.length));
-    if (commonDir) {
-      await writeExcludeBlock(commonDir, owner, excludePatterns([...writable, ...kept]), keepOwner);
-    }
+    const writable = candidates.filter((candidate) => !collisions.has(candidate.key));
+    const kept = existing.flatMap((receipt) =>
+      receipt.status === "failed" ? [] : entryOf(receipt.id, receipt, receipt.packageDigest),
+    );
+    const knownEnvironment = (id: string) => known.has(id);
+    const mcpContext = {
+      storage: this.deps.storage,
+      nodeId,
+      environmentId: environment.id,
+      worktree,
+    };
+    await syncWorktreeExclude(
+      git,
+      worktree,
+      environment.id,
+      [...writable, ...kept],
+      knownEnvironment,
+      await projectMcpExcludeFiles(mcpContext, writable),
+    );
     const { changed } = await runScopedPass(this.deps, {
       nodeId,
       scope: { environmentId: environment.id },
       desired: installations,
       locate,
+      worktree,
       collisions,
       removeFiles: true,
     });
-    if (commonDir) {
-      const after = await this.deps.storage.capabilities.loadCapabilityState();
-      const remaining = Object.values(after.receipts).flatMap((receipt) => {
-        if (receipt.environmentId !== environment.id || receipt.status === "failed") return [];
-        const entry = relativeEntry({ ...receipt, digest: receipt.packageDigest });
-        return entry ? [entry] : [];
-      });
-      await writeExcludeBlock(commonDir, owner, excludePatterns(remaining), keepOwner);
-    }
+    const after = await this.deps.storage.capabilities.loadCapabilityState();
+    const remaining = Object.values(after.receipts).flatMap((receipt) =>
+      receipt.nodeId !== nodeId ||
+      receipt.environmentId !== environment.id ||
+      receipt.status === "failed"
+        ? []
+        : entryOf(receipt.id, receipt, receipt.packageDigest),
+    );
+    await syncWorktreeExclude(
+      git,
+      worktree,
+      environment.id,
+      remaining,
+      knownEnvironment,
+      await projectMcpExcludeFiles(mcpContext, []),
+    );
     return changed;
   }
 
@@ -1128,7 +1406,7 @@ export class ScopedCapabilityDelivery {
 
   /** Display names for the "Where available" rows of scoped copies, from the last pass. */
   scopeNames(): ReadonlyMap<string, string> {
-    return this.names;
+    return new Map([...this.remoteNames, ...this.names]);
   }
 
   /** Evidence for one launch target (worktree or account); containers come from staging. */
@@ -1147,14 +1425,26 @@ export class ScopedCapabilityDelivery {
       const receipts = Object.values(state.receipts).filter(
         (receipt) => receipt.nodeId === target.nodeId && receipt.environmentId === environment.id,
       );
-      evidence.project = {
-        environmentId: environment.id,
-        observed: await observeScopedReceipts(
-          state,
-          receipts,
-          this.projectLocator(environment.worktreePath),
-        ),
-      };
+      const observed = await observeScopedReceipts(
+        state,
+        receipts,
+        this.projectLocator(environment.worktreePath),
+      );
+      const base = this.deps.projectMcp?.(environment.id);
+      const mcp = base
+        ? projectMcpInstaller(base, {
+            storage: this.deps.storage,
+            nodeId: target.nodeId,
+            environmentId: environment.id,
+            worktree: environment.worktreePath,
+          })
+        : undefined;
+      const mcpKeys = receipts
+        .filter((receipt) => projectMcpLocation(receipt.locationId) && observable(receipt))
+        .map((receipt) => receipt.id);
+      for (const [key, digest] of await observeProjectMcpEntries(this.deps.storage, mcp, mcpKeys))
+        observed.set(key, digest);
+      evidence.project = { environmentId: environment.id, observed };
     }
     if (target.accountHomeId !== undefined && account) {
       const entries = await accountHomeEvidence(account.provider, account.home, this.deps.homes());

@@ -318,6 +318,54 @@ test("toolkits show their exceptions; export and import are previews", async ({ 
   expect(await horizontalOverflow(page)).toEqual([]);
 });
 
+test("the administrator policy lists, adds and refuses entries, and wins over setups", async ({
+  page,
+}) => {
+  const settings = await openSettings(page);
+  await settings.getByRole("tab", { name: "Setups" }).click();
+  const policy = settings.getByRole("region", { name: "Policy" });
+  await expect(policy).toContainText("win over every setup");
+  await expect(policy.getByRole("list", { name: "Forbidden sources" })).toContainText(
+    "git:github.com/untrusted-org/",
+  );
+  await expect(policy).toContainText("No component is forbidden.");
+
+  // A kind is normalised and sent against the loaded revision; what it blocks is listed.
+  await policy.getByRole("textbox", { name: "Forbid a component" }).fill("mcp-server");
+  await policy.getByRole("textbox", { name: "Forbid a component" }).press("Enter");
+  await expect.poll(async () => (await calls(page, "set_capability_admin_policy")).length).toBe(1);
+  expect((await calls(page, "set_capability_admin_policy"))[0]!.args).toEqual({
+    expectedRevision: 2,
+    forbiddenComponents: ["kind:mcp-server"],
+  });
+  await expect(policy.getByRole("list", { name: "Forbidden components" })).toContainText(
+    "kind:mcp-server",
+  );
+  const blocked = policy.getByRole("list", { name: "Packages blocked by policy" });
+  await expect(blocked).toContainText("docs-search");
+  await expect(blocked).toContainText("Blocked by policy");
+
+  // An entry that could never match is refused in the form, with its reason.
+  const source = policy.getByRole("textbox", { name: "Forbid a source" });
+  await source.fill("github.com");
+  await source.press("Enter");
+  await expect(source).toHaveAttribute("aria-invalid", "true");
+  await expect(policy).toContainText("Start with git:");
+  expect(await calls(page, "set_capability_admin_policy")).toHaveLength(1);
+
+  // Someone else changed it meanwhile: the conflict is announced.
+  await page.evaluate(() =>
+    window.capabilityFixtureFailNext?.(
+      "set_capability_admin_policy",
+      "The policy changed since it was loaded. Review the current policy and try again.",
+    ),
+  );
+  await policy.getByRole("button", { name: "Allow registry:legacy/ again" }).click();
+  await expect(policy.getByRole("alert")).toContainText("The policy changed since it was loaded.");
+  expect(await unnamedControls(policy)).toEqual([]);
+  expect(await horizontalOverflow(page)).toEqual([]);
+});
+
 test("stale data stays visible with the error, and an offline machine says it is waiting", async ({
   page,
 }) => {

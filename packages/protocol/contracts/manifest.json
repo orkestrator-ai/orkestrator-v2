@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1059,
-    "defined": 1059,
+    "commands": 1063,
+    "defined": 1063,
     "untyped": 0,
     "events": 47
   },
@@ -382,6 +382,15 @@
       "critical": [],
       "argsDigest": "sha256:7059ebb46d5a8839b83b41106e137ef6f366995f595ae5da1a44ea090bc64150",
       "resultDigest": "sha256:252a98bc8ff092f1a24fa2b9ad5a4b3da5736a644b37a771ab291dc9d47b1465"
+    },
+    "apply_capability_node_environment_plan": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e9c11b6d0040495264d9861a1c39d10cf95858ec61aa41cfe4fd3538b67d6a0f",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
     },
     "apply_capability_node_plan": {
       "domain": "capabilities",
@@ -3001,6 +3010,15 @@
       "argsDigest": "sha256:67a7508d0f94643b4b28c2021da625b36461e509d7d3a887cdc09977afda241f",
       "resultDigest": "sha256:eb6f957593f316ad6b7a341f760e69b2358fda182b01e75d8e17299517b51e45"
     },
+    "get_capability_admin_policy": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:dc4461da6452b82e83c53992bf8243c5c3469b7fb675bd96a69e9a95e1c69e64"
+    },
     "get_capability_assignment": {
       "domain": "capabilities",
       "since": 1,
@@ -3027,6 +3045,15 @@
       "critical": [],
       "argsDigest": "sha256:280e6acdf0384cbe23a1f0c876d75baef40d854b47c4c676dbcb14093384b9d1",
       "resultDigest": "sha256:c157da2da4414f64e6d262692b4bab67e1dd1365ec316807bb42a88a3e2ca4b2"
+    },
+    "get_capability_node_environment_observation": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:b98d6e9c97cd7d214313a38f93e219f473f51aeab7fb8c47636db50d40263e1b",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
     },
     "get_capability_node_observation": {
       "domain": "capabilities",
@@ -7741,6 +7768,15 @@
       "critical": [],
       "argsDigest": "sha256:adb51eb53a995589b66c1689ff2dda370872caf40af68fb0c3d2443d0121cc78",
       "resultDigest": "sha256:c7c6232cd86a2ff8b4894faee55ce6f094c8951db27a9d829f9c1fe8cea2e525"
+    },
+    "set_capability_admin_policy": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7d6e0ed859431c68b0bbc408ebc18b4655c24eef9c09347776ea96bb74f80180",
+      "resultDigest": "sha256:dc4461da6452b82e83c53992bf8243c5c3469b7fb675bd96a69e9a95e1c69e64"
     },
     "set_capability_machine_enrollment": {
       "domain": "capabilities",

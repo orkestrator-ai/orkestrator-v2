@@ -248,6 +248,7 @@
     "./capability-resources-support": "./src/capability-resources-support.ts",
     "./capability-resources-resolve": "./src/capability-resources-resolve.ts",
     "./capability-registry": "./src/capability-registry.ts",
+    "./capability-admin-policy": "./src/capability-admin-policy.ts",
     "./capability-resources-manifest": "./src/capability-resources-manifest.ts",
     "./capability-resources-api": "./src/capability-resources-api.ts",
     "./model-id": "./src/model-id.ts",

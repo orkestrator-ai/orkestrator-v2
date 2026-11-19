@@ -23,6 +23,7 @@
  * Browser-safe and pure: the caller supplies the hash function.
  */
 import type { AgentPlatform } from "./agent-platforms.js";
+import { capabilityPolicyDenial } from "./capability-admin-policy.js";
 import {
   CAPABILITY_LIMITS,
   MY_SETUP_ID,
@@ -97,7 +98,7 @@ export interface CapabilityTargetFacts {
 export interface CapabilityAdminPolicy {
   /** Package id prefixes that may not be used (`git:github.com/untrusted/`). */
   forbiddenSources?: string[];
-  /** Exact package or component ids that may not be used. */
+  /** Exact package or component ids, or a whole kind (`kind:hook`), that may not be used. */
   forbiddenComponents?: string[];
   /** Highest risk any component may have. */
   maxRisk?: CapabilityComponent["risk"];
@@ -320,9 +321,6 @@ export function resolveEffectiveAgentResources(
       if (required) launchBlockers.push({ componentId: packageId, reason });
       continue;
     }
-    const forbiddenSource = (admin.forbiddenSources ?? []).find((prefix) =>
-      packageId.startsWith(prefix),
-    );
     const revisionComponents = capabilityRevisionComponents(pkg, digest, components);
     if (!revisionComponents) {
       const reason = "The selected revision's component inventory is unavailable.";
@@ -344,10 +342,7 @@ export function resolveEffectiveAgentResources(
         continue;
       }
       const reasonBlocked =
-        (forbiddenSource !== undefined ? "Administrator policy forbids this source." : undefined) ??
-        ((admin.forbiddenComponents ?? []).some((id) => id === componentId || id === packageId)
-          ? "Administrator policy forbids this component."
-          : undefined) ??
+        capabilityPolicyDenial(admin, packageId, component) ??
         (admin.maxRisk && capabilityRiskRank(component.risk) > capabilityRiskRank(admin.maxRisk)
           ? `Administrator policy allows at most ${admin.maxRisk} components.`
           : undefined) ??

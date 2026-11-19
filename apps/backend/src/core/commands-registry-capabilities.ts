@@ -15,6 +15,8 @@ import {
   answerCapabilityNodeLaunchCommand,
   applyCapabilityChangeCommand,
   applyCapabilityNodePlanCommand,
+  applyCapabilityNodeEnvironmentPlanCommand,
+  getCapabilityNodeEnvironmentObservationCommand,
   approveCapabilityUpdateCommand,
   assignCapabilitySetupCommand,
   getCapabilityAssignmentCommand,
@@ -61,6 +63,8 @@ import {
   setCapabilityRegistryCommand,
   setCapabilityManifestPolicyCommand,
   listCapabilityRegistryPackagesCommand,
+  getCapabilityAdminPolicyCommand,
+  setCapabilityAdminPolicyCommand,
 } from "@orkestrator/protocol/contract/domains/capabilities";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -211,6 +215,11 @@ export function registerCapabilityCommands(register: CommandRegistrar): void {
   r(listCapabilityRegistryPackagesCommand, (args, context) =>
     capabilities(context).registries.listPackages(args),
   );
+  // Administrator policy: forbidden sources and components.
+  r(getCapabilityAdminPolicyCommand, (_args, context) => capabilities(context).adminPolicy.get());
+  r(setCapabilityAdminPolicyCommand, (args, context) =>
+    capabilities(context).adminPolicy.set(args, actor(context)),
+  );
   // The executor this machine runs for its command node.
   r(getCapabilityNodeObservationCommand, (args, context) =>
     capabilities(context).executorObserve(args),
@@ -219,6 +228,12 @@ export function registerCapabilityCommands(register: CommandRegistrar): void {
     capabilities(context).executorStage(args),
   );
   r(applyCapabilityNodePlanCommand, (args, context) => capabilities(context).executorApply(args));
+  r(getCapabilityNodeEnvironmentObservationCommand, (args, context) =>
+    capabilities(context).executorObserveEnvironments(args),
+  );
+  r(applyCapabilityNodeEnvironmentPlanCommand, (args, context) =>
+    capabilities(context).executorApplyEnvironmentPlan(args),
+  );
   r(exportCapabilityNodeItemCommand, (args, context) =>
     capabilities(context).executorExportItem(args),
   );

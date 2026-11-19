@@ -10,9 +10,11 @@ import * as Result from "effect/Result";
 import { isNodeReadCommand } from "../../../command-nodes.js";
 import { decodeCommandArgs, decodeCommandResult } from "../../command.js";
 import {
+  applyCapabilityNodeEnvironmentPlanCommand,
   applyCapabilityNodePlanCommand,
   CAPABILITIES_COMMANDS,
   capabilitiesClient,
+  getCapabilityNodeEnvironmentObservationCommand,
   getCapabilityNodeObservationCommand,
   inspectCapabilitySourceCommand,
   listCapabilityPackagesCommand,
@@ -40,6 +42,8 @@ describe("capabilities domain", () => {
     expect(verifyAgentCapabilityCommand.access).toBe("workspace");
     expect(getCapabilityNodeObservationCommand.read).toBe(true);
     expect(applyCapabilityNodePlanCommand.read).toBe(false);
+    expect(getCapabilityNodeEnvironmentObservationCommand.read).toBe(true);
+    expect(applyCapabilityNodeEnvironmentPlanCommand.read).toBe(false);
   });
 
   it("decodes tolerantly: declared keys kept, unknown keys dropped", () => {

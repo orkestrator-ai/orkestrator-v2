@@ -276,6 +276,50 @@ describe("BackendPush end to end", () => {
     push.dispose();
   });
 
+  test("an announced activity reaches the subscribed connection within the coalescing window", async () => {
+    const clock = new ManualClock();
+    const model: SessionModel = { transcript: 1, state: 1, phase: "idle" };
+    const push = new BackendPush({
+      hub: { timers: clock, now: () => clock.now() },
+      sessionExists: async () => true,
+      nativeAgents: () => ({
+        getLiveUpdate: async (input) => liveUpdate(model, input),
+        observePushSession: () => () => undefined,
+        forgetPushSettled: () => undefined,
+      }),
+    });
+    const written: number[] = [];
+    const stream = push.openConnection("owner", {
+      write: () => {
+        written.push(clock.now());
+        return true;
+      },
+      backpressured: () => false,
+    });
+    await push.setSubscriptions("owner", {
+      streamId: stream,
+      setRevision: 1,
+      subscriptions: [{ topic: "native-session", key: PUSH_KEY }],
+    });
+    await clock.advanceAsync(0);
+    // An approval parks the turn: the bridge-side change and its announcement.
+    model.state = 2;
+    const announcedAt = clock.now() + 100;
+    await clock.advanceAsync(100);
+    push.observeEvent(NATIVE_AGENT_ACTIVITY_EVENT, {
+      environment_id: KEY.environmentId,
+      agent: KEY.agent,
+      logical_session_key: KEY.logicalSessionKey,
+      state: "waiting",
+    });
+    await clock.advanceAsync(0);
+    await clock.advanceAsync(50);
+    expect(written).toHaveLength(1);
+    // Backend share of the observation latency, excluding the provider read.
+    expect(written[0]! - announcedAt).toBeLessThanOrEqual(50);
+    push.dispose();
+  });
+
   test("rejects malformed subscribe arguments", async () => {
     const push = new BackendPush({
       sessionExists: async () => true,

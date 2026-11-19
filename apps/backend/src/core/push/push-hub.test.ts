@@ -381,3 +381,71 @@ describe("PushHub frames", () => {
     expect(JSON.stringify(h.hub.metrics())).not.toContain(c.streamId);
   });
 });
+
+describe("PushHub budgets", () => {
+  test("a busy key never delays another key's first change (an approval during a noisy build)", async () => {
+    const h = harness();
+    const c = h.open();
+    await h.set("owner", c.streamId, 1, ["build", "approval"]);
+    let revision = 0;
+    for (let tick = 0; tick < 100; tick += 1) {
+      revision += 1;
+      h.hub.publish(TOPIC, "build", { generation: "g", revision }, ["transcript"]);
+      if (tick === 60)
+        h.hub.publish(TOPIC, "approval", { generation: "g", revision: 1 }, ["state"]);
+      h.clock.advance(10);
+      if (tick === 60) {
+        // Published at 600 ms; out within the coalescing window, not the build's throttle.
+        h.clock.advance(40);
+        expect(h.changes(c.written).some((change) => change.key === "approval")).toBe(true);
+      }
+    }
+    // The build was announced at most once per throttle window.
+    const builds = h.changes(c.written).filter((change) => change.key === "build");
+    expect(builds.length).toBeLessThanOrEqual(Math.ceil(h.clock.now() / 500) + 1);
+  });
+
+  test("thirty minutes of noisy output with views coming and going keeps every queue bounded", async () => {
+    const h = harness();
+    const keys = Array.from({ length: 20 }, (_, index) => `session-${index}`);
+    let open = Array.from({ length: 4 }, () => h.open());
+    let revision = 0;
+    let maxPendingEntries = 0;
+    let maxPendingBytes = 0;
+    for (const [index, connection] of open.entries()) {
+      await h.set("owner", connection.streamId, 1, index % 2 ? keys : keys.slice(0, 5));
+    }
+    const minutes = 30;
+    for (let second = 0; second < minutes * 60; second += 1) {
+      for (let burst = 0; burst < 10; burst += 1) {
+        revision += 1;
+        h.hub.publish(TOPIC, keys[revision % keys.length]!, { generation: "g", revision }, [
+          "transcript",
+        ]);
+      }
+      h.clock.advance(1_000);
+      const metrics = h.hub.metrics();
+      maxPendingEntries = Math.max(maxPendingEntries, metrics.pendingEntries);
+      maxPendingBytes = Math.max(maxPendingBytes, metrics.pendingBytes);
+      // Every five minutes one view closes and another opens.
+      if (second % 300 === 299) {
+        const [closing, ...rest] = open;
+        h.hub.closeConnection(closing!.streamId);
+        const next = h.open();
+        await h.set("owner", next.streamId, 1, keys);
+        open = [...rest, next];
+      }
+    }
+    expect(maxPendingEntries).toBeLessThanOrEqual(keys.length * open.length);
+    expect(maxPendingBytes).toBeLessThan(64 * 1024);
+    for (const connection of open) h.hub.closeConnection(connection.streamId);
+    expect(h.hub.metrics()).toMatchObject({
+      connections: 0,
+      pendingEntries: 0,
+      pendingBytes: 0,
+      observedKeysByTopic: {},
+    });
+    expect(h.clock.pendingCount()).toBe(0);
+    expect(h.topic.released.sort()).toEqual([...h.topic.retained].sort());
+  });
+});

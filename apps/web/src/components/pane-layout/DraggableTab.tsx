@@ -74,6 +74,8 @@ interface DraggableTabProps {
   isActive: boolean;
   /** Whether this tab is focused (active tab in the focused pane) */
   isFocused?: boolean;
+  /** The tab's agent has a turn in flight. */
+  isWorking?: boolean;
   onSelect: () => void;
   /** Reload this tab from its authoritative server-side state. */
   onRefresh?: () => void;
@@ -99,6 +101,7 @@ export function DraggableTab({
   index,
   isActive,
   isFocused = false,
+  isWorking = false,
   onSelect,
   onRefresh,
   onClose,
@@ -408,7 +411,7 @@ export function DraggableTab({
       role="tab"
       tabIndex={0}
       aria-selected={isActive}
-      aria-label={isDirty ? `${title}, unsaved changes` : title}
+      aria-label={`${title}${isWorking ? ", working" : ""}${isDirty ? ", unsaved changes" : ""}`}
       aria-haspopup="menu"
       aria-keyshortcuts={canClose ? (isMac ? "Delete Backspace" : "Delete") : undefined}
       // Only the drag instructions: the rest of `attributes` names a button role
@@ -419,6 +422,7 @@ export function DraggableTab({
       onKeyDown={handleKeyDown}
       isActive={isActive}
       isFocused={isFocused}
+      isWorking={isWorking}
       className={cn("cursor-grab active:cursor-grabbing", isDragging && "opacity-50 z-50")}
       onClick={onSelect}
       onMouseEnter={tooltipContent ? tabTooltip.show : undefined}

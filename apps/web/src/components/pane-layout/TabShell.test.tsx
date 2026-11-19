@@ -22,6 +22,28 @@ describe("TabShell", () => {
     expect(indicator?.className).toContain("opacity-60");
   });
 
+  test("paints the working wash behind the content only while the agent works", () => {
+    const { container, rerender } = render(
+      <TabShell isActive={false} isWorking>
+        Tab title
+      </TabShell>,
+    );
+    const tab = container.firstElementChild as HTMLElement;
+    const tint = container.querySelector("[data-tab-working]");
+    expect(tab.hasAttribute("data-working")).toBe(true);
+    // Its own stacking context keeps the wash above the tab's background but
+    // behind the title.
+    expect(tab.className).toContain("isolate");
+    expect(tint?.getAttribute("aria-hidden")).toBe("true");
+    expect(tint?.className).toBe("tab-working-tint");
+    // The active marker is a separate, stronger element.
+    expect(container.querySelector("[aria-hidden='true'].bg-primary") === null).toBe(true);
+
+    rerender(<TabShell isActive>Tab title</TabShell>);
+    expect(tab.hasAttribute("data-working")).toBe(false);
+    expect(container.querySelector("[data-tab-working]") === null).toBe(true);
+  });
+
   test("keeps the close control visible on focus and isolates its events", () => {
     const onClick = mock(() => {});
     const onMouseDown = mock(() => {});

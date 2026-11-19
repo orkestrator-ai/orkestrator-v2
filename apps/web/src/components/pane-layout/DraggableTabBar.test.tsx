@@ -541,6 +541,64 @@ describe("DraggableTabBar", () => {
     expect(screen.queryByText("Refresh") === null).toBe(true);
   });
 
+  test("tints the tabs whose agent has a turn in flight, from the backend's answer", async () => {
+    const environmentId = "environment";
+    (
+      invoke as unknown as {
+        mockImplementation: (
+          implementation: (command: string, args?: { environmentId?: string }) => Promise<unknown>,
+        ) => void;
+      }
+    ).mockImplementation(async (command, args) =>
+      command === "list_native_agent_session_activity" && args?.environmentId === environmentId
+        ? {
+            sessions: {
+              [createSessionKey(environmentId, "busy")]: "working",
+              [createSessionKey(environmentId, "asking")]: "waiting",
+            },
+          }
+        : undefined,
+    );
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "pane",
+      // The working tab is not the front one, so its view is not mounted.
+      activeTabId: "idle",
+      tabs: [
+        {
+          id: "idle",
+          type: "agent-native",
+          nativeAgentData: { platform: "claude", environmentId },
+        },
+        {
+          id: "busy",
+          type: "agent-native",
+          nativeAgentData: { platform: "codex", environmentId },
+        },
+        {
+          id: "asking",
+          type: "agent-native",
+          nativeAgentData: { platform: "claude", environmentId },
+        },
+        { id: "terminal", type: "plain" },
+      ],
+    };
+
+    renderInAppCommandScope(
+      <DndContext>
+        <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
+      </DndContext>,
+    );
+
+    const busy = await screen.findByRole("tab", { name: "Codex 2, working" });
+    expect(busy.hasAttribute("data-working")).toBe(true);
+    expect(busy.querySelector("[data-tab-working]")).toBeTruthy();
+    for (const name of ["Claude 1", "Claude 3", "Terminal 4"]) {
+      const tab = screen.getByRole("tab", { name });
+      expect(tab.hasAttribute("data-working")).toBe(false);
+    }
+  });
+
   test("clears a clean file buffer when the tab is explicitly closed", async () => {
     const environmentId = "environment";
     appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);

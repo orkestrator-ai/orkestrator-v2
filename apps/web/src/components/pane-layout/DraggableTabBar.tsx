@@ -35,6 +35,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useNativeSessionActivity } from "@/stores/nativeSessionActivityStore";
+import { useAgentActivityStore } from "@/stores/agentActivityStore";
 
 const log = createLogger("web.pane-layout");
 
@@ -75,6 +77,17 @@ export function DraggableTabBar({
   const draftScope = useNodeScope();
   // Agents embedded in a design tab are shown by the design, not the strip.
   const visibleTabs = useMemo(() => visibleTabsOf(pane.tabs), [pane.tabs]);
+  // Backend-owned, so a tab whose view is not mounted still shows its turn.
+  const sessionActivity = useNativeSessionActivity(environmentId);
+  // Terminal agent tabs report their own state while their terminal is mounted.
+  const terminalTabStates = useAgentActivityStore((state) => state.tabStates);
+  const isTabWorking = useCallback(
+    (tab: (typeof visibleTabs)[number]) =>
+      tab.type === "agent-native"
+        ? sessionActivity.get(createSessionKey(environmentId, tab.id)) === "working"
+        : terminalTabStates[tab.id] === "working",
+    [environmentId, sessionActivity, terminalTabStates],
+  );
 
   const discardTabDraft = useCallback(
     (tabId: string): Promise<void> => {
@@ -449,6 +462,7 @@ export function DraggableTabBar({
                 index={index}
                 isActive={isActive}
                 isFocused={isActive && isPaneFocused}
+                isWorking={isTabWorking(tab)}
                 onSelect={() => onTabSelect(tab.id)}
                 onRefresh={
                   onTabRefresh && isRefreshableAgentTab(tab.type)

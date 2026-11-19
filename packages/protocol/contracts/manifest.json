@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1012,
-    "defined": 1012,
+    "commands": 1013,
+    "defined": 1013,
     "untyped": 0,
     "events": 45
   },
@@ -5353,6 +5353,15 @@
       "critical": [],
       "argsDigest": "sha256:fcb3afeb4cbea6bd5515a8d931dad8b53aaa419122f113364888bc876fcd03a3",
       "resultDigest": "sha256:af5a237a705c775bbe5e8881de09a6d822582e0ae070e39ea447ca01ab932785"
+    },
+    "list_native_agent_session_activity": {
+      "domain": "native-sessions",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:87c09c9bacf415eb41c5327ac5c76689cc39af19da9493942467194ce206359c"
     },
     "list_node_action_requests": {
       "domain": "node-mail",

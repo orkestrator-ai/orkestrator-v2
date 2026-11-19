@@ -240,6 +240,18 @@ export function createWorkflowsApi(client: BackendClient) {
     return asWebModel(native().get_native_agent_projection(input));
   }
 
+  /**
+   * Which of the environment's native sessions have a turn in flight, keyed by
+   * logical session key; idle sessions are absent. A backend that predates the
+   * command answers "Unknown backend command".
+   */
+  async function listNativeAgentSessionActivity(
+    environmentId: string,
+  ): Promise<Record<string, "working" | "waiting">> {
+    const result = await native().list_native_agent_session_activity({ environmentId });
+    return result.sessions;
+  }
+
   async function getNativeAgentSyncCapabilities(): Promise<{
     historyPagingVersions: number[];
     progressiveViewVersions?: number[];
@@ -973,6 +985,7 @@ export function createWorkflowsApi(client: BackendClient) {
     adoptNativeAgentSession,
     getNativeAgentProjection,
     getNativeAgentSyncCapabilities,
+    listNativeAgentSessionActivity,
     getNativeAgentTranscriptUpdate,
     getNativeAgentSessionStateUpdate,
     getNativeAgentLiveUpdate,
@@ -1039,6 +1052,7 @@ export const {
   adoptNativeAgentSession,
   getNativeAgentProjection,
   getNativeAgentSyncCapabilities,
+  listNativeAgentSessionActivity,
   getNativeAgentTranscriptUpdate,
   getNativeAgentSessionStateUpdate,
   getNativeAgentLiveUpdate,

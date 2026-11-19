@@ -47,6 +47,8 @@ interface TabShellProps extends HTMLAttributes<HTMLDivElement> {
   isActive: boolean;
   /** Dims the active marker when the owning pane is not the focused one. */
   isFocused?: boolean;
+  /** The tab's agent has a turn in flight: a faint, slowly pulsing blue wash. */
+  isWorking?: boolean;
   style?: CSSProperties;
   /** Icon, title, and any status badges. */
   children: ReactNode;
@@ -65,6 +67,7 @@ export const TabShell = forwardRef<HTMLDivElement, TabShellProps>(function TabSh
   {
     isActive,
     isFocused = true,
+    isWorking = false,
     className,
     children,
     onClose,
@@ -80,12 +83,16 @@ export const TabShell = forwardRef<HTMLDivElement, TabShellProps>(function TabSh
     <div
       ref={ref}
       className={cn(
-        "group relative flex shrink-0 select-none items-center gap-1.5 self-stretch bg-background px-3 text-xs",
+        // `isolate` keeps the working wash behind the content but above the
+        // tab's own background.
+        "group relative isolate flex shrink-0 select-none items-center gap-1.5 self-stretch bg-background px-3 text-xs",
         isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground",
         className,
       )}
+      data-working={isWorking ? "" : undefined}
       {...rest}
     >
+      {isWorking && <div aria-hidden="true" data-tab-working="" className="tab-working-tint" />}
       {/* Keep the active tab identifiable when it shares the pane background. */}
       {isActive && (
         <div

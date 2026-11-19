@@ -65,7 +65,7 @@ const SUMMARY_ONLY_ENVIRONMENT_FIELDS = [
 ] as const satisfies ReadonlyArray<keyof NodeEnvironmentSummary>;
 
 /** Whether `scope`'s stores may stand in for its node's summary rows. */
-export function scopeRowsReady(scope: NodeScope): boolean {
+export function scopeRowsReady(scope: NodeScope, projectsOnly = false): boolean {
   if (scope.disposed || scope.role !== "leaf") return false;
   const tier = scope.tier.get();
   if (tier !== "warm" && tier !== "live") return false;
@@ -73,15 +73,17 @@ export function scopeRowsReady(scope: NodeScope): boolean {
   if (connection !== "live" && connection !== "resyncing") return false;
   // `hasLoaded` stays false while the stores hold only a snapshot (4003).
   if (!scope.store(projectStore).getState().hasLoaded) return false;
-  return scopeAuthoritativeReads(scope).get().has("environment");
+  return projectsOnly || scopeAuthoritativeReads(scope).get().has("environment");
 }
 
 /** `scope`'s rows while they may stand in for its summary, else `null`. */
-export function readScopeRows(scope: NodeScope): ScopeRows | null {
-  if (!scopeRowsReady(scope)) return null;
+export function readScopeRows(scope: NodeScope, projectsOnly = false): ScopeRows | null {
+  if (!scopeRowsReady(scope, projectsOnly)) return null;
   return {
     projects: scope.store(projectStore).getState().projects,
-    environments: scope.store(environmentStore).getState().environments,
+    environments: projectsOnly
+      ? EMPTY_ENVIRONMENTS
+      : scope.store(environmentStore).getState().environments,
   };
 }
 
@@ -193,18 +195,26 @@ export interface ScopeRowsSource {
   getSnapshot(): ReadonlyMap<BackendId, ScopeRows>;
 }
 
+const EMPTY_ENVIRONMENTS: readonly Environment[] = [];
 const EMPTY_ROWS: ReadonlyMap<BackendId, ScopeRows> = new Map();
 const sources = new WeakMap<WindowScope, ScopeRowsSource>();
+const projectSources = new WeakMap<WindowScope, ScopeRowsSource>();
 
 /**
  * The window's scope rows as an external store (`useSyncExternalStore`):
  * it notifies when a scope opens or closes, changes tier or connection,
  * gets its first authoritative environment read, or its project or
- * environment store changes. The snapshot keeps its identity while no
- * node's rows changed.
+ * environment store changes. Consumers that only match projects can use
+ * the loaded project store before the first environment read. The snapshot
+ * keeps its identity while no node's rows changed.
  */
-export function scopeRowsSource(windowScope: WindowScope): ScopeRowsSource {
-  const existing = sources.get(windowScope);
+export function scopeRowsSource(
+  windowScope: WindowScope,
+  rows: "projects" | "workspace" = "workspace",
+): ScopeRowsSource {
+  const projectsOnly = rows === "projects";
+  const cache = projectsOnly ? projectSources : sources;
+  const existing = cache.get(windowScope);
   if (existing) return existing;
   let cached = EMPTY_ROWS;
   const source: ScopeRowsSource = {
@@ -220,7 +230,7 @@ export function scopeRowsSource(windowScope: WindowScope): ScopeRowsSource {
           watched.delete(scope);
         }
         for (const scope of open) {
-          if (!watched.has(scope)) watched.set(scope, watchScope(scope, listener));
+          if (!watched.has(scope)) watched.set(scope, watchScope(scope, listener, projectsOnly));
         }
       };
       sync();
@@ -237,7 +247,7 @@ export function scopeRowsSource(windowScope: WindowScope): ScopeRowsSource {
     getSnapshot() {
       const next = new Map<BackendId, ScopeRows>();
       for (const scope of windowScope.nodeScopes.get()) {
-        const rows = readScopeRows(scope);
+        const rows = readScopeRows(scope, projectsOnly);
         if (rows) next.set(scope.nodeId, rows);
       }
       if (sameRows(cached, next)) return cached;
@@ -245,17 +255,21 @@ export function scopeRowsSource(windowScope: WindowScope): ScopeRowsSource {
       return cached;
     },
   };
-  sources.set(windowScope, source);
+  cache.set(windowScope, source);
   return source;
 }
 
-function watchScope(scope: NodeScope, listener: () => void): () => void {
+function watchScope(scope: NodeScope, listener: () => void, projectsOnly: boolean): () => void {
   const stops = [
     scope.tier.subscribe(listener),
     scope.client.connection.subscribe(listener),
-    scopeAuthoritativeReads(scope).subscribe(listener),
     scope.store(projectStore).subscribe(listener),
-    scope.store(environmentStore).subscribe(listener),
+    ...(!projectsOnly
+      ? [
+          scopeAuthoritativeReads(scope).subscribe(listener),
+          scope.store(environmentStore).subscribe(listener),
+        ]
+      : []),
   ];
   return () => {
     for (const stop of stops) stop();

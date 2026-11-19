@@ -1,8 +1,9 @@
+import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
+import { defineScopedSlot } from "@/lib/node-scope-slots";
 import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useRemoteMachineView } from "@/components/federation/useMachineViews";
-import { MachineDot } from "@/components/federation/MachineDot";
 import {
   resolveAgentPlatformSettings,
   effectiveClaudeNativeBackend,
@@ -134,6 +135,8 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { launchBaseForCreate, type EnvironmentLaunchBase } from "@/lib/launch-base";
 import { LaunchBaseRow } from "./LaunchBaseRow";
+import { CreateEnvironmentMachinePicker } from "./CreateEnvironmentMachinePicker";
+import type { CreateEnvironmentMachine } from "./create-environment-machines";
 import { useLaunchBase } from "./useLaunchBase";
 import { useProjectSetupRequirements } from "@/hooks/useBuildLaunchOptions";
 import { aptPackagesNotice } from "@/lib/apt-packages-notice";
@@ -289,10 +292,23 @@ interface CreateEnvironmentDialogProps {
    * matching {@link onCreate}.
    */
   onCreateFeatureBuild?: (input: CreateFeatureBuildInput) => Promise<void | boolean>;
+  /**
+   * The machines the environment can be created on, this dialog's own
+   * (`current`) first (`useCreateEnvironmentMachines`). The header's machine
+   * dropdown lists them while several machines are in view.
+   */
+  machines?: readonly CreateEnvironmentMachine[];
+  /** Form data carried by the request that opened this dialog. */
+  handoff?: CreateEnvironmentHandoff;
+  /** Moves the form to another machine, returning whether the switch was accepted. */
+  onSelectMachine?: (machine: CreateEnvironmentMachine, form: CreateEnvironmentHandoff) => boolean;
 }
 
-// Persist draft prompt text per project across dialog open/close within the session
-const draftPrompts = new Map<string, string>();
+// Drafts are per project within a node scope, independent of transient open requests.
+const environmentDrafts = defineScopedSlot(
+  "create-environment-drafts",
+  () => new Map<string, CreateEnvironmentHandoff>(),
+);
 
 export function CreateEnvironmentDialog({
   open,
@@ -305,6 +321,9 @@ export function CreateEnvironmentDialog({
   projectName,
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
   localEnvironmentAvailable = true,
+  machines,
+  onSelectMachine,
+  handoff,
 }: CreateEnvironmentDialogProps) {
   const nodeBackend = useScopeBackend();
   // Browses the host of the node this component renders in.
@@ -315,6 +334,8 @@ export function CreateEnvironmentDialog({
   // sidebar opens it outside every node's provider, where it is the command
   // scope's, as for `useScopeBackend` above.
   const dialogScope = useScopesWithCommandFallback().scope;
+  const drafts = environmentDrafts(dialogScope);
+  const preserveSavedDraft = Boolean(handoff && projectId && drafts.has(projectId));
   const remoteMachine = useRemoteMachineView(
     dialogScope.role === "command" ? null : dialogScope.nodeId,
   );
@@ -784,15 +805,22 @@ export function CreateEnvironmentDialog({
     };
   }, [catalogRefreshRevision, open, projectId, nodeBackend]);
 
-  // Restore drafts only for a new dialog/project, never for navigation changes.
+  // A handoff belongs to this opening. An empty prompt can fall back to the
+  // destination's draft, while an empty Feature description stays empty.
   useEffect(() => {
-    if (open && projectId) {
-      const draft = draftPrompts.get(projectId);
-      if (draft) {
-        setInitialPrompt(draft);
-      }
-    }
-  }, [open, projectId]);
+    if (!open || !projectId) return;
+    const saved = drafts.get(projectId);
+    const form = handoff ?? saved;
+    if (!form) return;
+    setInitialPrompt(form.feature || form.prompt ? form.prompt : (saved?.prompt ?? ""));
+    setEnvironmentName(form.name);
+    const intent = form.feature ? "feature" : (form.interactionMode ?? DEFAULT_PROMPT_INTENT);
+    buildIntentRef.current = intent;
+    setBuildIntent(intent);
+    setFeatureName(form.feature?.name ?? "");
+    setFeatureAcceptanceCriteria(form.feature?.acceptanceCriteria ?? "");
+    setFeatureDeliveryPolicy(form.feature?.deliveryPolicy ?? DEFAULT_DELIVERY_POLICY);
+  }, [drafts, handoff, open, projectId]);
 
   // Focus the prompt when its section becomes active.
   useEffect(() => {
@@ -1415,23 +1443,64 @@ export function CreateEnvironmentDialog({
     setPortMappings((prev) => prev.map((m, i) => (i === index ? { ...m, ...updates } : m)));
   }, []);
 
+  const portableForm = useMemo<CreateEnvironmentHandoff>(
+    () => ({
+      prompt: initialPrompt.trim(),
+      name: environmentName.trim(),
+      ...(buildIntent === "feature"
+        ? {
+            feature: {
+              name: featureName,
+              acceptanceCriteria: featureAcceptanceCriteria,
+              deliveryPolicy: featureDeliveryPolicy,
+            },
+          }
+        : { interactionMode: buildIntent }),
+    }),
+    [
+      buildIntent,
+      environmentName,
+      featureAcceptanceCriteria,
+      featureDeliveryPolicy,
+      featureName,
+      initialPrompt,
+    ],
+  );
+
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
       if (!isOpen) {
-        // Save draft prompt before resetting, so it can be restored next time
-        if (projectId) {
-          const trimmed = initialPrompt.trim();
-          if (trimmed) {
-            draftPrompts.set(projectId, trimmed);
-          } else {
-            draftPrompts.delete(projectId);
-          }
+        if (projectId && !preserveSavedDraft) {
+          if (portableForm.prompt) drafts.set(projectId, { prompt: portableForm.prompt, name: "" });
+          else drafts.delete(projectId);
         }
         resetForm();
       }
       onOpenChange(isOpen);
     },
-    [onOpenChange, resetForm, projectId, initialPrompt],
+    [drafts, onOpenChange, portableForm.prompt, preserveSavedDraft, projectId, resetForm],
+  );
+
+  const handleSelectMachine = useCallback(
+    (machine: CreateEnvironmentMachine) => {
+      if (!onSelectMachine || isLoading || !onSelectMachine(machine, portableForm)) return;
+      // Keep recovery on the source scope. Navigation can supersede the
+      // destination request before its stores are ready to show the dialog.
+      if (projectId && !preserveSavedDraft) {
+        if (
+          portableForm.prompt ||
+          portableForm.name ||
+          portableForm.feature ||
+          portableForm.interactionMode === "interactive"
+        ) {
+          drafts.set(projectId, portableForm);
+        } else {
+          drafts.delete(projectId);
+        }
+      }
+      resetForm();
+    },
+    [drafts, isLoading, onSelectMachine, portableForm, preserveSavedDraft, projectId, resetForm],
   );
 
   // Validate port mappings - returns true if all valid
@@ -1541,7 +1610,7 @@ export function CreateEnvironmentDialog({
           featureAttemptIdentityRef.current = null;
           featureAttemptModelsRef.current = null;
           // The description is the shared prompt text, so its draft is spent too.
-          draftPrompts.delete(projectId);
+          if (!preserveSavedDraft) drafts.delete(projectId);
           resetForm();
           onOpenChange(false);
           return;
@@ -1576,7 +1645,7 @@ export function CreateEnvironmentDialog({
         // Clear the draft on successful creation and close directly
         // (bypass handleOpenChange which would re-save the draft)
         if (projectId) {
-          draftPrompts.delete(projectId);
+          if (!preserveSavedDraft) drafts.delete(projectId);
         }
         resetForm();
         onOpenChange(false);
@@ -1622,6 +1691,8 @@ export function CreateEnvironmentDialog({
       onOpenChange,
       projectId,
       validatePortMappings,
+      drafts,
+      preserveSavedDraft,
     ],
   );
 
@@ -1691,7 +1762,7 @@ export function CreateEnvironmentDialog({
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader className="m-0 shrink-0 gap-0 border-b border-divider bg-background px-4 py-3.5 pr-14 sm:m-0 sm:px-6 sm:py-4 sm:pr-14">
-          <div className="flex min-w-0 items-start gap-3">
+          <div className="flex min-w-0 items-start gap-3 sm:items-center">
             <span
               role="img"
               aria-label={
@@ -1713,29 +1784,27 @@ export function CreateEnvironmentDialog({
                   ? `Create Ork (environment) - ${projectName}`
                   : "Create Ork (environment)"
               }
-              className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-xl leading-tight"
+              className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1 text-xl leading-tight"
             >
-              <span className="shrink-0">Create Ork (environment)</span>
+              <span className="min-w-0 sm:shrink-0">Create Ork (environment)</span>
               {projectName && (
                 <span className="max-w-full truncate font-mono text-sm text-muted-foreground">
                   {projectName}
                 </span>
               )}
-              {federation.enabled && targetMachine ? (
-                // With several machines in view, the dialog names the machine
-                // the environment is created on.
-                <span
-                  className="flex items-center gap-1.5 text-sm font-normal text-muted-foreground"
-                  data-testid="create-environment-machine"
-                >
-                  <MachineDot
-                    colorToken={targetMachine.colorToken}
-                    machineName={targetMachine.name}
-                  />
-                  on {targetMachine.name}
-                </span>
-              ) : null}
             </DialogTitle>
+            {federation.enabled && targetMachine ? (
+              // With several machines in view, the header names the machine the
+              // environment is created on, and offers the others that can take it.
+              <div className="ml-auto">
+                <CreateEnvironmentMachinePicker
+                  current={targetMachine}
+                  machines={machines ?? []}
+                  onSelect={handleSelectMachine}
+                  disabled={isLoading}
+                />
+              </div>
+            ) : null}
           </div>
           <DialogDescription className="sr-only">
             Configure a new Ork environment with an optional initial prompt.

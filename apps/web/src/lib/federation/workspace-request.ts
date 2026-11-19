@@ -1,3 +1,6 @@
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
+import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
+
 /**
  * What the window asks another node's workspace to show when it opens it
  * (`openMachineWorkspace`): a selection, board navigation, work to open, or
@@ -40,6 +43,18 @@ export type WorkspaceWorkTarget =
   | { type: "review"; projectId: string; environmentId: string; workflowId: string }
   | { type: "graph-run"; projectId: string; environmentId: string; runId: string; title?: string };
 
+/** Form fields that can travel without depending on the source node's defaults. */
+export interface CreateEnvironmentHandoff {
+  prompt: string;
+  name: string;
+  interactionMode?: EnvironmentInteractionMode;
+  feature?: {
+    name: string;
+    acceptanceCriteria: string;
+    deliveryPolicy: DeliveryPolicy;
+  };
+}
+
 /** What the window asks another node's workspace to show. */
 export interface WorkspaceRequest {
   projectId?: string;
@@ -57,6 +72,7 @@ export interface WorkspaceRequest {
   addProject?: true;
   /** Open the node's New Environment dialog for this project. */
   createEnvironmentProjectId?: string;
+  createEnvironmentHandoff?: CreateEnvironmentHandoff;
   /** Open one of the node's dialogs for the selected project or environment. */
   dialog?: WorkspaceDialog;
 }

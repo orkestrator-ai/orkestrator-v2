@@ -1,7 +1,7 @@
 import { MOBILE_SHELL_MEDIA_QUERY, noteDrawerNavigation } from "@/lib/mobile-shell";
 import { useSidebarHydration } from "./useSidebarHydration";
 import { useSelectedEnvironmentActions } from "./useSelectedEnvironmentActions";
-import { onCreateEnvironmentRequest, openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { startsOnSelection } from "@/lib/environment-auto-start";
 import { lazy, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 import {
@@ -714,16 +714,6 @@ export function HierarchicalSidebar() {
     setCreateEnvProjectId(projectId);
     setShowCreateEnvDialog(true);
   };
-
-  // "New environment" from a machine section that turned out to be this one.
-  useEffect(
-    () =>
-      onCreateEnvironmentRequest((projectId) => {
-        setCreateEnvProjectId(projectId);
-        setShowCreateEnvDialog(true);
-      }),
-    [],
-  );
 
   // useCallback so memo(EnvironmentItem) rows are not invalidated every render.
   const handleSelectEnvironment = useCallback(

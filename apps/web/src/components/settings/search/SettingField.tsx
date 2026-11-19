@@ -4,7 +4,7 @@
  * explanation of its effective value. The field keeps its own editor,
  * validation and save; this only wraps it.
  */
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { AlertCircle, Info, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { settingDescriptor } from "@/lib/settings-catalog/catalog";
@@ -25,20 +25,22 @@ import {
 
 export function SettingField({
   setting,
-  className,
   children,
   explain = true,
-}: {
+  explanationClassName,
+  ...props
+}: Omit<ComponentProps<"div">, "children"> & {
   setting: string;
-  className?: string;
   children: ReactNode;
-  /** Off where the field explains itself, e.g. a page-level browser. */
+  /** Off where another field's explanation already covers this one. */
   explain?: boolean;
+  /** Aligns the explanation with a padded row, e.g. inside a settings card. */
+  explanationClassName?: string;
 }) {
   return (
-    <div data-setting-anchor={setting} className={className}>
+    <div data-setting-anchor={setting} {...props}>
       {children}
-      {explain ? <SettingExplanation setting={setting} /> : null}
+      {explain ? <SettingExplanation setting={setting} className={explanationClassName} /> : null}
     </div>
   );
 }
@@ -49,7 +51,13 @@ export function settingExplanationId(setting: string): string {
 }
 
 /** "Effective: On · Set on Studio · Applies to new agent sessions" and its actions. */
-export function SettingExplanation({ setting }: { setting: string }) {
+export function SettingExplanation({
+  setting,
+  className,
+}: {
+  setting: string;
+  className?: string;
+}) {
   const descriptor = settingDescriptor(setting);
   const explain = useSettingsExplain();
   const draft = useSettingsDraft();
@@ -110,7 +118,10 @@ export function SettingExplanation({ setting }: { setting: string }) {
     <div
       id={settingExplanationId(setting)}
       data-setting-explanation={setting}
-      className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-relaxed text-muted-foreground"
+      className={cn(
+        "mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-relaxed text-muted-foreground",
+        className,
+      )}
     >
       <Info className="h-3 w-3 shrink-0 text-zinc-500" aria-hidden="true" />
       {dirty && !failed ? (

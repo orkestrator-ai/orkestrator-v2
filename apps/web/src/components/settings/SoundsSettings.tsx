@@ -123,6 +123,7 @@ export function SoundsSettings() {
     >
       <div className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
         <SoundRow
+          setting="sounds.agent-stopped"
           label="Agent stopped"
           description="Play a cue when an environment raises the same completed-activity indicator as the bell icon."
           enabled={settings.agentStopped}
@@ -130,6 +131,7 @@ export function SoundsSettings() {
           onPreview={() => void preview("agent-stopped")}
         />
         <SoundRow
+          setting="sounds.agent-question"
           label="Agent question"
           description="Play a different, more urgent cue when an agent asks a question or stops for your approval, unless you are looking at that environment."
           enabled={settings.agentQuestion}
@@ -137,6 +139,7 @@ export function SoundsSettings() {
           onPreview={() => void preview("agent-question")}
         />
         <SoundRow
+          setting="sounds.pr-merged"
           label="Pull request merged"
           description="Play a different cue when GitHub confirms that a monitored pull request was merged."
           enabled={settings.prMerged}
@@ -144,6 +147,7 @@ export function SoundsSettings() {
           onPreview={() => void preview("pr-merged")}
         />
         <SoundRow
+          setting="sounds.coordinator-report"
           label="Coordinator report"
           description="Play a cue when a Coordinator is woken by a worker it was waiting on, unless that Coordinator is on screen."
           enabled={settings.coordinatorReport}
@@ -210,12 +214,15 @@ function NotificationPermissionNote({ permission }: { permission: DesktopNotific
 }
 
 function SoundRow({
+  setting,
   label,
   description,
   enabled,
   onEnabledChange,
   onPreview,
 }: {
+  /** The settings catalog entry, so search can open this row. */
+  setting: string;
   label: string;
   description: string;
   enabled: boolean;
@@ -223,12 +230,14 @@ function SoundRow({
   onPreview: () => void;
 }) {
   return (
-    <SettingsRow label={label} description={description}>
-      <Button variant="outline" size="sm" onClick={onPreview} aria-label={`Preview ${label}`}>
-        <Play className="h-3.5 w-3.5" aria-hidden="true" />
-        Preview
-      </Button>
-      <Switch checked={enabled} onCheckedChange={onEnabledChange} aria-label={`${label} sound`} />
-    </SettingsRow>
+    <div data-setting-anchor={setting}>
+      <SettingsRow label={label} description={description}>
+        <Button variant="outline" size="sm" onClick={onPreview} aria-label={`Preview ${label}`}>
+          <Play className="h-3.5 w-3.5" aria-hidden="true" />
+          Preview
+        </Button>
+        <Switch checked={enabled} onCheckedChange={onEnabledChange} aria-label={`${label} sound`} />
+      </SettingsRow>
+    </div>
   );
 }

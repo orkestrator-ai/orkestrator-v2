@@ -396,12 +396,25 @@ export interface SettingSourcesLayers {
   readonly node: SettingSourcesRead | null;
 }
 
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isGlobalSettingSources(value: unknown): value is GlobalSettingSources {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    isStringList(record.storedKeys) &&
+    (record.inheritedKeys === null || isStringList(record.inheritedKeys))
+  );
+}
+
 async function readSources(invoke: ConfigInvoke): Promise<SettingSourcesRead> {
   try {
-    return {
-      status: "ok",
-      sources: await invoke<GlobalSettingSources>(GET_GLOBAL_SETTING_SOURCES, {}),
-    };
+    const sources = await invoke<unknown>(GET_GLOBAL_SETTING_SOURCES, {});
+    return isGlobalSettingSources(sources)
+      ? { status: "ok", sources }
+      : { status: "failed", message: "The machine answered with an unreadable list of settings." };
   } catch (error) {
     if (incompatibility(error, GET_GLOBAL_SETTING_SOURCES)?.code === "unknown-command") {
       return { status: "unsupported" };

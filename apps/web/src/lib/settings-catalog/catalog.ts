@@ -117,6 +117,11 @@ const signIn = (platform: AgentPlatform, extra: readonly string[] = []): Setting
   },
 });
 
+const experimentalOnWindowMachine = {
+  isAvailable: ({ isWindowMachine }: { isWindowMachine: boolean }) => isWindowMachine,
+  reason: "Experimental settings belong to the machine this window runs on; select it above.",
+};
+
 const experimental = (
   id: string,
   key:
@@ -135,6 +140,7 @@ const experimental = (
   aliases: ["experimental", "beta", "feature flag", ...aliases],
   appliesWhen: "immediately",
   value: stored(key, false, onOff),
+  availability: experimentalOnWindowMachine,
 });
 
 export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
@@ -653,7 +659,7 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
   },
   {
     id: "terminal.link-target",
-    section: "terminal",
+    section: "previews",
     label: "Open terminal links in",
     description: "Whether links clicked in a terminal open in your browser or a browser tab here.",
     aliases: ["links", "urls", "browser", "click"],
@@ -930,7 +936,6 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     aliases: ["notifications", "alert", "audio", "bell", "done"],
     appliesWhen: "immediately",
     owner: "machine",
-    locate: { ariaLabel: "Agent stopped sound" },
   },
   {
     id: "sounds.agent-question",
@@ -940,7 +945,6 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     aliases: ["notifications", "alert", "audio", "approval", "attention"],
     appliesWhen: "immediately",
     owner: "machine",
-    locate: { ariaLabel: "Agent question sound" },
   },
   {
     id: "sounds.pr-merged",
@@ -950,7 +954,6 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     aliases: ["notifications", "alert", "audio", "merge"],
     appliesWhen: "immediately",
     owner: "machine",
-    locate: { ariaLabel: "Pull request merged sound" },
   },
   {
     id: "sounds.coordinator-report",
@@ -960,7 +963,6 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     aliases: ["notifications", "alert", "audio", "worker"],
     appliesWhen: "immediately",
     owner: "machine",
-    locate: { ariaLabel: "Coordinator report sound" },
   },
   {
     id: "sounds.desktop-notifications",
@@ -1035,7 +1037,7 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     value: stored("localWindowGatewayTransport", true, onOff),
     availability: {
       isAvailable: ({ isWindowMachine }) => isWindowMachine,
-      reason: "Only shown for the machine this window runs on.",
+      reason: "Only shown in the desktop app, for the machine this window runs on.",
     },
   },
 

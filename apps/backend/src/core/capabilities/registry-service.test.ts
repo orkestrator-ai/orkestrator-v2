@@ -172,6 +172,15 @@ describe("package registries", () => {
     expect(state.packages[PACKAGE_ID]?.previousRevisions?.[0]?.revision).toBe("1.0.0");
   });
 
+  test("exports refuse two toolkits with the same normalized name", async () => {
+    const node = await install("slug-collision", new Map());
+    const first = await node.service.setSetup({ setup: { name: "Team Review" } });
+    const second = await node.service.setSetup({ setup: { name: "Team-Review" } });
+    await expect(node.service.exportSetup({ setupIds: [first.id, second.id] })).rejects.toThrow(
+      "same export name",
+    );
+  });
+
   test("an active historical pin survives more than five newer revisions", async () => {
     const routes = publish(["1.0.0"]);
     const node = await install("long-history", routes);

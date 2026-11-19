@@ -18,6 +18,7 @@ import { runCommand } from "../shell.js";
 import { StorageService } from "../storage.js";
 import { stageContainerCapabilities } from "./container-staging.js";
 import { testCapabilityHomes } from "./native-ownership.js";
+import { worktreeCollisions } from "./worktree-writer.js";
 import type {
   ContainerDeliveryEvidence,
   ScopedAccount,
@@ -143,6 +144,26 @@ const exists = (file: string) =>
   );
 
 describe("project setups in a local worktree", () => {
+  test("Git inspection failure reports the candidate as a collision", async () => {
+    const fixture = await makeFixture();
+    const { worktree } = await repository(fixture);
+    const entry = {
+      key: "one",
+      componentName: "review",
+      pathOrKey: "skills/review",
+      locationId: "claude-project-skills",
+    };
+    const collisions = await worktreeCollisions(
+      async () => {
+        throw new Error("Git timed out");
+      },
+      worktree,
+      [entry],
+    );
+    expect(collisions.get(entry.key)).toContain("Git could not verify");
+    expect(await exists(path.join(worktree, ".claude", "skills", "review"))).toBe(false);
+  });
+
   test("an isolated graph launch stages required project and graph-only skills in its own branch", async () => {
     const fixture = await makeFixture();
     const { main, worktree } = await repository(fixture);

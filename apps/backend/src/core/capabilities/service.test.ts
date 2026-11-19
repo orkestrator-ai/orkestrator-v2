@@ -16,6 +16,7 @@ import { StorageService } from "../storage.js";
 import { testCapabilityHomes } from "./native-ownership.js";
 import { CapabilityService } from "./service.js";
 import { parseNodePlanTargets } from "./executor.js";
+import { finalizeOperation } from "./operations.js";
 import { CapabilityArtifactStore } from "./artifact-store.js";
 import { treeDigest, validatePackageFiles } from "./security.js";
 import { CAPABILITY_LIMITS } from "@orkestrator/protocol/capability-resources";
@@ -393,6 +394,24 @@ describe("remote safety", () => {
     await addSkill(command, "notes", "Take notes.");
     expect(staged).toBe(true);
     expect(leafA.applyCalls).toEqual([]);
+  });
+
+  test("writes requiring auth, approval or provider support do not complete", async () => {
+    const { command } = await fleet();
+    const { applied } = await addSkill(command, "operation-status", "Take notes.");
+    const snapshot = await command.service.getOperation({ operationId: applied.operation.id });
+    for (const status of ["needs-auth", "needs-approval", "unsupported"] as const) {
+      const copy = {
+        ...snapshot,
+        state: "applying" as const,
+        targets: snapshot.targets
+          .filter((target) => target.action === "install")
+          .map((target) => ({ ...target, status })),
+      };
+      expect(copy.targets.length).toBeGreaterThan(0);
+      finalizeOperation(copy);
+      expect(copy.state).toBe("failed");
+    }
   });
 
   test("a coded remote refusal settles the operation rather than leaving an unknown write", async () => {

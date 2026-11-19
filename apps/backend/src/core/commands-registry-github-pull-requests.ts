@@ -15,6 +15,7 @@ import {
   addGitHubPullRequestReviewCommentCommand,
   changeGitHubPullRequestLabelCommand,
   getGitHubPullRequestCommand,
+  getGitHubPullRequestFilePatchCommand,
   getGitHubPullRequestFilesCommand,
   getGitHubPullRequestTimelineCommand,
   listGitHubPullRequestsCommand,
@@ -51,6 +52,7 @@ import {
   addGitHubPullRequestReviewComment,
   changeGitHubPullRequestLabel,
   getGitHubPullRequest,
+  getGitHubPullRequestFilePatch,
   getGitHubPullRequestFiles,
   getGitHubPullRequestTimeline,
   type GitHubPullRequestStateAction,
@@ -232,6 +234,17 @@ export function registerGitHubPullRequestCommands(
   register(getGitHubPullRequestFilesCommand, async (args, context) => {
     const ref = refArgs(args);
     return withGitHubToken(context, (token) => getGitHubPullRequestFiles(token, ref));
+  });
+
+  register(getGitHubPullRequestFilePatchCommand, async (args, context) => {
+    const ref = refArgs(args);
+    const input = {
+      path: asString(args.path, "path"),
+      headSha: asString(args.headSha, "headSha"),
+      comparisonBase: args.comparisonBase,
+      ...(args.index === undefined ? {} : { index: asNumber(args.index, "index") }),
+    };
+    return withGitHubToken(context, (token) => getGitHubPullRequestFilePatch(token, ref, input));
   });
 
   register(mergeGitHubPullRequestCommand, async (args, context) => {

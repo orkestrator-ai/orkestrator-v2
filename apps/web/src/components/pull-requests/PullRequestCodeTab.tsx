@@ -1,20 +1,18 @@
-import { useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ChevronDown,
-  ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
-  ExternalLink,
+  EyeOff,
+  FolderTree,
   MessageSquare,
-  SquareArrowRight,
-  SquareDot,
-  SquareMinus,
-  SquarePlus,
-  SquareSlash,
+  MessageSquareDot,
+  Search,
+  SkipForward,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { ChangeFileStatus } from "@orkestrator/protocol/change-resources";
 import {
+  gitHubPullRequestComparisonKey,
+  gitHubPullRequestKey,
   gitHubPullRequestUrl,
   type GitHubPullRequestFile,
   type GitHubPullRequestFiles,
@@ -22,165 +20,94 @@ import {
   type GitHubPullRequestReviewThread,
 } from "@orkestrator/protocol/github-pull-requests";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { TruncatedPath } from "@/components/ui/truncated-path";
-import { openInBrowser } from "@/lib/backend";
+import { Input } from "@/components/ui/input";
+import { useWidthAtLeast } from "@/hooks/useWidthAtLeast";
 import { cn } from "@/lib/utils";
-import { usePullRequestsStore } from "@/stores/pullRequestsStore";
-import { PullRequestDiff } from "./PullRequestDiff";
-import { pluralize, splitPath } from "./pull-request-format";
+import { filePatchKey, resourceKey, usePullRequestsStore } from "@/stores/pullRequestsStore";
+import {
+  PullRequestFileSection,
+  openExternal,
+  type FilePatchState,
+} from "./PullRequestFileSection";
+import { PullRequestFileTree } from "./PullRequestFileTree";
+import { PullRequestReviewDrafts } from "./pull-request-review-drafts";
+import { pluralize } from "./pull-request-format";
+import {
+  NO_FILE_FILTERS,
+  ancestorDirectories,
+  buildFileTree,
+  fileMatchesFilters,
+  filtersActive,
+  nextFileAfter,
+  nextThreadAfter,
+  treeFileOrder,
+  unresolvedByPath,
+  unresolvedThreadOrder,
+  type FileFilters,
+} from "./pull-request-file-navigation";
 import { errorMessage } from "./pull-request-shared";
 
 /** Above this many files every file starts collapsed. */
 export const AUTO_EXPAND_FILE_LIMIT = 20;
-
-const STATUS_ICONS: Record<
-  ChangeFileStatus,
-  { icon: ComponentType<{ className?: string }>; className: string }
-> = {
-  added: { icon: SquarePlus, className: "text-success" },
-  modified: { icon: SquareDot, className: "text-amber-400" },
-  deleted: { icon: SquareMinus, className: "text-failure" },
-  renamed: { icon: SquareArrowRight, className: "text-sky-400" },
-  copied: { icon: SquareArrowRight, className: "text-sky-400" },
-  "mode-changed": { icon: SquareSlash, className: "text-muted-foreground" },
-  "type-changed": { icon: SquareSlash, className: "text-muted-foreground" },
-  unknown: { icon: SquareDot, className: "text-muted-foreground" },
-};
-
-function openExternal(url: string) {
-  void openInBrowser(url).catch((error) =>
-    toast.error(errorMessage(error, "Could not open the browser.")),
-  );
-}
+/** At this width the file tree sits beside the diffs and starts open. */
+export const FILE_TREE_SIDE_BY_SIDE_MIN_WIDTH_PX = 640;
 
 function initialExpanded(files: GitHubPullRequestFile[]): Set<string> {
   if (files.length > AUTO_EXPAND_FILE_LIMIT) return new Set();
   return new Set(files.filter((file) => file.viewedState !== "viewed").map((file) => file.path));
 }
 
-function FileRow({
-  pullRequest,
-  file,
-  threads,
-  expanded,
-  onToggle,
-  onViewed,
-  commitId,
-  canComment,
+function withAdded(set: ReadonlySet<string>, ...values: string[]): Set<string> {
+  const next = new Set(set);
+  for (const value of values) next.add(value);
+  return next;
+}
+
+function withRemoved(set: ReadonlySet<string>, ...values: string[]): Set<string> {
+  const next = new Set(set);
+  for (const value of values) next.delete(value);
+  return next;
+}
+
+/** A pending scroll to a file section, or to one conversation inside it. */
+type ScrollTarget = { path: string; threadId: string | null; revealTree: boolean };
+
+function findByData(root: HTMLElement, selector: string, key: string, value: string) {
+  for (const element of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
+    if (element.dataset[key] === value) return element;
+  }
+  return null;
+}
+
+function FilterToggle({
+  pressed,
+  onPressedChange,
+  label,
+  ariaLabel,
+  icon: Icon,
 }: {
-  pullRequest: GitHubPullRequestRef;
-  file: GitHubPullRequestFile;
-  threads: GitHubPullRequestReviewThread[];
-  expanded: boolean;
-  onToggle: () => void;
-  onViewed: (viewed: boolean) => void;
-  commitId: string;
-  canComment: boolean;
+  pressed: boolean;
+  onPressedChange: (pressed: boolean) => void;
+  label: string;
+  ariaLabel: string;
+  icon: typeof EyeOff;
 }) {
-  const { icon: StatusIcon, className: statusClass } = STATUS_ICONS[file.status];
-  const { directory, filename } = splitPath(file.path);
-  const renamed = file.previousPath && file.previousPath !== file.path ? file.previousPath : null;
-  const viewed = file.viewedState === "viewed";
-  const openThreads = threads.filter((thread) => !thread.isResolved).length;
-  const checkboxId = `viewed-${file.path}`;
   return (
-    <section
-      data-testid="pull-request-file"
-      data-path={file.path}
-      className="border-b border-border/50"
-    >
-      <div
-        className={cn(
-          "sticky top-0 z-10 flex items-center gap-1.5 bg-background py-1 pr-2 pl-1",
-          viewed && !expanded && "opacity-70",
-        )}
-      >
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={expanded}
-          aria-label={`${expanded ? "Collapse" : "Expand"} ${file.path}`}
-          title={renamed ? `${renamed} → ${file.path}` : file.path}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left hover:bg-muted/40"
-        >
-          {expanded ? (
-            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <StatusIcon className={cn("size-4 shrink-0", statusClass)} aria-label={file.status} />
-          <span className="flex min-w-0 flex-1 flex-col">
-            <TruncatedPath
-              className="text-xs"
-              directory={directory}
-              filename={filename}
-              directoryClassName="text-muted-foreground"
-              filenameClassName="text-foreground"
-            />
-            {renamed && (
-              <span className="truncate text-[10px] text-muted-foreground">from {renamed}</span>
-            )}
-          </span>
-          {threads.length > 0 && (
-            <span
-              className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground"
-              title={`${pluralize(threads.length, "conversation")}, ${openThreads} unresolved`}
-            >
-              <MessageSquare className="size-3" />
-              {threads.length}
-            </span>
-          )}
-          <span className="flex shrink-0 items-center gap-1 font-mono text-[11px] tabular-nums">
-            <span className="text-success">+{file.additions}</span>
-            <span className="text-failure">−{file.deletions}</span>
-          </span>
-        </button>
-        <label
-          htmlFor={checkboxId}
-          title={
-            file.viewedState === "dismissed" ? "Changed since you last viewed it" : "Mark as viewed"
-          }
-          className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-border/60 px-1.5 py-0.5 text-[11px] text-muted-foreground"
-        >
-          <Checkbox
-            id={checkboxId}
-            checked={viewed}
-            aria-label={`Viewed ${file.path}`}
-            onCheckedChange={(checked) => onViewed(checked === true)}
-            className="size-3.5"
-          />
-          Viewed
-        </label>
-      </div>
-      {expanded && (
-        <div className="overflow-x-auto border-t border-border/40">
-          {file.patchAvailable ? (
-            <PullRequestDiff
-              pullRequest={pullRequest}
-              file={file}
-              threads={threads}
-              commitId={commitId}
-              canComment={canComment}
-            />
-          ) : (
-            <div className="flex flex-wrap items-center gap-2 px-3 py-3 text-xs text-muted-foreground">
-              Diff not available here —
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 text-primary hover:underline"
-                onClick={() =>
-                  openExternal(file.blobUrl ?? `${gitHubPullRequestUrl(pullRequest)}/files`)
-                }
-              >
-                View on GitHub
-                <ExternalLink className="size-3" />
-              </button>
-            </div>
-          )}
-        </div>
+    <Button
+      variant="ghost"
+      size="sm"
+      aria-pressed={pressed}
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      onClick={() => onPressedChange(!pressed)}
+      className={cn(
+        "h-7 gap-1 px-2 text-xs text-muted-foreground",
+        pressed && "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary",
       )}
-    </section>
+    >
+      <Icon className="size-3.5" />
+      {label}
+    </Button>
   );
 }
 
@@ -194,7 +121,33 @@ export function PullRequestCodeTab({
   canComment: boolean;
 }) {
   const setFileViewed = usePullRequestsStore((state) => state.setFileViewed);
+  const loadFilePatch = usePullRequestsStore((state) => state.loadFilePatch);
+  const filePatches = usePullRequestsStore((state) => state.filePatches);
+  const loading = usePullRequestsStore((state) => state.loading);
+  const errors = usePullRequestsStore((state) => state.errors);
+  const loadedAt = usePullRequestsStore((state) => state.loadedAt);
+  const prKey = gitHubPullRequestKey(pullRequest);
+  const { headSha, comparisonBase } = files;
+  const comparisonKey = gitHubPullRequestComparisonKey(files);
+
   const [expanded, setExpanded] = useState(() => initialExpanded(files.files));
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [filters, setFilters] = useState<FileFilters>(NO_FILE_FILTERS);
+  const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
+  // The last attempted comparison for each file the reader explicitly opened.
+  // A null entry records intent on a file that had no deferred patch to load.
+  const wantedPatches = useRef(new Map<string, string | null>());
+  const [threadCursor, setThreadCursor] = useState<string | null>(null);
+  const [treeOverride, setTreeOverride] = useState<boolean | null>(null);
+  const [measureRef, wide] = useWidthAtLeast<HTMLDivElement>(FILE_TREE_SIDE_BY_SIDE_MIN_WIDTH_PX);
+  const showTree = treeOverride ?? wide;
+  const listRef = useRef<HTMLDivElement>(null);
+  const treeRef = useRef<HTMLElement>(null);
+  const scrollTarget = useRef<ScrollTarget | null>(null);
+  // Bumped with each navigation so the scroll effect runs even when the
+  // file was already open and selected.
+  const [, setScrollRequests] = useState(0);
+
   const threadsByPath = useMemo(() => {
     const map = new Map<string, GitHubPullRequestReviewThread[]>();
     for (const thread of files.threads) {
@@ -202,34 +155,271 @@ export function PullRequestCodeTab({
     }
     return map;
   }, [files.threads]);
+  const unresolved = useMemo(() => unresolvedByPath(files.threads), [files.threads]);
+  const indexByPath = useMemo(
+    () => new Map(files.files.map((file, index) => [file.path, index])),
+    [files.files],
+  );
+  const filesByPath = useMemo(
+    () => new Map(files.files.map((file) => [file.path, file])),
+    [files.files],
+  );
+  const tree = useMemo(
+    () =>
+      buildFileTree(
+        files.files.filter((file) => fileMatchesFilters(file, filters, unresolved)),
+        unresolved,
+      ),
+    [files.files, filters, unresolved],
+  );
+  const shownFiles = useMemo(() => treeFileOrder(tree), [tree]);
+  const shownPaths = useMemo(() => new Set(shownFiles.map((file) => file.path)), [shownFiles]);
+  const unresolvedThreads = useMemo(
+    () => unresolvedThreadOrder(shownFiles, files.threads),
+    [shownFiles, files.threads],
+  );
+  const filtering = filtersActive(filters);
+  const hiddenCount = files.files.length - shownFiles.length;
   const viewedCount = files.files.filter((file) => file.viewedState === "viewed").length;
+  const nextUnviewed = nextFileAfter(
+    shownFiles,
+    selectedPath,
+    (file) => file.viewedState !== "viewed",
+  );
+  const threadPosition = unresolvedThreads.findIndex((thread) => thread.id === threadCursor);
 
-  const toggle = (path: string) =>
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
+  const patchStateFor = (path: string): FilePatchState => {
+    const key = filePatchKey(prKey, comparisonKey, path);
+    const loadKey = resourceKey("file-patch", key);
+    return {
+      patch: filePatches.get(key),
+      loading: loading.has(loadKey),
+      error: errors.get(loadKey),
+      settled: loadedAt.has(loadKey),
+    };
+  };
+
+  const requestPatch = (path: string) => {
+    if (!wantedPatches.current.has(path)) wantedPatches.current.set(path, null);
+    const file = filesByPath.get(path);
+    if (!comparisonBase || !file?.patchDeferred || file.patchAvailable) return;
+    wantedPatches.current.set(path, comparisonKey);
+    if (patchStateFor(path).patch) return;
+    void loadFilePatch(pullRequest, {
+      path,
+      headSha,
+      comparisonBase,
+      index: indexByPath.get(path),
     });
+  };
+
+  // Carry explicit intent forward when a new list arrives. Cache eviction
+  // leaves the attempt recorded so only another file action reloads that patch.
+  useEffect(() => {
+    for (const [path, attempted] of Array.from(wantedPatches.current)) {
+      const file = filesByPath.get(path);
+      if (!file) {
+        wantedPatches.current.delete(path);
+        continue;
+      }
+      if (!comparisonBase || !expanded.has(path) || !shownPaths.has(path)) continue;
+      if (!file.patchDeferred || file.patchAvailable || attempted === comparisonKey) continue;
+      wantedPatches.current.set(path, comparisonKey);
+      const key = filePatchKey(prKey, comparisonKey, path);
+      if (filePatches.has(key)) continue;
+      void loadFilePatch(pullRequest, {
+        path,
+        headSha,
+        comparisonBase,
+        index: indexByPath.get(path),
+      });
+    }
+  }, [
+    comparisonBase,
+    comparisonKey,
+    expanded,
+    shownPaths,
+    filesByPath,
+    filePatches,
+    prKey,
+    headSha,
+    indexByPath,
+    loadFilePatch,
+    pullRequest,
+  ]);
+
+  useEffect(() => {
+    const target = scrollTarget.current;
+    const list = listRef.current;
+    if (!target || !list) return;
+    if (!shownPaths.has(target.path) || !expanded.has(target.path)) {
+      scrollTarget.current = null;
+      return;
+    }
+    const tree = treeRef.current;
+    if (target.revealTree && tree) {
+      const row = findByData(tree, '[aria-current="true"]', "path", target.path);
+      if (row) {
+        const viewport = tree.getBoundingClientRect();
+        const bounds = row.getBoundingClientRect();
+        if (bounds.top < viewport.top) tree.scrollTop += bounds.top - viewport.top;
+        else if (bounds.bottom > viewport.bottom) tree.scrollTop += bounds.bottom - viewport.bottom;
+      }
+    }
+    target.revealTree = false;
+
+    const section = findByData(list, '[data-testid="pull-request-file"]', "path", target.path);
+    if (!section) return;
+    if (target.threadId) {
+      const file = filesByPath.get(target.path);
+      const { patch, loading, error, settled } = patchStateFor(target.path);
+      if (
+        comparisonBase &&
+        file?.patchDeferred &&
+        !file.patchAvailable &&
+        (loading || (!patch && !error && !settled))
+      )
+        return;
+
+      const thread = findByData(section, "[data-thread-id]", "threadId", target.threadId);
+      if (thread) {
+        scrollTarget.current = null;
+        thread.scrollIntoView?.({ block: "center" });
+        thread.focus?.({ preventScroll: true });
+        return;
+      }
+    }
+    scrollTarget.current = null;
+    section.scrollIntoView?.({ block: "start" });
+  });
+
+  /** Opens a file (and optionally one of its conversations) and scrolls to it. */
+  const openFile = (path: string, threadId: string | null = null) => {
+    setSelectedPath(path);
+    setExpanded((current) => (current.has(path) ? current : withAdded(current, path)));
+    requestPatch(path);
+    setCollapsedDirectories((current) => withRemoved(current, ...ancestorDirectories(path)));
+    scrollTarget.current = { path, threadId, revealTree: true };
+    setScrollRequests((count) => count + 1);
+  };
+
+  const toggle = (path: string) => {
+    const opening = !expanded.has(path);
+    setExpanded((current) => (opening ? withAdded(current, path) : withRemoved(current, path)));
+    if (opening) {
+      setSelectedPath(path);
+      requestPatch(path);
+    }
+  };
 
   const markViewed = (path: string, viewed: boolean) => {
     // Like GitHub, marking a file viewed folds it away.
-    if (viewed) {
-      setExpanded((current) => {
-        const next = new Set(current);
-        next.delete(path);
-        return next;
-      });
-    }
+    if (viewed) setExpanded((current) => withRemoved(current, path));
     void setFileViewed(pullRequest, path, viewed).catch((error) => {
       toast.error(errorMessage(error, "Could not update the viewed state."));
     });
   };
 
+  const goToNextUnresolved = () => {
+    const next = nextThreadAfter(unresolvedThreads, threadCursor);
+    if (!next) return;
+    setThreadCursor(next.id);
+    openFile(next.path, next.id);
+  };
+
+  const toggleDirectory = (path: string) =>
+    setCollapsedDirectories((current) =>
+      current.has(path) ? withRemoved(current, path) : withAdded(current, path),
+    );
+
+  const fileList =
+    shownFiles.length === 0 ? (
+      <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+        {files.files.length === 0 ? "No changed files." : "No files match the filters."}
+      </p>
+    ) : (
+      shownFiles.map((file) => (
+        <PullRequestFileSection
+          key={file.path}
+          pullRequest={pullRequest}
+          file={file}
+          threads={threadsByPath.get(file.path) ?? []}
+          expanded={expanded.has(file.path)}
+          selected={file.path === selectedPath}
+          onToggle={() => toggle(file.path)}
+          onViewed={(viewed) => markViewed(file.path, viewed)}
+          commitId={headSha}
+          comparisonKey={comparisonKey}
+          canLoadPatch={Boolean(comparisonBase)}
+          canComment={canComment}
+          patchState={patchStateFor(file.path)}
+          onLoadPatch={() => requestPatch(file.path)}
+        />
+      ))
+    );
+
   return (
-    <div className="flex min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-4 py-1.5 text-xs text-muted-foreground">
-        <span>{pluralize(files.files.length, "file")}</span>
+    <div ref={measureRef} className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border/60 px-2 py-1.5">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={cn("size-7", showTree && "bg-muted")}
+          aria-label={showTree ? "Hide file tree" : "Show file tree"}
+          aria-pressed={showTree}
+          title={showTree ? "Hide file tree" : "Show file tree"}
+          onClick={() => setTreeOverride(!showTree)}
+        >
+          <FolderTree className="size-3.5" />
+        </Button>
+        <div className="relative min-w-32 flex-1">
+          <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            value={filters.query}
+            onChange={(event) => setFilters({ ...filters, query: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && filters.query) {
+                event.stopPropagation();
+                setFilters({ ...filters, query: "" });
+              }
+            }}
+            placeholder="Filter files by path"
+            aria-label="Filter files by path"
+            className="h-7 pl-7 text-xs"
+          />
+        </div>
+        <FilterToggle
+          pressed={filters.unviewedOnly}
+          onPressedChange={(unviewedOnly) => setFilters({ ...filters, unviewedOnly })}
+          label="Unviewed"
+          ariaLabel="Only unviewed files"
+          icon={EyeOff}
+        />
+        <FilterToggle
+          pressed={filters.unresolvedOnly}
+          onPressedChange={(unresolvedOnly) => setFilters({ ...filters, unresolvedOnly })}
+          label="Unresolved"
+          ariaLabel="Only files with unresolved conversations"
+          icon={MessageSquareDot}
+        />
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/60 px-3 py-1 text-xs text-muted-foreground">
+        {filtering ? (
+          <span data-testid="file-filter-summary" role="status">
+            Showing {shownFiles.length} of {pluralize(files.files.length, "file")}
+            {hiddenCount > 0 && ` · ${hiddenCount} hidden`}
+            <button
+              type="button"
+              className="ml-1.5 text-primary hover:underline"
+              onClick={() => setFilters(NO_FILE_FILTERS)}
+            >
+              Clear
+            </button>
+          </span>
+        ) : (
+          <span>{pluralize(files.files.length, "file")}</span>
+        )}
         <span>·</span>
         <span data-testid="viewed-count">
           {viewedCount} / {files.files.length} viewed
@@ -237,11 +427,44 @@ export function PullRequestCodeTab({
         <div className="ml-auto flex items-center gap-0.5">
           <Button
             variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs"
+            disabled={!nextUnviewed}
+            title={nextUnviewed ? `Next unviewed: ${nextUnviewed.path}` : "No unviewed files shown"}
+            onClick={() => nextUnviewed && openFile(nextUnviewed.path)}
+          >
+            <SkipForward className="size-3.5" />
+            Next unviewed
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs"
+            disabled={unresolvedThreads.length === 0}
+            aria-label="Next unresolved conversation"
+            title={
+              unresolvedThreads.length === 0
+                ? "No unresolved conversations on the files shown"
+                : "Next unresolved conversation"
+            }
+            onClick={goToNextUnresolved}
+          >
+            <MessageSquare className="size-3.5" />
+            <span data-testid="unresolved-position" className="tabular-nums">
+              {threadPosition >= 0
+                ? `${threadPosition + 1}/${unresolvedThreads.length}`
+                : unresolvedThreads.length}
+            </span>
+          </Button>
+          <Button
+            variant="ghost"
             size="icon-sm"
             className="size-7"
             aria-label="Expand all files"
-            title="Expand all"
-            onClick={() => setExpanded(new Set(files.files.map((file) => file.path)))}
+            title="Expand all shown files"
+            onClick={() =>
+              setExpanded((current) => withAdded(current, ...shownFiles.map((file) => file.path)))
+            }
           >
             <ChevronsUpDown className="size-3.5" />
           </Button>
@@ -260,7 +483,7 @@ export function PullRequestCodeTab({
       {files.truncated && (
         <div
           role="note"
-          className="border-b border-border/60 bg-muted/30 px-4 py-1.5 text-xs text-muted-foreground"
+          className="shrink-0 border-b border-border/60 bg-muted/30 px-4 py-1.5 text-xs text-muted-foreground"
         >
           GitHub only lists the first {files.files.length.toLocaleString()} files of this pull
           request.{" "}
@@ -273,25 +496,30 @@ export function PullRequestCodeTab({
           </button>
         </div>
       )}
-      {files.files.length === 0 ? (
-        <p className="px-4 py-6 text-center text-xs text-muted-foreground">No changed files.</p>
-      ) : (
-        <div>
-          {files.files.map((file) => (
-            <FileRow
-              key={file.path}
-              pullRequest={pullRequest}
-              file={file}
-              threads={threadsByPath.get(file.path) ?? []}
-              expanded={expanded.has(file.path)}
-              onToggle={() => toggle(file.path)}
-              onViewed={(viewed) => markViewed(file.path, viewed)}
-              commitId={files.headSha}
-              canComment={canComment}
-            />
-          ))}
+      <div className={cn("flex min-h-0 flex-1", wide ? "flex-row" : "flex-col")}>
+        {showTree && files.files.length > 0 && (
+          <PullRequestFileTree
+            ref={treeRef}
+            nodes={tree}
+            collapsed={collapsedDirectories}
+            forceOpen={filtering}
+            selectedPath={selectedPath}
+            onToggleDirectory={toggleDirectory}
+            onSelectFile={(path) => openFile(path)}
+            className={cn(
+              "shrink-0 border-border/60",
+              wide ? "w-64 max-w-[40%] border-r" : "max-h-[40%] border-b",
+            )}
+          />
+        )}
+        <div
+          ref={listRef}
+          data-testid="pull-request-file-list"
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto pb-6"
+        >
+          <PullRequestReviewDrafts>{fileList}</PullRequestReviewDrafts>
         </div>
-      )}
+      </div>
     </div>
   );
 }

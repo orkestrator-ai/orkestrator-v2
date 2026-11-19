@@ -9,9 +9,12 @@ import { appCommandScope } from "@/lib/node-scope-slots";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import {
+  gitHubPullRequestComparisonKey,
   gitHubPullRequestKey,
   type GitHubPullRequestComment,
   type GitHubPullRequestDetail,
+  type GitHubPullRequestFilePatch,
+  type GitHubPullRequestFilePatchInput,
   type GitHubPullRequestFiles,
   type GitHubPullRequestInlineCommentInput,
   type GitHubPullRequestListFilter,
@@ -32,16 +35,69 @@ import {
  * each mutation. Keys:
  * - pull request resources: `gitHubPullRequestKey(ref)`
  * - list results: `pullRequestListKey(projectId, filter, query)`
+ * - single-file patches: `filePatchKey(prKey, comparisonKey, path)`
  * Loading and error state is keyed by `resourceKey(kind, key)`.
  */
 
-export type PullRequestResourceKind = "detail" | "timeline" | "files" | "list";
+export type PullRequestResourceKind = "detail" | "timeline" | "files" | "list" | "file-patch";
 
 export const PULL_REQUEST_DETAIL_POLL_MS = 60_000;
 export const PULL_REQUEST_LIST_POLL_MS = 120_000;
 /** Cap on cached per-PR resources; files can carry large diffs. */
 export const MAX_CACHED_PULL_REQUESTS = 30;
 export const MAX_CACHED_PULL_REQUEST_LISTS = 40;
+/** Single-file patches kept, by count and by rendered rows (newest always kept). */
+export const MAX_CACHED_FILE_PATCHES = 40;
+export const MAX_CACHED_FILE_PATCH_ROWS = 60_000;
+
+/** One file's patch at one comparison of one pull request. */
+export function filePatchKey(pullRequestKey: string, comparisonKey: string, path: string): string {
+  return `${pullRequestKey}\u0000${comparisonKey}\u0000${path}`;
+}
+
+function patchRows(patch: GitHubPullRequestFilePatch): number {
+  return patch.hunks.reduce((total, hunk) => total + hunk.lines.length, 0);
+}
+
+/**
+ * Adds a patch, then evicts the stalest until both caps hold. The patch just
+ * added is never evicted, so a reader always gets the file it asked for.
+ */
+function setFilePatch(
+  map: Map<string, GitHubPullRequestFilePatch>,
+  key: string,
+  patch: GitHubPullRequestFilePatch,
+): Map<string, GitHubPullRequestFilePatch> {
+  const next = new Map(map);
+  next.delete(key);
+  next.set(key, patch);
+  let rows = 0;
+  for (const value of next.values()) rows += patchRows(value);
+  for (const [oldest, value] of Array.from(next)) {
+    if (oldest === key) break;
+    if (next.size <= MAX_CACHED_FILE_PATCHES && rows <= MAX_CACHED_FILE_PATCH_ROWS) break;
+    next.delete(oldest);
+    rows -= patchRows(value);
+  }
+  return next;
+}
+
+/** Drops a pull request's patches from earlier comparisons. */
+function withoutStalePatches(
+  map: Map<string, GitHubPullRequestFilePatch>,
+  pullRequestKey: string,
+  comparisonKey: string,
+): Map<string, GitHubPullRequestFilePatch> {
+  const prefix = `${pullRequestKey}\u0000`;
+  const current = `${prefix}${comparisonKey}\u0000`;
+  let next: Map<string, GitHubPullRequestFilePatch> | null = null;
+  for (const key of map.keys()) {
+    if (!key.startsWith(prefix) || key.startsWith(current)) continue;
+    next ??= new Map(map);
+    next.delete(key);
+  }
+  return next ?? map;
+}
 
 export function pullRequestListKey(
   projectId: string,
@@ -108,6 +164,8 @@ export interface PullRequestsState {
   timelines: Map<string, GitHubPullRequestTimeline>;
   files: Map<string, GitHubPullRequestFiles>;
   lists: Map<string, GitHubPullRequestListResult>;
+  /** Patches of files the list deferred, keyed by `filePatchKey`. */
+  filePatches: Map<string, GitHubPullRequestFilePatch>;
   /** Resource keys (`resourceKey(kind, key)`) with a read in flight. */
   loading: Set<string>;
   /** Last read error per resource key; cleared by the next successful read. */
@@ -120,6 +178,14 @@ export interface PullRequestsState {
   loadDetail: (ref: GitHubPullRequestRef) => Promise<void>;
   loadTimeline: (ref: GitHubPullRequestRef) => Promise<void>;
   loadFiles: (ref: GitHubPullRequestRef) => Promise<void>;
+  /**
+   * Loads one deferred patch at the list's comparison. If GitHub reports a
+   * change, the patch stays pending while the store refreshes the file list.
+   */
+  loadFilePatch: (
+    ref: GitHubPullRequestRef,
+    file: GitHubPullRequestFilePatchInput,
+  ) => Promise<void>;
   loadList: (
     projectId: string,
     filter: GitHubPullRequestListFilter,
@@ -251,6 +317,7 @@ export const pullRequestsStore = defineScopedStore<PullRequestsState>(
   "pull-requests",
   (scope) => (set, get) => {
     const requestSequence: RequestSequence = new Map();
+    const fileListReads = new Map<string, Promise<void>>();
     /** The scope's node's GitHub commands (the named exports on the app's command scope). */
     const api = () => backendApiForScope(scope, createGithubPullRequestsApi, backend);
     const reloadDetail = (ref: GitHubPullRequestRef) => get().loadDetail(ref);
@@ -264,6 +331,7 @@ export const pullRequestsStore = defineScopedStore<PullRequestsState>(
       timelines: new Map(),
       files: new Map(),
       lists: new Map(),
+      filePatches: new Map(),
       loading: new Set(),
       errors: new Map(),
       loadedAt: new Map(),
@@ -299,15 +367,67 @@ export const pullRequestsStore = defineScopedStore<PullRequestsState>(
 
       loadFiles: (ref) => {
         const key = gitHubPullRequestKey(ref);
-        return runLoad(
+        const read = runLoad(
           set,
           requestSequence,
           resourceKey("files", key),
           () => api().getGitHubPullRequestFiles(ref),
           (state, files) => ({
             files: setCapped(state.files, key, files, MAX_CACHED_PULL_REQUESTS),
+            filePatches: withoutStalePatches(
+              state.filePatches,
+              key,
+              gitHubPullRequestComparisonKey(files),
+            ),
           }),
           "Could not load the changed files.",
+        ).finally(() => {
+          if (fileListReads.get(key) === read) fileListReads.delete(key);
+        });
+        fileListReads.set(key, read);
+        return read;
+      },
+
+      loadFilePatch: (ref, file) => {
+        const key = gitHubPullRequestKey(ref);
+        const comparisonKey = gitHubPullRequestComparisonKey(file);
+        const patchKey = filePatchKey(key, comparisonKey, file.path);
+        const loadKey = resourceKey("file-patch", patchKey);
+        const isCurrent = (state: PullRequestsState) => {
+          const latest = state.files.get(key);
+          return !latest || gitHubPullRequestComparisonKey(latest) === comparisonKey;
+        };
+        if (!isCurrent(get()) || get().loading.has(loadKey)) return Promise.resolve();
+        return runLoad(
+          set,
+          requestSequence,
+          loadKey,
+          async () => {
+            const patch = await api().getGitHubPullRequestFilePatch(ref, file);
+            if (!isCurrent(get())) return null;
+            if (patch.outcome === "head-moved") {
+              // Keep the patch pending through recovery so jumps wait for the
+              // new diff. Other moved replies can join the same list read.
+              let refresh: Promise<void> | undefined =
+                fileListReads.get(key) ?? get().loadFiles(ref);
+              while (refresh) {
+                await refresh;
+                if (!isCurrent(get())) return null;
+                // A poll or mutation can have superseded the read we joined.
+                refresh = fileListReads.get(key);
+              }
+              throw new Error("The pull request changed while loading this file.");
+            }
+            if (gitHubPullRequestComparisonKey(patch) !== comparisonKey) {
+              throw new Error("GitHub returned a patch for a different comparison.");
+            }
+            return patch;
+          },
+          (state, patch) =>
+            patch && isCurrent(state)
+              ? { filePatches: setFilePatch(state.filePatches, patchKey, patch) }
+              : {},
+          "Could not load this file's changes.",
         );
       },
 

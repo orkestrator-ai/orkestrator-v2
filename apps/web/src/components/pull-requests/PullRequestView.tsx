@@ -171,6 +171,7 @@ export function PullRequestView({
   }, [pullRequests, ref, signature]);
 
   const pageWidth = layout === "page" ? "mx-auto w-full max-w-5xl" : "w-full";
+  const codeFills = tab === "code" && Boolean(detail) && Boolean(files.files);
 
   let body: ReactNode;
   if (!detail) {
@@ -279,12 +280,29 @@ export function PullRequestView({
           </div>
         </div>
       </div>
-      <div role="tabpanel" aria-label={tab} className="min-h-0 flex-1 overflow-y-auto">
-        <div className={cn(pageWidth, tab === "code" && detail ? "pb-6" : "px-4 py-3 pb-6")}>
+      <div
+        role="tabpanel"
+        aria-label={tab}
+        className={cn(
+          "min-h-0 flex-1",
+          // The code tab scrolls its file tree and diffs on their own.
+          codeFills ? "flex flex-col overflow-hidden" : "overflow-y-auto",
+        )}
+      >
+        <div
+          className={cn(
+            pageWidth,
+            codeFills
+              ? "flex min-h-0 flex-1 flex-col"
+              : tab === "code" && detail
+                ? "pb-6"
+                : "px-4 py-3 pb-6",
+          )}
+        >
           {tab === "code" && detail ? (
             <>
               {(staleError || tabStaleError) && (
-                <div className="px-4 pt-3">
+                <div className="shrink-0 px-4 pt-3">
                   {staleError}
                   {tabStaleError && (
                     <ErrorNotice

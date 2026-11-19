@@ -7,7 +7,7 @@ import {
   MAX_DIFF_COMMENTS_PER_ENVIRONMENT,
   diffCommentsStore,
   environmentDiffComments,
-  isDiffCommentOutdated,
+  diffCommentFreshness,
   type DiffCommentAnchor,
 } from "./diffCommentsStore";
 
@@ -113,7 +113,7 @@ describe("diffCommentsStore", () => {
     state().editComment(ENV, ids[2]!, "three, reworded");
     const added = state().addComment(ENV, anchor(), "six");
 
-    expect(state().completeSend(ENV, "req-1")).toEqual({ sent: 4, kept: 1 });
+    expect(state().completeSend(ENV, "req-1")).toEqual({ sent: 5, kept: 1 });
     expect(env().comments.map((comment) => comment.body)).toEqual(["three, reworded", "six"]);
     expect(env().comments.map((comment) => comment.id)).toEqual([ids[2]!, added!]);
     expect(env().sending).toBeNull();
@@ -141,15 +141,29 @@ describe("diffCommentsStore", () => {
       .getState()
       .addComment(ENV, anchor({ source: "historical", contentKey: null }), "past");
     const [live, past] = env().comments;
-    expect(isDiffCommentOutdated(env(), live!)).toBe(false);
+    expect(diffCommentFreshness(env(), live!)).toBe("unknown");
 
     store().getState().observeLiveContent(ENV, "p:src/app.ts", "blob:a|blob:b");
-    expect(isDiffCommentOutdated(env(), live!)).toBe(false);
+    expect(diffCommentFreshness(env(), live!)).toBe("current");
 
     store().getState().observeLiveContent(ENV, "p:src/app.ts", "blob:a|blob:c");
-    expect(isDiffCommentOutdated(env(), live!)).toBe(true);
+    expect(diffCommentFreshness(env(), live!)).toBe("outdated");
     // A historical identity never changes, so it is never outdated.
-    expect(isDiffCommentOutdated(env(), past!)).toBe(false);
+    expect(diffCommentFreshness(env(), past!)).toBe("current");
+  });
+
+  test("live observations evict only environments without pending review work", () => {
+    const id = store().getState().addComment(ENV, anchor({}), "In flight")!;
+    store()
+      .getState()
+      .beginSend(ENV, { requestId: "req", tabId: "tab", items: [{ id, revision: 1 }] });
+    for (let index = 0; index < 60; index++) {
+      store().getState().observeLiveContent(`other-${index}`, "path", "content");
+    }
+    expect(env().comments[0]?.id).toBe(id);
+    expect(env().sending?.items).toEqual([{ id, revision: 1 }]);
+    expect(store().getState().environments.size).toBeLessThanOrEqual(50);
+    expect(store().getState().completeSend(ENV, "req")).toEqual({ sent: 1, kept: 0 });
   });
 
   test("selects comments one at a time or all together", () => {

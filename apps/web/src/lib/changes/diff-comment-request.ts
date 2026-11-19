@@ -1,4 +1,8 @@
-import type { DiffComment, DiffCommentLine } from "@/stores/diffCommentsStore";
+import type {
+  DiffComment,
+  DiffCommentFreshness,
+  DiffCommentLine,
+} from "@/stores/diffCommentsStore";
 
 /**
  * Builds the one correction request a batch of diff comments is sent as.
@@ -14,7 +18,7 @@ export const MAX_DIFF_COMMENT_REQUEST_CHARACTERS = 200_000;
 
 export interface DiffCommentRequestItem {
   comment: DiffComment;
-  outdated: boolean;
+  freshness: DiffCommentFreshness;
 }
 
 function excerptLine(line: DiffCommentLine): string {
@@ -31,7 +35,7 @@ function fenceFor(text: string): string {
 }
 
 /** `src/app.ts:42`, `src/app.ts:42 (removed line)` or `src/app.ts, hunk @@ … @@`. */
-export function diffCommentLocation(comment: DiffComment): string {
+export function diffCommentLocation(comment: Pick<DiffComment, "anchor">): string {
   const { anchor } = comment;
   if (anchor.kind === "hunk" || anchor.line === null)
     return `${anchor.path}, hunk ${anchor.hunkHeader}`;
@@ -40,17 +44,32 @@ export function diffCommentLocation(comment: DiffComment): string {
     : `${anchor.path}:${anchor.line}`;
 }
 
+/** Keep repository text in a single JSON string inside a Markdown code span. */
+function literalLocation(location: string): string {
+  const encoded = JSON.stringify(location).replace(
+    /[\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+  const delimiter = fenceFor(encoded);
+  return `${delimiter} ${encoded} ${delimiter}`;
+}
+
 export function buildDiffCommentRequest(items: readonly DiffCommentRequestItem[]): string {
   const files = new Set(items.map((item) => item.comment.anchor.path));
   const count = items.length === 1 ? "1 comment" : `${items.length} comments`;
   const across = files.size > 1 ? ` across ${files.size} files` : "";
-  const sections = items.map(({ comment, outdated }, index) => {
+  const sections = items.map(({ comment, freshness }, index) => {
     const { anchor } = comment;
-    const lines = [`## ${index + 1}. ${diffCommentLocation(comment)}`];
-    if (outdated) {
+    const lines = [`## ${index + 1}. ${literalLocation(diffCommentLocation(comment))}`];
+    if (freshness === "outdated") {
       lines.push(
         "",
         "Note: this file has changed since the comment was written, so the line numbers may have moved. The code below is what the comment was written about.",
+      );
+    } else if (freshness === "unknown") {
+      lines.push(
+        "",
+        "Note: current file content could not be verified. Use the captured code below to locate the change.",
       );
     } else if (anchor.source === "historical") {
       lines.push("", "Note: written on an earlier recorded change to this file.");
@@ -90,9 +109,13 @@ export function diffCommentRequestId(
   environmentId: string,
   tabId: string,
   items: ReadonlyArray<{ id: string; revision: number }>,
+  sessionId?: string,
 ): string {
-  const key = [environmentId, tabId, ...items.map((item) => `${item.id}@${item.revision}`)].join(
-    "\0",
-  );
+  const key = [
+    environmentId,
+    tabId,
+    sessionId ?? "",
+    ...items.map((item) => `${item.id}@${item.revision}`),
+  ].join("\0");
   return `diff-comments:${fnv1a64(key)}`;
 }

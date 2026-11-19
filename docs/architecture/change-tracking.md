@@ -474,15 +474,17 @@ count the old shape cannot express exactly is omitted instead of guessed.
 A diff tab opened for an environment lets the user comment on any line or
 hunk, collect several comments across files, and send the selected ones to one
 of the environment's agent chats as a single prompt. The renderer owns the
-whole flow; the backend sees only an ordinary prompt-queue entry.
+review drafts and sends a prompt-queue entry bound to the chosen conversation.
 
 - **Anchor.** A comment records the `DiffIdentity` id, measurement, path id,
   side (removed lines count on the old side, the rest on the new), line number
   or hunk header, and a bounded copy of the lines it is about
   (`diffCommentsStore.ts`). The request quotes that copy, so it stays precise
   after the file moves on.
-- **Moved on.** A live view reports the blob ids of the file it shows
-  (`observeLiveContent`). A live comment written against other content is
+- **Moved on.** The tray follows live invalidations for the commented files,
+  including closed tabs. Copy and Send resolve each selected live path again.
+  If the file cannot be checked, the request says so and quotes the captured
+  code. A live comment written against other content is
   marked Outdated, listed above the file instead of under whatever line now
   has its number, and its section of the request says the lines may have
   moved. A historical identity never changes, so its comments are never
@@ -492,8 +494,12 @@ whole flow; the backend sees only an ordinary prompt-queue entry.
   when the session is free whether or not the tab is mounted
   (`diff-comment-delivery.ts`). The send snapshots `(id, revision)` pairs;
   once the queue accepts it, only comments still at those revisions are
-  removed. A comment added or edited during the send stays, and a failed send
-  keeps everything. The request id is derived from the snapshot and tab, so
+  removed. An open edit keeps its draft after acknowledgement. New drafts
+  keep their original anchors through refreshes, and an environment with
+  pending review work is protected from cache eviction. A failed send keeps
+  everything. A started conversation is required, and the backend checks its
+  binding before enqueue and dispatch. The request id includes the snapshot,
+  tab and conversation, so
   retrying the same batch finds the copy still waiting in the queue. As for
   any queued prompt, an unsent draft in that chat holds the queue.
 - **Scope.** Comments are renderer state per node scope and environment,

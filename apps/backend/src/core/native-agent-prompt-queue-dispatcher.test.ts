@@ -288,6 +288,53 @@ describe("NativeAgentPromptQueueDispatcher restored legacy claims", () => {
   );
 });
 
+test("conversation-bound corrections require an existing binding and keep the session mode", async () => {
+  await withPersistedQueue(async (storage, { dispatcher, host }) => {
+    const message = {
+      id: "correction",
+      text: "Review the captured line",
+      preserveSessionMode: true,
+      requireProviderSessionId: "provider-1",
+    };
+    const unstartedQueue = `${identity.agent}\0env-${identity.environmentId}:unstarted`;
+    await expect(
+      storage.enqueuePromptQueueMessage(unstartedQueue, identity.environmentId, message),
+    ).rejects.toThrow("destination conversation changed");
+    expect(await storage.getPromptQueue(unstartedQueue)).toBeNull();
+
+    await storage.updateNativeAgentSessionControls(sessionKey, "provider-1", {
+      mode: "plan",
+    });
+    await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, message);
+    await dispatcher.drainPromptQueueForSession(identity);
+    expect(host.dispatchPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: message.text,
+        mode: undefined,
+        requireProviderSessionId: "provider-1",
+      }),
+    );
+    expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
+    expect((await storage.getNativeAgentSession(sessionKey))?.controls?.mode).toBe("plan");
+
+    await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+      ...message,
+      id: "stale-correction",
+    });
+    await storage.invalidateNativeAgentSession(sessionKey, "provider-1");
+    const replacement = await storage.getOrCreateNativeAgentSession(
+      { ...identity, key: sessionKey },
+      async () => "provider-2",
+    );
+    host.ensureSession = async () => replacement;
+    await dispatcher.drainPromptQueueForSession(identity);
+    expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+    expect((await storage.getPromptQueue(queueKey))?.dispatchError?.message).toContain(
+      "destination conversation changed",
+    );
+  });
+});
+
 test("queue holds while limit recovery is pending, then releases the head", async () => {
   await withPersistedQueue(async (storage, { dispatcher, host }) => {
     await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {

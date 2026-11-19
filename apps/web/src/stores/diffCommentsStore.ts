@@ -32,7 +32,7 @@ export const MAX_DIFF_COMMENT_BODY = 4000;
 export const MAX_DIFF_COMMENT_EXCERPT_LINES = 20;
 /** Characters of one captured line. */
 export const MAX_DIFF_COMMENT_LINE_CHARACTERS = 300;
-/** Environments with comments held at once; the least recently touched is dropped first. */
+/** Environments held at once. Only entries without drafts or a send may be evicted. */
 const MAX_ENVIRONMENTS = 50;
 /** Paths whose live content is remembered per environment. */
 const MAX_OBSERVED_PATHS = 500;
@@ -55,6 +55,7 @@ export interface DiffCommentAnchor {
    * identities only); a different value for the same path means it moved on.
    */
   contentKey: string | null;
+  resourceKey?: string;
   kind: "line" | "hunk";
   /** Which side `line` counts on: removed lines on the old side, the rest on the new. */
   side: "old" | "new";
@@ -75,6 +76,9 @@ export interface DiffComment {
   /** Included in the next send. */
   selected: boolean;
   createdAt: number;
+  editDraft?: string;
+  /** The saved text was sent while this edit was open. */
+  sentWhileEditing?: boolean;
 }
 
 export interface DiffCommentSend {
@@ -83,7 +87,13 @@ export interface DiffCommentSend {
   items: ReadonlyArray<{ id: string; revision: number }>;
 }
 
+export interface NewDiffCommentDraft {
+  anchor: DiffCommentAnchor;
+  body: string;
+}
+
 export interface EnvironmentDiffComments {
+  newDrafts: ReadonlyMap<string, NewDiffCommentDraft>;
   comments: readonly DiffComment[];
   /** The agent tab the last send went to (a preference; preselects only). */
   destinationTabId: string | null;
@@ -92,7 +102,7 @@ export interface EnvironmentDiffComments {
   /** Why the last send failed, until the next one starts. */
   lastError: string | null;
   /** pathId → content key of the live diff most recently shown for it. */
-  liveContent: ReadonlyMap<string, string>;
+  liveContent: ReadonlyMap<string, string | null>;
 }
 
 export type DiffCommentSettlement = { sent: number; kept: number };
@@ -101,12 +111,14 @@ export interface DiffCommentsState {
   environments: ReadonlyMap<string, EnvironmentDiffComments>;
   /** Adds a comment; returns its id, or null when the environment is full or the body is blank. */
   addComment: (environmentId: string, anchor: DiffCommentAnchor, body: string) => string | null;
+  setNewDraft: (environmentId: string, key: string, draft: NewDiffCommentDraft | null) => boolean;
+  setEditDraft: (environmentId: string, commentId: string, body: string | null) => void;
   editComment: (environmentId: string, commentId: string, body: string) => void;
   removeComment: (environmentId: string, commentId: string) => void;
   setSelected: (environmentId: string, commentId: string, selected: boolean) => void;
   setAllSelected: (environmentId: string, selected: boolean) => void;
   setDestination: (environmentId: string, tabId: string) => void;
-  observeLiveContent: (environmentId: string, pathId: string, contentKey: string) => void;
+  observeLiveContent: (environmentId: string, pathId: string, contentKey: string | null) => void;
   /** Records a send of exactly these revisions; false when another send is in flight. */
   beginSend: (environmentId: string, send: DiffCommentSend) => boolean;
   /** The send landed: removes comments still at the revision it carried. */
@@ -118,6 +130,7 @@ export interface DiffCommentsState {
 
 const EMPTY_ENVIRONMENT: EnvironmentDiffComments = Object.freeze({
   comments: [],
+  newDrafts: new Map(),
   destinationTabId: null,
   sending: null,
   lastError: null,
@@ -131,15 +144,37 @@ export function environmentDiffComments(
   return (environmentId ? state.environments.get(environmentId) : undefined) ?? EMPTY_ENVIRONMENT;
 }
 
-/** True when the file this live comment was written on has since changed. */
-export function isDiffCommentOutdated(
+export function liveCommentPathKey(resourceKey: string | undefined, pathId: string): string {
+  return resourceKey ? JSON.stringify([resourceKey, pathId]) : pathId;
+}
+
+export type DiffCommentFreshness = "current" | "outdated" | "unknown";
+
+export function diffCommentFreshness(
   environment: Pick<EnvironmentDiffComments, "liveContent">,
   comment: DiffComment,
-): boolean {
+): DiffCommentFreshness {
   const { anchor } = comment;
-  if (anchor.source !== "live" || anchor.contentKey === null) return false;
-  const current = environment.liveContent.get(anchor.pathId);
-  return current !== undefined && current !== anchor.contentKey;
+  if (anchor.source !== "live") return "current";
+  const current = environment.liveContent.get(
+    liveCommentPathKey(anchor.resourceKey, anchor.pathId),
+  );
+  if (current == null || anchor.contentKey === null) return "unknown";
+  return current === anchor.contentKey ? "current" : "outdated";
+}
+
+export function isDiffCommentSelected(comment: DiffComment): boolean {
+  return comment.selected && !comment.sentWhileEditing;
+}
+
+function canHoldEnvironment(state: DiffCommentsState, environmentId: string): boolean {
+  return (
+    state.environments.has(environmentId) ||
+    state.environments.size < MAX_ENVIRONMENTS ||
+    Array.from(state.environments.values()).some(
+      (entry) => !entry.comments.length && !entry.newDrafts.size && !entry.sending,
+    )
+  );
 }
 
 /** Bounds one captured line so a minified file cannot bloat the store or the request. */
@@ -175,10 +210,12 @@ export const diffCommentsStore = defineScopedStore<DiffCommentsState>(
         const environments = new Map(state.environments);
         environments.delete(environmentId);
         environments.set(environmentId, nextEnvironment);
-        while (environments.size > MAX_ENVIRONMENTS) {
-          const oldest = environments.keys().next().value;
-          if (oldest === undefined || oldest === environmentId) break;
-          environments.delete(oldest);
+        if (environments.size > MAX_ENVIRONMENTS) {
+          for (const [id, entry] of Array.from(environments)) {
+            if (entry.comments.length || entry.newDrafts.size || entry.sending) continue;
+            environments.delete(id);
+            break;
+          }
         }
         return { environments };
       });
@@ -204,7 +241,7 @@ export const diffCommentsStore = defineScopedStore<DiffCommentsState>(
 
       addComment: (environmentId, anchor, body) => {
         const text = normalizeBody(body);
-        if (!text) return null;
+        if (!text || !canHoldEnvironment(get(), environmentId)) return null;
         const current = environmentDiffComments(get(), environmentId);
         if (current.comments.length >= MAX_DIFF_COMMENTS_PER_ENVIRONMENT) return null;
         const id = createUuid();
@@ -232,14 +269,54 @@ export const diffCommentsStore = defineScopedStore<DiffCommentsState>(
         return id;
       },
 
+      setNewDraft: (environmentId, key, draft) => {
+        const state = get();
+        const { newDrafts } = environmentDiffComments(state, environmentId);
+        if (
+          draft &&
+          (!canHoldEnvironment(state, environmentId) ||
+            (!newDrafts.has(key) && newDrafts.size >= MAX_DIFF_COMMENTS_PER_ENVIRONMENT))
+        )
+          return false;
+        update(environmentId, (current) => {
+          if (!draft && !current.newDrafts.has(key)) return null;
+          const newDrafts = new Map(current.newDrafts);
+          if (draft) newDrafts.set(key, draft);
+          else newDrafts.delete(key);
+          return { ...current, newDrafts };
+        });
+        return true;
+      },
+
+      setEditDraft: (environmentId, commentId, body) => {
+        if (
+          body === null &&
+          environmentDiffComments(get(), environmentId).comments.some(
+            (comment) => comment.id === commentId && comment.sentWhileEditing,
+          )
+        ) {
+          get().removeComment(environmentId, commentId);
+          return;
+        }
+        mapComment(environmentId, commentId, (comment) => ({
+          ...comment,
+          editDraft: body ?? undefined,
+        }));
+      },
+
       editComment: (environmentId, commentId, body) => {
         const text = normalizeBody(body);
         if (!text) return;
-        mapComment(environmentId, commentId, (comment) =>
-          comment.body === text
-            ? comment
-            : { ...comment, body: text, revision: comment.revision + 1 },
-        );
+        mapComment(environmentId, commentId, (comment) => {
+          const changed = comment.body !== text || comment.sentWhileEditing;
+          return {
+            ...comment,
+            body: text,
+            revision: changed ? comment.revision + 1 : comment.revision,
+            editDraft: undefined,
+            sentWhileEditing: undefined,
+          };
+        });
       },
 
       removeComment: (environmentId, commentId) =>
@@ -285,8 +362,17 @@ export const diffCommentsStore = defineScopedStore<DiffCommentsState>(
         }),
 
       beginSend: (environmentId, send) => {
-        if (environmentDiffComments(get(), environmentId).sending) return false;
-        update(environmentId, (current) => ({ ...current, sending: send, lastError: null }));
+        if (
+          !canHoldEnvironment(get(), environmentId) ||
+          environmentDiffComments(get(), environmentId).sending
+        )
+          return false;
+        update(environmentId, (current) => ({
+          ...current,
+          destinationTabId: send.tabId,
+          sending: send,
+          lastError: null,
+        }));
         return true;
       },
 
@@ -297,20 +383,24 @@ export const diffCommentsStore = defineScopedStore<DiffCommentsState>(
           const sentRevisions = new Map(
             current.sending.items.map((item) => [item.id, item.revision]),
           );
-          const comments = current.comments.filter(
-            (comment) => sentRevisions.get(comment.id) !== comment.revision,
-          );
-          const sent = current.comments.length - comments.length;
-          // Edited while sending: carried in the request, but at an older revision.
-          const kept = current.comments.filter(
-            (comment) =>
-              sentRevisions.has(comment.id) && sentRevisions.get(comment.id) !== comment.revision,
-          ).length;
-          settlement = { sent, kept };
+          let kept = 0;
+          const comments = current.comments.flatMap((comment) => {
+            const revision = sentRevisions.get(comment.id);
+            if (revision === undefined) return [comment];
+            if (revision !== comment.revision) {
+              kept++;
+              return [comment];
+            }
+            if (comment.editDraft !== undefined) {
+              kept++;
+              return [{ ...comment, sentWhileEditing: true }];
+            }
+            return [];
+          });
+          settlement = { sent: current.sending.items.length, kept };
           return {
             ...current,
             comments,
-            destinationTabId: current.sending.tabId,
             sending: null,
             lastError: null,
           };

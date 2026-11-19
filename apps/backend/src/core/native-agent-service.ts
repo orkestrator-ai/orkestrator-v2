@@ -58,6 +58,7 @@ import {
   controlsFromSessionInput,
   createNativeAgentProvider,
   isValidInteractionMetadata,
+  REQUIRED_CONVERSATION_CHANGED,
   nativeAgentSessionStorageKey,
   nativeCapabilities,
   nonBlank,
@@ -1495,6 +1496,12 @@ export class NativeAgentService {
     await this.assertEnvironmentLive(input.environmentId);
     const provider = await this.provider(input);
     const existing = await this.storage.getNativeAgentSession(key);
+    if (
+      input.requireProviderSessionId &&
+      existing?.providerSessionId !== input.requireProviderSessionId
+    ) {
+      throw new PromptRejectedError(REQUIRED_CONVERSATION_CHANGED);
+    }
     if (existing) {
       this.assertSessionIdentity(existing, input, key);
       await this.assertEnvironmentLive(input.environmentId);
@@ -1539,6 +1546,9 @@ export class NativeAgentService {
           return enriched;
         }
         return existing;
+      }
+      if (input.requireProviderSessionId) {
+        throw new PromptRejectedError(REQUIRED_CONVERSATION_CHANGED);
       }
       await this.storage.invalidateNativeAgentSession(key, existing.providerSessionId);
     }

@@ -33,9 +33,14 @@ import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { Button } from "@/components/ui/button";
 import { TruncatedPath } from "@/components/ui/truncated-path";
 import { ChangeHunksView } from "@/components/changes/ChangeHunksView";
-import { CommentableHunks, diffContentKey } from "@/components/changes/DiffComments";
+import { diffContentKey } from "@/lib/changes/diff-comment-freshness";
+import {
+  CommentableHunks,
+  diffCommentDraftKey,
+  type DiffCommentContext,
+} from "@/components/changes/DiffComments";
 import { DiffCommentTray } from "@/components/changes/DiffCommentTray";
-import { useDiffCommentsStore } from "@/stores/diffCommentsStore";
+import { liveCommentPathKey, useDiffCommentsStore } from "@/stores/diffCommentsStore";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 
 /**
@@ -439,22 +444,36 @@ export function DiffViewerTab({
   useEffect(() => {
     if (!environmentId || !observedBody) return;
     const contentKey = diffContentKey(observedBody.identity);
-    if (contentKey === null) return;
     for (const file of observedBody.files)
-      observeLiveContent(environmentId, file.pathId, contentKey);
-  }, [environmentId, observeLiveContent, observedBody]);
+      observeLiveContent(
+        environmentId,
+        liveCommentPathKey(liveResourceKey ?? undefined, file.pathId),
+        contentKey,
+      );
+  }, [environmentId, liveResourceKey, observeLiveContent, observedBody]);
 
   // ---------------------------------------------------------------------------
   // Rendering
   // ---------------------------------------------------------------------------
-  const shell = (children: ReactNode, testId = "diff-viewer") => (
+  const shell = (
+    children: ReactNode,
+    testId = "diff-viewer",
+    inlineDraftKeys?: ReadonlySet<string>,
+  ) => (
     <div
       data-testid={testId}
+      inert={!isActive}
       className={cn("absolute inset-0 flex flex-col", !isActive && "pointer-events-none opacity-0")}
       style={{ backgroundColor: terminalAppearance.backgroundColor }}
     >
       {children}
-      {environmentId && <DiffCommentTray environmentId={environmentId} />}
+      {environmentId && (
+        <DiffCommentTray
+          environmentId={environmentId}
+          isActive={isActive}
+          inlineDraftKeys={inlineDraftKeys}
+        />
+      )}
     </div>
   );
 
@@ -565,6 +584,17 @@ export function DiffViewerTab({
     );
   }
 
+  const commentContext: DiffCommentContext | null = environmentId
+    ? {
+        environmentId,
+        identity: shownBody.identity,
+        source: isLive ? "live" : "historical",
+        resourceKey: liveResourceKey ?? undefined,
+      }
+    : null;
+  const inlineDraftKeys = commentContext
+    ? new Set(shownBody.files.map((file) => diffCommentDraftKey(file.pathId, commentContext)))
+    : undefined;
   const singleFile = shownBody.identity.kind === "file" && shownBody.files.length <= 1;
   return shell(
     <>
@@ -590,16 +620,8 @@ export function DiffViewerTab({
                   <span className="shrink-0 opacity-70">{STATUS_TEXT[file.status]}</span>
                 </div>
               )}
-              {environmentId ? (
-                <CommentableHunks
-                  file={file}
-                  mode={effectiveMode}
-                  context={{
-                    environmentId,
-                    identity: shownBody.identity,
-                    source: isLive ? "live" : "historical",
-                  }}
-                />
+              {commentContext ? (
+                <CommentableHunks file={file} mode={effectiveMode} context={commentContext} />
               ) : (
                 <ChangeHunksView file={file} mode={effectiveMode} maxHeightClass="max-h-none" />
               )}
@@ -627,6 +649,8 @@ export function DiffViewerTab({
         )}
       </div>
     </>,
+    "diff-viewer",
+    inlineDraftKeys,
   );
 }
 

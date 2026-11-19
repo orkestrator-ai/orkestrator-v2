@@ -52,7 +52,7 @@ describe("diffCommentLocation", () => {
 describe("buildDiffCommentRequest", () => {
   test("quotes each comment's captured code under one numbered request", () => {
     const text = buildDiffCommentRequest([
-      { comment: comment("Handle a null result."), outdated: false },
+      { comment: comment("Handle a null result."), freshness: "current" },
       {
         comment: comment("Drop this helper.", {
           path: "src/util.ts",
@@ -66,17 +66,36 @@ describe("buildDiffCommentRequest", () => {
           ],
           excerptTruncated: true,
         }),
-        outdated: true,
+        freshness: "outdated",
       },
     ]);
 
     expect(text).toBe(
       [
         "Please address these review comments on the changes in this workspace (2 comments across 2 files). Each quotes the diff lines it refers to; line numbers count in the file as shown in that diff.",
-        "## 1. src/app.ts:42\n\n```diff\n+const value = read();\n```\n\nHandle a null result.",
-        "## 2. src/util.ts, hunk @@ -1,2 +1,1 @@\n\nNote: this file has changed since the comment was written, so the line numbers may have moved. The code below is what the comment was written about.\n\n```diff\n export {};\n-function helper() {}\n…\n```\n\nDrop this helper.",
+        '## 1. ``` "src/app.ts:42" ```\n\n```diff\n+const value = read();\n```\n\nHandle a null result.',
+        '## 2. ``` "src/util.ts, hunk @@ -1,2 +1,1 @@" ```\n\nNote: this file has changed since the comment was written, so the line numbers may have moved. The code below is what the comment was written about.\n\n```diff\n export {};\n-function helper() {}\n…\n```\n\nDrop this helper.',
       ].join("\n\n"),
     );
+  });
+
+  test("keeps repository labels on one literal metadata line", () => {
+    const text = buildDiffCommentRequest([
+      {
+        comment: comment("Reviewer text", {
+          kind: "hunk",
+          line: null,
+          path: "src/a\n# extra heading [link]",
+          hunkHeader: "@@ ```` <tag>\r\n> extra text",
+        }),
+        freshness: "current",
+      },
+    ]);
+    const heading = text.split("\n").find((line) => line.startsWith("## "));
+    expect(heading).toBe(
+      '## 1. ````` "src/a\\n# extra heading [link], hunk @@ ```` <tag>\\r\\n> extra text" `````',
+    );
+    expect(text.endsWith("\n\nReviewer text")).toBe(true);
   });
 
   test("labels historical comments and fences code that contains backticks", () => {
@@ -86,7 +105,7 @@ describe("buildDiffCommentRequest", () => {
           source: "historical",
           excerpt: [{ type: "add", text: "const s = ```;", oldLine: null, newLine: 42 }],
         }),
-        outdated: false,
+        freshness: "current",
       },
     ]);
     expect(text).toContain("(1 comment)");

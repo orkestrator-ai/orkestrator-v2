@@ -13,7 +13,11 @@ import {
 import { invoke } from "@/lib/native/backend";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
 import { changeProjectionStore } from "@/stores/changeProjectionStore";
-import { diffCommentsStore, environmentDiffComments } from "@/stores/diffCommentsStore";
+import {
+  diffCommentsStore,
+  environmentDiffComments,
+  MAX_DIFF_COMMENTS_PER_ENVIRONMENT,
+} from "@/stores/diffCommentsStore";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { ChangeDiffTarget, TabInfo } from "@/types/paneLayout";
 import { DiffViewerTab } from "@/components/terminal/DiffViewerTab";
@@ -128,7 +132,7 @@ function agentTab(id: string): TabInfo {
   return {
     id,
     type: "agent-native",
-    nativeAgentData: { environmentId: ENV, platform: "claude" },
+    nativeAgentData: { environmentId: ENV, platform: "claude", sessionId: `session-${id}` },
   } as TabInfo;
 }
 
@@ -165,7 +169,7 @@ async function addComment(buttonName: string, text: string) {
   const editor = await screen.findByTestId("diff-comment-editor");
   fireEvent.change(within(editor).getByRole("textbox"), { target: { value: text } });
   fireEvent.click(within(editor).getByRole("button", { name: "Add comment" }));
-  await waitFor(() => expect(screen.queryByTestId("diff-comment-editor")).toBeNull());
+  await waitFor(() => expect(screen.queryByTestId("diff-comment-editor") === null).toBe(true));
 }
 
 let identity = fileIdentity("diff-1", "blob-b");
@@ -249,12 +253,13 @@ describe("diff review comments", () => {
     const message = enqueued[0]?.message as { text: string; id: string };
     expect(enqueued[0]?.queueKey).toBe(`claude\u0000env-${ENV}:tab-1`);
     expect(message.text).toContain("(5 comments)");
-    expect(message.text).toContain("## 1. src/app.ts:2 (removed line)");
+    expect(message.text).toContain('## 1. ``` "src/app.ts:2 (removed line)" ```');
     expect(message.text).toContain("-const value = read() ?? 0;");
-    expect(message.text).toContain("## 5. src/app.ts, hunk @@ -1,2 +1,4 @@");
+    expect(message.text).toContain('## 5. ``` "src/app.ts, hunk @@ -1,2 +1,4 @@" ```');
     expect(message.text).toContain("Remove the debug log.");
 
-    // While the send is in flight: edit one comment and add another.
+    // While the send is in flight: add one comment and start editing another.
+    await addComment("Comment on src/app.ts line 1", "Use the shared io module.");
     const target = screen
       .getAllByTestId("diff-comment")
       .find((card) => card.textContent?.includes("Remove the debug log."))!;
@@ -263,13 +268,15 @@ describe("diff review comments", () => {
     fireEvent.change(within(editor).getByRole("textbox"), {
       target: { value: "Log through the logger instead." },
     });
-    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("Edited while sending")).toBeTruthy();
-    await addComment("Comment on src/app.ts line 1", "Use the shared io module.");
 
     await act(async () => write.resolve({ messages: [] }));
 
     await waitFor(() => expect(comments()).toHaveLength(2));
+    expect((within(editor).getByRole("textbox") as HTMLTextAreaElement).value).toBe(
+      "Log through the logger instead.",
+    );
+    expect(screen.getByRole("button", { name: "Send 1 to Claude Code" })).toBeTruthy();
+    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
     expect(comments().map((comment) => comment.body)).toEqual([
       "Log through the logger instead.",
       "Use the shared io module.",
@@ -308,6 +315,181 @@ describe("diff review comments", () => {
     const text = (enqueued[0]!.message as { text: string }).text;
     expect(text).toContain("this file has changed since the comment was written");
     expect(text).toContain("+console.log(value);");
+  });
+
+  test("keeps a draft at the comment limit and saves it once there is room", async () => {
+    const view = renderInAppCommandScope(
+      <DiffViewerTab target={live} environmentId={ENV} isActive />,
+    );
+    await screen.findByText("+console.log(value);");
+    await addComment("Comment on src/app.ts line 3", "Original comment");
+    const [first] = comments();
+    const store = view.scope.store(diffCommentsStore);
+    act(() => {
+      for (let index = 1; index < MAX_DIFF_COMMENTS_PER_ENVIRONMENT; index++) {
+        store.getState().addComment(ENV, first!.anchor, `Comment ${index}`);
+      }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Comment on src/app.ts line 4" }));
+    const editor = screen.getByTestId("diff-comment-editor");
+    const input = within(editor).getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "Keep this draft." } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Add comment" }));
+    expect(within(editor).getByRole("alert").textContent).toContain("comment limit");
+    expect(input.value).toBe("Keep this draft.");
+    act(() => store.getState().removeComment(ENV, first!.id));
+    fireEvent.click(within(editor).getByRole("button", { name: "Add comment" }));
+    expect(comments().at(-1)?.body).toBe("Keep this draft.");
+  });
+
+  test("keeps new and existing drafts when a refresh replaces their rows", async () => {
+    renderInAppCommandScope(<DiffViewerTab target={live} environmentId={ENV} isActive />);
+    await screen.findByText("+console.log(value);");
+    await addComment("Comment on src/app.ts line 3", "Original");
+    fireEvent.click(screen.getByRole("button", { name: "Edit comment on src/app.ts:3" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit comment on src/app.ts:3" }), {
+      target: { value: "Edited original" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Comment on src/app.ts line 4" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Comment on src/app.ts:4" }), {
+      target: { value: "New draft" },
+    });
+    identity = fileIdentity("diff-new", "blob-new");
+    handlers.changes_get_diff = () => body(identity, LINES.slice(0, 3));
+    fireEvent.click(screen.getByRole("button", { name: "Reload diff" }));
+    const earlier = await screen.findByTestId("diff-comments-elsewhere");
+    expect(
+      (
+        within(earlier).getByRole("textbox", {
+          name: "Edit comment on src/app.ts:3",
+        }) as HTMLTextAreaElement
+      ).value,
+    ).toBe("Edited original");
+    expect(
+      (
+        within(earlier).getByRole("textbox", {
+          name: "Comment on src/app.ts:4",
+        }) as HTMLTextAreaElement
+      ).value,
+    ).toBe("New draft");
+    fireEvent.click(within(earlier).getByRole("button", { name: "Add comment" }));
+    expect(comments()[1]?.anchor).toMatchObject({
+      diffIdentityId: "diff-1",
+      excerpt: [expect.objectContaining({ text: "export { value };" })],
+    });
+  });
+
+  test("checks anchors from a closed file on invalidation, copy and send", async () => {
+    const first = renderInAppCommandScope(
+      <DiffViewerTab target={live} environmentId={ENV} isActive />,
+    );
+    await screen.findByText("+console.log(value);");
+    await addComment("Comment on src/app.ts line 3", "Remove the log.");
+    first.unmount();
+
+    const other: ChangeDiffTarget = { ...live, path: "src/other.ts", title: "other.ts" };
+    const otherIdentity = fileIdentity("other", "other-blob");
+    const otherBody = body(otherIdentity);
+    if (otherBody.kind !== "body") throw new Error("Missing fixture body");
+    otherBody.files[0] = {
+      ...otherBody.files[0]!,
+      pathId: "p:src/other.ts",
+      newPathDisplay: "src/other.ts",
+    };
+    let fileAUnavailable = false;
+    handlers.changes_resolve_live_detail = (args) =>
+      args?.pathId === "p:src/app.ts"
+        ? fileAUnavailable
+          ? {
+              kind: "error",
+              error: { code: "unsupported-capability", reasonKey: "changes.error.unsupported" },
+            }
+          : { kind: "identity", identity }
+        : { kind: "identity", identity: otherIdentity };
+    handlers.changes_get_diff = () => otherBody;
+    const second = renderInAppCommandScope(
+      <DiffViewerTab target={other} environmentId={ENV} isActive />,
+    );
+    await screen.findByText("+console.log(value);");
+    fireEvent.click(screen.getByRole("button", { name: "1 comment" }));
+    identity = fileIdentity("changed-while-closed", "new-blob");
+    act(() =>
+      second.scope
+        .store(changeProjectionStore)
+        .getState()
+        .applyContentInvalidation(live.resourceKey, 1, ["p:src/app.ts"], "owner-1"),
+    );
+    expect(await screen.findByText("Outdated")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Copy comments as a request" }));
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copied = (mockWriteText.mock.calls[0] as unknown as [string])[0];
+    expect(copied).toContain("this file has changed");
+    expect(copied).toContain("+console.log(value);");
+
+    fileAUnavailable = true;
+    const enqueued: InvokeArgs[] = [];
+    handlers.enqueue_prompt_queue_message = (args) => {
+      enqueued.push(args);
+      return { messages: [] };
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Send 1 to Claude Code" }));
+    await waitFor(() => expect(enqueued).toHaveLength(1));
+    expect((enqueued[0]!.message as { text: string }).text).toContain(
+      "current file content could not be verified",
+    );
+  });
+
+  test("pairs old and new comment slots in split mode and keeps historical anchors off live rows", async () => {
+    const historical: ChangeDiffTarget = {
+      kind: "historical",
+      diffIdentityId: identity.id,
+      title: "Past change",
+    };
+    const { rerender } = renderInAppCommandScope(
+      <DiffViewerTab target={historical} environmentId={ENV} isActive />,
+    );
+    await screen.findByText("+console.log(value);");
+    const contextAction = screen.getByRole("button", { name: "Comment on src/app.ts line 1" });
+    expect(contextAction.parentElement?.previousElementSibling?.textContent).toContain("import");
+    await addComment("Comment on src/app.ts removed line 2", "Old side");
+    await addComment("Comment on src/app.ts line 2", "New side");
+    const [old, next] = screen.getAllByTestId("diff-comment");
+    expect(old?.parentElement?.nextElementSibling?.textContent).toContain("New side");
+    expect(next?.textContent).toContain("New side");
+    expect(comments().map(({ anchor }) => [anchor.source, anchor.side, anchor.line])).toEqual([
+      ["historical", "old", 2],
+      ["historical", "new", 2],
+    ]);
+
+    identity = fileIdentity("same-lines-live", "blob-b");
+    rerender(<DiffViewerTab target={live} environmentId={ENV} isActive />);
+    const earlier = await screen.findByTestId("diff-comments-elsewhere");
+    expect(within(earlier).getAllByTestId("diff-comment")).toHaveLength(2);
+    expect(within(earlier).queryByText("Outdated") === null).toBe(true);
+
+    rerender(<DiffViewerTab target={live} environmentId={ENV} isActive={false} />);
+    expect(screen.getByTestId("diff-viewer").hasAttribute("inert")).toBe(true);
+  });
+
+  test("keeps a destination chosen during enqueue and counts a deleted submitted comment", async () => {
+    seedAgentTabs([agentTab("tab-1"), agentTab("tab-2")]);
+    renderInAppCommandScope(<DiffViewerTab target={live} environmentId={ENV} isActive />);
+    await screen.findByText("+console.log(value);");
+    await addComment("Comment on src/app.ts line 3", "Remove the log.");
+    const receipt = deferred<unknown>();
+    const enqueued: InvokeArgs[] = [];
+    handlers.enqueue_prompt_queue_message = (args) => {
+      enqueued.push(args);
+      return receipt.promise;
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Send 1" }));
+    await waitFor(() => expect(enqueued).toHaveLength(1));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "tab-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Delete comment on src/app.ts:3" }));
+    await addComment("Comment on src/app.ts line 4", "Follow up.");
+    await act(async () => receipt.resolve({ messages: [] }));
+    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("tab-2");
+    expect(mockToastSuccess.mock.calls[0]?.[0]).toBe("Sent 1 comment to Claude Code 1");
   });
 
   test("keeps every comment when the send fails", async () => {
@@ -361,10 +543,14 @@ describe("diff review comments", () => {
   test("offers no comments without an environment, and no send without an agent chat", async () => {
     const { unmount } = renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
     await screen.findByText("+console.log(value);");
-    expect(screen.queryByRole("button", { name: "Comment on src/app.ts line 3" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Comment on src/app.ts line 3" }) === null).toBe(
+      true,
+    );
     unmount();
 
-    seedAgentTabs([]);
+    seedAgentTabs([
+      { ...agentTab("starting"), nativeAgentData: { environmentId: ENV, platform: "claude" } },
+    ]);
     renderInAppCommandScope(<DiffViewerTab target={live} environmentId={ENV} isActive />);
     await screen.findByText("+console.log(value);");
     await addComment("Comment on src/app.ts line 3", "Remove the debug log.");

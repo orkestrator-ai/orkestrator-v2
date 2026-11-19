@@ -8,6 +8,7 @@ import {
   environmentDiffComments,
   type DiffCommentAnchor,
 } from "@/stores/diffCommentsStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
 import {
   defaultDiffCommentDestination,
@@ -23,11 +24,16 @@ const invokeMock = invoke as unknown as Mock<
 >;
 
 const ENV = "env-1";
-const CLAUDE: DiffCommentDestination = { tabId: "tab-1", platform: "claude", label: "Claude" };
+const CLAUDE: DiffCommentDestination = {
+  tabId: "tab-1",
+  platform: "claude",
+  sessionId: "session-tab-1",
+  label: "Claude",
+};
 
 function anchor(line: number): DiffCommentAnchor {
   return {
-    source: "live",
+    source: "historical",
     diffIdentityId: "diff-1",
     measurementId: "m-1",
     scope: "environment-net",
@@ -47,7 +53,11 @@ function agentTab(id: string, platform: AgentPlatform | undefined, extra: Partia
   return {
     id,
     type: "agent-native",
-    nativeAgentData: { environmentId: ENV, ...(platform ? { platform } : {}) },
+    nativeAgentData: {
+      environmentId: ENV,
+      sessionId: `session-${id}`,
+      ...(platform ? { platform } : {}),
+    },
     ...extra,
   } as TabInfo;
 }
@@ -65,8 +75,24 @@ function deferred<T>() {
 const store = () => appCommandStore(diffCommentsStore);
 const env = () => environmentDiffComments(store().getState(), ENV);
 
+function seedTabs(tabs: TabInfo[]) {
+  appCommandStore(paneLayoutStore).setState({
+    environments: new Map([
+      [
+        ENV,
+        {
+          root: { kind: "leaf", id: "default", tabs, activeTabId: tabs[0]?.id ?? null },
+          activePaneId: "default",
+          containerId: null,
+        },
+      ],
+    ]),
+  });
+}
+
 beforeEach(() => {
   store().setState({ environments: new Map() });
+  seedTabs([agentTab(CLAUDE.tabId, CLAUDE.platform)]);
   invokeMock.mockClear();
 });
 
@@ -85,9 +111,9 @@ describe("diffCommentDestinations", () => {
       agentTab("e", "codex", { isReviewTab: true }),
     ]);
     expect(destinations).toEqual([
-      { tabId: "a", platform: "claude", label: "Claude Code 1" },
-      { tabId: "b", platform: "codex", label: "Reviewer" },
-      { tabId: "d", platform: "claude", label: "Claude Code 2" },
+      { tabId: "a", sessionId: "session-a", platform: "claude", label: "Claude Code 1" },
+      { tabId: "b", sessionId: "session-b", platform: "codex", label: "Reviewer" },
+      { tabId: "d", sessionId: "session-d", platform: "claude", label: "Claude Code 2" },
     ]);
     expect(defaultDiffCommentDestination(destinations, "d")?.tabId).toBe("d");
     expect(defaultDiffCommentDestination(destinations, "gone")?.tabId).toBe("a");
@@ -108,7 +134,7 @@ describe("sendDiffComments", () => {
     }
     const skipped = env().comments[4]!.id;
     store().getState().setSelected(ENV, skipped, false);
-    const expectedText = selectedDiffCommentRequest(appCommandScope(), ENV);
+    const expectedText = await selectedDiffCommentRequest(appCommandScope(), ENV);
 
     const result = await sendDiffComments(appCommandScope(), ENV, CLAUDE);
 
@@ -145,7 +171,7 @@ describe("sendDiffComments", () => {
     const added = store().getState().addComment(ENV, anchor(9), "fix 9")!;
     write.resolve({ messages: [] });
 
-    expect(await sending).toEqual({ kind: "sent", sent: 4, kept: 1 });
+    expect(await sending).toEqual({ kind: "sent", sent: 5, kept: 1 });
     expect(env().comments.map((comment) => [comment.id, comment.body])).toEqual([
       [edited, "fix 2, but differently"],
       [added, "fix 9"],
@@ -181,6 +207,26 @@ describe("sendDiffComments", () => {
     expect(ids).toHaveLength(2);
     expect(ids[0]).toBe(ids[1]);
     expect(env().lastError).toBeNull();
+  });
+
+  test("keeps the batch when a tab's bound conversation changes", async () => {
+    store().getState().addComment(ENV, anchor(1), "A correction");
+    const sending = sendDiffComments(appCommandScope(), ENV, CLAUDE);
+    seedTabs([
+      agentTab(CLAUDE.tabId, CLAUDE.platform, {
+        nativeAgentData: {
+          environmentId: ENV,
+          platform: CLAUDE.platform,
+          sessionId: "replacement",
+        },
+      }),
+    ]);
+    expect(await sending).toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("conversation changed"),
+    });
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(env().comments).toHaveLength(1);
   });
 
   test("sends nothing when no comment is selected", async () => {

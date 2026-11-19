@@ -3,21 +3,24 @@ import { History, MessageSquarePlus, Pencil, Trash2 } from "lucide-react";
 import type {
   ChangeDiffFileBody,
   ChangeDiffLine,
-  DiffFileSide,
   DiffIdentity,
 } from "@orkestrator/protocol/change-resources";
+import { toast } from "sonner";
+import { diffContentKey } from "@/lib/changes/diff-comment-freshness";
 import { cn } from "@/lib/utils";
 import { diffCommentLocation } from "@/lib/changes/diff-comment-request";
 import { detectShortcutPlatform } from "@/lib/keyboard-shortcuts";
 import {
   MAX_DIFF_COMMENT_BODY,
   MAX_DIFF_COMMENT_EXCERPT_LINES,
+  captureDiffCommentLine,
   environmentDiffComments,
-  isDiffCommentOutdated,
+  diffCommentFreshness,
   useDiffCommentsStore,
   type DiffComment,
   type DiffCommentAnchor,
   type EnvironmentDiffComments,
+  type NewDiffCommentDraft,
 } from "@/stores/diffCommentsStore";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,28 +45,17 @@ export function diffLineAnchor(line: ChangeDiffLine): { side: "old" | "new"; lin
   return null;
 }
 
-function sideKey(side: DiffFileSide): string | null {
-  if (side.state === "present") return `blob:${side.blobId}`;
-  if (side.state === "absent") return "absent";
-  return null;
-}
-
-/** Both compared sides of a file identity; null when either side is unknown. */
-export function diffContentKey(identity: DiffIdentity): string | null {
-  if (identity.kind !== "file") return null;
-  const before = sideKey(identity.before);
-  const after = sideKey(identity.after);
-  return before === null || after === null ? null : `${before}|${after}`;
-}
-
 export interface DiffCommentContext {
   environmentId: string;
   identity: DiffIdentity;
   source: "live" | "historical";
+  resourceKey?: string;
 }
 
-type EditorTarget =
-  { kind: "new"; key: string; anchor: DiffCommentAnchor } | { kind: "edit"; commentId: string };
+export function diffCommentDraftKey(pathId: string, context: DiffCommentContext): string {
+  const { source, identity, resourceKey } = context;
+  return JSON.stringify([source, pathId, source === "historical" ? identity.id : resourceKey]);
+}
 
 function lineKey(hunkIndex: number, anchor: { side: string; line: number }): string {
   return `${hunkIndex}:${anchor.side}:${anchor.line}`;
@@ -74,21 +66,23 @@ function lineKey(hunkIndex: number, anchor: { side: string; line: number }): str
 // -----------------------------------------------------------------------------
 
 export function DiffCommentEditor({
-  initialBody = "",
+  body,
+  onChange,
   label,
   submitLabel,
   onSubmit,
   onCancel,
 }: {
-  initialBody?: string;
+  body: string;
+  onChange: (body: string) => void;
   label: string;
   submitLabel: string;
-  onSubmit: (body: string) => void;
+  onSubmit: (body: string) => string | void;
   onCancel: () => void;
 }) {
-  const [body, setBody] = useState(initialBody);
+  const [error, setError] = useState<string>();
   const submit = () => {
-    if (body.trim()) onSubmit(body);
+    if (body.trim()) setError(onSubmit(body) || undefined);
   };
   return (
     <div
@@ -102,7 +96,7 @@ export function DiffCommentEditor({
         maxLength={MAX_DIFF_COMMENT_BODY}
         placeholder="Describe what should change…"
         className="min-h-14 text-xs md:text-xs"
-        onChange={(event) => setBody(event.target.value)}
+        onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
             event.preventDefault();
@@ -113,6 +107,11 @@ export function DiffCommentEditor({
           }
         }}
       />
+      {error && (
+        <p role="alert" className="text-failure">
+          {error}
+        </p>
+      )}
       <div className="flex items-center justify-end gap-1.5">
         <span className="mr-auto text-[10px] text-muted-foreground">
           {detectShortcutPlatform() === "mac" ? "⌘" : "Ctrl"}+Enter to save · Esc to cancel
@@ -134,28 +133,54 @@ export function DiffCommentEditor({
   );
 }
 
+export function NewDiffCommentEditor({
+  environmentId,
+  draftKey,
+  draft,
+}: {
+  environmentId: string;
+  draftKey: string;
+  draft: NewDiffCommentDraft;
+}) {
+  const addComment = useDiffCommentsStore((state) => state.addComment);
+  const setNewDraft = useDiffCommentsStore((state) => state.setNewDraft);
+  const close = () => setNewDraft(environmentId, draftKey, null);
+  const location = diffCommentLocation({ anchor: draft.anchor });
+  return (
+    <DiffCommentEditor
+      body={draft.body}
+      onChange={(body) => setNewDraft(environmentId, draftKey, { ...draft, body })}
+      label={`Comment on ${location}`}
+      submitLabel="Add comment"
+      onSubmit={(body) => {
+        if (!addComment(environmentId, draft.anchor, body)) {
+          return "This environment has reached its comment limit. Delete or send a comment before saving this draft.";
+        }
+        close();
+      }}
+      onCancel={close}
+    />
+  );
+}
+
 export function DiffCommentCard({
   environmentId,
   comment,
   environment,
   showLocation = false,
-  editing,
-  onEdit,
-  onCancelEdit,
   leading,
 }: {
   environmentId: string;
   comment: DiffComment;
   environment: EnvironmentDiffComments;
   showLocation?: boolean;
-  editing: boolean;
-  onEdit: () => void;
-  onCancelEdit: () => void;
   leading?: ReactNode;
 }) {
   const editComment = useDiffCommentsStore((state) => state.editComment);
   const removeComment = useDiffCommentsStore((state) => state.removeComment);
-  const outdated = isDiffCommentOutdated(environment, comment);
+  const setEditDraft = useDiffCommentsStore((state) => state.setEditDraft);
+  const freshness = diffCommentFreshness(environment, comment);
+  const editing = comment.editDraft !== undefined;
   const inFlight = environment.sending?.items.find((item) => item.id === comment.id);
   const location = diffCommentLocation(comment);
   return (
@@ -166,14 +191,14 @@ export function DiffCommentCard({
     >
       {leading}
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        {(showLocation || outdated || inFlight) && (
+        {(showLocation || freshness !== "current" || inFlight) && (
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
             {showLocation && (
               <span className="min-w-0 truncate font-mono" title={location}>
                 {location}
               </span>
             )}
-            {outdated && (
+            {freshness === "outdated" && (
               <span
                 className="inline-flex shrink-0 items-center gap-1 rounded bg-yellow-500/15 px-1.5 py-px text-yellow-400"
                 title="The file has changed since this comment was written; the request quotes the code it was written about."
@@ -182,6 +207,7 @@ export function DiffCommentCard({
                 Outdated
               </span>
             )}
+            {freshness === "unknown" && <span>Freshness unknown</span>}
             {inFlight &&
               (inFlight.revision === comment.revision ? (
                 <span className="shrink-0 rounded bg-primary/15 px-1.5 py-px text-blue-300">
@@ -199,14 +225,12 @@ export function DiffCommentCard({
         )}
         {editing ? (
           <DiffCommentEditor
-            initialBody={comment.body}
+            body={comment.editDraft ?? comment.body}
+            onChange={(body) => setEditDraft(environmentId, comment.id, body)}
             label={`Edit comment on ${location}`}
             submitLabel="Save"
-            onSubmit={(body) => {
-              editComment(environmentId, comment.id, body);
-              onCancelEdit();
-            }}
-            onCancel={onCancelEdit}
+            onSubmit={(body) => editComment(environmentId, comment.id, body)}
+            onCancel={() => setEditDraft(environmentId, comment.id, null)}
           />
         ) : (
           <p className="whitespace-pre-wrap break-words">{comment.body}</p>
@@ -221,7 +245,7 @@ export function DiffCommentCard({
             className="h-6 w-6 p-0"
             aria-label={`Edit comment on ${location}`}
             title="Edit"
-            onClick={onEdit}
+            onClick={() => setEditDraft(environmentId, comment.id, comment.body)}
           >
             <Pencil className="h-3 w-3" />
           </Button>
@@ -274,17 +298,19 @@ export function CommentableHunks({
   mode: "unified" | "split";
   context: DiffCommentContext;
 }) {
-  const { environmentId, identity, source } = context;
+  const { environmentId, identity, source, resourceKey } = context;
   const environment = useDiffCommentsStore((state) =>
     environmentDiffComments(state, environmentId),
   );
-  const addComment = useDiffCommentsStore((state) => state.addComment);
-  const [editor, setEditor] = useState<EditorTarget | null>(null);
+  const setNewDraft = useDiffCommentsStore((state) => state.setNewDraft);
+  const draftKey = diffCommentDraftKey(file.pathId, context);
+  const draft = environment.newDrafts.get(draftKey);
+  const draftAnchor = draft?.anchor;
   const path = file.newPathDisplay ?? file.oldPathDisplay ?? file.pathId;
   const contentKey = source === "live" ? diffContentKey(identity) : null;
 
   // Comments on this file, split into the ones this view can place and the rest.
-  const { placed, elsewhere } = useMemo(() => {
+  const { placed, elsewhere, draftSlot } = useMemo(() => {
     const placedComments = new Map<string, DiffComment[]>();
     const others: DiffComment[] = [];
     const hunkIndexByHeader = new Map(file.hunks.map((hunk, index) => [hunk.header, index]));
@@ -295,27 +321,32 @@ export function CommentableHunks({
         if (anchor) lineKeys.add(lineKey(hunkIndex, anchor));
       }
     });
-    for (const comment of environment.comments) {
-      const { anchor } = comment;
-      if (anchor.pathId !== file.pathId) continue;
+    const slotFor = (anchor: DiffCommentAnchor) => {
       const sameContent =
         anchor.diffIdentityId === identity.id ||
         (contentKey !== null && anchor.contentKey === contentKey);
+      if (!sameContent) return null;
       const hunkIndex = hunkIndexByHeader.get(anchor.hunkHeader);
-      const key =
-        hunkIndex === undefined
-          ? null
-          : anchor.kind === "hunk" || anchor.line === null
-            ? `${hunkIndex}:hunk`
-            : lineKey(hunkIndex, { side: anchor.side, line: anchor.line });
-      if (sameContent && key && (key.endsWith(":hunk") || lineKeys.has(key))) {
+      if (hunkIndex === undefined) return null;
+      if (anchor.kind === "hunk" || anchor.line === null) return `${hunkIndex}:hunk`;
+      const key = lineKey(hunkIndex, { side: anchor.side, line: anchor.line });
+      return lineKeys.has(key) ? key : null;
+    };
+    for (const comment of environment.comments) {
+      if (comment.anchor.pathId !== file.pathId) continue;
+      const key = slotFor(comment.anchor);
+      if (key) {
         placedComments.set(key, [...(placedComments.get(key) ?? []), comment]);
       } else {
         others.push(comment);
       }
     }
-    return { placed: placedComments, elsewhere: others };
-  }, [contentKey, environment.comments, file.hunks, file.pathId, identity.id]);
+    return {
+      placed: placedComments,
+      elsewhere: others,
+      draftSlot: draftAnchor ? slotFor(draftAnchor) : null,
+    };
+  }, [contentKey, draftAnchor, environment.comments, file.hunks, file.pathId, identity.id]);
 
   const anchorBase = useCallback(
     (hunkIndex: number): Omit<DiffCommentAnchor, "kind" | "side" | "line" | "excerpt"> => ({
@@ -326,10 +357,11 @@ export function CommentableHunks({
       pathId: file.pathId,
       path,
       contentKey,
+      resourceKey,
       hunkHeader: file.hunks[hunkIndex]?.header ?? "",
       excerptTruncated: false,
     }),
-    [contentKey, file.hunks, file.pathId, identity, path, source],
+    [contentKey, file.hunks, file.pathId, identity, path, resourceKey, source],
   );
 
   const renderComments = (comments: readonly DiffComment[] | undefined, showLocation = false) =>
@@ -340,33 +372,22 @@ export function CommentableHunks({
         comment={comment}
         environment={environment}
         showLocation={showLocation}
-        editing={editor?.kind === "edit" && editor.commentId === comment.id}
-        onEdit={() => setEditor({ kind: "edit", commentId: comment.id })}
-        onCancelEdit={() => setEditor(null)}
       />
     ));
 
-  const renderNewEditor = (key: string) => {
-    if (editor?.kind !== "new" || editor.key !== key) return null;
-    const location = diffCommentLocation({
-      id: "",
-      anchor: editor.anchor,
-      body: "",
-      revision: 0,
-      selected: true,
-      createdAt: 0,
-    });
-    return (
-      <DiffCommentEditor
-        label={`Comment on ${location}`}
-        submitLabel="Add comment"
-        onSubmit={(body) => {
-          addComment(environmentId, editor.anchor, body);
-          setEditor(null);
-        }}
-        onCancel={() => setEditor(null)}
-      />
-    );
+  const renderNewEditor = (key: string | null) =>
+    draft && draftSlot === key ? (
+      <NewDiffCommentEditor environmentId={environmentId} draftKey={draftKey} draft={draft} />
+    ) : null;
+
+  const openDraft = (anchor: DiffCommentAnchor) => {
+    if (draft) {
+      toast.info("Save or cancel the open comment draft first.");
+      return;
+    }
+    if (!setNewDraft(environmentId, draftKey, { anchor, body: "" })) {
+      toast.error("Comment draft limit reached. Save or cancel an open draft.");
+    }
   };
 
   const slot = (key: string) => {
@@ -396,16 +417,12 @@ export function CommentableHunks({
         <GutterButton
           label={label}
           onClick={() =>
-            setEditor({
-              kind: "new",
-              key: lineKey(hunkIndex, anchor),
-              anchor: {
-                ...anchorBase(hunkIndex),
-                kind: "line",
-                side: anchor.side,
-                line: anchor.line,
-                excerpt: [line],
-              },
+            openDraft({
+              ...anchorBase(hunkIndex),
+              kind: "line",
+              side: anchor.side,
+              line: anchor.line,
+              excerpt: [captureDiffCommentLine(line)],
             })
           }
         />
@@ -426,17 +443,15 @@ export function CommentableHunks({
         <GutterButton
           label={`Comment on ${path} hunk ${hunk.header}`}
           onClick={() =>
-            setEditor({
-              kind: "new",
-              key: `${hunkIndex}:hunk`,
-              anchor: {
-                ...anchorBase(hunkIndex),
-                kind: "hunk",
-                side: "new",
-                line: null,
-                excerpt: hunk.lines.slice(0, MAX_DIFF_COMMENT_EXCERPT_LINES),
-                excerptTruncated: hunk.lines.length > MAX_DIFF_COMMENT_EXCERPT_LINES,
-              },
+            openDraft({
+              ...anchorBase(hunkIndex),
+              kind: "hunk",
+              side: "new",
+              line: null,
+              excerpt: hunk.lines
+                .slice(0, MAX_DIFF_COMMENT_EXCERPT_LINES)
+                .map(captureDiffCommentLine),
+              excerptTruncated: hunk.lines.length > MAX_DIFF_COMMENT_EXCERPT_LINES,
             })
           }
         />
@@ -447,18 +462,24 @@ export function CommentableHunks({
 
   return (
     <>
-      {elsewhere.length > 0 && (
+      {(elsewhere.length > 0 || (draft && draftSlot === null)) && (
         <div
           data-testid="diff-comments-elsewhere"
           className="flex flex-col gap-1.5 border-b border-border/40 bg-yellow-500/5 px-3 py-2"
         >
-          <p className="text-[11px] text-muted-foreground">
-            {elsewhere.length === 1
-              ? "1 comment on this file is not on a line shown here."
-              : `${elsewhere.length} comments on this file are not on a line shown here.`}{" "}
-            Each keeps the code it was written about.
-          </p>
+          {elsewhere.length > 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              {elsewhere.length === 1
+                ? "1 comment on this file is not on a line shown here."
+                : `${elsewhere.length} comments on this file are not on a line shown here.`}{" "}
+              Each keeps the code it was written about.
+            </p>
+          )}
           {renderComments(elsewhere, true)}
+          {draft && draftSlot === null && (
+            <p className="text-[11px] text-muted-foreground">Draft on an earlier diff</p>
+          )}
+          {renderNewEditor(null)}
         </div>
       )}
       <ChangeHunksView

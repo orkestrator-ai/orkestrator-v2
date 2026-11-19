@@ -470,10 +470,26 @@ export class CapabilityExecutor {
       ]);
     } else {
       await fs.mkdir(directory, { recursive: true });
-      await writeFileAtomically(path.join(directory, entry), writtenFiles[0]!.content);
       const index = await readLocationIndex(directory);
-      index.files[entry] = marker;
-      await writeLocationIndex(directory, index);
+      const indexed = Object.hasOwn(index.files, entry);
+      if (!indexed) {
+        // Publish ownership before new bytes can be seen by portable-input copying.
+        index.files[entry] = marker;
+        await writeLocationIndex(directory, index);
+      }
+      try {
+        await writeFileAtomically(path.join(directory, entry), writtenFiles[0]!.content);
+      } catch (error) {
+        if (!indexed) {
+          delete index.files[entry];
+          await writeLocationIndex(directory, index).catch(() => undefined);
+        }
+        throw error;
+      }
+      if (indexed) {
+        index.files[entry] = marker;
+        await writeLocationIndex(directory, index);
+      }
     }
     this.record(target, digest);
     return {

@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_ACCOUNT_ID } from "@orkestrator/protocol/agent-accounts";
 import {
   CAPABILITY_TARGET_STATUSES,
   CAPABILITY_VERIFICATION_LEVELS,
@@ -35,15 +36,18 @@ export async function localCapabilitySessionTarget(
     : undefined;
   const { environmentIncarnation, accountHomeId, ...rest } = launch?.target ?? target;
   const incarnation =
-    environment && environment.environmentType !== "local"
+    environmentIncarnation ??
+    (environment && environment.environmentType !== "local"
       ? (environment.containerId ?? environment.id)
-      : environmentIncarnation;
-  const account = accountHomeId ?? (await ctx.deps.sessionAccountHome?.(target));
+      : undefined);
+  const account = (await ctx.deps.sessionAccountHome?.(target)) ?? accountHomeId;
   return {
     ...rest,
     ...(environment ? { projectId: environment.projectId } : {}),
     ...(incarnation ? { environmentIncarnation: incarnation } : {}),
-    ...(account && !incarnation ? { accountHomeId: account } : {}),
+    ...(account && account !== DEFAULT_AGENT_ACCOUNT_ID && !incarnation
+      ? { accountHomeId: account }
+      : {}),
   };
 }
 

@@ -221,6 +221,52 @@ describe("add once, use wherever compatible", () => {
     expect(await fs.readFile(file, "utf8")).toContain("Review the change.");
   });
 
+  test("another reader gains a matching shared receipt without rewriting the copy", async () => {
+    const { command, leafA } = await fleet();
+    await command.service.setSetup({
+      setup: {
+        id: MY_SETUP_ID,
+        name: "My setup",
+        providerSelectors: ["provider:codex", "provider:grok", "provider:opencode", "provider:pi"],
+      },
+      expectedRevision: 1,
+    });
+    const { inspection } = await addSkill(command, "shared-readers", "Read the shared copy.");
+    const file = skillFile(leafA, ".agents", "shared-readers");
+    const before = await fs.stat(file);
+    const state = await command.storage.capabilities.loadCapabilityState();
+    const initial = Object.values(state.receipts).find(
+      (receipt) =>
+        receipt.nodeId === leafA.id &&
+        receipt.packageId === inspection.packageId &&
+        receipt.locationId === "agents-shared-skills",
+    );
+    expect(initial?.providers).not.toContain("cursor");
+    await command.service.setSetup({
+      setup: {
+        id: MY_SETUP_ID,
+        name: "My setup",
+        providerSelectors: [
+          "provider:codex",
+          "provider:cursor",
+          "provider:grok",
+          "provider:opencode",
+          "provider:pi",
+        ],
+      },
+      expectedRevision: state.setups[MY_SETUP_ID]!.revision,
+    });
+    await command.service.reconciler.reconcileAll("reader-binding-changed");
+    await command.service.reconciler.idle();
+    const refreshed = (await command.storage.capabilities.loadCapabilityState()).receipts[
+      initial!.id
+    ];
+    expect(refreshed?.providers).toContain("cursor");
+    const after = await fs.stat(file);
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
   test("a populated toolkit reaches the fleet only after approval", async () => {
     const { command, leafA } = await fleet();
     const toolkit = await command.service.setSetup({ setup: { name: "Selected tools" } });

@@ -793,6 +793,7 @@ describe("launch deliveries for targets with their own copies", () => {
     fixture.environments = [
       { id: "env-c", projectId: "proj-1", environmentType: "containerized", containerId: "ctr-2" },
     ];
+    fixture.container.evidence = { ...fixture.container.evidence, containerId: "ctr-2" };
     const stale = await fixture.service.verify({
       target: { ...target, sessionId: "c1" },
       componentIds: [record.items[0]!.componentId],

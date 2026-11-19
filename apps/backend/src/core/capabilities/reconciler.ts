@@ -704,7 +704,7 @@ export class CapabilityReconciler {
       if (results.length > 0) {
         recordActivity(current, {
           action: "reconcile",
-          summary: `Applied ${results.filter((result) => result.status !== "failed").length} of ${results.length} changes on ${machineName}.`,
+          summary: `Applied ${results.filter((result) => result.status === "ready" || result.status === "installed-next-session").length} of ${results.length} changes on ${machineName}.`,
           packageIds: [...new Set(plan.targets.map((target) => target.packageId))].slice(0, 50),
           setupIds: [],
           ...(operationId.startsWith("capop_") ? { operationId } : {}),

@@ -61,6 +61,9 @@ test("the compact project-home button names and opens the waiting request", asyn
     name: /home needs attention, Question: Choose the project review window/,
   });
   await expect(home).toHaveAttribute("title", /Choose the project review window/);
+  // The header's hover card must leave its sibling attention button clickable.
+  await page.getByRole("button", { name: /^p 2$/ }).hover();
+  await expect(page.getByText("Click to open board", { exact: true })).toBeVisible();
   await home.click();
   await page.getByRole("button", { name: "Finish layout hydration" }).click();
   const question = page.locator('[data-interaction-id="question-target"]');

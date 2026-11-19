@@ -256,7 +256,7 @@ test("another machine's project header shows its home's activity and no mail cou
   expect(within(header).queryByLabelText("3 unread agent messages") === null).toBe(true);
   expect(within(header).queryByLabelText("Agent message delivery failed") === null).toBe(true);
 
-  const homeActivity = within(header).getByRole("button", { name: /^app home needs attention/ });
+  const homeActivity = within(header).getByRole("button", { name: "app home needs attention" });
   const bell = homeActivity.querySelector("svg");
   expect(bell?.classList.contains("fill-amber-400/20")).toBe(true);
   expect(bell?.classList.contains("text-amber-400")).toBe(true);

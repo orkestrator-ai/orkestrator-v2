@@ -74,8 +74,8 @@ export function ProjectHomeActivityButton({
   return (
     <button
       type="button"
-      aria-label={status.waiting ? `${label}, ${attention}` : label}
-      title={status.waiting ? attention : `Open project home — ${status.label}`}
+      aria-label={target ? `${label}, ${attention}` : label}
+      title={target ? attention : `Open project home — ${status.label}`}
       className={
         compact
           ? "shrink-0 rounded-md p-1 text-amber-400 hover:bg-hover"
@@ -90,7 +90,7 @@ export function ProjectHomeActivityButton({
       )}
       {!compact && (
         <span className="min-w-0 truncate">
-          {projectName} home — {status.waiting ? attention : status.label}
+          {projectName} home — {target ? attention : status.label}
         </span>
       )}
     </button>

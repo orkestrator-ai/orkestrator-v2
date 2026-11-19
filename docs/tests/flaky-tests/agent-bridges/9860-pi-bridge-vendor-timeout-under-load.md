@@ -1,7 +1,7 @@
 # Pi bridge vendoring timeout under concurrent host load
 
 - **ID:** 9860
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure`
 - **File:** `tests/unit/pi-bridge-vendor.test.ts:21`
@@ -186,3 +186,27 @@ The final-source retry, `mise run test:logged -- --name final-complete-tests -- 
 ## Deadline change, still open (2026-11-15)
 
 Same test and same change as [0178](0178-pi-vendor-runtime-aggregate-timeout.md): the 30 s test timeout and the 15 s child `execFile` timeout in `tests/unit/pi-bridge-vendor.test.ts` are now 180 s and 150 s hang watchdogs. The contention rerun still timed out at 180 s on an extremely loaded host, so the case stays open; see 0178 for the evidence and what is not verified.
+
+## Resolution (2026-11-19) — heavy work, now off the default suite and on a hang watchdog
+
+- **Cause:** genuine work, not a race. The case copies the whole Pi runtime
+  closure and imports it in a real child. A run on this macOS host at load
+  average 35 took 12.8 s, of which 9.8 s was kernel time (file copying from the
+  checkout's volume into the temporary directory). Every recorded failure was the
+  old 30 s budget on a host saturated by aggregates or other worktrees (once
+  112 s at load 156). Nothing in the test's outcome depends on elapsed time.
+- **Fix (already in place, now verified):** the file moved to the slow tier on
+  2026-10-28 (`beb1ec4c8`, `scripts/test-tiers.ts`), so the default
+  `mise run test` aggregate where every recurrence happened no longer runs it;
+  and on 2026-11-15 the 30 s and 15 s budgets became 180 s and 150 s hang
+  watchdogs with comments saying so. No recurrence has been recorded since
+  2026-10-25.
+- **Verification under contention:** `mise run test:logged -- --name
+  forkb-pi-vendor-cont -- bun scripts/test-under-contention.ts --burners 4 --
+  bun test ./tests/unit/pi-bridge-vendor.test.ts -t "staged runtime closure"
+  --rerun-each=3` passed all three runs in 38.8 s (about 13 s each, a
+  fourteen-fold margin to the watchdog), at host load 35 on macOS (unpinned
+  burners). The 2026-11-15 180 s timeout was a single core pinned under many
+  other contention runners at once, far beyond what an aggregate grants one file.
+- **Not done:** staging a smaller closure. That would test less than production
+  stages, and the watchdog no longer needs it.

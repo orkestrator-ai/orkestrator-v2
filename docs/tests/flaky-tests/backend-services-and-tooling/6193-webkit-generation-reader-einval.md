@@ -120,3 +120,16 @@ Status stays open. Every recorded recurrence is on macOS (`/var/folders`, `/priv
 ## Investigation (2026-11-15, status stays open)
 
 No change. Every recurrence is on macOS and the Linux stress passes; the EINVAL needs a macOS reproduction or a decision on the concurrent-reader assertion's platform scope (see the 2026-11-06 investigation).
+
+## Investigation (2026-11-19, status stays open)
+
+Not reproduced on macOS (arktech-mini, APFS temporary root) at base
+`fe9d1f5d6`: 120 serial single-case runs, 100 single-case runs under
+`scripts/test-under-contention.ts --burners 8`, and 80 whole-file runs under
+the same contention all passed. A standalone script that swaps a relative
+symlink with `rename` 10,701 times while reading a file through it
+(38,783 reads) saw no error, so a plain symlink replacement alone does not
+produce the `EINVAL`. `--rerun-each` is unsuitable for this case: from the
+second run the private `TMPDIR` the preload set is gone, `tmpdir()` returns
+`/var/folders/...` while `.source.json` records the physical
+`/private/var/...`, and line 615 fails every rerun. Use repeated processes.

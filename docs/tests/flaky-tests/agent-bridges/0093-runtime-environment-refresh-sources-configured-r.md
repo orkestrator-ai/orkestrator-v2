@@ -266,6 +266,25 @@ into an assertion failure, so it was not made as a flake fix.
 
 `bridges/codex-bridge/src/runtime-env.test.ts` no longer gives this case its own 15 s budget (`}, 15_000)` removed), so it gets the shared 60 s default from `tests/default-test-timeout.ts`. This does not address the 2026-11-06 hypothesis that the first child spawn of the test process never reports its exit: if that is the cause, 60 s only delays the same failure. Not reproduced here; the file passed (`bun test --cwd bridges/codex-bridge ... ./src/runtime-env.test.ts`, with `fake-codex-app-server.test.ts` and `app-server-http.test.ts`, `--parallel=2`, 2.4 s). Next recurrence: record whether the `/bin/sh` child was alive and whether `exit` fired without `close`. The unbounded `execFile` in `refreshRuntimeEnvironment` remains a separate product gap.
 
+## Investigation (2026-11-19) — not reproduced on macOS; still open
+
+0093, 0210 and 0219 share one shape: a test (or, for 0219, the old per-test
+bridge stop) waits for a spawned child's `exit` or `close` and hits its full
+budget. On macOS with Bun 1.4.4 at host load about 35, two probes tried to make
+that exit go unobserved:
+
+- 300 fresh Bun processes, eight at a time, each spawning
+  `fake-codex-app-server.mjs --version` and waiting for `close` with an 8 s
+  watchdog: no hang, every output intact.
+- One Bun process running 2,000 children 24 at a time, alternating
+  `spawn(fake --version)` (waiting for `close`) and `execFile("/bin/sh", ["-c",
+  "echo hi"])` (the shape of 0093's helper), with a 15 s watchdog per child:
+  2,000 done, no hang (4.9 s).
+
+Neither reproduced a lost exit, so no code changed. The next recurrence should
+still record whether the child was alive and whether `exit` fired without
+`close`.
+
 ## EL01 sidebar review rerun — 2026-11-19
 
 - **Base:** `5e9835d0a6981a8d2c217d8941e2e065abbe3008`. The recurrence check confirmed case 0093 was open on this base.

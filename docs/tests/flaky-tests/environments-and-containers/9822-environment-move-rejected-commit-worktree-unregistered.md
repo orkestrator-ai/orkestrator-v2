@@ -52,3 +52,16 @@ capture `git worktree list --porcelain` and whether `.git/worktrees/<name>`
 exists immediately before and after rollback, when the caller receives the
 rejection, and after recovery. These observations can show whether rollback
 restored registration and, if it did, when it went missing again.
+
+## Investigation — 2026-11-19 (stays open)
+
+Not reproduced on macOS at base `fe9d1f5d6`:
+`mise run test:logged -- --name move-9822 -- bun scripts/test-under-contention.ts --burners 6 -- bun --cwd=apps/backend test ./src/core/environment-move.recovery.test.ts -t "rejected path commit" --rerun-each=30`
+passed (32.2 s, 60 runs). Reading `moveEnvironmentTask` for the
+`forceCopy=false` path: the forward and rollback moves are both
+`git worktree move`, and a cleared journal means the rollback command exited
+0. No code path this test reaches runs `git worktree prune` or
+`git worktree remove`; those are only in `removeOldWorktree`,
+`removeLocalWorktree`, `cleanupFailedLocalWorktree` and environment cleanup.
+The missing admin directory is still unexplained. The next step recorded
+above stands; it needs a Linux host under load.

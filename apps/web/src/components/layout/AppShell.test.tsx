@@ -669,6 +669,10 @@ describe("AppShell", () => {
       act(() => requestAppShortcut("search-projects"));
       expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
       // The reopening transition settles; the search it delivered stays open.
+      // The hook restores the full width on the next animation frame.
+      await act(async () => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      });
       await act(async () => {
         expect(settle.advance()).toBe(1);
       });

@@ -188,6 +188,176 @@ describe("animating a width change", () => {
   });
 });
 
+describe("a renderer too loaded to start the transition on time (flake 4290)", () => {
+  function widthTransition() {
+    const finished = Promise.withResolvers<void>();
+    const animation = {
+      transitionProperty: "flex-grow",
+      playState: "running",
+      finished: finished.promise,
+    };
+    return {
+      animation,
+      finish() {
+        animation.playState = "finished";
+        finished.resolve();
+      },
+      cancel() {
+        animation.playState = "idle";
+        finished.reject(new DOMException("Transition cancelled", "AbortError"));
+      },
+    };
+  }
+
+  test("the release waits for the frame that applies the full width", async () => {
+    const originalFrame = globalThis.requestAnimationFrame;
+    const frames: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = (callback) => frames.push(callback);
+    try {
+      const props = { sidebar: element(56), main: element(900) };
+      const { rerender } = render(<Harness mode="compact" {...props} />);
+      rerender(<Harness mode="full" {...props} />);
+      expect(motion.animating).toBe(true);
+      // The settle time passes before the frame that starts the motion runs.
+      await act(async () => {
+        expect(settleTimer.advance()).toBe(1);
+      });
+      expect(motion.animating).toBe(true);
+      expect(resize).not.toHaveBeenCalled();
+
+      act(() => {
+        for (const frame of frames.splice(0)) frame(0);
+      });
+      expect(resize).toHaveBeenCalledWith("280px");
+      expect(motion.animating).toBe(true);
+      // Measured from the frame that applied the width, then released.
+      await act(async () => {
+        expect(settleTimer.advance()).toBe(1);
+      });
+      expect(motion.animating).toBe(false);
+    } finally {
+      globalThis.requestAnimationFrame = originalFrame;
+    }
+  });
+
+  test("the release waits for a width transition that is still running", async () => {
+    const transition = widthTransition();
+    const sidebar = element(344);
+    sidebar.getAnimations = () =>
+      [transition.animation, { transitionProperty: "opacity", playState: "running" }] as never;
+    const props = { sidebar, main: element(900) };
+    const { rerender } = render(<Harness mode="full" {...props} />);
+    rerender(<Harness mode="compact" {...props} />);
+    await act(async () => {
+      expect(settleTimer.advance()).toBe(1);
+    });
+    expect(motion.animating).toBe(true);
+
+    await act(async () => transition.finish());
+    expect(motion.animating).toBe(false);
+  });
+
+  test("a resize that replaces the transition keeps the pins until the replacement ends", async () => {
+    const original = widthTransition();
+    const replacement = widthTransition();
+    let transitions = [original.animation];
+    const sidebar = element(344);
+    sidebar.getAnimations = () => transitions as never;
+    const props = { sidebar, main: element(900) };
+    const { rerender } = render(<Harness mode="full" {...props} />);
+    rerender(<Harness mode="compact" {...props} />);
+    const pins = motion.pins;
+    expect(pins).not.toBeNull();
+    await settle();
+
+    await act(async () => {
+      transitions = [replacement.animation];
+      original.cancel();
+    });
+    expect(motion.pins).toBe(pins);
+
+    await act(async () => replacement.finish());
+    expect(motion.pins).toBeNull();
+  });
+
+  test("cancelling a transition without a replacement releases the pins", async () => {
+    const transition = widthTransition();
+    const sidebar = element(344);
+    sidebar.getAnimations = () => [transition.animation] as never;
+    const props = { sidebar, main: element(900) };
+    const { rerender } = render(<Harness mode="full" {...props} />);
+    rerender(<Harness mode="hidden" {...props} />);
+    await settle();
+    expect(motion.contentShown).toBe(true);
+
+    await act(async () => transition.cancel());
+    expect(motion.pins).toBeNull();
+    expect(motion.contentShown).toBe(false);
+  });
+
+  test("a manual release stops watching for transitions", async () => {
+    const transition = widthTransition();
+    const sidebar = element(344);
+    const readAnimations = mock(() => [transition.animation] as never);
+    sidebar.getAnimations = readAnimations;
+    const props = { sidebar, main: element(900) };
+    const { rerender } = render(<Harness mode="full" {...props} />);
+    rerender(<Harness mode="compact" {...props} />);
+    await settle();
+    expect(readAnimations).toHaveBeenCalledTimes(1);
+
+    act(() => motion.settleNow());
+    expect(motion.pins).toBeNull();
+    await act(async () => transition.cancel());
+    expect(readAnimations).toHaveBeenCalledTimes(1);
+  });
+
+  test("a manual release clears the wait for the full-width restore frame", async () => {
+    const originalFrame = globalThis.requestAnimationFrame;
+    const frames: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = (callback) => frames.push(callback);
+    try {
+      const props = { sidebar: element(56), main: element(900) };
+      const { rerender } = render(<Harness mode="compact" {...props} />);
+      rerender(<Harness mode="full" {...props} />);
+      await settle();
+      expect(motion.animating).toBe(true);
+
+      act(() => motion.settleNow());
+      expect(motion.pins).toBeNull();
+      act(() => {
+        for (const frame of frames.splice(0)) frame(0);
+      });
+      expect(resize).toHaveBeenCalledWith("280px");
+      expect(settleTimer.advance()).toBe(0);
+    } finally {
+      globalThis.requestAnimationFrame = originalFrame;
+    }
+  });
+
+  test("a later change is not released by the earlier one's transition", async () => {
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const sidebar = element(344);
+    sidebar.getAnimations = () =>
+      [{ transitionProperty: "flex-grow", playState: "running", finished }] as never;
+    const props = { sidebar, main: element(900) };
+    const { rerender } = render(<Harness mode="full" {...props} />);
+    rerender(<Harness mode="compact" {...props} />);
+    await act(async () => {
+      expect(settleTimer.advance()).toBe(1);
+    });
+    rerender(<Harness mode="hidden" {...props} />);
+    await act(async () => {
+      finish();
+    });
+    // The hide is still in flight; only its own settle releases it.
+    expect(motion.animating).toBe(true);
+  });
+});
+
 test("reversal measures the panel, not the pinned content", () => {
   const parent = element(900);
   const main = element(900, parent);

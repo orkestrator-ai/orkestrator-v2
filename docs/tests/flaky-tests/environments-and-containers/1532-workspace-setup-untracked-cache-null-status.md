@@ -38,3 +38,9 @@ stuck child exists. On a recurrence, record whether the child is `Z
 <defunct>`. If it is, moving the fixture's subprocesses to the backend's
 `runCommand`, or to a shared bounded spawn helper with the same watchdog, is
 the fix. Raising the budget would not be. Status left open.
+
+## Review — 2026-11-19 (stays open)
+
+No recurrence recorded since 2026-10-24, and none was reproduced. The fixture
+still calls `spawnSync` directly; moving it to a bounded helper remains the
+fix if a recurrence shows a zombie child. No code changed.

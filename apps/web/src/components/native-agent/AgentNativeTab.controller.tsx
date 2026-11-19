@@ -1,3 +1,4 @@
+import { useRenderedUnreadResult } from "@/lib/unread-result-view";
 import { useCoordinatorActionHistory } from "@/components/projects/useCoordinatorActionHistory";
 import { useCoordinatorActionMarking } from "@/components/projects/useCoordinatorActionMarking";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -555,6 +556,7 @@ export function SharedNativeAgentController({
     transcriptAvailability,
     transcriptRefreshing,
     transcriptError,
+    unreadRead,
     sessionStateAvailability,
     sessionStateRefreshing,
     sessionStateError,
@@ -3638,6 +3640,18 @@ export function SharedNativeAgentController({
     Boolean(requestedResumeSessionId) ||
     (hasConnectedSession &&
       (messages.length > 0 || authenticationRequired || allInteractions.length > 0));
+  useRenderedUnreadResult(
+    sessionKey,
+    !setupPending &&
+      isActive &&
+      !hiddenByLayout &&
+      !transcriptError &&
+      sessionStateAvailability === "current" &&
+      (transcriptAvailability === "current" || transcriptAvailability === "empty") &&
+      unreadRead?.sessionId === projection?.sessionId
+      ? unreadRead
+      : undefined,
+  );
   if (setupPending) {
     return (
       <SetupPendingOverlay

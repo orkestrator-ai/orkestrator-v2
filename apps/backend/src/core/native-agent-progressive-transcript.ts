@@ -1517,7 +1517,9 @@ export class NativeAgentProgressiveTranscript {
     bypassSourceToken = false,
   ): Promise<NativeAgentTranscriptUpdate> {
     return this.context.reads.trackProgressiveRequest(input, () =>
-      this.getTranscriptUpdateOnce(input, bypassSourceToken),
+      // A forced view confirms unread work only from the provider, after
+      // any earlier conditional read has settled.
+      this.getTranscriptUpdateOnce(input, bypassSourceToken || input.freshSource === true),
     );
   }
 

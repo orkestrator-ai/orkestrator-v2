@@ -100,12 +100,13 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
-  BUG_REPORT_EXECUTION_POLICY_OVERRIDE,
+  bugReportExecutionPolicyOverride,
+  bugReportInitialApprovalMode,
   bugReportRuntimeEnvironment,
   bugReportRuntimeUnavailableMessage,
   resolveBugReportRuntime,
 } from "./bug-report-runtime.js";
-import { bugReportFirstPromptNote } from "@orkestrator/protocol/bug-report";
+import { bugReportFirstPromptNote, type BugReportAgent } from "@orkestrator/protocol/bug-report";
 import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
@@ -1160,7 +1161,7 @@ export class NativeAgentService {
    */
   private async trustedBugReportInput<T extends EnsureNativeAgentSessionInput>(
     input: T,
-    record: { id: string; agent: string; briefedAt?: string; scratchDir: string },
+    record: { id: string; agent: BugReportAgent; briefedAt?: string; scratchDir: string },
   ): Promise<T> {
     if (record.agent !== input.agent) {
       throw new Error("This bug report belongs to a different agent platform");
@@ -1168,15 +1169,20 @@ export class NativeAgentService {
     const existing = await this.storage.getNativeAgentSession(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
     );
+    // A new session starts in the asking approval mode; the policy allows the
+    // others, so the user can change it from the composer. An existing
+    // session keeps the policy and mode it was created with.
+    const initialApprovalMode = existing ? undefined : bugReportInitialApprovalMode(record.agent);
     const trusted = {
       ...input,
+      ...(initialApprovalMode && !input.approvalMode ? { approvalMode: initialApprovalMode } : {}),
       executionPolicy: existing?.executionPolicy,
       policy:
         existing?.policy ??
         resolveNativeAgentExecutionPolicy(
           { environmentType: "local", networkAccessMode: "full" },
           input.origin ?? "interactive-native",
-          BUG_REPORT_EXECUTION_POLICY_OVERRIDE,
+          bugReportExecutionPolicyOverride(record.agent),
         ),
     };
     if (

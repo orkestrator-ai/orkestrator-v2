@@ -8,6 +8,7 @@ import path from "node:path";
 
 import { ArtifactFailure } from "@orkestrator/protocol/transcript-artifacts";
 
+import { BUG_REPORT_SCRATCH_PREFIX } from "./bug-report-scratch.js";
 import type { CommandContext } from "./commands-context.js";
 import { readableHostFileRoots } from "./readable-host-roots.js";
 import { readFileBase64 } from "./shell.js";
@@ -28,6 +29,8 @@ let chosenFolder: string;
 let customWorktree: string;
 let outside: string;
 let environments: Array<Record<string, unknown>>;
+let bugReportScratch: string;
+let bugReports: Array<Record<string, unknown>>;
 let streams: TranscriptMediaStreams | undefined;
 let minted: MintMediaInput[];
 
@@ -37,6 +40,7 @@ function context(): Pick<CommandContext, "storage" | "worktreeDir"> {
     storage: {
       loadEnvironments: async () => environments,
       getDataDir: () => dataDir,
+      bugReports: { listBugReports: async () => bugReports },
     } as unknown as CommandContext["storage"],
   };
 }
@@ -115,6 +119,17 @@ beforeEach(() => {
       worktreePath: outside,
     },
   ];
+  // A report's scratch directory is created directly under the temporary
+  // directory, which is the only place a report's images are admitted from.
+  bugReportScratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), BUG_REPORT_SCRATCH_PREFIX)));
+  mkdirSync(path.join(bugReportScratch, "screenshots"));
+  writeFileSync(path.join(bugReportScratch, "screenshots", "window.wav"), WAV);
+  writeFileSync(path.join(bugReportScratch, "issue.wav"), WAV);
+  bugReports = [
+    { id: "report-1", scratchDir: bugReportScratch },
+    // A record naming a directory the service did not create is never a root.
+    { id: "report-2", scratchDir: outside },
+  ];
   minted = [];
 });
 
@@ -122,15 +137,33 @@ afterEach(async () => {
   await streams?.dispose();
   streams = undefined;
   rmSync(root, { recursive: true, force: true });
+  rmSync(bugReportScratch, { recursive: true, force: true });
 });
 
 describe("readable host file roots", () => {
-  test("are the worktree base, custom worktrees one by one, and coordinator attachments", async () => {
+  test("are the worktree base, custom worktrees one by one, coordinator attachments and bug report images", async () => {
     expect(await readableHostFileRoots(context())).toEqual([
       worktrees,
       customWorktree,
       path.join(dataDir, "coordinator-attachments"),
+      path.join(bugReportScratch, "screenshots"),
     ]);
+  });
+
+  test("an open bug report's images are readable until it is discarded", async () => {
+    const capture = path.join(bugReportScratch, "screenshots", "window.wav");
+    expect(await readFileBase64(capture, await readableHostFileRoots(context()))).toBe(
+      Buffer.from(WAV).toString("base64"),
+    );
+    // The rest of the scratch directory is not an image folder.
+    await expect(
+      readFileBase64(
+        path.join(bugReportScratch, "issue.wav"),
+        await readableHostFileRoots(context()),
+      ),
+    ).rejects.toThrow();
+    bugReports = [];
+    await expect(readFileBase64(capture, await readableHostFileRoots(context()))).rejects.toThrow();
   });
 
   test("the readable-roots stream admits exactly what read_file_base64 admits", async () => {

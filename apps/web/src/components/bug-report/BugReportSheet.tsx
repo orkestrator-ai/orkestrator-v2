@@ -400,7 +400,7 @@ export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <span className="flex items-center gap-1.5 rounded-md border border-success/25 bg-success/10 px-2 py-0.5 text-[11px] text-success">
               <LockKeyhole className="size-3" aria-hidden="true" />
-              Writes only to its scratch folder · asks before commands
+              Writes only to its scratch folder · asks before commands by default
             </span>
             <div className="ml-auto flex items-center gap-1">
               {canCapture ? (

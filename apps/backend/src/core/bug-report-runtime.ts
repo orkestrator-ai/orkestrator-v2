@@ -16,18 +16,44 @@ import type { BugReportRecord, BugReportsStorage } from "./storage-bug-reports.j
 export const BUG_REPORT_PROJECT_ID = "bug-report";
 
 /**
- * Read-only, apart from the scratch directory, with a human in the loop.
+ * Read-only, apart from the scratch directory, with the approval mode the
+ * user picks.
  *
  * The provider sandbox lets the agent write only inside its working directory
- * (the report's scratch directory); approvals `ask` sends every escalation,
- * and every command Claude does not treat as read-only, to the user. The
- * filing itself never runs in the agent: the sheet's File issue button does it.
+ * (the report's scratch directory) whatever approval mode is chosen. Claude
+ * and Codex offer a mode picker, so their policy allows every mode and the
+ * session starts in the asking one (`bugReportInitialApprovalMode`): the user
+ * can then step up to accepting edits, auto review or approving everything,
+ * which the picker could not offer while the policy was `ask`. OpenCode has no
+ * mode picker, so its policy stays `ask` and every escalation still goes to
+ * the user. The filing itself never runs in the agent: the sheet's File issue
+ * button does it.
  */
-export const BUG_REPORT_EXECUTION_POLICY_OVERRIDE: NativeAgentExecutionPolicyOverride = {
-  sandbox: "provider",
-  approvals: "ask",
-  projectResources: false,
-};
+export function bugReportExecutionPolicyOverride(
+  agent: BugReportAgent | undefined,
+): NativeAgentExecutionPolicyOverride {
+  return {
+    sandbox: "provider",
+    approvals: agent && bugReportInitialApprovalMode(agent) ? "auto-approve" : "ask",
+    projectResources: false,
+  };
+}
+
+/**
+ * The approval mode a new report session starts in: the asking mode, so a
+ * report still asks before every command until the user picks another one.
+ * Undefined for a platform with no approval-mode picker.
+ */
+export function bugReportInitialApprovalMode(agent: BugReportAgent): string | undefined {
+  switch (agent) {
+    case "claude":
+      return "default";
+    case "codex":
+      return "on-request";
+    case "opencode":
+      return undefined;
+  }
+}
 
 export type BugReportRuntimeResolution =
   | { status: "not-bug-report" }
@@ -110,7 +136,7 @@ export function bugReportRuntimeEnvironment(
     environmentType: "local",
     worktreePath: record.scratchDir,
     ...bridge,
-    agentSettings: { executionPolicy: BUG_REPORT_EXECUTION_POLICY_OVERRIDE },
+    agentSettings: { executionPolicy: bugReportExecutionPolicyOverride(record.agent) },
     setupPhase: "ready",
     setupScriptsComplete: true,
   } as Environment;

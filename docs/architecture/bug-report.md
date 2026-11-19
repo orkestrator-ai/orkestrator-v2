@@ -85,10 +85,16 @@ coordinator's is:
 
 A report gets no Agent Tools MCP: it belongs to no project.
 
-Its policy is `interactive-host` with the override in
-`BUG_REPORT_EXECUTION_POLICY_OVERRIDE`: provider sandbox and approvals `ask`.
-The agent can read the host but write only inside its scratch directory, and
-every escalation or non-read-only command needs the user's approval. The
+Its policy is `interactive-host` with the override from
+`bugReportExecutionPolicyOverride` (`bug-report-runtime.ts`): provider sandbox
+and no project resources, so the agent can read the host but write only inside
+its scratch directory whatever approval mode is in force. Claude and Codex
+offer the composer's approval-mode picker, so their policy allows every mode
+(`auto-approve`) and a new session starts in the asking one
+(`bugReportInitialApprovalMode`: Claude `default`, Codex `on-request`): every
+escalation or non-read-only command needs the user's approval until they pick
+Accept edits, Auto, Bypass or the Codex equivalents. OpenCode has no picker,
+so its policy stays `ask`. A session keeps the policy it was created with. The
 briefing tells it never to file anything; filing is the sheet's button.
 
 ## Machines
@@ -123,6 +129,11 @@ renderer entry, and the briefing tells the agent to redact them.
 **Capture window** captures the window, with the sheet stepped aside so it
 shows what the user was looking at, into the report's `screenshots/` on the
 node it reports on, and attaches it to the next message.
+The `screenshots/` folder of every open report is one of the readable host
+roots (`readableHostFileRoots`, through `bugReportImageRoots` in
+`bug-report-scratch.ts`), so the transcript can show a capture or pasted image
+from it; the rest of the scratch directory is not readable that way, and a
+discarded report's folder stops being readable at once.
 Pasted images use `write_bug_report_attachment` in both the assigned and
 unassigned composers. The command resolves the scratch directory from the
 stored report ID and writes a generated filename through the confined report

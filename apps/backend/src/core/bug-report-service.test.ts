@@ -19,11 +19,14 @@ import {
 import {
   bugReportBridgeFieldNames,
   bugReportBridgeIdentityFromFields,
+  bugReportExecutionPolicyOverride,
+  bugReportInitialApprovalMode,
   bugReportRuntimeEnvironment,
   bugReportReaperEnvironments,
   updateBugReportBridgeFromEnvironment,
   resolveBugReportRuntime,
 } from "./bug-report-runtime.js";
+import { nativeAgentApprovalModes } from "@orkestrator/protocol/native-agent";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { localServerFields } from "./commands-local-server-lifecycle.js";
@@ -417,12 +420,31 @@ describe("bug report runtime", () => {
       status: "running",
       localClaudePort: 4100,
       claudeBridgePid: 77,
-      agentSettings: { executionPolicy: { sandbox: "provider", approvals: "ask" } },
+      agentSettings: { executionPolicy: { sandbox: "provider", approvals: "auto-approve" } },
     });
     expect(
       bugReportBridgeIdentityFromFields("claude", { localClaudePort: null, claudeBridgePid: null }),
     ).toEqual({ changed: true });
     expect(bugReportBridgeIdentityFromFields("claude", { name: "x" })).toEqual({ changed: false });
+  });
+
+  test("lets a mode-picking platform choose any approval mode, starting in the asking one", () => {
+    for (const agent of ["claude", "codex"] as const) {
+      const policy = bugReportExecutionPolicyOverride(agent);
+      expect(policy).toEqual({
+        sandbox: "provider",
+        approvals: "auto-approve",
+        projectResources: false,
+      });
+      const modes = nativeAgentApprovalModes(agent, { approvals: "auto-approve" });
+      expect(modes.filter((mode) => mode.disabled)).toEqual([]);
+      const initial = bugReportInitialApprovalMode(agent);
+      expect(modes.find((mode) => mode.id === initial)?.kind).toBe("ask");
+    }
+    // OpenCode has no approval-mode picker: its policy keeps asking.
+    expect(bugReportInitialApprovalMode("opencode")).toBeUndefined();
+    expect(bugReportExecutionPolicyOverride("opencode").approvals).toBe("ask");
+    expect(bugReportExecutionPolicyOverride(undefined).approvals).toBe("ask");
   });
 
   for (const agent of ["claude", "codex", "opencode"] as const) {

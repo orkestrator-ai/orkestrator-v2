@@ -354,7 +354,7 @@ export function buildBugReportBriefing(input: BugReportBriefingInput): string {
     ...describeClientContext(input.client),
     "",
     "## How you are running",
-    "Your sandbox lets you write only inside your working directory. Commands and anything outside it need my approval, so prefer reading files and searching logs over running commands, and say why before asking. Stay in this working directory: it is deleted once the issue is filed.",
+    "Your sandbox lets you write only inside your working directory. Unless I choose a more permissive approval mode, commands and anything outside it need my approval, so prefer reading files and searching logs over running commands, and say why before asking. Stay in this working directory: it is deleted once the issue is filed.",
     "",
     ...bugReportUnderstandSection(
       `I can attach screenshots to my messages, or capture the Orkestrator window into ${input.screenshotDir}`,

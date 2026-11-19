@@ -9,7 +9,6 @@
  * which the sheet does when the user is done with a filed report.
  */
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
 import { lstat, mkdtemp, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -47,8 +46,11 @@ import { runCommand } from "./shell.js";
 import { writeConfinedFile } from "./path-safety.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import type { BugReportRecord } from "./storage-bug-reports.js";
+import {
+  BUG_REPORT_SCRATCH_PREFIX,
+  isOwnedBugReportScratchDir as ownedScratchDir,
+} from "./bug-report-scratch.js";
 
-export const BUG_REPORT_SCRATCH_PREFIX = "orkestrator-bug-report-";
 const MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024;
 const MAX_DRAFT_FILE_BYTES = 1024 * 1024;
 const MAX_CONTEXT_STRING = 512;
@@ -420,22 +422,6 @@ export async function markBugReportFiled(
     filed: { url, filedAt: new Date().toISOString() },
   }));
   return getBugReportSnapshot(context);
-}
-
-/**
- * Only a directory this service created is ever removed: one directly under
- * the temporary directory, named with the report prefix.
- */
-function ownedScratchDir(scratchDir: string): boolean {
-  if (!path.basename(scratchDir).startsWith(BUG_REPORT_SCRATCH_PREFIX)) return false;
-  const parent = path.dirname(scratchDir);
-  let tmp = os.tmpdir();
-  try {
-    tmp = realpathSync(tmp);
-  } catch {
-    // An unreadable temporary directory still names the parent literally.
-  }
-  return parent === tmp || parent === os.tmpdir();
 }
 
 async function discardRecord(context: CommandContext, record: BugReportRecord): Promise<void> {

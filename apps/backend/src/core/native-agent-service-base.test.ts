@@ -9,6 +9,7 @@ import path from "node:path";
 import { type BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 
 import { COORDINATOR_AGENTS_MD_RULE } from "@orkestrator/protocol/agents-md-orkestrator";
+import { nativeAgentApprovalModes } from "@orkestrator/protocol/native-agent";
 import {
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
@@ -3251,7 +3252,7 @@ test("ambiguous retry preserves one command block and never acknowledges a newer
 });
 
 describe("bug report session authority", () => {
-  test("forces provider sandbox and ask approvals, prefixes the first prompt once, and rejects mismatches", async () => {
+  test("forces provider sandbox, starts in the asking mode, prefixes the first prompt once, and rejects mismatches", async () => {
     const provider = createProviderStub("codex");
     await withService(
       { prefix: "ork-report-trust-", provider: async () => provider.provider },
@@ -3277,11 +3278,18 @@ describe("bug report session authority", () => {
           },
         };
         const session = await service.ensureSession(input);
-        expect((await storage.getNativeAgentSession(session.key))?.policy).toMatchObject({
+        const stored = await storage.getNativeAgentSession(session.key);
+        // The policy allows every approval mode so the user can pick one, but
+        // a new report starts in the asking mode.
+        expect(stored?.policy).toMatchObject({
           sandbox: "provider",
-          approvals: "ask",
+          approvals: "auto-approve",
           projectResources: false,
         });
+        expect(stored?.controls?.approvalMode).toBe("on-request");
+        const offered = nativeAgentApprovalModes("codex", stored?.policy);
+        expect(offered.length).toBeGreaterThan(1);
+        expect(offered.filter((mode) => mode.disabled)).toEqual([]);
         expect((await storage.bugReports.getBugReport("r1"))?.briefedAt).toBeUndefined();
         await expect(service.ensureSession({ ...input, agent: "claude" })).rejects.toThrow(
           "different agent",

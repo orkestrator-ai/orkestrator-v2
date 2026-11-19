@@ -71,6 +71,7 @@ import {
 import {
   lastAssistantText,
   missingWorkflowResultMessage,
+  workflowResultRefusals,
   workflowRestartContinuationPrompt,
   workflowResumeContinuationPrompt,
   workflowUsageLimitContinuationPrompt,
@@ -824,6 +825,8 @@ export class BuildPipelineReviewFanout {
             },
             closeResult: (requestId: string) =>
               this.deps.workflowResults!.close(requestId, "superseded"),
+            resultRefusals: (requestId: string) =>
+              workflowResultRefusals(this.deps.workflowResults, requestId),
           }
         : {}),
       save: () => this.save(pipeline),
@@ -1570,6 +1573,7 @@ export class BuildPipelineReviewFanout {
               toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
               submission: consolidation.resultSubmission,
               finalText: lastAssistantText(session.messages),
+              refusals: workflowResultRefusals(this.deps.workflowResults, consolidation.requestId),
             })
           : "The consolidation session became idle without returning its consolidated report",
         () => this.prepareConsolidationResultReminder(pipeline, consolidation, session),
@@ -1746,6 +1750,7 @@ export class BuildPipelineReviewFanout {
         submission: consolidation.resultSubmission,
         finalText: lastAssistantText(session.messages),
         workLabel: "consolidation work",
+        refusals: workflowResultRefusals(this.deps.workflowResults, consolidation.requestId),
       }),
     );
     return true;

@@ -117,6 +117,12 @@ export type WorkflowResultValidation =
 export interface WorkflowResultDelivery {
   validationCalls: number;
   submissionCalls: number;
+  /**
+   * Calls that reached the backend's tool but were refused before validation:
+   * arguments its input check rejected, or a `result` sent as JSON text that
+   * does not parse. Absent when there were none.
+   */
+  refusedCalls?: number;
   lastValidation?: "valid" | "invalid";
   /** Present while a valid candidate is held and can be committed by digest. */
   validatedDigest?: string;
@@ -521,7 +527,7 @@ export function callsOwnWorkflowResult(turn: WorkflowResultTurn, args: unknown):
  * one in either direction, so the guidance names both.
  */
 export const WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE =
-  "A call rejected with a JSON parse error or `Failed to parse arguments string as JSON object` was malformed. It is not a sign that the tool is broken, and it is not a size, line-length or formatting problem. The usual cause is a brace count that is off by one: a missing closing brace, or one extra `}` at the very end, which is easy to add when the call is wrapped in another object. Recount the closing braces, keep the same content, and call the same tool again. Never shorten the report or replace its findings with placeholder text to get a call through.";
+  "A call rejected with a JSON parse error or `Failed to parse arguments string as JSON object` was malformed. It is not a sign that the tool is broken, and it is not a size, line-length or formatting problem. The usual cause is a brace count that is off by one: a missing closing brace, or one extra `}` at the very end, which is easy to add when the call is wrapped in another object. Recount the closing braces, keep the same content, and call the same tool again. Pass `result` as a JSON object, never as a string of JSON text. A refusal that says `result` is not valid JSON gives the character offset, the field path and what was expected where the text breaks: fix that one point, because resending the same text is refused the same way. Never shorten the report or replace its findings with placeholder text to get a call through.";
 
 export function workflowResultToolName(kind: WorkflowResultKind): string {
   return WORKFLOW_RESULT_TOOL_NAMES[kind];

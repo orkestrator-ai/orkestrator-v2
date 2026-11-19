@@ -2,6 +2,26 @@ import {
   WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE,
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
+import type { WorkflowResultRefusals, WorkflowResultService } from "./workflow-result-service.js";
+
+/**
+ * The refused calls of an open slot, from a service that may predate
+ * `refusals` (test doubles): undefined when there is nothing to report.
+ */
+export function workflowResultRefusals(
+  service: Partial<Pick<WorkflowResultService, "refusals">> | undefined,
+  resultKey: string | undefined,
+): WorkflowResultRefusals | undefined {
+  if (!resultKey || typeof service?.refusals !== "function") return undefined;
+  return service.refusals(resultKey);
+}
+
+/** Bound on the refusal reason quoted in a reminder (a durable prompt under 4 KiB). */
+const REMINDER_REFUSAL_MAX_CHARS = 700;
+
+function calls(count: number): string {
+  return `${count} call${count === 1 ? "" : "s"}`;
+}
 
 /**
  * Explains why a tool-transport step went idle with no accepted result.
@@ -19,10 +39,24 @@ export function missingWorkflowResultMessage(input: {
   toolName: string;
   submission: WorkflowResultSubmissionState | undefined;
   finalText?: string;
+  /**
+   * Calls the tool refused before validation (`WorkflowResultService.refusals`).
+   * Such a call never reaches the slot, so without this a step whose every
+   * call was refused read as one that never called its tool.
+   */
+  refusals?: WorkflowResultRefusals;
 }): string {
   const { subject, resultLabel, toolName } = input;
   if (input.submission === "correcting" || input.submission === "needs-attention") {
     return `${subject} stopped before ${toolName} accepted its ${resultLabel}; its last submission was rejected`;
+  }
+  if (input.refusals && input.refusals.count > 0) {
+    const { count, processed, lastReason } = input.refusals;
+    const refused =
+      processed === 0
+        ? `called ${toolName} (or its validation tool) ${count === 1 ? "once" : `${count} times`} for its latest result key, and the input check refused every call before validation`
+        : `made ${calls(count)} to ${toolName} (or its validation tool) for its latest result key that the input check refused before validation`;
+    return `${subject} ${refused}, so no ${resultLabel} was accepted${lastReason ? `. The last refusal: ${lastReason}` : ""}`;
   }
   if (input.finalText !== undefined && looksLikeJsonObject(input.finalText)) {
     return `${subject} replied with its ${resultLabel} as text instead of calling ${toolName}`;
@@ -52,15 +86,24 @@ export function workflowResultReminderPrompt(input: {
   finalText?: string;
   /** What is already done, e.g. "discovery work". Defaults to "analysis". */
   workLabel?: string;
+  /** Calls the tool refused before validation, with the newest reason. */
+  refusals?: WorkflowResultRefusals;
 }): string {
   const { resultLabel, toolName } = input;
   const workLabel = input.workLabel ?? "analysis";
+  const refusals = input.refusals && input.refusals.count > 0 ? input.refusals : undefined;
+  const lastReason =
+    refusals?.lastReason && refusals.lastReason.length > REMINDER_REFUSAL_MAX_CHARS
+      ? `${refusals.lastReason.slice(0, REMINDER_REFUSAL_MAX_CHARS - 1)}…`
+      : refusals?.lastReason;
   const cause =
     input.submission === "correcting"
       ? `Your last submission was rejected. Correct only the problems it reported and submit again.`
-      : input.finalText !== undefined && looksLikeJsonObject(input.finalText)
-        ? `You wrote the ${resultLabel} as reply text. Reply text is not read; pass it to \`${toolName}\` instead.`
-        : `No call to \`${toolName}\` was accepted.`;
+      : refusals
+        ? `The input check refused your ${calls(refusals.count)} before validation, so nothing was received.${lastReason ? ` The last refusal said: ${lastReason}` : ""} Sending the same arguments again is refused the same way: fix exactly the point the refusal names, and pass \`result\` as a JSON object, not as a string.`
+        : input.finalText !== undefined && looksLikeJsonObject(input.finalText)
+          ? `You wrote the ${resultLabel} as reply text. Reply text is not read; pass it to \`${toolName}\` instead.`
+          : `No call to \`${toolName}\` was accepted.`;
   return [
     `Orkestrator has not received your ${resultLabel}. ${cause} Your ${workLabel} is already done: do not repeat it, only submit the result.`,
     `The result tools are working. ${WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE} Only call tools that were offered to you: never call a tool named \`invalid\`, and never write a tool error yourself.`,

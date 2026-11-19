@@ -87,6 +87,7 @@ import {
   LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
   missingWorkflowResultMessage,
+  workflowResultRefusals,
   workflowRestartContinuationPrompt,
   workflowUsageLimitContinuationPrompt,
   workflowResultReminderPrompt,
@@ -4103,6 +4104,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             },
             closeResult: (requestId: string) =>
               this.options.workflowResults!.close(requestId, "superseded"),
+            resultRefusals: (requestId: string) =>
+              workflowResultRefusals(this.options.workflowResults, requestId),
           }
         : {}),
       save: async () => {
@@ -4999,6 +5002,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               submission: request.resultSubmission,
               finalText,
               workLabel: stepWorkLabel(request.kind),
+              refusals: workflowResultRefusals(this.options.workflowResults, request.requestId),
             }),
             spend: "resultReminderSent",
           });
@@ -5011,6 +5015,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             toolName: workflowResultToolName(this.stepResultKind(request.kind)),
             submission: request.resultSubmission,
             finalText,
+            refusals: workflowResultRefusals(this.options.workflowResults, request.requestId),
           }),
         );
       }

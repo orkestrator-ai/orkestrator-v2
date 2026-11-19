@@ -82,6 +82,22 @@ interface DeliveryCounters {
   validationCalls: number;
   submissionCalls: number;
   lastValidation?: "valid" | "invalid";
+  /** Calls refused before they reached `validate`/`submit` (`recordRefusedCall`). */
+  refusedCalls?: number;
+  /** Why the newest refused call was refused, bounded and without an excerpt. */
+  lastRefusal?: string;
+}
+
+/** Bound on the remembered reason of the newest refused call. */
+const MAX_REFUSAL_REASON_CHARS = 600;
+
+/** What a step reports when its result never arrived: how many calls were refused, and why. */
+export interface WorkflowResultRefusals {
+  /** Calls refused before validation. */
+  count: number;
+  /** Validation and submission calls that were processed, for the same slot. */
+  processed: number;
+  lastReason?: string;
 }
 
 interface WorkflowResultCapabilityIdentity {
@@ -466,6 +482,49 @@ export class WorkflowResultService {
       }
     }
     return counters;
+  }
+
+  /**
+   * A result-tool call refused before it reached {@link validate} or
+   * {@link submit}: arguments the tool's input check rejected, or a `result`
+   * sent as JSON text that does not parse. Nothing else records such a call,
+   * so without this a step whose every call was refused reports that its tool
+   * was never called. Counted only for an open slot of the caller's scope, in
+   * memory, like the other delivery counters.
+   */
+  recordRefusedCall(scope: WorkflowResultCallerScope, resultKey: string, reason: string): void {
+    let entry: StoredWorkflowResult | undefined;
+    try {
+      entry = this.readEntry(resultKey);
+    } catch {
+      return;
+    }
+    if (
+      !entry ||
+      entry.lifecycle !== "open" ||
+      entry.environmentId !== scope.environmentId ||
+      entry.projectId !== scope.projectId
+    ) {
+      return;
+    }
+    const counters = this.counters(resultKey);
+    counters.refusedCalls = (counters.refusedCalls ?? 0) + 1;
+    counters.lastRefusal =
+      reason.length > MAX_REFUSAL_REASON_CHARS
+        ? `${reason.slice(0, MAX_REFUSAL_REASON_CHARS - 1)}…`
+        : reason;
+    this.metrics.recordRefusedCall(entry.kind);
+  }
+
+  /** The refused calls of a slot still open, or undefined when there were none. */
+  refusals(resultKey: string): WorkflowResultRefusals | undefined {
+    const counters = this.deliveryCounters.get(resultKey);
+    if (!counters?.refusedCalls) return undefined;
+    return {
+      count: counters.refusedCalls,
+      processed: counters.validationCalls + counters.submissionCalls,
+      ...(counters.lastRefusal !== undefined ? { lastReason: counters.lastRefusal } : {}),
+    };
   }
 
   private releaseHeld(resultKey: string): void {
@@ -1574,9 +1633,12 @@ export class WorkflowResultService {
     const held = this.heldValidation(resultKey);
     const validationCalls = counters?.validationCalls ?? 0;
     const submissionCalls = counters?.submissionCalls ?? 0;
+    const refusedCalls = counters?.refusedCalls ?? 0;
     let hint: string | undefined;
     if (held) {
       hint = `A validated result is held. Commit it by calling ${workflowResultKindDefinition(entry.kind).toolName(entry)} with this resultKey and validatedDigest; do not re-send the result.`;
+    } else if (validationCalls === 0 && submissionCalls === 0 && refusedCalls > 0) {
+      hint = `${refusedCalls} call${refusedCalls === 1 ? " was" : "s were"} refused before processing because the arguments did not pass the tool's input check. The newest refusal said: ${counters?.lastRefusal ?? "(no reason recorded)"} Correct exactly that; sending the same arguments again is refused the same way.`;
     } else if (validationCalls === 0 && submissionCalls === 0) {
       hint =
         "No validation or submission has been processed for this resultKey. Calls may have been rejected by the client or by service size or capacity limits before processing. Check the actual call error before retrying.";
@@ -1586,6 +1648,7 @@ export class WorkflowResultService {
     return {
       validationCalls,
       submissionCalls,
+      ...(refusedCalls > 0 ? { refusedCalls } : {}),
       ...(counters?.lastValidation ? { lastValidation: counters.lastValidation } : {}),
       ...(held ? { validatedDigest: held.digest } : {}),
       ...(hint ? { hint } : {}),

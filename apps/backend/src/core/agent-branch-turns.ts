@@ -111,6 +111,9 @@ export async function prepareAgentBranchReminder<B extends AgentBranchRecord>(
     toolName,
     submission: branch.resultSubmission,
     finalText: await finalText(),
+    ...(branch.requestId && context.host.resultRefusals
+      ? { refusals: context.host.resultRefusals(branch.requestId) }
+      : {}),
   });
   // Retire the old slot before the new request identity reaches memory, for
   // the same reason a schema repair does.

@@ -73,6 +73,7 @@ import {
   lastAssistantText,
   workflowRestartContinuationPrompt,
   workflowUsageLimitContinuationPrompt,
+  workflowResultRefusals,
   workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
@@ -2060,6 +2061,7 @@ export class BuildPipelineSupervisor {
         submission: session.resultSubmission,
         finalText,
         workLabel: `${session.label.toLowerCase()} work`,
+        refusals: workflowResultRefusals(this.ctx.options.workflowResults, previousRequestId),
       }),
     });
     return true;

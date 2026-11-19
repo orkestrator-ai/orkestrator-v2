@@ -615,6 +615,32 @@ export const answerCapabilityNodeLaunchCommand = capabilityCommand(
   OpenObject,
 );
 
+/**
+ * The command node's answer to a leaf's request on its event stream
+ * (`node-capability-leaf-requested`, `environment-authority.ts`): the
+ * manifest to stage into a container the leaf is creating (its artifacts
+ * already staged on the leaf), or the environment card for one of the
+ * leaf's environments, from the command node's state and receipts.
+ */
+export const answerCapabilityNodeRequestCommand = capabilityCommand(
+  "answer_capability_node_request",
+  "internal",
+  ["controllerId", "epoch", "requestId", "answer"],
+  OpenObject,
+);
+
+/**
+ * The capability record staged into one of that machine's containers (ids,
+ * digests and statuses, read from its inputs revision and label), for the
+ * command node's environment card.
+ */
+export const getCapabilityNodeContainerDeliveryCommand = capabilityCommand(
+  "get_capability_node_container_delivery",
+  "internal",
+  ["controllerId", "epoch", "environmentId"],
+  OpenObject,
+);
+
 // Package registries and the signed-manifest policy (`registry.ts`, `manifest-signing.ts`).
 export const listCapabilityRegistriesCommand = capabilityCommand(
   "list_capability_registries",
@@ -717,4 +743,6 @@ export const CAPABILITIES_COMMANDS = [
   exportCapabilityNodeItemCommand,
   stageCapabilityNodeHandoverCommand,
   answerCapabilityNodeLaunchCommand,
+  answerCapabilityNodeRequestCommand,
+  getCapabilityNodeContainerDeliveryCommand,
 ] as const;

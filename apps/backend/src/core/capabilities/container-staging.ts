@@ -109,7 +109,19 @@ export interface ContainerCapabilityRecord {
   stages: string[];
   stagedAt: string;
   items: ContainerCapabilityRecordItem[];
+  /**
+   * Nothing was staged, and why: a leaf that could not reach its command
+   * node at creation and held no cached manifest for this container.
+   */
+  unstaged?: { reason: ContainerUnstagedReason };
+  /**
+   * A leaf's container: staged from the command node's answer, or from its
+   * last answer for this container target when the command node was away.
+   */
+  source?: { kind: "command-node" | "cached"; controllerId: string; receivedAt: string };
 }
+
+export type ContainerUnstagedReason = "command-node-unreachable";
 
 const FILE_KINDS = new Set(["skill", "command", "prompt", "subagent"]);
 
@@ -203,14 +215,72 @@ export function containerCapabilityPlan(
   }
   for (const key of conflicts) byKey.delete(key);
   const items = [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
-  const digest = sha256(
+  const digest = containerPlanDigest(providers, stages, items);
+  return { digest, providers, stages, items, undeliverable };
+}
+
+/**
+ * A plan's digest: its providers, its stages and every (location,
+ * component, revision, providers). The command node and a leaf that stages
+ * the command node's plan compute it the same way, so the leaf's label
+ * equals the command node's current digest while nothing changed.
+ */
+export function containerPlanDigest(
+  providers: readonly AgentPlatform[],
+  stages: readonly string[],
+  items: ReadonlyArray<Pick<ContainerCapabilityItem, "key" | "packageDigest" | "providers">>,
+): string {
+  return sha256(
     canonicalCapabilityJson({
       providers,
       stages,
       items: items.map((item) => [item.key, item.packageDigest, item.providers]),
     }),
   );
-  return { digest, providers, stages, items, undeliverable };
+}
+
+/**
+ * The plan for a container whose machine could not reach its command node
+ * and had nothing cached: no items, and a digest of its own so its label
+ * still matches the record that says so.
+ */
+export function unstagedContainerPlan(
+  providers: readonly AgentPlatform[],
+  stages: readonly string[],
+  reason: ContainerUnstagedReason,
+): ContainerCapabilityPlan {
+  const sortedProviders = [...new Set(providers)].sort();
+  const sortedStages = [...new Set(stages)].sort();
+  return {
+    digest: sha256(
+      canonicalCapabilityJson({
+        providers: sortedProviders,
+        stages: sortedStages,
+        unstaged: reason,
+      }),
+    ),
+    providers: sortedProviders,
+    stages: sortedStages,
+    items: [],
+    undeliverable: [],
+  };
+}
+
+/** The record of an unstaged container (`unstagedContainerPlan`). */
+export function unstagedContainerRecord(
+  plan: ContainerCapabilityPlan,
+  reason: ContainerUnstagedReason,
+  now: () => string = () => new Date().toISOString(),
+): ContainerCapabilityRecord {
+  return {
+    formatVersion: CONTAINER_CAPABILITY_RECORD_VERSION,
+    digest: plan.digest,
+    providers: plan.providers,
+    stages: plan.stages,
+    stagedAt: now(),
+    items: [],
+    unstaged: { reason },
+  };
 }
 
 function itemFor(
@@ -384,6 +454,9 @@ export function parseContainerCapabilityRecord(value: unknown): ContainerCapabil
       },
     ];
   });
+  const unstaged = (record.unstaged ?? null) as Record<string, unknown> | null;
+  const source = (record.source ?? null) as Record<string, unknown> | null;
+  const sourceKind = source?.kind;
   return {
     formatVersion: CONTAINER_CAPABILITY_RECORD_VERSION,
     digest: record.digest,
@@ -391,6 +464,20 @@ export function parseContainerCapabilityRecord(value: unknown): ContainerCapabil
     stages: strings(record.stages),
     stagedAt: typeof record.stagedAt === "string" ? record.stagedAt : "",
     items,
+    ...(unstaged?.reason === "command-node-unreachable"
+      ? { unstaged: { reason: "command-node-unreachable" as const } }
+      : {}),
+    ...((sourceKind === "command-node" || sourceKind === "cached") &&
+    typeof source?.controllerId === "string" &&
+    typeof source.receivedAt === "string"
+      ? {
+          source: {
+            kind: sourceKind,
+            controllerId: source.controllerId.slice(0, 256),
+            receivedAt: source.receivedAt.slice(0, 64),
+          },
+        }
+      : {}),
   };
 }
 

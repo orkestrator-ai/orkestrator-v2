@@ -19,9 +19,11 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { UNRESTRICTED_CAPABILITY_CEILING } from "@orkestrator/protocol/capability-resources-resolve";
 import type { McpMutation } from "@orkestrator/protocol/mcp-management";
 import {
   capabilityLaunchRequestedEvent,
+  capabilityLeafRequestedEvent,
   capabilityManagementChangedEvent,
 } from "@orkestrator/protocol/contract/domains/capabilities";
 
@@ -36,6 +38,7 @@ import {
 import type { CommandContext } from "../commands-context.js";
 import { discoverAgentPlugins } from "../extension-discovery.js";
 import type { McpManagementService } from "../mcp-management/index.js";
+import { CapabilityEnvironmentAuthority } from "./environment-authority.js";
 import type { McpInstaller } from "./executor.js";
 import type { InventoryMcpServer, InventoryPlugin } from "./inventory.js";
 import { defaultCapabilityHomes, testCapabilityHomes } from "./native-ownership.js";
@@ -457,5 +460,35 @@ export function createCapabilityService(
         mcpManagementInstaller(() => context.mcpManagement, { environmentId }),
     },
     claudePlugins,
+  });
+}
+
+/**
+ * A leaf's container staging and the environment card, under the command
+ * node's authority (`environment-authority.ts`). Built from the service's
+ * public parts (artifact cache, executor epoch, resolution) and this node's
+ * links; `context.capabilityEnvironments`.
+ */
+export function createCapabilityEnvironmentAuthority(
+  context: CommandContext,
+  service: CapabilityService,
+  nodes: CapabilityNodeAccess,
+): CapabilityEnvironmentAuthority {
+  return new CapabilityEnvironmentAuthority({
+    storage: { capabilities: context.storage.capabilities },
+    artifacts: service.artifacts,
+    selfId: nodes.selfId,
+    isLeaf: nodes.isLeaf,
+    link: nodes.link,
+    admitEpoch: (controllerId, epoch) => service.executor.admitEpoch(controllerId, epoch),
+    controllerReachable: async () => (await nodes.controllerReachable?.()) ?? false,
+    // A leaf asks its command node on its own event stream, like a launch.
+    request: (payload) => context.emit(capabilityLeafRequestedEvent, payload),
+    resolve: (state, target) =>
+      service.resolveFor(state, { target, ceiling: UNRESTRICTED_CAPABILITY_CEILING }),
+    sources: capabilityScopedSources(context),
+    machines: nodes.machines,
+    ...(nodes.remoteEnvironments ? { remoteEnvironments: nodes.remoteEnvironments } : {}),
+    now: () => new Date().toISOString(),
   });
 }

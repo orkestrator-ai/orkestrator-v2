@@ -28,8 +28,10 @@ import {
 } from "./container-staging.js";
 import { projectCapabilityLocation, projectMcpLocation } from "./scoped-locations.js";
 import {
+  CONTAINER_UNSTAGED_SUMMARY,
   desiredProjectState,
   revisionComponent,
+  type ContainerDeliveryEvidence,
   type ScopedEnvironment,
   type ScopedTargetSources,
 } from "./scoped-delivery.js";
@@ -65,6 +67,8 @@ const ALL_STAGES = [...AGENT_PLATFORMS, "agents-skills"];
 export async function containerStaging(
   context: EnvironmentDeliveryContext,
   input: {
+    /** The machine the container is on; this one when absent. */
+    nodeId?: string;
     environmentId: string;
     projectId?: string;
     providers: readonly AgentPlatform[];
@@ -78,7 +82,7 @@ export async function containerStaging(
   const plan = containerCapabilityPlan(
     state,
     {
-      nodeId: await context.selfId(),
+      nodeId: input.nodeId ?? (await context.selfId()),
       environmentId: input.environmentId,
       ...(input.projectId ? { projectId: input.projectId } : {}),
       providers: input.providers,
@@ -99,13 +103,21 @@ function nameOf(state: CapabilityState, packageId: string, componentId: string, 
   return { name: component?.name ?? componentId, kind: component?.kind ?? "skill" };
 }
 
-/** The environment card's view of its own copies. */
+/**
+ * The environment card's view of its own copies. `options.nodeId` names the
+ * machine the environment is on when it is not this one (the command node
+ * answering for a leaf's environment from its receipts), and
+ * `options.container` that machine's staged record for its container.
+ */
 export async function environmentDeliveryView(
   context: EnvironmentDeliveryContext,
   environment: ScopedEnvironment,
+  options: { nodeId?: string; container?: ContainerDeliveryEvidence | null } = {},
 ): Promise<CapabilityEnvironmentDelivery> {
   const state = await context.storage.capabilities.loadCapabilityState();
-  const nodeId = await context.selfId();
+  const self = await context.selfId();
+  const nodeId = options.nodeId ?? self;
+  const remote = nodeId !== self ? { nodeId } : {};
   if (environment.environmentType === "local") {
     const items: CapabilityEnvironmentDeliveryItem[] = [];
     for (const receipt of Object.values(state.receipts)) {
@@ -179,13 +191,17 @@ export async function environmentDeliveryView(
       environmentId: environment.id,
       kind: items.length > 0 ? "worktree" : "none",
       stale: items.some((item) => item.status === "pending"),
+      ...remote,
       items: items.slice(0, 500),
     };
   }
 
-  const delivered = environment.containerId
-    ? await context.sources.containerDelivery?.(environment.id).catch(() => null)
-    : null;
+  const delivered =
+    options.container !== undefined
+      ? options.container
+      : environment.containerId
+        ? await context.sources.containerDelivery?.(environment.id).catch(() => null)
+        : null;
   const record =
     delivered?.record && delivered.labelDigest === delivered.record.digest
       ? delivered.record
@@ -208,6 +224,9 @@ export async function environmentDeliveryView(
     );
     const { name, kind } = nameOf(state, item.packageId, item.componentId, item.packageDigest);
     const upToDate = staged?.status === "staged" && staged.packageDigest === item.packageDigest;
+    const missingReason = record?.unstaged
+      ? `${CONTAINER_UNSTAGED_SUMMARY} when this container was created; rebuild it once the command node is reachable.`
+      : "Not staged in this container yet; rebuild it to stage the current setup.";
     items.push({
       componentId: item.componentId,
       name,
@@ -230,7 +249,7 @@ export async function environmentDeliveryView(
           : {
               reason: staged
                 ? "An older revision is staged in this container; rebuild it to stage the current one."
-                : "Not staged in this container yet; rebuild it to stage the current setup.",
+                : missingReason,
             }),
     });
   }
@@ -261,14 +280,18 @@ export async function environmentDeliveryView(
     });
   }
   const installedDigest = record?.digest;
+  const containerId = environment.containerId ?? delivered?.containerId;
   return {
     environmentId: environment.id,
-    kind: environment.containerId || items.length > 0 ? "container" : "none",
+    kind: containerId || items.length > 0 ? "container" : "none",
     ...(installedDigest ? { installedDigest } : {}),
     currentDigest: current.digest,
     stale:
       installedDigest !== current.digest && (items.length > 0 || installedDigest !== undefined),
     ...(record?.stagedAt ? { stagedAt: record.stagedAt } : {}),
+    ...(record?.unstaged ? { notStagedReason: CONTAINER_UNSTAGED_SUMMARY } : {}),
+    ...(record?.source?.kind === "cached" ? { stagedFromCacheAt: record.source.receivedAt } : {}),
+    ...remote,
     items: items.slice(0, 500),
   };
 }

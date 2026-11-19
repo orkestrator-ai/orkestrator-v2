@@ -10,7 +10,9 @@ import { useCapabilityResource } from "./useCapabilityResource";
  * (written into the checkout, kept out of Git), or the manifest staged into a
  * container's inputs against the one the current setup would stage. A stale
  * container is refreshed by its existing rebuild; nothing is written into a
- * running container.
+ * running container. The window asks its command node, which answers for an
+ * environment on any machine from its receipts; a container's staged record
+ * comes from the machine that owns it.
  */
 export function EnvironmentDeliveryPanel({
   environmentId,
@@ -25,7 +27,14 @@ export function EnvironmentDeliveryPanel({
     [environmentId],
   );
   const data = delivery.state.data;
-  if (!data || data.kind === "none") return null;
+  // An answer without a kind or item list (an older or unrelated backend)
+  // shows nothing rather than breaking the settings view around it.
+  if (
+    !data ||
+    (data.kind !== "container" && data.kind !== "worktree") ||
+    !Array.isArray(data.items)
+  )
+    return null;
   return data.kind === "container" ? (
     <ContainerDelivery data={data} onRebuild={onRebuild} />
   ) : (
@@ -47,18 +56,42 @@ function ContainerDelivery({
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-foreground">In this container</span>
-        <StatusBadge
-          status={data.stale ? "restart-required" : "installed-next-session"}
-          label={data.stale ? "Rebuild to update" : "Up to date"}
-        />
+        {data.notStagedReason ? (
+          <StatusBadge status="failed" label="Not staged" />
+        ) : data.currentDigest ? (
+          <StatusBadge
+            status={data.stale ? "restart-required" : "installed-next-session"}
+            label={data.stale ? "Rebuild to update" : "Up to date"}
+          />
+        ) : null}
       </div>
-      <p className="text-muted-foreground">
-        Installed revision{" "}
-        <code className="text-foreground">
-          {data.installedDigest ? shortDigest(data.installedDigest) : "none"}
-        </code>{" "}
-        · current <code className="text-foreground">{shortDigest(data.currentDigest)}</code>
-      </p>
+      {data.notStagedReason ? (
+        <p className="text-foreground" data-testid="capability-container-not-staged">
+          {data.notStagedReason}. The container started without them; rebuild it once the command
+          node is reachable.
+        </p>
+      ) : (
+        <p className="text-muted-foreground">
+          Installed revision{" "}
+          <code className="text-foreground">
+            {data.installedDigest ? shortDigest(data.installedDigest) : "none"}
+          </code>
+          {data.currentDigest ? (
+            <>
+              {" "}
+              · current <code className="text-foreground">{shortDigest(data.currentDigest)}</code>
+            </>
+          ) : null}
+        </p>
+      )}
+      {data.stagedFromCacheAt ? (
+        <p className="text-muted-foreground">
+          Staged from the command node's last answer for this container (
+          {new Date(data.stagedFromCacheAt).toLocaleString()}): the command node was unreachable
+          when it was created.
+        </p>
+      ) : null}
+      <DeliveryNotice data={data} />
       {data.stale ? (
         <p className="text-muted-foreground">
           Capabilities reach a container through its staged inputs. Rebuild it to stage the current
@@ -85,6 +118,7 @@ function WorktreeDelivery({ data }: { data: CapabilityEnvironmentDelivery }) {
       data-testid="capability-worktree-delivery"
     >
       <span className="font-medium text-foreground">In this worktree</span>
+      <DeliveryNotice data={data} />
       <p className="text-muted-foreground">
         The project's toolkits are written into this checkout's agent folders and listed in the
         repository's local exclude file, so Git never shows them. A file the repository tracks is
@@ -92,6 +126,16 @@ function WorktreeDelivery({ data }: { data: CapabilityEnvironmentDelivery }) {
       </p>
       <DeliveryItems data={data} />
     </div>
+  );
+}
+
+/** Why what the card shows may not be current: the command node or the machine could not be asked. */
+function DeliveryNotice({ data }: { data: CapabilityEnvironmentDelivery }) {
+  if (!data.notice) return null;
+  return (
+    <p className="text-amber-300" role="status">
+      {data.notice}
+    </p>
   );
 }
 

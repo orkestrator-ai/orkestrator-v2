@@ -24,6 +24,18 @@ export const CAPABILITIES_LOG_AREAS = defineLogAreas({
         "A leaf could not ask its command node to resolve a launch; it falls back to its last answer or fails closed.",
       "launch.answer-failed":
         "The command node could not answer a leaf's launch request; the leaf falls back.",
+      "leaf-request.failed":
+        "A leaf could not ask its command node for a container manifest or an environment card; it falls back.",
+      "leaf-request.answer-failed":
+        "The command node could not answer a leaf's container or environment-card request; the leaf falls back.",
+      "container.artifact-transfer-failed":
+        "An artifact of a leaf's container manifest did not reach the leaf; that component is recorded as not staged.",
+      "container.staged-from-cache":
+        "A leaf's command node was unreachable at container creation; its last manifest for that container was staged.",
+      "container.unstaged":
+        "A leaf's command node was unreachable at container creation and nothing was cached; no capabilities were staged.",
+      "environment-card.container-read-failed":
+        "The command node could not read a container's staged record from its machine; the card says so.",
     },
   },
 });

@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1063,
-    "defined": 1063,
+    "commands": 1065,
+    "defined": 1065,
     "untyped": 0,
-    "events": 47
+    "events": 48
   },
   "untypedByDomain": {},
   "domains": {
@@ -312,6 +312,15 @@
       "resultDigest": "sha256:ae0d30c46a376c0fba94960e2b8c66e97add0bc7c0ba90c1ba4376e292863992"
     },
     "answer_capability_node_launch": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:510eb7a99ceb20f0ae9a6eeac9e521864aecda302350f8b96ed65043c287981c",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
+    },
+    "answer_capability_node_request": {
       "domain": "capabilities",
       "since": 1,
       "access": "internal",
@@ -3045,6 +3054,15 @@
       "critical": [],
       "argsDigest": "sha256:280e6acdf0384cbe23a1f0c876d75baef40d854b47c4c676dbcb14093384b9d1",
       "resultDigest": "sha256:c157da2da4414f64e6d262692b4bab67e1dd1365ec316807bb42a88a3e2ca4b2"
+    },
+    "get_capability_node_container_delivery": {
+      "domain": "capabilities",
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:de40500c73c70228e600989e791c2ff94f635688c4e8fc52ab58e979e863a296",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
     },
     "get_capability_node_environment_observation": {
       "domain": "capabilities",
@@ -9852,6 +9870,10 @@
     "node-capability-launch-requested": {
       "domain": "capabilities",
       "payloadDigest": "sha256:19d372587c7fad0836c20acb8df9ef68b01289bfe8e394b91f9504a32af171c0"
+    },
+    "node-capability-leaf-requested": {
+      "domain": "capabilities",
+      "payloadDigest": "sha256:cb499d4603380bdcfbe33ab7949bd66062c4ae6460042ce18c3703267f0ed18d"
     },
     "node-outbox-ready": {
       "domain": "node-mail",

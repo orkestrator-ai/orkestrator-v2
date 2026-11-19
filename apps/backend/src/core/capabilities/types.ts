@@ -248,6 +248,20 @@ export interface LeafLaunchAuthorityCache {
   answers: Record<string, LeafLaunchAnswerRecord>;
   /** The command node said required capabilities apply on this machine. */
   requiredOnNode?: { value: boolean; at: string; controllerId: string };
+  /**
+   * The command node's last container manifest per container target
+   * (`environment-authority.ts`), staged again when it is unreachable.
+   */
+  containers?: Record<string, LeafContainerPlanRecord>;
+}
+
+export interface LeafContainerPlanRecord {
+  key: string;
+  environmentId: string;
+  controllerId: string;
+  epoch: number;
+  receivedAt: string;
+  plan: import("./container-staging.js").ContainerCapabilityPlan;
 }
 
 export interface LeafLaunchAnswerRecord {

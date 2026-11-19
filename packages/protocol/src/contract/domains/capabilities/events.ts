@@ -39,7 +39,29 @@ export const capabilityLaunchRequestedEvent = defineEvent({
   }),
 });
 
+/**
+ * A leaf asks its command node for what only the command node knows
+ * (`environment-authority.ts`), on the same stream as launches: `kind`
+ * `container-staging` (the manifest for a container it is creating: the
+ * environment and project ids, the staged providers and stage names) or
+ * `environment-delivery` (an environment card: the environment's ids and
+ * type, and its container's staged record). Opaque ids and digests only.
+ * The command node answers with `answer_capability_node_request`.
+ */
+export const CAPABILITY_LEAF_REQUESTED_EVENT = "node-capability-leaf-requested";
+
+export const capabilityLeafRequestedEvent = defineEvent({
+  domain: capabilitiesDomain,
+  name: CAPABILITY_LEAF_REQUESTED_EVENT,
+  payload: Schema.Struct({
+    requestId: Schema.String,
+    kind: Schema.String,
+    request: Schema.Unknown,
+  }),
+});
+
 export const CAPABILITIES_EVENTS = [
   capabilityManagementChangedEvent,
   capabilityLaunchRequestedEvent,
+  capabilityLeafRequestedEvent,
 ] as const;

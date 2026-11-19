@@ -444,7 +444,13 @@ test("the session chip changes toolkits without a restart and announces its test
   await expect(list).toContainText("MCP servers load when a session starts.");
 
   await chip.getByRole("button", { name: "Test" }).click();
-  await expect(chip.getByRole("status")).toHaveText("2 of 2 checks found the files in place.");
+  await expect(chip.getByTestId("capability-chip-announcement")).toHaveAttribute(
+    "aria-live",
+    "polite",
+  );
+  await expect(chip.getByTestId("capability-chip-announcement")).toHaveText(
+    "2 of 2 checks found the files in place.",
+  );
   expect(await horizontalOverflow(page)).toEqual([]);
 });
 

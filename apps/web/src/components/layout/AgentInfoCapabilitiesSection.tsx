@@ -255,8 +255,15 @@ export function AgentInfoCapabilitiesSection({
           ))}
         </ul>
       ) : null}
-      {/* Always mounted, so a screen reader announces the result when it arrives. */}
-      <p className="text-muted-foreground empty:hidden" role="status">
+      {/* Always mounted, so a screen reader announces the result when it arrives.
+          A plain polite live region rather than role="status": the usage panel
+          in the same popover owns that role. */}
+      <p
+        className="text-muted-foreground empty:hidden"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="capability-chip-announcement"
+      >
         {testResult ?? (copied ? "Diagnostics copied." : "")}
       </p>
       {error ? (

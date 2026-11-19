@@ -1,0 +1,108 @@
+/**
+ * What `CapabilityService` (service.ts) hands its collaborators
+ * (docs/architecture/agent-capabilities-management.md): the service's
+ * dependencies, the parts it builds once (artifact cache, executor,
+ * reconciler, environment delivery, drift, registries, leaf launches) and the
+ * few service-level helpers every command uses. Each collaborator
+ * (`library-reads.ts`, `change-commands.ts`, `setup-commands.ts`, ...) takes
+ * this context; none extends another.
+ */
+import type { EffectiveAgentResources } from "@orkestrator/protocol/capability-resources";
+import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
+
+import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilityArtifactStore } from "./artifact-store.js";
+import type { CapabilityDriftWorkflow } from "./drift.js";
+import type { CapabilityExecutor, McpInstaller } from "./executor.js";
+import type { InventorySources } from "./inventory.js";
+import type { LeafLaunchAuthority } from "./launch-authority.js";
+import type { ManifestSigningKeys } from "./manifest-signing.js";
+import type { CapabilityHomes } from "./native-ownership.js";
+import type { CapabilityLink } from "./node-transport.js";
+import type { CapabilityReconciler } from "./reconciler.js";
+import type { RegistryFetch } from "./registry.js";
+import type { CapabilityRegistryCommands } from "./registry-settings.js";
+import type { CapabilityResolveInput } from "./resolution.js";
+import type {
+  ScopedCapabilityDelivery,
+  ScopedEnvironment,
+  ScopedTargetSources,
+} from "./scoped-delivery.js";
+import type { RemoteScopedDelivery } from "./scoped-remote.js";
+import type { GitFetchOptions } from "./source-inspection.js";
+import type { CapabilityState } from "./types.js";
+import type { MachineFact } from "./views.js";
+
+export interface CapabilityServiceDeps {
+  storage: {
+    capabilities: CapabilitiesStorage;
+    getProject?(projectId: string): Promise<{ localPath: string | null } | null>;
+  };
+  dataDir: string;
+  selfId(): Promise<string>;
+  selfName(): Promise<string>;
+  /** Other machines this node controls. */
+  machines(): Promise<Array<{ nodeId: string; name: string; connected: boolean }>>;
+  link(nodeId: string): CapabilityLink | null;
+  /** False on a leaf: its command node holds the authority. */
+  isAuthority(): boolean;
+  /** Leaf: emits `node-capability-launch-requested` for the command node to answer. */
+  requestLaunch?(payload: { requestId: string; request: unknown }): void;
+  /** Leaf: an attached command node was in contact recently enough to answer a launch. */
+  controllerReachable?(): Promise<boolean>;
+  emit(event: {
+    revision: number;
+    packageIds: string[];
+    setupIds: string[];
+    operationIds: string[];
+  }): void;
+  homes(): CapabilityHomes;
+  inventory: Omit<InventorySources, "homes">;
+  mcp?: McpInstaller;
+  claudePlugins?: ExecutorClaudePlugins;
+  gitRun?: GitFetchOptions["run"];
+  /** This installation's graph-sharing keys, for signed manifests (`manifest-signing.ts`). */
+  signing?: ManifestSigningKeys;
+  /** Registry index and tarball fetches (`registry.ts`); the global fetch when absent. */
+  registryFetch?: RegistryFetch;
+  /** This machine's worktrees, added accounts and containers (`scoped-delivery.ts`). */
+  scoped?: ScopedTargetSources;
+  /** Another machine's environments, from the federation read model (`scoped-remote.ts`). */
+  remoteEnvironments?(nodeId: string): Promise<ScopedEnvironment[] | null>;
+  now?: () => string;
+}
+
+export type ExecutorClaudePlugins = NonNullable<
+  ConstructorParameters<typeof CapabilityExecutor>[0]["claudePlugins"]
+>;
+
+/** The ids a change touched, for the `capability-management-changed` event. */
+export interface CapabilityChangeNotice {
+  packageIds: string[];
+  setupIds: string[];
+  operationIds: string[];
+}
+
+export interface CapabilityServiceContext {
+  /** The service's dependencies; `isAuthority()` is false once this node handed over. */
+  deps: CapabilityServiceDeps;
+  artifacts: CapabilityArtifactStore;
+  executor: CapabilityExecutor;
+  reconciler: CapabilityReconciler;
+  scoped: ScopedCapabilityDelivery;
+  remoteScoped: RemoteScopedDelivery;
+  drift: CapabilityDriftWorkflow;
+  registries: CapabilityRegistryCommands;
+  leafLaunch: LeafLaunchAuthority;
+  now(): string;
+  /** Emits the change event with the store's current revision. */
+  announce(change: CapabilityChangeNotice): Promise<void>;
+  /** Throws on a leaf (or a node that handed its authority over). */
+  assertAuthority(): void;
+  /** This machine first, then the machines it controls. */
+  machineFacts(): Promise<MachineFact[]>;
+  observeSelf(): Promise<CapabilityInventory>;
+  /** A machine's live inventory: this one directly, another over its node link. */
+  observeNode(nodeId: string): Promise<CapabilityInventory>;
+  resolveFor(state: CapabilityState, input: CapabilityResolveInput): EffectiveAgentResources;
+}

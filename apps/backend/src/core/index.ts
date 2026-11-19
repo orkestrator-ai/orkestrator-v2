@@ -64,7 +64,10 @@ import {
   type NodeServiceOptions,
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
-import { CAPABILITY_LAUNCH_REQUESTED_EVENT } from "@orkestrator/protocol/contract/domains/capabilities";
+import {
+  CAPABILITY_LAUNCH_REQUESTED_EVENT,
+  CAPABILITY_LEAF_REQUESTED_EVENT,
+} from "@orkestrator/protocol/contract/domains/capabilities";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
 import {
@@ -172,7 +175,11 @@ import {
   mcpContainerOptions,
 } from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/index.js";
-import { createCapabilityService } from "./capabilities/index.js";
+import {
+  createCapabilityEnvironmentAuthority,
+  createCapabilityService,
+  type CapabilityNodeAccess,
+} from "./capabilities/index.js";
 import { remoteScopedEnvironments } from "./capabilities/scoped-sources.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
@@ -992,7 +999,7 @@ export class OrkestratorBackend {
     context.usageSync = this.usageSync;
     // Agent Capabilities: the command node's authority over setups and
     // packages, and this machine's executor (docs/architecture/agent-capabilities-management.md).
-    context.capabilities = createCapabilityService(context, {
+    const capabilityNodes = {
       selfId: () => this.nodes.selfIdentity(),
       selfName: async () => (await this.nodes.selfProfile()).displayName,
       machines: async () =>
@@ -1009,9 +1016,17 @@ export class OrkestratorBackend {
           (controller) => Date.now() - Date.parse(controller.lastContactAt) < 3 * NODE_HEARTBEAT_MS,
         ),
       // Which environments live on another machine, for project setups in its worktrees.
-      remoteEnvironments: async (nodeId) =>
+      remoteEnvironments: async (nodeId: string) =>
         remoteScopedEnvironments(await this.nodePortal.summaries([nodeId]), nodeId),
-    });
+    } satisfies CapabilityNodeAccess;
+    context.capabilities = createCapabilityService(context, capabilityNodes);
+    // A leaf's containers are staged from the command node's manifest, and an
+    // environment card on any machine is answered from the command node's receipts.
+    context.capabilityEnvironments = createCapabilityEnvironmentAuthority(
+      context,
+      context.capabilities,
+      capabilityNodes,
+    );
     this.nodeCoordination.onNodeConnected((nodeId) =>
       context.capabilities?.noteNodeConnected(nodeId),
     );
@@ -1021,6 +1036,9 @@ export class OrkestratorBackend {
     this.nodePortal.readModel.onNodeEvent((event, payload, nodeId) => {
       if (event === CAPABILITY_LAUNCH_REQUESTED_EVENT)
         void context.capabilities?.answerLeafLaunch(nodeId, payload);
+      // A leaf creating a container, or showing an environment card, asks here.
+      if (event === CAPABILITY_LEAF_REQUESTED_EVENT)
+        void context.capabilityEnvironments?.answerLeafRequest(nodeId, payload);
     });
     this.nodePortal.readModel.onNodeEvent((event, payload) =>
       this.usageSync.handleNodeEvent(event, payload),

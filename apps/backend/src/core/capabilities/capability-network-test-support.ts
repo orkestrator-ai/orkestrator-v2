@@ -14,13 +14,22 @@ import path from "node:path";
 
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
-import { CAPABILITY_LAUNCH_REQUESTED_EVENT } from "@orkestrator/protocol/contract/domains/capabilities";
+import { UNRESTRICTED_CAPABILITY_CEILING } from "@orkestrator/protocol/capability-resources-resolve";
+import {
+  CAPABILITY_LAUNCH_REQUESTED_EVENT,
+  CAPABILITY_LEAF_REQUESTED_EVENT,
+} from "@orkestrator/protocol/contract/domains/capabilities";
 
 import { StorageService } from "../storage.js";
 import type { TestNode, TestNodeNetwork } from "../nodes/node-network-test-support.js";
 import type { NodeServiceOptions } from "../nodes/node-service.js";
+import { CapabilityEnvironmentAuthority } from "./environment-authority.js";
 import { testCapabilityHomes } from "./native-ownership.js";
-import type { ScopedEnvironment } from "./scoped-delivery.js";
+import type {
+  ContainerDeliveryEvidence,
+  ScopedEnvironment,
+  ScopedTargetSources,
+} from "./scoped-delivery.js";
 import { CapabilityService } from "./service.js";
 
 export interface CapabilityNode {
@@ -28,6 +37,8 @@ export interface CapabilityNode {
   id: string;
   node: TestNode;
   cap: CapabilityService;
+  /** Container staging and environment cards under the command node (`environment-authority.ts`). */
+  environmentsAuthority: CapabilityEnvironmentAuthority;
   storage: StorageService;
   dir: string;
   home: string;
@@ -39,6 +50,10 @@ export interface CapabilityNode {
   failNextStage?: "artifact" | "state";
   /** This machine's own environments (its environment store). */
   environments: ScopedEnvironment[];
+  /** Its containers' staged records (label and inputs revision), by environment. */
+  containers: Map<string, ContainerDeliveryEvidence>;
+  /** Answer `false` to drop this machine's container-record reads for its command node. */
+  answersContainerReads: boolean;
   /** Other machines' environments, as this node's read model reports them. */
   remoteEnvironments: Map<string, ScopedEnvironment[]>;
   /** Scoped plans this machine's executor received for its worktrees, in order. */
@@ -61,6 +76,7 @@ export async function addCapabilityNode(
     forceRegistration?: boolean;
     commandable?: boolean;
     launchAnswerTimeoutMs?: number;
+    leafRequestTimeoutMs?: number;
     extra?: Partial<NodeServiceOptions>;
   } = {},
 ): Promise<CapabilityNode> {
@@ -93,21 +109,30 @@ export async function addCapabilityNode(
     applyCalls: [],
     reachable: true,
     environments: [],
+    containers: new Map(),
+    answersContainerReads: true,
     remoteEnvironments: new Map(),
     environmentApplyCalls: [],
   } as unknown as CapabilityNode;
   const service = node.service;
+  const scoped: ScopedTargetSources = {
+    environments: async () => entry.environments,
+    containerDelivery: async (environmentId) => entry.containers.get(environmentId) ?? null,
+  };
+  const machines = async () =>
+    (await service.listNodes()).nodes.map((view) => ({
+      nodeId: view.nodeId,
+      name: view.displayName || view.fallbackName,
+      connected: view.connection.state === "connected",
+    }));
+  const controllerReachable = async () =>
+    entry.reachable && (await service.status()).controllers.length > 0;
   entry.cap = new CapabilityService({
     storage: { capabilities: storage.capabilities },
     dataDir: path.join(dir, "data"),
     selfId: async () => node.storage.instanceId,
     selfName: async () => name,
-    machines: async () =>
-      (await service.listNodes()).nodes.map((view) => ({
-        nodeId: view.nodeId,
-        name: view.displayName || view.fallbackName,
-        connected: view.connection.state === "connected",
-      })),
+    machines,
     link: (nodeId) => service.link(nodeId as never),
     isAuthority: () => !service.isLeaf(),
     emit: () => undefined,
@@ -116,11 +141,31 @@ export async function addCapabilityNode(
       providers: async () => AGENT_PLATFORMS.map((provider) => ({ provider, available: true })),
     },
     requestLaunch: (payload) => node.emit(CAPABILITY_LAUNCH_REQUESTED_EVENT, payload),
-    controllerReachable: async () =>
-      entry.reachable && (await service.status()).controllers.length > 0,
-    scoped: { environments: async () => entry.environments },
+    controllerReachable,
+    scoped,
     remoteEnvironments: async (nodeId) => entry.remoteEnvironments.get(nodeId) ?? null,
   });
+  // Built from the service's public parts, as `createCapabilityEnvironmentAuthority` does.
+  entry.environmentsAuthority = new CapabilityEnvironmentAuthority({
+    storage: { capabilities: storage.capabilities },
+    artifacts: entry.cap.artifacts,
+    selfId: async () => node.storage.instanceId,
+    isLeaf: () => service.isLeaf(),
+    link: (nodeId) => service.link(nodeId as never),
+    admitEpoch: (controllerId, epoch) => entry.cap.executor.admitEpoch(controllerId, epoch),
+    controllerReachable,
+    request: (payload) => node.emit(CAPABILITY_LEAF_REQUESTED_EVENT, payload),
+    resolve: (state, target) =>
+      entry.cap.resolveFor(state, { target, ceiling: UNRESTRICTED_CAPABILITY_CEILING }),
+    sources: scoped,
+    machines,
+    remoteEnvironments: async (nodeId) => entry.remoteEnvironments.get(nodeId) ?? null,
+    now: () => new Date().toISOString(),
+  });
+  if (options.leafRequestTimeoutMs !== undefined) {
+    entry.environmentsAuthority.containerAnswerTimeoutMs = options.leafRequestTimeoutMs;
+    entry.environmentsAuthority.cardAnswerTimeoutMs = options.leafRequestTimeoutMs;
+  }
   if (options.launchAnswerTimeoutMs !== undefined)
     entry.cap.leafLaunch.answerTimeoutMs = options.launchAnswerTimeoutMs;
   await entry.cap.init();
@@ -128,6 +173,8 @@ export async function addCapabilityNode(
   node.portal.readModel.onNodeEvent((event, payload, nodeId) => {
     if (event === CAPABILITY_LAUNCH_REQUESTED_EVENT)
       void entry.cap.answerLeafLaunch(nodeId, payload);
+    if (event === CAPABILITY_LEAF_REQUESTED_EVENT)
+      void entry.environmentsAuthority.answerLeafRequest(nodeId, payload);
   });
   const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     get_capability_node_observation: (args) => entry.cap.executorObserve(args),
@@ -165,6 +212,11 @@ export async function addCapabilityNode(
       return entry.cap.executorStageHandover(args);
     },
     answer_capability_node_launch: (args) => entry.cap.executorLaunchAnswer(args),
+    answer_capability_node_request: (args) => entry.environmentsAuthority.receiveAnswer(args),
+    get_capability_node_container_delivery: (args) => {
+      if (!entry.answersContainerReads) throw new Error("The connection dropped.");
+      return entry.environmentsAuthority.containerDeliveryForController(args);
+    },
   };
   for (const [command, handler] of Object.entries(handlers)) node.commands.set(command, handler);
   cleanups.push(async () => {

@@ -264,9 +264,14 @@ describe("adopt local changes", () => {
     const store = (inspected: InspectedPackage) =>
       (
         command.service as unknown as {
-          storeInspection(inspected: InspectedPackage): Promise<CapabilitySourceInspection>;
+          inspection: {
+            store(
+              inspected: InspectedPackage,
+              requestKey: string | undefined,
+            ): Promise<CapabilitySourceInspection>;
+          };
         }
-      ).storeInspection(inspected);
+      ).inspection.store(inspected, undefined);
     const upstream = "a".repeat(40);
     const inspection = await store(inspectFiles(source, files(BODY), { revision: upstream }));
     await previewAndApply(command, {

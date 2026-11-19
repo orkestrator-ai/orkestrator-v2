@@ -13,10 +13,12 @@ import { randomBytes } from "node:crypto";
 import {
   adoptExternalCapabilityCommand,
   answerCapabilityNodeLaunchCommand,
+  answerCapabilityNodeRequestCommand,
   applyCapabilityChangeCommand,
   applyCapabilityNodePlanCommand,
   applyCapabilityNodeEnvironmentPlanCommand,
   getCapabilityNodeEnvironmentObservationCommand,
+  getCapabilityNodeContainerDeliveryCommand,
   approveCapabilityUpdateCommand,
   assignCapabilitySetupCommand,
   getCapabilityAssignmentCommand,
@@ -84,6 +86,17 @@ function capabilities(context: CommandContext): CapabilityService {
     });
   }
   return context.capabilities;
+}
+
+function environmentAuthority(
+  context: CommandContext,
+): NonNullable<CommandContext["capabilityEnvironments"]> {
+  if (!context.capabilityEnvironments) {
+    throw Object.assign(new Error("Capability management is not available on this backend."), {
+      code: "unavailable",
+    });
+  }
+  return context.capabilityEnvironments;
 }
 
 /** A user-facing error: the reason the service gave, and its code; anything else is generic. */
@@ -201,8 +214,11 @@ export function registerCapabilityCommands(register: CommandRegistrar): void {
     capabilities(context).importSetup(args, actor(context)),
   );
   r(verifyAgentCapabilityCommand, (args, context) => capabilities(context).verify(args));
+  // The command node answers for every machine's environments; a leaf asks its command node.
   r(getCapabilityEnvironmentDeliveryCommand, (args, context) =>
-    capabilities(context).getEnvironmentDelivery(args),
+    context.capabilityEnvironments
+      ? context.capabilityEnvironments.getEnvironmentDelivery(args)
+      : capabilities(context).getEnvironmentDelivery(args),
   );
   // Package registries and the signed-manifest policy.
   r(listCapabilityRegistriesCommand, (_args, context) => capabilities(context).registries.list());
@@ -244,5 +260,13 @@ export function registerCapabilityCommands(register: CommandRegistrar): void {
   // The command node's answer to this leaf's launch request.
   r(answerCapabilityNodeLaunchCommand, (args, context) =>
     capabilities(context).executorLaunchAnswer(args),
+  );
+  // The command node's answer to this leaf's container or environment-card request,
+  // and this leaf's container records for the command node's environment cards.
+  r(answerCapabilityNodeRequestCommand, (args, context) =>
+    environmentAuthority(context).receiveAnswer(args),
+  );
+  r(getCapabilityNodeContainerDeliveryCommand, (args, context) =>
+    environmentAuthority(context).containerDeliveryForController(args),
   );
 }

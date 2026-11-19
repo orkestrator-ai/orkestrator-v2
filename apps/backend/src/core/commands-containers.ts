@@ -558,7 +558,8 @@ export async function createDockerContainer(
   // Agent Capabilities: the container's effective manifest is staged with its
   // inputs and its digest labelled on the container; nothing is ever written
   // into a running container (`capabilities/container-staging.ts`).
-  const capabilityStaging = await context.capabilities
+  // On a leaf the manifest is the command node's, staged here from verified artifacts.
+  const capabilityStaging = await (context.capabilityEnvironments ?? context.capabilities)
     ?.prepareContainerStaging({
       environmentId: environment.id,
       projectId: environment.projectId,

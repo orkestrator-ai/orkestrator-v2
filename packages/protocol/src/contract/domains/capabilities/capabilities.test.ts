@@ -80,6 +80,7 @@ describe("capabilities domain", () => {
       "capability-management-changed",
       // `node-` so a command node's event stream from its leaf carries it.
       "node-capability-launch-requested",
+      "node-capability-leaf-requested",
     ]);
   });
 });

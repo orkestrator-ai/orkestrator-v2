@@ -49,6 +49,7 @@ import {
   type ContainerCapabilityRecord,
 } from "./container-staging.js";
 import {
+  containerUnstagedReason,
   revisionComponent,
   scopedRequiredDelivery,
   type ScopedEvidence,
@@ -768,6 +769,12 @@ export class LeafLaunchAuthority {
     }
     const requiredKnown =
       state.leafAuthority?.requiredOnNode?.value === true || (cached?.required.length ?? 0) > 0;
+    // A container this machine created while the command node was away holds nothing.
+    const container = report?.container;
+    const unstaged =
+      container?.record?.unstaged !== undefined &&
+      container.labelDigest === container.record.digest &&
+      container.containerId === request.target.environmentIncarnation;
     const effective: EffectiveAgentResources = {
       target: request.target,
       setupRevisions: [],
@@ -777,7 +784,14 @@ export class LeafLaunchAuthority {
       unsupported: [],
       blocked: [],
       launchBlockers: requiredKnown
-        ? [{ componentId: "command-node", reason: COMMAND_NODE_UNREACHABLE_REASON }]
+        ? [
+            {
+              componentId: "command-node",
+              reason: unstaged
+                ? containerUnstagedReason("this session's required capabilities")
+                : COMMAND_NODE_UNREACHABLE_REASON,
+            },
+          ]
         : [],
       warnings: [
         "The command node is unreachable; capabilities on this machine are as last applied and are not confirmed for this session.",

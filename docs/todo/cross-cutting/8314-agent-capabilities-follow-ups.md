@@ -389,7 +389,20 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 - **Transport.** Two `internal` commands instead of widening `apply_capability_node_plan`: an older leaf answers `unknown-command` and nothing is written, and the machine-wide plan keeps its strict location table. Keys must start with `<that node>|env:<environment>|` and locations must be project locations; the worktree path never travels.
 - **One pass, two places.** `runScopedPass` takes an IO (observe, apply): local for this machine, remote for another. The remote IO marks receipts `outcomeUnknown` before writing; the next pass settles them from the observation (planned digest → confirmed; previous digest → restored; anything else → planned afresh, with the executor's ownership rules deciding).
 - **Triggers.** After each machine's reconcile pass (`afterNodePass`), and after every applied change (`reconcileScoped`), since a project toolkit's change has no machine-wide target. A recheck is scheduled after an unknown outcome.
-- **Not done.** The environment card of a remote worktree is answered by that machine, whose store holds no receipts.
+- **Environment cards (done).** The window already asks its command scope; the command node answered "none" for any environment not in its own store. It now finds the environment in its read model and answers from its receipts and plan for that machine (`environment-authority.ts`); a container's staged record is read from the machine that owns it (`get_capability_node_container_delivery`).
+  - **Option: the window asks the environment's own node, which proxies to its command node.** Pros: the container's record is local to the answer. Cons: every card needs a leaf→command round trip on the event channel and a leaf with no command node in contact shows nothing.
+  - **Option: the command node answers for every machine (chosen), and a leaf's own window proxies.** Pros: one read for the usual window (on the command node); receipts and setups never leave the command node; a leaf's own window still gets the command node's view, or its own record with a notice. Cons: one extra link call for a container's record; a just-created environment is unknown until the read model refreshes.
+
+### Container staging on a leaf
+
+- **Problem.** A leaf staged a new container from its own store, which holds no setups: nothing was staged and required components always blocked.
+- **Options.**
+  - **The leaf asks on its event stream (`node-capability-leaf-requested`, kind `container-staging`); the command node stages the plan's artifacts on the leaf, then answers (`answer_capability_node_request`) (chosen).**
+    - Pros: the launch channel's direction (command node to leaf) and epoch admission; artifacts arrive through the existing verified chunked transfer before the leaf copies anything; the plan is computed where the setups are, and its digest is computed the same way on both sides, so the card's comparison holds.
+    - Cons: container creation waits up to 20 seconds when the command node is slow; a first large transfer can exceed it (the late answer is cached).
+  - **The command node pushes every container plan to its leaves after each change.** Pros: no wait at creation. Cons: the command node does not know which containers a leaf is about to create (providers and stages depend on the image and the enabled platforms), so it would push plans for every combination; still stale whenever the push was missed.
+  - **Reuse `node-capability-launch-requested` / `answer_capability_node_launch` with a `kind`.** Pros: no new contract. Cons: an older command node would read a container request as a malformed launch; the names would lie.
+- **When the command node is away.** The last plan cached for that container target (environment, project, providers, stages) is staged if every artifact it names is still in the leaf's cache; otherwise nothing, with a record (`unstaged: command-node-unreachable`) that the card shows as "Capabilities not staged: command node unreachable" and that blocks required components with that reason until a rebuild. No age limit on the cached plan: the launch check on the command node still refuses an older revision than the one required.
 
 ### Task 7: project MCP servers
 

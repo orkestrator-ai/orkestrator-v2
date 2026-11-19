@@ -300,6 +300,18 @@ export interface CapabilityEnvironmentDelivery {
   /** Container: the installed manifest differs from the current one; a rebuild re-stages it. */
   stale: boolean;
   stagedAt?: string;
+  /**
+   * Container: why nothing was staged into it ("Capabilities not staged:
+   * command node unreachable" when its machine, a leaf, could not reach the
+   * command node at creation and had no cached manifest for it).
+   */
+  notStagedReason?: string;
+  /** Container: staged from the command node's last answer for it, received at this time. */
+  stagedFromCacheAt?: string;
+  /** The machine the environment is on, when it is not the one that answered. */
+  nodeId?: string;
+  /** Why what is shown may not be current (the command node could not be asked). */
+  notice?: string;
   items: CapabilityEnvironmentDeliveryItem[];
 }
 

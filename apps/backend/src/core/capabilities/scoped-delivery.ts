@@ -974,6 +974,14 @@ export type ScopedRequirement =
   /** The machine-wide copy is what this target loads: check the host receipts. */
   | { kind: "host" };
 
+/** The environment card's words for a container nothing was staged into (`container-staging.ts`). */
+export const CONTAINER_UNSTAGED_SUMMARY = "Capabilities not staged: command node unreachable";
+
+/** Why a required component cannot be verified in such a container. */
+export function containerUnstagedReason(componentName: string): string {
+  return `${CONTAINER_UNSTAGED_SUMMARY} when this container was created, so ${componentName} is not in it; rebuild the container once the command node is reachable.`;
+}
+
 /** A container's staged copy, as a launch delivery's location id. */
 export function containerDeliveryLocation(locationId: string): string {
   return `container:${locationId}`;
@@ -1007,6 +1015,9 @@ export function scopedRequiredDelivery(input: {
         kind: "refused",
         reason: `The staged capability manifest does not belong to this container; rebuild it to stage ${component.name}.`,
       };
+    }
+    if (container.record.unstaged) {
+      return { kind: "refused", reason: containerUnstagedReason(component.name) };
     }
     const item = container.record.items.find(
       (entry) =>

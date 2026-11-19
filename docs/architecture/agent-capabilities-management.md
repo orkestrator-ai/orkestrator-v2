@@ -53,7 +53,19 @@ Backend code is in `apps/backend/src/core/capabilities/`:
 
 | Module | Responsibility |
 | --- | --- |
-| `service.ts` | Every command: library, setups, inspection, preview/apply, updates, import/export, verification, launch preflight, executor handlers. |
+| `service.ts` | `CapabilityService`: builds the parts below, owns the authority (handover, leaf launches) and environment-copy views, and delegates each command to its collaborator. |
+| `service-context.ts` | The service's dependencies and the context object its collaborators share. |
+| `service-args.ts` | Bounded parsing of command arguments (targets, ceilings, selections, lists). |
+| `library-reads.ts` | Reads: the library, package files, setups, inventories, provider support, effective resources, the session chip, machines, local changes, activity, operations and updates. |
+| `resolution.ts` | One target's effective resources: the setup layers from assignments, required-delivery checks for a launch. |
+| `inspection-commands.ts` | Inspecting a Git, registry or marketplace source and authoring a package; stores the inspection for a later preview. |
+| `change-commands.ts` | Previewing, applying and cancelling a change (plan digests, approval, delivery start). |
+| `setup-commands.ts` | Setups, assignments, exceptions, machine enrollment and package pin/pause state. |
+| `update-commands.ts` | Update checks (trusted auto-apply included), taking or dismissing an update, update policy, rollback. |
+| `import-commands.ts` | Exporting setups and previewing and completing an import against the store and the package sources. |
+| `preflight.ts` | Non-destructive verification and native-session launch preflight. |
+| `executor-handlers.ts` | This machine's executor commands for its command node (observe, stage, apply, environment plans, item export). |
+| `environment-authority.ts` | A leaf's container staging from the command node's plan (cached, or nothing, when it is away) and the environment card for any machine's environment, answered from the command node's receipts. |
 | `index.ts` | Builds the service from the backend context; the MCP installer over `McpManagementService`; inventory sources. |
 | `source-inspection.ts` | Reads a tree without running anything from it; detects components, risk, requirements and secrets; fetches Git sources safely. |
 | `security.ts` | Bounded tree reads, link and special-file refusal, confined paths, atomic writes, tree digests. |
@@ -135,6 +147,49 @@ machine's applied installations and required copies are unchanged; otherwise
 a required component blocks the launch ("command node unreachable") and
 optional ones are a warning. Whether anything is required comes from the last
 answer; a leaf that never had one does not block.
+
+**Leaf containers and environment cards** (`environment-authority.ts`, held
+as `context.capabilityEnvironments`). The same channel serves two more
+questions only the command node can answer. The leaf emits
+`node-capability-leaf-requested` with a `kind`, and the command node answers
+with `answer_capability_node_request` (`internal`, at the leaf's current
+epoch and controller):
+
+- `container-staging`, when the leaf creates or rebuilds a container
+  (`commands-containers.ts` asks `prepareContainerStaging`): the container's
+  environment and project ids, providers and stage names. The command node
+  plans the container target for that machine (`containerCapabilityPlan`),
+  sends every artifact the plan names over `stage_capability_node_artifact`,
+  and then answers with the plan (location ids, component ids, revisions;
+  never a directory). The leaf rebuilds the plan from its own location table,
+  recomputes its digest (`containerPlanDigest`, the same function the command
+  node uses, so the label equals the command node's current digest), caches
+  it per container target (environment, project, providers, stages; newest
+  100) and stages it from its own verified artifacts. It waits up to 20
+  seconds. Without an answer it stages the cached plan for that target when
+  every artifact it names is still in its cache (the record's `source` says
+  `cached`), and otherwise stages nothing, with a record whose `unstaged`
+  says `command-node-unreachable`: the card shows "Capabilities not staged:
+  command node unreachable", and a required component blocks with that
+  reason, both on the command node's answer and in the leaf's own fail-closed
+  fallback, until the container is rebuilt. A late answer is still cached for
+  the next rebuild. Nothing is written into a running container.
+- `environment-delivery`, when the leaf's own window opens one of its
+  environment cards: the environment's ids and type and its container's
+  staged record. The command node answers from its receipts and plan; with no
+  answer in five seconds the leaf shows only its own record, with a notice
+  that it may not be current.
+
+`get_capability_environment_delivery` is answered by the window's command
+scope. The command node answers for its own environments and, from the
+federation read model, for those on any machine it controls: a worktree from
+its receipts for that machine (`<node>|env:<environment>|…`) and its desired
+project state; a container from its plan for that machine and the staged
+record that machine reads from its own inputs revision and label
+(`get_capability_node_container_delivery`, `internal`). A machine that does
+not answer leaves the card with what the current setup would stage and a
+notice. The card names the machine (`nodeId`) when it is not the one that
+answered.
 
 **Launch deliveries.** On every launch, a required component is checked
 where the target reads it (`verifyLaunchDeliveries`): a container only
@@ -543,7 +598,10 @@ Catalogue names are insufficient to identify the installed revision.
   staged or why not) lands in the revision's `manifest.json`, its digest on the
   container's label. The environment card shows "installed revision X ·
   current Y" from `get_capability_environment_delivery`; when they differ it
-  offers the existing rebuild, which re-stages.
+  offers the existing rebuild, which re-stages. On a leaf the plan is the
+  command node's, with its artifacts transferred first; with the command node
+  away, the leaf stages its last plan for that container or nothing ("Leaf
+  containers and environment cards" above).
 - **Session chip**: the agent information panel shows the owning machine's
   receipts, Change (session toolkits), See details, Test (read-only, with
   consent) and Copy diagnostics (ids and digests only).
@@ -721,11 +779,14 @@ container takes a changed setup on its next rebuild, which the environment
 card offers) and adopting a worktree copy's local changes as a new revision
 (keep and replace work) are not implemented; see
 [8314](../todo/cross-cutting/8314-agent-capabilities-follow-ups.md).
-A worktree on another machine is delivered and verified at launch, but its
-environment card is answered by that machine, whose store holds no receipts,
-so the card shows no copies there (the package's "Where available" on the
-command node does); a leaf stages its containers from its own store, which
-holds no setups. Project MCP servers are proven through the real MCP
+A leaf's container staging and the cards of another machine's worktrees and
+containers are proven over the real node link on the in-memory network
+(`environment-authority.test.ts`), not between two real backends. The
+command node finds another machine's environment through its read model, so
+a card for an environment created moments ago can read as empty until the
+summaries refresh. A leaf waits at most 20 seconds for a container's
+manifest: a large first transfer that takes longer falls back to the cached
+plan or to nothing, and the late answer is cached for the next rebuild. Project MCP servers are proven through the real MCP
 management service's read-back (`project-mcp.test.ts`), not by a provider
 loading them; OpenCode is written only when its project configuration is
 `opencode.json`. A personal copy at another revision with the same name

@@ -12,6 +12,8 @@ export const ENVIRONMENT_LOG_AREAS = defineLogAreas({
         "No host port block could be reserved for a local environment; its processes start without the port variables. Environment id and error only.",
       "project-seed.refused":
         "A project file the Environment Files setting matched was not copied into a new local worktree: a link, not a regular file, outside the project, too large, behind a link in the worktree, or over the match bounds. Path and reason only, never contents.",
+      "worktree.created":
+        "A local environment's worktree was created. `startPoint` says whether its start commit was pinned before the start (no fetch), fetched from the remote or read from a local-only branch; `resolveMs` is the time spent finding it and `durationMs` the whole creation. Environment id and timings only, never paths, branches or commits.",
       "rename.failed": "Naming an environment from its pending prompt failed for the first time.",
       "rename.still-failing":
         "That rename is still failing; written at the 2nd, 4th, 8th... failure.",

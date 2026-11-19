@@ -1620,12 +1620,15 @@ describe("project coordinator", () => {
         await runCommand("git", ["rev-parse", "HEAD"], { cwd: publisher })
       ).stdout.trim();
 
-      expect(await git.baseBranchTip(project.id, "main")).toEqual({
+      const tip = await git.baseBranchTip(project.id, "main");
+      expect(tip).toEqual({
         branch: "main",
         commit: remoteHead,
         ref: "origin/main",
         fetched: true,
+        fetchedAt: expect.any(String),
       });
+      expect(Number.isNaN(Date.parse(tip.fetchedAt ?? ""))).toBe(false);
       // Only refs moved: the checkout is still on its own branch and commit.
       expect(await checkoutHead()).toBe(featureHead);
 
@@ -1657,6 +1660,8 @@ describe("project coordinator", () => {
       const offline = await new ProjectGitService(storage).baseBranchTip(project.id, "main");
       expect(offline).toMatchObject({ commit: remoteHead, ref: "origin/main", fetched: false });
       expect(offline.fetchError).toBeTruthy();
+      // That service never fetched successfully, so it cannot say when the ref was.
+      expect(offline.fetchedAt).toBeUndefined();
 
       // A local-only branch falls back to the local ref.
       await runCommand("git", ["remote", "remove", "origin"], { cwd: checkout });
@@ -1716,6 +1721,46 @@ describe("project coordinator", () => {
       now.mockReturnValue(Date.now() + 60_001);
       await git.baseBranchTip(project.id, "main");
       expect(fetch).toHaveBeenCalledTimes(3);
+    } finally {
+      fetch.mockRestore();
+      now.mockRestore();
+    }
+  });
+
+  test("a failed base refresh keeps the time of the last successful one", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    await runCommand("git", ["remote", "add", "origin", path.join(root, "gone.git")], {
+      cwd: checkout,
+    });
+    // The remote-tracking ref a real fetch would have written.
+    await runCommand("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: checkout });
+    const git = new ProjectGitService(storage);
+    const fetch = spyOn(remoteGit, "runRemoteGit")
+      .mockImplementationOnce(async () => ({ stdout: "", stderr: "" }))
+      .mockImplementationOnce(async () => {
+        throw new Error("remote unavailable");
+      });
+    const now = spyOn(Date, "now");
+    try {
+      const fresh = await git.baseBranchTip(project.id, "main");
+      expect(fresh).toMatchObject({ ref: "origin/main", fetched: true });
+      expect(fresh.fetchedAt).toEqual(expect.any(String));
+      expect(fresh.fetchError).toBeUndefined();
+
+      // Inside the cooldown no fetch runs, but the earlier one still counts.
+      const cooled = await git.baseBranchTip(project.id, "main");
+      expect(cooled).toMatchObject({ fetched: false, fetchedAt: fresh.fetchedAt });
+      expect(fetch).toHaveBeenCalledTimes(1);
+
+      now.mockReturnValue(Date.now() + 60_001);
+      const stale = await git.baseBranchTip(project.id, "main");
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(stale).toMatchObject({
+        ref: "origin/main",
+        fetched: false,
+        fetchError: "remote unavailable",
+        fetchedAt: fresh.fetchedAt,
+      });
     } finally {
       fetch.mockRestore();
       now.mockRestore();

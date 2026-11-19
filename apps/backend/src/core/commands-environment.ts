@@ -1739,6 +1739,7 @@ export async function startEnvironmentOnce(
         },
       );
       const seedRoot = seedFilesDir(storage.getDataDir(), environment.id);
+      const worktreeStartedAt = performance.now();
       const worktree = await createLocalWorktree(
         project.localPath,
         project.name,
@@ -1751,6 +1752,14 @@ export async function startEnvironmentOnce(
         project.gitUrl === project.localPath,
         (await storage.loadConfig()).global.envFilePatterns,
       );
+      // Time to a usable worktree, the measure the pinned launch base shortens.
+      // Content-free: no path, branch or commit.
+      log.info("worktree.created", {
+        environmentId: environment.id,
+        startPoint: worktree.startPointSource,
+        resolveMs: worktree.startPointResolveMs,
+        durationMs: Math.round(performance.now() - worktreeStartedAt),
+      });
       rememberWorktreeSeedRefusals(environment.id, worktree.envFileRefusals);
       // Seed files are copied once; the staging copy is not kept.
       await fs.rm(seedRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -2355,6 +2364,9 @@ export async function runEnvironmentSetupNow(
   return task;
 }
 
+/** Where a new local worktree's start point came from (`createLocalWorktree`). */
+export type WorktreeStartPointSource = "pinned-commit" | "remote-fetch" | "local-branch";
+
 export async function createLocalWorktree(
   projectPath: string,
   projectName: string,
@@ -2374,6 +2386,13 @@ export async function createLocalWorktree(
   createdFromCommit: string;
   /** Matches refused under the seed-file rules, for the setup terminal. */
   envFileRefusals: ProjectSeedRefusal[];
+  /**
+   * How the start point was found: a commit pinned before the start (no
+   * network on this path), or a fetch of the base branch from the remote.
+   */
+  startPointSource: WorktreeStartPointSource;
+  /** Milliseconds spent resolving the start point, the fetch included. */
+  startPointResolveMs: number;
 }> {
   const baseDir = worktreeBaseDir ?? getWorktreeBaseDir();
   assertWorktreePathUnlinked(baseDir);
@@ -2381,10 +2400,21 @@ export async function createLocalWorktree(
   await fs.mkdir(baseDir, { recursive: true });
   const baseSlug = sanitizeBranchName(branch);
   const requestedBase = baseBranch?.trim() || "main";
-  const startPoint =
-    /^[0-9a-f]{40}$/i.test(requestedBase) && (await gitRefExists(projectPath, requestedBase))
-      ? requestedBase
-      : await resolveRemoteWorktreeStartPoint(projectPath, requestedBase, { localOnly });
+  const resolveStartedAt = performance.now();
+  // A pinned commit (chosen while the creation dialog was open, or by a
+  // coordinator) is already in this repository, so the start needs no fetch:
+  // the remote round trip, and its long deadline, stay off the blocking path.
+  const pinned =
+    /^[0-9a-f]{40}$/i.test(requestedBase) && (await gitRefExists(projectPath, requestedBase));
+  const startPoint = pinned
+    ? requestedBase
+    : await resolveRemoteWorktreeStartPoint(projectPath, requestedBase, { localOnly });
+  const startPointResolveMs = Math.round(performance.now() - resolveStartedAt);
+  const startPointSource: WorktreeStartPointSource = pinned
+    ? "pinned-commit"
+    : startPoint.startsWith("refs/heads/")
+      ? "local-branch"
+      : "remote-fetch";
   const gitBranchExists = await createGitBranchCollisionChecker({
     baseBranch: baseSlug,
     projectPath,
@@ -2473,7 +2503,14 @@ export async function createLocalWorktree(
       seedRoot,
     );
 
-    return { path: worktreePath, branch: finalBranch, createdFromCommit, envFileRefusals };
+    return {
+      path: worktreePath,
+      branch: finalBranch,
+      createdFromCommit,
+      envFileRefusals,
+      startPointSource,
+      startPointResolveMs,
+    };
   } catch (error) {
     await cleanupFailedLocalWorktree(projectPath, worktreePath, finalBranch);
     throw error;

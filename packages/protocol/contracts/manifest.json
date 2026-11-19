@@ -4180,7 +4180,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:8ffbad9fa87c1c16a1824e521b7509a4e532143abcde783dfe83b4cfc47fb885",
-      "resultDigest": "sha256:4c6077557e7d9d1968f6f7458d081abee1d282697ed174aa2558062bcb728862"
+      "resultDigest": "sha256:215dae7a3750ea50fbcdb45e63b02db569a322551fd53df728892fcd7b771c95"
     },
     "get_project_clone": {
       "domain": "projects",

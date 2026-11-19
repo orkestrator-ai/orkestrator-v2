@@ -101,6 +101,12 @@ export type ProjectBaseBranchTip = {
   ref: string | null;
   /** True only when `ref` was refreshed from the remote by this read. */
   fetched: boolean;
+  /**
+   * When this service last refreshed `origin/<branch>` successfully, by this
+   * read or an earlier one inside the cooldown. Absent when it never has since
+   * the backend started, so a caller can label the commit "last fetched".
+   */
+  fetchedAt?: string;
   fetchError?: string;
   unavailableReason?: string;
 };
@@ -149,7 +155,10 @@ export class ProjectGitService {
   >();
   private readonly fetching = new Set<string>();
   private readonly baseFetches = new Map<string, Promise<{ fetchError?: string }>>();
-  private readonly baseFetchAttempts = new Map<string, { at: number; fetchError?: string }>();
+  private readonly baseFetchAttempts = new Map<
+    string,
+    { at: number; fetchError?: string; fetchedAt?: string }
+  >();
   private readonly confirmations = new Map<
     string,
     {
@@ -842,10 +851,16 @@ export class ProjectGitService {
         }
         // Bound completed-attempt metadata; in-flight requests stay deduplicated
         // until settlement. Failed attempts also cool down unreachable remotes.
+        // A failed attempt keeps the time of the last success, which is how old
+        // the remote-tracking ref it answers from is.
+        const lastFetchedAt = fetched
+          ? new Date().toISOString()
+          : this.baseFetchAttempts.get(key)?.fetchedAt;
         this.baseFetchAttempts.delete(key);
         this.baseFetchAttempts.set(key, {
           at: Date.now(),
           ...(error ? { fetchError: error } : {}),
+          ...(lastFetchedAt ? { fetchedAt: lastFetchedAt } : {}),
         });
         if (this.baseFetchAttempts.size > 128) {
           const oldest = this.baseFetchAttempts.keys().next().value;
@@ -858,6 +873,7 @@ export class ProjectGitService {
       this.baseFetches.set(key, operation);
       ({ fetchError } = await operation);
     }
+    const fetchedAt = this.baseFetchAttempts.get(key)?.fetchedAt;
     return this.serialize(root, async () => {
       const remoteCommit = await readCommit(root, `refs/remotes/origin/${branch}`);
       if (remoteCommit) {
@@ -866,6 +882,7 @@ export class ProjectGitService {
           commit: remoteCommit,
           ref: `origin/${branch}`,
           fetched,
+          ...(fetchedAt ? { fetchedAt } : {}),
           ...(fetchError ? { fetchError } : {}),
         };
       }

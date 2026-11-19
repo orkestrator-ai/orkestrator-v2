@@ -1,5 +1,6 @@
 import { environmentRequests, hydrationRequests } from "@/lib/hydration-request-limiter";
 import { hydrationActivity } from "@/lib/hydration-activity";
+import type { EnvironmentLaunchBase } from "@/lib/launch-base";
 import { systemApi } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
@@ -267,6 +268,12 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     buildPipelineId?: string,
     /** Parent folder for a local environment's worktree; omitted uses the default. */
     worktreeBaseDir?: string,
+    /**
+     * The exact commit a local worktree starts from, resolved while the create
+     * dialog was open. The start then creates the worktree from it without
+     * fetching first (`lib/launch-base.ts`).
+     */
+    launchBase?: EnvironmentLaunchBase,
   ): Promise<Environment> {
     return environments().createEnvironment({
       projectId,
@@ -278,6 +285,12 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
       namingPrompt,
       ...(buildPipelineId ? { buildPipelineId } : {}),
       ...(worktreeBaseDir ? { worktreeBaseDir } : {}),
+      ...(launchBase
+        ? {
+            delegationBaseBranch: launchBase.branch,
+            delegationBaseCommit: launchBase.commit,
+          }
+        : {}),
     });
   }
 

@@ -20,6 +20,7 @@ import {
   type CoordinatorActionMarks,
 } from "@orkestrator/protocol/coordinator-action-marks";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
+import type { ProjectBaseBranchTip } from "@/lib/launch-base";
 import { coordinatorApi as coordinatorDomainApi } from "@/lib/node-scope/domains/coordinator";
 import { commandBackendClient, type BackendClient } from "./client";
 
@@ -131,6 +132,14 @@ export function createCoordinatorApi(client: BackendClient) {
   const fetchProjectGit = (projectId: string, force = false): Promise<ProjectGitStatus> =>
     domain().fetch_project_git({ projectId, force });
 
+  /**
+   * Refreshes the project's base branch from its remote and reads its tip: the
+   * exact commit a new environment would start from. A failed fetch still
+   * answers from the last-fetched ref, with `fetchError` set.
+   */
+  const getProjectBaseBranchTip = (projectId: string): Promise<ProjectBaseBranchTip> =>
+    domain().get_project_base_branch_tip({ projectId });
+
   const syncProjectGit = (projectId: string): Promise<ProjectGitStatus> =>
     domain().sync_project_git({ projectId });
 
@@ -224,6 +233,7 @@ export function createCoordinatorApi(client: BackendClient) {
     resumeProjectCoordinator,
     getProjectGitStatus,
     fetchProjectGit,
+    getProjectBaseBranchTip,
     syncProjectGit,
     prepareProjectGitBranchSwitch,
     switchProjectGitBranch,
@@ -252,6 +262,7 @@ export const {
   resumeProjectCoordinator,
   getProjectGitStatus,
   fetchProjectGit,
+  getProjectBaseBranchTip,
   syncProjectGit,
   prepareProjectGitBranchSwitch,
   switchProjectGitBranch,

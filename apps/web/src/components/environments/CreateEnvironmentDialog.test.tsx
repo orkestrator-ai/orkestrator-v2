@@ -348,6 +348,78 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     );
   });
 
+  test("pins a local environment to the exact base commit resolved while the dialog is open", async () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const readTip = spyOn(backend, "getProjectBaseBranchTip").mockImplementation(async () => ({
+      branch: "main",
+      commit,
+      ref: "origin/main",
+      fetched: true,
+      fetchedAt: new Date().toISOString(),
+    }));
+    try {
+      const onCreate = mock(async (_options: ClaudeOptions) => true);
+      renderInAppCommandScope(
+        <DockerAvailabilityProvider available>
+          <CreateEnvironmentDialog
+            open
+            onOpenChange={() => undefined}
+            onCreate={onCreate}
+            projectId="project-1"
+          />
+        </DockerAvailabilityProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Containerized" }));
+      // A container clones from the remote, so it never reads the base here.
+      expect(screen.queryByTestId("launch-base-row") === null).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Local" }));
+      await waitFor(() =>
+        expect(screen.getByTestId("launch-base-row").textContent).toContain(commit),
+      );
+      expect(readTip).toHaveBeenCalledWith("project-1");
+
+      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      expect(onCreate.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          environmentType: "local",
+          launchBase: { branch: "main", commit },
+        }),
+      );
+    } finally {
+      readTip.mockRestore();
+    }
+  });
+
+  test("a container create carries no pinned base", async () => {
+    const readTip = spyOn(backend, "getProjectBaseBranchTip").mockImplementation(async () => ({
+      branch: "main",
+      commit: "a".repeat(40),
+      ref: "origin/main",
+      fetched: true,
+    }));
+    try {
+      const onCreate = mock(async (_options: ClaudeOptions) => true);
+      renderInAppCommandScope(
+        <DockerAvailabilityProvider available>
+          <CreateEnvironmentDialog
+            open
+            onOpenChange={() => undefined}
+            onCreate={onCreate}
+            projectId="project-1"
+          />
+        </DockerAvailabilityProvider>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Containerized" }));
+      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      expect(onCreate.mock.calls[0]?.[0]?.launchBase).toBeUndefined();
+    } finally {
+      readTip.mockRestore();
+    }
+  });
+
   test("Cmd+Enter or Ctrl+Enter anywhere in the dialog creates the environment", async () => {
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
       const onCreate = mock(async (_options: ClaudeOptions) => true);

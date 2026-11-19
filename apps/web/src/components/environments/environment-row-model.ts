@@ -54,6 +54,7 @@ export interface EnvironmentRowFacts {
   autoMerge: boolean;
   /** The displayed agent activity; a working build pipeline reads `working`. */
   activity: AgentActivity;
+  hasWaitingNativeTab?: boolean;
   /** Local, or a container its machine reports running (with Docker, where known). */
   running: boolean;
   /** The owning machine is reachable; otherwise the row is last-known state. */
@@ -145,7 +146,7 @@ const UNREAD_TEXT: Record<
   { tone: EnvironmentRowAttention["tone"]; text: string }
 > = {
   agent_finished: { tone: "unread", text: "Finished · result unread" },
-  agent_ready: { tone: "unread", text: "Finished · result unread" },
+  agent_ready: { tone: "unread", text: "Ready for input · unread" },
   terminal_finished: { tone: "unread", text: "Finished · result unread" },
   agent_failed: { tone: "failed", text: "Failed · error unread" },
   agent_waiting: { tone: "unread", text: "Stopped for input · unread" },
@@ -156,7 +157,8 @@ const UNREAD_TEXT: Record<
 
 function rowAttention(facts: EnvironmentRowFacts): EnvironmentRowAttention | null {
   if (facts.deleting || facts.deleteFailure) return null;
-  const waiting = facts.running && facts.live && facts.activity === "waiting";
+  const waiting =
+    facts.running && facts.live && (facts.activity === "waiting" || facts.hasWaitingNativeTab);
   if (waiting) {
     return {
       tone: "waiting",

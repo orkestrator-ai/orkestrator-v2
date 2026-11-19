@@ -123,6 +123,19 @@ const PENDING_INTERACTION_LABELS: Record<AgentInteractionKind, string> = {
   "terminal-selection": "Needs a choice",
 };
 
+/** The fixed titles assigned by the Codex mapper, with no operation payload. */
+const FIXED_APPROVAL_TITLES = new Map<AgentInteractionKind, ReadonlyMap<string, string>>([
+  [
+    "command-approval",
+    new Map([
+      ["Approve command", "Needs command approval"],
+      ["Approve network access", "Needs network approval"],
+    ]),
+  ],
+  ["file-approval", new Map([["Approve file changes", "Needs file approval"]])],
+  ["permission", new Map([["Approve permissions", "Needs permission approval"]])],
+]);
+
 /**
  * Titles bridges use when the provider gave nothing more specific. They say no
  * more than the label does, so the summary leaves them out.
@@ -162,12 +175,12 @@ function singleLine(text: string, max = PENDING_INTERACTION_DETAIL_MAX): string 
 
 /**
  * The detail for one request, or `undefined` when it has no reliable summary
- * or might show sensitive input: a request with a secret question, and a link
- * request (its URL is never shown outside the card) get only their label.
+ * or might show sensitive input. Secret questions, MCP forms, links and plans
+ * get only their fixed label.
  */
 function pendingInteractionDetail(request: AgentInteractionRequest): string | undefined {
   const { presentation } = request;
-  if (request.kind === "mcp-url") return undefined;
+  if (request.kind === "mcp-url" || request.kind === "mcp-form") return undefined;
   if (presentation.questions.some((question) => question.secret)) return undefined;
   if (request.kind === "plan-approval") return undefined;
   if (request.kind === "question" || request.kind === "elicitation") {
@@ -199,10 +212,13 @@ export function summarizePendingInteractions(
   );
   if (!first) return undefined;
   const detail = pendingInteractionDetail(first);
+  const label =
+    FIXED_APPROVAL_TITLES.get(first.kind)?.get(first.presentation.title) ??
+    PENDING_INTERACTION_LABELS[first.kind];
   return {
     interactionId: first.id.slice(0, 512),
     kind: first.kind,
-    label: PENDING_INTERACTION_LABELS[first.kind] ?? "Needs input",
+    label: label ?? "Needs input",
     ...(detail ? { detail } : {}),
     since: first.createdAt,
     count: live.length,

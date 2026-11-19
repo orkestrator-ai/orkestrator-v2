@@ -1,14 +1,10 @@
 import { AlertCircle, CheckCircle2, MessageCircleQuestion, ShieldAlert } from "lucide-react";
-import type {
-  AgentPendingInteractionSummary,
-  AgentRegistryEntry,
-  AgentRegistrySnapshot,
-} from "@orkestrator/protocol/agent-registry";
+import type { AgentPendingInteractionSummary } from "@orkestrator/protocol/agent-registry";
 import { useMinuteClock } from "@/hooks/useMinuteClock";
 import { cn } from "@/lib/utils";
 import { LOCAL_AGENT_SUMMARY_SOURCE, type AgentSummarySource } from "./EnvironmentAgentSummary";
 import { environmentAttentionParts, type EnvironmentRowAttention } from "./environment-row-model";
-import { useAgentRegistryRead } from "./useAgentRegistryRead";
+import { useAgentRegistryRead, type RegistryRead } from "./useAgentRegistryRead";
 
 /** The tab a waiting environment waits in, and what it waits on there. */
 export interface EnvironmentPendingTarget {
@@ -24,14 +20,13 @@ export interface EnvironmentPendingTarget {
  * reported none: an older machine, a terminal agent, or nothing pending yet.
  */
 export function pendingTarget(
-  snapshot: AgentRegistrySnapshot | null,
+  snapshot: RegistryRead | null,
   environmentId: string,
 ): EnvironmentPendingTarget | null {
-  const waiting = (snapshot?.entries ?? []).filter(
-    (entry): entry is AgentRegistryEntry & { pending: AgentPendingInteractionSummary } =>
-      entry.environmentId === environmentId &&
-      entry.ownerKind === "environment" &&
-      entry.pending !== undefined,
+  const waiting = (snapshot?.entries ?? []).flatMap((entry) =>
+    entry.environmentId === environmentId && entry.ownerKind === "environment" && entry.pending
+      ? [{ tabId: entry.tabId, tabOrdinal: entry.tabOrdinal, pending: entry.pending }]
+      : [],
   );
   if (waiting.length === 0) return null;
   const [first] = [...waiting].sort(
@@ -43,6 +38,19 @@ export function pendingTarget(
     pending: first.pending,
     total: waiting.reduce((sum, entry) => sum + Math.max(1, entry.pending.count), 0),
   };
+}
+
+export function useEnvironmentPendingTarget(
+  environmentId: string,
+  source: AgentSummarySource | null,
+) {
+  const snapshot = useAgentRegistryRead(
+    environmentId,
+    source !== null,
+    source ?? LOCAL_AGENT_SUMMARY_SOURCE,
+    { includePending: true },
+  );
+  return pendingTarget(snapshot, environmentId);
 }
 
 const TONE_CLASS: Record<EnvironmentRowAttention["tone"], string> = {
@@ -94,19 +102,12 @@ export function EnvironmentAttentionLine({
   environmentId: string;
   attention: EnvironmentRowAttention;
   source: AgentSummarySource | null;
-  onOpen: (tabId: string | null) => void;
+  onOpen: (tabId: string | null, interactionId?: string) => void;
   /** The row name's id, so the button reads "<text>, <environment>". */
   describedBy?: string;
 }) {
-  const reads = attention.readsPending && source !== null;
-  const snapshot = useAgentRegistryRead(
-    environmentId,
-    reads,
-    source ?? LOCAL_AGENT_SUMMARY_SOURCE,
-    { includePending: true },
-  );
+  const target = useEnvironmentPendingTarget(environmentId, attention.readsPending ? source : null);
   const now = useMinuteClock();
-  const target = reads ? pendingTarget(snapshot, environmentId) : null;
   const { head, tail } = environmentAttentionParts(
     attention,
     target?.pending ?? null,
@@ -122,7 +123,8 @@ export function EnvironmentAttentionLine({
       onClick={(event) => {
         // The row's own click selects; this opens the request inside it.
         event.stopPropagation();
-        onOpen(target?.tabId ?? null);
+        if (target) onOpen(target.tabId, target.pending.interactionId);
+        else onOpen(null);
       }}
       title={text}
       aria-describedby={describedBy}

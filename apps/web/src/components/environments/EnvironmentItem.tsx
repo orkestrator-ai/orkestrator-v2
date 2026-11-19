@@ -194,7 +194,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       tooltipDetails={environment}
       agentSummary={<EnvironmentAgentSummary environmentId={environment.id} open={tooltip.open} />}
       attentionSource={LOCAL_AGENT_SUMMARY_SOURCE}
-      onOpenAttention={(tabId) => {
+      onOpenAttention={(tabId, interactionId) => {
         onSelect(environment.id);
         // Focuses the tab once the environment's layout has it, as a worker link does.
         if (tabId) {
@@ -204,6 +204,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               projectId: environment.projectId,
               environmentId: environment.id,
               tabId,
+              interactionId,
             },
             undefined,
             scope,

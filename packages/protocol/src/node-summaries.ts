@@ -92,6 +92,8 @@ export interface NodeEnvironmentSummary {
   activityUpdatedAt?: string;
   lastActivityAt?: string;
   hasUnreadWork: boolean;
+  /** Independent of the environment-wide activity indicator. */
+  hasWaitingNativeTab?: boolean;
   /**
    * What lit `hasUnreadWork` (the environment record's `unreadReason`), so
    * another machine's row says "Finished" or "Question" as its own row does.
@@ -456,6 +458,7 @@ export function toNodeEnvironmentSummary(
       ? { lastActivityAt: raw.lastActivityAt.slice(0, MAX_TIMESTAMP) }
       : {}),
     hasUnreadWork: raw.hasUnreadWork === true,
+    ...(raw.hasWaitingNativeTab === true ? { hasWaitingNativeTab: true } : {}),
     ...(raw.hasUnreadWork === true && isNodeUnreadReason(raw.unreadReason)
       ? { unreadReason: raw.unreadReason }
       : {}),

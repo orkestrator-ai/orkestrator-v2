@@ -245,6 +245,7 @@ import {
   nativeComposeProfileLabel,
   useNativeAgentActivityAnnouncement,
 } from "./AgentNativeTab.helpers";
+import { NativeInteractionAnchor } from "./NativeInteractionAnchor";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
 import {
   commandSubmissionIntent,
@@ -3424,33 +3425,43 @@ export function SharedNativeAgentController({
   // again (see `StableVirtuoso` in VirtualizedMessageList).
   const transcriptCards = useMemo(
     () => [
-      ...transcriptInteractions.map((interaction) =>
-        interaction.kind === "question" ? (
-          <NativeAgentQuestionCard
-            key={interaction.id}
-            interaction={interaction}
-            onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
-            onHold={(held) => holdInteraction(interaction.id, held)}
-          />
-        ) : (
-          <NativeAgentInteractionCard
-            key={interaction.id}
-            interaction={interaction}
-            planContent={
-              interaction.presentation.planAvailable ? interaction.presentation.body : planContent
-            }
-            onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
-            onHold={(held) => holdInteraction(interaction.id, held)}
-          />
-        ),
-      ),
+      ...transcriptInteractions.map((interaction) => (
+        <NativeInteractionAnchor
+          key={interaction.id}
+          environmentId={data.environmentId}
+          tabId={tabId}
+          interactionId={interaction.id}
+          active={isActive && !hiddenByLayout}
+        >
+          {interaction.kind === "question" ? (
+            <NativeAgentQuestionCard
+              interaction={interaction}
+              onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+              onHold={(held) => holdInteraction(interaction.id, held)}
+            />
+          ) : (
+            <NativeAgentInteractionCard
+              interaction={interaction}
+              planContent={
+                interaction.presentation.planAvailable ? interaction.presentation.body : planContent
+              }
+              onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+              onHold={(held) => holdInteraction(interaction.id, held)}
+            />
+          )}
+        </NativeInteractionAnchor>
+      )),
       ...(claudeSignInCard !== null && claudeSignInInline ? [claudeSignInCard] : []),
     ],
     [
       claudeSignInCard,
       claudeSignInInline,
+      data.environmentId,
+      hiddenByLayout,
       holdInteraction,
+      isActive,
       planContent,
+      tabId,
       resolveInteraction,
       transcriptInteractions,
     ],
@@ -4103,13 +4114,22 @@ export function SharedNativeAgentController({
           ? [<HumanPromptBanner key="human-prompts" prompts={agentPrompts} />]
           : []),
         ...pinnedInteractions.map((interaction) => (
-          <NativeAgentInteractionCard
+          <NativeInteractionAnchor
             key={interaction.id}
-            interaction={interaction}
-            onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
-            onHold={(held) => holdInteraction(interaction.id, held)}
-            onApproveAndRemember={(choice) => approveInteractionAndRemember(interaction.id, choice)}
-          />
+            environmentId={data.environmentId}
+            tabId={tabId}
+            interactionId={interaction.id}
+            active={isActive && !hiddenByLayout}
+          >
+            <NativeAgentInteractionCard
+              interaction={interaction}
+              onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+              onHold={(held) => holdInteraction(interaction.id, held)}
+              onApproveAndRemember={(choice) =>
+                approveInteractionAndRemember(interaction.id, choice)
+              }
+            />
+          </NativeInteractionAnchor>
         )),
       ]}
       transcriptCards={transcriptCards}

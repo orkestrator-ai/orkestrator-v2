@@ -14,10 +14,11 @@ import { describeAgentRegistrySummary } from "@orkestrator/protocol/agent-regist
 import { goalStatusSummary } from "@orkestrator/protocol/native-agent-goal";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { AgentRegistry } from "./agent-registry.js";
 import { StorageService } from "./storage.js";
 
-async function fixture() {
+async function fixture(extraNativeTabs = 0) {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-agent-registry-"));
   const storage = new StorageService(dataDir);
   await storage.init();
@@ -59,6 +60,11 @@ async function fixture() {
           id: "pane",
           tabs: [
             { id: "native", type: "agent-native", nativeAgentData: { platform: "claude" } },
+            ...Array.from({ length: extraNativeTabs }, (_, index) => ({
+              id: `native-${index}`,
+              type: "agent-native",
+              nativeAgentData: { platform: "codex" },
+            })),
             { id: "tmux", type: "claude-tmux" },
             { id: "terminal", type: "codex" },
             { id: "shell", type: "plain" },
@@ -288,6 +294,53 @@ describe("AgentRegistry", () => {
         pending,
       );
     } finally {
+      storage.close();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("one deadline bounds stalled tabs without dropping faster siblings", async () => {
+    const { storage, dataDir } = await fixture(2);
+    const clock = new ManualClock();
+    const slow = Promise.withResolvers<undefined>();
+    const started = Promise.withResolvers<void>();
+    try {
+      const registry = new AgentRegistry(
+        storage,
+        {
+          native: () => "waiting",
+          pending: async (_environmentId, _agent, key) => {
+            if (key.endsWith(":native-1")) started.resolve();
+            if (key.endsWith(":native") || key.endsWith(":native-1")) return slow.promise;
+            return {
+              interactionId: "request",
+              kind: "question",
+              label: "Question",
+              since: 1,
+              count: 1,
+            };
+          },
+        },
+        clock,
+      );
+      let returned = false;
+      const reading = registry
+        .snapshot({ environmentId: "running-env" }, { includePending: true })
+        .then((result) => {
+          returned = true;
+          return result;
+        });
+      await started.promise;
+      await clock.advanceAsync(1_999);
+      expect(returned).toBe(false);
+      await clock.advanceAsync(1);
+      const result = await reading;
+      expect(result.entries.filter((entry) => entry.pending).map((entry) => entry.tabId)).toEqual([
+        "native-0",
+      ]);
+      expect(clock.pendingCount()).toBe(0);
+    } finally {
+      slow.resolve(undefined);
       storage.close();
       await fs.rm(dataDir, { recursive: true, force: true });
     }

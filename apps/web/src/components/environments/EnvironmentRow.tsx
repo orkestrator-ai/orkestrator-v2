@@ -473,7 +473,7 @@ export interface EnvironmentRowProps {
    * Opens the tab holding the request the attention line names (`null`: no tab
    * is known, so the environment itself).
    */
-  onOpenAttention: (tabId: string | null) => void;
+  onOpenAttention: (tabId: string | null, interactionId?: string) => void;
   /** Extra notes for the delete confirmation, rendered while it is open. */
   deleteNotice?: (open: boolean) => ReactNode;
 }

@@ -64,6 +64,7 @@ export function localEnvironmentRowFacts(
     prState: environment.prState ?? null,
     autoMerge: environment.autoMerge === true,
     activity: inputs.activity,
+    hasWaitingNativeTab: environment.hasWaitingNativeTab === true,
     running: inputs.running,
     live: true,
     busy: false,
@@ -126,6 +127,7 @@ export function nodeEnvironmentRowFacts(
     autoMerge: environment.autoMerge === true,
     // Pipeline sessions need not project agent activity onto their environment.
     activity: environment.buildActive ? "working" : environment.activity,
+    hasWaitingNativeTab: environment.hasWaitingNativeTab === true,
     // As `useEnvironmentDisplayActivity` decides it on the machine itself.
     running:
       environment.environmentType === "local" ||

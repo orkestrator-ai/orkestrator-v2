@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   AgentPendingInteractionSummary,
   AgentRegistryEntry,
   AgentRegistrySnapshot,
 } from "@orkestrator/protocol/agent-registry";
-import type { AgentSummarySource } from "./EnvironmentAgentSummary";
+import {
+  EnvironmentAgentSummary,
+  LOCAL_AGENT_SUMMARY_SOURCE,
+  type AgentSummarySource,
+} from "./EnvironmentAgentSummary";
+import { dispatchResourceChange, RESOURCE_COALESCE_MS } from "@/lib/resource-sync";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { EnvironmentAttentionLine, pendingTarget } from "./EnvironmentAttentionLine";
 import type { EnvironmentRowAttention } from "./environment-row-model";
 
@@ -85,7 +91,7 @@ describe("EnvironmentAttentionLine", () => {
     const line = await screen.findByRole("button", { name: WAITING_NAMED });
     expect(read).toHaveBeenCalledWith("env-1", { includePending: true });
     fireEvent.click(line);
-    expect(onOpen).toHaveBeenCalledWith("agent-tab");
+    expect(onOpen).toHaveBeenCalledWith("agent-tab", "agent-tab-request");
   });
 
   test("keeps its generic wording and opens the environment when no request is known", async () => {
@@ -102,6 +108,145 @@ describe("EnvironmentAttentionLine", () => {
     await waitFor(() => expect(read).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: WAITING_GENERIC }));
     expect(onOpen).toHaveBeenCalledWith(null);
+  });
+
+  test.each([
+    ["array", []],
+    ["empty object", {}],
+    ["empty snapshot", snapshot([])],
+    [
+      "malformed entries",
+      { entries: [null, entry("agent-tab", { detail: {} as string })], environments: [null, {}] },
+    ],
+    ["rejected read", undefined],
+  ])("a %s reply keeps the waiting line and hover card safe", async (_label, result) => {
+    const read = mock(async () => {
+      if (result === undefined) throw new Error("unreachable");
+      return result as AgentRegistrySnapshot;
+    });
+    const value: AgentSummarySource = { read, subscribe: () => () => {} };
+    const onOpen = mock(() => {});
+    render(
+      <>
+        <EnvironmentAttentionLine
+          environmentId="env-1"
+          attention={waiting}
+          source={value}
+          onOpen={onOpen}
+        />
+        <EnvironmentAgentSummary environmentId="env-1" open source={value} />
+      </>,
+    );
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/agent tabs?/) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: WAITING_GENERIC }));
+    expect(onOpen).toHaveBeenCalledWith(null);
+  });
+
+  test("an older registry's MCP form title is kept out of its row", async () => {
+    const { value } = source([
+      entry("agent-tab", {
+        kind: "mcp-form",
+        label: "Untrusted provider title",
+        detail: "Sensitive input",
+      }),
+    ]);
+    render(
+      <EnvironmentAttentionLine
+        environmentId="env-1"
+        attention={waiting}
+        source={value}
+        onOpen={() => {}}
+      />,
+    );
+    const line = await screen.findByRole("button", { name: /^Needs input/ });
+    expect(line.getAttribute("title")).not.toMatch(/Untrusted|Sensitive/);
+  });
+
+  test("a deadline fallback retries within the same wait and stops when the line closes", async () => {
+    const time = installControlledTimeout(1_000, { label: "first pending retry" });
+    try {
+      let reads = 0;
+      const value: AgentSummarySource = {
+        read: async () =>
+          snapshot([
+            ++reads === 1
+              ? entry("agent-tab", undefined, { state: "waiting" })
+              : entry("agent-tab", {}),
+          ]),
+        subscribe: () => () => {},
+      };
+      const view = render(
+        <EnvironmentAttentionLine
+          environmentId="env-1"
+          attention={waiting}
+          source={value}
+          onOpen={() => {}}
+        />,
+      );
+      await act(async () => {});
+      expect(screen.getByRole("button", { name: WAITING_GENERIC })).toBeTruthy();
+      expect(time.pendingCount()).toBe(1);
+      await act(async () => {
+        time.advance();
+      });
+      expect(screen.getByRole("button", { name: WAITING_NAMED })).toBeTruthy();
+      expect(reads).toBe(2);
+      view.unmount();
+    } finally {
+      cleanup();
+      time.restore();
+    }
+  });
+
+  test("a native-session change replaces an answered request while the local row keeps waiting", async () => {
+    const debounce = installControlledTimeout(250, { label: "registry refresh" });
+    const resource = installControlledTimeout(RESOURCE_COALESCE_MS, {
+      label: "resource coalescing",
+    });
+    try {
+      let reads = 0;
+      const value: AgentSummarySource = {
+        ...LOCAL_AGENT_SUMMARY_SOURCE,
+        read: async () =>
+          snapshot([
+            ++reads === 1
+              ? entry("tab", { count: 2, detail: "First request" })
+              : entry("tab", { interactionId: "next", detail: "Second request" }),
+          ]),
+      };
+      const onOpen = mock(() => {});
+      render(
+        <EnvironmentAttentionLine
+          environmentId="env-1"
+          attention={waiting}
+          source={value}
+          onOpen={onOpen}
+        />,
+      );
+      await act(async () => {});
+      expect(screen.getByRole("button", { name: /First request.*2 waiting/ })).toBeTruthy();
+      act(() =>
+        dispatchResourceChange({
+          resource: "native-agent-session",
+          id: "env-1",
+          revision: 1,
+          cause: "pending-interactions",
+        }),
+      );
+      await act(async () => {
+        resource.advance();
+        debounce.advance();
+      });
+      expect(screen.queryByRole("button", { name: /First request/ }) === null).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: /Second request/ }));
+      expect(onOpen).toHaveBeenCalledWith("tab", "next");
+    } finally {
+      cleanup();
+      resource.restore();
+      debounce.restore();
+    }
   });
 
   test("reads nothing for unread work, or while the machine is unreachable", () => {

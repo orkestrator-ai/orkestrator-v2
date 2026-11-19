@@ -861,22 +861,26 @@ with `MachinesFilter`:
   several are pending. Unread work it is no longer blocked on reads "Finished ·
   result unread", "Failed · error unread", "Asked a question · unread",
   "Setup needs your approval" and the like, from the record's `unreadReason`
-  (relayed for another machine as the summary's `unreadReason`). Working rows,
-  idle rows nobody needs to open and rows being deleted have no line.
-  Clicking the line selects the environment and focuses the tab holding the
-  request (the same worker-tab navigation a coordinator link uses; another
-  machine's row opens its workspace with that tab as the work target), or just
-  opens the environment when no tab is known.
+  (relayed for another machine as the summary's `unreadReason`). A waiting
+  native tab gets a line even while a sibling keeps the environment working.
+  Project-home activity buttons show the same request summary in activity
+  view and in their compact tooltip. Clicking selects the environment,
+  focuses the tab and reveals the named request once the card renders.
+  When the request has settled, focus stays on the tab. A generic line opens
+  the environment when no tab is known.
   The request comes from the owning machine's agent registry, read with
   `includePending` only while the row waits: the backend asks only tabs it
   observes `waiting`, through the bounded, cached pending-interactions read
-  `attention.list` uses, and gives up on one after 2 s. Each request becomes
+  `attention.list` uses, with up to eight concurrent reads and one 2 s deadline
+  per snapshot. The row retries missing detail with backoff and refreshes
+  when the owning node reports session changes or reconnects. Each request becomes
   `AgentPendingInteractionSummary` (`summarizePendingInteractions`): a fixed
   label per kind and, as detail, a question's first prompt or an approval's
-  title, on one line and at most 120 characters. A request with a secret
-  question, a link request, a plan and a bridge's generic title ("Approve
-  command") get the label alone; a body, option, URL or answer is never shown.
-  A machine that predates `includePending` keeps the generic wording.
+  title, on one line and at most 120 characters. Secret questions, MCP forms,
+  links and plans show a fixed label. Codex command, network, file and
+  permission approvals each have a fixed label. Bodies, options, URLs and
+  answers stay in the interaction card. A machine that predates
+  `includePending` keeps the generic wording.
 - A row of the bound machine selects in place. A row of another machine opens
   its machine's workspace; its actions menu adds Open workspace and Copy link to
   the actions every row has, and disables writes while the machine is not
@@ -977,7 +981,7 @@ component with two thin adapters:
 | Delete confirmation | `EnvironmentDeleteDialog` | through `EnvironmentRow` | through `EnvironmentRow` |
 | Attention line (what a waiting agent needs) | `EnvironmentAttentionLine`, `environmentRowModel` | `EnvironmentItem` (`LOCAL_AGENT_SUMMARY_SOURCE`) | `RemoteEnvironmentItem` (`nodeAgentSummarySource`) |
 | Project header | `ProjectGroupHeader` | `SortableProjectGroup` | `RemoteProjectGroup` |
-| Project home activity | `ProjectHomeActivityButton`, `projectHomeStatus` | `ProjectHomeActivity` | `RemoteProjectGroup`, `RemoteActivityHome` |
+| Project home activity | `ProjectHomeActivityButton`, `projectHomeStatus` | `ProjectHomeActivity` | `RemoteProjectHomeActivity` |
 | Compact icon status | `compactRepositoryStatus`, `projectHomeStatus` | `useCompactStatuses` | `remoteMemberFacts` |
 | Activity list | `ActivityEnvironmentList`, `compareActivity` | `HierarchicalSidebar` | `FederatedActivityList` |
 | Empty project list | `SidebarEmptyState` | `HierarchicalSidebar` | `MergedProjectList`, `RemoteMachineBody` |

@@ -54,9 +54,9 @@ describe("summarizePendingInteractions", () => {
     });
   });
 
-  test("a bridge's generic title adds nothing, so only the label is kept", () => {
+  test("a fixed command approval title gets the operation label", () => {
     const summary = summarizePendingInteractions([request("a", { title: "Approve command" })]);
-    expect(summary?.label).toBe("Needs approval");
+    expect(summary?.label).toBe("Needs command approval");
     expect(summary?.detail).toBeUndefined();
   });
 
@@ -74,13 +74,22 @@ describe("summarizePendingInteractions", () => {
   test("a request holding secret input, a link or a plan gets only its label", () => {
     const secret = summarizePendingInteractions([
       request("s", {
-        kind: "mcp-form",
+        kind: "question",
         title: "Enter your API key",
         questions: [question("API key", true)],
       }),
     ]);
-    expect(secret).toMatchObject({ label: "Needs input" });
+    expect(secret).toMatchObject({ label: "Question" });
     expect(secret?.detail).toBeUndefined();
+    const form = summarizePendingInteractions([
+      request("f", {
+        kind: "mcp-form",
+        title: "Enter your API key",
+        questions: [question("Schema")],
+      }),
+    ]);
+    expect(form).toMatchObject({ label: "Needs input" });
+    expect(form?.detail).toBeUndefined();
     const link = summarizePendingInteractions([
       request("u", { kind: "mcp-url", title: "Sign in at https://example.invalid/?code=1" }),
     ]);

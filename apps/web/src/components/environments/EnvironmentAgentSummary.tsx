@@ -35,6 +35,9 @@ export const LOCAL_AGENT_SUMMARY_SOURCE: AgentSummarySource = {
       onResourceChanged("environment", (change) => {
         if (change.id === environmentId) refresh();
       }),
+      onResourceChanged("native-agent-session", (change) => {
+        if (change.id === environmentId) refresh();
+      }),
       onResourceChanged("pane-layout", (change) => {
         if (change.id === environmentId) refresh();
       }),

@@ -56,7 +56,9 @@ export function nodeAgentSummarySource(nodeId: BackendId): AgentSummarySource {
             }
             const change = changedResource(payload);
             if (
-              (change?.resource === "environment" || change?.resource === "pane-layout") &&
+              (change?.resource === "environment" ||
+                change?.resource === "pane-layout" ||
+                change?.resource === "native-agent-session") &&
               change.id === environmentId
             ) {
               refresh();

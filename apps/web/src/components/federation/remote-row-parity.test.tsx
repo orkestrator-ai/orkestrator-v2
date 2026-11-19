@@ -181,6 +181,54 @@ test("another machine's row shows no agent mail count or failed-delivery dot", (
   expect(screen.queryByLabelText("Agent message delivery failed") === null).toBe(true);
 });
 
+test("a remote waiting row sends the named interaction to the owning workspace", async () => {
+  const row = environment("feature", { activity: "working", hasWaitingNativeTab: true });
+  installDesktopFake({
+    list: connectionList([remoteConnection("a", "Machine A", "teal")]),
+    datasets: { a: sharedIdDataset("working") },
+    respondPortal: (command, args) =>
+      command === "watch_node_events"
+        ? { watchId: args.watchId, renewed: true, expiresAt: 90_000 }
+        : undefined,
+    respond: ({ command, args }) =>
+      command === "get_agent_registry" && args.includePending === true
+        ? {
+            entries: [
+              {
+                environmentId: row.ref.environmentId,
+                tabId: "blocked-tab",
+                tabOrdinal: 1,
+                ownerKind: "environment",
+                kind: "native",
+                state: "waiting",
+                pending: {
+                  interactionId: "request-1",
+                  kind: "question",
+                  label: "Question",
+                  detail: "Choose region",
+                  since: Date.now(),
+                  count: 2,
+                },
+              },
+            ],
+            environments: [],
+          }
+        : undefined,
+  });
+  renderInAppCommandScope(
+    <FederationProvider>
+      <RemoteEnvironmentItem machine={machineView([row])} environment={row} />
+    </FederationProvider>,
+  );
+  await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
+  fireEvent.click(await screen.findByRole("button", { name: /Choose region.*2 waiting/ }));
+  expect(useRemoteWorkspaceStore.getState().requests.a?.request).toMatchObject({
+    projectId: "project-1",
+    environmentId: "feature",
+    workTarget: { type: "worker-tab", tabId: "blocked-tab", interactionId: "request-1" },
+  });
+});
+
 test("another machine's project header shows its home's activity and no mail count", async () => {
   const home = environment("home", {
     isProjectHome: true,
@@ -208,7 +256,7 @@ test("another machine's project header shows its home's activity and no mail cou
   expect(within(header).queryByLabelText("3 unread agent messages") === null).toBe(true);
   expect(within(header).queryByLabelText("Agent message delivery failed") === null).toBe(true);
 
-  const homeActivity = within(header).getByRole("button", { name: "app home needs attention" });
+  const homeActivity = within(header).getByRole("button", { name: /^app home needs attention/ });
   const bell = homeActivity.querySelector("svg");
   expect(bell?.classList.contains("fill-amber-400/20")).toBe(true);
   expect(bell?.classList.contains("text-amber-400")).toBe(true);

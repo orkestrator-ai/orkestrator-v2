@@ -28,7 +28,7 @@ export interface FederatedEnvironmentActions {
   /** Selects a row of this window's machine; switches to another machine's workspace. */
   open: () => void;
   /** As `open`, then shows one of its tabs (the one an attention line names). */
-  openTab: (tabId: string) => void;
+  openTab: (tabId: string, interactionId?: string) => void;
   copyLink: () => void;
   /** Opens the environment's settings dialog, on its own machine. */
   openSettings: () => void;
@@ -96,12 +96,13 @@ export function useFederatedEnvironmentActions(
     });
   };
 
-  const openTab = (tabId: string) => {
+  const openTab = (tabId: string, interactionId?: string) => {
     const workTarget = {
       type: "worker-tab" as const,
       projectId: environment.projectId,
       environmentId: environment.ref.environmentId,
       tabId,
+      interactionId,
     };
     if (machine.bound) {
       open();

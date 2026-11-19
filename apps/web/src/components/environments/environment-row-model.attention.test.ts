@@ -62,6 +62,12 @@ describe("a row's attention line", () => {
     ).toBeNull();
   });
 
+  test("a native tab can wait while its environment remains working", () => {
+    const model = environmentRowModel(facts({ activity: "working", hasWaitingNativeTab: true }));
+    expect(model.markerState).toBe("working");
+    expect(model.attention).toMatchObject({ tone: "waiting", readsPending: true });
+  });
+
   test("waiting says how long, and names the request once its machine reports it", () => {
     const waiting = attention({ activity: "waiting" })!;
     expect(waiting).toMatchObject({ tone: "waiting", readsPending: true });
@@ -100,6 +106,7 @@ describe("a row's attention line", () => {
       tone: "unread",
       text: "Finished · result unread",
     });
+    expect(text("agent_ready")?.text).toBe("Ready for input · unread");
     expect(text("terminal_finished")?.text).toBe("Finished · result unread");
     expect(text("agent_failed")).toMatchObject({ tone: "failed", text: "Failed · error unread" });
     expect(text("agent_question")?.text).toBe("Asked a question · unread");

@@ -246,6 +246,15 @@ const cases: Array<[string, Partial<Environment>, Markers]> = [
   ["a paused build pipeline", { name: "Build: feature" }, { buildPipeline: true }],
   ["a project home", { name: "project-home", projectHome: true }, {}],
   ["unread work", { hasUnreadWork: true }, {}],
+  ["a legacy ready-for-input record", { hasUnreadWork: true, unreadReason: "agent_ready" }, {}],
+  [
+    "a waiting native tab under working aggregate activity",
+    {
+      agentActivityState: "working",
+      hasWaitingNativeTab: true,
+    },
+    {},
+  ],
   ["finished work nobody has opened", { hasUnreadWork: true, unreadReason: "agent_finished" }, {}],
   ["a failed turn nobody has opened", { hasUnreadWork: true, unreadReason: "agent_failed" }, {}],
   [

@@ -90,6 +90,7 @@ interface Observer {
   stateStatus: PartStatus;
   phase: string | undefined;
   quietObservation: boolean;
+  bridgeBackoff: boolean;
   providerSessionId?: string;
   quietIndex: number;
   timer: unknown;
@@ -176,6 +177,7 @@ export class NativeSessionPushTopic implements PushTopicProvider {
       stateStatus: "unknown",
       phase: undefined,
       quietObservation: false,
+      bridgeBackoff: false,
       quietIndex: 0,
       timer: null,
       reading: false,
@@ -246,6 +248,7 @@ export class NativeSessionPushTopic implements PushTopicProvider {
   /** A bridge frame is a wake hint. Activity and projections still come from reads. */
   wakeProvider(environmentId: string, agent: string, providerSessionId?: string): void {
     for (const observer of this.observers.values()) {
+      if (!observer.bridgeBackoff) continue;
       if (observer.parsed.environmentId !== environmentId || observer.parsed.agent !== agent)
         continue;
       if (providerSessionId !== undefined && observer.providerSessionId !== providerSessionId)
@@ -330,6 +333,7 @@ export class NativeSessionPushTopic implements PushTopicProvider {
     observer.reading = false;
     if (observer.stopped) return;
     if (!update) {
+      observer.bridgeBackoff = false;
       this.schedule(observer, observer.wakeAgain ? 0 : NATIVE_SESSION_OBSERVE_ERROR_MS);
       return;
     }
@@ -344,10 +348,9 @@ export class NativeSessionPushTopic implements PushTopicProvider {
         parts,
       );
     }
-    this.schedule(
-      observer,
-      observer.wakeAgain ? 0 : this.nextDelay(observer, update, parts.length > 0),
-    );
+    const delay = this.nextDelay(observer, update, parts.length > 0);
+    observer.bridgeBackoff = delay === NATIVE_SESSION_BRIDGE_BACKSTOP_MS;
+    this.schedule(observer, observer.wakeAgain ? 0 : delay);
   }
 
   /** Applies one answer to the observer and returns the parts that moved. */

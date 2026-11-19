@@ -15,10 +15,10 @@ the design and the polling baseline. On 2026-11-19 the user's ticket
 layer to be built, which answers the design review that tasks 2 to 5 waited
 on. The layer's core and the `native-session` topic are built (task 3) and
 the living doc is [push-events.md](../../architecture/push-events.md)
-(task 5). What is built differs from the draft in one place, recorded under
-[Assumptions and decisions](#assumptions-and-decisions): the change signal is
-a backend observer per subscribed session rather than bridge revisions, so
-task 2 is no longer a prerequisite and stays open as an optimisation.
+(task 5). A shared backend observer reconciles each subscribed session.
+Qualified idle Claude and Codex bridges can wake it through their existing
+observation stream and content revision. Task 2 remains open for full bridge
+state revision coverage. See [Assumptions and decisions](#assumptions-and-decisions).
 
 ### Tasks
 

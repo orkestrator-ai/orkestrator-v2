@@ -3,7 +3,7 @@
  * observed, the read a viewer sends after a frame takes the observer's answer
  * instead of a second provider read; nothing else changes.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   NativeAgentProgressiveReads,
   OBSERVED_SETTLED_SHARE_MS,
@@ -12,6 +12,11 @@ import {
 const SESSION = "env\u0000claude\u0000tab";
 const KEY = `${SESSION}\u0000progressive-v1\u0000state`;
 
+const instances: NativeAgentProgressiveReads[] = [];
+afterEach(() => {
+  for (const instance of instances.splice(0)) instance.clear();
+});
+
 function reads() {
   const projectionEpochs = new Map<string, number>();
   const instance = new NativeAgentProgressiveReads({
@@ -19,6 +24,7 @@ function reads() {
     storage: {},
     projectionEpochs,
   } as never);
+  instances.push(instance);
   let providerReads = 0;
   const read = async () => {
     providerReads += 1;

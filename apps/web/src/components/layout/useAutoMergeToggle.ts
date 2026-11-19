@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
+import type { EnvironmentPrDestination } from "@/lib/backend/config-integrations";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useEnvironmentStore } from "@/stores";
@@ -30,7 +31,11 @@ export function useAutoMergeToggle(
 
   /** Resolves to whether auto-merge is on afterwards, as the backend answered. */
   const set = useCallback(
-    async (next: boolean, cleanupAfterMerge?: boolean): Promise<boolean | null> => {
+    async (
+      next: boolean,
+      cleanupAfterMerge?: boolean,
+      destination?: EnvironmentPrDestination,
+    ): Promise<boolean | null> => {
       if (!environmentId || savingEnvironmentId === environmentId) return null;
       setSavingEnvironmentId(environmentId);
       try {
@@ -38,6 +43,7 @@ export function useAutoMergeToggle(
           environmentId,
           next,
           cleanupAfterMerge,
+          ...(destination ? ([destination] as const) : []),
         );
         const on = updated?.autoMerge === true;
         updateEnvironment(environmentId, {

@@ -46,7 +46,7 @@ const DOMAINS = [
     domain: pullRequestsDomain,
     commands: PULL_REQUESTS_COMMANDS as readonly AnyCommandDef[],
     count: 39,
-    version: 3,
+    version: 4,
   },
 ];
 
@@ -91,7 +91,7 @@ describe("git and pull-requests definitions", () => {
     expect(DOMAIN_CLIENTS).toContain(gitClient);
     expect(DOMAIN_CLIENTS).toContain(pullRequestsClient);
     expect(gitClient.versions).toEqual([2, 1, 0]);
-    expect(pullRequestsClient.versions).toEqual([3, 2, 1, 0]);
+    expect(pullRequestsClient.versions).toEqual([4, 3, 2, 1, 0]);
   });
 
   it("drops unknown keys of a formerly strict command, refuses an unknown critical one", () => {
@@ -109,6 +109,36 @@ describe("git and pull-requests definitions", () => {
       { critical: ["future"] },
     );
     expect(refused._tag).toBe("Failure");
+  });
+
+  it("refuses a destination-guarded merge before invoking a pre-contract backend", async () => {
+    const calls: string[] = [];
+    const client = createDomainClient(pullRequestsClient, {
+      domains: () => null,
+      call: async () => {
+        throw new Error("Unexpected contract call");
+      },
+      invoke: async (command) => {
+        calls.push(command);
+        return { merged: true };
+      },
+    });
+    const args = {
+      owner: "acme",
+      repo: "widget",
+      number: 42,
+      method: "squash" as const,
+      deleteBranch: false,
+    };
+    await expect(
+      client.api().merge_github_pull_request({
+        ...args,
+        expectedBaseRef: "main",
+      }),
+    ).rejects.toThrow("Update the backend");
+    expect(calls).toEqual([]);
+    await client.api().merge_github_pull_request(args);
+    expect(calls).toEqual(["merge_github_pull_request"]);
   });
 
   it("accepts optional arguments an in-process caller sends as undefined", () => {

@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:339c5bd258b7f16ef675427a1ab57f2c20c4ff042f1cd68db224717d0e03f327",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "deleteBranch": {
+          "type": "boolean"
+        },
+        "expectedBaseRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedHeadSha": {},
+        "expectedTargetBranch": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "method": {
+          "enum": ["merge", "squash", "rebase"],
+          "type": "string"
+        },
+        "number": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "projectId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        }
+      },
+      "required": ["deleteBranch", "method", "number", "owner", "repo"],
+      "type": "object"
+    }
+  }
+}

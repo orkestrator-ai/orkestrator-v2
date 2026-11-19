@@ -1,3 +1,4 @@
+import { defaultPrTargetBranch } from "./git-workflow-prompts.js";
 export type GitHubRepositoryRef = {
   owner: string;
   name: string;
@@ -64,4 +65,39 @@ export function parseGitHubRepositoryRemote(gitUrl: string): GitHubRepositoryPar
 
   const repository = repositoryRef(parts[0], parts[1]);
   return repository ? { ok: true, repository } : { ok: false, reason: "invalid-url" };
+}
+
+type PrTargetProject = { id: string; gitUrl: string };
+
+/**
+ * The configured target for a pull request opened by reference, found
+ * through the project whose GitHub remote is the PR's repository. A pull
+ * request in a repository no project tracks has no configured target. When
+ * several projects track the repository and their settings disagree, the
+ * target is ambiguous and nothing is flagged.
+ */
+export function configuredPrTargetForPullRequest(
+  ref: { owner: string; repo: string },
+  projects: readonly PrTargetProject[],
+  repositories: Readonly<Record<string, { prBaseBranch?: string | null } | undefined>>,
+  projectId?: string,
+): string | null {
+  const owner = ref.owner.toLowerCase();
+  const repo = ref.repo.toLowerCase();
+  const targets = new Set<string>();
+  for (const project of projects) {
+    const parsed = parseGitHubRepositoryRemote(project.gitUrl);
+    if (!parsed.ok) continue;
+    if (
+      parsed.repository.owner.toLowerCase() !== owner ||
+      parsed.repository.name.toLowerCase() !== repo
+    ) {
+      continue;
+    }
+    const repository = repositories[project.id];
+    const target = repository ? defaultPrTargetBranch(repository.prBaseBranch) : null;
+    if (project.id === projectId) return target;
+    if (target) targets.add(target);
+  }
+  return targets.size === 1 ? ([...targets][0] ?? null) : null;
 }

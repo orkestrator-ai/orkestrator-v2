@@ -1303,6 +1303,51 @@ export async function deletePullRequestHeadBranchViaGitHubApi(
   await deleteRemoteBranchForPullRequestHead(head, runGh, environmentId);
 }
 
+export class PrDestinationChangedError extends Error {
+  constructor() {
+    super(
+      "The pull request destination changed or could not be verified. Review the branch and confirm the merge again.",
+    );
+  }
+}
+
+async function verifyPullRequestDestination(
+  prUrl: string,
+  runGh: GhCliRunner,
+  expectedBaseRef: string,
+): Promise<string> {
+  const reading = await runGh(["pr", "view", prUrl, "--json", "baseRefName,headRefOid"], 30_000)
+    .then((output) => JSON.parse(output) as { baseRefName?: string; headRefOid?: string } | null)
+    .catch(() => null);
+  const head = reading?.headRefOid;
+  if (reading?.baseRefName !== expectedBaseRef || !head || !/^[0-9a-f]{40}$/i.test(head)) {
+    throw new PrDestinationChangedError();
+  }
+  return head;
+}
+
+interface MergeDispatchGuard {
+  expectedBaseRef?: string;
+  beforeDispatch?: () => Promise<void>;
+}
+
+async function prepareMergeDispatch(
+  prUrl: string,
+  runGh: GhCliRunner,
+  expectedHeadSha: string | undefined,
+  guard: MergeDispatchGuard | undefined,
+): Promise<string | undefined> {
+  if (guard?.expectedBaseRef !== undefined) {
+    const head = await verifyPullRequestDestination(prUrl, runGh, guard.expectedBaseRef);
+    if (expectedHeadSha !== undefined && expectedHeadSha !== head) {
+      throw new PrDestinationChangedError();
+    }
+    expectedHeadSha = head;
+  }
+  await guard?.beforeDispatch?.();
+  return expectedHeadSha;
+}
+
 /**
  * Merges an environment's pull request through the GitHub API.
  *
@@ -1319,6 +1364,7 @@ export async function mergePullRequestViaGitHubApi(
   deleteBranchOf: string | null,
   cwd: string,
   expectedHeadSha?: string,
+  guard?: MergeDispatchGuard,
 ): Promise<MergePrResult> {
   const pr = parseGitHubPullRequestUrl(prUrl);
   const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
@@ -1336,6 +1382,7 @@ export async function mergePullRequestViaGitHubApi(
     }
   }
 
+  expectedHeadSha = await prepareMergeDispatch(prUrl, runGh, expectedHeadSha, guard);
   const mergeOutput = await runGh(
     [
       "api",
@@ -1379,6 +1426,7 @@ export async function mergePullRequestInContainer(
   deleteBranchOf: string | null,
   expectedHeadSha?: string,
   attachedPrUrl?: string,
+  guard?: MergeDispatchGuard,
 ): Promise<MergePrResult> {
   const runGh = createContainerGhRunner(containerId);
   const prUrl =
@@ -1405,6 +1453,7 @@ export async function mergePullRequestInContainer(
     }
   }
 
+  expectedHeadSha = await prepareMergeDispatch(prUrl, runGh, expectedHeadSha, guard);
   await runGh(
     [
       "pr",
@@ -1439,6 +1488,7 @@ export async function runStoredEnvironmentMerge<T>(
   onResult: (result: MergePrResult) => Promise<T>,
   expectedHeadSha?: string,
   expectedAutoMergeEnabledAt?: string,
+  guard?: MergeDispatchGuard,
 ): Promise<T> {
   const release = environment.projectHome
     ? await context.projectGit?.beginTurnAfterMergeSync(environment.projectId)
@@ -1452,6 +1502,7 @@ export async function runStoredEnvironmentMerge<T>(
       onResult,
       expectedHeadSha,
       expectedAutoMergeEnabledAt,
+      guard,
     );
   } finally {
     release?.();
@@ -1466,6 +1517,7 @@ async function runStoredEnvironmentMergeOnce<T>(
   onResult: (result: MergePrResult) => Promise<T>,
   expectedHeadSha?: string,
   expectedAutoMergeEnabledAt?: string,
+  guard?: MergeDispatchGuard,
 ): Promise<T> {
   if (isProjectHomeEnvironment(environment)) {
     const previousPr = environment.prUrl;
@@ -1532,7 +1584,6 @@ async function runStoredEnvironmentMergeOnce<T>(
       const current = await context.storage.getEnvironment(environment.id);
       if (
         !current?.autoMerge ||
-        !current.autoMergeCleanup ||
         current.prUrl !== environment.prUrl ||
         current.autoMergeEnabledAt !== expectedAutoMergeEnabledAt
       ) {
@@ -1551,6 +1602,7 @@ async function runStoredEnvironmentMergeOnce<T>(
               deleteBranch ? environment.id : null,
               environment.worktreePath!,
               expectedHeadSha,
+              guard,
             )
           : await mergePullRequestInContainer(
               environment.containerId!,
@@ -1558,6 +1610,7 @@ async function runStoredEnvironmentMergeOnce<T>(
               deleteBranch ? environment.id : null,
               expectedHeadSha,
               environment.prUrl ?? undefined,
+              guard,
             );
     } catch (error) {
       // The shimmer said this credential may merge; ask GitHub again on the

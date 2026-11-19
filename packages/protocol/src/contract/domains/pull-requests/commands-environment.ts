@@ -95,6 +95,8 @@ export const mergeEnvironmentPrCommand = defineCommand({
     expectedHeadSha: optionalUnknown,
     cleanupAfterMerge: optionalUnknown,
     expectedPrUrl: optionalUnknown,
+    expectedBaseRef: Schema.optionalKey(Schema.NonEmptyString),
+    expectedTargetBranch: Schema.optionalKey(Schema.NonEmptyString),
     deleteBranch,
     // Compared with the stored value as sent.
     autoMergeEnabledAt: optionalUnknown,
@@ -104,7 +106,15 @@ export const mergeEnvironmentPrCommand = defineCommand({
   // `expectedHeadSha`, `expectedPrUrl`, `autoMergeEnabledAt`: compare-and-swap
   // guards; ignored, a newer head, another PR or withdrawn options merge.
   // `method`, `deleteBranch`: ignored, the merge squashes and deletes the branch.
-  critical: ["expectedHeadSha", "expectedPrUrl", "autoMergeEnabledAt", "method", "deleteBranch"],
+  critical: [
+    "expectedHeadSha",
+    "expectedPrUrl",
+    "expectedBaseRef",
+    "expectedTargetBranch",
+    "autoMergeEnabledAt",
+    "method",
+    "deleteBranch",
+  ],
 });
 
 // --- PR monitor ------------------------------------------------------------------
@@ -147,9 +157,12 @@ export const setEnvironmentAutoMergeCommand = defineCommand({
     environmentId: Schema.String,
     enabled: Schema.Boolean,
     cleanupAfterMerge: optionalUnknown,
+    expectedPrUrl: Schema.optionalKey(Schema.NonEmptyString),
+    expectedBaseRef: Schema.optionalKey(Schema.NonEmptyString),
+    expectedTargetBranch: Schema.optionalKey(Schema.NonEmptyString),
   }),
   result: ClientEnvironmentSchema,
-  critical: [],
+  critical: ["expectedPrUrl", "expectedBaseRef", "expectedTargetBranch"],
 });
 
 /** Durably arm the next completed agent turn to re-check a conflicting PR. */

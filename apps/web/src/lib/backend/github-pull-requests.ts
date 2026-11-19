@@ -73,6 +73,9 @@ export function createGithubPullRequestsApi(client: BackendClient) {
       method: GitHubPullRequestMergeMethod;
       deleteBranch: boolean;
       expectedHeadSha?: string;
+      expectedBaseRef?: string;
+      expectedTargetBranch?: string | null;
+      projectId?: string;
     },
   ): Promise<GitHubPullRequestMergeResult> {
     return api().merge_github_pull_request({

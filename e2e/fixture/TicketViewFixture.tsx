@@ -1,3 +1,4 @@
+import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import { useLayoutEffect, useState } from "react";
 import type { BuildPipelineKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 
@@ -84,6 +85,14 @@ function ticket(status: KanbanStatus): KanbanTask {
   });
 }
 
+function installTicketBackend() {
+  // No backend behind the fixture: every read answers nothing.
+  window.orkestrator = {
+    invoke: async () => null,
+    listen: () => () => undefined,
+  } as unknown as Window["orkestrator"];
+}
+
 /**
  * The ticket view. `?column=review` opens it from the Review column (on its
  * Notes); `?ready` makes the pull request ready to merge; `?nonotes` gives
@@ -93,15 +102,12 @@ export function TicketViewFixture() {
   const params = new URLSearchParams(window.location.search);
   const column = (params.get("column") as KanbanStatus | null) ?? "in-progress";
   const ready = params.has("ready");
+  const prBaseBranch = params.get("base") ?? "main";
   const withNotes = !params.has("nonotes");
   const [open, setOpen] = useState(true);
 
   useLayoutEffect(() => {
-    // No backend behind the fixture: every read answers nothing.
-    window.orkestrator = {
-      invoke: async () => null,
-      listen: () => () => undefined,
-    } as unknown as Window["orkestrator"];
+    installTicketBackend();
     appCommandStore(useBuildPipelineStore.def).setState({
       pipelines: withNotes
         ? new Map([
@@ -119,6 +125,15 @@ export function TicketViewFixture() {
         : new Map(),
       buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
     });
+    appCommandStore(useConfigStore.def).setState(({ config }) => ({
+      config: {
+        ...config,
+        repositories: {
+          ...config.repositories,
+          ["project-1"]: { ...config.repositories["project-1"], prBaseBranch: "main" },
+        },
+      },
+    }));
     appCommandStore(useEnvironmentStore.def).setState({
       environments: [
         {
@@ -130,6 +145,7 @@ export function TicketViewFixture() {
           environmentType: "local",
           prUrl: PR_URL,
           prState: "open",
+          prBaseBranch,
           hasMergeConflicts: false,
           prMergeability: ready ? "clean" : "unstable",
         } as never,
@@ -157,7 +173,7 @@ export function TicketViewFixture() {
         ],
       ]),
     });
-  }, [ready, withNotes]);
+  }, [prBaseBranch, ready, withNotes]);
 
   const task = ticket(column);
   return (

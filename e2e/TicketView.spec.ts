@@ -106,3 +106,29 @@ test.describe("the ticket view", () => {
     await preview(page, testInfo, "no-notes");
   });
 });
+
+test("ticket merge and both auto-merge controls ask for the ticket project's destination", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/ticket-view?column=review&ready&base=release");
+  const bar = page.getByRole("toolbar", { name: "Pull request actions" });
+  await bar.getByRole("button", { name: "Merge", exact: true }).click();
+  const options = page.getByRole("alertdialog", { name: "Merge pull request" });
+  await expect(options.locator('[data-target-mismatch="true"]')).toHaveText("release");
+  const warning = page.getByRole("alertdialog", { name: "Merge into non-target branch?" });
+  await options.getByRole("button", { name: "Merge PR" }).click();
+  await expect(warning).toContainText("pull request #2113 into release");
+  await warning.getByRole("button", { name: "Cancel" }).click();
+  await options.getByRole("button", { name: "Auto-merge & Cleanup" }).click();
+  await expect(
+    warning.getByRole("button", { name: "Accept and turn on auto-merge" }),
+  ).toBeVisible();
+  await warning.getByRole("button", { name: "Cancel" }).click();
+  await options.getByRole("button", { name: "Cancel" }).click();
+  const toggle = bar.getByRole("button", { name: "Auto-merge" });
+  await toggle.click();
+  await expect(warning).toContainText("pull request #2113 into release");
+  await preview(page, testInfo, "review-auto-merge-confirmation");
+  await warning.getByRole("button", { name: "Cancel" }).click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+});

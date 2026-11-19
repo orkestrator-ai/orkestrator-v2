@@ -122,4 +122,118 @@ describe("MergePrDialog", () => {
     fireEvent.click(options().getByRole("button", { name: "Merge PR" }));
     expect(onMerge).toHaveBeenLastCalledWith(false);
   });
+
+  describe("into a branch other than the project's target", () => {
+    const targetMismatch = { actual: "dev", configured: "main" };
+
+    test("warns in the options and asks before merging", () => {
+      const onMerge = mock(() => {});
+      render(
+        <MergePrDialog {...props({ targetMismatch, merge: { disabledReason: null, onMerge } })} />,
+      );
+      expect(screen.getByTestId("merge-target-mismatch").textContent).toContain(
+        "This pull request targets dev, not main",
+      );
+      fireEvent.click(options().getByRole("button", { name: "Merge & Cleanup" }));
+      expect(onMerge).not.toHaveBeenCalled();
+      const confirmation = screen.getByTestId("merge-non-target-confirmation");
+      expect(within(confirmation).getByText("Merge into non-target branch?")).toBeTruthy();
+      expect(confirmation.textContent).toContain("Do you wish to accept?");
+      fireEvent.click(within(confirmation).getByRole("button", { name: "Accept and merge" }));
+      expect(onMerge).toHaveBeenLastCalledWith(true);
+    });
+
+    test("cancelling the question returns to the options without merging", () => {
+      const onMerge = mock(() => {});
+      const onOpenChange = mock((_open: boolean) => {});
+      render(
+        <MergePrDialog
+          {...props({ targetMismatch, onOpenChange, merge: { disabledReason: null, onMerge } })}
+        />,
+      );
+      fireEvent.click(options().getByRole("button", { name: "Merge PR" }));
+      fireEvent.click(
+        within(screen.getByTestId("merge-non-target-confirmation")).getByRole("button", {
+          name: "Cancel",
+        }),
+      );
+      expect(onMerge).not.toHaveBeenCalled();
+      expect(onOpenChange).not.toHaveBeenCalled();
+      expect(options().getByRole("button", { name: "Merge PR" })).toBeTruthy();
+    });
+
+    test("arming Auto-merge & Cleanup asks too", () => {
+      const onArm = mock(() => {});
+      render(
+        <MergePrDialog
+          {...props({
+            targetMismatch,
+            autoMergeCleanup: { ...props().autoMergeCleanup, onArm },
+          })}
+        />,
+      );
+      fireEvent.click(options().getByRole("button", { name: "Auto-merge & Cleanup" }));
+      expect(onArm).not.toHaveBeenCalled();
+      fireEvent.click(
+        within(screen.getByTestId("merge-non-target-confirmation")).getByRole("button", {
+          name: "Accept and turn on auto-merge",
+        }),
+      );
+      expect(onArm).toHaveBeenCalledTimes(1);
+    });
+
+    test("a reopened dialog starts at the options, not the question", () => {
+      const { rerender } = render(<MergePrDialog {...props({ targetMismatch })} />);
+      fireEvent.click(options().getByRole("button", { name: "Merge PR" }));
+      expect(screen.getByTestId("merge-non-target-confirmation")).toBeTruthy();
+      rerender(<MergePrDialog {...props({ targetMismatch, open: false })} />);
+      rerender(<MergePrDialog {...props({ targetMismatch, open: true })} />);
+      expect(screen.queryByTestId("merge-non-target-confirmation") === null).toBe(true);
+      expect(options().getByRole("button", { name: "Merge PR" })).toBeTruthy();
+    });
+  });
+
+  test("a matching target merges without a question", () => {
+    const onMerge = mock(() => {});
+    render(
+      <MergePrDialog
+        {...props({ targetMismatch: null, merge: { disabledReason: null, onMerge } })}
+      />,
+    );
+    expect(screen.queryByTestId("merge-target-mismatch") === null).toBe(true);
+    fireEvent.click(options().getByRole("button", { name: "Merge PR" }));
+    expect(onMerge).toHaveBeenLastCalledWith(false);
+  });
+});
+
+test("discards confirmation after a different PR with the same destination is selected", () => {
+  const mismatch = { actual: "release", configured: "main" };
+  const onMerge = mock(() => {});
+  const shared = props({ targetMismatch: mismatch, merge: { disabledReason: null, onMerge } });
+  const view = render(<MergePrDialog {...shared} prIdentity="environment-a/pr-1" />);
+  fireEvent.click(options().getByRole("button", { name: "Merge PR" }));
+  expect(screen.getByRole("button", { name: "Accept and merge" })).toBeTruthy();
+  view.rerender(<MergePrDialog {...shared} prIdentity="environment-b/pr-2" />);
+  expect(options().getByRole("button", { name: "Merge PR" })).toBeTruthy();
+  expect(onMerge).not.toHaveBeenCalled();
+});
+
+test("a cleared and restored mismatch requires a new selection", () => {
+  const shared = props({ targetMismatch: { actual: "release", configured: "main" } });
+  const view = render(<MergePrDialog {...shared} />);
+  fireEvent.click(options().getByRole("button", { name: "Merge PR" }));
+  view.rerender(<MergePrDialog {...shared} targetMismatch={null} />);
+  expect(options().getByRole("button", { name: "Merge PR" })).toBeTruthy();
+  view.rerender(<MergePrDialog {...shared} />);
+  expect(options().getByRole("button", { name: "Merge PR" })).toBeTruthy();
+});
+
+test("shows an unknown destination and disables both merge actions", () => {
+  render(<MergePrDialog {...props({ targetBranch: null })} />);
+  expect(screen.getByRole("alertdialog").textContent).toContain(
+    "Waiting for GitHub to report the destination branch.",
+  );
+  for (const name of ["Merge PR", "Merge & Cleanup", "Auto-merge & Cleanup"]) {
+    expect((options().getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+  }
 });

@@ -19,7 +19,12 @@ import { useConfigStore, useEnvironmentStore } from "@/stores";
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { isEnvironmentOwnedBranch } from "@orkestrator/protocol/environment-branch";
-import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
+import {
+  configuredPrTargetBranch,
+  environmentPrDestination,
+  prTargetMismatch,
+  pullRequestLabel,
+} from "@/lib/pr-target-mismatch";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import { TicketActionBar } from "./TicketActionBar";
@@ -78,9 +83,19 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
   const syncStatus = usePrMonitorStore((state) => state.syncStatus);
   const hold = useAutoMergeHold(environmentId, environment);
   const autoMerge = useAutoMergeToggle(environment ?? null);
-  const prBaseBranch = useConfigStore((state) =>
-    environment ? state.config.repositories[environment.projectId]?.prBaseBranch : undefined,
+  const configuredTarget = useConfigStore((state) =>
+    environment ? configuredPrTargetBranch(state.config.repositories[environment.projectId]) : null,
   );
+  const targetMismatch = prTargetMismatch({
+    actualBase: environment?.prBaseBranch,
+    configuredBase: configuredTarget,
+  });
+  const destination = environmentPrDestination(
+    environment?.prUrl,
+    environment?.prBaseBranch,
+    configuredTarget,
+  );
+  const mergeTarget = destination?.expectedBaseRef;
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [merging, setMerging] = useState(false);
 
@@ -118,10 +133,16 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
 
   const merge = async () => {
     setOptionsOpen(false);
-    if (!environment) return;
+    if (!environment || !destination) return;
     setMerging(true);
     try {
-      const result = await backend.mergeEnvironmentPr(environment.id, "squash", true, false);
+      const result = await backend.mergeEnvironmentPr(
+        environment.id,
+        "squash",
+        !environment.projectHome,
+        false,
+        destination,
+      );
       if (result.outcome === "merged") {
         toast.success("Pull request merged", { id: `ticket-merge-${environment.id}` });
       } else {
@@ -201,13 +222,25 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
           Merge
         </Button>
       </span>
-      <AutoMergeToggleButton environmentId={environmentId} />
+      <AutoMergeToggleButton environmentId={environmentId} destination={destination} />
       <MergePrDialog
         open={optionsOpen}
         onOpenChange={setOptionsOpen}
         mergeability={prMergeability(environment?.hasMergeConflicts)}
         sourceBranch={prNumber ? `#${prNumber}` : "this pull request"}
-        targetBranch={defaultPrTargetBranch(prBaseBranch)}
+        targetBranch={
+          mergeTarget ? (
+            <span
+              data-target-mismatch={targetMismatch ? "true" : undefined}
+              className={cn("font-mono", targetMismatch && "font-semibold text-failure")}
+            >
+              {mergeTarget}
+            </span>
+          ) : null
+        }
+        targetMismatch={targetMismatch}
+        prIdentity={JSON.stringify([environmentId, environment?.prUrl])}
+        prLabel={pullRequestLabel(environment?.prUrl)}
         deletesBranch={Boolean(
           environment && isEnvironmentOwnedBranch(environment.id, environment.branch),
         )}
@@ -227,7 +260,13 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
           hold,
           onArm: () => {
             setOptionsOpen(false);
-            if (environment) void armAutoMergeCleanup(environment.id, autoMerge.set, hold);
+            if (environment && destination) {
+              void armAutoMergeCleanup(
+                environment.id,
+                (enabled, cleanup) => autoMerge.set(enabled, cleanup, destination),
+                hold,
+              );
+            }
           },
         }}
       />

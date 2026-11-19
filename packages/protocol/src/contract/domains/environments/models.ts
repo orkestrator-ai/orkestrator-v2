@@ -364,6 +364,8 @@ export const clientEnvironmentFields = {
   autoMergeCleanup: optionalBoolean,
   /** PR-specific authorization and freshness fence. */
   autoMergePrUrl: optionalNullableString,
+  autoMergeBaseRef: optionalNullableString,
+  autoMergeTargetBranch: optionalNullableString,
   autoMergeEnabledAt: optionalNullableString,
   /** Last automatic attempt failure, cleared after recovery. */
   autoMergeError: optionalNullableString,

@@ -134,6 +134,9 @@ export interface PullRequestsState {
       method: GitHubPullRequestMergeMethod;
       deleteBranch: boolean;
       expectedHeadSha?: string;
+      expectedBaseRef?: string;
+      expectedTargetBranch?: string | null;
+      projectId?: string;
     },
   ) => Promise<GitHubPullRequestMergeResult>;
   updateState: (ref: GitHubPullRequestRef, action: GitHubPullRequestStateAction) => Promise<void>;

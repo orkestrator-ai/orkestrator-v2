@@ -1,3 +1,5 @@
+import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
+import { PrDestinationChangedError } from "./commands-review.js";
 import { projectHomePrTarget } from "./commands-pr-monitor.js";
 import {
   isProjectHomeEnvironment,
@@ -292,6 +294,8 @@ export function registerPullRequestCommands(
         cleanupAfterMerge,
         expectedHeadSha,
         expectedPrUrl,
+        expectedBaseRef,
+        expectedTargetBranch,
         autoMergeEnabledAt,
       },
       context,
@@ -305,6 +309,9 @@ export function registerPullRequestCommands(
       }
       const environment = await context.storage.getEnvironment(id);
       if (!environment) throw new Error(`Environment not found: ${id}`);
+      if (expectedBaseRef !== undefined && expectedPrUrl === undefined) {
+        throw new Error("A destination check requires the pull request URL.");
+      }
 
       const requestedCleanup = asBoolean(cleanupAfterMerge, false);
       const cleanupRequested =
@@ -317,23 +324,36 @@ export function registerPullRequestCommands(
       ) {
         throw new Error("The pull request or merge effects changed; confirm the merge again");
       }
-      const automaticCleanup = autoMergeEnabledAt !== undefined;
+      const automatic = autoMergeEnabledAt !== undefined;
       if (
-        automaticCleanup &&
+        automatic &&
         (environment.autoMerge !== true ||
           environment.autoMergeEnabledAt !== autoMergeEnabledAt ||
-          environment.autoMergeCleanup !== true)
+          (environment.autoMergeCleanup === true && !requestedCleanup))
       ) {
         throw new Error("Auto-merge options changed; retry with current options");
       }
       // Automatic intent remains revocable until confirmation; manual requests
       // retain their independent durable recovery timestamp.
-      if (requestedCleanup && !automaticCleanup) {
-        await context.storage.updateEnvironment(id, {
-          cleanupAfterMergeRequestedAt: new Date().toISOString(),
-          cleanupAfterMergeError: null,
-        });
-      }
+      const beforeDispatch = async () => {
+        if (expectedBaseRef !== undefined) {
+          const current = await context.storage.getEnvironment(id);
+          if (current?.prUrl !== expectedPrUrl) throw new PrDestinationChangedError();
+          const repository = await context.storage.getRepositoryConfig(environment.projectId);
+          if (
+            defaultPrTargetBranch(repository.prBaseBranch) !==
+            (expectedTargetBranch ?? expectedBaseRef)
+          ) {
+            throw new PrDestinationChangedError();
+          }
+        }
+        if (requestedCleanup && !automatic) {
+          await context.storage.updateEnvironment(id, {
+            cleanupAfterMergeRequestedAt: new Date().toISOString(),
+            cleanupAfterMergeError: null,
+          });
+        }
+      };
 
       const armMergeReconciliation = async (): Promise<void> => {
         await context.runtime.prMonitor.sync(context);
@@ -346,6 +366,7 @@ export function registerPullRequestCommands(
         }
       };
 
+      if (expectedBaseRef === undefined && requestedCleanup && !automatic) await beforeDispatch();
       try {
         return await runStoredEnvironmentMerge(
           environment,
@@ -424,9 +445,12 @@ export function registerPullRequestCommands(
           },
           expectedHeadSha as string | undefined,
           autoMergeEnabledAt as string | undefined,
+          expectedBaseRef === undefined ? undefined : { expectedBaseRef, beforeDispatch },
         );
       } catch (error) {
-        if (cleanupRequested) {
+        if (error instanceof PrDestinationChangedError) {
+          await context.runtime.prMonitor.requestRefresh(id, context).catch(() => undefined);
+        } else if (cleanupRequested) {
           await armMergeReconciliation().catch(() => undefined);
         }
         throw error;
@@ -491,21 +515,44 @@ export function registerPullRequestCommands(
       args.cleanupAfterMerge === undefined
         ? false
         : asRequiredBoolean(args.cleanupAfterMerge, "cleanupAfterMerge");
-    if (enabled && cleanupAfterMerge) {
-      const environment = await context.storage.getEnvironment(id);
-      if (!environment) throw new Error(`Environment not found: ${id}`);
-      if (isProjectHomeEnvironment(environment)) {
-        throw new Error("A project's home checkout cannot be deleted after merging");
-      }
-    }
     const current = await context.storage.getEnvironment(id);
-    if (current?.lifecycleOperation === "merging" || context.runtime.environments?.isMerging(id)) {
-      throw new Error("A merge is in progress; wait for its result before changing integration");
+    if (!current) throw new Error(`Environment not found: ${id}`);
+    if (enabled && cleanupAfterMerge && isProjectHomeEnvironment(current)) {
+      throw new Error("A project's home checkout cannot be deleted after merging");
     }
-    const updated = await context.storage.updateEnvironment(id, {
-      autoMerge: enabled,
-      autoMergeCleanup: enabled && cleanupAfterMerge,
-    });
+    const target = enabled
+      ? defaultPrTargetBranch(
+          (await context.storage.getRepositoryConfig(current.projectId)).prBaseBranch,
+        )
+      : null;
+    const updated = await context.storage.updateEnvironment(
+      id,
+      {
+        autoMerge: enabled,
+        autoMergeCleanup: enabled && cleanupAfterMerge,
+        autoMergeBaseRef: enabled ? (args.expectedBaseRef ?? target) : null,
+        autoMergeTargetBranch: target,
+      },
+      (latest) => {
+        if (
+          latest.lifecycleOperation === "merging" ||
+          context.runtime.environments?.isMerging(id)
+        ) {
+          throw new Error(
+            "A merge is in progress; wait for its result before changing integration",
+          );
+        }
+        if (
+          enabled &&
+          args.expectedBaseRef !== undefined &&
+          (latest.prUrl !== args.expectedPrUrl ||
+            latest.prBaseBranch?.trim() !== args.expectedBaseRef ||
+            target !== (args.expectedTargetBranch ?? args.expectedBaseRef))
+        )
+          throw new PrDestinationChangedError();
+        return true;
+      },
+    );
     if (enabled) {
       // Advisory: the durable flag stands even if the monitor cannot check now.
       await context.runtime.prMonitor.requestRefresh(id, context).catch((error) => {

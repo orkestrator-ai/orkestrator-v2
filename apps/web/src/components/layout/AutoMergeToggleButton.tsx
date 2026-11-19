@@ -3,6 +3,8 @@ import { AutoMergeIcon } from "@/components/icons/AutoMergeIcon";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAutoMergeHold } from "@/hooks/useEnvironmentNameSignal";
+import type { EnvironmentPrDestination } from "@/lib/backend/config-integrations";
+import { useAutoMergeConfirmation } from "./useAutoMergeConfirmation";
 import { cn } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores";
 import { useAutoMergeToggle } from "./useAutoMergeToggle";
@@ -15,58 +17,72 @@ import { useAutoMergeToggle } from "./useAutoMergeToggle";
  */
 export function AutoMergeToggleButton({
   environmentId,
+  destination,
   className,
 }: {
   environmentId: string;
+  destination: EnvironmentPrDestination | null;
   className?: string;
 }) {
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
   const autoMerge = useAutoMergeToggle(environment ?? null);
+  const confirmation = useAutoMergeConfirmation(environmentId, destination, autoMerge);
+  const { mismatch } = confirmation;
   const hold = useAutoMergeHold(environmentId, environment);
   if (!environment?.prUrl || environment.prState !== "open") return null;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            className={cn(
-              "size-7",
-              autoMerge.enabled &&
-                "border-green-600 bg-green-600/15 text-white hover:bg-green-600/25 hover:text-white",
-              className,
-            )}
-            aria-label="Auto-merge"
-            aria-pressed={autoMerge.enabled}
-            disabled={autoMerge.saving}
-            onClick={() => void autoMerge.toggle()}
-          >
-            {autoMerge.saving ? <Loader2 className="size-4 animate-spin" /> : <AutoMergeIcon />}
-          </Button>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={5}>
-        {environment.autoMergeError ? (
-          <p>Auto-merge: {environment.autoMergeError}</p>
-        ) : (
-          <>
-            <p>
-              {autoMerge.enabled
-                ? `${autoMerge.cleanup ? "Auto-merge & Cleanup" : "Auto-merge"} is on: merges as soon as GitHub reports it ready. Click to turn off.`
-                : "Merge this PR automatically once it is ready, resolving conflicts as needed"}
-            </p>
-            {hold ? (
-              <p className="text-xs text-muted-foreground">
-                {autoMerge.enabled ? "Waiting: " : "Not ready yet: "}
-                {hold.message}
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex shrink-0">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              className={cn(
+                "size-7",
+                autoMerge.enabled &&
+                  "border-green-600 bg-green-600/15 text-white hover:bg-green-600/25 hover:text-white",
+                !autoMerge.enabled && mismatch && "text-failure",
+                className,
+              )}
+              aria-label="Auto-merge"
+              aria-pressed={autoMerge.enabled}
+              disabled={confirmation.disabled}
+              onClick={confirmation.toggle}
+            >
+              {autoMerge.saving ? <Loader2 className="size-4 animate-spin" /> : <AutoMergeIcon />}
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={5}>
+          {environment.autoMergeError ? (
+            <p>Auto-merge: {environment.autoMergeError}</p>
+          ) : (
+            <>
+              <p>
+                {autoMerge.enabled
+                  ? `${autoMerge.cleanup ? "Auto-merge & Cleanup" : "Auto-merge"} is on: merges as soon as GitHub reports it ready. Click to turn off.`
+                  : "Merge this PR automatically once it is ready, resolving conflicts as needed"}
               </p>
-            ) : null}
-          </>
-        )}
-      </TooltipContent>
-    </Tooltip>
+              {!autoMerge.enabled && mismatch && (
+                <p className="text-failure">
+                  Targets {mismatch.actual}. Project target is {mismatch.configured}.
+                </p>
+              )}
+              {!destination && !autoMerge.enabled && <p>Waiting for the destination branch.</p>}
+              {hold ? (
+                <p className="text-xs text-muted-foreground">
+                  {autoMerge.enabled ? "Waiting: " : "Not ready yet: "}
+                  {hold.message}
+                </p>
+              ) : null}
+            </>
+          )}
+        </TooltipContent>
+      </Tooltip>
+      {confirmation.confirmation}
+    </>
   );
 }

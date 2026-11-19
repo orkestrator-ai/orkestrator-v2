@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:26da6766f1722055a225132ee83dc3aa022fbb8080228494c72f3a272ac2f44d",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cleanupAfterMerge": {},
+        "enabled": {
+          "type": "boolean"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "expectedBaseRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedPrUrl": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedTargetBranch": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": ["enabled", "environmentId"],
+      "type": "object"
+    }
+  }
+}

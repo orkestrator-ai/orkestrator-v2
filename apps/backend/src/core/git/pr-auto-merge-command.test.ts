@@ -87,6 +87,47 @@ test("set_environment_auto_merge persists the flag and waits for the requested m
   });
 });
 
+test("arming stores the accepted destination and refuses a changed observation", async () => {
+  await withStorage(async (storage) => {
+    const url = "https://github.com/o/r/pull/1";
+    const environment = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: url,
+      prState: "open",
+      prBaseBranch: "release",
+    });
+    const requestRefresh = mock(async () => undefined);
+    const context = {
+      storage,
+      runtime: { prMonitor: { requestRefresh } },
+    } as unknown as CommandContext;
+    const command = createCommandRegistry().get("set_environment_auto_merge")!;
+    const args = {
+      environmentId: environment.id,
+      enabled: true,
+      expectedPrUrl: url,
+      expectedTargetBranch: "main",
+    };
+    await expect(command({ ...args, expectedBaseRef: "main" }, context)).rejects.toThrow(
+      "destination changed",
+    );
+    expect((await storage.getEnvironment(environment.id))?.autoMerge).toBeFalsy();
+    expect(requestRefresh).not.toHaveBeenCalled();
+    await command({ ...args, expectedBaseRef: "release" }, context);
+    expect(await storage.getEnvironment(environment.id)).toMatchObject({
+      autoMerge: true,
+      autoMergeBaseRef: "release",
+      autoMergeTargetBranch: "main",
+    });
+    await command({ environmentId: environment.id, enabled: false }, context);
+    expect(await storage.getEnvironment(environment.id)).toMatchObject({
+      autoMerge: false,
+      autoMergeBaseRef: null,
+      autoMergeTargetBranch: null,
+    });
+  });
+});
+
 test("set_environment_auto_merge records cleanup only with auto-merge, and each call restates it", async () => {
   await withStorage(async (storage) => {
     const environment = await storage.addEnvironment({

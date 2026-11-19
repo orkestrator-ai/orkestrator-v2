@@ -274,11 +274,18 @@ const selectedEnvironment: Environment = {
   status: "running",
   prUrl: "https://github.com/org/repo/pull/1",
   prState: "merged",
+  prBaseBranch: "main",
   hasMergeConflicts: false,
   createdAt: "2026-01-01T00:00:00.000Z",
   networkAccessMode: "restricted",
   order: 0,
   environmentType: "containerized",
+};
+
+const mainDestination = {
+  expectedPrUrl: "https://github.com/org/repo/pull/1",
+  expectedBaseRef: "main",
+  expectedTargetBranch: "main",
 };
 
 const selectedProject: Project = {
@@ -340,7 +347,7 @@ let currentExperimentalGraphs: boolean | undefined;
 let currentExperimentalTmux: boolean | undefined;
 let currentRepositoryConfig: Record<
   string,
-  { prBaseBranch?: string; agentSettings?: AgentSettingsTier }
+  { prBaseBranch?: string; defaultBranch?: string; agentSettings?: AgentSettingsTier }
 > = {
   "project-1": { prBaseBranch: "main" },
 };
@@ -4460,6 +4467,7 @@ describe("ActionBar workflow tabs", () => {
       ...selectedEnvironment,
       prState: "open",
       hasMergeConflicts: true,
+      prBaseBranch: undefined,
     };
     const view = renderInAppCommandScope(<ActionBar />);
 
@@ -6022,7 +6030,12 @@ describe("ActionBar pull request actions", () => {
     });
     expect(mergeOptions() === null).toBe(true);
     await waitFor(() =>
-      expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith("env-1", true, true),
+      expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith(
+        "env-1",
+        true,
+        true,
+        mainDestination,
+      ),
     );
     expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
   });
@@ -7110,10 +7123,68 @@ describe("ActionBar successful cleanup and merge actions", () => {
       fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 
       await waitFor(() =>
-        expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
+        expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+          "env-1",
+          "squash",
+          true,
+          false,
+          mainDestination,
+        ),
       );
       expect(useMergePrRequestStore.getState().request).toBeNull();
       expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
+    });
+
+    test("a PR into another branch than the project's target is red and asks first", async () => {
+      currentRepositoryConfig = { "project-1": { prBaseBranch: "main" } };
+      currentEnvironment = {
+        ...selectedEnvironment,
+        prState: "open",
+        hasMergeConflicts: false,
+        prBaseBranch: "dev",
+      };
+      renderInAppCommandScope(<ActionBar />);
+      expect(screen.getByTestId("pr-target-mismatch").textContent).toBe("→ dev");
+
+      fireEvent.click(mergePrButton());
+      const dialog = screen.getByTestId("alert-dialog-content");
+      expect(dialog.querySelector('[data-target-mismatch="true"]')?.textContent).toBe("dev");
+      expect(screen.getByTestId("merge-target-mismatch").textContent).toContain(
+        "targets dev, not main",
+      );
+      fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
+      expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
+      expect(screen.getByText("Merge into non-target branch?")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Accept and merge" }));
+
+      await waitFor(() =>
+        expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false, {
+          ...mainDestination,
+          expectedBaseRef: "dev",
+        }),
+      );
+    });
+
+    test("a PR into the project's target branch merges without the extra question", async () => {
+      currentRepositoryConfig = { "project-1": { prBaseBranch: "", defaultBranch: "develop" } };
+      currentEnvironment = {
+        ...selectedEnvironment,
+        prState: "open",
+        hasMergeConflicts: false,
+        prBaseBranch: "main",
+      };
+      renderInAppCommandScope(<ActionBar />);
+      expect(screen.queryByTestId("pr-target-mismatch") === null).toBe(true);
+      confirmMerge();
+      await waitFor(() =>
+        expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+          "env-1",
+          "squash",
+          true,
+          false,
+          mainDestination,
+        ),
+      );
     });
 
     test("selects a different row through real selection state and merges its PR", async () => {
@@ -7153,7 +7224,13 @@ describe("ActionBar successful cleanup and merge actions", () => {
         );
         fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
         await waitFor(() =>
-          expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(target.id, "squash", true, false),
+          expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+            target.id,
+            "squash",
+            true,
+            false,
+            mainDestination,
+          ),
         );
       } finally {
         cleanup();
@@ -7271,7 +7348,13 @@ describe("ActionBar successful cleanup and merge actions", () => {
     confirmMergeAndCleanup();
 
     await waitFor(() =>
-      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+        "env-1",
+        "squash",
+        true,
+        true,
+        mainDestination,
+      ),
     );
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
     expect(mergePrMock).not.toHaveBeenCalled();
@@ -7300,7 +7383,13 @@ describe("ActionBar successful cleanup and merge actions", () => {
     confirmMergeAndCleanup();
 
     await waitFor(() =>
-      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+        "env-1",
+        "squash",
+        true,
+        true,
+        mainDestination,
+      ),
     );
     expect(setProjectCollapsedMock).toHaveBeenCalledWith("project-1", false);
     expect(selectProjectMock).toHaveBeenCalledWith("project-1");
@@ -7317,7 +7406,13 @@ describe("ActionBar successful cleanup and merge actions", () => {
     confirmMergeAndCleanup();
 
     await waitFor(() =>
-      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+        "env-1",
+        "squash",
+        true,
+        true,
+        mainDestination,
+      ),
     );
     expect(setProjectCollapsedMock).toHaveBeenCalledWith("project-1", false);
     expect(selectProjectMock).toHaveBeenCalledWith("project-1");
@@ -7335,7 +7430,13 @@ describe("ActionBar successful cleanup and merge actions", () => {
     confirmMergeAndCleanup();
 
     await waitFor(() =>
-      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+        "env-1",
+        "squash",
+        true,
+        true,
+        mainDestination,
+      ),
     );
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
   });
@@ -7446,7 +7547,13 @@ describe("ActionBar successful cleanup and merge actions", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 
     await waitFor(() =>
-      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+        "env-1",
+        "squash",
+        true,
+        false,
+        mainDestination,
+      ),
     );
 
     mergeEnvironmentPrMock.mockClear();
@@ -7464,7 +7571,13 @@ describe("ActionBar successful cleanup and merge actions", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 
     await waitFor(() =>
-      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+        "env-1",
+        "squash",
+        true,
+        false,
+        mainDestination,
+      ),
     );
     expect(mergePrMock).not.toHaveBeenCalled();
   });
@@ -8562,7 +8675,13 @@ describe("ActionBar merge completion", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 
     await waitFor(() => {
-      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false);
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+        "env-1",
+        "squash",
+        true,
+        false,
+        mainDestination,
+      );
       expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
         description: "feature/very-long-error",
         id: "branch-merged-env-1",
@@ -8671,7 +8790,13 @@ describe("ActionBar merge completion", () => {
     const { unmount } = renderInAppCommandScope(<ActionBar />);
     confirmMergeAndCleanup();
     await waitFor(() =>
-      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+        "env-1",
+        "squash",
+        true,
+        true,
+        mainDestination,
+      ),
     );
 
     unmount();
@@ -8765,7 +8890,13 @@ describe("ActionBar error dialogs", () => {
     const errorAlert = await waitFor(() => findErrorAlert("Failed to merge PR:"));
     const dialogContent = screen.getByTestId("alert-dialog-content");
 
-    expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false);
+    expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+      "env-1",
+      "squash",
+      true,
+      false,
+      mainDestination,
+    );
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(dialogContent.className).toContain("max-h-[calc(100vh-2rem)]");
     // The merge options can outgrow a short window, so the dialog scrolls.
@@ -8801,7 +8932,13 @@ describe("ActionBar error dialogs", () => {
 
     const errorAlert = await waitFor(() => findErrorAlert("Failed to merge PR:"));
     expect(errorAlert.textContent).toContain("local merge failed");
-    expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false);
+    expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+      "env-1",
+      "squash",
+      true,
+      false,
+      mainDestination,
+    );
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
@@ -8822,6 +8959,28 @@ describe("ActionBar error dialogs", () => {
 });
 
 describe("ActionBar auto-merge", () => {
+  test("requires consent to arm auto-merge into a different branch and turns off immediately", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open", prBaseBranch: "dev" };
+    const view = renderInAppCommandScope(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto-merge" }));
+    expect(setEnvironmentAutoMergeMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("alert-dialog-content").textContent).toContain("pull request #1");
+    fireEvent.click(screen.getByRole("button", { name: "Accept and turn on auto-merge" }));
+    await waitFor(() =>
+      expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith("env-1", true, undefined, {
+        ...mainDestination,
+        expectedBaseRef: "dev",
+      }),
+    );
+
+    currentEnvironment = { ...currentEnvironment, autoMerge: true };
+    view.rerender(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto-merge" }));
+    await waitFor(() =>
+      expect(setEnvironmentAutoMergeMock).toHaveBeenLastCalledWith("env-1", false, undefined),
+    );
+  });
+
   test("saves the open PR toggle, disables it during saving, and reflects on/off", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open", autoMerge: false };
     let finish!: (environment: Environment) => void;
@@ -8836,6 +8995,7 @@ describe("ActionBar auto-merge", () => {
       currentEnvironment.id,
       true,
       undefined,
+      mainDestination,
     );
     expect(toggle.disabled).toBe(true);
     await act(async () => finish({ ...currentEnvironment, autoMerge: true }));

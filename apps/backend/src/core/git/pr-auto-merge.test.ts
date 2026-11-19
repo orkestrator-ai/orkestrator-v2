@@ -245,8 +245,26 @@ function harness(
 }
 
 describe("PrAutoMergeController", () => {
+  test("holds a retargeted PR even though its head is ready and unchanged", async () => {
+    const h = harness(
+      environment({
+        prBaseBranch: "release",
+        autoMergeBaseRef: "main",
+        autoMergeTargetBranch: "main",
+      }),
+    );
+    try {
+      await h.controller.evaluate("env-1");
+      expect(h.invocations).toEqual([]);
+      expect(h.stored.autoMergeError).toContain("destination changed");
+    } finally {
+      h.controller.dispose();
+    }
+  });
+
   test("merges a ready PR when the monitor announces it", async () => {
-    const h = harness(environment());
+    const env = environment();
+    const h = harness(env);
     h.controller.start();
     await h.announce();
     expect(h.invocations).toEqual([
@@ -259,6 +277,9 @@ describe("PrAutoMergeController", () => {
           cleanupAfterMerge: false,
           expectedHeadSha: "a".repeat(40),
           expectedPrUrl: PR_URL,
+          expectedBaseRef: "develop",
+          expectedTargetBranch: "develop",
+          autoMergeEnabledAt: env.autoMergeEnabledAt,
         },
       },
     ]);

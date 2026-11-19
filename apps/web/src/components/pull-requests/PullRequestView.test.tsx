@@ -1,8 +1,11 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GitHubPullRequestDetail } from "@orkestrator/protocol/github-pull-requests";
+import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
 import type { Environment } from "@/types";
 import { uiStore } from "@/stores/uiStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
@@ -20,7 +23,10 @@ import {
 } from "./pull-request-test-fixtures";
 import { appCommandStore } from "@/test/app-command-store";
 
-function renderView(detail: GitHubPullRequestDetail, props: { onSummaryLoaded?: () => void } = {}) {
+function renderView(
+  detail: GitHubPullRequestDetail,
+  props: { onSummaryLoaded?: () => void; projectId?: string } = {},
+) {
   installBackend({
     get_github_pull_request: () => detail,
     get_github_pull_request_timeline: () => ({ ref: prRef, items: [], truncated: false }),
@@ -41,12 +47,51 @@ function renderView(detail: GitHubPullRequestDetail, props: { onSummaryLoaded?: 
   );
 }
 
+const originalConfig = appCommandStore(configStore).getState().config;
+
+let restoreDomains: () => void;
 beforeEach(() => {
+  const domains = spyOn(getWindowScope().commandScope().client.domains, "get").mockReturnValue({
+    "pull-requests": { min: 1, max: 4 },
+  });
+  restoreDomains = () => domains.mockRestore();
   resetPullRequestsStore();
   appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(projectStore).setState({ projects: [] });
+  appCommandStore(configStore).setState({ config: originalConfig });
 });
 
+/** A project tracking acme/widget whose settings name `prBaseBranch` as the PR target. */
+function trackWidgetProject(prBaseBranch: string) {
+  appCommandStore(projectStore).setState({
+    projects: [
+      {
+        id: "project-widget",
+        name: "widget",
+        gitUrl: "git@github.com:acme/widget.git",
+        localPath: null,
+        addedAt: "2026-11-01T00:00:00.000Z",
+        order: 0,
+      },
+    ],
+  });
+  appCommandStore(configStore).setState({
+    config: {
+      ...originalConfig,
+      repositories: {
+        ...originalConfig.repositories,
+        "project-widget": {
+          ...originalConfig.repositories["project-widget"],
+          defaultBranch: "main",
+          prBaseBranch,
+        },
+      },
+    },
+  });
+}
+
 afterEach(() => {
+  restoreDomains();
   cleanup();
   resetBackend();
 });
@@ -167,6 +212,8 @@ describe("PullRequestView", () => {
       method: "squash",
       deleteBranch: true,
       expectedHeadSha: "abc1234def5678",
+      expectedBaseRef: "main",
+      expectedTargetBranch: null,
     });
   });
 
@@ -208,6 +255,46 @@ describe("PullRequestView", () => {
       );
     });
   }
+
+  test("a base other than the project's target branch is red and the merge asks first", async () => {
+    trackWidgetProject("main");
+    renderView(makeDetail({ baseRef: "dev" }));
+    await screen.findByText("feat: add usage history tab");
+
+    const base = screen.getByTestId("pull-request-base-ref");
+    expect(base.getAttribute("data-target-mismatch")).toBe("true");
+    expect(base.className).toContain("text-failure");
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Merge into non-target branch?")).toBeTruthy();
+    expect(within(dialog).getByTestId("merge-target-mismatch").textContent).toContain(
+      "targets dev, but the target branch set in this project's settings is main. Do you wish to accept?",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Accept and merge" }));
+    await waitFor(() => expect(callsFor("merge_github_pull_request")).toHaveLength(1));
+  });
+
+  test("a base matching the project's target branch keeps its usual colour and dialog", async () => {
+    trackWidgetProject("main");
+    renderView(makeDetail({ baseRef: "main" }));
+    await screen.findByText("feat: add usage history tab");
+    expect(
+      screen.getByTestId("pull-request-base-ref").getAttribute("data-target-mismatch"),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Merge pull request #42?")).toBeTruthy();
+    expect(within(dialog).queryByTestId("merge-target-mismatch") === null).toBe(true);
+  });
+
+  test("a pull request in a repository no project tracks is never flagged", async () => {
+    renderView(makeDetail({ baseRef: "dev" }));
+    await screen.findByText("feat: add usage history tab");
+    expect(
+      screen.getByTestId("pull-request-base-ref").getAttribute("data-target-mismatch"),
+    ).toBeNull();
+  });
 
   test("hides the Merge button once the pull request is merged", async () => {
     renderView(makeDetail({ state: "merged", mergeability: "unavailable" }));
@@ -308,4 +395,60 @@ test("the label picker sends one change from a stale detail without replacing ot
   });
   expect(callsFor("set_github_pull_request_labels")).toHaveLength(0);
   expect(await screen.findByText("externally-added")).toBeTruthy();
+});
+
+test("uses the originating project when repository matches disagree", async () => {
+  trackWidgetProject("main");
+  const project = appCommandStore(projectStore).getState().projects[0]!;
+  appCommandStore(projectStore).setState({
+    projects: [project, { ...project, id: "other", gitUrl: "https://github.com/acme/widget.git" }],
+  });
+  const config = appCommandStore(configStore).getState().config;
+  const original = config.repositories[project.id]!;
+  appCommandStore(configStore).setState({
+    config: {
+      ...config,
+      repositories: { ...config.repositories, other: { ...original, prBaseBranch: "dev" } },
+    },
+  });
+  renderView(makeDetail({ baseRef: "dev" }), { projectId: project.id });
+  await screen.findByText("feat: add usage history tab");
+  expect(screen.getByTestId("pull-request-base-ref").dataset.targetMismatch).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+  expect(await screen.findByText("Merge into non-target branch?")).toBeTruthy();
+});
+
+test("refreshes a rejected destination and asks for fresh consent on the same head", async () => {
+  trackWidgetProject("main");
+  let liveBase = "main";
+  const completed: string[] = [];
+  installBackend({
+    get_github_pull_request: () => makeDetail({ baseRef: liveBase }),
+    merge_github_pull_request: (args) => {
+      if (args.expectedBaseRef !== liveBase)
+        throw new Error("The pull request destination changed");
+      completed.push(liveBase);
+      return { merged: true };
+    },
+  });
+  renderInAppCommandScope(<PullRequestView pullRequest={prRef} layout="sidebar" />);
+  await screen.findByText("feat: add usage history tab");
+  const merge = screen.getByRole("button", { name: "Merge" });
+  fireEvent.click(merge);
+  liveBase = "release";
+  fireEvent.click(screen.getByRole("button", { name: "Squash and merge" }));
+  await waitFor(() =>
+    expect(screen.getByTestId("pull-request-base-ref").textContent).toBe("release"),
+  );
+  expect(completed).toEqual([]);
+  expect(screen.queryByRole("alertdialog") === null).toBe(true);
+
+  fireEvent.click(merge);
+  expect(await screen.findByText("Merge into non-target branch?")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Accept and merge" }));
+  await waitFor(() => expect(completed).toEqual(["release"]));
+  expect(callsFor("merge_github_pull_request").map((args) => args.expectedHeadSha)).toEqual([
+    "abc1234def5678",
+    "abc1234def5678",
+  ]);
 });

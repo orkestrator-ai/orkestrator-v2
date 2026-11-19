@@ -747,12 +747,14 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     method?: MergeMethod,
     deleteBranch?: boolean,
     cleanupAfterMerge?: boolean,
+    destination?: EnvironmentPrDestination,
   ): Promise<MergeEnvironmentPrResult> {
     return prDomain().merge_environment_pr({
       environmentId,
       method,
       deleteBranch,
       cleanupAfterMerge,
+      ...destination,
     });
   }
 
@@ -766,11 +768,13 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     environmentId: string,
     enabled: boolean,
     cleanupAfterMerge?: boolean,
+    destination?: EnvironmentPrDestination,
   ): Promise<Environment> {
     return prDomain().set_environment_auto_merge({
       environmentId,
       enabled,
       ...(cleanupAfterMerge === undefined ? {} : { cleanupAfterMerge }),
+      ...destination,
     });
   }
 
@@ -897,3 +901,10 @@ export const {
   mergePr,
 } = createConfigIntegrationsApi(commandBackendClient);
 // --- Docker Commands ---
+
+/** The pull request and destination displayed when the user authorized a merge. */
+export type EnvironmentPrDestination = {
+  expectedPrUrl: string;
+  expectedBaseRef: string;
+  expectedTargetBranch?: string;
+};

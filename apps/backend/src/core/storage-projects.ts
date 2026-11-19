@@ -1335,6 +1335,8 @@ export class ProjectsRepository {
         environment.autoMerge &&
         environment.autoMergeCleanup &&
         environment.autoMergePrUrl === environment.prUrl &&
+        (!environment.autoMergeBaseRef ||
+          environment.autoMergeBaseRef === environment.prBaseBranch) &&
         environment.prState === "merged" &&
         environment.prUrl === previousPrUrl &&
         environment.branch === previousBranch &&
@@ -1353,6 +1355,14 @@ export class ProjectsRepository {
         environment.autoMerge =
           updates.autoMerge === true && !!environment.prUrl && environment.prState === "open";
         environment.autoMergePrUrl = environment.autoMerge ? environment.prUrl : null;
+        environment.autoMergeBaseRef =
+          environment.autoMerge && typeof updates.autoMergeBaseRef === "string"
+            ? updates.autoMergeBaseRef
+            : null;
+        environment.autoMergeTargetBranch =
+          environment.autoMerge && typeof updates.autoMergeTargetBranch === "string"
+            ? updates.autoMergeTargetBranch
+            : null;
         environment.autoMergeEnabledAt = environment.autoMerge ? new Date().toISOString() : null;
         environment.autoMergeError = null;
         // Set only together with `autoMerge`, so a later toggle that does not
@@ -1372,6 +1382,8 @@ export class ProjectsRepository {
       ) {
         environment.autoMerge = false;
         environment.autoMergePrUrl = null;
+        environment.autoMergeBaseRef = null;
+        environment.autoMergeTargetBranch = null;
         environment.autoMergeEnabledAt = null;
         environment.autoMergeError = null;
         environment.autoMergeCleanup = false;

@@ -105,6 +105,7 @@ export function FilesPanelPullRequests({ targetId }: { targetId: string | null }
             key={`${active.key}:${active.openRequest}`}
             className="min-h-0 flex-1"
             pullRequest={active.ref}
+            projectId={projectId ?? undefined}
             initialView={active.view}
             layout="sidebar"
             onSummaryLoaded={(summary) => updatePullRequestTab(targetId, active.key, summary)}

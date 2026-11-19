@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, mkdir, realpath, rm, writeFile, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { StorageService, createProject } from "./storage.js";
+import { StorageService, createEnvironment, createProject } from "./storage.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { startEnvironmentSetupOnce } from "./commands-environment.js";
@@ -136,6 +136,7 @@ printf '%s %s\\n' "$PWD" "$*" >> '${log}'
 case "$*" in
   *list*) cat '${path.join(root, "list.json")}';;
   *headRefName*) printf '%s\\n' '{"url":"https://github.com/org/repo/pull/1","state":"OPEN","headRefName":"feature/A","baseRefName":"main","isCrossRepository":false}';;
+  *baseRefName,headRefOid*) printf '%s\\n' '{"baseRefName":"release","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}';;
   *isDraft*) printf '%s\\n' '{"isDraft":false}';;
   *PUT*) printf '%s\\n' '{"merged":true}';;
   *) printf '%s\\n' '{}';;
@@ -477,3 +478,47 @@ for (const read of [
     expect(switched.untrackedChanges).toBe(0);
   });
 }
+
+test("refuses to merge a retargeted pull request before a second confirmation", async () => {
+  const url = "https://github.com/org/repo/pull/1";
+  const environment = await storage.addEnvironment({
+    ...createEnvironment(projectId),
+    environmentType: "local",
+    worktreePath: checkout,
+    prUrl: url,
+    prState: "open",
+    prBaseBranch: "main",
+  });
+  const gh = await fakeGh();
+  try {
+    const args = {
+      environmentId: environment.id,
+      expectedPrUrl: url,
+      expectedHeadSha: "a".repeat(40),
+      expectedTargetBranch: "main",
+      deleteBranch: false,
+    };
+    await expect(
+      invoke("merge_environment_pr", {
+        ...args,
+        expectedBaseRef: "main",
+        cleanupAfterMerge: true,
+      }),
+    ).rejects.toThrow("destination changed");
+    expect(await gh.log()).not.toContain("--method PUT");
+    expect(
+      (await storage.getEnvironment(environment.id))?.cleanupAfterMergeRequestedAt,
+    ).toBeFalsy();
+    expect(
+      await invoke("merge_environment_pr", {
+        ...args,
+        expectedBaseRef: "release",
+      }),
+    ).toMatchObject({ outcome: "merged" });
+    expect(await gh.log()).toContain(
+      `--method PUT -f merge_method=squash -f sha=${"a".repeat(40)}`,
+    );
+  } finally {
+    gh.restore();
+  }
+});

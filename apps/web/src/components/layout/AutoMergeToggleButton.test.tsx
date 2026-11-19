@@ -1,6 +1,7 @@
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
-import { afterEach, beforeEach, describe, expect, type Mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, type Mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import { environmentStore } from "@/stores";
@@ -43,16 +44,34 @@ function answerAutoMerge() {
   });
 }
 
+const destination = {
+  expectedPrUrl: "https://github.com/acme/repo/pull/7",
+  expectedBaseRef: "main",
+  expectedTargetBranch: "main",
+};
+
+function autoMergeCalls() {
+  return invokeMock.mock.calls
+    .filter(([command]) => command === "set_environment_auto_merge")
+    .map(([, args]) => args);
+}
+
 function toggle() {
   return screen.getByRole("button", { name: "Auto-merge" });
 }
 
+let restoreDomains: () => void;
 beforeEach(() => {
+  const domains = spyOn(getWindowScope().commandScope().client.domains, "get").mockReturnValue({
+    "pull-requests": { min: 1, max: 4 },
+  });
+  restoreDomains = () => domains.mockRestore();
   invokeMock.mockReset();
   appCommandStore(environmentStore).getState().setEnvironments([environment()]);
 });
 
 afterEach(() => {
+  restoreDomains();
   cleanup();
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
@@ -63,27 +82,39 @@ afterEach(() => {
 describe("AutoMergeToggleButton", () => {
   test("turns auto-merge on and off without a confirmation", async () => {
     answerAutoMerge();
-    renderInAppCommandScope(<AutoMergeToggleButton environmentId="env-1" />);
+    renderInAppCommandScope(
+      <AutoMergeToggleButton environmentId="env-1" destination={destination} />,
+    );
     expect(toggle().getAttribute("aria-pressed")).toBe("false");
 
     await act(async () => {
       fireEvent.click(toggle());
     });
-    expect(invokeMock).toHaveBeenCalledWith("set_environment_auto_merge", {
-      environmentId: "env-1",
-      enabled: true,
-    });
+    expect(autoMergeCalls()).toEqual([{ environmentId: "env-1", enabled: true, ...destination }]);
     expect(toggle().getAttribute("aria-pressed")).toBe("true");
     expect(screen.queryByRole("alertdialog") === null).toBe(true);
 
     await act(async () => {
       fireEvent.click(toggle());
     });
-    expect(invokeMock).toHaveBeenLastCalledWith("set_environment_auto_merge", {
-      environmentId: "env-1",
-      enabled: false,
-    });
+    expect(autoMergeCalls().at(-1)).toEqual({ environmentId: "env-1", enabled: false });
     expect(toggle().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  test("sends the accepted non-target base only after confirmation", async () => {
+    answerAutoMerge();
+    const release = { ...destination, expectedBaseRef: "release" };
+    appCommandStore(environmentStore)
+      .getState()
+      .setEnvironments([environment({ prBaseBranch: "release" })]);
+    renderInAppCommandScope(<AutoMergeToggleButton environmentId="env-1" destination={release} />);
+    fireEvent.click(toggle());
+    expect(autoMergeCalls()).toEqual([]);
+    const accept = screen.getByRole("button", { name: "Accept and turn on auto-merge" });
+    await act(async () => {
+      fireEvent.click(accept);
+    });
+    expect(autoMergeCalls()).toEqual([{ environmentId: "env-1", enabled: true, ...release }]);
   });
 
   test.each([
@@ -94,7 +125,9 @@ describe("AutoMergeToggleButton", () => {
     appCommandStore(environmentStore)
       .getState()
       .setEnvironments([environment(overrides)]);
-    renderInAppCommandScope(<AutoMergeToggleButton environmentId="env-1" />);
+    renderInAppCommandScope(
+      <AutoMergeToggleButton environmentId="env-1" destination={destination} />,
+    );
     expect(screen.queryByRole("button", { name: "Auto-merge" }) === null).toBe(true);
   });
 
@@ -120,7 +153,9 @@ describe("AutoMergeToggleButton", () => {
       states: new Map([["env-1", state]]),
       syncStatus: "current",
     });
-    renderInAppCommandScope(<AutoMergeToggleButton environmentId="env-1" />);
+    renderInAppCommandScope(
+      <AutoMergeToggleButton environmentId="env-1" destination={destination} />,
+    );
 
     await act(async () => {
       fireEvent.focus(toggle());

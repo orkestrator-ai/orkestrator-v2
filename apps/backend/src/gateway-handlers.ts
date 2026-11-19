@@ -54,7 +54,10 @@ import { codedErrorWire } from "@orkestrator/protocol/contract/errors";
 import { mcpFailure } from "@orkestrator/protocol/mcp-management";
 import * as Result from "effect/Result";
 import { createHash } from "node:crypto";
-import { PUSH_SET_SUBSCRIPTIONS_COMMAND } from "@orkestrator/protocol/push-events";
+import {
+  PUSH_SET_SUBSCRIPTIONS_COMMAND,
+  type PushSetSubscriptionsResult,
+} from "@orkestrator/protocol/push-events";
 
 const KEEPALIVE_EVENT_FRAME = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
 
@@ -177,7 +180,11 @@ export class GatewayHandlers {
         : {};
     const startedAt = Date.now();
     if (command === PUSH_SET_SUBSCRIPTIONS_COMMAND && this.ctx.backend.push) {
-      await this.handlePushSetSubscriptions(request, response, safeArgs, requestBytes, startedAt);
+      await this.handlePushSetSubscriptions(request, response, safeArgs, requestBytes, startedAt, {
+        // A workspace grant cannot use the relay, so it cannot subscribe to
+        // another node through this one either (design D10).
+        relayedNodes: !options.refuseCommand,
+      });
       return;
     }
     // Attribute work to its arrival window, even if it outlives the burst.
@@ -460,14 +467,18 @@ export class GatewayHandlers {
     args: Record<string, unknown>,
     requestBytes: number,
     startedAt: number,
+    access: { relayedNodes: boolean },
   ): Promise<void> {
     this.ctx.traffic.noteInvoke(PUSH_SET_SUBSCRIPTIONS_COMMAND);
     const push = this.ctx.backend.push!;
     try {
-      const result = await push.setSubscriptions(
-        pushCredentialOwner(gatewayRequestCredential(request)),
-        args,
-      );
+      const result: PushSetSubscriptionsResult =
+        args.nodeId !== undefined && !access.relayedNodes
+          ? { status: "refused", reason: "unavailable" }
+          : await push.setSubscriptions(
+              pushCredentialOwner(gatewayRequestCredential(request)),
+              args,
+            );
       const body = Buffer.from(JSON.stringify({ result }));
       this.ctx.metrics.recordInvoke(
         PUSH_SET_SUBSCRIPTIONS_COMMAND,

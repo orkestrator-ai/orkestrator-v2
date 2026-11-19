@@ -24,6 +24,15 @@
  * that work completed from a transport closing: a closed stream only makes a
  * key unhealthy.
  *
+ * Relayed nodes (design D10): a client built with `nodeId` holds a window's
+ * set for that node on its command node's stream. It sends its set with
+ * `nodeId` only to a stream whose offer says `nodes: true` (otherwise it is
+ * `unavailable`), acts only on changes and resyncs naming its node, and
+ * still checks every frame's `seq`, since the stream's numbering is shared
+ * by every namespace on it. Its keys are healthy only while the command node
+ * answers them; a command node that cannot reach the node now answers
+ * `refused` / `unavailable`, which this client retries with backoff.
+ *
  * Browser-safe.
  */
 import {
@@ -101,6 +110,11 @@ export interface PushSubscriptionClientOptions {
   maxRetryMs?: number;
   /** Reports listener failures; the controller never throws into a transport. */
   onListenerError?: (error: unknown) => void;
+  /**
+   * The relayed node this set is for (design D10); the stream is the command
+   * node's. Absent: the stream's own backend.
+   */
+  nodeId?: string;
 }
 
 interface Entry {
@@ -221,9 +235,11 @@ export class PushSubscriptionClient {
    * A new connection opened (every `gateway.connected`, fresh or resumed).
    * A new stream starts a new `seq` space; the whole set is sent again.
    */
-  streamConnected(offer: PushStreamOffer | null): void {
+  streamConnected(streamOffer: PushStreamOffer | null): void {
     if (this.stateValue === "closed") return;
     this.resetRequest();
+    // A node set goes only to a backend that says it takes one.
+    const offer = this.options.nodeId !== undefined && !streamOffer?.nodes ? null : streamOffer;
     if (!offer) {
       this.streamId = null;
       this.lastSeq = 0;
@@ -277,6 +293,8 @@ export class PushSubscriptionClient {
       if (!frame || !this.acceptSeq(frame.seq)) return true;
       this.counters.framesReceived += 1;
       for (const change of frame.changes) {
+        // Another namespace's change on the shared stream (design D10).
+        if (change.nodeId !== this.options.nodeId) continue;
         this.counters.changesReceived += 1;
         const entry = this.entries.get(pushSubscriptionId(change.topic, change.key));
         if (!entry || !this.advanceStamp(entry, change)) {
@@ -297,6 +315,14 @@ export class PushSubscriptionClient {
       const started = this.now();
       const frame = parsePushResyncPayload(payload);
       if (!frame || !this.acceptSeq(frame.seq)) return true;
+      // Another node's resync: only its `seq` concerns this client.
+      if (frame.nodeId !== undefined && frame.nodeId !== this.options.nodeId) return true;
+      if (frame.nodeId !== undefined && !this.inFlight) {
+        // The command node's view of the node changed (it came back, or its
+        // stream was replaced): try now rather than after the backoff.
+        this.cancelSend();
+        this.retryDelay = this.retryMs;
+      }
       this.counters.resyncs += 1;
       for (const entry of Array.from(this.entries.values())) {
         if (frame.topics !== "all" && !frame.topics.includes(entry.topic)) continue;
@@ -456,6 +482,7 @@ export class PushSubscriptionClient {
             streamId,
             setRevision,
             subscriptions: sent.map((entry) => ({ topic: entry.topic, key: entry.key })),
+            ...(this.options.nodeId === undefined ? {} : { nodeId: this.options.nodeId }),
           },
           request.signal,
         ),
@@ -478,13 +505,24 @@ export class PushSubscriptionClient {
       this.scheduleSend(delay);
       return;
     }
-    this.retryDelay = this.retryMs;
     if (result.status === "refused") {
       this.counters.refusals += 1;
       this.resetStatuses();
+      if (this.options.nodeId !== undefined && result.reason === "unavailable") {
+        // The command node cannot reach the node's push now (not connected,
+        // an older node). Views poll; the set is tried again with backoff.
+        this.setState("recovering");
+        this.dirty = true;
+        const delay = this.retryDelay;
+        this.retryDelay = Math.min(this.maxRetryMs, this.retryDelay * 2);
+        this.scheduleSend(delay);
+        return;
+      }
+      this.retryDelay = this.retryMs;
       this.setState("unavailable");
       return;
     }
+    this.retryDelay = this.retryMs;
     if (result.status === "superseded") {
       // Only this controller writes the set, so a newer revision means a
       // previous process of ours did; send again with one past it.

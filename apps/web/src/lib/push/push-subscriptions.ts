@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import {
   PushSubscriptionClient,
+  type PushClientTimers,
   type PushKeyChange,
   type PushClientDiagnostics,
 } from "@orkestrator/protocol/push-client";
@@ -13,6 +14,7 @@ import {
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { windowScopeOf } from "@/lib/node-scope/window-scope";
 import { appCommandScope, defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
 
 const log = createLogger("web.push");
@@ -31,6 +33,14 @@ const log = createLogger("web.push");
  * say what moved meanwhile. A node that offers no push (an older backend, the
  * Electron main-process stream) leaves every key unhealthy, and views keep
  * their polling cadence.
+ *
+ * Another node's scope (a leaf shown in-tree) subscribes through the window's
+ * command node (design D10): its client sends its set with `nodeId` on the
+ * command node's own stream, whose subscription controller holds the node's
+ * keys for every window, and it hears that stream's frames, acting on the
+ * changes that name its node. Its keys are healthy only while the command
+ * node answers them; a command node that does not offer `nodes` leaves them
+ * on their polling cadence.
  */
 interface PushSlot {
   client: PushSubscriptionClient | null;
@@ -47,16 +57,44 @@ const pushSlot = defineScopedSlot<PushSlot>("push-subscriptions", (scope) => {
   return slot;
 });
 
+/**
+ * Whose stream a scope's set rides (design D10): its own for the command
+ * scope; the window's command scope, naming the node, for any other.
+ */
+export function pushRouteFor(scope: NodeScope): { stream: NodeScope; nodeId?: string } {
+  if (scope.role !== "leaf") return { stream: scope };
+  let command: NodeScope | null = null;
+  try {
+    command = windowScopeOf(scope)?.commandScope() ?? null;
+  } catch {
+    command = null;
+  }
+  if (!command || command === scope || command.disposed) return { stream: scope };
+  return { stream: command, nodeId: scope.nodeId };
+}
+
+/** Test seam: the timers clients attached from now on use (a `ManualClock`). */
+let clientTimers: PushClientTimers | undefined;
+
+/** Tests: drive every client attached afterwards on `timers`; `undefined` restores the runtime's. */
+export function setPushClientTimersForTests(timers: PushClientTimers | undefined): void {
+  clientTimers = timers;
+}
+
 function attach(scope: NodeScope, slot: PushSlot): PushSubscriptionClient {
+  const route = pushRouteFor(scope);
   const client = new PushSubscriptionClient({
-    setSubscriptions: (args, signal) => backendForScope(scope).setPushSubscriptions(args, signal),
+    setSubscriptions: (args, signal) =>
+      backendForScope(route.stream).setPushSubscriptions(args, signal),
     onListenerError: (error) => log.error("listener.failed", { error: formatLogError(error) }),
+    ...(route.nodeId === undefined ? {} : { nodeId: route.nodeId }),
+    ...(clientTimers ? { timers: clientTimers } : {}),
   });
   slot.client = client;
   const listenFor = (event: string, handler: (payload: unknown) => void) => {
     let stopped = false;
     let unlisten: (() => void) | null = null;
-    void listenInScope<unknown>(scope, event, handler)
+    void listenInScope<unknown>(route.stream, event, handler)
       .then((stop) => {
         if (stopped) stop();
         else unlisten = stop;

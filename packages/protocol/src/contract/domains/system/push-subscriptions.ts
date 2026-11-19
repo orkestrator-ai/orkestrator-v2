@@ -6,7 +6,9 @@
  * which checks that the caller's credential opened it; a caller with no
  * stream (an in-process or IPC caller) is answered `refused`. It is
  * `workspace`, like the reads its subscriptions replace: each subscription is
- * resolved with the same lookup the read uses.
+ * resolved with the same lookup the read uses. With `nodeId` the set is for
+ * that node's keys, held by this command node's subscription controller
+ * (design D10); only a stream whose offer says `nodes: true` takes one.
  *
  * `get_push_metrics` reports the layer's content-free counters (no keys, ids
  * or revisions), as `/__orkestrator/metrics` does.
@@ -34,6 +36,8 @@ export const pushSetSubscriptionsCommand = defineCommand({
     streamId: Schema.String,
     setRevision: Schema.Finite,
     subscriptions: Schema.Array(PushSubscriptionRequestSchema),
+    // A node this command node relays (design D10); absent for its own keys.
+    nodeId: Schema.optional(Schema.String),
   }),
   result: ownedObject<PushSetSubscriptionsResult>(),
   critical: [],

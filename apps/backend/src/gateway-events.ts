@@ -383,7 +383,14 @@ export class GatewayEvents {
         // The push layer's offer for this connection (push-events.ts). Its
         // frames are this connection's alone and never enter the ring.
         ...(state.pushStreamId && this.ctx.backend.push
-          ? { push: { versions: this.ctx.backend.push.versions, streamId: state.pushStreamId } }
+          ? {
+              push: {
+                versions: this.ctx.backend.push.versions,
+                streamId: state.pushStreamId,
+                // Sets for relayed nodes are accepted (design D10).
+                ...(this.ctx.backend.push.acceptsNodeSets ? { nodes: true } : {}),
+              },
+            }
           : {}),
       })
     )

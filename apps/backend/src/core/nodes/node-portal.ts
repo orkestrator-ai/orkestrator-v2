@@ -11,6 +11,7 @@ import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
 import { ClientGrantService, MAX_GRANT_TTL_MS, type ClientGrant } from "./client-grants.js";
 import { FleetUpdatePolicyRunner, type FleetUpdatePolicyStore } from "./fleet-update-policy.js";
 import { NodeEventRelay } from "./node-event-relay.js";
+import { NodePushSubscriptionController } from "./node-push-subscriptions.js";
 import { NodeUnavailableError, type ContractEnvelope } from "./node-link.js";
 import {
   NodeReadModel,
@@ -70,6 +71,8 @@ const MAX_WORKSPACES = 128;
 export class NodePortal {
   readonly readModel: NodeReadModel;
   readonly events: NodeEventRelay;
+  /** Windows' push subscriptions to relayed nodes (design D10). */
+  readonly pushSubscriptions: NodePushSubscriptionController;
   readonly outcomes: NodeOutcomeLedger;
   readonly grants: ClientGrantService;
   /** The opt-in "keep leaves on this node's version" policy (plan item 5006). */
@@ -127,6 +130,8 @@ export class NodePortal {
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
+    this.pushSubscriptions = new NodePushSubscriptionController({ leaf: this.events });
+    this.events.attachPush(this.pushSubscriptions);
     this.outcomes = new NodeOutcomeLedger(options.outcomes, (nodeId) => {
       options.emit(nodeOutcomesChangedEvent, { nodeId });
     });
@@ -145,6 +150,8 @@ export class NodePortal {
 
   stop(): void {
     this.readModel.stop();
+    this.pushSubscriptions.stop();
+    this.events.attachPush(null);
     this.events.stop();
     this.fleetUpdates.stop();
     this.grants.revokeAll();

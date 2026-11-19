@@ -42,7 +42,7 @@ const NON_DEFAULT_VALUES: Record<ResettableGlobalSettingKey, unknown> = {
   terminalLinkDefaultTarget: "browser-tab",
   reviewInstruction: "Look for missing tests.",
   reviewLensPresets: [{ id: "only", label: "Only", instruction: "Look at one thing." }],
-  coordinatorWebResearch: "mcp",
+  coordinatorWebResearch: "search-and-mcp",
   coordinatorResearchMcpServers: [{ name: "research", url: "https://research.example/mcp" }],
   experimentalGraphs: true,
   experimentalScheduling: true,

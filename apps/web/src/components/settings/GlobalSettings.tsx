@@ -71,6 +71,9 @@ import { GlobalSettingsSections } from "./GlobalSettings.sections";
 import { globalConfigPatchFromCoreFields, type CoreFieldsSnapshot } from "./global-settings-patch";
 import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
 import { cn } from "@/lib/utils";
+import { SETTINGS_CATALOG } from "@/lib/settings-catalog/catalog";
+import { SETTING_TIMING_SHORT } from "@/lib/settings-catalog/scope";
+import { useSettingsDraftRegistry } from "./search/settings-explain";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.settings");
@@ -259,6 +262,28 @@ export function globalFormSignature(global: GlobalConfig): string {
   ]);
 }
 
+/**
+ * Says when the settings a save changed take effect, unless they all apply at
+ * once: " Session titles applies to new agent sessions."
+ */
+export function savedTimingNote(keys: readonly string[]): string {
+  const later = SETTINGS_CATALOG.filter(
+    (descriptor) =>
+      descriptor.value &&
+      keys.includes(descriptor.value.key) &&
+      descriptor.appliesWhen !== "immediately",
+  );
+  if (later.length === 0) return "";
+  const timings = [...new Set(later.map((descriptor) => descriptor.appliesWhen))];
+  if (
+    later.length === 1 ||
+    (timings.length === 1 && new Set(later.map((d) => d.value!.key)).size === 1)
+  ) {
+    return ` ${later[0]!.label} ${SETTING_TIMING_SHORT[later[0]!.appliesWhen]}.`;
+  }
+  return ` Some changes apply later: ${timings.map((timing) => SETTING_TIMING_SHORT[timing].replace(/^applies /, "")).join("; ")}.`;
+}
+
 interface GlobalSettingsProps {
   activeSection: string;
 }
@@ -410,6 +435,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [isResettingTailscaleServe, setIsResettingTailscaleServe] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
+  // The stored keys the last successful save changed, for its timing note.
+  const [lastSavedKeys, setLastSavedKeys] = useState<readonly string[]>([]);
   const [githubCredentialPropagationPending, setGithubCredentialPropagationPending] =
     useState(false);
   const [domainErrors, setDomainErrors] = useState<string[]>([]);
@@ -733,6 +761,17 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const storedCoreSignature = useMemo(() => JSON.stringify(storedCoreFields(global)), [global]);
   const coreHasChanges =
     localCoreSignature !== storedCoreSignature || githubCredentialPropagationPending;
+  // Which stored settings the form holds unsaved edits for, for the field
+  // explanations, search navigation and the reset preview.
+  const dirtyKeys = useMemo(() => {
+    if (localCoreSignature === storedCoreSignature) return [];
+    const changes = globalConfigPatchFromCoreFields(
+      localCoreFields,
+      storedCoreFields(global),
+      global,
+    );
+    return [...Object.keys(changes.patch), ...changes.unset].sort();
+  }, [localCoreSignature, storedCoreSignature, localCoreFields, global]);
 
   // Latest-value mirrors for the unmount flush. Its effect must run once, so it
   // cannot depend on state that changes on every render; the refs carry the
@@ -936,6 +975,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         await propagateGithubCredentials();
       }
       failedCoreSignatureRef.current = null;
+      setSaveErrorMessage(null);
+      setLastSavedKeys([...Object.keys(changes.patch), ...changes.unset]);
       setSaveState("saved");
     } catch (err) {
       // Remember the exact edit the backend rejected so the debounce effect does
@@ -944,6 +985,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       setSaveState("error");
       log.error("config.save-failed", { error: formatLogError(err) });
       const message = err instanceof Error ? err.message : "Failed to save settings";
+      setSaveErrorMessage(message);
       toast.error("Failed to save settings", { description: message });
     } finally {
       setIsSaving(false);
@@ -1315,6 +1357,30 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     };
   }, []);
 
+  const draftRegistry = useSettingsDraftRegistry();
+  useEffect(() => {
+    if (!draftRegistry) return;
+    draftRegistry.report({
+      dirtyKeys,
+      saving: isSaving,
+      blocker: saveBlocker,
+      errorMessage:
+        saveState === "error" ? (saveErrorMessage ?? "Changes could not be saved") : null,
+    });
+  }, [draftRegistry, dirtyKeys, isSaving, saveBlocker, saveState, saveErrorMessage]);
+  useEffect(() => {
+    if (!draftRegistry) return;
+    // An explicit retry of the edit the backend refused, from a field's explanation.
+    draftRegistry.setRetry(() => {
+      failedCoreSignatureRef.current = null;
+      if (!isSavingRef.current && !saveBlockerRef.current) void persistCoreRef.current();
+    });
+    return () => {
+      draftRegistry.setRetry(null);
+      draftRegistry.report({ dirtyKeys: [], saving: false, blocker: null, errorMessage: null });
+    };
+  }, [draftRegistry]);
+
   const SAVE_BLOCKER_SECTION_LABELS: Record<string, string> = {
     network: "Network",
     terminal: "Terminal",
@@ -1335,7 +1401,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         : coreHasChanges
           ? { tone: "pending" as const, text: "Unsaved changes" }
           : saveState === "saved"
-            ? { tone: "saved" as const, text: "All changes saved" }
+            ? {
+                tone: "saved" as const,
+                text: `All changes saved.${savedTimingNote(lastSavedKeys)}`,
+              }
             : null;
 
   return (

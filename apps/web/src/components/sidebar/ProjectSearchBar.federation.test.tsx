@@ -283,7 +283,12 @@ describe("ProjectSearchBar across machines", () => {
       screen.queryByRole("option", { name: "orkestrator-v2, project on mbp3" }),
       "remote project under the environments filter",
     );
+    // Actions, Settings and History, then back to All.
     fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(await screen.findByLabelText("Filter results: All")).toBeTruthy();
 
     fireEvent.pointerDown(screen.getByTestId("project-search-filter"));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /mbp3/ }));

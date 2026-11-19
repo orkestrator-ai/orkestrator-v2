@@ -11,7 +11,7 @@ The app-level shortcuts are:
 
 | Shortcut | Opens | Owner |
 | --- | --- | --- |
-| ⌘K / Ctrl+K | Search projects and environments (sidebar) | the window's shell |
+| ⌘K / Ctrl+K | The command palette: projects, environments, actions, settings and open tabs ([command-palette.md](command-palette.md)) | the window's shell |
 | ⌘⇧/ / Ctrl+Shift+/ (⌘? / Ctrl+?) | The keyboard shortcuts dialog | the focused app document (the window's renderer) |
 | ⌘, / Ctrl+, | Global settings (`GlobalSettingsHost`) | the window's shell |
 | ⌘T / Ctrl+T | A new agent tab, except while environment setup runs | the workspace on show (the command node's or another node's) |
@@ -27,7 +27,7 @@ browser opens its own tab before the page sees the key.
 | App-level shortcut list, matcher, claim rule, events | `packages/protocol/src/keyboard-shortcuts.ts` (`APP_SHORTCUTS`) |
 | Renderer key router and delivery | `apps/web/src/lib/app-shortcuts.ts` (retained by `AppShell` and by each handler) |
 | Catalog the dialog lists | `apps/web/src/lib/keyboard-shortcuts.ts` (app-level entries take their keys from `APP_SHORTCUTS`) |
-| Search | `apps/web/src/components/sidebar/ProjectSearchBar.tsx` |
+| Search and command palette | `apps/web/src/components/sidebar/ProjectSearchBar.tsx`, `apps/web/src/lib/command-palette/` |
 | Dialog | `apps/web/src/components/layout/KeyboardShortcutsDialog.tsx` (mounted once per renderer by `AppShell`) |
 | Settings | `apps/web/src/components/layout/GlobalSettingsHost.tsx` (mounted once per renderer by `AppShell`) |
 | Sidebar group-by rotation | `apps/web/src/components/sidebar/HierarchicalSidebar.tsx`, `apps/web/src/lib/federation/sidebar-grouping.ts` |

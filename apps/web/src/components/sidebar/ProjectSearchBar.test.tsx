@@ -479,10 +479,16 @@ describe("ProjectSearchBar", () => {
     expect(screen.getByTestId("project-search-item-env-local")).toBeTruthy();
   });
 
-  test("starts from All and Shift+Tab moves to Environments", async () => {
+  test("starts from All and Shift+Tab steps back through History, Settings and Actions to Environments", async () => {
     renderSearchBar();
     const input = await openSearch();
 
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    expect(await screen.findByLabelText("Filter results: History")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    expect(await screen.findByLabelText("Filter results: Settings")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    expect(await screen.findByLabelText("Filter results: Actions")).toBeTruthy();
     fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
     expect(await screen.findByLabelText("Filter results: Environments")).toBeTruthy();
     expectDomAbsent(screen.queryByTestId("project-search-item-project-1"), "hidden project");

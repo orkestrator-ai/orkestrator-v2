@@ -1064,6 +1064,8 @@ the checks on the user's real machines are in the
 (`apps/web/src/lib/project-search.ts`), are the only search over projects and
 environments. The ⌘K shortcut and the sidebar's "Search projects,
 environments..." field open the same dialog, so they behave identically.
+The same dialog is the command palette, which adds actions, settings and open
+tabs around these results ([command-palette.md](command-palette.md)).
 
 - **Sources.** This machine's rows come from its full stores
   (`localSearchSource`); every other machine's from its summaries, or from
@@ -1103,8 +1105,8 @@ environments..." field open the same dialog, so they behave identically.
   A node that is not shown does not change recency.
   The node's older `recentProjectIds` follow as a fallback. Nothing is written to the window's
   workspace stores, and no remote ID is resolved against them.
-- **Filters.** Tab and Shift+Tab cycle All / Projects / Environments over
-  every machine. The Filter menu adds a **Machine** group (shown when other
+- **Filters.** Tab and Shift+Tab cycle All / Projects / Environments (then
+  the palette's Actions / Settings / History) over every machine. The Filter menu adds a **Machine** group (shown when other
   machines exist): All machines (default), This machine, or one machine, each
   marked offline/stale/loading when it is. Both reset when the dialog closes.
 - **Choosing a row.** This machine's rows select as before. Another machine's

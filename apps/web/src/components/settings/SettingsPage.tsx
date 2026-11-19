@@ -58,71 +58,128 @@ import {
 import { MachineConfigProvider } from "./settings-config";
 import { SettingsMachineStrip } from "./SettingsMachineStrip";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
+import { globalSettingsLabel, isGlobalSettingsSectionEnabled } from "@/lib/settings-catalog";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.settings");
 
 const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
-  { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
-  { id: "version-control", label: "Version control", icon: <GitBranch className="h-4 w-4" /> },
-  { id: "machines", label: "Machines", icon: <Network className="h-4 w-4" /> },
-  { id: "disk-usage", label: "Disk usage", icon: <HardDrive className="h-4 w-4" /> },
-  { id: "usage", label: "Usage", icon: <ChartArea className="h-4 w-4" /> },
-  { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
-  { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
-  { id: "coordinator", label: "Coordinator", icon: <Workflow className="h-4 w-4" /> },
-  { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
+  { id: "general", label: globalSettingsLabel("general"), icon: <Settings2 className="h-4 w-4" /> },
+  {
+    id: "version-control",
+    label: globalSettingsLabel("version-control"),
+    icon: <GitBranch className="h-4 w-4" />,
+  },
+  { id: "machines", label: globalSettingsLabel("machines"), icon: <Network className="h-4 w-4" /> },
+  {
+    id: "disk-usage",
+    label: globalSettingsLabel("disk-usage"),
+    icon: <HardDrive className="h-4 w-4" />,
+  },
+  { id: "usage", label: globalSettingsLabel("usage"), icon: <ChartArea className="h-4 w-4" /> },
+  {
+    id: "defaults",
+    label: globalSettingsLabel("defaults"),
+    icon: <SlidersHorizontal className="h-4 w-4" />,
+  },
+  { id: "platforms", label: globalSettingsLabel("platforms"), icon: <Boxes className="h-4 w-4" /> },
+  {
+    id: "coordinator",
+    label: globalSettingsLabel("coordinator"),
+    icon: <Workflow className="h-4 w-4" />,
+  },
+  { id: "review", label: globalSettingsLabel("review"), icon: <Eye className="h-4 w-4" /> },
   {
     id: "claude",
-    label: "Claude",
+    label: globalSettingsLabel("claude"),
     icon: <AgentPlatformIcon platform="claude" accent className="h-4 w-4" />,
   },
   {
     id: "codex",
-    label: "Codex",
+    label: globalSettingsLabel("codex"),
     icon: <AgentPlatformIcon platform="codex" accent className="h-4 w-4" />,
   },
   {
     id: "cursor",
-    label: "Cursor",
+    label: globalSettingsLabel("cursor"),
     icon: <AgentPlatformIcon platform="cursor" accent className="h-4 w-4" />,
   },
   {
     id: "grok",
-    label: "Grok",
+    label: globalSettingsLabel("grok"),
     icon: <AgentPlatformIcon platform="grok" accent className="h-4 w-4" />,
   },
   {
     id: "opencode",
-    label: "OpenCode",
+    label: globalSettingsLabel("opencode"),
     icon: <AgentPlatformIcon platform="opencode" accent className="h-4 w-4" />,
   },
   {
     id: "pi",
-    label: "Pi",
+    label: globalSettingsLabel("pi"),
     icon: <AgentPlatformIcon platform="pi" accent className="h-4 w-4" />,
   },
-  { id: "skills", label: "Skills and plugins", icon: <Sparkles className="h-4 w-4" /> },
-  { id: "terminal", label: "Terminal", icon: <Terminal className="h-4 w-4" /> },
-  { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
-  { id: "web-client", label: "Web client", icon: <Globe2 className="h-4 w-4" /> },
-  { id: "previews", label: "Browser previews", icon: <MonitorPlay className="h-4 w-4" /> },
-  { id: "mcp-servers", label: "MCP servers", icon: <Server className="h-4 w-4" /> },
-  { id: "mcp", label: "Control MCP", icon: <Cable className="h-4 w-4" /> },
-  { id: "messaging", label: "Messaging", icon: <MessagesSquare className="h-4 w-4" /> },
-  { id: "schedules", label: "Schedules", icon: <CalendarClock className="h-4 w-4" /> },
+  { id: "skills", label: globalSettingsLabel("skills"), icon: <Sparkles className="h-4 w-4" /> },
+  {
+    id: "terminal",
+    label: globalSettingsLabel("terminal"),
+    icon: <Terminal className="h-4 w-4" />,
+  },
+  { id: "network", label: globalSettingsLabel("network"), icon: <Shield className="h-4 w-4" /> },
+  {
+    id: "web-client",
+    label: globalSettingsLabel("web-client"),
+    icon: <Globe2 className="h-4 w-4" />,
+  },
+  {
+    id: "previews",
+    label: globalSettingsLabel("previews"),
+    icon: <MonitorPlay className="h-4 w-4" />,
+  },
+  {
+    id: "mcp-servers",
+    label: globalSettingsLabel("mcp-servers"),
+    icon: <Server className="h-4 w-4" />,
+  },
+  { id: "mcp", label: globalSettingsLabel("mcp"), icon: <Cable className="h-4 w-4" /> },
+  {
+    id: "messaging",
+    label: globalSettingsLabel("messaging"),
+    icon: <MessagesSquare className="h-4 w-4" />,
+  },
+  {
+    id: "schedules",
+    label: globalSettingsLabel("schedules"),
+    icon: <CalendarClock className="h-4 w-4" />,
+  },
   {
     id: "self-improvement",
-    label: "Self-improvement",
+    label: globalSettingsLabel("self-improvement"),
     icon: <TrendingUp className="h-4 w-4" />,
   },
-  { id: "permissions", label: "Permissions", icon: <ShieldCheck className="h-4 w-4" /> },
-  { id: "credentials", label: "Credentials", icon: <KeyRound className="h-4 w-4" /> },
-  { id: "sounds", label: "Sounds", icon: <Volume2 className="h-4 w-4" /> },
-  { id: "docker", label: "Docker", icon: <DockerIcon className="h-4 w-4" /> },
-  { id: "container", label: "Container", icon: <Container className="h-4 w-4" /> },
-  { id: "experimental", label: "Experimental", icon: <FlaskConical className="h-4 w-4" /> },
-  { id: "debug", label: "Debug", icon: <Bug className="h-4 w-4" /> },
+  {
+    id: "permissions",
+    label: globalSettingsLabel("permissions"),
+    icon: <ShieldCheck className="h-4 w-4" />,
+  },
+  {
+    id: "credentials",
+    label: globalSettingsLabel("credentials"),
+    icon: <KeyRound className="h-4 w-4" />,
+  },
+  { id: "sounds", label: globalSettingsLabel("sounds"), icon: <Volume2 className="h-4 w-4" /> },
+  { id: "docker", label: globalSettingsLabel("docker"), icon: <DockerIcon className="h-4 w-4" /> },
+  {
+    id: "container",
+    label: globalSettingsLabel("container"),
+    icon: <Container className="h-4 w-4" />,
+  },
+  {
+    id: "experimental",
+    label: globalSettingsLabel("experimental"),
+    icon: <FlaskConical className="h-4 w-4" />,
+  },
+  { id: "debug", label: globalSettingsLabel("debug"), icon: <Bug className="h-4 w-4" /> },
 ];
 
 /**
@@ -239,10 +296,11 @@ export function SettingsPage({
   // Scheduling and self-improvement are experimental: each section exists only while it is on.
   const menuItems = useMemo(
     () =>
-      MENU_ITEMS.filter(
-        (item) =>
-          (schedulingEnabled || item.id !== "schedules") &&
-          (selfImprovementEnabled || item.id !== "self-improvement"),
+      MENU_ITEMS.filter((item) =>
+        isGlobalSettingsSectionEnabled(item.id, {
+          experimentalScheduling: schedulingEnabled,
+          experimentalSelfImprovement: selfImprovementEnabled,
+        }),
       ),
     [schedulingEnabled, selfImprovementEnabled],
   );

@@ -67,6 +67,7 @@ import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { Environment, EnvironmentType, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
+import type { CommandPaletteHandlers } from "@/components/command-palette/useCommandPalette";
 import { SidebarBottomBar } from "./SidebarBottomBar";
 import { useRevealMachineProject } from "@/components/federation/useRevealMachineProject";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
@@ -783,6 +784,17 @@ export function HierarchicalSidebar() {
     [allEnvironments, handleSelectEnvironment, revealProject],
   );
 
+  // The ⌘K palette's commands run the same handlers as this sidebar's rows.
+  const paletteHandlers = useMemo<CommandPaletteHandlers>(
+    () => ({
+      startEnvironment,
+      stopEnvironment,
+      restartEnvironment,
+      onAddProject: () => setShowAddProjectDialog(true),
+    }),
+    [restartEnvironment, startEnvironment, stopEnvironment],
+  );
+
   const selection = useSelectedEnvironmentActions({
     selectionIds: selectedEnvironmentIds,
     localEnvironments: allEnvironments,
@@ -1308,9 +1320,11 @@ export function HierarchicalSidebar() {
         <ProjectSearchBar
           projects={projects}
           environments={sidebarEnvironments}
+          allEnvironments={allEnvironments}
           onSelectProject={handleSearchSelectProject}
           onSelectEnvironment={handleSearchSelectEnvironment}
           onSelectMachineProject={revealMachineProject}
+          commandHandlers={paletteHandlers}
         />
       )}
 

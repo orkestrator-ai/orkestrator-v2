@@ -16,7 +16,7 @@ import {
   startFederatedEnvironment,
   stopFederatedEnvironment,
 } from "@/lib/federation/federated-actions";
-import { OutcomeUnknownError } from "@/lib/portal/portal-store";
+import { OutcomeUnknownError, type PortalStore } from "@/lib/portal/portal-store";
 import { incompatibilityNotice, updatableMachine } from "@/lib/federation/fleet-currency";
 import { useUIStore } from "@/stores";
 import { noteDrawerNavigation } from "@/lib/mobile-shell";
@@ -65,6 +65,37 @@ export function reportFederatedActionError(
     toast.error(`${label} failed on ${machineName}`, {
       description: error instanceof Error ? error.message : String(error),
     });
+  }
+}
+
+const POWER_ACTIONS = {
+  start: { label: "Start", run: startFederatedEnvironment },
+  stop: { label: "Stop", run: stopFederatedEnvironment },
+  restart: { label: "Restart", run: restartFederatedEnvironment },
+} as const;
+
+/**
+ * Start, stop or restart another machine's environment: the row's menu items
+ * and the ⌘K palette both run this. It claims the environment for this
+ * client while it runs (a second request is ignored, never queued), sends
+ * once to the captured reference, and reports a failure or a lost answer
+ * (`OutcomeUnknownError`) on the owning machine's name without resending.
+ */
+export async function runFederatedEnvironmentPower(
+  portal: PortalStore,
+  machine: Pick<MachineView, "name" | "backendId" | "release">,
+  environment: Pick<FederatedEnvironment, "key" | "ref">,
+  action: keyof typeof POWER_ACTIONS,
+): Promise<void> {
+  const { label, run } = POWER_ACTIONS[action];
+  const ref = environment.ref;
+  if (!claimSidebarAction(environment.key)) return;
+  try {
+    await run(portal, ref);
+  } catch (error) {
+    reportFederatedActionError(label, machine, error);
+  } finally {
+    releaseSidebarAction(environment.key);
   }
 }
 
@@ -162,14 +193,8 @@ export function useFederatedEnvironmentActions(
     open,
     openTab,
     copyLink,
-    start: () => {
-      const ref = environment.ref;
-      void run("Start", () => startFederatedEnvironment(portal, ref));
-    },
-    stop: () => {
-      const ref = environment.ref;
-      void run("Stop", () => stopFederatedEnvironment(portal, ref));
-    },
+    start: () => void runFederatedEnvironmentPower(portal, machine, environment, "start"),
+    stop: () => void runFederatedEnvironmentPower(portal, machine, environment, "stop"),
     openSettings: () =>
       openMachineWorkspace({
         connectionId: machine.connectionId,
@@ -178,12 +203,7 @@ export function useFederatedEnvironmentActions(
         dialog: "environment-settings",
         title: environment.name,
       }),
-    restart: () => {
-      const ref = environment.ref;
-      void run("Restart", async () => {
-        await restartFederatedEnvironment(portal, ref);
-      });
-    },
+    restart: () => void runFederatedEnvironmentPower(portal, machine, environment, "restart"),
     fork: (environmentType) => {
       const ref = environment.ref;
       void run("Fork", async () => {

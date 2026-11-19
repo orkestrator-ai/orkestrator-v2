@@ -878,6 +878,16 @@ with `MachinesFilter`:
   with none remembered. Explicit navigation still sends `boardTab`, which
   always wins: Open Coordinator, Open board, a ticket opened on its board, a
   project home opened on Home.
+- The project page's tab row ends, at its far right, with a **machine
+  dropdown** (`ProjectMachineSwitcher`) whenever another machine has a copy
+  of the project's repository (matched by `repositoryHint`, the same match
+  the Build launcher and Linear connect dialog use, `linear-machines.ts`).
+  It lists only those machines, in the sidebar's machine order, with the one
+  shown selected and a machine that is not connected disabled. Picking one
+  opens that machine's copy of the project on the same tab
+  (`openMachineWorkspace` with `boardTab`), so Home on the command node
+  becomes Home on the leaf. A project with no checkout there has no Home, and
+  lands on its Coordinator (`useProjectHomeActivation`).
 - Activity order offers **Priority order** (the default for both local and
   federated lists), **Newest first**, and **Oldest first**. Every order keeps
   merged environments below unmerged ones and, within each, working environments

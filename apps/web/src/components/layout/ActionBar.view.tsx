@@ -86,6 +86,7 @@ import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
 import { pullRequestLabel } from "@/lib/pr-target-mismatch";
+import { ProjectMachineSwitcher } from "./ProjectMachineSwitcher";
 import { useAutoMergeConfirmation } from "./useAutoMergeConfirmation";
 import { useAutoMergeToggle } from "./useAutoMergeToggle";
 import { MergePrDialog, prMergeability } from "./MergePrDialog";
@@ -743,6 +744,18 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           }>
         }
       />
+      {/*
+        The same tab on another machine with this repository. At the far end
+        of the bar's row; the grid gives it a row of its own.
+      */}
+      {selectedProject && (
+        <ProjectMachineSwitcher
+          projectId={selectedProject.id}
+          projectName={selectedProject.name}
+          tab={projectBoardTab}
+          isGrid={isGrid}
+        />
+      )}
     </>
   );
 

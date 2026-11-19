@@ -99,7 +99,9 @@ afterEach(cleanup);
  * the flow made, so the durable launch intent is asserted end to end rather than
  * only through the pure helpers.
  */
-async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) {
+async function submitCreateFlow(
+  options: { turnOffLaunchAgent?: boolean; intent?: "Task" | "Interactive" } = {},
+) {
   const created = { id: "env-created" } as Environment;
   const startEnvironment = mock(async () => {});
   renderInAppCommandScope(
@@ -115,6 +117,9 @@ async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) 
 
   if (options.turnOffLaunchAgent) {
     fireEvent.click(screen.getByLabelText("Launch agent"));
+  }
+  if (options.intent) {
+    fireEvent.click(screen.getByRole("button", { name: options.intent }));
   }
   fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
@@ -536,13 +541,13 @@ describe("CreateEnvironmentFlowDialog", () => {
    * that provisions, so a failed clone is not something the user can undo.
    */
   function startFeatureBuild(name: string) {
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     fireEvent.change(screen.getByLabelText(/Feature name/i), { target: { value: name } });
     fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
   }
 
   function startFeatureBuildFromDescription(description: string) {
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     fireEvent.change(screen.getByLabelText(/^Description$/i), { target: { value: description } });
     fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
   }
@@ -949,6 +954,22 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[2]).toBe(true);
     expect(call[3]).toBe("sonnet");
     expect(call[4]).toBeUndefined();
+  });
+
+  test("saves a prompt environment as a task by default", async () => {
+    const call = await submitCreateFlow();
+    expect(call[7]).toBe("task");
+  });
+
+  test("saves the interactive mode the user chose", async () => {
+    const call = await submitCreateFlow({ intent: "Interactive" });
+    expect(call[7]).toBe("interactive");
+  });
+
+  test("keeps the interaction mode when the agent is not launched now", async () => {
+    const call = await submitCreateFlow({ turnOffLaunchAgent: true, intent: "Interactive" });
+    expect(call[2]).toBe(false);
+    expect(call[7]).toBe("interactive");
   });
 
   test("arms the creating Electron window for the post-setup agent handoff", async () => {

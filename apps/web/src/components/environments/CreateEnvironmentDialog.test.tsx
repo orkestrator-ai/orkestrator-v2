@@ -147,7 +147,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
         />
       </DockerAvailabilityProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     fireEvent.change(screen.getByLabelText(/^Description/), {
       target: { value: "Test inherited defaults" },
     });
@@ -224,7 +224,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(row.textContent).toContain("Configured default");
     act(() => fireEvent.keyDown(document.body, { key: "Escape" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
     const buildPicker = screen.getByRole("combobox", {
@@ -272,8 +272,8 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(localTypeButton.className).toContain("font-bold");
     expect(containerTypeButton.className).toContain("font-normal");
 
-    expect(screen.getByRole("button", { name: "With a prompt" }).className).toContain("font-bold");
-    expect(screen.getByRole("button", { name: "A feature" }).className).toContain("font-normal");
+    expect(screen.getByRole("button", { name: "Task" }).className).toContain("font-bold");
+    expect(screen.getByRole("button", { name: "Pipeline" }).className).toContain("font-normal");
     expect(screen.getByRole("button", { name: "Create environment" }).className).toContain(
       "font-bold",
     );
@@ -448,7 +448,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
         </DockerAvailabilityProvider>,
       );
       if (reason.includes("feature")) {
-        fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+        fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
         if (reason === "missing feature handler") {
           fireEvent.change(screen.getByLabelText(/^Description/), {
             target: { value: "Build a feature" },
@@ -521,7 +521,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
       </DockerAvailabilityProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
 
@@ -616,10 +616,10 @@ test("local feature builds hide and clear a previously picked worktree folder", 
   await waitFor(() => expect(useHostPathPickerStore.getState().request?.mode).toBe("directory"));
   act(() => useHostPathPickerStore.getState().settle("/srv/trees"));
   await waitFor(() => expect(screen.getByText("Worktree in /srv/trees")).toBeTruthy());
-  fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+  fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
   expect(screen.queryByRole("button", { name: "Choose worktree location" }) === null).toBe(true);
   expect(screen.queryByText("Worktree in /srv/trees") === null).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "With a prompt" }));
+  fireEvent.click(screen.getByRole("button", { name: "Task" }));
   expect(screen.getByRole("button", { name: "Choose worktree location" })).toBeTruthy();
   expect(screen.queryByText("Worktree in /srv/trees") === null).toBe(true);
 });

@@ -1413,6 +1413,27 @@ exit 0
       context,
     );
     expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
+    // The interaction mode is durable: it is saved even with the launch
+    // cancelled, and only a known mode is accepted.
+    await commands.get("update_environment_agent_settings")?.(
+      { environmentId: environment.id, pendingAgentLaunch: false, interactionMode: "interactive" },
+      context,
+    );
+    expect(updates.at(-1)).toMatchObject({
+      pendingAgentLaunch: false,
+      interactionMode: "interactive",
+    });
+    await commands.get("update_environment_agent_settings")?.(
+      { environmentId: environment.id, agentSettings: null },
+      context,
+    );
+    expect(updates.at(-1)).not.toHaveProperty("interactionMode");
+    await expect(
+      commands.get("update_environment_agent_settings")?.(
+        { environmentId: environment.id, interactionMode: "pipeline" },
+        context,
+      ),
+    ).rejects.toThrow("interactionMode must be task or interactive");
 
     await commands.get("update_environment_allowed_domains")?.(
       {

@@ -889,6 +889,7 @@ export const updateEnvironmentAgentSettingsCommand = defineCommand({
     initialConversationMode: optionalUnknown,
     initialPrompt: optionalUnknown,
     initialPromptAttachments: optionalUnknown,
+    interactionMode: optionalUnknown,
   }),
   result: ClientEnvironmentSchema,
   critical: [],

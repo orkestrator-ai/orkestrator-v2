@@ -124,6 +124,9 @@ export function resolveEnvironmentAgentLaunchSettings(options: ClaudeOptions) {
     initialReasoningEffort: options.launchAgent ? options.reasoningEffort : undefined,
     initialFastMode: options.launchAgent ? options.fastMode : undefined,
     initialPromptAttachments: options.launchAgent ? options.initialPromptAttachments : undefined,
+    // Durable, so it is saved whether or not the agent launches now: a prompt
+    // started later from the environment is told the same thing.
+    interactionMode: options.interactionMode,
   };
 }
 
@@ -309,6 +312,7 @@ export function CreateEnvironmentFlowDialog({
         launchSettings.initialReasoningEffort,
         launchSettings.initialPromptAttachments,
         launchSettings.initialFastMode,
+        launchSettings.interactionMode,
       );
       updateEnvironment(environment.id, configuredEnvironment);
       if (

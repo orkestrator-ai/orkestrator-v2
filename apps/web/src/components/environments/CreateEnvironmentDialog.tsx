@@ -98,12 +98,14 @@ import {
 import {
   defaultFeatureBuildModels,
   featureBuildIdentity,
+  buildIntentInteractionMode,
   featureBuildRequest,
   type BuildIntent,
   type FeatureBuildModelState,
 } from "@/lib/feature-build-launch";
 import { buildPipelineLauncherDefaults } from "@/lib/build-launch-options";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
+import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 import type { CachedOpenCodeModel } from "@/lib/backend";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
@@ -181,6 +183,8 @@ const MOBILE_TAB_CONTENT_CLASSES =
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_RGBA_SIZE = 32 * 1024 * 1024;
 const MAX_INITIAL_PROMPT_ATTACHMENTS = 20;
+/** The Build section's choice when the dialog opens: a prompt environment run as a task. */
+const DEFAULT_PROMPT_INTENT: BuildIntent = "task";
 
 export function getEncodedImageSizeError(base64Length: number): string | null {
   const estimatedSize = (base64Length * 3) / 4;
@@ -236,6 +240,12 @@ export interface ClaudeOptions {
   fastMode?: boolean;
   initialPrompt: string;
   initialPromptAttachments: InitialPromptImageAttachment[];
+  /**
+   * Whether the prompt environment's agent may ask the user questions: a
+   * `task` runs the opening prompt unattended and then waits, `interactive`
+   * may ask from the start. Durable on the environment.
+   */
+  interactionMode?: EnvironmentInteractionMode;
   networkAccessMode: NetworkAccessMode;
   portMappings: PortMapping[];
 }
@@ -626,7 +636,7 @@ export function CreateEnvironmentDialog({
       resolve: configured.steps["resolve-conflicts"] ?? review,
     });
   }, [agentType, config, fastMode, model, modelCatalog, projectId, reasoningEffort]);
-  const [buildIntent, setBuildIntent] = useState<BuildIntent>("prompt");
+  const [buildIntent, setBuildIntent] = useState<BuildIntent>(DEFAULT_PROMPT_INTENT);
   const [featureName, setFeatureName] = useState("");
   const [featureAcceptanceCriteria, setFeatureAcceptanceCriteria] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -689,7 +699,7 @@ export function CreateEnvironmentDialog({
     useState<MobileTabTransitionDirection | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const buildIntentRef = useRef<BuildIntent>("prompt");
+  const buildIntentRef = useRef<BuildIntent>(DEFAULT_PROMPT_INTENT);
   const promptPasteRequestIdRef = useRef(0);
   const initialPromptAttachmentsRef = useRef<InitialPromptImageAttachment[]>([]);
   const attachmentDragDepthRef = useRef(0);
@@ -818,8 +828,8 @@ export function CreateEnvironmentDialog({
     setShowPortConfig(defaultPortMappings.length > 0);
     setMobileSection("prompt");
     setMobileTabTransitionDirection(null);
-    buildIntentRef.current = "prompt";
-    setBuildIntent("prompt");
+    buildIntentRef.current = DEFAULT_PROMPT_INTENT;
+    setBuildIntent(DEFAULT_PROMPT_INTENT);
     setFeatureName("");
     setFeatureAcceptanceCriteria("");
     setAdvancedOpen(false);
@@ -1500,6 +1510,7 @@ export function CreateEnvironmentDialog({
           fastMode: speedAvailable ? fastMode : undefined,
           initialPrompt: initialPrompt.trim(),
           initialPromptAttachments,
+          interactionMode: buildIntentInteractionMode(buildIntent),
           networkAccessMode,
           portMappings: environmentType === "containerized" ? portMappings : [],
         });
@@ -1949,7 +1960,7 @@ export function CreateEnvironmentDialog({
               <div
                 className={cn(
                   "border-b border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6",
-                  !launchAgent && buildIntent === "prompt" && "opacity-50",
+                  !launchAgent && buildIntent !== "feature" && "opacity-50",
                 )}
               >
                 <Label className="mb-2 text-sm font-medium text-muted-foreground sm:mb-0">
@@ -1980,7 +1991,7 @@ export function CreateEnvironmentDialog({
                     fastModeAvailable={speedAvailable}
                     fastModeEnabled={speedAvailable ? (fastMode ?? false) : false}
                     onFastModeChange={speedAvailable ? setFastMode : undefined}
-                    disabled={isLoading || (!launchAgent && buildIntent === "prompt")}
+                    disabled={isLoading || (!launchAgent && buildIntent !== "feature")}
                     title="Choose agent, model, and reasoning"
                     className={MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME}
                   />

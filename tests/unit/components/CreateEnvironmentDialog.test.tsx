@@ -3735,7 +3735,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     description?: string;
     acceptanceCriteria?: string;
   }) {
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     if (fields.name !== undefined) {
       fireEvent.change(screen.getByLabelText(/Feature name/i), {
         target: { value: fields.name },
@@ -3766,7 +3766,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(screen.getByLabelText(/Initial prompt/i)).toBeTruthy();
     expect(screen.queryByLabelText(/Feature name/i) === null).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
 
     expect(screen.getByLabelText(/Feature name/i)).toBeTruthy();
     expect(screen.getByLabelText(/Acceptance criteria/i)).toBeTruthy();
@@ -3786,14 +3786,14 @@ describe("CreateEnvironmentDialog feature builds", () => {
     fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Add a dark mode toggle." },
     });
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     const description = screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement;
     expect(description.value).toBe("Add a dark mode toggle.");
 
     fireEvent.change(description, {
       target: { value: "Add a dark mode toggle to the header." },
     });
-    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Task" }));
     expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe(
       "Add a dark mode toggle to the header.",
     );
@@ -3936,7 +3936,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Add sign in with passkeys." },
     });
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     const createButton = screen.getByRole("button", { name: "Create environment" });
     expect((createButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(createButton);
@@ -4168,11 +4168,11 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(await screen.findByAltText("reference.png")).toBeTruthy();
     expect(await screen.findByText("notes.txt")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     expect(screen.getByAltText("reference.png")).toBeTruthy();
     expect(screen.queryByText("notes.txt") === null).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Task" }));
     expect(screen.getByAltText("reference.png")).toBeTruthy();
     expect(screen.getByText("notes.txt")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
@@ -4202,7 +4202,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     });
     expect(await screen.findByText("prompt-19.txt")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
     fireEvent.drop(screen.getByRole("dialog"), {
       dataTransfer: attachmentDataTransfer([
         new File(["image"], "feature.png", { type: "image/png" }),
@@ -4214,7 +4214,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     );
     expect(mockReadImage).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Task" }));
     fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]![0].initialPromptAttachments).toHaveLength(20);
@@ -4384,7 +4384,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     });
     await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Task" }));
     await act(async () => pendingImage.resolve({ rgba, size }));
 
     expect(rgba).not.toHaveBeenCalled();

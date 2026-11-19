@@ -418,7 +418,7 @@ for (const intent of ["prompt", "feature"] as const) {
     if (intent === "feature") {
       await page
         .getByRole("group", { name: "Build intent" })
-        .getByRole("button", { name: "A feature", exact: true })
+        .getByRole("button", { name: "Pipeline", exact: true })
         .click();
     }
     const prompt =

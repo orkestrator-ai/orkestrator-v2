@@ -67,6 +67,7 @@ import {
   type SavedInitialPromptAttachment,
 } from "@orkestrator/protocol/initial-prompt-attachments";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
+import { withEnvironmentInteraction } from "@orkestrator/protocol/environment-interaction";
 import { readActivityGroup } from "./native-agent-activity-reads.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { queueString } from "./native-agent-queue-message.js";
@@ -1811,6 +1812,9 @@ export class NativeAgentLaunchActivityReconciler {
           });
         }
 
+        // The interaction mode is told to the agent, never saved into the
+        // stored prompt: that is the user's own text.
+        prompt = withEnvironmentInteraction(prompt, environment.interactionMode);
         if (agent === "claude" && claudeNativeBackend === "tmux") {
           await this.invoke("launch_terminal_job", {
             requestId: tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID),
@@ -1985,7 +1989,10 @@ export class NativeAgentLaunchActivityReconciler {
         ...(parameterValues ? { parameterValues } : {}),
         // A file-only turn needs non-blank text before its final workspace paths
         // can be resolved inside the dispatch lock below.
-        prompt: prompt || (files.length > 0 ? "Use the attached file." : ""),
+        prompt: withEnvironmentInteraction(
+          prompt || (files.length > 0 ? "Use the attached file." : ""),
+          environment.interactionMode,
+        ),
         requestId: tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID),
         images,
         ...(environment.initialPromptPresentation
@@ -2008,7 +2015,10 @@ export class NativeAgentLaunchActivityReconciler {
               );
               return {
                 dispatch: true,
-                prompt: buildInitialPromptWithAttachmentReferences(prompt ?? "", saved),
+                prompt: withEnvironmentInteraction(
+                  buildInitialPromptWithAttachmentReferences(prompt ?? "", saved),
+                  environment.interactionMode,
+                ),
               };
             })
           : await this.host.dispatchPrompt(dispatchInput);

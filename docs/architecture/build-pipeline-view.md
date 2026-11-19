@@ -36,19 +36,31 @@ tab. The old PIPELINE stage list (`PipelineStageRail`) is gone.
   conflict resolution) this tab shows.
 - **Pipeline environment**: an environment a build pipeline created and runs
   in. A ticket's Build button, the Features view, `start_build_pipeline`, the
-  CLI's `build launch` and the New environment dialog's "A feature" option all
-  make one. The sidebar marks it with the pipe icon (`PipeIcon.tsx`).
+  CLI's `build launch` and the New environment dialog's "Pipeline" option all
+  make one. The sidebar marks it with the pipe icon (`PipeIcon.tsx`). It is
+  never interactive: every stage prompt carries the unattended policy.
 - **Prompt environment**: an environment that runs one prompt, from the New
-  Environment dialog's "With a prompt" option or a coordinator's
+  Environment dialog's "Task" or "Interactive" option or a coordinator's
   `launch_environment`. Review and the PR are started by hand or by a
   coordinator.
+- **Interaction mode**: whether a prompt environment's agent may talk with the
+  user (`interactionMode`, `@orkestrator/protocol/environment-interaction`).
+  `task` (the dialog's "Task") runs the opening prompt without asking
+  questions, then stops and waits; it is not interactive until that turn is
+  finished. `interactive` (the dialog's "Interactive") may ask the user
+  questions from the start. The mode is saved on the environment and reaches
+  the agent as a system-instructions frame appended to the opening prompt, on
+  native and terminal launches alike; transcripts strip the frame. An
+  environment without a mode (a coordinator worker, the CLI, one created
+  before the setting) gets no frame.
 
-The New environment dialog keeps the "A feature" / "With a prompt" wording and
-says under it which of the two each choice creates. Internal names still say
-"feature build" (`BuildIntent = "feature" | "prompt"`, `createFeatureBuild`,
-the `create_feature_build` command, `featureBuildRequestHash`, the `feature-build.*` log
-events): they are persisted or part of the backend contract, so they were not
-renamed.
+The New environment dialog offers "Pipeline", "Task" and "Interactive" and
+says under them which kind of environment each creates and whether it is
+interactive. Internal names still say "feature build" (`BuildIntent =
+"feature" | "task" | "interactive"`, `createFeatureBuild`, the
+`create_feature_build` command, `featureBuildRequestHash`, the
+`feature-build.*` log events): they are persisted or part of the backend
+contract, so they were not renamed.
 
 ## Sidebar activity and completion
 

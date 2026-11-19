@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:05f2a0d2af2ed10d464c4002af6c5b2f2954c6b393e625eea80ee9a15bf5d270",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentSettings": {},
+        "environmentId": {
+          "type": "string"
+        },
+        "initialAgentModel": {},
+        "initialAgentPlatform": {},
+        "initialConversationMode": {},
+        "initialFastMode": {},
+        "initialPrompt": {},
+        "initialPromptAttachments": {},
+        "initialReasoningEffort": {},
+        "interactionMode": {},
+        "pendingAgentLaunch": {}
+      },
+      "required": ["environmentId"],
+      "type": "object"
+    }
+  }
+}

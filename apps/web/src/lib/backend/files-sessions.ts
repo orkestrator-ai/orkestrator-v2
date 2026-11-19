@@ -7,6 +7,7 @@ import type * as Schema from "effect/Schema";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { FileWritePrecondition } from "@orkestrator/protocol/file-write-precondition";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 import type {
   DiffBaseBranch,
   DiffBaseCommit,
@@ -661,6 +662,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     initialReasoningEffort?: string,
     initialPromptAttachments?: InitialPromptImageAttachment[],
     initialFastMode?: boolean,
+    interactionMode?: EnvironmentInteractionMode,
   ): Promise<Environment> {
     return environments().updateEnvironmentAgentSettings({
       environmentId,
@@ -672,6 +674,7 @@ export function createFilesSessionsApi(client: BackendClient) {
       // A boolean check, not truthiness: an explicit Normal is a choice the
       // launcher made and must not be dropped the way `false` would be.
       ...(typeof initialFastMode === "boolean" ? { initialFastMode } : {}),
+      ...(interactionMode ? { interactionMode } : {}),
     });
   }
 

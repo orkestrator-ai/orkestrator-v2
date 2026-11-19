@@ -32,6 +32,7 @@ import {
 } from "../../../container-lifecycle.js";
 import { ENVIRONMENT_DELETION_STEPS } from "../../../node-summaries.js";
 import { STARTUP_AGENT_TAB_ID } from "../../../tab-initial-prompt.js";
+import { ENVIRONMENT_INTERACTION_MODES } from "../../../environment-interaction.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalNullableString = Schema.optional(Schema.NullOr(Schema.String));
@@ -519,6 +520,15 @@ export const clientEnvironmentFields = {
    */
   initialFastMode: optionalBoolean,
   initialPrompt: optionalString,
+  /**
+   * How a prompt environment's agent may treat the user
+   * (`@orkestrator/protocol/environment-interaction`): `task` runs the opening
+   * prompt without asking questions and becomes interactive once it is
+   * finished; `interactive` may ask questions from the start. Durable, unlike
+   * the one-shot launch fields above. Absent on pipeline environments (never
+   * interactive) and on environments created without the choice.
+   */
+  interactionMode: Schema.optional(Schema.Literals(ENVIRONMENT_INTERACTION_MODES)),
   /** Backend-owned result of consuming pendingAgentLaunch. */
   startupAgentSession: Schema.optional(StartupAgentSessionSnapshotSchema),
   hasInitialPromptAttachments: optionalBoolean,

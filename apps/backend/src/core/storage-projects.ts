@@ -14,6 +14,7 @@ import {
 import { isEmptyAgentSettings, normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
+import { isEnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import { normalizeProjectIcon } from "@orkestrator/protocol/project-icon";
 import {
@@ -1535,6 +1536,12 @@ export class ProjectsRepository {
         if (value == null) environment.initialAgentPlatform = undefined;
         else if (isAgentPlatform(value)) environment.initialAgentPlatform = value;
         else throw new Error("Invalid initial agent platform");
+      }
+      if ("interactionMode" in updates) {
+        const value = updates.interactionMode;
+        if (value == null) environment.interactionMode = undefined;
+        else if (isEnvironmentInteractionMode(value)) environment.interactionMode = value;
+        else throw new Error("Invalid interaction mode");
       }
       if ("initialConversationMode" in updates) {
         const value = updates.initialConversationMode;

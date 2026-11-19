@@ -89,6 +89,7 @@ import {
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { isEnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import { environmentMailMarkers, isWorkingPipelineRecord } from "./nodes/index.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
@@ -989,6 +990,7 @@ export function registerEnvironmentCommands(
         initialConversationMode,
         initialPrompt,
         initialPromptAttachments,
+        interactionMode,
       },
       { storage },
     ) => {
@@ -1056,6 +1058,14 @@ export function registerEnvironmentCommands(
       if (pendingAgentLaunch !== false && Array.isArray(initialPromptAttachments)) {
         updates.initialPromptAttachments =
           initialPromptAttachments as Environment["initialPromptAttachments"];
+      }
+      // Durable, and independent of the launch intent: the mode describes the
+      // environment, so a call that only cancels a launch must not erase it.
+      if (interactionMode !== undefined) {
+        if (!isEnvironmentInteractionMode(interactionMode)) {
+          throw new Error("interactionMode must be task or interactive");
+        }
+        updates.interactionMode = interactionMode;
       }
       return toClientEnvironment(await storage.updateEnvironment(id, updates));
     },

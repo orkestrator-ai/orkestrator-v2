@@ -153,6 +153,19 @@ for (const path of ["subagent", "task-group"] as const) {
       expect(container.querySelector("button [title]") === null).toBe(true);
       expect(screen.getByText("2m 5s")).toBeTruthy();
     });
+
+    test("runtime sits behind a stopwatch in the same size and colour as the counts", () => {
+      renderUsage(path, { toolUseCount: 8, tokenCountText: "980 tokens" });
+      const tools = assertStat("8 tool uses", "8", "wrench");
+      const runtime = screen.getByText("2m 5s");
+      const timer = runtime.querySelector("svg.lucide-timer");
+      expect(timer).toBeTruthy();
+      expect(timer!.getAttribute("aria-hidden")).toBe("true");
+      for (const cls of ["text-[11px]", "text-muted-foreground"]) {
+        expect(runtime.classList.contains(cls)).toBe(true);
+        expect(tools.parentElement!.classList.contains(cls)).toBe(true);
+      }
+    });
   });
 }
 

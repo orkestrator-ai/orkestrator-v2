@@ -255,6 +255,11 @@
     {
       "version": "2.39.7-beta",
       "channel": "beta",
+      "publishedAt": "2026-11-19T02:12:40Z"
+    },
+    {
+      "version": "2.39.8-beta",
+      "channel": "beta",
       "publishedAt": null
     }
   ]

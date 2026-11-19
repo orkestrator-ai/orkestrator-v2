@@ -29,6 +29,7 @@ import type {
 } from "@orkestrator/protocol/environment-attention";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/index.js";
+import type { CredentialRecordStore } from "./credentials/records.js";
 import {
   reconcileRetiredLoopedReviewSessions,
   type RetirementProvider,
@@ -328,6 +329,11 @@ export class StorageService {
     return this.repos.permissionRules.store();
   }
 
+  /** Agent credential records (metadata only; values live in the credential vault). */
+  credentialRecordStore(): CredentialRecordStore {
+    return this.repos.credentials.store();
+  }
+
   async getResourceSnapshotRevision(
     resource: ResourceManifestKind,
   ): Promise<ResourceSnapshotRevision> {
@@ -470,6 +476,11 @@ export class StorageService {
 
   getEnvironmentsByProject(projectId: string): Promise<Environment[]> {
     return this.repos.projects.getEnvironmentsByProject(projectId);
+  }
+
+  /** Current row for synchronous checks inside a credential dispatch transaction. */
+  readEnvironmentRow(environmentId: string): Environment | null {
+    return this.repos.projects.readEnvironmentRow(environmentId);
   }
 
   getEnvironment(environmentId: string): Promise<Environment | null> {
@@ -1079,6 +1090,11 @@ export class StorageService {
     update: (journal: AgentInteractionResolutionJournal) => AgentInteractionResolutionJournal,
   ): Promise<AgentInteractionResolutionJournal> {
     return this.repos.nativeAgentSessions.updateAgentInteractionResolutionJournal(update);
+  }
+
+  /** Current row for synchronous checks inside a credential dispatch transaction. */
+  peekNativeAgentSession(key: string): PersistedNativeAgentSession | undefined {
+    return this.repos.nativeAgentSessions.peekNativeAgentSession(key);
   }
 
   getNativeAgentSession(key: string): Promise<PersistedNativeAgentSession | null> {

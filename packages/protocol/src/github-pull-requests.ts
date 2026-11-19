@@ -245,8 +245,55 @@ export type GitHubPullRequestFile = {
    * large; the UI links to GitHub instead.
    */
   patchAvailable: boolean;
+  /**
+   * True when GitHub sent a patch that was left out only to bound this
+   * response (the shared row budget, or the per-file cap of the full list).
+   * `get_github_pull_request_file_patch` loads it on its own. Absent from
+   * older backends, which link to GitHub instead.
+   */
+  patchDeferred?: boolean;
   viewedState: GitHubPullRequestViewedState;
   blobUrl?: string;
+};
+
+/** The target branch and commit of the pull request comparison. */
+export type GitHubPullRequestComparisonBase = { ref: string; sha: string };
+
+export type GitHubPullRequestComparison = {
+  headSha: string;
+  comparisonBase: GitHubPullRequestComparisonBase;
+};
+
+export type GitHubPullRequestFilePatchInput = GitHubPullRequestComparison & {
+  path: string;
+  index?: number;
+};
+
+export function gitHubPullRequestComparisonKey({
+  headSha,
+  comparisonBase,
+}: Pick<GitHubPullRequestFiles, "headSha" | "comparisonBase">): string {
+  return JSON.stringify([headSha, comparisonBase?.ref, comparisonBase?.sha]);
+}
+
+/** How a single-file patch read ended. */
+export type GitHubPullRequestFilePatchOutcome =
+  /** `hunks` and `patchAvailable` describe the file at the requested comparison. */
+  | "loaded"
+  /** The head or base changed; reload the file list. */
+  | "head-moved"
+  /** The file is not among the pull request's files at the requested comparison. */
+  | "not-found";
+
+/** One file's patch, read on demand (`get_github_pull_request_file_patch`). */
+export type GitHubPullRequestFilePatch = GitHubPullRequestComparison & {
+  ref: GitHubPullRequestRef;
+  path: string;
+  outcome: GitHubPullRequestFilePatchOutcome;
+  /** False for a binary file or one too large to render here even on its own. */
+  patchAvailable: boolean;
+  /** Parsed hunks; empty unless `outcome` is `loaded` and `patchAvailable`. */
+  hunks: ChangeDiffHunk[];
 };
 
 export type GitHubPullRequestReviewThreadComment = {
@@ -279,6 +326,8 @@ export type GitHubPullRequestReviewThread = {
 export type GitHubPullRequestFiles = {
   ref: GitHubPullRequestRef;
   headSha: string;
+  /** Absent from older backends that cannot bind a deferred read to this base. */
+  comparisonBase?: GitHubPullRequestComparisonBase;
   files: GitHubPullRequestFile[];
   threads: GitHubPullRequestReviewThread[];
   /** GitHub caps the file list (3000 files); true when the PR exceeds it. */

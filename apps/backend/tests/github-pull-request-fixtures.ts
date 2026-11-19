@@ -2,6 +2,7 @@ import { createGitHubConditionalCache } from "../src/core/git/github-pull-reques
 
 export const TOKEN = "github_pat_pull_request_secret";
 export const HEAD_SHA = "a".repeat(40);
+export const BASE = { ref: "main", sha: "d".repeat(40) };
 export const REF = { owner: "acme", repo: "repo", number: 7 } as const;
 
 export type FakeRequest = {
@@ -108,7 +109,7 @@ export function apiPull(overrides: Record<string, unknown> = {}) {
     created_at: "2026-10-01T00:00:00Z",
     updated_at: "2026-10-02T00:00:00Z",
     head: { ref: "feature/widgets", sha: HEAD_SHA, repo: { full_name: "acme/repo" } },
-    base: { ref: "main", repo: { full_name: "acme/repo" } },
+    base: { ...BASE, repo: { full_name: "acme/repo" } },
     additions: 10,
     deletions: 2,
     changed_files: 2,

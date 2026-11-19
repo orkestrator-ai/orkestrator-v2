@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "@testing-library/react";
 import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
-import { gitHubPullRequestKey } from "@orkestrator/protocol/github-pull-requests";
+import {
+  gitHubPullRequestComparisonKey,
+  gitHubPullRequestKey,
+} from "@orkestrator/protocol/github-pull-requests";
 import { usePullRequestDetail } from "@/hooks/usePullRequestData";
 import {
   callsFor,
+  comparisonBase,
   deferred,
   installBackend,
   makeDetail,
@@ -17,8 +21,12 @@ import {
   installControlledTimeout,
   type ControlledTimeout,
 } from "../../../../tests/helpers/controlled-timeout";
+import type { GitHubPullRequestFilePatch } from "@orkestrator/protocol/github-pull-requests";
 import {
+  MAX_CACHED_FILE_PATCHES,
+  MAX_CACHED_FILE_PATCH_ROWS,
   PULL_REQUEST_DETAIL_POLL_MS,
+  filePatchKey,
   pullRequestsStore,
   resourceKey,
   startPullRequestDetailPolling,
@@ -105,6 +113,180 @@ describe("pullRequestsStore reads", () => {
       { projectId: "p1", filter: "mine", query: "bug" },
     ]);
     expect(appCommandStore(pullRequestsStore).getState().lists.has("p1:mine:bug")).toBe(true);
+  });
+});
+
+describe("pullRequestsStore single-file patches", () => {
+  const HEAD = "a".repeat(40);
+  const comparison = { headSha: HEAD, comparisonBase };
+  const revision = gitHubPullRequestComparisonKey(comparison);
+  const patchOf = (path: string, rows = 1): GitHubPullRequestFilePatch => ({
+    ref: prRef,
+    path,
+    ...comparison,
+    outcome: "loaded",
+    patchAvailable: true,
+    hunks: [
+      {
+        header: "@@",
+        oldStart: 1,
+        oldLines: 0,
+        newStart: 1,
+        newLines: rows,
+        lines: Array.from({ length: rows }, (_, index) => ({
+          type: "add" as const,
+          text: `${index}`,
+          oldLine: null,
+          newLine: index + 1,
+        })),
+      },
+    ],
+  });
+  const store = () => appCommandStore(pullRequestsStore).getState();
+
+  test("caches by comparison and path and does not repeat a read in flight", async () => {
+    const pending = deferred<GitHubPullRequestFilePatch>();
+    installBackend({ get_github_pull_request_file_patch: () => pending.promise });
+    const file = { path: "a.ts", ...comparison, index: 3 };
+    const first = store().loadFilePatch(prRef, file);
+    const second = store().loadFilePatch(prRef, file);
+    expect(callsFor("get_github_pull_request_file_patch")).toHaveLength(1);
+    pending.resolve(patchOf("a.ts"));
+    await Promise.all([first, second]);
+    expect(store().filePatches.get(filePatchKey(key, revision, "a.ts"))?.outcome).toBe("loaded");
+  });
+
+  test("evicts the stalest patches by count and rows, never the newest", async () => {
+    installBackend({
+      get_github_pull_request_file_patch: (args) =>
+        patchOf(String(args.path), args.path === "huge.ts" ? MAX_CACHED_FILE_PATCH_ROWS + 1 : 1),
+    });
+    for (let index = 0; index <= MAX_CACHED_FILE_PATCHES; index++) {
+      await store().loadFilePatch(prRef, { path: `f${index}.ts`, ...comparison });
+    }
+    expect(store().filePatches.size).toBe(MAX_CACHED_FILE_PATCHES);
+    expect(store().filePatches.has(filePatchKey(key, revision, "f0.ts"))).toBe(false);
+
+    await store().loadFilePatch(prRef, { path: "huge.ts", ...comparison });
+    expect(Array.from(store().filePatches.keys())).toEqual([
+      filePatchKey(key, revision, "huge.ts"),
+    ]);
+  });
+
+  test("a new file list drops patches read at an older head", async () => {
+    installBackend({
+      get_github_pull_request_file_patch: (args) => patchOf(String(args.path)),
+      get_github_pull_request_files: () => makeFiles({ headSha: "b".repeat(40) }),
+    });
+    await store().loadFilePatch(prRef, { path: "a.ts", ...comparison });
+    expect(store().filePatches.size).toBe(1);
+    await store().loadFiles(prRef);
+    expect(store().filePatches.size).toBe(0);
+  });
+
+  test.each([
+    ["retarget", { headSha: HEAD, comparisonBase: { ref: "release", sha: "e".repeat(40) } }],
+    ["push", { headSha: "b".repeat(40), comparisonBase }],
+  ] as const)(
+    "a %s invalidates cached patches and drops old in-flight successes",
+    async (_, next) => {
+      const pending = deferred<GitHubPullRequestFilePatch>();
+      installBackend({
+        get_github_pull_request_file_patch: (args) => {
+          if (args.path === "pending.ts") return pending.promise;
+          const patch = patchOf(String(args.path));
+          return args.path === "current.ts" ? { ...patch, ...next } : patch;
+        },
+        get_github_pull_request_files: () => makeFiles(next),
+      });
+      await store().loadFilePatch(prRef, { path: "cached.ts", ...comparison });
+      const oldRead = store().loadFilePatch(prRef, { path: "pending.ts", ...comparison });
+      await store().loadFiles(prRef);
+      const currentRead = store().loadFilePatch(prRef, { path: "current.ts", ...next });
+      await currentRead;
+      pending.resolve(patchOf("pending.ts"));
+      await oldRead;
+
+      expect(Array.from(store().filePatches.keys())).toEqual([
+        filePatchKey(key, gitHubPullRequestComparisonKey(next), "current.ts"),
+      ]);
+    },
+  );
+
+  test.each([false, true])(
+    "moved patch reads share a list refresh (poll already running: %s)",
+    async (pollAlreadyRunning) => {
+      const first = deferred<GitHubPullRequestFilePatch>();
+      const second = deferred<GitHubPullRequestFilePatch>();
+      const list = deferred<ReturnType<typeof makeFiles>>();
+      const newHead = "b".repeat(40);
+      installBackend({
+        get_github_pull_request_file_patch: ({ path, headSha }) => {
+          if (headSha === newHead) return { ...patchOf(String(path)), headSha: newHead };
+          return path === "first.ts" ? first.promise : second.promise;
+        },
+        get_github_pull_request_files: () => list.promise,
+      });
+
+      const firstRead = store().loadFilePatch(prRef, { path: "first.ts", ...comparison });
+      const secondRead = store().loadFilePatch(prRef, { path: "second.ts", ...comparison });
+      const poll = pollAlreadyRunning ? store().loadFiles(prRef) : undefined;
+      for (const [pending, path] of [
+        [first, "first.ts"],
+        [second, "second.ts"],
+      ] as const) {
+        pending.resolve({
+          ...patchOf(path),
+          headSha: newHead,
+          outcome: "head-moved",
+          patchAvailable: false,
+          hunks: [],
+        });
+        await pending.promise;
+      }
+      await act(async () => {});
+      expect(callsFor("get_github_pull_request_files")).toHaveLength(1);
+      expect(store().errors.size).toBe(0);
+      list.resolve(makeFiles({ headSha: newHead }));
+      await Promise.all([firstRead, secondRead, poll]);
+      expect(store().errors.size).toBe(0);
+      expect(callsFor("get_github_pull_request_files")).toHaveLength(1);
+
+      await store().loadFilePatch(prRef, { path: "first.ts", ...comparison, headSha: newHead });
+      expect(Array.from(store().filePatches.values()).map((patch) => patch.headSha)).toEqual([
+        newHead,
+      ]);
+    },
+  );
+
+  test("a superseded recovery stays pending until the newer file list settles", async () => {
+    const recovery = deferred<ReturnType<typeof makeFiles>>();
+    const poll = deferred<ReturnType<typeof makeFiles>>();
+    const nextHead = "b".repeat(40);
+    const loadKey = resourceKey("file-patch", filePatchKey(key, revision, "a.ts"));
+    let reads = 0;
+    installBackend({
+      get_github_pull_request_file_patch: () => ({
+        ...patchOf("a.ts"),
+        headSha: nextHead,
+        outcome: "head-moved",
+        hunks: [],
+      }),
+      get_github_pull_request_files: () => (++reads === 1 ? recovery.promise : poll.promise),
+    });
+    const read = store().loadFilePatch(prRef, { ...comparison, path: "a.ts" });
+    await act(async () => {});
+    expect(reads).toBe(1);
+
+    const newer = store().loadFiles(prRef);
+    await act(async () => recovery.resolve(makeFiles(comparison)));
+    expect(store().loading.has(loadKey)).toBe(true);
+    expect(store().errors.has(loadKey)).toBe(false);
+    poll.resolve(makeFiles({ headSha: nextHead }));
+    await Promise.all([newer, read]);
+    expect(store().loading.has(loadKey)).toBe(false);
+    expect(store().errors.has(loadKey)).toBe(false);
+    expect(store().files.get(key)?.headSha).toBe(nextHead);
   });
 });
 

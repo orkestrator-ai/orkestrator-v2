@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1013,
-    "defined": 1013,
+    "commands": 1023,
+    "defined": 1023,
     "untyped": 0,
     "events": 45
   },
@@ -432,6 +432,15 @@
       "critical": ["liveIds", "reset"],
       "argsDigest": "sha256:20b586a7940fc8a1ff56fe55e6c4e7527357a26eb6815b57bae44771705056de",
       "resultDigest": "sha256:8a62babc0519cc8dc63a8493a1025d0e86913952348111019aab4e16dc0748da"
+    },
+    "approve_credential_request": {
+      "domain": "config",
+      "since": 2,
+      "access": "admin",
+      "read": false,
+      "critical": ["hosts", "lifetimeMs", "maxUses"],
+      "argsDigest": "sha256:a732e9e847c21d4d7b95a43ab617b7a478b229844a000ca59675bbbe6585aa66",
+      "resultDigest": "sha256:14713020370e402057cc193ac55f911a6937e689dc5d8dd8a5376b7b2f1a1608"
     },
     "approve_environment_setup": {
       "domain": "environments",
@@ -1594,6 +1603,15 @@
       "argsDigest": "sha256:9397dd4c7560923d7b2d93de605926c568dc9df2d047ac07f52acc9ee97e72f5",
       "resultDigest": "sha256:04e68c837f2356031413e8b6f6282b10d248fe419558a8ec366c36041ae9e050"
     },
+    "create_credential_connection": {
+      "domain": "config",
+      "since": 2,
+      "access": "admin",
+      "read": false,
+      "critical": ["httpHosts", "projectIds"],
+      "argsDigest": "sha256:82226a40b1d57694579fc14bbdc69ee8aafe1ab8fc8dfe2c1ef5e3a87a5897ae",
+      "resultDigest": "sha256:df658a01742b8ce5a0a2e0f96fa14aeb889f09596e1a0fe9bd9336f620dbd7fc"
+    },
     "create_debug_build": {
       "domain": "pipelines",
       "since": 1,
@@ -1798,6 +1816,15 @@
       "argsDigest": "sha256:34daba8ff437717507bc8d1bf9b558ed721c58752c22e1bce9bee8e23167bc4a",
       "resultDigest": "sha256:3d17582058056198ca6e4fc71800b3b2250f45bc8b29850cdbe749ef42eaaeb3"
     },
+    "decline_credential_request": {
+      "domain": "config",
+      "since": 2,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:39545f2031b64488a9af49453422c9b5b0c1d517f8c72f3eb541550f5f01eaea",
+      "resultDigest": "sha256:b5aa9dfccb4039da9d3dd74db98032c3a499bdfb82992aa7301f0e0779d82b46"
+    },
     "delete_agent_handoff": {
       "domain": "native-sessions",
       "since": 1,
@@ -1842,6 +1869,15 @@
       "critical": [],
       "argsDigest": "sha256:aebe73b717158cd52e145c128feb569c211ab1fd4e58209bbeaae75b80d8c818",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "delete_credential_connection": {
+      "domain": "config",
+      "since": 2,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5f7317f3efd10fa0394946643f410c5f83a7a2f8707554c9eae9fce06ef755e1",
+      "resultDigest": "sha256:46ecf0e4b544d897b71c0d66e52f5b10659b3525539b88ca1ea1b4368707ad61"
     },
     "delete_environment": {
       "domain": "environments",
@@ -3177,6 +3213,24 @@
       "argsDigest": "sha256:9397dd4c7560923d7b2d93de605926c568dc9df2d047ac07f52acc9ee97e72f5",
       "resultDigest": "sha256:6569c87ee4a3a4dac2d230e39c2f0461594128680a7138255e0d0f6ec20e62f0"
     },
+    "get_credential_overview": {
+      "domain": "config",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:296ae69c49f8c5ccf648a1c1e150dc90ad97fb30fe86d6149dc5e0a635876f25"
+    },
+    "get_credential_snapshot": {
+      "domain": "config",
+      "since": 2,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:017ad555ac9656b38898499d24635487967987e299a8bed19e88e0299d899547",
+      "resultDigest": "sha256:70466f6e5c2a7d8fe5b6c6ee0939b2edc1b5c3d8091823aaa07ee2862f9e01cc"
+    },
     "get_cursor_server_log": {
       "domain": "agent-servers",
       "since": 1,
@@ -3519,6 +3573,15 @@
       "argsDigest": "sha256:9fc2a21bbb4038b3d76a1027356507ea2340d65085e90dff42dd67104bff8a0d",
       "resultDigest": "sha256:3a3a27fedba9f53c57b7cabaa63828085f3c5dcd8074e4d61d65353e61b4fc16"
     },
+    "get_github_pull_request_file_patch": {
+      "domain": "pull-requests",
+      "since": 4,
+      "access": "workspace",
+      "read": true,
+      "critical": ["comparisonBase"],
+      "argsDigest": "sha256:5ba9d94eb6b2fbb9bfc14e41796006596ce9a66792489d3e0663754ad2628c2f",
+      "resultDigest": "sha256:a85cebe4209797f97b80bdc74387ebd7978e385761b5137847d50186f6429212"
+    },
     "get_github_pull_request_files": {
       "domain": "pull-requests",
       "since": 1,
@@ -3526,7 +3589,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9fc2a21bbb4038b3d76a1027356507ea2340d65085e90dff42dd67104bff8a0d",
-      "resultDigest": "sha256:5725cd90a44a2ece5698e5ac4e80966b72287c58fcae7b005f70711bcd359145"
+      "resultDigest": "sha256:09b1fcbfb36bbc9dc02ec29aab61f3400c41e453902f0d5eb549f64eb280a29c"
     },
     "get_github_pull_request_timeline": {
       "domain": "pull-requests",
@@ -6685,6 +6748,15 @@
       "argsDigest": "sha256:4afba85612da7b703ea1ded572331d2cc58e862a5520d10c6a78c4914d78eca9",
       "resultDigest": "sha256:3e03db3640f4a15dabb47a1aa8d4d5f8bfda3059fee96c9fe5799299f2b85ef1"
     },
+    "replace_credential_connection_value": {
+      "domain": "config",
+      "since": 2,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8f4a4e91403e2777b517a25023de6030e66816f411b102f7bff2e3b6bd704420",
+      "resultDigest": "sha256:df658a01742b8ce5a0a2e0f96fa14aeb889f09596e1a0fe9bd9336f620dbd7fc"
+    },
     "reply_github_pull_request_review_thread": {
       "domain": "pull-requests",
       "since": 1,
@@ -7089,6 +7161,15 @@
       "critical": [],
       "argsDigest": "sha256:50f537fb45f88f545ea687c2104746b32a75083e3285d285f5097b900659fcfa",
       "resultDigest": "sha256:855204851d3fbee3807e1345c9ce7ab6a7f9e33845f6bdc56dec91c32826ec48"
+    },
+    "revoke_credential_grant": {
+      "domain": "config",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f2fad562a58d1e850cbbeb8b60e8fb1b75b511f682b70fa666c327e3e99617f1",
+      "resultDigest": "sha256:b208313384f59e0391d1bc25c5a52cd5f46d5656eadfb3ed875fa196055d5571"
     },
     "revoke_preview_access": {
       "domain": "previews",
@@ -8601,6 +8682,15 @@
       "critical": [],
       "argsDigest": "sha256:c45c9bc3164cf52ca003fde5e314351263ed14de5f435846b1c894c3e3c90ae2",
       "resultDigest": "sha256:cd5cd9969560d40521d96f8d80d700c877005b75c785411f83b74473d94448c7"
+    },
+    "update_credential_connection": {
+      "domain": "config",
+      "since": 2,
+      "access": "admin",
+      "read": false,
+      "critical": ["httpHosts", "projectIds"],
+      "argsDigest": "sha256:50dc4f5eff659cb28dc4bf3cbc4796801bc77b42242a7a8bca85fbeae147689b",
+      "resultDigest": "sha256:df658a01742b8ce5a0a2e0f96fa14aeb889f09596e1a0fe9bd9336f620dbd7fc"
     },
     "update_environment_agent_settings": {
       "domain": "environments",

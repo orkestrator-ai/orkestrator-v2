@@ -50,6 +50,7 @@ Bun.serve({
     return Response.json({ version: "2.2.6", pid: process.pid, launched });
   },
 });
+process.stdout.write("server listening on http://127.0.0.1:" + port + "\\n");
 `;
 
 let cleanup: Array<() => Promise<void>> = [];

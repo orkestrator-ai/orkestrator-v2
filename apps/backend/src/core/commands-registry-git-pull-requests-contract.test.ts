@@ -20,8 +20,8 @@ const context = {} as CommandContext;
 describe("git and pull-requests registrations", () => {
   const commands = createCommandRegistry();
 
-  test("registers all 62 commands with their definitions", () => {
-    expect(DEFINITIONS).toHaveLength(62);
+  test("registers all 63 commands with their definitions", () => {
+    expect(DEFINITIONS).toHaveLength(63);
     for (const def of DEFINITIONS) {
       expect({ name: def.name, defined: commands.contracts.get(def.name) === def }).toEqual({
         name: def.name,

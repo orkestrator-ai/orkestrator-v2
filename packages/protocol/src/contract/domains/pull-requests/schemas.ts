@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import type {
   GitHubPullRequestComment,
   GitHubPullRequestDetail,
+  GitHubPullRequestFilePatch,
   GitHubPullRequestFiles,
   GitHubPullRequestLabel,
   GitHubPullRequestListResult,
@@ -204,9 +205,15 @@ export const GitHubPullRequestReviewThreadCommentSchema =
     htmlUrl: Schema.String,
   }).annotate({ identifier: "GitHubPullRequestReviewThreadComment" });
 
+export const GitHubPullRequestComparisonBaseSchema = Schema.Struct({
+  ref: Schema.String,
+  sha: Schema.String,
+});
+
 export const GitHubPullRequestFilesSchema = modelRecord<GitHubPullRequestFiles>()({
   ref: PullRequestRefSchema,
   headSha: Schema.String,
+  comparisonBase: Schema.optionalKey(GitHubPullRequestComparisonBaseSchema),
   files: Schema.Array(
     openRecord({
       path: Schema.String,
@@ -228,6 +235,16 @@ export const GitHubPullRequestFilesSchema = modelRecord<GitHubPullRequestFiles>(
   ),
   truncated: Schema.Boolean,
 }).annotate({ identifier: "GitHubPullRequestFiles" });
+
+export const GitHubPullRequestFilePatchSchema = modelRecord<GitHubPullRequestFilePatch>()({
+  ref: PullRequestRefSchema,
+  path: Schema.String,
+  headSha: Schema.String,
+  comparisonBase: GitHubPullRequestComparisonBaseSchema,
+  outcome: Schema.String,
+  patchAvailable: Schema.Boolean,
+  hunks: Schema.Array(openRecord({ header: Schema.String })),
+}).annotate({ identifier: "GitHubPullRequestFilePatch" });
 
 export const GitHubPullRequestMergeResultSchema = modelRecord<GitHubPullRequestMergeResult>()({
   merged: Schema.Boolean,

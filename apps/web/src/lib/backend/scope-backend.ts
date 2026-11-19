@@ -44,6 +44,7 @@ import { createGithubPullRequestsApi } from "./github-pull-requests";
 import { createScheduledJobsApi } from "./scheduled-jobs";
 import { createUserCommandsApi } from "./user-commands";
 import { createPermissionRulesApi } from "./permission-rules";
+import { createCredentialsApi } from "./credentials";
 import { createBugReportApi } from "./bug-report";
 import { createGraphRunsApi } from "./graph-runs";
 import { createGraphTemplatesApi } from "./graph-templates";
@@ -79,6 +80,7 @@ const FACTORIES = [
   createScheduledJobsApi,
   createUserCommandsApi,
   createPermissionRulesApi,
+  createCredentialsApi,
   createBugReportApi,
   createGraphRunsApi,
   createGraphTemplatesApi,

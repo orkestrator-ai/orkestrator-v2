@@ -36,6 +36,7 @@ are refused) and `assertOnlyKeys`. Argument shapes match
 | `get_github_pull_request` | REST `/pulls/{n}`, `/pulls/{n}/reviews`, `/issues/{n}/comments`, `/repos/{o}/{r}`, `/user`, then `/commits/{sha}/check-runs` and `/commits/{sha}/status` for the head commit, all in parallel. |
 | `get_github_pull_request_timeline` | REST `/issues/{n}/timeline` (capped at 500 items → `truncated`), plus `/pulls/{n}/commits` for commit authors and `/pulls/{n}/comments` for per-review inline comment counts. A synthetic `opened` event is first. |
 | `get_github_pull_request_files` | REST `/pulls/{n}/files` (GitHub stops at 3000 files → `truncated`) plus one paged GraphQL query for `viewerViewedState` per path and every review thread. |
+| `get_github_pull_request_file_patch { …, path, headSha, comparisonBase, index? }` | One deferred file’s patch. Tries the REST file page named by `index`, then searches the remaining pages as needed. Uncached reads of the head SHA, base ref and base SHA bracket the search. The outcomes are `loaded`, `not-found` and `head-moved` (comparison changed). Domain version 4. |
 | `merge_github_pull_request` | REST `PUT /pulls/{n}/merge` (`sha` = `expectedHeadSha`), then `DELETE /git/refs/heads/{ref}` when asked and the head is in the same repository. |
 | `update_github_pull_request_state` | `close`/`reopen`: REST `PATCH /pulls/{n}`; `ready-for-review`/`convert-to-draft`: GraphQL mutations with the PR node id. Returns the re-fetched detail. |
 | `add_/update_github_pull_request_comment` | REST issue comments; an edit checks the comment's `issue_url` belongs to this PR and that the viewer authored it or has write access. |
@@ -68,7 +69,49 @@ array of an HTTP 200 into a `GitHubApiError` with a REST-style code.
   A file is `patchAvailable: false` when GitHub omits the patch (binary or
   too large), when it renders more than 3000 rows, or once the response has
   used 40 000 rows. Pure renames and copies with no changes are available
-  with no hunks.
+  with no hunks. A file left out only for those response bounds, whose patch
+  has at most 10 000 rows, is also `patchDeferred: true`; the renderer loads
+  it on its own with `get_github_pull_request_file_patch`, whose per-file cap
+  is 10 000 rows. The renderer requests deferred patches only when the
+  list includes the base branch and SHA. The backend checks both before and
+  after reading mutable file pages, along with the head SHA.
+
+## The Code tab
+
+`PullRequestCodeTab` (`apps/web/src/components/pull-requests/`) shows the
+files in the order of its path tree (`pull-request-file-navigation.ts`:
+directories first, natural sort, single-child directory chains folded into
+one row). The tree sits beside the diffs at 640px and wider and starts open
+there; narrower, it stacks above them and starts closed. The toolbar has a
+path search (every space-separated term must occur in the path or previous
+path) and Unviewed and Unresolved filters. While any of them is active the
+tab says how many files it shows and hides, and the tree temporarily shows every
+directory open with its toggle disabled. The viewed count always covers the whole pull request.
+
+- **Selecting a file** in the tree, or **Next unviewed** (the next file after
+  the selected one that is not viewed, wrapping), expands it, reveals it in
+  the tree, scrolls it into view and, if its patch is deferred, loads just
+  that patch.
+- **Next unresolved conversation** walks unresolved threads on the shown files
+  in tree order, then by line (outdated last), wrapping, and focuses the
+  thread. In a deferred file it waits through comparison recovery so it lands
+  on the thread's current line when available. Hiding or collapsing the file
+  cancels a pending jump. Both navigation buttons reveal the selected tree row.
+- **Per-file patch state** lives in `pullRequestsStore.filePatches`, keyed by
+  pull request, head SHA, base branch, base SHA and file path. A
+  `head-moved` answer means either side changed and joins or starts a shared
+  file-list refresh. The reader's explicit request follows the new comparison
+  once. A new file list drops obsolete patches, including results arriving
+  after that list. The cache evicts the oldest patches to stay within 40
+  entries and 60 000 rows. Loading an evicted patch takes another file action.
+- **Expand all** expands the shown files without fetching deferred patches;
+  each shows **Load diff**. Only a single-file action (expanding one file,
+  selecting it, a next-button jump, Load diff, Retry) starts a read, so a
+  large pull request never fans out into one GitHub request per file.
+- Conversations on unavailable or empty diffs are listed under the file.
+  Unsent inline comments and replies survive filtering, collapsing files, and
+  refreshing deferred patches while the Code tab is open. An inline draft
+  keeps the commit and line captured when it was opened.
 
 ## Conditional-request cache
 

@@ -188,8 +188,14 @@ export function CommentComposer({
   className,
   ariaLabel,
   allowEmpty = false,
+  draft,
 }: {
   allowEmpty?: boolean;
+  draft?: {
+    body: string;
+    submitting: boolean;
+    update: (change: { body?: string; submitting?: boolean }) => void;
+  };
   placeholder?: string;
   submitLabel?: string;
   onSubmit: (body: string) => Promise<void>;
@@ -200,15 +206,20 @@ export function CommentComposer({
   className?: string;
   ariaLabel?: string;
 }) {
-  const [value, setValue] = useState(initialValue);
-  const [submitting, setSubmitting] = useState(false);
+  const [localValue, setLocalValue] = useState(initialValue);
+  const [localSubmitting, setLocalSubmitting] = useState(false);
+  const value = draft?.body ?? localValue;
+  const submitting = draft?.submitting ?? localSubmitting;
+  const setValue = (body: string) => (draft ? draft.update({ body }) : setLocalValue(body));
+  const setSubmitting = (submitting: boolean) =>
+    draft ? draft.update({ submitting }) : setLocalSubmitting(submitting);
   const submit = async () => {
     const body = value.trim();
     if ((!body && !allowEmpty) || submitting) return;
     setSubmitting(true);
     try {
       await onSubmit(body);
-      setValue("");
+      if (!draft) setValue("");
     } catch (error) {
       toast.error(errorMessage(error, "Could not post the comment."));
     } finally {
@@ -219,7 +230,7 @@ export function CommentComposer({
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       void submit();
-    } else if (event.key === "Escape" && onCancel) {
+    } else if (event.key === "Escape" && onCancel && !submitting) {
       event.preventDefault();
       onCancel();
     }
@@ -240,7 +251,13 @@ export function CommentComposer({
         <span className="mr-auto text-[11px] text-muted-foreground">⌘/Ctrl+Enter to send</span>
         {extraActions}
         {onCancel && (
-          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onCancel}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs"
+            disabled={submitting}
+            onClick={onCancel}
+          >
             Cancel
           </Button>
         )}

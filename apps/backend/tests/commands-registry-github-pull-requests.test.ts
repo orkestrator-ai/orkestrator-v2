@@ -3,6 +3,8 @@ import { refreshMonitoredPullRequest } from "../src/core/commands-registry-githu
 import { resetGitHubPullRequestCache } from "../src/core/git/github-pull-requests";
 import { createCommandFixtures } from "./command-fixtures";
 import {
+  BASE,
+  HEAD_SHA,
   TOKEN,
   apiPull,
   createFakeGitHub,
@@ -54,6 +56,7 @@ describe("GitHub pull request commands", () => {
       "get_github_pull_request",
       "get_github_pull_request_timeline",
       "get_github_pull_request_files",
+      "get_github_pull_request_file_patch",
       "merge_github_pull_request",
       "update_github_pull_request_state",
       "add_github_pull_request_comment",
@@ -126,6 +129,47 @@ describe("GitHub pull request commands", () => {
       }),
     ).rejects.toThrow("at most 256");
     expect(fake.requests).toEqual([]);
+  });
+
+  test.each([
+    [undefined, "1"],
+    [205, "3"],
+  ] as const)("loads a file patch through the registry with index %s", async (index, page) => {
+    const { fake, run } = setup();
+    fake.on("GET", "/repos/acme/repo/pulls/7", apiPull());
+    fake.on("GET", "/repos/acme/repo/pulls/7/files", [
+      { filename: "a.ts", status: "added", patch: "@@ -0,0 +1 @@\n+new" },
+    ]);
+    const result = await run("get_github_pull_request_file_patch", {
+      ...ref,
+      path: "a.ts",
+      headSha: HEAD_SHA,
+      comparisonBase: BASE,
+      ...(index === undefined ? {} : { index }),
+    });
+    expect(result).toMatchObject({ outcome: "loaded", comparisonBase: BASE });
+    expect(
+      fake
+        .requestsTo("GET", "/repos/acme/repo/pulls/7/files")
+        .map(({ url }) => url.searchParams.get("page")),
+    ).toEqual([page]);
+  });
+
+  test("rejects malformed file-patch arguments before contacting GitHub", async () => {
+    const { fake, run } = setup();
+    const input = { ...ref, path: "a.ts", headSha: HEAD_SHA, comparisonBase: BASE };
+    for (const [field, value] of [
+      ["path", 4],
+      ["headSha", false],
+      ["comparisonBase", undefined],
+      ["comparisonBase", { ref: "main", sha: 4 }],
+      ["index", "205"],
+    ] as const) {
+      await expect(
+        run("get_github_pull_request_file_patch", { ...input, [field]: value }),
+      ).rejects.toThrow(field);
+    }
+    expect(fake.requests).toHaveLength(0);
   });
 
   test("explains a missing credential", async () => {

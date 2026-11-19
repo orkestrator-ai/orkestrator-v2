@@ -311,6 +311,13 @@ import { autoPipelineToolHost, createAutoPipelineService } from "./auto-pipeline
 import { GraphDescribeService } from "./graph-describe-service.js";
 import { GraphMockRuns } from "./graph-mock-launch.js";
 import { installGraphMockExecutors } from "./graph-mock-provider.js";
+import {
+  CredentialService,
+  credentialVaultPreference,
+  openCredentialVault,
+} from "./credentials/index.js";
+import { createCredentialHost } from "./credentials-host.js";
+import path from "node:path";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -431,6 +438,7 @@ export class OrkestratorBackend {
         AgentToolsServer,
         | "setGoalToolHost"
         | "setSuborkToolHost"
+        | "setCredentialToolHost"
         | "setAutoPipelineToolHost"
         | "revokeTab"
         | "workflowResultConnection"
@@ -445,6 +453,8 @@ export class OrkestratorBackend {
       >
     >;
   private readonly scheduledJobs: ScheduledJobService;
+  /** Agent credentials; set once the vault opens during `init`. */
+  private credentials: CredentialService | null = null;
   /** Experimental self-improvement runs; idle while its switch is off. */
   private readonly selfImprovement: SelfImprovementService;
   /** Unsubscribes the container lifecycle reactor (`container-lifecycle-events.ts`). */
@@ -510,6 +520,7 @@ export class OrkestratorBackend {
           AgentToolsServer,
           | "setGoalToolHost"
           | "setSuborkToolHost"
+          | "setCredentialToolHost"
           | "setAutoPipelineToolHost"
           | "revokeTab"
           | "workflowResultConnection"
@@ -1127,6 +1138,21 @@ export class OrkestratorBackend {
         signInGuidance: (environmentId, agent) =>
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
+        onConversationRetired: (environmentId, logicalSessionKey, retiredProviderSessionId) => {
+          try {
+            this.credentials?.conversationRetired(
+              environmentId,
+              logicalSessionKey,
+              retiredProviderSessionId,
+            );
+          } catch (error) {
+            log.warn("notice.failed", {
+              step: "credential-conversation-retired",
+              environmentId,
+              error: formatLogError(error),
+            });
+          }
+        },
         // A view-only invalidation for an idle session whose content changed:
         // same channel and stamp sequence as transitions, so a client re-reads
         // that view (or every view after a gap). Deliberately nothing else
@@ -2117,6 +2143,32 @@ export class OrkestratorBackend {
     );
   }
 
+  /** Opens the saved credential vault and starts the credential service. */
+  private async startCredentials(): Promise<void> {
+    if (this.credentials) return;
+    const dataDir = this.context.storage.getDataDir();
+    const { vault, vaults, status } = await openCredentialVault({
+      dataDir,
+      preference: credentialVaultPreference(
+        process.env,
+        this.context.runtimeFlavor ?? "production",
+      ),
+    });
+    if (this.shuttingDown) return;
+    const service = new CredentialService({
+      records: this.context.storage.credentialRecordStore(),
+      vault,
+      vaults,
+      vaultStatus: status,
+      host: createCredentialHost(this.context),
+      runRoot: path.join(dataDir, "credentials", "runs"),
+    });
+    this.credentials = service;
+    this.context.credentials = service;
+    this.agentTools.setCredentialToolHost?.(service);
+    service.start();
+  }
+
   /**
    * Startup work only the lease holder may do: operations a previous process
    * left unresolved are settled by exact Docker identity (an unreachable
@@ -2137,6 +2189,11 @@ export class OrkestratorBackend {
         step: "container-operations",
         error: formatLogError(error),
       });
+    });
+    // Temporary credential grants and open credential runs of the previous
+    // process cannot continue; settle their records.
+    await this.credentials?.reconcileStartup().catch((error: unknown) => {
+      log.warn("startup.step-failed", { step: "credentials", error: formatLogError(error) });
     });
     // Probe containers are never started; one left by an interrupted
     // manifest read is removed in the background.
@@ -2212,6 +2269,11 @@ export class OrkestratorBackend {
     // management, not the backend.
     await this.context.mcpManagement?.init().catch((error: unknown) => {
       log.warn("startup.step-failed", { step: "mcp-management", error: formatLogError(error) });
+    });
+    // Agent credentials. A vault that cannot open disables the feature, not
+    // the backend: the tools and commands report it unavailable.
+    await this.startCredentials().catch((error: unknown) => {
+      log.warn("startup.step-failed", { step: "credentials", error: formatLogError(error) });
     });
     const terminalHistoryConfig = (await this.context.storage.loadConfig()).global;
     this.runtime.terminals.history.configureRetention({
@@ -3447,6 +3509,7 @@ export class OrkestratorBackend {
       required(yield* shutdownStep("mcp-management", () => this.context.mcpManagement?.dispose()));
       required(yield* shutdownStep("control-mcp", () => this.controlMcp.stop()));
       required(yield* shutdownStep("agent-tools", () => this.agentTools.stop()));
+      stopStepNow("credentials", () => this.credentials?.stop());
       yield* shutdownStep("host-reachability", () => reachabilitySettled);
       yield* shutdownStep("web-annotations", () => this.webAnnotations.close(), {
         timeoutMs: WEB_ANNOTATIONS_CLOSE_TIMEOUT_MS,

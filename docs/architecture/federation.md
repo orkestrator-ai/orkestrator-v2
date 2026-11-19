@@ -882,6 +882,9 @@ with `MachinesFilter`:
   dropdown** (`ProjectMachineSwitcher`) whenever another machine has a copy
   of the project's repository (matched by `repositoryHint`, the same match
   the Build launcher and Linear connect dialog use, `linear-machines.ts`).
+  The dropdown stays visible when the tabs scroll. On phones it appears in
+  Tools while viewing a project. Matching uses loaded project records from
+  warm and live scopes when available and node summaries otherwise.
   It lists only those machines, in the sidebar's machine order, with the one
   shown selected and a machine that is not connected disabled. Picking one
   opens that machine's copy of the project on the same tab

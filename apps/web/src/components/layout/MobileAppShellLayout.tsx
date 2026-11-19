@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -26,6 +27,7 @@ import { useBugReportStore } from "@/stores/bugReportStore";
 import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
 import { onDrawerNavigation } from "@/lib/mobile-shell";
 import { pinnedScroll } from "@/lib/pinned-scroll";
+import { CloseMobileToolsContext } from "./mobile-tools-context";
 
 /**
  * Accessible name of the collapsed tools trigger.
@@ -113,10 +115,10 @@ export function MobileAppShellLayout({
     setSidebarOpen(open);
   };
 
-  const closeTools = () => {
+  const closeTools = useCallback(() => {
     restoreToolsFocusRef.current = true;
     setToolsOpen(false);
-  };
+  }, []);
 
   useEffect(() => {
     const previousSelection = previousSelectionRef.current;
@@ -264,7 +266,7 @@ export function MobileAppShellLayout({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toolsOpen]);
+  }, [closeTools, toolsOpen]);
 
   return (
     <DialogPrimitive.Root open={sidebarOpen} onOpenChange={handleSidebarOpenChange}>
@@ -447,12 +449,18 @@ export function MobileAppShellLayout({
           style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
           onMouseDown={(event) => event.stopPropagation()}
           onClickCapture={(event) => {
-            if ((event.target as Element).closest("button, [data-slot='context-menu-item']")) {
+            const action = (event.target as Element).closest(
+              "button, [data-slot='context-menu-item']",
+            );
+            // A chooser owns dismissal until the user commits or cancels it.
+            if (action && !action.hasAttribute("data-keep-mobile-tools-open")) {
               closeTools();
             }
           }}
         >
-          {actionBar}
+          <CloseMobileToolsContext.Provider value={closeTools}>
+            {actionBar}
+          </CloseMobileToolsContext.Provider>
         </div>
       </div>
       <div className="relative min-h-0 flex-1 overflow-hidden" {...pinnedScroll}>

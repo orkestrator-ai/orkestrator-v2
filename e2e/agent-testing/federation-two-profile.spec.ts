@@ -931,6 +931,84 @@ test("past sessions refuse a disconnected owner and resume durably after reconne
   await expect(reloadedHistory).toBeHidden();
 });
 
+test("the project toolbar switches Home to the leaf and Pull requests back to the command node", async () => {
+  const { command, leaf, commandPage: page, leafNodeId } = s();
+  const findCopy = async (node: Gateway) => {
+    const { testProject } = profileStatus(node.profile);
+    const projects =
+      await node.invoke<Array<{ id: string; name: string; gitUrl: string; localPath: string }>>(
+        "get_projects",
+      );
+    const project = projects.find((entry) => entry.localPath === testProject);
+    if (!project) throw new Error(`${node.profile} has no fixture project`);
+    return { node, project };
+  };
+  const [local, peer] = await Promise.all([findCopy(command), findCopy(leaf)]);
+  expect(local.project.id).not.toBe(peer.project.id);
+
+  const remote = page.getByTestId("remote-workspace-region");
+  const remoteBar = remote.getByTestId("project-navigation-bar");
+  const localBar = page.getByTestId("project-navigation-bar").filter({
+    has: page.getByRole("combobox", { name: "Machine" }).filter({ hasText: COMMAND_NAME }),
+  });
+  const openCopy = async (projectName: string, machineName: string) => {
+    await page.getByTestId("project-search-trigger").click();
+    await page
+      .getByRole("combobox", { name: "Search projects and environments" })
+      .fill(projectName);
+    await page
+      .getByRole("option", { name: `${projectName}, project on ${machineName}`, exact: true })
+      .click();
+  };
+
+  // Both profiles are reset by the suite. The shared URL is used only for repository identity.
+  for (const { node, project } of [local, peer]) {
+    await node.invoke("update_project", {
+      projectId: project.id,
+      updates: { gitUrl: "https://example.test/fixtures/machine-switch.git" },
+    });
+  }
+
+  // Remember Notes on the same leaf scope that will handle the switch.
+  await openCopy(peer.project.name, LEAF_NAME);
+  await expect(remote).toHaveAttribute("data-node", leafNodeId);
+  const notes = remoteBar.getByRole("tab", { name: "Notes", exact: true });
+  await notes.click();
+  await expect(notes).toHaveAttribute("aria-selected", "true");
+  await openCopy(local.project.name, COMMAND_NAME);
+  await expect(remote).toBeHidden();
+  await localBar.getByRole("tab", { name: "Home", exact: true }).click();
+  await expect(page.locator("#project-panel-home").filter({ visible: true })).toBeVisible();
+  await localBar.getByRole("combobox", { name: "Machine" }).click();
+  await page.getByRole("option", { name: LEAF_NAME, exact: true }).click();
+
+  await expect(remote).toHaveAttribute("data-node", leafNodeId);
+  await expect(remoteBar.getByRole("tab", { name: "Home", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(remote.locator("#project-panel-home")).toBeVisible();
+  await expect(remoteBar.getByRole("combobox", { name: "Machine" })).toHaveText(LEAF_NAME);
+
+  await remoteBar.getByRole("tab", { name: "Pull requests", exact: true }).click();
+  await expect(remote.locator("#project-panel-pull-requests")).toBeVisible();
+  await remoteBar.getByRole("combobox", { name: "Machine" }).click();
+  await page.getByRole("option", { name: COMMAND_NAME, exact: true }).click();
+  await expect(remote).toBeHidden();
+  await expect(localBar.getByRole("tab", { name: "Pull requests", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(
+    page.locator("#project-panel-pull-requests").filter({ visible: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(localBar.getByRole("tab", { name: "Pull requests", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
 test("Settings offers explicit recovery after its last leaf is removed", async () => {
   const { command, commandPage, leafEnvironment, leafNodeId } = s();
   await revealRow(commandPage, leafEnvironment.name);

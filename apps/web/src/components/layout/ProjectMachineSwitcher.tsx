@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useContext, useMemo, useRef, useSyncExternalStore } from "react";
+import { useStore } from "zustand";
 import { MachineColorDot } from "@/components/federation/MachineDot";
 import { useLinearMachineTargets } from "@/components/linear/linear-machines";
 import {
@@ -9,10 +10,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { scopeRowsSource } from "@/lib/federation/scope-overlay";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
+import { portalStore } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
 import type { ProjectBoardTab } from "@/stores";
+import { CloseMobileToolsContext } from "./mobile-tools-context";
 import { projectMachineOptions, type ProjectMachineOption } from "./project-machine-options";
 
 interface ProjectMachineSwitcherProps {
@@ -32,7 +36,10 @@ interface ProjectMachineSwitcherProps {
  * this machine is the only one with the repository.
  */
 export function ProjectMachineSwitcher(props: ProjectMachineSwitcherProps) {
-  const targets = useLinearMachineTargets(props.projectId);
+  const { windowScope } = useScopesWithCommandFallback();
+  const source = scopeRowsSource(windowScope, "projects");
+  const projects = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot);
+  const targets = useLinearMachineTargets(props.projectId, projects);
   // Mount the select (and its sidebar-order subscription) only when there is a choice.
   if (targets.length < 2) return null;
   return <ProjectMachineSelect {...props} targets={targets} />;
@@ -45,16 +52,27 @@ function ProjectMachineSelect({
   targets,
 }: ProjectMachineSwitcherProps & { targets: ReturnType<typeof useLinearMachineTargets> }) {
   const { windowScope } = useScopesWithCommandFallback();
-  const commandNodeId = windowScope.commandScope().nodeId;
+  const selfId = useStore(portalStore.store, (state) => state.selfId);
+  const commandNodeId = selfId ?? windowScope.commandScope().nodeId;
+  const nodes = useStore(portalStore.store, (state) => state.nodes);
   const layout = usePortalLayout();
+  const closeMobileTools = useContext(CloseMobileToolsContext);
+  const choseMachine = useRef(false);
   const options = useMemo(
-    () => projectMachineOptions(targets, layout, commandNodeId),
-    [commandNodeId, layout, targets],
+    () =>
+      projectMachineOptions(
+        targets,
+        layout,
+        commandNodeId,
+        nodes.map((node) => node.nodeId),
+      ),
+    [commandNodeId, layout, nodes, targets],
   );
   const current = options.find((option) => option.current);
   const switchTo = (key: string) => {
     const option = options.find((entry) => entry.key === key);
     if (!option || option.current || !option.available) return;
+    choseMachine.current = true;
     openMachineWorkspace({
       connectionId: option.connectionId,
       projectId: option.projectId,
@@ -63,14 +81,12 @@ function ProjectMachineSelect({
     });
   };
   return (
-    <div
-      data-testid="project-machine-switcher"
-      className={cn(isGrid ? "col-span-2" : "ml-auto shrink-0 pl-2")}
-    >
+    <div data-testid="project-machine-switcher" className={isGrid ? "col-span-2" : "shrink-0 pl-2"}>
       <Select value={current?.key} onValueChange={switchTo}>
         <SelectTrigger
           size="sm"
           aria-label="Machine"
+          data-keep-mobile-tools-open
           title="Open this project on another machine"
           className={cn(
             "gap-1.5 rounded-lg border-border/60 bg-transparent px-2 text-xs shadow-none hover:bg-elevated",
@@ -79,7 +95,18 @@ function ProjectMachineSelect({
         >
           <SelectValue />
         </SelectTrigger>
-        <SelectContent position="popper" align="end">
+        <SelectContent
+          position="popper"
+          align="end"
+          onCloseAutoFocus={(event) => {
+            if (choseMachine.current && closeMobileTools) {
+              // Wait for the select's focus trap to release before Tools restores focus.
+              event.preventDefault();
+              closeMobileTools();
+            }
+            choseMachine.current = false;
+          }}
+        >
           {options.map((option) => (
             <MachineOption key={option.key} option={option} />
           ))}

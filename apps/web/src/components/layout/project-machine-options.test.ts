@@ -21,30 +21,36 @@ function target(
 }
 
 describe("projectMachineOptions", () => {
-  test("lists the command node first, then the stored machine order, whichever is current", () => {
-    // On a leaf, the targets put the leaf first and the command node second.
-    const targets = [
-      target("leaf-b", "beelink", { current: true, machine: undefined }),
-      target("command", "mini", { machine: null }),
-      target("leaf-a", "beelink2"),
-    ];
-    const options = projectMachineOptions(targets, { machineOrder: [] }, "command");
-    expect(options.map((option) => option.name)).toEqual(["mini", "beelink", "beelink2"]);
-    expect(options.find((option) => option.current)?.name).toBe("beelink");
-
-    const arranged = projectMachineOptions(
-      targets,
-      { machineOrder: ["leaf-a", "command", "leaf-b"] },
-      "command",
-    );
-    expect(arranged.map((option) => option.name)).toEqual(["beelink2", "mini", "beelink"]);
-  });
+  for (const { saved, expected } of [
+    { saved: [], expected: ["command", "leaf-a", "leaf-b"] },
+    { saved: ["leaf-b", "command"], expected: ["leaf-b", "command", "leaf-a"] },
+    { saved: ["unmatched", "command"], expected: ["leaf-b", "command", "leaf-a"] },
+    {
+      saved: ["leaf-b", "unmatched", "leaf-a", "command"],
+      expected: ["leaf-b", "leaf-a", "command"],
+    },
+  ]) {
+    test(`keeps the sidebar order from every machine with saved order [${saved}]`, () => {
+      const matching = ["command", "leaf-a", "leaf-b"];
+      const nodes = ["leaf-a", "unmatched", "leaf-b"];
+      for (const current of matching) {
+        // Matching puts the current machine first, then the rest in registry order.
+        const targets = [current, ...matching.filter((id) => id !== current)].map((id) =>
+          target(id, id, { current: id === current }),
+        );
+        const options = projectMachineOptions(targets, { machineOrder: saved }, "command", nodes);
+        expect(options.map((option) => option.connectionId)).toEqual(expected);
+        expect(options.find((option) => option.current)?.connectionId).toBe(current);
+      }
+    });
+  }
 
   test("opens the command node's copy when its id is not known yet", () => {
     const [option] = projectMachineOptions(
       [target(null, "mini", { machine: null })],
       { machineOrder: [] },
       "command-scope",
+      [],
     );
     expect(option).toMatchObject({ connectionId: "command-scope", projectId: "mini-project" });
   });
@@ -57,6 +63,7 @@ describe("projectMachineOptions", () => {
       ],
       { machineOrder: [] },
       "command",
+      ["leaf"],
     );
     expect(options).toEqual([
       expect.objectContaining({ name: "mini", colorToken: "teal", available: true, current: true }),

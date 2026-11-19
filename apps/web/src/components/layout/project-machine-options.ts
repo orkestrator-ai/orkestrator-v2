@@ -28,6 +28,7 @@ export function projectMachineOptions(
   targets: readonly LinearMachineTarget[],
   layout: Pick<PortalLayout, "machineOrder">,
   commandNodeId: string,
+  registryNodeIds: readonly string[],
 ): ProjectMachineOption[] {
   const options = targets.map((target): ProjectMachineOption => ({
     key: target.key,
@@ -40,7 +41,7 @@ export function projectMachineOptions(
   }));
   const position = new Map(
     machineOrder(
-      options.map((option) => ({ connectionId: option.connectionId })),
+      [commandNodeId, ...registryNodeIds].map((connectionId) => ({ connectionId })),
       layout,
       commandNodeId,
     ).map((id, index) => [id, index]),

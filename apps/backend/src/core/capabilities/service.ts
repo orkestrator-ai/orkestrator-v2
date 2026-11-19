@@ -601,6 +601,7 @@ export class CapabilityService {
 
   /** The native-session and graph launch hook: preflight under the launch policy, then record it. */
   preflightSession(input: {
+    readOnly?: boolean;
     environmentId: string;
     projectId?: string;
     environmentIncarnation?: string;
@@ -610,7 +611,7 @@ export class CapabilityService {
     relativeWorktree?: string;
     provider: AgentPlatform;
     sessionKey: string;
-    policy?: Parameters<typeof nativeAgentDeniedCapabilities>[0];
+    policy?: Parameters<typeof nativeAgentDeniedCapabilities>[0] & { id?: string };
   }): Promise<EffectiveAgentResources | null> {
     return this.preflight.preflightSession(input);
   }

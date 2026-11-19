@@ -174,10 +174,16 @@ export async function observeProjectMcpEntries(
     const seen = installer?.observe
       ? await installer.observe(applied.mcp).catch(() => "unavailable" as const)
       : "unavailable";
-    observed.set(
-      key,
-      seen === "missing" ? null : seen === "drifted" ? `changed:${applied.digest}` : applied.digest,
-    );
+    if (seen !== "unavailable") {
+      observed.set(
+        key,
+        seen === "missing"
+          ? null
+          : seen === "drifted"
+            ? `changed:${applied.digest}`
+            : applied.digest,
+      );
+    }
   }
   return observed;
 }

@@ -65,6 +65,29 @@ async function handOver(from: CapabilityNode, to: CapabilityNode) {
 }
 
 describe("command-node handover of capability authority", () => {
+  test("the receiver retains its private session plugin through handover", async () => {
+    const { desktop, mini } = await fleet();
+    const toolkit = await desktop.cap.setSetup({ setup: { name: "Private tools" } });
+    await addSkill(desktop, "private", "Private instructions.", {
+      setupId: toolkit.id,
+      required: true,
+    });
+    await desktop.cap.assignSetup({
+      scope: "session",
+      scopeId: "private-session",
+      setupIds: [toolkit.id],
+    });
+    await mini.cap.preflightSession({
+      environmentId: "env-1",
+      provider: "claude",
+      sessionKey: "private-session",
+    });
+    const plugin = await mini.cap.sessionPlugins("private-session");
+    expect(plugin).toHaveLength(1);
+    await handOver(desktop, mini);
+    expect(await mini.cap.sessionPlugins("private-session")).toEqual(plugin);
+  });
+
   test("state and artifacts move with a higher epoch; the old controller is refused everywhere", async () => {
     const { desktop, mini, gram } = await fleet();
     const { inspection } = await addSkill(desktop, "review", "Review carefully.");

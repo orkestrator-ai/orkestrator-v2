@@ -170,9 +170,12 @@ export function registerCapabilityCommands(register: CommandRegistrar): void {
   r(deleteCapabilitySetupCommand, (args, context) =>
     capabilities(context).deleteSetup(args, actor(context)),
   );
-  r(assignCapabilitySetupCommand, (args, context) =>
-    capabilities(context).assignSetup(args, actor(context)),
-  );
+  r(assignCapabilitySetupCommand, (args, context) => {
+    if (typeof args.expectedRevision !== "number" || !Number.isSafeInteger(args.expectedRevision)) {
+      throw new CapabilityError("invalid-request", "Reload the assignment before editing it.");
+    }
+    return capabilities(context).assignSetup(args, actor(context));
+  });
   r(getCapabilityAssignmentCommand, (args, context) => capabilities(context).getAssignment(args));
   r(manageCapabilityExceptionCommand, (args, context) =>
     capabilities(context).manageException(args, actor(context)),

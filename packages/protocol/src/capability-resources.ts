@@ -195,10 +195,11 @@ export function canonicalGitRepo(repo: string): string {
   }
   let host = "";
   let pathPart = value;
-  const url = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?(\/.*)?$/.exec(value);
-  if (url) {
-    host = url[1]!.toLowerCase();
-    pathPart = url[2] ?? "";
+  const url = URL.parse(value);
+  if (url?.hostname) {
+    host = url.host.toLowerCase();
+    if (url.protocol === "ssh:" && url.port === "22") host = url.hostname.toLowerCase();
+    pathPart = url.pathname;
   }
   pathPart = pathPart
     .replace(/\/+$/, "")
@@ -659,6 +660,7 @@ export function isTerminalCapabilityOperationState(state: CapabilityOperationSta
 
 export const CAPABILITY_CHANGE_KINDS = [
   "add-to-setup",
+  "use-toolkit-on-fleet",
   "remove-from-setup",
   "update",
   "rollback",

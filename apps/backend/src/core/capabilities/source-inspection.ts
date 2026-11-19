@@ -208,6 +208,7 @@ export function containsLiteralMcpCredentials(files: PackageFile[]): boolean {
 }
 
 export function assertDistributableArtifact(files: PackageFile[]): void {
+  assertInspectableCapabilities(files);
   if (scanPackageSecrets(files).length > 0 || containsLiteralMcpCredentials(files)) {
     throw new CapabilityError("secrets-detected", "The artifact contains credential material.");
   }
@@ -221,24 +222,166 @@ function endpointHost(url: string): string | undefined {
   }
 }
 
+function unsupportedInventory(message: string): never {
+  throw new CapabilityError("unsafe-content", message);
+}
+
+function assertMarkdownFrontmatter(text: string): void {
+  const source = text.replace(/^\uFEFF/, "");
+  if (!/^---[ \t]*\r?\n/.test(source)) return;
+  const head = /^---[ \t]*\r?\n([\s\S]*?)^---[ \t]*\r?$/m.exec(source);
+  if (!head) unsupportedInventory("Markdown capability frontmatter is unterminated.");
+  let parsed: unknown;
+  try {
+    parsed = Bun.YAML.parse(head[1]!);
+  } catch {
+    unsupportedInventory("Markdown capability frontmatter cannot be verified.");
+  }
+  if (parsed === null || parsed === undefined) return;
+  const permitted = new Set([
+    "name",
+    "description",
+    "argument-hint",
+    "disable-model-invocation",
+    "user-invocable",
+    "model",
+    "context",
+    "agent",
+    "effort",
+    "os",
+    "requires",
+    "binaries",
+    "license",
+    "compatibility",
+    "metadata",
+  ]);
+  if (!isRecord(parsed) || Object.keys(parsed).some((key) => !permitted.has(key))) {
+    unsupportedInventory(
+      "Markdown capability frontmatter contains unsupported settings, hooks or tool grants.",
+    );
+  }
+}
+
+function assertInspectableCapabilities(files: PackageFile[]): void {
+  const claudeManifest = files.find((file) => file.path === ".claude-plugin/plugin.json");
+  const markdown = files.filter(
+    (file) =>
+      /(?:^|\/)SKILL\.md$|^(?:agents|commands|prompts)\/.*\.md$/i.test(file.path) ||
+      (files.length === 1 && /^[^/]+\.md$/i.test(file.path)),
+  );
+  for (const file of markdown) assertMarkdownFrontmatter(textOf(file));
+  if (!claudeManifest) return;
+  const manifest = parseJson(claudeManifest);
+  const metadata = new Set([
+    "name",
+    "version",
+    "description",
+    "author",
+    "homepage",
+    "repository",
+    "license",
+    "keywords",
+    "displayName",
+  ]);
+  if (!isRecord(manifest) || Object.keys(manifest).some((key) => !metadata.has(key))) {
+    unsupportedInventory(
+      "This Claude plugin uses manifest settings whose delivery cannot be verified.",
+    );
+  }
+  for (const file of files) {
+    if (file.path === "hooks/hooks.json" || file.path === "hooks.json") {
+      const hooks = parseJson(file);
+      if (
+        !isRecord(hooks) ||
+        !isRecord(hooks.hooks) ||
+        Object.keys(hooks).some((key) => key !== "hooks" && key !== "description")
+      ) {
+        unsupportedInventory("Claude plugin hook configuration uses an unsupported layout.");
+      }
+      parseHooks(hooks);
+    }
+    if (MCP_DEFINITION_FILE.test(file.path)) {
+      if (file.path.includes("/")) {
+        unsupportedInventory("Nested MCP configuration is not supported in Claude plugin bundles.");
+      }
+      const value = parseJson(file);
+      const map = isRecord(value) && Object.hasOwn(value, "mcpServers") ? value.mcpServers : value;
+      if (
+        !isRecord(map) ||
+        Object.keys(map).length > 50 ||
+        (isRecord(value) && map !== value && Object.keys(value).length !== 1) ||
+        Object.entries(map).some(
+          ([name, raw]) =>
+            !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(name) ||
+            !isRecord(raw) ||
+            Object.keys(raw).some(
+              (key) =>
+                !["type", "transport", "url", "command", "args", "env", "headers"].includes(key),
+            ) ||
+            (typeof raw.url === "string") === (typeof raw.command === "string") ||
+            (raw.args !== undefined &&
+              (!Array.isArray(raw.args) ||
+                raw.args.length > 64 ||
+                raw.args.some((arg) => typeof arg !== "string"))) ||
+            [raw.env, raw.headers].some(
+              (fields) =>
+                fields !== undefined && (!isRecord(fields) || Object.keys(fields).length > 32),
+            ),
+        )
+      ) {
+        unsupportedInventory(
+          "Claude plugin MCP configuration exceeds the verifiable inventory or uses unsupported settings.",
+        );
+      }
+    }
+    if (
+      /^(?:agents|commands|prompts)\/.+\/.+\.md$/i.test(file.path) ||
+      /^(?:\.lsp\.json|settings\.json|output-styles\/)/.test(file.path)
+    ) {
+      unsupportedInventory(
+        "This Claude plugin includes resources outside the supported inventory.",
+      );
+    }
+  }
+  if (
+    ["hooks.json", "hooks/hooks.json"].every((path) => files.some((file) => file.path === path)) ||
+    [".mcp.json", "mcp.json"].every((path) => files.some((file) => file.path === path))
+  ) {
+    unsupportedInventory(
+      "A Claude plugin must use one configuration file for each executable resource type.",
+    );
+  }
+}
+
 /** Hook commands from a Claude `hooks.json` (`{ hooks: { Event: [{ hooks: [{ command }] }] } }`). */
 function parseHooks(value: unknown): Array<{ trigger: string; commands: string[] }> {
   const root = isRecord(value) && isRecord(value.hooks) ? value.hooks : value;
-  if (!isRecord(root)) return [];
+  if (!isRecord(root) || Object.keys(root).length > 32) {
+    unsupportedInventory("Hook configuration has unsupported or too many trigger groups.");
+  }
   const result: Array<{ trigger: string; commands: string[] }> = [];
-  for (const [trigger, groups] of Object.entries(root).slice(0, 32)) {
-    if (!Array.isArray(groups)) continue;
+  for (const [trigger, groups] of Object.entries(root)) {
+    if (trigger.length > 64 || !Array.isArray(groups)) {
+      unsupportedInventory("A hook trigger is invalid.");
+    }
     const commands: string[] = [];
     for (const group of groups) {
       const hooks = isRecord(group) && Array.isArray(group.hooks) ? group.hooks : [group];
       for (const hook of hooks) {
-        if (isRecord(hook) && typeof hook.command === "string") {
-          commands.push(hook.command.slice(0, 300));
+        if (
+          !isRecord(hook) ||
+          (hook.type !== undefined && hook.type !== "command") ||
+          typeof hook.command !== "string" ||
+          !hook.command ||
+          hook.command.length > 300 ||
+          commands.length >= 16
+        ) {
+          unsupportedInventory("A hook trigger contains unsupported or too many commands.");
         }
+        commands.push(hook.command);
       }
     }
-    if (commands.length > 0)
-      result.push({ trigger: trigger.slice(0, 64), commands: commands.slice(0, 16) });
+    if (commands.length > 0) result.push({ trigger, commands });
   }
   return result;
 }
@@ -316,7 +459,7 @@ function detectSkills(
         ...(meta.description
           ? { description: clamp(meta.description, CAPABILITY_LIMITS.maxDescriptionChars) }
           : {}),
-        risk: scripts.length > 0 ? "executable" : "instructions",
+        risk: scripts.length > 0 || /!`[^`]+`/.test(text) ? "executable" : "instructions",
         ...(scripts.length > 0
           ? { executes: scripts.slice(0, 16).map((script) => script.path) }
           : {}),
@@ -436,6 +579,7 @@ export function detectComponents(
   description?: string;
   publisher?: string;
 } {
+  assertInspectableCapabilities(files);
   const ctx: DetectionContext = {
     packageId,
     files,

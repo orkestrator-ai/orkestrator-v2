@@ -26,6 +26,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import {
+  McpSourceStore,
   scanTomlLayout,
   tomlDeepEqual,
   tomlEntryLayout,
@@ -37,6 +38,8 @@ import type { ProviderCli } from "./provider-cli.js";
 
 const PLUGIN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MAX_CONFIG_BYTES = 1024 * 1024;
+type ConfigLock = <T>(file: string, work: () => Promise<T>) => Promise<T>;
+const sourceLock = new McpSourceStore({ keyFile: "" });
 
 /** One installed plugin from `codex plugin list --json`. */
 export interface CodexInstalledPlugin {
@@ -93,6 +96,7 @@ export async function setCodexPluginEnabled(input: {
   pluginId: string;
   enabled: boolean;
   installed: readonly CodexInstalledPlugin[];
+  withSourceLock?: ConfigLock;
 }): Promise<CodexPluginToggleResult> {
   const { pluginId, enabled } = input;
   if (!PLUGIN_ID.test(pluginId)) {
@@ -105,6 +109,15 @@ export async function setCodexPluginEnabled(input: {
     );
   }
   const file = path.join(input.codexHome, "config.toml");
+  const lock = input.withSourceLock ?? sourceLock.withLock.bind(sourceLock);
+  return lock(file, () => editCodexPluginFlag(file, pluginId, enabled));
+}
+
+async function editCodexPluginFlag(
+  file: string,
+  pluginId: string,
+  enabled: boolean,
+): Promise<CodexPluginToggleResult> {
   const stat = await fs.lstat(file).catch(() => null);
   if (!stat?.isFile()) {
     throw new CapabilityError(
@@ -172,7 +185,7 @@ export async function setCodexPluginEnabled(input: {
 
 /** Reads Codex's installed list, flips the flag, and confirms the change with Codex itself. */
 export async function toggleCodexPlugin(
-  deps: { codexHome: string; cli: ProviderCli },
+  deps: { codexHome: string; cli: ProviderCli; withSourceLock?: ConfigLock },
   pluginId: string,
   enabled: boolean,
 ): Promise<CodexPluginToggleResult> {
@@ -190,6 +203,7 @@ export async function toggleCodexPlugin(
     pluginId,
     enabled,
     installed: await list(),
+    ...(deps.withSourceLock ? { withSourceLock: deps.withSourceLock } : {}),
   });
   const confirmed = (await list()).find((entry) => entry.pluginId === pluginId);
   if (confirmed?.enabled !== enabled) {

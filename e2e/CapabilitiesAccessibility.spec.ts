@@ -292,6 +292,30 @@ test("the update inbox asks for review before approval, and rollback previews fi
   });
 });
 
+test("fleet delivery opens an approval preview before applying", async ({ page }, info) => {
+  const settings = await openSettings(page);
+  await settings.getByRole("tab", { name: "Setups" }).click();
+  const fleet = settings.getByRole("checkbox", { name: "Use on every enrolled machine" }).first();
+  await expect(fleet).not.toBeChecked();
+  const visualDir = process.env.ORKESTRATOR_CAPABILITY_VISUALS;
+  if (visualDir)
+    await page.screenshot({ path: `${visualDir}/fleet-before-preview-${info.project.name}.png` });
+  await fleet.click();
+  const preview = settings.getByTestId("capability-change-preview");
+  await expect(preview).toContainText("This toolkit will be used on every enrolled machine.");
+  await expect(fleet).not.toBeChecked();
+  expect(await calls(page, "set_capability_setup")).toHaveLength(0);
+  expect(await calls(page, "apply_capability_change")).toHaveLength(0);
+  expect((await calls(page, "preview_capability_change"))[0]?.args.change).toEqual({
+    kind: "use-toolkit-on-fleet",
+    setupId: "frontend",
+    expectedRevision: 2,
+  });
+  await preview.scrollIntoViewIfNeeded();
+  if (visualDir)
+    await page.screenshot({ path: `${visualDir}/fleet-approval-${info.project.name}.png` });
+});
+
 test("toolkits show their exceptions; export and import are previews", async ({ page }) => {
   const settings = await openSettings(page);
   await settings.getByRole("tab", { name: "Setups" }).click();
@@ -477,6 +501,7 @@ test("project, environment and graph node toolkits resolve through the same mode
     scope: "project",
     scopeId: "project-1",
     setupIds: ["frontend"],
+    expectedRevision: 0,
   });
   await expect(project.getByRole("checkbox", { name: "Frontend" })).toBeChecked();
   await expect(environment.getByRole("checkbox", { name: "Frontend" })).not.toBeChecked();
@@ -492,6 +517,7 @@ test("project, environment and graph node toolkits resolve through the same mode
     scope: "graph-node",
     scopeId: "template-1/worker",
     setupIds: ["research"],
+    expectedRevision: 0,
   });
   expect(await unnamedControls(page.locator("main"))).toEqual([]);
   expect(await horizontalOverflow(page)).toEqual([]);

@@ -930,6 +930,17 @@ function answer(command: string, args: Record<string, unknown>): unknown {
           ),
         };
       }
+      if ((args.change as { kind?: string }).kind === "use-toolkit-on-fleet") {
+        return {
+          replayed: false,
+          operation: operation(
+            "op-fleet",
+            "use-toolkit-on-fleet",
+            [target("fleet-desk", "bk_desk", "claude", FRONTEND_SKILL, "install", "pending")],
+            ["This toolkit will be used on every enrolled machine."],
+          ),
+        };
+      }
       return { replayed: false, operation: addPlan(args) };
     case "apply_capability_change": {
       const applied = addPlan({ change: {} });

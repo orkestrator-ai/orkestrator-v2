@@ -18,6 +18,12 @@ export class CapabilityExecutorHandlers {
     this.ctx.executor.admitEpoch(asText(args.controllerId, "controllerId"), Number(args.epoch));
   }
 
+  private fence(args: Record<string, unknown>): () => Promise<void> {
+    const controllerId = asText(args.controllerId, "controllerId");
+    const epoch = Number(args.epoch);
+    return () => this.ctx.executor.assertEpoch(controllerId, epoch);
+  }
+
   /** `get_capability_node_observation`: this machine's inventory. */
   async observe(args: Record<string, unknown>): Promise<CapabilityInventory> {
     this.admit(args);
@@ -40,7 +46,7 @@ export class CapabilityExecutorHandlers {
   async apply(args: Record<string, unknown>): Promise<{ results: unknown[] }> {
     this.admit(args);
     const targets = parseNodePlanTargets(args.targets);
-    return { results: await this.ctx.executor.apply(targets) };
+    return { results: await this.ctx.executor.apply(targets, this.fence(args)) };
   }
 
   /** `get_capability_node_environment_observation`: this machine's worktrees, for its command node. */
@@ -52,7 +58,7 @@ export class CapabilityExecutorHandlers {
   /** `apply_capability_node_environment_plan`: a project setup into one worktree here. */
   async applyEnvironmentPlan(args: Record<string, unknown>) {
     this.admit(args);
-    return this.ctx.remoteScoped.applyForController(args);
+    return this.ctx.remoteScoped.applyForController(args, this.fence(args));
   }
 
   /** `export_capability_node_item`: one installed item's files, for adoption on the command node. */

@@ -399,6 +399,7 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
           graphNode: `${run.template.id}/${node.id}`,
           ...(facts.worktree ? { relativeWorktree: facts.worktree.path } : {}),
           policy: decision.compiled.policy,
+          readOnly: decision.compiled.readOnly,
         });
       } catch (error) {
         const message =

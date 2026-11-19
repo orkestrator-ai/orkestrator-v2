@@ -6,7 +6,7 @@
  * stands in, and required components otherwise fail closed. At launch, the
  * recorded deliveries are exactly the observed bytes.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
@@ -51,6 +51,35 @@ const launch = (sessionKey: string, environmentId = "env-1") => ({
 });
 
 describe("leaf launch authority", () => {
+  test.each([false, true])(
+    "missing command-node private bytes are narrowed at the leaf (required: %s)",
+    async (required) => {
+      const { desktop, gram } = await fleet();
+      const toolkit = await desktop.cap.setSetup({ setup: { name: "Private" } });
+      const { inspection } = await addSkill(desktop, "private", "Private instructions.", {
+        required,
+        setupId: toolkit.id,
+      });
+      await desktop.cap.assignSetup({ scope: "session", scopeId: "s1", setupIds: [toolkit.id] });
+      await desktop.cap.reconciler.idle();
+      const get = desktop.cap.artifacts.get.bind(desktop.cap.artifacts);
+      const artifact = spyOn(desktop.cap.artifacts, "get").mockImplementation((digest) =>
+        digest === inspection.artifactDigest
+          ? Promise.reject(new Error("Artifact unavailable"))
+          : get(digest),
+      );
+      if (required) {
+        await expect(gram.cap.preflightSession(launch("s1"))).rejects.toThrow("could not be sent");
+      } else {
+        const effective = await gram.cap.preflightSession(launch("s1"));
+        expect(effective?.resolvedPackages).toEqual([]);
+        expect(effective?.warnings.join(" ")).toContain("could not be sent");
+      }
+      expect(await gram.cap.sessionPlugins("s1")).toEqual([]);
+      artifact.mockRestore();
+    },
+  );
+
   test("the command node resolves and records a leaf's launch; the leaf enforces the answer", async () => {
     const { desktop, gram } = await fleet();
     const { inspection } = await addSkill(desktop, "docs", "Write docs.", { required: true });

@@ -30,7 +30,6 @@ import {
   capabilityRevisionComponents,
 } from "@orkestrator/protocol/capability-resources-resolve";
 import { capabilityLiveSemantics } from "@orkestrator/protocol/capability-resources-support";
-import { sessionPrivateDeliverable } from "./session-delivery.js";
 
 import { operationSnapshot, type CapabilityOperationRecord } from "./operations.js";
 import { supportFor } from "./planning.js";
@@ -201,10 +200,20 @@ export class CapabilityLibraryReads {
     const state = await this.loadState();
     const assigned = assignmentSetups(state, "session", sessionKey);
     // The session's own policy, as its projection reports it: it can only narrow.
+    const privatelyDeliverable = new Set<string>();
     const effective = this.ctx.resolveFor(state, {
       target,
       sessionKey,
       ceiling: parseCeiling(args.ceiling),
+      forLaunch: true,
+      verifyOptionalDelivery: false,
+      ...(state.machines[target.nodeId]?.inventory
+        ? { launchInventory: state.machines[target.nodeId]!.inventory! }
+        : {}),
+      privateDelivery: {
+        deliverable: () => true,
+        capture: (item) => privatelyDeliverable.add(item.componentId),
+      },
     });
     const matrix = supportFor(state.machines[target.nodeId]?.inventory, target.provider);
     const components: CapabilitySessionView["components"] = [];
@@ -231,7 +240,7 @@ export class CapabilityLibraryReads {
             entry.packageDigest === pkg.artifactDigest,
         );
         const privately =
-          !receipt && (launched || sessionPrivateDeliverable(state, target, component));
+          !receipt && (launched || (!sessionRunning && privatelyDeliverable.has(componentId)));
         const status = receipt
           ? effectiveReceiptStatus(receipt).status
           : privately
@@ -256,7 +265,7 @@ export class CapabilityLibraryReads {
               ? {
                   reason: launched
                     ? "Delivered to this session only, in Orkestrator's session plugin; not runtime-verified."
-                    : "Delivered to this session only, in Orkestrator's session plugin, when it starts.",
+                    : "Will be delivered to this session only if the launch can verify the files.",
                 }
               : {}),
         });
@@ -383,9 +392,14 @@ export class CapabilityLibraryReads {
   async listUpdates(): Promise<CapabilityUpdateList> {
     const state = await this.loadState();
     return {
-      updates: Object.values(state.updates).sort((a, b) =>
-        b.detectedAt.localeCompare(a.detectedAt),
-      ),
+      updates: Object.values(state.updates)
+        .filter(
+          (update) =>
+            update.state !== "pending" ||
+            Date.parse(state.inspections[`update:${update.id}`]?.expiresAt ?? "") >
+              Date.parse(this.ctx.now()),
+        )
+        .sort((a, b) => b.detectedAt.localeCompare(a.detectedAt)),
       ...(state.settings.lastUpdateCheckAt
         ? { lastCheckedAt: state.settings.lastUpdateCheckAt }
         : {}),

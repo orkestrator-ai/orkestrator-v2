@@ -85,6 +85,7 @@ export interface LaunchRequest {
   target: CapabilityTarget;
   sessionKey: string;
   relativeWorktree?: string;
+  readOnly?: boolean;
   ceiling: CapabilityPermissionCeiling;
   templateId?: string;
   graphNode?: string;
@@ -326,6 +327,7 @@ export function launchCacheKey(request: LaunchRequest): string {
       templateId: request.templateId ?? null,
       graphNode: request.graphNode ?? null,
       ceiling: request.ceiling.digest,
+      ...(request.readOnly ? { readOnly: true } : {}),
     }),
   );
 }
@@ -719,6 +721,7 @@ export class LeafLaunchAuthority {
             target: request.target,
             sessionKey: request.sessionKey,
             ceiling: request.ceiling,
+            ...(request.readOnly ? { readOnly: true } : {}),
             ...(request.templateId ? { templateId: request.templateId } : {}),
             ...(request.graphNode ? { graphNode: request.graphNode } : {}),
             inventory: compactInventory(inventory),
@@ -1002,7 +1005,7 @@ export async function answerLeafLaunch(
     captureRequired: (ids) => {
       required = ids;
     },
-    ...(deps.stageArtifact
+    ...(deps.stageArtifact && request.readOnly !== true
       ? {
           privateDelivery: {
             deliverable: () => true,

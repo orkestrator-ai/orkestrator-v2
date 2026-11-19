@@ -578,6 +578,7 @@ export class RemoteScopedDelivery {
   /** `apply_capability_node_environment_plan` (epoch already admitted). */
   applyForController(
     args: Record<string, unknown>,
+    fence?: () => Promise<void>,
   ): Promise<{ found: boolean; results: NodePlanResult[] }> {
     return this.serialized(async () => {
       const selfId = await this.deps.selfId();
@@ -595,6 +596,7 @@ export class RemoteScopedDelivery {
       const keep = parseEntries(args.keep, prefix);
       const local = await this.localWorktree(environmentId);
       if (local.state !== "present" || !local.worktree) return { found: false, results: [] };
+      await fence?.();
       const results = await applyWorktreePlan(
         {
           storage: this.deps.storage,
@@ -613,6 +615,7 @@ export class RemoteScopedDelivery {
           targets,
           keep,
           knownEnvironment: (id) => local.known.has(id),
+          ...(fence ? { fence } : {}),
         },
       );
       return { found: true, results };

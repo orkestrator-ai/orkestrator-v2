@@ -6,10 +6,11 @@ import type {
   CapabilityInventory,
   CapabilitySourceInspection,
 } from "@orkestrator/protocol/capability-resources-api";
-import type {
-  CapabilityMachineSummary,
-  CapabilityOperationSnapshot,
-  CapabilitySetup,
+import {
+  CAPABILITY_LIMITS,
+  type CapabilityMachineSummary,
+  type CapabilityOperationSnapshot,
+  type CapabilitySetup,
 } from "@orkestrator/protocol/capability-resources";
 
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
@@ -71,13 +72,25 @@ const HOOK_TRIGGERS = [
 
 async function readUploadedFiles(list: FileList): Promise<AuthoredCapabilityInput["files"]> {
   const files: NonNullable<AuthoredCapabilityInput["files"]> = [];
-  for (const file of Array.from(list).slice(0, 2_000)) {
+  if (list.length > CAPABILITY_LIMITS.maxPackageFiles) {
+    throw new Error("The selected package has too many files.");
+  }
+  const selected = Array.from(list);
+  const bytes = selected.reduce((total, file) => total + file.size, 0);
+  if (
+    bytes > CAPABILITY_LIMITS.maxPackageBytes ||
+    selected.some((file) => file.size > CAPABILITY_LIMITS.maxFileBytes)
+  ) {
+    throw new Error("The selected package exceeds the upload size limit.");
+  }
+  for (const file of selected) {
     const relative =
       (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
     const buffer = new Uint8Array(await file.arrayBuffer());
     let binary = "";
-    for (let index = 0; index < buffer.length; index += 1)
-      binary += String.fromCharCode(buffer[index]!);
+    for (let index = 0; index < buffer.length; index += 16_384) {
+      binary += String.fromCharCode(...buffer.subarray(index, index + 16_384));
+    }
     files.push({ path: relative, content: btoa(binary), encoding: "base64" });
   }
   return files;
@@ -198,6 +211,20 @@ export function AddCapabilityDialog({
       setMachineIds(new Set(enrolled.map((machine) => machine.nodeId)));
     } catch (inspectError) {
       setError(describeError(inspectError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectUpload = async (files: FileList | null) => {
+    setUploaded(undefined);
+    setError(null);
+    if (!files?.length) return;
+    setBusy(true);
+    try {
+      setUploaded(await readUploadedFiles(files));
+    } catch (uploadError) {
+      setError(describeError(uploadError));
     } finally {
       setBusy(false);
     }
@@ -342,7 +369,7 @@ export function AddCapabilityDialog({
               </ul>
             ) : null}
             <div className="grid gap-4 sm:grid-cols-2">
-              <fieldset className="space-y-1.5">
+              <fieldset className="space-y-1.5" disabled={mode === "installed"}>
                 <legend className="mb-1 text-xs font-medium text-foreground">Agents</legend>
                 {AGENT_PLATFORMS.map((provider) => {
                   const compatible = inspection.compatibleProviders.includes(provider);
@@ -378,7 +405,7 @@ export function AddCapabilityDialog({
                   );
                 })}
               </fieldset>
-              <fieldset className="space-y-1.5">
+              <fieldset className="space-y-1.5" disabled={mode === "installed"}>
                 <legend className="mb-1 text-xs font-medium text-foreground">Machines</legend>
                 {enrolled.map((machine) => (
                   <label key={machine.nodeId} className="flex items-center gap-2 text-xs">
@@ -425,6 +452,7 @@ export function AddCapabilityDialog({
               <label className="flex items-center gap-2 text-xs">
                 <input
                   type="checkbox"
+                  disabled={mode === "installed"}
                   checked={pin}
                   onChange={(event) => setPin(event.target.checked)}
                 />{" "}
@@ -433,6 +461,7 @@ export function AddCapabilityDialog({
               <label className="flex items-center gap-2 text-xs">
                 <input
                   type="checkbox"
+                  disabled={mode === "installed"}
                   checked={required}
                   onChange={(event) => setRequired(event.target.checked)}
                 />{" "}
@@ -571,19 +600,28 @@ export function AddCapabilityDialog({
             ) : mode === "upload" ? (
               <div className="space-y-2">
                 <Label htmlFor="capability-upload" className="text-xs">
-                  A skill folder, plugin folder or Markdown file
+                  Skill or plugin folder
                 </Label>
                 <input
                   id="capability-upload"
                   type="file"
+                  disabled={busy}
                   multiple
                   // @ts-expect-error -- non-standard attribute for folder uploads
                   webkitdirectory=""
                   className="block text-xs"
-                  onChange={(event) => {
-                    if (event.target.files)
-                      void readUploadedFiles(event.target.files).then(setUploaded);
-                  }}
+                  onChange={(event) => void selectUpload(event.target.files)}
+                />
+                <Label htmlFor="capability-upload-markdown" className="text-xs">
+                  Markdown file
+                </Label>
+                <input
+                  id="capability-upload-markdown"
+                  type="file"
+                  accept=".md,text/markdown"
+                  disabled={busy}
+                  className="block text-xs"
+                  onChange={(event) => void selectUpload(event.target.files)}
                 />
                 {uploaded?.length ? (
                   <p className="text-[11px] text-muted-foreground">

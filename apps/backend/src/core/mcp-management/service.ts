@@ -320,6 +320,10 @@ export class McpManagementService {
   // Catalog
   // -------------------------------------------------------------------------
 
+  withSourceLock<T>(file: string, work: () => Promise<T>): Promise<T> {
+    return this.store.withLock(file, work);
+  }
+
   private async specsFor(target: ResolvedTarget): Promise<SourceSpec[]> {
     if (target.info.location === "container") {
       if (!target.info.containerId) {

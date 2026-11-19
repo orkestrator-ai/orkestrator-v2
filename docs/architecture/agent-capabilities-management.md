@@ -167,8 +167,9 @@ epoch and controller):
   it per container target (environment, project, providers, stages; newest
   100) and stages it from its own verified artifacts. It waits up to 20
   seconds. Without an answer it stages the cached plan for that target when
-  every artifact it names is still in its cache (the record's `source` says
-  `cached`), and otherwise stages nothing, with a record whose `unstaged`
+  every artifact it names is still in its cache, it came from the current
+  executor controller and epoch, and it is at most six hours old (the record's
+  `source` says `cached`), and otherwise stages nothing, with a record whose `unstaged`
   says `command-node-unreachable`: the card shows "Capabilities not staged:
   command node unreachable", and a required component blocks with that
   reason, both on the command node's answer and in the leaf's own fail-closed
@@ -219,8 +220,8 @@ Two passes (`resolveEffectiveAgentResources`):
    denied for a networked server) is `blocked`; a hook is blocked when shell is
    denied; a subagent when `subagents` is denied.
 
-Then each component is checked against the provider's support matrix. A
-required component that is unsupported or blocked is a **launch blocker**;
+Then each component is checked against the provider's support matrix. At
+launch, optional components also need delivery evidence. A required component that is unsupported or blocked is a **launch blocker**;
 an optional one is skipped with a warning.
 
 ## Administrator policy
@@ -302,8 +303,9 @@ review), whose boundary admits no skill frontmatter hooks or tool grants.
 - **Frozen at launch.** The directory is named by its content and recorded at
   launch; a setup change later never alters what a running session loads. A
   turn re-stages a pruned directory from the artifact cache and refuses to run
-  when the recorded bytes cannot be reproduced. Unreferenced directories are
-  pruned after an hour.
+  when the recorded bytes cannot be reproduced. Private-plugin records survive diagnostic retention
+  and stay on the machine running the session through handover. Unreferenced
+  directories are pruned after an hour.
 - **Never a substitute for a copy the provider already reads.** When any
   receipt or observed item for the component exists on the target (a drifted
   or older shared copy, a worktree copy), the launch is judged on that copy as
@@ -544,7 +546,10 @@ against a copy of the state; its digest covers every target's key, action,
 digest and status. Apply re-plans and refuses unless the digest is the approved
 one, so a package revision, setup or machine that moved since the preview
 invalidates the approval. The change, the approval record and the operation
-commit together; delivery then follows the newest desired state.
+commit together; delivery then follows the newest desired state. Changes
+above the operation target limit are refused before approval. Enabling a
+populated toolkit on the fleet uses this preview. Editing assignments uses
+an administrator command and requires the current assignment revision.
 
 One reconcile pass per machine (`CapabilityReconciler.passOnce`):
 
@@ -795,7 +800,9 @@ previewed again.
 
 ## Security
 
-- Inspection reads files; it never runs a repository's scripts. Git fetches
+- Inspection reads files; it never runs a repository's scripts. Provider-loaded
+  Markdown with unsupported frontmatter and Claude bundles with executable
+  definitions outside the supported inventory are refused. Git fetches
   use `core.hooksPath=/dev/null`, `core.symlinks=false`, no submodules, no
   `file://` or `ext::`, and only https or SSH addresses.
 - Trees are bounded (2,000 files, 32 MiB, 8 MiB per file, depth 24); special

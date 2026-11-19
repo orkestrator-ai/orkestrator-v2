@@ -730,7 +730,8 @@ export function localTransport(input: {
   observe(): Promise<CapabilityInventory>;
   executor: {
     admitEpoch(controllerId: string, epoch: number): void;
-    apply(targets: NodePlanTarget[]): Promise<NodePlanResult[]>;
+    assertEpoch(controllerId: string, epoch: number): Promise<void>;
+    apply(targets: NodePlanTarget[], fence?: () => Promise<void>): Promise<NodePlanResult[]>;
   };
   artifacts: CapabilityArtifactStore;
 }): Pick<CapabilityNodeTransport, "observe" | "stage" | "apply"> {
@@ -742,8 +743,9 @@ export function localTransport(input: {
       }
     },
     apply: async (_nodeId, epoch, _operationId, targets) => {
-      input.executor.admitEpoch(await input.selfId(), epoch);
-      return input.executor.apply(targets);
+      const controllerId = await input.selfId();
+      input.executor.admitEpoch(controllerId, epoch);
+      return input.executor.apply(targets, () => input.executor.assertEpoch(controllerId, epoch));
     },
   };
 }

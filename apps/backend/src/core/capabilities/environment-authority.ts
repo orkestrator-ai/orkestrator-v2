@@ -478,21 +478,29 @@ export class CapabilityEnvironmentAuthority {
         this.rememberPlan(key, input.environmentId, plan, controllerId, epoch),
     );
     if (answered) {
-      return this.staging(answered.value, {
-        kind: "command-node",
-        controllerId: answered.controllerId,
-        receivedAt: this.deps.now(),
-      });
+      return this.staging(
+        answered.value,
+        {
+          kind: "command-node",
+          controllerId: answered.controllerId,
+          receivedAt: this.deps.now(),
+        },
+        answered.epoch,
+      );
     }
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const cached = state.leafAuthority?.containers?.[key];
-    if (cached && (await this.holdsArtifacts(cached.plan))) {
+    if (cached && (await this.holdsArtifacts(cached.plan)) && (await this.isCurrentPlan(cached))) {
       log.info("container.staged-from-cache", { environmentId: input.environmentId });
-      return this.staging(cached.plan, {
-        kind: "cached",
-        controllerId: cached.controllerId,
-        receivedAt: cached.receivedAt,
-      });
+      return this.staging(
+        cached.plan,
+        {
+          kind: "cached",
+          controllerId: cached.controllerId,
+          receivedAt: cached.receivedAt,
+        },
+        cached.epoch,
+      );
     }
     log.warn("container.unstaged", {
       environmentId: input.environmentId,
@@ -508,19 +516,41 @@ export class CapabilityEnvironmentAuthority {
   private staging(
     plan: ContainerCapabilityPlan,
     source: NonNullable<ContainerCapabilityRecord["source"]>,
+    epoch: number,
   ): ContainerStaging {
     return {
       plan,
-      stage: async (partialDirectory) => ({
-        ...(await stageContainerCapabilities(
-          plan,
-          this.deps.artifacts,
-          partialDirectory,
-          this.deps.now,
-        )),
-        source,
-      }),
+      stage: async (partialDirectory) => {
+        if (!(await this.isCurrentPlan({ ...source, epoch }))) {
+          throw new CapabilityError(
+            "stale-epoch",
+            "Container capability approval changed before staging.",
+          );
+        }
+        return {
+          ...(await stageContainerCapabilities(
+            plan,
+            this.deps.artifacts,
+            partialDirectory,
+            this.deps.now,
+          )),
+          source,
+        };
+      },
     };
+  }
+
+  private async isCurrentPlan(
+    plan: Pick<LeafContainerPlanRecord, "controllerId" | "epoch" | "receivedAt">,
+  ): Promise<boolean> {
+    const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
+    const age = Date.parse(this.deps.now()) - Date.parse(plan.receivedAt);
+    return (
+      plan.controllerId === executor.controllerId &&
+      plan.epoch === executor.epoch &&
+      age >= 0 &&
+      age <= 6 * 60 * 60_000
+    );
   }
 
   private async holdsArtifacts(plan: ContainerCapabilityPlan): Promise<boolean> {

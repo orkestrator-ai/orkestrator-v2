@@ -244,14 +244,11 @@ export class CapabilityExecutor {
   private withLock<T>(key: string, run: () => Promise<T>): Promise<T> {
     const previous = this.locks.get(key) ?? Promise.resolve();
     const next = previous.then(run, run);
-    this.locks.set(
-      key,
-      next
-        .catch(() => undefined)
-        .finally(() => {
-          if (this.locks.get(key) === next) this.locks.delete(key);
-        }),
-    );
+    const settled = next.catch(() => undefined);
+    this.locks.set(key, settled);
+    void settled.then(() => {
+      if (this.locks.get(key) === settled) this.locks.delete(key);
+    });
     return next;
   }
 
@@ -282,13 +279,26 @@ export class CapabilityExecutor {
     });
   }
 
-  async apply(targets: readonly NodePlanTarget[]): Promise<NodePlanResult[]> {
+  async assertEpoch(controllerId: string, epoch: number): Promise<void> {
+    const current = await this.deps.storage.capabilities.loadCapabilityExecutorState();
+    if (current.controllerId !== controllerId || current.epoch !== epoch) {
+      throw new CapabilityError(
+        "stale-epoch",
+        "This machine's command authority changed before the plan could write.",
+      );
+    }
+  }
+
+  async apply(
+    targets: readonly NodePlanTarget[],
+    fence?: () => Promise<void>,
+  ): Promise<NodePlanResult[]> {
     const results: NodePlanResult[] = [];
     for (const target of targets) {
       const lockKey = target.locationId ?? `${target.kind}:${target.provider ?? ""}`;
       results.push(
         await this.withLock(lockKey, () =>
-          this.applyOne(target).catch((error: unknown) => ({
+          this.applyOne(target, fence).catch((error: unknown) => ({
             key: target.key,
             status: "failed" as const,
             verification: "requested" as const,
@@ -311,11 +321,16 @@ export class CapabilityExecutor {
     return { location, directory: locationDirectory(location.id, this.deps.homes()) };
   }
 
-  private async applyOne(target: NodePlanTarget): Promise<NodePlanResult> {
+  private async applyOne(
+    target: NodePlanTarget,
+    fence?: () => Promise<void>,
+  ): Promise<NodePlanResult> {
+    await fence?.();
     const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
     const previous = executor.applied[target.key];
-    if (target.kind === "mcp-server") return this.applyMcp(target, previous);
-    if (target.kind === "native-plugin") return this.applyPlugin(target, previous !== undefined);
+    if (target.kind === "mcp-server") return this.applyMcp(target, previous, fence);
+    if (target.kind === "native-plugin")
+      return this.applyPlugin(target, previous !== undefined, fence);
     if (target.kind === "hook") {
       return {
         key: target.key,
@@ -338,7 +353,7 @@ export class CapabilityExecutor {
     const entry = location.layout === "file" ? `${name}.md` : name;
 
     if (target.action === "remove")
-      return this.removeFileComponent(target, location.layout, directory, entry);
+      return this.removeFileComponent(target, location.layout, directory, entry, fence);
 
     if (!target.artifactDigest)
       throw new CapabilityError("invalid-request", "The plan names no artifact.");
@@ -381,7 +396,10 @@ export class CapabilityExecutor {
     if (ownership.kind === "managed") {
       const takingOver =
         target.takeoverFrom !== undefined && ownership.packageId === target.takeoverFrom;
-      if (ownership.packageId !== target.packageId && !takingOver) {
+      if (
+        (ownership.packageId !== target.packageId && !takingOver) ||
+        (ownership.packageId === target.packageId && ownership.componentId !== target.componentId)
+      ) {
         return {
           key: target.key,
           status: "failed",
@@ -390,7 +408,7 @@ export class CapabilityExecutor {
         };
       }
       const current = await installedDigest(location, directory, entry);
-      if (current !== ownership.digest && current !== digest && !target.force) {
+      if (current !== null && current !== ownership.digest && current !== digest && !target.force) {
         return {
           key: target.key,
           status: "drifted",
@@ -407,6 +425,7 @@ export class CapabilityExecutor {
       digest,
       writtenAt: this.now(),
     };
+    await fence?.();
     if (location.layout === "directory") {
       await replaceDirectoryAtomically(path.join(directory, entry), writtenFiles, [
         { path: CAPABILITY_MARKER_FILE, content: markerContent(marker) },
@@ -434,17 +453,36 @@ export class CapabilityExecutor {
   ): Promise<
     | { kind: "absent" }
     | { kind: "external" }
-    | { kind: "managed"; packageId: string; digest: string }
+    | { kind: "managed"; packageId: string; componentId: string; digest: string }
   > {
-    const exists = await fs.lstat(path.join(directory, entry)).catch(() => null);
+    const exists = await fs
+      .lstat(path.join(directory, entry))
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
     if (!exists) return { kind: "absent" };
+    if (
+      (layout === "directory" && !exists.isDirectory()) ||
+      (layout === "file" && !exists.isFile())
+    )
+      return { kind: "external" };
     if (layout === "directory") {
       try {
         const marker = JSON.parse(
           await fs.readFile(path.join(directory, entry, CAPABILITY_MARKER_FILE), "utf8"),
-        ) as { packageId?: unknown; digest?: unknown };
-        if (typeof marker.packageId === "string" && typeof marker.digest === "string") {
-          return { kind: "managed", packageId: marker.packageId, digest: marker.digest };
+        ) as { packageId?: unknown; componentId?: unknown; digest?: unknown };
+        if (
+          typeof marker.packageId === "string" &&
+          typeof marker.componentId === "string" &&
+          typeof marker.digest === "string"
+        ) {
+          return {
+            kind: "managed",
+            packageId: marker.packageId,
+            componentId: marker.componentId,
+            digest: marker.digest,
+          };
         }
       } catch {
         // no marker: external
@@ -454,7 +492,12 @@ export class CapabilityExecutor {
     const index = await readLocationIndex(directory);
     const managed = index.files[entry];
     return managed
-      ? { kind: "managed", packageId: managed.packageId, digest: managed.digest }
+      ? {
+          kind: "managed",
+          packageId: managed.packageId,
+          componentId: managed.componentId,
+          digest: managed.digest,
+        }
       : { kind: "external" };
   }
 
@@ -463,6 +506,7 @@ export class CapabilityExecutor {
     layout: "directory" | "file",
     directory: string,
     entry: string,
+    fence?: () => Promise<void>,
   ): Promise<NodePlanResult> {
     const ownership = await this.ownership(layout, directory, entry);
     if (ownership.kind === "absent") {
@@ -482,14 +526,14 @@ export class CapabilityExecutor {
         reason: "The item is not owned by this package, so it was not removed.",
       };
     }
-    if (ownership.packageId !== target.packageId) {
-      // Another package (a local variant) took the copy over: this package's copy is gone.
+    if (ownership.packageId !== target.packageId || ownership.componentId !== target.componentId) {
+      // This component no longer owns the copy at this path.
       this.forget(target);
       return {
         key: target.key,
         status: "ready",
         verification: "requested",
-        reason: "Another package now manages this item; it was left in place.",
+        reason: "Another component now manages this item; it was left in place.",
       };
     }
     const { location } = this.locate(target.locationId!);
@@ -502,6 +546,7 @@ export class CapabilityExecutor {
         reason: "The item has local changes, so it was kept; choose keep or replace first.",
       };
     }
+    await fence?.();
     await removeManagedPath(directory, entry);
     if (layout === "file") {
       const index = await readLocationIndex(directory);
@@ -515,6 +560,7 @@ export class CapabilityExecutor {
   private async applyMcp(
     target: NodePlanTarget,
     previous: { digest: string; mcp?: McpOwnership } | undefined,
+    fence?: () => Promise<void>,
   ): Promise<NodePlanResult> {
     if (!this.deps.mcp || !target.provider) {
       return {
@@ -533,9 +579,10 @@ export class CapabilityExecutor {
           reason: "This MCP server was not added by Orkestrator, so it was not removed.",
         };
       }
+      await fence?.();
       const removed = await this.deps.mcp.remove({
         provider: target.provider,
-        name: target.pathOrKey,
+        name: previous.mcp.name,
         requestId: `${target.key}:${previous.digest}`,
         previous: previous.mcp,
       });
@@ -595,6 +642,7 @@ export class CapabilityExecutor {
         replayed: true,
       };
     }
+    await fence?.();
     const result = await this.deps.mcp.install({
       provider: target.provider,
       name: definition.name,
@@ -623,6 +671,7 @@ export class CapabilityExecutor {
   private async applyPlugin(
     target: NodePlanTarget,
     managedBefore: boolean,
+    fence?: () => Promise<void>,
   ): Promise<NodePlanResult> {
     const adapter = this.deps.claudePlugins;
     if (target.provider !== "claude" || !adapter) {
@@ -638,6 +687,7 @@ export class CapabilityExecutor {
       };
     }
     if (target.action === "remove") {
+      await fence?.();
       const removed = await adapter.remove({
         packageId: target.packageId,
         componentId: target.componentId,
@@ -657,6 +707,7 @@ export class CapabilityExecutor {
     }
     const files = await this.deps.artifacts.get(target.artifactDigest);
     assertDistributableArtifact(files);
+    await fence?.();
     const result = await adapter.install({
       packageId: target.packageId,
       componentId: target.componentId,

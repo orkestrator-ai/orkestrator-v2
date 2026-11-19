@@ -24,10 +24,14 @@ import {
   type CapabilityNode,
 } from "./capability-network-test-support.js";
 import { disposeFleet, fleet, skillFile, type FleetNode } from "./drift-test-support.js";
+import { parseCapabilityChange } from "./operations.js";
+import { sha256 } from "./planning.js";
+import { canonicalCapabilityJson } from "@orkestrator/protocol/capability-resources-resolve";
 import { sha256Hex, treeDigest, type PackageFile } from "./security.js";
 import {
   parseSessionPrivateItems,
   pruneSessionPlugins,
+  sessionPluginDigest,
   sessionPluginForTurn,
   sessionPluginsRoot,
   sessionPrivateDeliverable,
@@ -335,6 +339,35 @@ describe("reporting undelivered components", () => {
   });
 });
 
+test("exclusion lists preserve empty selections and reject invalid input", () => {
+  const change = { kind: "add-to-setup", inspectionId: "inspection" };
+  expect(
+    parseCapabilityChange({ ...change, excludedMachines: [], excludedProviders: [] }),
+  ).toMatchObject({ excludedMachines: [], excludedProviders: [] });
+  expect(() =>
+    parseCapabilityChange({
+      ...change,
+      excludedMachines: Array.from({ length: 65 }, () => "machine"),
+    }),
+  ).toThrow("too many entries");
+  expect(() => parseCapabilityChange({ ...change, excludedProviders: ["claude", 1] })).toThrow(
+    "invalid",
+  );
+});
+
+test("session plugin digests sort keys independent of locale", () => {
+  const items = ["é", "a", "Z"].map((componentId) => ({ ...ITEMS[0]!, componentId }));
+  const expected = sha256(
+    canonicalCapabilityJson({
+      format: 1,
+      items: ["Z", "a", "é"].map((id) => [items[0]!.packageId, id, items[0]!.packageDigest]),
+    }),
+  )
+    .replace(/^sha256:/, "")
+    .slice(0, 40);
+  expect(sessionPluginDigest(items)).toBe(expected);
+});
+
 async function sessionToolkit(command: FleetNode, required: boolean) {
   const toolkit = await command.service.setSetup({ setup: { name: "Session tools" } });
   const inspection = await command.service.authorPackage({
@@ -362,6 +395,82 @@ async function sessionToolkit(command: FleetNode, required: boolean) {
 }
 
 describe("session launch on a host", () => {
+  test("the session chip does not promise private delivery for an old shared copy", async () => {
+    const { command } = await fleet();
+    const { inspection } = await sessionToolkit(command, true);
+    const componentId = inspection.components[0]!.id;
+    command.storage.capabilities.mutateCapabilityState((state) => {
+      const nodeId = command.id;
+      const key = `${nodeId}|claude-user-skills|${componentId}`;
+      state.receipts[key] = {
+        id: key,
+        nodeId,
+        locationId: "claude-user-skills",
+        componentId,
+        packageId: inspection.packageId,
+        packageDigest: "sha256:old",
+        digest: "sha256:old",
+        providers: ["claude"],
+        alsoVisibleTo: [],
+        references: ["setup:my-setup"],
+        status: "installed-next-session",
+        verification: "present",
+        operationId: "old",
+        appliedAt: "2026-11-19T00:00:00.000Z",
+      };
+      return { changed: true, result: undefined };
+    });
+    const view = await command.service.getSessionView({
+      sessionKey: "s1",
+      target: { provider: "claude" },
+    });
+    expect(view.components.find((row) => row.componentId === componentId)?.status).toBe(
+      "unsupported",
+    );
+    expect(view.effective?.launchBlockers.some((row) => row.componentId === componentId)).toBe(
+      true,
+    );
+  });
+
+  test("a required private skill cannot pass a read-only launch", async () => {
+    const { command } = await fleet();
+    await sessionToolkit(command, true);
+    await expect(
+      command.service.preflightSession({
+        environmentId: "env-1",
+        provider: "claude",
+        sessionKey: "s1",
+        readOnly: true,
+      }),
+    ).rejects.toThrow("cannot have");
+    expect(await command.service.sessionPlugins("s1")).toEqual([]);
+  });
+
+  test("active private metadata survives launch diagnostics retention", async () => {
+    const { command } = await fleet();
+    await sessionToolkit(command, true);
+    await command.service.preflightSession({
+      environmentId: "env-1",
+      provider: "claude",
+      sessionKey: "s1",
+    });
+    const before = await command.service.sessionPlugins("s1");
+    command.storage.capabilities.mutateCapabilityState((state) => {
+      const launch = state.launches.s1!;
+      const { privatePlugin: _, ...diagnostic } = launch;
+      for (let index = 0; index < 2001; index++) {
+        const sessionKey = `unrelated-${index}`;
+        state.launches[sessionKey] = {
+          ...diagnostic,
+          sessionKey,
+          launchedAt: "2099-01-01T00:00:00.000Z",
+        };
+      }
+      return { result: undefined, changed: true };
+    });
+    expect(await command.service.sessionPlugins("s1")).toEqual(before);
+  });
+
   test("a required session-only skill reaches that Claude session alone", async () => {
     const { command } = await fleet();
     const { inspection } = await sessionToolkit(command, true);
@@ -513,6 +622,12 @@ describe("session launch on a leaf", () => {
     expect(
       await fs.readFile(path.join(directory!, "skills", "leaf-private", "SKILL.md"), "utf8"),
     ).toContain("Leaf only.");
+    await fs.rm(directory!, { recursive: true });
+    expect(await gram.cap.sessionPlugins("s1")).toEqual([directory!]);
+    expect(
+      await fs.readFile(path.join(directory!, "skills", "leaf-private", "SKILL.md"), "utf8"),
+    ).toContain("Leaf only.");
+
     // Recorded on the leaf, and never written to its shared provider homes.
     expect(
       (await gram.storage.capabilities.loadCapabilityState()).launches.s1?.privatePlugin?.items,

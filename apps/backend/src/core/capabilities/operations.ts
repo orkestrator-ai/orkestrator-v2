@@ -29,6 +29,7 @@ import {
 } from "@orkestrator/protocol/capability-resources";
 import {
   canonicalCapabilityJson,
+  expandCapabilitySetup,
   capabilityInstallApproval,
   compareCapabilityRevisions,
 } from "@orkestrator/protocol/capability-resources-resolve";
@@ -52,6 +53,7 @@ export type CapabilityChange =
       excludedMachines?: string[];
       pin?: boolean;
     }
+  | { kind: "use-toolkit-on-fleet"; setupId: string; expectedRevision: number }
   | { kind: "remove-from-setup"; packageId: string; setupId: string }
   | { kind: "update"; packageId: string; updateId: string }
   | { kind: "rollback"; packageId: string; toRevision: string }
@@ -80,10 +82,17 @@ function nowIso(): string {
 
 function asStringArray(value: unknown, max = 64): string[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new CapabilityError("invalid-request", "Expected a list.");
-  return value
-    .filter((entry): entry is string => typeof entry === "string" && entry.length <= 512)
-    .slice(0, max);
+  if (
+    !Array.isArray(value) ||
+    value.length > max ||
+    value.some((entry) => typeof entry !== "string" || entry.length > 512)
+  ) {
+    throw new CapabilityError(
+      "invalid-request",
+      "The selection list contains invalid or too many entries.",
+    );
+  }
+  return value;
 }
 
 function requireText(record: Record<string, unknown>, key: string): string {
@@ -106,10 +115,12 @@ export function parseCapabilityChange(value: unknown): CapabilityChange {
   const record = value as Record<string, unknown>;
   switch (record.kind) {
     case "add-to-setup": {
-      const excludedProviders = asStringArray(record.excludedProviders)?.filter(
-        (provider): provider is AgentPlatform =>
-          (AGENT_PLATFORMS as readonly string[]).includes(provider),
-      );
+      const excludedProviders = asStringArray(record.excludedProviders)?.map((provider) => {
+        if (!(AGENT_PLATFORMS as readonly string[]).includes(provider)) {
+          throw new CapabilityError("invalid-request", "An excluded provider is unknown.");
+        }
+        return provider as AgentPlatform;
+      });
       const components = asStringArray(
         record.components,
         CAPABILITY_LIMITS.maxComponentsPerPackage,
@@ -124,11 +135,23 @@ export function parseCapabilityChange(value: unknown): CapabilityChange {
         setupId: typeof record.setupId === "string" ? record.setupId : MY_SETUP_ID,
         ...(components ? { components } : {}),
         ...(record.required === true ? { required: true } : {}),
-        ...(excludedProviders?.length ? { excludedProviders } : {}),
-        ...(excludedMachines?.length ? { excludedMachines } : {}),
+        ...(excludedProviders ? { excludedProviders } : {}),
+        ...(excludedMachines ? { excludedMachines } : {}),
         ...(record.pin === true ? { pin: true } : {}),
       };
     }
+    case "use-toolkit-on-fleet":
+      if (
+        typeof record.expectedRevision !== "number" ||
+        !Number.isSafeInteger(record.expectedRevision)
+      ) {
+        throw new CapabilityError("invalid-request", "Reload the toolkit before editing it.");
+      }
+      return {
+        kind: "use-toolkit-on-fleet",
+        setupId: requireText(record, "setupId"),
+        expectedRevision: record.expectedRevision,
+      };
     case "remove-from-setup":
       return {
         kind: "remove-from-setup",
@@ -180,9 +203,17 @@ function retainRevisions(
         .map((selection) => selection.version),
     ),
   );
+  const installed = new Set(
+    Object.values(state.receipts)
+      .filter((receipt) => receipt.packageId === packageId)
+      .map((receipt) => receipt.packageDigest),
+  );
   return revisions.filter(
     (revision, index) =>
-      index < 5 || pins.has(revision.artifactDigest) || pins.has(revision.revision),
+      index < 5 ||
+      pins.has(revision.artifactDigest) ||
+      pins.has(revision.revision) ||
+      installed.has(revision.artifactDigest),
   );
 }
 
@@ -326,13 +357,24 @@ export function applyChangeToState(
         (change.excludedProviders !== undefined || change.excludedMachines !== undefined)
       ) {
         const exclusions = new Set(
-          setup.exclusions.filter((entry) => !entry.endsWith(`|${inspection.packageId}`)),
+          setup.exclusions.filter((entry) => {
+            if (!entry.endsWith(`|${inspection.packageId}`)) return true;
+            if (entry.startsWith("machine:")) return change.excludedMachines === undefined;
+            if (entry.startsWith("provider:")) return change.excludedProviders === undefined;
+            return true;
+          }),
         );
         for (const provider of change.excludedProviders ?? [])
           exclusions.add(`provider:${provider}|${inspection.packageId}`);
         for (const nodeId of change.excludedMachines ?? [])
           exclusions.add(`machine:${nodeId}|${inspection.packageId}`);
-        setup.exclusions = [...exclusions].slice(0, CAPABILITY_LIMITS.maxExclusionsPerSetup);
+        if (exclusions.size > CAPABILITY_LIMITS.maxExclusionsPerSetup) {
+          throw new CapabilityError(
+            "too-large",
+            "The toolkit has too many exceptions for these selections.",
+          );
+        }
+        setup.exclusions = [...exclusions];
       }
       settleAdoption(state, inspection, existing, {
         now,
@@ -349,6 +391,36 @@ export function applyChangeToState(
         packageIds: [inspection.packageId, ...replaced],
         setupId: setup.id,
         addedComponentIds: added,
+      };
+    }
+    case "use-toolkit-on-fleet": {
+      const existing = state.setups[change.setupId];
+      if (
+        !existing ||
+        existing.builtIn ||
+        existing.revision !== change.expectedRevision ||
+        existing.targetSelectors?.length
+      ) {
+        throw new CapabilityError(
+          "conflict",
+          "The toolkit cannot be used on the fleet from this preview. Reload it.",
+        );
+      }
+      touchSetup(change.setupId).machineSelectors = ["*"];
+      const { order, errors } = expandCapabilitySetup(
+        change.setupId,
+        new Map(Object.entries(state.setups)),
+      );
+      if (errors.length > 0) throw new CapabilityError("conflict", errors[0]!);
+      const packageIds = [
+        ...new Set(
+          order.flatMap((setup) => setup.packageSelections.map(({ packageId }) => packageId)),
+        ),
+      ];
+      return {
+        packageIds,
+        setupId: change.setupId,
+        addedComponentIds: packageIds.flatMap((id) => state.packages[id]?.componentIds ?? []),
       };
     }
     case "remove-from-setup": {
@@ -482,8 +554,12 @@ export function planDigestOf(
       targets: targets.map((target) => [
         target.key,
         target.action,
+        target.fromDigest ?? "",
         target.toDigest ?? "",
+        target.target,
+        target.locationId ?? "",
         target.status,
+        target.reason ?? "",
       ]),
     }),
   );

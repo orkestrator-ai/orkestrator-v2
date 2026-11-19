@@ -37,6 +37,7 @@ export interface CapabilityResolveInput {
   ceiling: CapabilityPermissionCeiling;
   launchInventory?: CapabilityInventory;
   forLaunch?: boolean;
+  verifyOptionalDelivery?: boolean;
   captureRequired?: (ids: ReadonlySet<string>) => void;
   /** A worktree's, account's or container's own copies (`scoped-delivery.ts`). */
   scopedEvidence?: ScopedEvidence;
@@ -122,7 +123,8 @@ export function resolveCapabilityTarget(
     ),
     ...(input.forLaunch
       ? {
-          requiredDelivery: (component, digest) => {
+          verifyOptionalDelivery: input.verifyOptionalDelivery ?? true,
+          requiredDelivery: (component, digest, allowPrivate) => {
             // Containers, added accounts and worktrees answer from their own copies first.
             const scoped = scopedRequiredDelivery({
               state,
@@ -148,6 +150,8 @@ export function resolveCapabilityTarget(
                 !receipt.providers.includes(input.target.provider) ||
                 !deliveredBy.has(receipt.componentId) ||
                 receipt.packageDigest !== digest ||
+                receipt.environmentId !== undefined ||
+                receipt.accountHomeId !== undefined ||
                 receipt.outcomeUnknown ||
                 (receipt.status !== "installed-next-session" && receipt.status !== "ready")
               )
@@ -179,10 +183,11 @@ export function resolveCapabilityTarget(
                   (receipt.accountHomeId === undefined ||
                     receipt.accountHomeId === input.target.accountHomeId),
               ) ||
-              input.launchInventory?.items.some(
+              (input.launchInventory ?? machine?.inventory)?.items.some(
                 (item) => item.componentId !== undefined && deliveredBy.has(item.componentId),
               ) === true;
             if (
+              allowPrivate &&
               !anyCopy &&
               input.privateDelivery &&
               sessionPrivateDeliverable(state, input.target, component) &&
@@ -198,7 +203,7 @@ export function resolveCapabilityTarget(
               });
               return undefined;
             }
-            return `The required revision of ${component.name} is not verified on this machine.`;
+            return `The selected revision of ${component.name} is not verified on this machine.`;
           },
         }
       : {}),

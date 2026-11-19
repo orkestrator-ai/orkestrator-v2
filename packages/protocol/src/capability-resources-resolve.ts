@@ -132,7 +132,12 @@ export interface CapabilityResolutionInput {
   components: ReadonlyMap<string, CapabilityComponent>;
   support: CapabilitySupportMatrix;
   /** When resolving a launch, return the reason a required revision is unavailable. */
-  requiredDelivery?: (component: CapabilityComponent, artifactDigest: string) => string | undefined;
+  requiredDelivery?: (
+    component: CapabilityComponent,
+    artifactDigest: string,
+    allowPrivate: boolean,
+  ) => string | undefined;
+  verifyOptionalDelivery?: boolean;
   ceiling: CapabilityPermissionCeiling;
   admin?: CapabilityAdminPolicy;
   hash: (text: string) => string;
@@ -384,6 +389,12 @@ export function resolveEffectiveAgentResources(
         if (required) launchBlockers.push({ componentId, reason });
         continue;
       }
+      if (
+        component.providerHints.length > 0 &&
+        !component.providerHints.includes(facts.target.provider)
+      ) {
+        continue;
+      }
       const reasonBlocked = denial(component) ?? bundleDenials.get(componentId);
       if (reasonBlocked) {
         blocked.push({ componentId, reason: reasonBlocked });
@@ -411,7 +422,9 @@ export function resolveEffectiveAgentResources(
       }
       const scopedLaunch = scope === "session" || scope === "graph-node" || scope === "template";
       const deliveryProblem =
-        required || scopedLaunch ? input.requiredDelivery?.(component, digest) : undefined;
+        required || scopedLaunch || input.verifyOptionalDelivery
+          ? input.requiredDelivery?.(component, digest, required || scopedLaunch)
+          : undefined;
       if (deliveryProblem && scopedLaunch) {
         const reason = `This provider has no verified delivery for this launch-only selection. ${deliveryProblem}`;
         unsupported.push({ componentId, reason });
@@ -419,8 +432,14 @@ export function resolveEffectiveAgentResources(
         else warnings.push(reason);
         continue;
       }
-      if (deliveryProblem && required)
-        launchBlockers.push({ componentId, reason: deliveryProblem });
+      if (deliveryProblem) {
+        if (required) launchBlockers.push({ componentId, reason: deliveryProblem });
+        else if (input.verifyOptionalDelivery) {
+          unsupported.push({ componentId, reason: deliveryProblem });
+          warnings.push(deliveryProblem);
+          continue;
+        }
+      }
       delivered.push(componentId);
     }
     if (delivered.length > 0) {

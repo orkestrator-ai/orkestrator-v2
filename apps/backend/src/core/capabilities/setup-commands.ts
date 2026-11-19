@@ -107,6 +107,20 @@ export class CapabilitySetupCommands {
         updatedAt: this.ctx.now(),
         ...(actor ? { updatedBy: actor } : {}),
       };
+      const expandsMachineScope =
+        next.machineSelectors.length > 0 &&
+        (Boolean(existing?.targetSelectors?.length) ||
+          next.machineSelectors.some((selector) => !existing?.machineSelectors.includes(selector)));
+      if (
+        expandsMachineScope &&
+        !next.targetSelectors?.length &&
+        (next.packageSelections.length > 0 || next.parentSetupIds.length > 0)
+      ) {
+        throw new CapabilityError(
+          "approval-required",
+          "Preview this toolkit's delivery to the fleet before changing its scope.",
+        );
+      }
       state.setups[id] = next;
       recordActivity(state, {
         ...(actor ? { actor } : {}),

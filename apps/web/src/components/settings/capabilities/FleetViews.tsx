@@ -6,6 +6,7 @@ import {
   MY_SETUP_ID,
   type CapabilityDriftEntry,
   type CapabilityMachineSummary,
+  type CapabilityOperationSnapshot,
   type CapabilitySetup,
   type CapabilityUpdatePolicy,
 } from "@orkestrator/protocol/capability-resources";
@@ -29,6 +30,7 @@ import {
   shortDigest,
   StatusBadge,
 } from "./capability-format";
+import { ChangePreview } from "./ChangePreview";
 import { AdminPolicySection } from "./AdminPolicySection";
 import { AdoptLocalChangesDialog, MergeLocalChangesDialog } from "./LocalChangesDialogs";
 import { ManifestSignatureNote } from "./ManifestSignatureNote";
@@ -59,9 +61,18 @@ function useAction() {
 }
 
 /** My setup and named toolkits: what they hold, where they apply, how they update; export and import. */
-export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; reload: () => void }) {
+export function SetupsView({
+  setups,
+  machines,
+  reload,
+}: {
+  setups: CapabilitySetup[];
+  machines: CapabilityMachineSummary[];
+  reload: () => void;
+}) {
   const { busy, error, run } = useAction();
   const [name, setName] = useState("");
+  const [fleetPreview, setFleetPreview] = useState<CapabilityOperationSnapshot | null>(null);
   const [exported, setExported] = useState<CapabilityExport | null>(null);
   const [importIntent, setImportIntent] = useState("");
   const [importLock, setImportLock] = useState("");
@@ -76,6 +87,26 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
 
   return (
     <div className="space-y-6" data-testid="capability-setups">
+      {fleetPreview ? (
+        <ChangePreview
+          key={fleetPreview.id}
+          operation={fleetPreview}
+          machineNames={Object.fromEntries(
+            machines.map((machine) => [machine.nodeId, machine.name]),
+          )}
+          componentNames={{}}
+          onApplied={() => {
+            setFleetPreview(null);
+            reload();
+          }}
+          onCancel={() =>
+            void run(async () => {
+              await capabilitiesApi.cancelCapabilityOperation(fleetPreview.id);
+              setFleetPreview(null);
+            })
+          }
+        />
+      ) : null}
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1">
           <Label htmlFor="toolkit-name" className="text-xs">
@@ -197,20 +228,30 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
                     <input
                       type="checkbox"
                       checked={setup.machineSelectors.length > 0}
-                      disabled={busy}
-                      onChange={(event) =>
+                      disabled={busy || fleetPreview !== null}
+                      onChange={(event) => {
+                        const enabled = event.target.checked;
                         void run(async () => {
+                          if (enabled) {
+                            const result = await capabilitiesApi.previewCapabilityChange({
+                              kind: "use-toolkit-on-fleet",
+                              setupId: setup.id,
+                              expectedRevision: setup.revision,
+                            });
+                            setFleetPreview(result.operation);
+                            return;
+                          }
                           await capabilitiesApi.setCapabilitySetup(
                             {
                               id: setup.id,
                               name: setup.name,
-                              machineSelectors: event.target.checked ? ["*"] : [],
+                              machineSelectors: [],
                             },
                             setup.revision,
                           );
                           reload();
-                        })
-                      }
+                        });
+                      }}
                     />
                     Use on every enrolled machine
                   </label>

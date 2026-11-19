@@ -389,7 +389,7 @@ export const deleteCapabilitySetupCommand = capabilityCommand(
 );
 export const assignCapabilitySetupCommand = capabilityCommand(
   "assign_capability_setup",
-  "workspace",
+  "admin",
   ["scope", "scopeId", "setupIds", "expectedRevision"],
   OpenObject,
 );

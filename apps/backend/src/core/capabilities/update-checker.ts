@@ -92,7 +92,12 @@ export async function checkPackageUpdate(
   if (
     Object.values(state.updates).some(
       (update) =>
-        update.packageId === pkg.id && update.toRevision === head && update.state !== "failed",
+        update.packageId === pkg.id &&
+        update.toRevision === head &&
+        update.state !== "failed" &&
+        (update.state !== "pending" ||
+          Date.parse(state.inspections[`update:${update.id}`]?.expiresAt ?? "") >
+            Date.parse(deps.now())),
     )
   ) {
     return null;

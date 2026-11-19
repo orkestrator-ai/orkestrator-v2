@@ -72,6 +72,11 @@ describe("the workspace grant allow-list (plan item 7012)", () => {
     expect(workspace).toBeGreaterThan(0);
   });
 
+  test("workspace clients cannot assign toolkits to arbitrary scopes", () => {
+    expect(admits("assign_capability_setup")).toBe(false);
+    expect(admits("get_capability_assignment")).toBe(true);
+  });
+
   test("refuses an unregistered command and a name that is not one", () => {
     for (const command of ["no_such_command", "get_config ", "", "__proto__", "constructor"]) {
       expect(admits(command)).toBe(false);

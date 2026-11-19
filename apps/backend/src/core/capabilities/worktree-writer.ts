@@ -304,6 +304,7 @@ export async function applyWorktreePlan(
     /** Copies already there that stay (the environment's other receipts). */
     keep: readonly WorktreeEntry[];
     knownEnvironment(environmentId: string): boolean;
+    fence?: () => Promise<void>;
   },
 ): Promise<NodePlanResult[]> {
   const entryOf = (target: NodePlanTarget): WorktreeEntry => ({
@@ -312,8 +313,7 @@ export async function applyWorktreePlan(
     componentName: target.componentName,
     pathOrKey: target.pathOrKey,
   });
-  const writes = input.targets.filter((target) => target.action !== "remove");
-  const collisions = await worktreeCollisions(deps.git, input.worktree, writes.map(entryOf));
+  const collisions = await worktreeCollisions(deps.git, input.worktree, input.targets.map(entryOf));
   const results: NodePlanResult[] = [];
   const runnable: NodePlanTarget[] = [];
   for (const target of input.targets) {
@@ -346,6 +346,7 @@ export async function applyWorktreePlan(
     environmentId: input.environmentId,
     worktree: input.worktree,
   };
+  await input.fence?.();
   // Exclude before writing, so no status ever shows the copies.
   await syncWorktreeExclude(
     deps.git,
@@ -365,7 +366,7 @@ export async function applyWorktreePlan(
       ...(deps.projectMcp ? { mcp: projectMcpInstaller(deps.projectMcp, mcpContext) } : {}),
       ...(deps.now ? { now: deps.now } : {}),
     });
-    const applied = await executor.apply(runnable);
+    const applied = await executor.apply(runnable, input.fence);
     await dropEmptyIndexes(runnable, applied, locate);
     results.push(...applied);
   }

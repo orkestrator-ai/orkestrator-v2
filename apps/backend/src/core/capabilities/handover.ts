@@ -111,6 +111,15 @@ export function buildHandoverBundle(
   for (const collection of TRANSFERRED_COLLECTIONS) {
     collections[collection] = state[collection] as Record<string, unknown>;
   }
+  // The receiving authority needs launch diagnostics, but private delivery
+  // belongs to the machine that actually runs the session.
+  collections.launches = Object.fromEntries(
+    Object.entries(state.launches).map(([key, launch]) => {
+      if (!launch.privatePlugin) return [key, launch];
+      const { privatePlugin: _privatePlugin, ...diagnostic } = launch;
+      return [`${launch.target.nodeId}|${launch.sessionKey}`, diagnostic];
+    }),
+  );
   const bundle: CapabilityHandoverBundle = {
     formatVersion: BUNDLE_FORMAT,
     handoverId: input.handoverId,
@@ -487,10 +496,14 @@ export class CapabilityHandoverReceiver {
     const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
     const epoch = this.deps.storage.capabilities.mutateCapabilityState((state) => {
       const next = Math.max(bundle.epoch, state.epoch, executor.epoch) + 1;
+      const localLaunches = Object.fromEntries(
+        Object.entries(state.launches).filter(([, launch]) => launch.privatePlugin),
+      );
       for (const collection of TRANSFERRED_COLLECTIONS) {
         (state as unknown as Record<string, unknown>)[collection] =
           bundle.collections[collection] ?? {};
       }
+      state.launches = { ...state.launches, ...localLaunches };
       state.settings = { ...state.settings, ...bundle.settings };
       state.revision = Math.max(state.revision, bundle.revision);
       state.epoch = next;

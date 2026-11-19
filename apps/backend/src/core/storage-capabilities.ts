@@ -126,7 +126,12 @@ export function pruneCapabilityState(state: CapabilityState, now = Date.now()): 
   );
   keepNewest(state.observations, CAPABILITY_LIMITS.maxObservations, (entry) => entry.observedAt);
   keepNewest(state.requests, 2_000, (entry) => entry.at);
-  keepNewest(state.launches, 2_000, (entry) => entry.launchedAt);
+  keepNewest(
+    state.launches,
+    2_000,
+    (entry) => entry.launchedAt,
+    (entry) => Boolean(entry.privatePlugin),
+  );
   // A preview nobody applied within a day is withdrawn; its approval could no longer match anyway.
   for (const operation of Object.values(state.operations)) {
     if (
@@ -139,6 +144,11 @@ export function pruneCapabilityState(state: CapabilityState, now = Date.now()): 
   }
   for (const [id, inspection] of Object.entries(state.inspections)) {
     if (Date.parse(inspection.expiresAt) <= now) delete state.inspections[id];
+  }
+  for (const [id, update] of Object.entries(state.updates)) {
+    if (update.state === "pending" && !state.inspections[`update:${id}`]) {
+      delete state.updates[id];
+    }
   }
   for (const [id, entry] of Object.entries(state.imports)) {
     if (Date.parse(entry.createdAt) + 60 * 60_000 <= now) delete state.imports[id];

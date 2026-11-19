@@ -16,6 +16,57 @@ const files = (entries: Record<string, string>, executable: string[] = []) =>
 const source = { kind: "managed" as const, managedId: "m1" };
 
 describe("inspection", () => {
+  test.each(["hooks: {}", '"allowed-tools": []'])(
+    "rejects unsupported capability frontmatter (%s)",
+    (setting) => {
+      expect(() =>
+        inspectFiles(
+          source,
+          files({
+            "SKILL.md": `---\nname: demo\n${setting}\n---\nDemo`,
+          }),
+        ),
+      ).toThrow("frontmatter contains unsupported");
+    },
+  );
+
+  test("rejects native bundles beyond the inspected inventory", () => {
+    const manifest = { ".claude-plugin/plugin.json": JSON.stringify({ name: "demo" }) };
+    const hooks = Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`event-${i}`, []]));
+    expect(() =>
+      inspectFiles(
+        source,
+        files({
+          ...manifest,
+          "hooks/hooks.json": JSON.stringify({ hooks }),
+        }),
+      ),
+    ).toThrow("too many trigger groups");
+    const mcpServers = Object.fromEntries(
+      Array.from({ length: 51 }, (_, i) => [`server-${i}`, { url: "https://example.invalid/mcp" }]),
+    );
+    expect(() =>
+      inspectFiles(
+        source,
+        files({
+          ...manifest,
+          ".mcp.json": JSON.stringify({ mcpServers }),
+        }),
+      ),
+    ).toThrow("exceeds the verifiable inventory");
+    expect(() =>
+      inspectFiles(
+        source,
+        files({
+          ...manifest,
+          "hooks/hooks.json": JSON.stringify({
+            hooks: { Stop: [{ hooks: [{ type: "prompt" }] }] },
+          }),
+        }),
+      ),
+    ).toThrow("unsupported or too many commands");
+  });
+
   test("a plugin's skill, MCP server and hook are separate components with their own risk", () => {
     const inspected = inspectFiles(
       source,

@@ -117,7 +117,7 @@ export function CapabilitiesSettings({ initialTab = "library" }: { initialTab?: 
           )}
         </TabsContent>
         <TabsContent value="setups" className="pt-4">
-          <SetupsView setups={setupList} reload={setups.reload} />
+          <SetupsView setups={setupList} machines={machineList} reload={setups.reload} />
         </TabsContent>
         <TabsContent value="machines" className="pt-4">
           <MachinesView machines={machineList} reload={machines.reload} />

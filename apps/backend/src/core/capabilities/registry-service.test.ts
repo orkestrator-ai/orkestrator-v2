@@ -237,6 +237,7 @@ describe("package registries", () => {
       },
     });
     for (let n = 1; n <= 6; n += 1) {
+      await node.service.reconciler.idle();
       const revision = `1.${n}.0`;
       publish([revision], routes);
       const update = (await node.service.refreshUpdates({})).updates.find(

@@ -252,6 +252,46 @@ describe("project MCP servers in a worktree", () => {
 });
 
 describe("project MCP files", () => {
+  test("an executable project change previews the worktree target and records its outcome", async () => {
+    const fixture = await makeFixture();
+    const toolkit = await fixture.service.setSetup({ setup: { name: "Project tools" } });
+    await fixture.service.assignSetup({
+      scope: "project",
+      scopeId: "proj-1",
+      setupIds: [toolkit.id],
+    });
+    await fixture.service.reconciler.idle();
+    const inspection = await fixture.service.authorPackage({
+      kind: "mcp-server",
+      name: "project-docs",
+      mcp: { transport: "stdio", command: "fixture-command" },
+    });
+    const { operation } = await fixture.service.previewChange({
+      change: {
+        kind: "add-to-setup",
+        inspectionId: inspection.inspectionId,
+        setupId: toolkit.id,
+        excludedProviders: AGENT_PLATFORMS.filter((provider) => provider !== "claude"),
+      },
+    });
+    const project = operation.targets.find((target) => target.target.environmentId === "env-1");
+    expect(project).toMatchObject({ action: "install", locationId: "project-mcp-claude" });
+    expect(operation.requiresApproval).toBe(true);
+    expect(await Bun.file(path.join(fixture.worktree, ".mcp.json")).exists()).toBe(false);
+    await fixture.service.applyChange({
+      operationId: operation.id,
+      approvedDigest: operation.planDigest,
+    });
+    await fixture.service.reconciler.idle();
+    const finished = (await fixture.storage.capabilities.loadCapabilityState()).operations[
+      operation.id
+    ];
+    expect(finished?.targets.find((target) => target.key === project!.key)?.status).not.toBe(
+      "pending",
+    );
+    expect(await Bun.file(path.join(fixture.worktree, ".mcp.json")).exists()).toBe(true);
+  });
+
   test("an empty file is only an empty server map", () => {
     const claude = projectMcpLocationFor("claude")!;
     const codex = projectMcpLocationFor("codex")!;

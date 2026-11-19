@@ -79,7 +79,10 @@ export interface SessionPrivatePluginRecord {
   digest: string;
   /** The staged tree's digest, read back after writing. */
   treeDigest: string;
-  items: Array<Pick<SessionPrivateItem, "packageId" | "componentId" | "packageDigest">>;
+  items: Array<
+    Pick<SessionPrivateItem, "packageId" | "componentId" | "packageDigest"> &
+      Partial<Pick<SessionPrivateItem, "kind" | "name" | "pathOrKey">>
+  >;
 }
 
 /**
@@ -111,7 +114,11 @@ function pluginSubdirectory(kind: CapabilityComponent["kind"]): "skills" | "comm
 export function sessionPluginDigest(items: readonly SessionPrivateItem[]): string {
   const sorted = [...items]
     .map((item) => [item.packageId, item.componentId, item.packageDigest])
-    .sort((a, b) => a.join("|").localeCompare(b.join("|")));
+    .sort((a, b) => {
+      const left = a.join("|");
+      const right = b.join("|");
+      return left < right ? -1 : left > right ? 1 : 0;
+    });
   return sha256(canonicalCapabilityJson({ format: SESSION_PLUGIN_FORMAT, items: sorted }))
     .replace(/^sha256:/, "")
     .slice(0, 40);
@@ -230,11 +237,7 @@ export async function stageSessionPlugin(input: {
     record: {
       digest,
       treeDigest: expected,
-      items: input.items.map((item) => ({
-        packageId: item.packageId,
-        componentId: item.componentId,
-        packageDigest: item.packageDigest,
-      })),
+      items: input.items.map((item) => ({ ...item })),
     },
   };
 }
@@ -273,7 +276,11 @@ export async function sessionPluginForTurn(input: {
   const directory = sessionPluginPath(input.root, input.record.digest);
   if ((await readBack(input.root, directory)) === input.record.treeDigest) return directory;
   const items = input.record.items.map((entry) => {
-    const item = input.resolveItem(entry);
+    const { kind, name, pathOrKey } = entry;
+    const item =
+      kind !== undefined && name !== undefined && pathOrKey !== undefined
+        ? { ...entry, kind, name, pathOrKey }
+        : input.resolveItem(entry);
     if (!item) {
       throw new CapabilityError(
         "source-unavailable",

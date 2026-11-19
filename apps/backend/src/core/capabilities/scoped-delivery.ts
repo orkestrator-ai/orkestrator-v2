@@ -76,6 +76,7 @@ import {
   worktreeCollisions,
   type WorktreeEntry,
 } from "./worktree-writer.js";
+import { updateOperationTargets } from "./operations.js";
 import type { CapabilityLaunchDelivery, CapabilityState, InstallationReceipt } from "./types.js";
 
 const log = createLogger("capabilities");
@@ -786,6 +787,17 @@ export async function runScopedPass(
       if (forceKeys.has(result.key) && result.status !== "failed" && result.status !== "drifted")
         delete current.drift[`drift:${result.key}`];
     }
+    const outcomes = new Map<string, { status: CapabilityTargetStatus; reason?: string }>();
+    for (const result of results) outcomes.set(result.key, result);
+    for (const [key, reason] of collided) outcomes.set(key, { status: "failed", reason });
+    for (const key of forget) outcomes.set(key, { status: "ready" });
+    if (unknown) {
+      for (const target of targets) outcomes.set(target.key, { status: "outcome-unknown" });
+    }
+    updateOperationTargets(current, outcomes, (target) => {
+      const desired = desiredByKey.get(target.key);
+      return target.action === "remove" ? !desired : desired?.digest === target.toDigest;
+    });
     return { result: undefined, changed: true };
   });
   return { changed: true, ...(unknown ? { unknown: true } : {}) };

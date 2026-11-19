@@ -448,7 +448,14 @@ export class ClaudePluginAdapter {
     for (const name of names.sort()) {
       const managed = index.plugins[name]!;
       const entry = listed.find((plugin) => plugin.id === this.qualified(name));
-      const digest = entry ? await digestUnder(this.marketplaceDir, entry.readFromFolder) : null;
+      const source = entry ? await digestUnder(this.marketplaceDir, entry.readFromFolder) : null;
+      const cached = entry
+        ? await digestUnder(
+            path.join(this.deps.homes().claudeConfigDir, "plugins"),
+            entry.installPath,
+          )
+        : null;
+      const digest = source === managed.digest ? cached : source;
       result.push({
         provider: "claude",
         qualifiedId: this.qualified(name),

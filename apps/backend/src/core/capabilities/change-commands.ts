@@ -13,15 +13,20 @@ import {
   isTerminalCapabilityOperationState,
   summarizeCapabilityTargets,
   type CapabilityPlannedTarget,
+  type CapabilityTarget,
 } from "@orkestrator/protocol/capability-resources";
 import type { CapabilityChangeResult } from "@orkestrator/protocol/capability-resources-api";
-import { canonicalCapabilityJson } from "@orkestrator/protocol/capability-resources-resolve";
+import {
+  canonicalCapabilityJson,
+  UNRESTRICTED_CAPABILITY_CEILING,
+} from "@orkestrator/protocol/capability-resources-resolve";
 import { capabilityLocation } from "@orkestrator/protocol/capability-resources-support";
 
 import type { CapabilityImportCommands } from "./import-commands.js";
 import {
   applyChangeToState,
   approvalReasonsFor,
+  finalizeOperation,
   newCorrelationId,
   newOperationId,
   operationSnapshot,
@@ -33,17 +38,165 @@ import {
   type CapabilityOperationRecord,
 } from "./operations.js";
 import { desiredStateForNode, installationKey, planNode, sha256 } from "./planning.js";
+import { defaultGitRunner } from "./project-git.js";
+import {
+  accountHomeEvidence,
+  desiredAccountState,
+  desiredProjectState,
+  revisionComponent,
+  type ScopedInstallation,
+} from "./scoped-delivery.js";
 import { CapabilityError } from "./security.js";
 import { asRecord, asText, requestKeyOf } from "./service-args.js";
 import type { CapabilityServiceContext } from "./service-context.js";
-import { containsLiteralMcpCredentials, scanPackageSecrets } from "./source-inspection.js";
+import {
+  assertDistributableArtifact,
+  containsLiteralMcpCredentials,
+  scanPackageSecrets,
+} from "./source-inspection.js";
 import type { CapabilityState } from "./types.js";
+import { worktreeCollisions, type WorktreeEntry } from "./worktree-writer.js";
 
 export class CapabilityChangeCommands {
   constructor(
     private readonly ctx: CapabilityServiceContext,
     private readonly imports: CapabilityImportCommands,
   ) {}
+
+  private async scopedTargets(
+    draft: CapabilityState,
+    machine: Awaited<ReturnType<CapabilityServiceContext["machineFacts"]>>[number],
+    desired: ReturnType<typeof desiredStateForNode>,
+  ): Promise<CapabilityPlannedTarget[]> {
+    const { nodeId, self, connected } = machine;
+    const scopes = new Map<
+      string,
+      {
+        target: Omit<CapabilityTarget, "provider">;
+        items: ScopedInstallation[];
+        worktree?: string;
+      }
+    >();
+    const targets: CapabilityPlannedTarget[] = [];
+    const environments = self
+      ? await this.ctx.deps.scoped?.environments?.()
+      : await this.ctx.deps.remoteEnvironments?.(nodeId);
+    for (const environment of environments ?? []) {
+      if (environment.environmentType !== "local" || (self && !environment.worktreePath)) continue;
+      const { installations, undeliverable } = desiredProjectState(
+        draft,
+        nodeId,
+        environment,
+        desired,
+        (state, target) =>
+          this.ctx.resolveFor(state, { target, ceiling: UNRESTRICTED_CAPABILITY_CEILING }),
+      );
+      const target = { nodeId, environmentId: environment.id, projectId: environment.projectId };
+      scopes.set(`env:${environment.id}`, {
+        target,
+        items: installations,
+        ...(self && environment.worktreePath ? { worktree: environment.worktreePath } : {}),
+      });
+      for (const entry of undeliverable) {
+        targets.push({
+          key: `${nodeId}|env:${environment.id}|preview:${entry.provider}|${entry.componentId}`,
+          target: { ...target, provider: entry.provider },
+          action: "skip",
+          status: entry.status,
+          reason: entry.reason,
+          packageId: entry.packageId,
+          componentId: entry.componentId,
+          liveSemantics: "new-session-required",
+        });
+      }
+    }
+    const accounts = self ? await this.ctx.deps.scoped?.accounts?.() : undefined;
+    for (const account of accounts ?? []) {
+      const evidence = await accountHomeEvidence(
+        account.provider,
+        account.home,
+        this.ctx.deps.homes(),
+      );
+      scopes.set(`account:${account.accountId}`, {
+        target: { nodeId, accountHomeId: account.accountId },
+        items: desiredAccountState(account, desired, evidence),
+      });
+    }
+    const status = self || connected ? "pending" : "offline";
+    for (const [scope, { target, items, worktree }] of scopes) {
+      const start = targets.length;
+      const wanted = new Set(items.map((entry) => entry.key));
+      for (const item of items) {
+        const receipt = draft.receipts[item.key];
+        if (
+          receipt?.packageDigest === item.digest &&
+          (receipt.status === "ready" || receipt.status === "installed-next-session")
+        )
+          continue;
+        targets.push({
+          key: item.key,
+          target: { ...target, provider: item.providers[0] ?? "claude" },
+          action: receipt ? "update" : "install",
+          status,
+          packageId: item.packageId,
+          componentId: item.componentId,
+          locationId: item.locationId,
+          ...(receipt ? { fromDigest: receipt.digest } : {}),
+          toDigest: item.digest,
+          liveSemantics: "new-session-required",
+        });
+      }
+      for (const receipt of Object.values(draft.receipts)) {
+        const receiptScope = receipt.environmentId
+          ? `env:${receipt.environmentId}`
+          : receipt.accountHomeId
+            ? `account:${receipt.accountHomeId}`
+            : undefined;
+        if (receiptScope !== scope || receipt.nodeId !== nodeId || wanted.has(receipt.id)) continue;
+        targets.push({
+          key: receipt.id,
+          target: { ...target, provider: receipt.providers[0] ?? "claude" },
+          action: "remove",
+          status,
+          packageId: receipt.packageId,
+          componentId: receipt.componentId,
+          locationId: receipt.locationId,
+          fromDigest: receipt.digest,
+          liveSemantics: "new-session-required",
+        });
+      }
+      if (worktree) {
+        const changed = targets.slice(start);
+        const entries = changed.flatMap((entry): WorktreeEntry[] => {
+          const digest = entry.toDigest ?? draft.receipts[entry.key]?.packageDigest;
+          const component =
+            digest && revisionComponent(draft, entry.packageId, entry.componentId, digest);
+          return component && entry.locationId
+            ? [
+                {
+                  key: entry.key,
+                  locationId: entry.locationId,
+                  componentName: component.name,
+                  pathOrKey: component.pathOrKey,
+                },
+              ]
+            : [];
+        });
+        if (entries.length > 0) {
+          const collisions = await worktreeCollisions(
+            this.ctx.deps.scoped?.git ?? defaultGitRunner,
+            worktree,
+            entries,
+          );
+          for (const entry of changed) {
+            const reason = collisions.get(entry.key);
+            if (reason) Object.assign(entry, { action: "skip", status: "failed", reason });
+          }
+        }
+      }
+    }
+    return targets;
+  }
 
   /** Plans `change` against a copy of the state for every enrolled machine. */
   private async planChange(state: CapabilityState, change: CapabilityChange) {
@@ -58,7 +211,8 @@ export class CapabilityChangeCommands {
       const inventory = draft.machines[machine.nodeId]?.inventory;
       const desired = desiredStateForNode(draft, machine.nodeId, inventory);
       const plan = planNode(draft, desired, { connected: machine.connected || machine.self });
-      const relevant = plan.planned.filter(
+      const scoped = await this.scopedTargets(draft, machine, desired);
+      const relevant = [...plan.planned, ...scoped].filter(
         (target) =>
           applied.packageIds.length === 0 || applied.packageIds.includes(target.packageId),
       );
@@ -66,8 +220,14 @@ export class CapabilityChangeCommands {
         ...relevant.filter((target) => target.action !== "keep" || change.kind === "reconcile"),
       );
     }
-    const bounded = targets.slice(0, CAPABILITY_LIMITS.maxTargetsPerOperation);
-    return { draft, applied, targets: bounded, planDigest: planDigestOf(change, bounded) };
+    targets.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    if (targets.length > CAPABILITY_LIMITS.maxTargetsPerOperation) {
+      throw new CapabilityError(
+        "too-large",
+        "This change has too many targets for a single approval.",
+      );
+    }
+    return { draft, applied, targets, planDigest: planDigestOf(change, targets) };
   }
 
   async previewChange(
@@ -116,6 +276,9 @@ export class CapabilityChangeCommands {
     }
     const { applied, targets, planDigest, draft } = await this.planChange(state, change);
     const reasons = approvalReasonsFor(draft, applied.addedComponentIds);
+    if (change.kind === "use-toolkit-on-fleet") {
+      reasons.push("This toolkit will be used on every enrolled machine.");
+    }
     if (change.kind === "add-to-setup") {
       const inspection = state.inspections[change.inspectionId];
       if (inspection?.adoption) reasons.push(...this.ctx.drift.adoptionReasons(state, inspection));
@@ -130,6 +293,7 @@ export class CapabilityChangeCommands {
     }
     if (
       change.kind === "add-to-setup" ||
+      change.kind === "use-toolkit-on-fleet" ||
       change.kind === "adopt" ||
       change.kind === "update" ||
       change.kind === "rollback"
@@ -188,6 +352,7 @@ export class CapabilityChangeCommands {
           `Remove the detected credential (${secrets.join(", ")}) before applying this revision.`,
         );
       }
+      assertDistributableArtifact(files);
     }
   }
 
@@ -222,6 +387,7 @@ export class CapabilityChangeCommands {
       throw new CapabilityError("conflict", "That operation has no change to apply.");
     const replanned = await this.planChange(state, operation.change);
     if (replanned.planDigest !== approvedDigest) {
+      if (operation.kind === "update") this.cancelOperation({ operationId });
       throw new CapabilityError(
         "approval-required",
         "Something changed since the preview (a package revision, a setup or a machine). Review the new preview.",
@@ -231,13 +397,44 @@ export class CapabilityChangeCommands {
     await this.ctx.drift.assertAdoptionCurrent(state, change);
     if (
       change.kind === "add-to-setup" ||
+      change.kind === "use-toolkit-on-fleet" ||
       change.kind === "adopt" ||
       change.kind === "update" ||
       change.kind === "rollback"
     ) {
       await this.assertPackageArtifactsSafe(replanned.draft, replanned.applied.packageIds);
     }
+    // Observations can publish while artifacts are checked. Revalidate against
+    // that new snapshot before committing, and still require the approved effects.
+    const commitBasis = await this.ctx.deps.storage.capabilities.loadCapabilityState();
+    const finalPlan = await this.planChange(commitBasis, change);
+    if (
+      finalPlan.planDigest !== approvedDigest ||
+      replanned.applied.packageIds.some(
+        (id) =>
+          replanned.draft.packages[id]?.artifactDigest !==
+          finalPlan.draft.packages[id]?.artifactDigest,
+      )
+    ) {
+      if (operation.kind === "update") this.cancelOperation({ operationId });
+      throw new CapabilityError(
+        "approval-required",
+        "The delivery plan changed. Review a fresh preview.",
+      );
+    }
     const result = this.ctx.deps.storage.capabilities.mutateCapabilityState((current) => {
+      this.ctx.assertAuthority();
+      if (
+        current.handover?.role === "sending" ||
+        current.handover?.role === "sent" ||
+        current.epoch !== state.epoch ||
+        planningIntent(current) !== planningIntent(commitBasis)
+      ) {
+        throw new CapabilityError(
+          "conflict",
+          "Capability state changed after approval. Review a new preview.",
+        );
+      }
       const record = current.operations[operationId] as CapabilityOperationRecord | undefined;
       if (!record || (record.state !== "awaiting-approval" && record.state !== "planned")) {
         throw new CapabilityError("conflict", "That operation was already applied or cancelled.");
@@ -310,6 +507,7 @@ export class CapabilityChangeCommands {
         if (target.action !== "skip" && target.action !== "keep" && target.status !== "offline")
           target.status = "pending";
       }
+      finalizeOperation(record);
       const superseded = supersedeOperations(current, operationId);
       if (requestKey) {
         current.requests[`apply:${requestKey}`] = {
@@ -377,6 +575,23 @@ export class CapabilityChangeCommands {
   }
 }
 
+function planningIntent(state: CapabilityState): string {
+  return canonicalCapabilityJson({
+    packages: state.packages,
+    components: state.components,
+    setups: state.setups,
+    assignments: state.assignments,
+    settings: state.settings,
+    machines: Object.values(state.machines)
+      .filter(
+        ({ enrolled, groups }) =>
+          enrolled !== state.settings.enrollNewMachines || groups.length > 0,
+      )
+      .map(({ nodeId, enrolled, groups }) => ({ nodeId, enrolled, groups }))
+      .sort((a, b) => (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0)),
+  });
+}
+
 function describeChange(
   state: CapabilityState,
   change: CapabilityChange,
@@ -386,6 +601,8 @@ function describeChange(
   switch (change.kind) {
     case "add-to-setup":
       return `Added ${names} to ${state.setups[change.setupId]?.name ?? change.setupId}.`;
+    case "use-toolkit-on-fleet":
+      return `Enabled ${state.setups[change.setupId]?.name ?? change.setupId} on the fleet.`;
     case "remove-from-setup":
       return `Removed ${names} from ${state.setups[change.setupId]?.name ?? change.setupId}.`;
     case "update":

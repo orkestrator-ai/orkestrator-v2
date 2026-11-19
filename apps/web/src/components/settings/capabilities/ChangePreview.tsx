@@ -124,6 +124,12 @@ export function ChangePreview({
               <tr key={target.key} className="align-top">
                 <td className="px-2 py-1.5">
                   {machineNames[target.target.nodeId] ?? target.target.nodeId}
+                  {target.target.environmentId ? (
+                    <div>Environment {target.target.environmentId}</div>
+                  ) : null}
+                  {target.target.accountHomeId ? (
+                    <div>Account {target.target.accountHomeId}</div>
+                  ) : null}
                 </td>
                 <td className="px-2 py-1.5">
                   {providerLabel(target.target.provider)}

@@ -138,21 +138,27 @@ export class CapabilityPreflight {
     templateId?: string;
     graphNode?: string;
     relativeWorktree?: string;
+    readOnly?: boolean;
   }): Promise<EffectiveAgentResources> {
     // A leaf's store holds no setups: its command node resolves the launch.
     if (!this.ctx.deps.isAuthority() && input.target.nodeId === (await this.ctx.deps.selfId())) {
       const answer = await this.ctx.leafLaunch.preflight(input);
-      this.launchEvidence.set(answer.effective, {
+      const privateItems = answer.privateItems ?? [];
+      const required = new Set(answer.privateRequired ?? []);
+      const effective = input.readOnly
+        ? withoutPrivateItems(
+            answer.effective,
+            privateItems,
+            "Private plugins are unavailable on read-only turns.",
+            required,
+          )
+        : answer.effective;
+      this.launchEvidence.set(effective, {
         deliveries: answer.deliveries,
         ...(answer.resolvedBy ? { resolvedBy: answer.resolvedBy } : {}),
-        ...(answer.privateItems && answer.privateItems.length > 0
-          ? {
-              privateItems: answer.privateItems,
-              required: new Set(answer.privateRequired ?? []),
-            }
-          : {}),
+        ...(!input.readOnly && privateItems.length > 0 ? { privateItems, required } : {}),
       });
-      return answer.effective;
+      return effective;
     }
     const resolveInput = {
       target: input.target,
@@ -180,7 +186,7 @@ export class CapabilityPreflight {
       captureRequired: (ids) => {
         required = ids;
       },
-      ...(local
+      ...(local && !input.readOnly
         ? {
             privateDelivery: {
               deliverable: () => true,
@@ -311,17 +317,23 @@ export class CapabilityPreflight {
     relativeWorktree?: string;
     provider: AgentPlatform;
     sessionKey: string;
-    policy?: Parameters<typeof nativeAgentDeniedCapabilities>[0];
+    policy?: Parameters<typeof nativeAgentDeniedCapabilities>[0] & { id?: string };
+    readOnly?: boolean;
   }): Promise<EffectiveAgentResources | null> {
     let effective: EffectiveAgentResources;
     try {
+      const readOnly = input.readOnly === true || input.policy?.id === "coordinator-read-only";
       const denied = nativeAgentDeniedCapabilities(input.policy);
       const grant = nativeAgentUserMcpGrant(input.policy);
       const ceiling: CapabilityPermissionCeiling = {
         denied,
         userMcpServers: grant ?? null,
         digest: sha256(
-          canonicalCapabilityJson({ denied: [...denied].sort(), grant: grant ?? null }),
+          canonicalCapabilityJson({
+            denied: [...denied].sort(),
+            grant: grant ?? null,
+            ...(readOnly ? { readOnly } : {}),
+          }),
         ),
       };
       effective = await this.preflightLaunch({
@@ -341,6 +353,7 @@ export class CapabilityPreflight {
         ...(input.graphNode ? { graphNode: input.graphNode } : {}),
         ...(input.relativeWorktree ? { relativeWorktree: input.relativeWorktree } : {}),
         ceiling,
+        ...(readOnly ? { readOnly } : {}),
       });
     } catch (error) {
       log.warn("service.preflight-failed", { error: formatLogError(error, { message: false }) });
@@ -385,6 +398,12 @@ export class CapabilityPreflight {
       log.warn("service.launch-record-failed", {
         error: formatLogError(error, { message: false }),
       });
+      if (staged.record) {
+        throw new CapabilityError(
+          "source-unavailable",
+          "The session's private capabilities could not be recorded. Retry the launch.",
+        );
+      }
     }
     if (referenced) {
       void pruneSessionPlugins(sessionPluginsRoot(this.ctx.deps.dataDir), referenced);

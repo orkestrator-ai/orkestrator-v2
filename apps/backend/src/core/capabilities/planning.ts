@@ -458,20 +458,56 @@ export function planNode(
   const targets: NodePlanTarget[] = [];
   const planned: CapabilityPlannedTarget[] = [];
   const desiredKeys = new Set(desired.installations.map((entry) => entry.key));
+  const revisions = new Map(Object.entries(state.components));
+  const componentFor = (packageId: string, digest: string, componentId: string) => {
+    const pkg = state.packages[packageId];
+    return (
+      pkg &&
+      capabilityRevisionComponents(pkg, digest, revisions)?.find(
+        (entry) => entry.id === componentId,
+      )
+    );
+  };
+  const physicalKeys = new Map<string, string>();
+  const occupants = new Map<string, number>();
+  for (const installation of desired.installations) {
+    const component = componentFor(
+      installation.packageId,
+      installation.digest,
+      installation.componentId,
+    );
+    const location = capabilityLocation(installation.locationId);
+    if (!component || !location) continue;
+    const name = installName(component.name, component.pathOrKey, location.layout);
+    const key = `${location.id}|${name}`;
+    physicalKeys.set(installation.key, key);
+    occupants.set(key, (occupants.get(key) ?? 0) + 1);
+  }
   const receipts = Object.values(state.receipts).filter(
     (receipt) => receipt.nodeId === desired.nodeId && isMachineWideReceipt(receipt),
   );
 
   for (const installation of desired.installations) {
     const pkg = state.packages[installation.packageId];
-    const component =
-      pkg &&
-      (pkg.artifactDigest === installation.digest
-        ? state.components[installation.componentId]
-        : pkg.previousRevisions
-            ?.find((revision) => revision.artifactDigest === installation.digest)
-            ?.components?.find((entry) => entry.id === installation.componentId));
+    const component = componentFor(
+      installation.packageId,
+      installation.digest,
+      installation.componentId,
+    );
     if (!component) continue;
+    if ((occupants.get(physicalKeys.get(installation.key) ?? "") ?? 0) > 1) {
+      planned.push({
+        key: installation.key,
+        target: { nodeId: desired.nodeId, provider: installation.providers[0] ?? "claude" },
+        componentId: installation.componentId,
+        packageId: installation.packageId,
+        action: "skip",
+        locationId: installation.locationId,
+        status: "failed",
+        reason: "Multiple selected components would write to the same path.",
+      });
+      continue;
+    }
     const receipt = state.receipts[installation.key];
     const fileLocation = capabilityLocation(installation.locationId);
     const upToDate =
@@ -569,8 +605,21 @@ export function planNode(
     // Still referenced by an account or a project outside the fleet setups.
     if (receipt.references.some((reference) => !reference.startsWith("setup:"))) continue;
     if (options.driftKeys?.has(receipt.id) && !options.forceKeys?.has(receipt.id)) continue;
-    const component = state.components[receipt.componentId];
+    const component = componentFor(receipt.packageId, receipt.packageDigest, receipt.componentId);
     const fileLocation = capabilityLocation(receipt.locationId);
+    if (fileLocation && !component) {
+      planned.push({
+        key: receipt.id,
+        target: { nodeId: desired.nodeId, provider: receipt.providers[0] ?? "claude" },
+        packageId: receipt.packageId,
+        componentId: receipt.componentId,
+        locationId: receipt.locationId,
+        action: "skip",
+        status: "failed",
+        reason: "The installed revision's file location cannot be verified.",
+      });
+      continue;
+    }
     const locationProvider =
       receipt.locationId.startsWith("mcp:") || receipt.locationId.startsWith("plugin:")
         ? (receipt.locationId.split(":")[1] as AgentPlatform)

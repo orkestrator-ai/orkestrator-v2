@@ -182,6 +182,17 @@ describe("a leaf's containers", () => {
     ).toBe(false);
   });
 
+  test("a cached plan from the previous executor epoch cannot stage", async () => {
+    const { desktop, gram } = await fleet();
+    await addSkill(desktop, "docs", "Write docs.");
+    await createContainer(gram, "env-c", "ctr-1");
+    gram.reachable = false;
+    gram.cap.executor.admitEpoch("new-controller", 2);
+    const rebuilt = await createContainer(gram, "env-c", "ctr-2");
+    expect(rebuilt.record.items).toEqual([]);
+    expect(rebuilt.record.unstaged?.reason).toBe("command-node-unreachable");
+  });
+
   test("without the command node: the last manifest for that container if its files are here, otherwise nothing, and required components block", async () => {
     const { desktop, gram } = await fleet();
     const { inspection } = await addSkill(desktop, "docs", "Write docs.", { required: true });

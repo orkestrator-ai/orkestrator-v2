@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -37,6 +37,8 @@ export function GraphNodeToolkitsEditor({
   providers: readonly AgentPlatform[];
 }) {
   const scopeId = `${templateId}/${nodeId}`;
+  const saving = useRef(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const provider = providers[0] ?? "claude";
   const setups = useCapabilityResource(() => capabilitiesApi.listCapabilitySetups(), []);
@@ -87,8 +89,13 @@ export function GraphNodeToolkitsEditor({
             <input
               type="checkbox"
               checked={assigned.includes(setup.id) || inherited}
-              disabled={inherited || assignment.state.data == null}
+              disabled={busy || inherited || assignment.state.data == null}
               onChange={(event) => {
+                const revision = assignment.state.data?.revision;
+                if (saving.current || revision === undefined) return;
+                saving.current = true;
+                setBusy(true);
+                setError(null);
                 const current = assigned.filter((id) =>
                   toolkits.some((toolkit) => toolkit.id === id),
                 );
@@ -96,12 +103,14 @@ export function GraphNodeToolkitsEditor({
                   ? [...new Set([...current, setup.id])]
                   : current.filter((id) => id !== setup.id);
                 void capabilitiesApi
-                  .assignCapabilitySetup("graph-node", scopeId, next)
-                  .then(() => {
+                  .assignCapabilitySetup("graph-node", scopeId, next, revision)
+                  .catch((assignError: unknown) => setError(describeError(assignError)))
+                  .finally(() => {
                     assignment.reload();
                     effective.reload();
-                  })
-                  .catch((assignError: unknown) => setError(describeError(assignError)));
+                    saving.current = false;
+                    setBusy(false);
+                  });
               }}
             />
             {setup.name}

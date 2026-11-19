@@ -321,7 +321,15 @@ export async function setCapabilityPluginEnabled(
     );
   }
   const result = await toggleCodexPlugin(
-    { codexHome: capabilityHomes(context).codexHome, cli: capabilityProviderCli(context, "codex") },
+    {
+      codexHome: capabilityHomes(context).codexHome,
+      cli: capabilityProviderCli(context, "codex"),
+      ...(context.mcpManagement
+        ? {
+            withSourceLock: (file, work) => context.mcpManagement!.withSourceLock(file, work),
+          }
+        : {}),
+    },
     qualifiedId,
     enabled,
   );

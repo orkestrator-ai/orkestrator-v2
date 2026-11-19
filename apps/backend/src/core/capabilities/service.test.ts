@@ -3,7 +3,7 @@
  * node and two leaves, each with its own SQLite store and provider homes,
  * joined by fake node links that call the leaves' own executor handlers.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -164,6 +164,63 @@ const skillFile = (node: Node, root: string, name: string) =>
   path.join(node.home, root, "skills", name, "SKILL.md");
 
 describe("add once, use wherever compatible", () => {
+  test("an oversized plan is refused before creating an approval", async () => {
+    const others: Node[] = [];
+    const command = await makeNode("bk_command", () => others, true);
+    await command.service.reconciler.idle();
+    const inspection = await command.service.authorPackage({
+      kind: "skill",
+      name: "many-targets",
+      content: "Instructions.",
+    });
+    for (let index = 0; index < CAPABILITY_LIMITS.maxTargetsPerOperation; index++) {
+      others.push({ ...command, id: `bk_virtual_${index}`, connected: false });
+    }
+    await expect(
+      command.service.previewChange({
+        change: {
+          kind: "add-to-setup",
+          inspectionId: inspection.inspectionId,
+          setupId: MY_SETUP_ID,
+        },
+      }),
+    ).rejects.toThrow("too many targets");
+    expect(
+      Object.keys((await command.storage.capabilities.loadCapabilityState()).operations),
+    ).toHaveLength(0);
+  });
+
+  test("a populated toolkit reaches the fleet only after approval", async () => {
+    const { command, leafA } = await fleet();
+    const toolkit = await command.service.setSetup({ setup: { name: "Selected tools" } });
+    await addSkill(command, "toolkit-skill", "Instructions.", toolkit.id);
+    const input = {
+      setup: { id: toolkit.id, name: toolkit.name, machineSelectors: ["*"] },
+      expectedRevision: toolkit.revision + 1,
+    };
+    await expect(command.service.setSetup(input)).rejects.toThrow("Preview this toolkit");
+    const { operation } = await command.service.previewChange({
+      change: {
+        kind: "use-toolkit-on-fleet",
+        setupId: toolkit.id,
+        expectedRevision: input.expectedRevision,
+      },
+    });
+    expect(operation.requiresApproval).toBe(true);
+    expect(
+      operation.targets.some(
+        (entry) => entry.target.nodeId === leafA.id && entry.action === "install",
+      ),
+    ).toBe(true);
+    expect(await Bun.file(skillFile(leafA, ".claude", "toolkit-skill")).exists()).toBe(false);
+    await command.service.applyChange({
+      operationId: operation.id,
+      approvedDigest: operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    expect(await Bun.file(skillFile(leafA, ".claude", "toolkit-skill")).exists()).toBe(true);
+  });
+
   test("one skill reaches every enrolled machine as two shared copies, with honest statuses", async () => {
     const { command, leafA, leafB } = await fleet();
     const { inspection, preview } = await addSkill(
@@ -499,6 +556,72 @@ describe("remote safety", () => {
     await command.service.getInventory({ nodeId: leafA.id, refresh: true });
     await command.service.reconciler.idle();
     expect(leafA.applyCalls).toEqual([]);
+  });
+
+  test("a queued write from a previous executor epoch cannot reach disk", async () => {
+    const { command } = await fleet();
+    const files = validatePackageFiles([
+      { path: "SKILL.md", content: Buffer.from("Instructions."), executable: false },
+    ]);
+    const artifactDigest = await command.service.artifacts.put(files);
+    const target = {
+      key: `${command.id}|claude-user-skills|queued`,
+      action: "install",
+      kind: "skill",
+      locationId: "claude-user-skills",
+      componentName: "queued",
+      pathOrKey: "",
+      componentId: "queued",
+      packageId: "queued-package",
+      artifactDigest,
+    };
+    const stopped = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const original = command.service.artifacts.get.bind(command.service.artifacts);
+    const get = spyOn(command.service.artifacts, "get").mockImplementation(async (digest) => {
+      stopped.resolve();
+      await release.promise;
+      return original(digest);
+    });
+    const args = { controllerId: command.id, epoch: 1, targets: [target] };
+    const running = command.service.executorApply(args);
+    await stopped.promise;
+    const queued = command.service.executorApply(args);
+    command.service.executor.admitEpoch("new-controller", 2);
+    release.resolve();
+    for (const answer of await Promise.all([running, queued])) {
+      expect(answer.results[0]).toMatchObject({ status: "failed" });
+    }
+    get.mockRestore();
+    expect(await Bun.file(skillFile(command, ".claude", "queued")).exists()).toBe(false);
+  });
+
+  test("a deleted file component installs again without force", async () => {
+    const { command } = await fleet();
+    const files = validatePackageFiles([
+      { path: "review.md", content: Buffer.from("Instructions."), executable: false },
+    ]);
+    const artifactDigest = await command.service.artifacts.put(files);
+    const target = {
+      key: `${command.id}|claude-user-commands|demo`,
+      action: "install" as const,
+      kind: "command" as const,
+      locationId: "claude-user-commands",
+      componentName: "review",
+      pathOrKey: "review.md",
+      componentId: "demo",
+      packageId: "demo-package",
+      artifactDigest,
+    };
+    const file = path.join(command.home, ".claude", "commands", "review.md");
+    expect((await command.service.executor.apply([target]))[0]?.status).toBe(
+      "installed-next-session",
+    );
+    await fs.unlink(file);
+    expect((await command.service.executor.apply([target]))[0]?.status).toBe(
+      "installed-next-session",
+    );
+    expect(await fs.readFile(file, "utf8")).toBe("Instructions.");
   });
 
   test("executor refuses an unknown provider before native routing", () => {

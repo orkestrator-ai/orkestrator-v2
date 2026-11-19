@@ -25,6 +25,16 @@ describe("package identity", () => {
     expect(new Set(forms.map(canonicalGitRepo))).toEqual(new Set(["github.com/org/agent-tools"]));
   });
 
+  test("explicit nondefault ports remain distinct Git origins", () => {
+    expect(canonicalGitRepo("https://git.example.invalid:8443/team/tools.git")).toBe(
+      "git.example.invalid:8443/team/tools",
+    );
+    expect(canonicalGitRepo("https://git.example.invalid:9443/team/tools.git")).toBe(
+      "git.example.invalid:9443/team/tools",
+    );
+    expect(canonicalGitRepo("https://github.com:443/Org/Tools.git")).toBe("github.com/org/tools");
+  });
+
   test("identity is source and subpath, never the display name or channel", () => {
     const a = capabilityPackageId({
       kind: "git",

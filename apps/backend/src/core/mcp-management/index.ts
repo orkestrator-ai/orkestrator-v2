@@ -21,3 +21,4 @@ export type {
   ContainerFileWriter,
   ContainerPathProbe,
 } from "./types.js";
+export { McpSourceStore } from "./source-store.js";

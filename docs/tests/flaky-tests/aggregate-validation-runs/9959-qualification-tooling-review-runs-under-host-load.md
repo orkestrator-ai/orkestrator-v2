@@ -164,3 +164,15 @@ On macOS, branch `image-copy-download-aeea21f2f5ef-r1`, pre-merge head
   reported `open`. The watchdog and the isolated results establish the
   observed run behavior. The causes of the viewport and remount failures
   remain unconfirmed.
+
+## Scroll return recurrence during capability review (2026-11-19)
+
+On Linux, validated commit `c84d647e66f27bda0731ce61fcb8ca6018ff0d80`, base
+`fe9d1f5d63541eb7fd3e295909dcbeec8de8a6e4`,
+`mise run test:logged -- --name review-default-tests -- mise run test`
+failed with six workspace worker slots. The remount-after-reflow test in
+`apps/web/src/hooks/useVirtuosoScrollState.return.test.ts:134` saw
+`lastOutcome` null instead of `"converged"` (84.54 ms). The aggregate runner
+reran the owning file alone with one worker slot and it passed in 560 ms.
+The capability repair leaves both the test and the scroll hook untouched.
+The log is at `/tmp/orkestrator-test-run.bvmoTF/review-default-tests.log.gz`.

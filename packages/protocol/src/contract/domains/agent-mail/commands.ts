@@ -67,7 +67,15 @@ export const getAgentRegistryCommand = defineCommand({
   access: "workspace",
   read: true,
   critical: [],
-  args: Schema.Struct({ projectId: optionalUnknown, environmentId: optionalUnknown }),
+  args: Schema.Struct({
+    projectId: optionalUnknown,
+    environmentId: optionalUnknown,
+    /**
+     * Add each waiting native tab's `pending` summary. Optional: an older
+     * backend drops it and answers without summaries.
+     */
+    includePending: optionalUnknown,
+  }),
   result: AgentRegistrySnapshotSchema,
 });
 

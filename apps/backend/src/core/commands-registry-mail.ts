@@ -85,13 +85,20 @@ export function registerAgentMailCommands(registrar: CommandRegistrar): void {
   const register = withAsyncArgumentFailures(registrar);
   // Not mail, but read by the same audiences: the renderer, Control MCP, and
   // any service that needs to know which agents exist and which are busy.
-  register(getAgentRegistryCommand, async ({ projectId, environmentId }, context) => {
-    if (!context.agentRegistry) throw new Error("Agent registry is unavailable");
-    return context.agentRegistry.snapshot({
-      ...(typeof projectId === "string" && projectId ? { projectId } : {}),
-      ...(typeof environmentId === "string" && environmentId ? { environmentId } : {}),
-    });
-  });
+  register(
+    getAgentRegistryCommand,
+    async ({ projectId, environmentId, includePending }, context) => {
+      if (!context.agentRegistry) throw new Error("Agent registry is unavailable");
+      return context.agentRegistry.snapshot(
+        {
+          ...(typeof projectId === "string" && projectId ? { projectId } : {}),
+          ...(typeof environmentId === "string" && environmentId ? { environmentId } : {}),
+        },
+        // Only the sidebar asks: it shows what a waiting tab waits on.
+        { includePending: includePending === true },
+      );
+    },
+  );
 
   register(
     listAgentMailboxesCommand,

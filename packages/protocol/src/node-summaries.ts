@@ -92,6 +92,13 @@ export interface NodeEnvironmentSummary {
   activityUpdatedAt?: string;
   lastActivityAt?: string;
   hasUnreadWork: boolean;
+  /**
+   * What lit `hasUnreadWork` (the environment record's `unreadReason`), so
+   * another machine's row says "Finished" or "Question" as its own row does.
+   * A fixed word, never content; absent while nothing is unread and from
+   * machines whose records predate it.
+   */
+  unreadReason?: NodeUnreadReason;
   environmentType?: string;
   /** Last segment of the environment's worktree path, for search. */
   worktreeName?: string;
@@ -405,6 +412,24 @@ export function environmentDeletionStep(raw: {
   return isEnvironmentDeletionStep(raw.deletionStep) ? raw.deletionStep : null;
 }
 
+/** Every `unreadReason` an environment record can carry (the environments contract's list). */
+export const NODE_UNREAD_REASONS = [
+  "agent_finished",
+  "agent_failed",
+  "agent_ready",
+  "agent_waiting",
+  "agent_question",
+  "terminal_finished",
+  "marked_unread",
+  "setup_approval",
+] as const;
+
+export type NodeUnreadReason = (typeof NODE_UNREAD_REASONS)[number];
+
+export function isNodeUnreadReason(value: unknown): value is NodeUnreadReason {
+  return (NODE_UNREAD_REASONS as readonly unknown[]).includes(value);
+}
+
 export function toNodeEnvironmentSummary(
   nodeId: BackendId,
   raw: Record<string, unknown>,
@@ -431,6 +456,9 @@ export function toNodeEnvironmentSummary(
       ? { lastActivityAt: raw.lastActivityAt.slice(0, MAX_TIMESTAMP) }
       : {}),
     hasUnreadWork: raw.hasUnreadWork === true,
+    ...(raw.hasUnreadWork === true && isNodeUnreadReason(raw.unreadReason)
+      ? { unreadReason: raw.unreadReason }
+      : {}),
     ...(typeof raw.environmentType === "string"
       ? { environmentType: boundedText(raw.environmentType, 32) }
       : {}),

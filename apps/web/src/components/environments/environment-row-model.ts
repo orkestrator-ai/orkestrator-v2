@@ -8,10 +8,12 @@
  * and a new fact must be supplied by both or the code does not compile.
  * `environment-row-model.parity.test.ts` checks the two adapters agree.
  */
+import type { AgentPendingInteractionSummary } from "@orkestrator/protocol/agent-registry";
 import {
   NODE_DELETE_FAILURE,
   type AgentActivity,
   type EnvironmentDeletionStep,
+  type NodeUnreadReason,
 } from "@orkestrator/protocol/node-summaries";
 import type { PrState } from "@orkestrator/protocol/pr-monitor";
 import type { EnvironmentTooltipMachine } from "./EnvironmentTooltipBody";
@@ -59,6 +61,10 @@ export interface EnvironmentRowFacts {
   /** An action on it is in flight from this client. */
   busy: boolean;
   hasUnreadWork: boolean;
+  /** What lit `hasUnreadWork`, when its machine says. */
+  unreadReason: NodeUnreadReason | null;
+  /** The last prompt, completion or waiting edge (the owner's clock). */
+  lastActivityAt: string | null;
   prMergeState: PrMergeState | null;
   /** The owning machine, whenever this client can show machines. */
   machine: EnvironmentRowMachine | null;
@@ -90,6 +96,12 @@ export interface EnvironmentRowModel {
   spinner: "deleting" | "transition" | null;
   /** Shown under the name when its last delete failed. */
   deleteFailureText: string | null;
+  /**
+   * The line under the name saying what it needs from the user: waiting on
+   * them, or finished work nobody has seen. `null` while it works, while it is
+   * idle and seen, and while it is being deleted.
+   */
+  attention: EnvironmentRowAttention | null;
   /** Multi-select can take it: not a delete in flight. */
   selectable: boolean;
   /** What the row's button announces after its name, e.g. "Working". */
@@ -108,6 +120,116 @@ export interface EnvironmentRowModel {
     restartDisabled: boolean;
     deleteDisabled: boolean;
   };
+}
+
+/**
+ * A row's attention line before its pending interaction is known.
+ *
+ * `waiting`: the agent is blocked on the user now (amber). `unread`: work
+ * finished that nobody has opened. `failed`: a turn ended in an error nobody
+ * has opened. `setup`: setup commands wait for approval.
+ */
+export interface EnvironmentRowAttention {
+  tone: "waiting" | "unread" | "failed" | "setup";
+  /** The text when no pending interaction adds detail, e.g. "Waiting for you". */
+  text: string;
+  /** When it started waiting, for "· 8 min"; only for `waiting`. */
+  since: string | null;
+  /** The agent is blocked now, so the tab and request it waits on are worth reading. */
+  readsPending: boolean;
+}
+
+/** Words for unread work the agent is no longer blocked on. */
+const UNREAD_TEXT: Record<
+  NodeUnreadReason,
+  { tone: EnvironmentRowAttention["tone"]; text: string }
+> = {
+  agent_finished: { tone: "unread", text: "Finished · result unread" },
+  agent_ready: { tone: "unread", text: "Finished · result unread" },
+  terminal_finished: { tone: "unread", text: "Finished · result unread" },
+  agent_failed: { tone: "failed", text: "Failed · error unread" },
+  agent_waiting: { tone: "unread", text: "Stopped for input · unread" },
+  agent_question: { tone: "unread", text: "Asked a question · unread" },
+  marked_unread: { tone: "unread", text: "Marked unread" },
+  setup_approval: { tone: "setup", text: "Setup needs your approval" },
+};
+
+function rowAttention(facts: EnvironmentRowFacts): EnvironmentRowAttention | null {
+  if (facts.deleting || facts.deleteFailure) return null;
+  const waiting = facts.running && facts.live && facts.activity === "waiting";
+  if (waiting) {
+    return {
+      tone: "waiting",
+      text:
+        facts.unreadReason === "agent_question"
+          ? "Question for you"
+          : facts.unreadReason === "setup_approval"
+            ? "Setup needs your approval"
+            : "Waiting for you",
+      since: facts.lastActivityAt,
+      readsPending: true,
+    };
+  }
+  // A working row shows its spinner; what it finished earlier waits until it stops.
+  if (!facts.hasUnreadWork || (facts.running && facts.live && facts.activity === "working")) {
+    return null;
+  }
+  const unread = facts.unreadReason
+    ? UNREAD_TEXT[facts.unreadReason]
+    : { tone: "unread" as const, text: "New activity · unread" };
+  return { ...unread, since: null, readsPending: false };
+}
+
+const MINUTE_MS = 60_000;
+
+/** "just now", "8 min", "3 h", "2 d": how long something has been waiting. */
+export function formatWaitingDuration(sinceMs: number, nowMs: number): string | null {
+  if (!Number.isFinite(sinceMs)) return null;
+  const minutes = Math.floor(Math.max(0, nowMs - sinceMs) / MINUTE_MS);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  return `${Math.floor(hours / 24)} d`;
+}
+
+/**
+ * The attention line's text in two parts: `head` says what is needed and may
+ * be cut short in a narrow sidebar; `tail` (how long, how many) is short and
+ * always shown. A waiting row names the request it waits on when its machine
+ * reported one ("Needs approval: Run bun install", "8 min"), and otherwise its
+ * generic wording with how long it has waited.
+ */
+export function environmentAttentionParts(
+  attention: EnvironmentRowAttention,
+  pending: AgentPendingInteractionSummary | null,
+  nowMs: number,
+  /** Pending requests across the environment's tabs, this one included. */
+  pendingCount = pending?.count ?? 0,
+): { head: string; tail: string | null } {
+  if (attention.tone !== "waiting") return { head: attention.text, tail: null };
+  const head = pending
+    ? `${pending.label}${pending.detail ? `: ${pending.detail}` : ""}`
+    : attention.text;
+  const since = pending ? pending.since : Date.parse(attention.since ?? "");
+  const tail = [
+    formatWaitingDuration(since, nowMs),
+    pendingCount > 1 ? `${pendingCount} waiting` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return { head, tail: tail || null };
+}
+
+/** The whole attention line on one line, e.g. "Needs approval: Run bun install · 8 min". */
+export function environmentAttentionText(
+  attention: EnvironmentRowAttention,
+  pending: AgentPendingInteractionSummary | null,
+  nowMs: number,
+  pendingCount = pending?.count ?? 0,
+): string {
+  const { head, tail } = environmentAttentionParts(attention, pending, nowMs, pendingCount);
+  return tail ? `${head} · ${tail}` : head;
 }
 
 const ACTIVITY_TEXT: Record<AgentActivity, string> = {
@@ -159,6 +281,7 @@ export function environmentRowModel(facts: EnvironmentRowFacts): EnvironmentRowM
           ? facts.deleteFailure
           : `Delete failed: ${facts.deleteFailure}`
         : null,
+    attention: rowAttention(facts),
     selectable: !(facts.deletionPending ?? facts.deleting) || facts.deletionRetryable,
     activityText,
     accessibleLabel: machine ? `${displayName}, on ${machine.name}, ${activityText}` : undefined,

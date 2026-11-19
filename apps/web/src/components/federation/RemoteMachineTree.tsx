@@ -706,6 +706,12 @@ export function RemoteEnvironmentItem({
           />
         ) : null
       }
+      attentionSource={nodeAgentSummarySource(environment.ref.backendId)}
+      onOpenAttention={(tabId) => {
+        clearMultiSelection();
+        if (tabId) actions.openTab(tabId);
+        else actions.open();
+      }}
     />
   );
 }

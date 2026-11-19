@@ -246,6 +246,14 @@ const cases: Array<[string, Partial<Environment>, Markers]> = [
   ["a paused build pipeline", { name: "Build: feature" }, { buildPipeline: true }],
   ["a project home", { name: "project-home", projectHome: true }, {}],
   ["unread work", { hasUnreadWork: true }, {}],
+  ["finished work nobody has opened", { hasUnreadWork: true, unreadReason: "agent_finished" }, {}],
+  ["a failed turn nobody has opened", { hasUnreadWork: true, unreadReason: "agent_failed" }, {}],
+  [
+    "an agent waiting on a question",
+    { agentActivityState: "waiting", hasUnreadWork: true, unreadReason: "agent_question" },
+    {},
+  ],
+  ["a setup waiting for approval", { hasUnreadWork: true, unreadReason: "setup_approval" }, {}],
   [
     "a running container on a machine whose Docker is down",
     { environmentType: "containerized", status: "running", agentActivityState: "working" },

@@ -1,20 +1,19 @@
-import { useEffect, useState } from "react";
 import { Bot } from "lucide-react";
 import * as backend from "@/lib/backend";
 import { subscribeNativeObservationInvalidations } from "@/lib/native-observation-events";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import {
   describeAgentRegistrySummary,
-  type AgentRegistryEnvironmentSummary,
   type AgentRegistrySnapshot,
 } from "@orkestrator/protocol/agent-registry";
-
-/** Coalesces a burst of activity edges into one registry read. */
-const REFRESH_DEBOUNCE_MS = 250;
+import { useAgentRegistryRead } from "./useAgentRegistryRead";
 
 /** Where an environment's agent registry is read from, and what invalidates it. */
 export interface AgentSummarySource {
-  read(environmentId: string): Promise<AgentRegistrySnapshot>;
+  read(
+    environmentId: string,
+    options?: { includePending?: boolean },
+  ): Promise<AgentRegistrySnapshot>;
   /** The source requests the first read once its event subscription is ready. */
   resyncOnSubscribe?: boolean;
   /** Requests a refresh on changes; subscription readiness/resync may bypass debounce. */
@@ -23,7 +22,11 @@ export interface AgentSummarySource {
 
 /** This window's own backend. */
 export const LOCAL_AGENT_SUMMARY_SOURCE: AgentSummarySource = {
-  read: (environmentId) => backend.getAgentRegistry({ environmentId }),
+  read: (environmentId, options) =>
+    backend.getAgentRegistry({
+      environmentId,
+      ...(options?.includePending ? { includePending: true } : {}),
+    }),
   subscribe(environmentId, refresh) {
     const stops = [
       subscribeNativeObservationInvalidations((invalidation) => {
@@ -62,42 +65,9 @@ export function EnvironmentAgentSummary({
   open: boolean;
   source?: AgentSummarySource;
 }) {
-  const [summary, setSummary] = useState<AgentRegistryEnvironmentSummary | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    let latest = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const read = () => {
-      const request = ++latest;
-      void source
-        .read(environmentId)
-        .then((snapshot) => {
-          // Only the newest read may land: an older one can finish last.
-          if (cancelled || request !== latest) return;
-          setSummary(
-            snapshot.environments.find((item) => item.environmentId === environmentId) ?? null,
-          );
-        })
-        .catch(() => {
-          if (!cancelled && request === latest) setSummary(null);
-        });
-    };
-    const refresh = (immediate = false) => {
-      latest++;
-      if (timer) clearTimeout(timer);
-      if (immediate) read();
-      else timer = setTimeout(read, REFRESH_DEBOUNCE_MS);
-    };
-    const stop = source.subscribe(environmentId, refresh);
-    if (!source.resyncOnSubscribe) read();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      stop();
-    };
-  }, [environmentId, open, source]);
+  const snapshot = useAgentRegistryRead(environmentId, open, source);
+  const summary =
+    snapshot?.environments.find((item) => item.environmentId === environmentId) ?? null;
 
   if (!summary) return null;
   return (

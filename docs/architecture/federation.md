@@ -851,6 +851,32 @@ with `MachinesFilter`:
   inactive and idle halos are hidden. Machine dots keep an outline and compact
   badges show the name. "Compact machine labels" reduces labels to the dot plus
   a tooltip.
+- A row that needs the user has a second line under its name
+  (`EnvironmentAttentionLine`, decided by `environmentRowModel`'s `attention`),
+  so a list of agents shows which one to open without opening each. A running,
+  reachable agent waiting for input reads "Waiting for you · 8 min" ("Question
+  for you" when its unread reason is a question), and then names the request
+  once its machine reports it: "Needs approval: Run bun install · 5 min",
+  "Question: Which API should this use? · 2 min", with "· 3 waiting" when
+  several are pending. Unread work it is no longer blocked on reads "Finished ·
+  result unread", "Failed · error unread", "Asked a question · unread",
+  "Setup needs your approval" and the like, from the record's `unreadReason`
+  (relayed for another machine as the summary's `unreadReason`). Working rows,
+  idle rows nobody needs to open and rows being deleted have no line.
+  Clicking the line selects the environment and focuses the tab holding the
+  request (the same worker-tab navigation a coordinator link uses; another
+  machine's row opens its workspace with that tab as the work target), or just
+  opens the environment when no tab is known.
+  The request comes from the owning machine's agent registry, read with
+  `includePending` only while the row waits: the backend asks only tabs it
+  observes `waiting`, through the bounded, cached pending-interactions read
+  `attention.list` uses, and gives up on one after 2 s. Each request becomes
+  `AgentPendingInteractionSummary` (`summarizePendingInteractions`): a fixed
+  label per kind and, as detail, a question's first prompt or an approval's
+  title, on one line and at most 120 characters. A request with a secret
+  question, a link request, a plan and a bridge's generic title ("Approve
+  command") get the label alone; a body, option, URL or answer is never shown.
+  A machine that predates `includePending` keeps the generic wording.
 - A row of the bound machine selects in place. A row of another machine opens
   its machine's workspace; its actions menu adds Open workspace and Copy link to
   the actions every row has, and disables writes while the machine is not
@@ -949,6 +975,7 @@ component with two thin adapters:
 | Environment row | `EnvironmentRow`, drawn from `environmentRowModel(facts)` | `EnvironmentItem` (`localEnvironmentRowFacts`) | `RemoteEnvironmentItem` (`nodeEnvironmentRowFacts`) |
 | Row frame (grip, selection, offline dimming) | `SortableEnvironmentRowFrame`, `activityRowClassName` | `SortableEnvironmentItem` | `RemoteSortableEnvironmentItem` |
 | Delete confirmation | `EnvironmentDeleteDialog` | through `EnvironmentRow` | through `EnvironmentRow` |
+| Attention line (what a waiting agent needs) | `EnvironmentAttentionLine`, `environmentRowModel` | `EnvironmentItem` (`LOCAL_AGENT_SUMMARY_SOURCE`) | `RemoteEnvironmentItem` (`nodeAgentSummarySource`) |
 | Project header | `ProjectGroupHeader` | `SortableProjectGroup` | `RemoteProjectGroup` |
 | Project home activity | `ProjectHomeActivityButton`, `projectHomeStatus` | `ProjectHomeActivity` | `RemoteProjectGroup`, `RemoteActivityHome` |
 | Compact icon status | `compactRepositoryStatus`, `projectHomeStatus` | `useCompactStatuses` | `remoteMemberFacts` |

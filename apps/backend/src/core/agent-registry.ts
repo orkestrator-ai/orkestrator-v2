@@ -3,6 +3,7 @@ import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent
 import { resolveTabDisplayName } from "@orkestrator/protocol/agent-mail";
 import {
   summarizeAgentRegistry,
+  type AgentPendingInteractionSummary,
   type AgentRegistryEntry,
   type AgentRegistrySnapshot,
   type AgentTabState,
@@ -32,7 +33,22 @@ export interface AgentRegistrySources {
     agent: AgentPlatform,
     logicalSessionKey: string,
   ) => Promise<NativeAgentGoalSummary | undefined>;
+  /**
+   * What a waiting native tab waits on. Asked only when a snapshot requests
+   * it (`includePending`) and only for a tab `native` reports `waiting`, so a
+   * plain snapshot still never reaches a provider. The reader is the bounded,
+   * cached pending-interactions read `attention.list` uses: it never starts a
+   * bridge, hydrates a transcript or re-attaches an idle session.
+   */
+  pending?: (
+    environmentId: string,
+    agent: AgentPlatform,
+    logicalSessionKey: string,
+  ) => Promise<AgentPendingInteractionSummary | undefined>;
 }
+
+/** How long a snapshot waits for one tab's pending read before leaving it out. */
+const PENDING_READ_TIMEOUT_MS = 2_000;
 
 const WORKFLOW_TAB_TYPES = new Set(["claude-build", "multi-review"]);
 
@@ -89,6 +105,7 @@ export class AgentRegistry {
 
   async snapshot(
     filter: { projectId?: string; environmentId?: string } = {},
+    options: { includePending?: boolean } = {},
   ): Promise<AgentRegistrySnapshot> {
     const [projects, environments, layouts, coordinators] = await Promise.all([
       this.storage.loadProjects(),
@@ -117,6 +134,13 @@ export class AgentRegistry {
             kind === "native" && agent
               ? await this.sources.goal?.(environment.id, agent, logicalSessionKey)
               : undefined;
+          const state = running
+            ? this.observe(kind, environment.id, tab.id, agent, logicalSessionKey)
+            : "stopped";
+          const pending =
+            options.includePending && state === "waiting" && kind === "native" && agent
+              ? await this.readPending(environment.id, agent, logicalSessionKey)
+              : undefined;
           entries.push({
             projectId: environment.projectId,
             environmentId: environment.id,
@@ -133,10 +157,9 @@ export class AgentRegistry {
               displayTitle: typeof tab.displayTitle === "string" ? tab.displayTitle : null,
             }),
             tabOrdinal,
-            state: running
-              ? this.observe(kind, environment.id, tab.id, agent, logicalSessionKey)
-              : "stopped",
+            state,
             ...(goal ? { goal } : {}),
+            ...(pending ? { pending } : {}),
           });
         }
       }
@@ -178,6 +201,27 @@ export class AgentRegistry {
       entries,
       environments: summarizeAgentRegistry(entries),
     };
+  }
+
+  /** One tab's pending summary, or nothing when the read fails or is slow. */
+  private async readPending(
+    environmentId: string,
+    agent: AgentPlatform,
+    logicalSessionKey: string,
+  ): Promise<AgentPendingInteractionSummary | undefined> {
+    const read = this.sources.pending;
+    if (!read) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        read(environmentId, agent, logicalSessionKey).catch(() => undefined),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), PENDING_READ_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private observe(

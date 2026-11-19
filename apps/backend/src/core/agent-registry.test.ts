@@ -233,4 +233,86 @@ describe("AgentRegistry", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+
+  test("names what a waiting native tab waits on only when asked, and only for that tab", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const asked: string[] = [];
+      const pending = {
+        interactionId: "approval-1",
+        kind: "command-approval" as const,
+        label: "Needs approval",
+        detail: "Run bun install",
+        since: 1_000,
+        count: 1,
+      };
+      const registry = new AgentRegistry(storage, {
+        native: (environmentId) => (environmentId === "running-env" ? "waiting" : "idle"),
+        tmux: () => "waiting",
+        pending: async (environmentId, _agent, logicalSessionKey) => {
+          asked.push(`${environmentId}/${logicalSessionKey}`);
+          return pending;
+        },
+      });
+      // A plain snapshot never reaches a provider.
+      const plain = await registry.snapshot({ projectId: "p1" });
+      expect(asked).toEqual([]);
+      expect(plain.entries.some((entry) => entry.pending)).toBe(false);
+
+      const withPending = await registry.snapshot({ projectId: "p1" }, { includePending: true });
+      // Only the waiting native tab is read: not tmux, not a stopped environment.
+      expect(asked).toEqual(["running-env/env-running-env:native"]);
+      expect(
+        withPending.entries
+          .filter((entry) => entry.pending)
+          .map((entry) => [entry.environmentId, entry.tabId, entry.pending]),
+      ).toEqual([["running-env", "native", pending]]);
+
+      // The command passes the flag through, and only a literal `true` counts.
+      const commands = new Map<string, CommandHandler>();
+      registerAgentMailCommands(
+        registrarFrom((name, handler) => {
+          commands.set(name, handler);
+        }),
+      );
+      const command = commands.get("get_agent_registry")!;
+      const context = { agentRegistry: registry } as CommandContext;
+      asked.length = 0;
+      await command({ environmentId: "running-env", includePending: "yes" }, context);
+      expect(asked).toEqual([]);
+      const viaCommand = (await command(
+        { environmentId: "running-env", includePending: true },
+        context,
+      )) as Awaited<ReturnType<AgentRegistry["snapshot"]>>;
+      expect(viaCommand.entries.find((entry) => entry.tabId === "native")?.pending).toEqual(
+        pending,
+      );
+    } finally {
+      storage.close();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a pending read that fails leaves the tab without a summary", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const registry = new AgentRegistry(storage, {
+        native: () => "waiting",
+        pending: async () => {
+          throw new Error("bridge unreachable");
+        },
+      });
+      const snapshot = await registry.snapshot(
+        { environmentId: "running-env" },
+        { includePending: true },
+      );
+      expect(snapshot.entries.find((entry) => entry.tabId === "native")).toMatchObject({
+        state: "waiting",
+      });
+      expect(snapshot.entries.some((entry) => entry.pending)).toBe(false);
+    } finally {
+      storage.close();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
 });

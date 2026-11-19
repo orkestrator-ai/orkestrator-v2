@@ -10,6 +10,7 @@ import {
   environmentDeletionStep,
   environmentHasDeletionTombstone,
   isEnvironmentDeletionStep,
+  isNodeUnreadReason,
   type AgentActivity,
 } from "@orkestrator/protocol/node-summaries";
 import { machineStatusText } from "@/components/federation/MachineDot";
@@ -67,6 +68,11 @@ export function localEnvironmentRowFacts(
     live: true,
     busy: false,
     hasUnreadWork: environment.hasUnreadWork === true,
+    unreadReason:
+      environment.hasUnreadWork === true && isNodeUnreadReason(environment.unreadReason)
+        ? environment.unreadReason
+        : null,
+    lastActivityAt: environment.lastActivityAt ?? null,
     prMergeState: inputs.prMergeState,
     machine: inputs.machine
       ? {
@@ -127,6 +133,8 @@ export function nodeEnvironmentRowFacts(
     live: machine.transport === "connected",
     busy: actions.busy,
     hasUnreadWork: environment.hasUnreadWork,
+    unreadReason: environment.unreadReason ?? null,
+    lastActivityAt: environment.lastActivityAt ?? null,
     // Decided from the machine's relayed PR reading and monitor health.
     prMergeState: nodeEnvironmentPrMergeState(environment, machine, requireChecks),
     machine: {

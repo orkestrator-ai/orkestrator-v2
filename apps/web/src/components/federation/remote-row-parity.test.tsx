@@ -402,6 +402,8 @@ test("a machine-qualified row describes change counts along with unread work and
         tooltip={tooltip}
         tooltipDetails={{}}
         agentSummary={null}
+        attentionSource={null}
+        onOpenAttention={() => {}}
         changes={{
           kind: "legacy",
           stats: { additions: 7, deletions: 3, filesChanged: 2, truncated: false },

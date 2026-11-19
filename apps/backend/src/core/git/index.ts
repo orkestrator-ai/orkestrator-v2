@@ -76,7 +76,10 @@ export {
   updateGitHubPullRequestState,
   type GitHubPullRequestStateAction,
 } from "./github-pull-request-actions.js";
-export { getGitHubPullRequestFiles } from "./github-pull-request-files.js";
+export {
+  getGitHubPullRequestFilePatch,
+  getGitHubPullRequestFiles,
+} from "./github-pull-request-files.js";
 export { getGitHubPullRequestTimeline } from "./github-pull-request-timeline.js";
 export {
   confirmGitHubPullRequestDeleted,

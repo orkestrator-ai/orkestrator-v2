@@ -1,6 +1,7 @@
 import type {
   GitHubPullRequestComment,
   GitHubPullRequestDetail,
+  GitHubPullRequestFilePatch,
   GitHubPullRequestFiles,
   GitHubPullRequestInlineCommentInput,
   GitHubPullRequestLabel,
@@ -65,6 +66,18 @@ export function createGithubPullRequestsApi(client: BackendClient) {
     ref: GitHubPullRequestRef,
   ): Promise<GitHubPullRequestFiles> {
     return api().get_github_pull_request_files(refArgs(ref));
+  }
+
+  /**
+   * One file's patch at `headSha`. Only files a backend marked
+   * `patchDeferred` are read this way, and only backends with this command
+   * mark them.
+   */
+  async function getGitHubPullRequestFilePatch(
+    ref: GitHubPullRequestRef,
+    file: { path: string; headSha: string; index?: number },
+  ): Promise<GitHubPullRequestFilePatch> {
+    return api().get_github_pull_request_file_patch({ ...refArgs(ref), ...file });
   }
 
   async function mergeGitHubPullRequest(
@@ -232,6 +245,7 @@ export function createGithubPullRequestsApi(client: BackendClient) {
     getGitHubPullRequest,
     getGitHubPullRequestTimeline,
     getGitHubPullRequestFiles,
+    getGitHubPullRequestFilePatch,
     mergeGitHubPullRequest,
     updateGitHubPullRequestState,
     addGitHubPullRequestComment,
@@ -257,6 +271,7 @@ export const {
   getGitHubPullRequest,
   getGitHubPullRequestTimeline,
   getGitHubPullRequestFiles,
+  getGitHubPullRequestFilePatch,
   mergeGitHubPullRequest,
   updateGitHubPullRequestState,
   addGitHubPullRequestComment,

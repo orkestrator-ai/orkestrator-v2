@@ -54,6 +54,7 @@ describe("GitHub pull request commands", () => {
       "get_github_pull_request",
       "get_github_pull_request_timeline",
       "get_github_pull_request_files",
+      "get_github_pull_request_file_patch",
       "merge_github_pull_request",
       "update_github_pull_request_state",
       "add_github_pull_request_comment",

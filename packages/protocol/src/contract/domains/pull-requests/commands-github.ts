@@ -31,6 +31,7 @@ import {
   GitHubIssuesSnapshotSchema,
   GitHubPullRequestCommentSchema,
   GitHubPullRequestDetailSchema,
+  GitHubPullRequestFilePatchSchema,
   GitHubPullRequestFilesSchema,
   GitHubPullRequestFileViewedSchema,
   GitHubPullRequestLabelSchema,
@@ -231,6 +232,27 @@ export const getGitHubPullRequestFilesCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * One file's patch at `headSha`, for a file the list marked `patchDeferred`.
+ * `index` is the file's position in that list, so the read usually costs one
+ * page of GitHub's file list.
+ */
+export const getGitHubPullRequestFilePatchCommand = defineCommand({
+  domain: pullRequestsDomain,
+  name: "get_github_pull_request_file_patch",
+  since: 4,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({
+    ...pullRequestRef,
+    path: Schema.String,
+    headSha: Schema.String,
+    index: Schema.optionalKey(Schema.Finite),
+  }),
+  result: GitHubPullRequestFilePatchSchema,
+  critical: [],
+});
+
 export const mergeGitHubPullRequestCommand = defineCommand({
   domain: pullRequestsDomain,
   name: "merge_github_pull_request",
@@ -417,6 +439,7 @@ export const GITHUB_PULL_REQUEST_COMMANDS = [
   getGitHubPullRequestCommand,
   getGitHubPullRequestTimelineCommand,
   getGitHubPullRequestFilesCommand,
+  getGitHubPullRequestFilePatchCommand,
   mergeGitHubPullRequestCommand,
   updateGitHubPullRequestStateCommand,
   addGitHubPullRequestCommentCommand,

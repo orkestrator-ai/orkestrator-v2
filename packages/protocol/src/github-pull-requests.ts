@@ -245,8 +245,37 @@ export type GitHubPullRequestFile = {
    * large; the UI links to GitHub instead.
    */
   patchAvailable: boolean;
+  /**
+   * True when GitHub sent a patch that was left out only to bound this
+   * response (the shared row budget, or the per-file cap of the full list).
+   * `get_github_pull_request_file_patch` loads it on its own. Absent from
+   * older backends, which link to GitHub instead.
+   */
+  patchDeferred?: boolean;
   viewedState: GitHubPullRequestViewedState;
   blobUrl?: string;
+};
+
+/** How a single-file patch read ended. */
+export type GitHubPullRequestFilePatchOutcome =
+  /** `hunks` and `patchAvailable` describe the file at the requested head. */
+  | "loaded"
+  /** The pull request's head is no longer the requested one; reload the file list. */
+  | "head-moved"
+  /** The file is not among the pull request's files at the requested head. */
+  | "not-found";
+
+/** One file's patch, read on demand (`get_github_pull_request_file_patch`). */
+export type GitHubPullRequestFilePatch = {
+  ref: GitHubPullRequestRef;
+  path: string;
+  /** The head the read saw; differs from the requested head only for `head-moved`. */
+  headSha: string;
+  outcome: GitHubPullRequestFilePatchOutcome;
+  /** False for a binary file or one too large to render here even on its own. */
+  patchAvailable: boolean;
+  /** Parsed hunks; empty unless `outcome` is `loaded` and `patchAvailable`. */
+  hunks: ChangeDiffHunk[];
 };
 
 export type GitHubPullRequestReviewThreadComment = {

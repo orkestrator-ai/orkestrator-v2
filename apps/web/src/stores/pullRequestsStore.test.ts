@@ -17,8 +17,12 @@ import {
   installControlledTimeout,
   type ControlledTimeout,
 } from "../../../../tests/helpers/controlled-timeout";
+import type { GitHubPullRequestFilePatch } from "@orkestrator/protocol/github-pull-requests";
 import {
+  MAX_CACHED_FILE_PATCHES,
+  MAX_CACHED_FILE_PATCH_ROWS,
   PULL_REQUEST_DETAIL_POLL_MS,
+  filePatchKey,
   pullRequestsStore,
   resourceKey,
   startPullRequestDetailPolling,
@@ -105,6 +109,71 @@ describe("pullRequestsStore reads", () => {
       { projectId: "p1", filter: "mine", query: "bug" },
     ]);
     expect(appCommandStore(pullRequestsStore).getState().lists.has("p1:mine:bug")).toBe(true);
+  });
+});
+
+describe("pullRequestsStore single-file patches", () => {
+  const HEAD = "a".repeat(40);
+  const patchOf = (path: string, rows = 1): GitHubPullRequestFilePatch => ({
+    ref: prRef,
+    path,
+    headSha: HEAD,
+    outcome: "loaded",
+    patchAvailable: true,
+    hunks: [
+      {
+        header: "@@",
+        oldStart: 1,
+        oldLines: 0,
+        newStart: 1,
+        newLines: rows,
+        lines: Array.from({ length: rows }, (_, index) => ({
+          type: "add" as const,
+          text: `${index}`,
+          oldLine: null,
+          newLine: index + 1,
+        })),
+      },
+    ],
+  });
+  const store = () => appCommandStore(pullRequestsStore).getState();
+
+  test("caches by head and path and does not repeat a read in flight", async () => {
+    const pending = deferred<GitHubPullRequestFilePatch>();
+    installBackend({ get_github_pull_request_file_patch: () => pending.promise });
+    const file = { path: "a.ts", headSha: HEAD, index: 3 };
+    const first = store().loadFilePatch(prRef, file);
+    const second = store().loadFilePatch(prRef, file);
+    expect(callsFor("get_github_pull_request_file_patch")).toHaveLength(1);
+    pending.resolve(patchOf("a.ts"));
+    await Promise.all([first, second]);
+    expect(store().filePatches.get(filePatchKey(key, HEAD, "a.ts"))?.outcome).toBe("loaded");
+  });
+
+  test("evicts the stalest patches by count and rows, never the newest", async () => {
+    installBackend({
+      get_github_pull_request_file_patch: (args) =>
+        patchOf(String(args.path), args.path === "huge.ts" ? MAX_CACHED_FILE_PATCH_ROWS + 1 : 1),
+    });
+    for (let index = 0; index <= MAX_CACHED_FILE_PATCHES; index++) {
+      await store().loadFilePatch(prRef, { path: `f${index}.ts`, headSha: HEAD });
+    }
+    expect(store().filePatches.size).toBe(MAX_CACHED_FILE_PATCHES);
+    expect(store().filePatches.has(filePatchKey(key, HEAD, "f0.ts"))).toBe(false);
+
+    await store().loadFilePatch(prRef, { path: "huge.ts", headSha: HEAD });
+    expect(Array.from(store().filePatches.keys())).toEqual([filePatchKey(key, HEAD, "huge.ts")]);
+  });
+
+  test("a new file list drops patches read at an older head", async () => {
+    installBackend({
+      get_github_pull_request_file_patch: (args) => patchOf(String(args.path)),
+      get_github_pull_request_files: () => makeFiles({ headSha: "b".repeat(40) }),
+    });
+    await store().loadFilePatch(prRef, { path: "a.ts", headSha: HEAD });
+    expect(store().filePatches.size).toBe(1);
+    await store().loadFiles(prRef);
+    expect(store().filePatches.size).toBe(0);
   });
 });
 

@@ -52,8 +52,10 @@ export function PullRequestReviewThread({
       data-testid="review-thread"
       data-thread-id={thread.id}
       data-resolved={thread.isResolved || undefined}
+      // Focus target for "next unresolved conversation".
+      tabIndex={-1}
       className={cn(
-        "rounded-lg border bg-card/60 font-sans text-sm",
+        "rounded-lg border bg-card/60 font-sans text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
         thread.isResolved ? "border-border/50" : "border-border",
       )}
     >

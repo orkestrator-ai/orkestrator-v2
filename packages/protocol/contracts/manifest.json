@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1006,
-    "defined": 1006,
+    "commands": 1007,
+    "defined": 1007,
     "untyped": 0,
     "events": 45
   },
@@ -3479,6 +3479,15 @@
       "critical": [],
       "argsDigest": "sha256:9fc2a21bbb4038b3d76a1027356507ea2340d65085e90dff42dd67104bff8a0d",
       "resultDigest": "sha256:3a3a27fedba9f53c57b7cabaa63828085f3c5dcd8074e4d61d65353e61b4fc16"
+    },
+    "get_github_pull_request_file_patch": {
+      "domain": "pull-requests",
+      "since": 4,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:34546d285155765801259ec03cf579bcbea9865b23a357aecac9e64159557fa8",
+      "resultDigest": "sha256:88a2f363c4605419c39a6718546c67f42b87d8681a0c0e36562288ce185d20fe"
     },
     "get_github_pull_request_files": {
       "domain": "pull-requests",

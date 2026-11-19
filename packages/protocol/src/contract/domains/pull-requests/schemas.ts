@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import type {
   GitHubPullRequestComment,
   GitHubPullRequestDetail,
+  GitHubPullRequestFilePatch,
   GitHubPullRequestFiles,
   GitHubPullRequestLabel,
   GitHubPullRequestListResult,
@@ -228,6 +229,15 @@ export const GitHubPullRequestFilesSchema = modelRecord<GitHubPullRequestFiles>(
   ),
   truncated: Schema.Boolean,
 }).annotate({ identifier: "GitHubPullRequestFiles" });
+
+export const GitHubPullRequestFilePatchSchema = modelRecord<GitHubPullRequestFilePatch>()({
+  ref: PullRequestRefSchema,
+  path: Schema.String,
+  headSha: Schema.String,
+  outcome: Schema.String,
+  patchAvailable: Schema.Boolean,
+  hunks: Schema.Array(openRecord({ header: Schema.String })),
+}).annotate({ identifier: "GitHubPullRequestFilePatch" });
 
 export const GitHubPullRequestMergeResultSchema = modelRecord<GitHubPullRequestMergeResult>()({
   merged: Schema.Boolean,

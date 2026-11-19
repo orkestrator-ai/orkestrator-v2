@@ -5,6 +5,7 @@
 import type { ChangeDiffHunk, ChangeFileStatus } from "@orkestrator/protocol/change-resources";
 import type {
   GitHubPullRequestFile,
+  GitHubPullRequestFilePatch,
   GitHubPullRequestFiles,
   GitHubPullRequestRef,
   GitHubPullRequestReviewThread,
@@ -21,6 +22,7 @@ import {
   graphqlUser,
   prUser,
   pullHeadSha,
+  isCommitSha,
   pullPath,
   pullRequestClient,
   type GitHubPullRequestClient,
@@ -33,6 +35,13 @@ export const MAX_PULL_REQUEST_FILES = 3_000;
 export const MAX_FILE_RENDERED_LINES = 3_000;
 /** Rendered rows across the whole response; later files link to GitHub. */
 export const MAX_TOTAL_RENDERED_LINES = 40_000;
+/**
+ * Rendered rows of a file loaded on its own. Larger than the list's per-file
+ * cap, which shares one response with every other file.
+ */
+export const MAX_SINGLE_FILE_RENDERED_LINES = 10_000;
+/** `/pulls/{n}/files` page size; a file's list index names its page. */
+export const FILE_PAGE_SIZE = 100;
 export const MAX_REVIEW_THREADS = 1_000;
 const MAX_GRAPHQL_PAGES = 40;
 
@@ -73,6 +82,20 @@ function renderedLines(hunks: readonly ChangeDiffHunk[]): number {
   return hunks.reduce((total, hunk) => total + hunk.lines.length, 0);
 }
 
+/** Upper bound on a patch's rendered rows without parsing it (hunk headers count too). */
+function patchRowEstimate(patch: string): number {
+  let rows = 1;
+  for (let index = patch.indexOf("\n"); index !== -1; index = patch.indexOf("\n", index + 1)) {
+    rows++;
+  }
+  return rows;
+}
+
+/** A pure rename or copy has no content change, so an empty body is the full story. */
+function unchangedRenameOrCopy(status: ChangeFileStatus, additions: number, deletions: number) {
+  return (status === "renamed" || status === "copied") && additions === 0 && deletions === 0;
+}
+
 export function viewedStateFromGraphql(value: unknown): GitHubPullRequestViewedState {
   switch (value) {
     case "VIEWED":
@@ -105,6 +128,7 @@ export function mapPullRequestFiles(
     const patch = optionalString(value.patch);
     let hunks: ChangeDiffHunk[] = [];
     let patchAvailable: boolean;
+    let patchDeferred = false;
     if (patch) {
       const parsed = remaining > 0 ? parsePullRequestFilePatch(patch) : null;
       const rows = parsed ? renderedLines(parsed) : 0;
@@ -114,12 +138,13 @@ export function mapPullRequestFiles(
         patchAvailable = true;
       } else {
         patchAvailable = false;
+        // Left out to bound this response, not because GitHub cannot show
+        // it: the file can still be loaded on its own.
+        patchDeferred = patchRowEstimate(patch) <= MAX_SINGLE_FILE_RENDERED_LINES;
       }
     } else {
-      // GitHub omits `patch` for binary and oversized files. A pure rename or
-      // copy has no content change, so an empty body is the full story.
-      patchAvailable =
-        (status === "renamed" || status === "copied") && additions === 0 && deletions === 0;
+      // GitHub omits `patch` for binary and oversized files.
+      patchAvailable = unchangedRenameOrCopy(status, additions, deletions);
     }
     files.push({
       path,
@@ -129,6 +154,7 @@ export function mapPullRequestFiles(
       deletions,
       hunks,
       patchAvailable,
+      ...(patchDeferred ? { patchDeferred } : {}),
       viewedState: viewedStates.get(path) ?? "unviewed",
       blobUrl: optionalString(value.blob_url),
     });
@@ -365,4 +391,106 @@ export async function getGitHubPullRequestFiles(
     };
   }
   throw new GitHubApiError("The pull request changed while loading files. Refresh and try again.");
+}
+
+/** The `/pulls/{n}/files` pages to read for a file, its hinted page first. */
+export function filePatchPageOrder(index: number | undefined): number[] {
+  const pages = Math.ceil(MAX_PULL_REQUEST_FILES / FILE_PAGE_SIZE);
+  const hint =
+    index !== undefined && Number.isSafeInteger(index) && index >= 0
+      ? Math.floor(index / FILE_PAGE_SIZE) + 1
+      : null;
+  const order: number[] = [];
+  if (hint !== null && hint <= pages) order.push(hint);
+  for (let page = 1; page <= pages; page++) if (page !== hint) order.push(page);
+  return order;
+}
+
+/** One REST file entry's patch, parsed with the single-file row cap. */
+export function singleFilePatch(value: Record<string, unknown>): {
+  patchAvailable: boolean;
+  hunks: ChangeDiffHunk[];
+} {
+  const patch = optionalString(value.patch);
+  if (!patch) {
+    const status = fileStatusFromApi(value.status);
+    return {
+      patchAvailable: unchangedRenameOrCopy(
+        status,
+        numberValue(value.additions),
+        numberValue(value.deletions),
+      ),
+      hunks: [],
+    };
+  }
+  const hunks = parsePullRequestFilePatch(patch, MAX_SINGLE_FILE_RENDERED_LINES);
+  return hunks ? { patchAvailable: true, hunks } : { patchAvailable: false, hunks: [] };
+}
+
+/**
+ * One file's patch at `headSha`, for a file the list left out to bound its
+ * response. Reads the page `index` names first and falls back to the others,
+ * between two uncached head reads: a head other than `headSha` on either side
+ * answers `head-moved`, so a patch never mixes revisions with the list it
+ * belongs to.
+ */
+export async function getGitHubPullRequestFilePatch(
+  token: string,
+  ref: GitHubPullRequestRef,
+  input: { path: string; headSha: string; index?: number },
+  options: GitHubPullRequestRequestOptions = {},
+): Promise<GitHubPullRequestFilePatch> {
+  assertPullRequestRef(ref);
+  if (!input.path) throw new Error("Expected path to name a file of the pull request");
+  if (!isCommitSha(input.headSha)) throw new Error("Expected headSha to be a commit SHA");
+  const client = pullRequestClient(token, options);
+  const result = (
+    headSha: string,
+    outcome: GitHubPullRequestFilePatch["outcome"],
+    patch: { patchAvailable: boolean; hunks: ChangeDiffHunk[] } = {
+      patchAvailable: false,
+      hunks: [],
+    },
+  ): GitHubPullRequestFilePatch => ({
+    ref: { owner: ref.owner, repo: ref.repo, number: ref.number },
+    path: input.path,
+    headSha,
+    outcome,
+    ...patch,
+  });
+  const readHead = async () => {
+    const { data } = await getJson(client, pullPath(ref), "validate pull request head", {
+      cached: false,
+    });
+    const sha = isRecord(data) ? pullHeadSha(data) : "";
+    if (!sha) throw new GitHubApiError("GitHub returned an invalid pull request head.");
+    return sha;
+  };
+  const before = await readHead();
+  if (before !== input.headSha) return result(before, "head-moved");
+  let found: Record<string, unknown> | null = null;
+  // A short page is the last one: every page after it is empty.
+  let lastPage = Number.POSITIVE_INFINITY;
+  for (const page of filePatchPageOrder(input.index)) {
+    if (page > lastPage) continue;
+    const { data } = await getJson(
+      client,
+      `${pullPath(ref)}/files?per_page=${FILE_PAGE_SIZE}&page=${page}`,
+      `load a file of pull request #${ref.number}`,
+      { cached: false },
+    );
+    if (!Array.isArray(data)) {
+      throw new GitHubApiError("GitHub returned an invalid file list. Try again.");
+    }
+    found =
+      data.find(
+        (value): value is Record<string, unknown> =>
+          isRecord(value) && stringValue(value.filename) === input.path,
+      ) ?? null;
+    if (found) break;
+    if (data.length < FILE_PAGE_SIZE) lastPage = Math.min(lastPage, page);
+  }
+  const after = await readHead();
+  if (after !== input.headSha) return result(after, "head-moved");
+  return found ? result(after, "loaded", singleFilePatch(found)) : result(after, "not-found");
 }

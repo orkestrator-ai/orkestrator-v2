@@ -1118,7 +1118,7 @@ case "$*" in
   *"'oversized:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDUyNDI4ODEK\\n' ;;
   *"/workspace/assets/blob.bin"*) printf 'AAEC\\n' ;;
   *"mkdir -p '/workspace/generated'"*) ;;
-  *"base64 -d > '/workspace/generated/out.bin'"*) cat > "$FAKE_DOCKER_STDIN" ;;
+  *"exec -i container-1 bash -lc node -e"*"/workspace/generated/out.bin"*) cat > "$FAKE_DOCKER_STDIN" ;;
   *) printf 'unexpected docker invocation: %s\\n' "$*" >&2; exit 33 ;;
 esac
 `;
@@ -1265,9 +1265,12 @@ esac
       );
       expect(dockerLog).not.toContain("git show");
       expect(dockerLog).not.toContain("cat-file -s");
-      expect(dockerLog).toContain(
-        "exec -i container-1 bash -lc mkdir -p -- '/workspace/generated' && base64 -d > '/workspace/generated/out.bin'",
-      );
+      // Staged in a temporary sibling and renamed over the target, never
+      // truncated in place before the payload has arrived.
+      expect(dockerLog).toContain("exec -i container-1 bash -lc node -e");
+      expect(dockerLog).toContain("/workspace/generated/out.bin");
+      expect(dockerLog).toContain("fs.renameSync(temp, target)");
+      expect(dockerLog).not.toContain("base64 -d > '/workspace/generated/out.bin'");
     });
   });
 

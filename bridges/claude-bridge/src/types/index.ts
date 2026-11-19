@@ -1000,6 +1000,7 @@ export interface SessionUsageSnapshot {
     turnId: string;
     /** When this turn was finalized, ISO-8601; what dates recorded usage. */
     at?: string;
+    cacheAccessNotBefore?: string;
     costUsd?: number;
     costSource?: NativeAgentCostSource;
     inputTokens?: number;

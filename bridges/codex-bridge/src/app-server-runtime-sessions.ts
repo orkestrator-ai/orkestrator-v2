@@ -526,6 +526,22 @@ export class CodexRuntimeSessions {
     this.clearCompactionBackstop(context.threadId);
     if (!context.compacting) return;
     context.compacting = false;
+    if (!error) {
+      const previousUsage = this.ctx.usageByThread.get(context.threadId);
+      // Compaction rewrote the prefix. Keep historical usage while marking
+      // both the old occupancy and the old cache evidence unusable.
+      this.ctx.usageByThread.set(context.threadId, {
+        ...previousUsage,
+        source: "codex",
+        estimated: false,
+        updatedAt: new Date(this.ctx.now()).toISOString(),
+        usedTokens: 0,
+        totalTokens: 0,
+        percentUsed: 0,
+        occupancyUnknown: true,
+        contextCompacted: true,
+      });
+    }
     if (!context.activeTurn && !context.dispatchInFlight && context.phase === "running") {
       this.ctx.registry.setPhase(context, error ? "failed" : "idle", error);
     }
@@ -538,7 +554,11 @@ export class CodexRuntimeSessions {
       this.ctx.options.emit({
         type: "session.updated",
         sessionId,
-        data: { compacted: true, compacting: false },
+        data: {
+          compacted: true,
+          compacting: false,
+          contextUsage: this.ctx.usageByThread.get(context.threadId),
+        },
       });
       this.ctx.options.emit({
         type: "session.idle",

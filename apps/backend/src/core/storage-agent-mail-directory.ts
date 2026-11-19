@@ -338,11 +338,9 @@ export class AgentMailboxDirectory {
    */
   async resolveUniqueAgentMailPullTabId(environmentId: string): Promise<string | null> {
     if (!environmentId.trim()) return null;
-    const store = await this.store.snapshot();
     let tabId: string | null = null;
-    for (const mailbox of Object.values(store.mailboxes)) {
+    for (const mailbox of await this.store.environmentMailboxes(environmentId)) {
       if (
-        mailbox.environmentId !== environmentId ||
         mailbox.tombstonedAt ||
         // A pipeline worker is reached only through its own turn credential,
         // never claimed by an environment-wide one.
@@ -369,11 +367,9 @@ export class AgentMailboxDirectory {
     options: { includePipelineWorkers?: boolean; sharedConnection?: boolean } = {},
   ): Promise<string[]> {
     if (!environmentId.trim()) return [];
-    const store = await this.store.snapshot();
-    return Object.values(store.mailboxes)
+    return (await this.store.environmentMailboxes(environmentId))
       .filter(
         (mailbox) =>
-          mailbox.environmentId === environmentId &&
           !mailbox.tombstonedAt &&
           (options.includePipelineWorkers === true || mailbox.kind !== "pipeline") &&
           !(mailbox.pipelineWorker && pipelineWorkerEnded(mailbox.pipelineWorker.status)) &&
@@ -857,8 +853,12 @@ export class AgentMailboxDirectory {
       config?: AppConfig;
     } = {},
   ): Promise<{ mailboxes: MailboxDescriptor[]; total: number; offset: number; limit: number }> {
-    const [store, config] = await Promise.all([
-      this.store.snapshot(),
+    // One environment's directory (an MCP handshake, a merge notice) reads
+    // only that environment's mailboxes by key.
+    const [persisted, config] = await Promise.all([
+      options.environmentId
+        ? this.store.environmentMailboxes(options.environmentId)
+        : this.store.snapshot().then((store) => Object.values(store.mailboxes)),
       options.config ?? this.repos.config.loadConfig(),
     ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
@@ -868,7 +868,7 @@ export class AgentMailboxDirectory {
       AGENT_MAIL_MAX_LIST_LIMIT,
       Math.max(1, options.limit ?? AGENT_MAIL_DEFAULT_LIST_LIMIT),
     );
-    const filtered = Object.values(store.mailboxes)
+    const filtered = persisted
       .filter((mailbox) => options.includeTombstoned || !mailbox.tombstonedAt)
       .filter(
         (mailbox) => !options.environmentId || mailbox.environmentId === options.environmentId,
@@ -968,11 +968,12 @@ export class AgentMailboxDirectory {
       incarnationId?: string;
     } = {},
   ): Promise<AgentMailMailboxSnapshot> {
-    const [store, config] = await Promise.all([
-      this.store.snapshot(),
+    // Keyed: an inbox read parses this mailbox's row alone, however much mail
+    // the rest of the store retains or how recently anyone wrote to it.
+    const [mailbox, config] = await Promise.all([
+      this.store.mailbox(agentMailboxId(environmentId, tabId)),
       this.repos.config.loadConfig(),
     ]);
-    const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
     if (!mailbox) throw new AgentMailError("recipient-not-found", "Mailbox not found");
     const offset = Math.max(0, options.offset ?? 0);
     const limit = Math.min(
@@ -1005,21 +1006,18 @@ export class AgentMailboxDirectory {
     if (addresses.length > AGENT_MAIL_MAX_MAILBOXES) {
       throw new Error(`At most ${AGENT_MAIL_MAX_MAILBOXES} mailboxes may be read at once`);
     }
-    const [store, config] = await Promise.all([
-      this.store.snapshot(),
+    const keys = Array.from(
+      new Set(addresses.map(({ environmentId, tabId }) => agentMailboxId(environmentId, tabId))),
+    );
+    const [batch, config] = await Promise.all([
+      this.store.mailboxesById(keys),
       this.repos.config.loadConfig(),
     ]);
     const defaultPolicy = normalizeAgentMessagingSettings(
       config.global.agentMessaging,
     ).defaultInjectPolicy;
     const mailboxes: AgentMailMailboxSnapshot[] = [];
-    const seen = new Set<string>();
-    for (const address of addresses) {
-      const mailboxId = agentMailboxId(address.environmentId, address.tabId);
-      if (seen.has(mailboxId)) continue;
-      seen.add(mailboxId);
-      const mailbox = store.mailboxes[mailboxId];
-      if (!mailbox) continue;
+    for (const mailbox of batch.mailboxes) {
       const messages = mailbox.messages.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
       mailboxes.push({
         descriptor: this.descriptor(mailbox, defaultPolicy),
@@ -1030,7 +1028,7 @@ export class AgentMailboxDirectory {
         revision: mailbox.revision,
       });
     }
-    return { revision: store.revision, mailboxes };
+    return { revision: batch.revision, mailboxes };
   }
 
   async getAgentMailInboxSnapshot(): Promise<AgentMailInboxSnapshot> {

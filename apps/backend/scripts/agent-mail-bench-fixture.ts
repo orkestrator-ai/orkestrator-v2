@@ -35,6 +35,7 @@ export async function createAgentMailBenchFixture(options: {
   environments: number;
   tabs: number;
   messages: number;
+  reserveFirstEnvironment?: boolean;
 }): Promise<AgentMailBenchFixture & { log: (line: string) => void }> {
   const { environments, tabs, messages } = options;
   const dataDir = await mkdtemp(path.join(tmpdir(), options.prefix));
@@ -42,6 +43,7 @@ export async function createAgentMailBenchFixture(options: {
   console.log = console.info = console.warn = () => undefined;
   const storage = new StorageService(dataDir);
   const dispose = async () => {
+    storage.close();
     Object.assign(console, quiet);
     await rm(dataDir, { recursive: true, force: true });
   };
@@ -97,17 +99,19 @@ export async function createAgentMailBenchFixture(options: {
     }
     await storage.synchronizeAgentMailboxes();
     const body = "m".repeat(1_800);
+    const first = options.reserveFirstEnvironment ? 1 : 0;
+    const seedEnvironment = (index: number) => `env-${first + (index % (environments - first))}`;
     for (let index = 0; index < messages; index += 1) {
       await storage.sendAgentMail(
         {
           kind: "tab",
-          environmentId: `env-${index % environments}`,
+          environmentId: seedEnvironment(index),
           projectId: "project",
           tabId: "tab-0",
         },
         {
           requestId: `bench-${index}`,
-          toEnvironmentId: `env-${(index + 1) % environments}`,
+          toEnvironmentId: seedEnvironment(index + 1),
           toTabId: `tab-${index % tabs}`,
           body,
         },

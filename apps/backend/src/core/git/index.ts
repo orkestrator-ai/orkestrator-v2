@@ -24,6 +24,12 @@
 //   `backend-runtime.ts`;
 // - `pr-required-checks.ts` (imports `commands-review.ts`), for
 //   `commands-pr-monitor.ts`.
+export {
+  backgroundBranchFetchRefspec,
+  backgroundFetchArgs,
+  backgroundFetchRefspec,
+  NO_WRITE_FETCH_HEAD,
+} from "./background-fetch.js";
 export { containerGitBlobReadCommand, decodeGitBatchOutput, readGitBlob } from "./blob-read.js";
 export {
   parseGitDiffSummary,

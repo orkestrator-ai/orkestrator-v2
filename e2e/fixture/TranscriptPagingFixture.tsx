@@ -31,6 +31,21 @@ const bounded = query.has("bounded");
 // to travel as a revision does while its subagents run.
 let churn = query.has("churn");
 let transcriptReads = 0;
+// `stream` keeps the turn running, so the tab polls at the active cadence.
+// Once a test calls `startPagingFixtureStream`, every transcript read streams
+// one row into the live tail, up to `STREAM_MAX_ROWS`. The live window keeps
+// its length, so the rows it drops age out into the tab's held history, and
+// each view names the provider's cursor before its own first row.
+const stream = query.has("stream");
+let streaming = false;
+const STREAM_MAX_ROWS = 40;
+const streamed: Array<{
+  id: string;
+  role: "assistant";
+  content: string;
+  createdAt: string;
+  parts: Array<{ type: "text"; content: string }>;
+}> = [];
 // The native tab pages history in by itself as the reader nears the top.
 // Without `auto` that is off, so a test can drive the button.
 if (!query.has("auto")) disableAutoLoadEarlier();
@@ -132,8 +147,9 @@ const reviewer: MultiReviewReviewerTranscript = {
   historyCursor: `before-${tailStart}`,
   truncated: true,
 };
-// `slow` holds the page long enough for the reader to move while it loads.
-const pageDelayMs = new URLSearchParams(window.location.search).has("slow") ? 1_500 : 150;
+// `slow` holds the page long enough for the reader to move while it loads;
+// `delay=N` holds it N ms (the streaming case holds it for 3 s).
+const pageDelayMs = Number(query.get("delay") ?? 0) || (query.has("slow") ? 1_500 : 150);
 const pause = () => new Promise((resolve) => setTimeout(resolve, pageDelayMs));
 let reviewerHistoryLoaded = false;
 const loadTranscript = async () => {
@@ -172,11 +188,45 @@ const loadHistoryPage = async (_workflow: string, _reviewer: string, page: { bef
 /** The cursors the native tab paged from, in order, for tests to read. */
 const pageRequests: string[] = [];
 (window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests = pageRequests;
+let pageResponses = 0;
+(window as unknown as { pagingFixtureResponses: () => number }).pagingFixtureResponses = () =>
+  pageResponses;
 /** How many rows the tab holds right now, for tests sampling every frame. */
 (window as unknown as { pagingFixtureRowCount: () => number }).pagingFixtureRowCount = () =>
   appCommandStore(useNativeAgentProjectionStore.def)
     .getState()
     .projections.get(identity.logicalSessionKey)?.messages.length ?? 0;
+/** The ids of the rows the tab holds, in order, to check for duplicates. */
+(window as unknown as { pagingFixtureRowIds: () => string[] }).pagingFixtureRowIds = () =>
+  (
+    appCommandStore(useNativeAgentProjectionStore.def)
+      .getState()
+      .projections.get(identity.logicalSessionKey)?.messages ?? []
+  ).map((message) => String((message as { id?: unknown }).id));
+/** The live tail a transcript read answers with, streaming a row in `stream` mode. */
+function liveTail() {
+  if (!streaming) return { messages: tail, cursor: `before-${tailStart}`, token: undefined };
+  if (streamed.length < STREAM_MAX_ROWS) {
+    const index = streamed.length;
+    streamed.push({
+      id: `streamed-${index}`,
+      role: "assistant",
+      content: `Streamed message ${index}`,
+      createdAt: `2026-10-18T01:36:${String(index).padStart(2, "0")}.000Z`,
+      parts: [{ type: "text", content: `Streamed message ${index}` }],
+    });
+  }
+  const messages = [...tail, ...streamed].slice(streamed.length);
+  return {
+    messages,
+    cursor: `before-${tailStart + streamed.length}`,
+    token: `transcript-stream-${streamed.length}`,
+  };
+}
+/** Starts streaming rows into the live tail (`stream` mode). */
+(window as unknown as { startPagingFixtureStream: () => void }).startPagingFixtureStream = () => {
+  if (stream) streaming = true;
+};
 /** Starts revision overflow after the test has installed its frame probe. */
 (window as unknown as { startPagingFixtureChurn: () => void }).startPagingFixtureChurn = () => {
   churn = true;
@@ -235,7 +285,7 @@ function installBackend() {
             value: {
               identity,
               connection: "connected",
-              turn: { phase: "idle" },
+              turn: { phase: stream ? "running" : "idle" },
               interactions: [],
               composerControls: [],
               capabilities: nativeAgentCapabilities("claude"),
@@ -243,19 +293,20 @@ function installBackend() {
             },
           };
           break;
-        case "get_native_agent_transcript_update":
+        case "get_native_agent_transcript_update": {
           transcriptReads += 1;
+          const live = liveTail();
           result = {
             viewVersion: 1,
             status: "snapshot",
-            token: churn ? `transcript-${transcriptReads}` : "transcript-1",
+            token: live.token ?? (churn ? `transcript-${transcriptReads}` : "transcript-1"),
             value: {
               identity,
               freshness: "current",
-              messages: tail,
+              messages: live.messages,
               ...(churn ? { historyReconciliationToken: `row-digest-${transcriptReads}` } : {}),
               historyEpoch: "epoch-1",
-              historyCursor: `before-${tailStart}`,
+              historyCursor: live.cursor,
               historyComplete: false,
               messageWindow: bounded
                 ? {
@@ -269,10 +320,12 @@ function installBackend() {
             },
           };
           break;
+        }
         case "get_native_agent_message_page":
           pageRequests.push(String(args?.before));
           await pause();
           result = { syncVersion: 1, ...pageBefore(args?.before as string | undefined) };
+          pageResponses += 1;
           break;
         case "get_native_agent_discovery_update":
           result = {

@@ -35,6 +35,7 @@ import {
   truncatedText,
 } from "../agent-provider-runtime.js";
 import { assertOk, boundedJson, bridgeFetch } from "./transport.js";
+import type { HttpBridgeStateReads } from "./state-revision.js";
 import { acpRuleDetail, claudeRuleDetail, codexRuleDetail } from "../permission-rules/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
@@ -943,7 +944,17 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     });
   }
 
+  /** Side routes kept while the bridge's state revision stands (to-do 8102 task 2). */
+  sideRouteCache?: Pick<HttpBridgeStateReads, "sideRoutes">;
+
   async listPendingInteractions(sessionId: string): Promise<AgentInteractionSnapshot> {
+    const read = () => this.readSideRoutes(sessionId);
+    const payloads = await (this.sideRouteCache?.sideRoutes(sessionId, read) ?? read());
+    if (payloads === "missing") return this.interactionTracker.snapshot(sessionId, []);
+    return this.snapshotFromSideRoutes(sessionId, payloads);
+  }
+
+  private async readSideRoutes(sessionId: string): Promise<unknown[] | "missing"> {
     const paths =
       this.agent === "claude"
         ? (["questions", "plan-approvals", "interactions"] as const)
@@ -958,20 +969,22 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
         ),
       ),
     );
-    if (fetched.every((response) => response.status === 404)) {
-      return this.interactionTracker.snapshot(sessionId, []);
-    }
+    if (fetched.every((response) => response.status === 404)) return "missing";
     // Every Claude bridge from v2.21.0 serves `/interactions`, so any other
     // 404 fails the snapshot like any failed read.
     for (const response of fetched) assertOk(response, `${this.agent} interaction snapshot`);
-    const snapshotBudget = {
-      remaining: AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes,
-    };
-    const payloads = await Promise.all(
+    const snapshotBudget = { remaining: AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes };
+    return Promise.all(
       fetched.map((response) =>
         boundedJson(response, `${this.agent} interaction snapshot`, snapshotBudget),
       ),
     );
+  }
+
+  private snapshotFromSideRoutes(
+    sessionId: string,
+    payloads: readonly unknown[],
+  ): AgentInteractionSnapshot {
     const first = asRecord(payloads[0]);
     const second = asRecord(payloads[1]);
     const firstRequests = first?.[this.agent === "claude" ? "questions" : "approvals"];

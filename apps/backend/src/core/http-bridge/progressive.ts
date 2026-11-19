@@ -233,20 +233,86 @@ function mapV1TranscriptBody(
   };
 }
 
-export async function readHttpBridgeSessionState(input: {
+/**
+ * What one state read returned: the state body and, for Codex, `/config` and,
+ * for Pi, `/queue`. Read in full here, or through the state revision cache
+ * (`HttpBridgeStateReads`), which reuses the last one when the bridge answers
+ * `unchanged`.
+ */
+export interface HttpBridgeSessionStateSource {
+  payload: Record<string, unknown>;
+  /** Codex `/config`. */
+  config?: Record<string, unknown> | null;
+  /** Pi `/queue`; absent when that read failed. */
+  queue?: Record<string, unknown> | null;
+}
+
+export interface HttpBridgeSessionStateReadInput {
   agent: HttpBridgeAgent;
   connection: BridgeConnection;
   fetchImpl: typeof fetch;
   sessionId: string;
   planUsage?: PlanUsageState;
-}): Promise<ProviderSessionStateSnapshot> {
+  /** The conditional reader (to-do 8102 task 2); without it every read is full. */
+  stateReads?: { read(sessionId: string): Promise<HttpBridgeSessionStateSource | "missing"> };
+}
+
+export function httpBridgeSessionStatePath(agent: HttpBridgeAgent, sessionId: string): string {
+  const encodedSessionId = encodeURIComponent(sessionId);
+  return agent === "claude"
+    ? `/session/${encodedSessionId}`
+    : `/session/${encodedSessionId}/status`;
+}
+
+/** The state body's read: shared by the full and the conditional reader. */
+export async function readHttpBridgeStateBody(
+  input: Pick<HttpBridgeSessionStateReadInput, "agent" | "connection" | "fetchImpl">,
+  response: Response,
+): Promise<Record<string, unknown>> {
+  assertOk(response, `${input.agent} session state read`);
+  return (
+    asRecord(
+      await boundedJson(
+        response,
+        `${input.agent} session state read`,
+        sessionSnapshotBudget(input.agent, 512 * 1024),
+      ),
+    ) ?? {}
+  );
+}
+
+export async function readHttpBridgeStateConfig(
+  response: Response,
+): Promise<Record<string, unknown> | null> {
+  assertOk(response, "Codex session state config read");
+  return (
+    asRecord(
+      await boundedJson(response, "Codex session state config read", {
+        remaining: 128 * 1024,
+      }),
+    ) ?? null
+  );
+}
+
+export async function readHttpBridgeStateQueue(
+  response: Response | undefined,
+): Promise<Record<string, unknown> | null> {
+  if (!response?.ok) return null;
+  return asRecord(await boundedJson(response, "Pi queue state", { remaining: 256 * 1024 })) ?? null;
+}
+
+/** One full state read, as every read was before the state revision. */
+export async function fetchHttpBridgeSessionStateSource(
+  input: Pick<HttpBridgeSessionStateReadInput, "agent" | "connection" | "fetchImpl" | "sessionId">,
+): Promise<HttpBridgeSessionStateSource | "missing"> {
   const encodedSessionId = encodeURIComponent(input.sessionId);
-  const sessionPath =
-    input.agent === "claude"
-      ? `/session/${encodedSessionId}`
-      : `/session/${encodedSessionId}/status`;
   const [sessionResponse, configResponse, queueResponse] = await Promise.all([
-    bridgeFetch(input.connection, sessionPath, {}, input.fetchImpl),
+    bridgeFetch(
+      input.connection,
+      httpBridgeSessionStatePath(input.agent, input.sessionId),
+      {},
+      input.fetchImpl,
+    ),
     input.agent === "codex"
       ? bridgeFetch(input.connection, `/session/${encodedSessionId}/config`, {}, input.fetchImpl)
       : Promise.resolve(undefined),
@@ -259,16 +325,33 @@ export async function readHttpBridgeSessionState(input: {
         ).catch(() => undefined)
       : Promise.resolve(undefined),
   ]);
-  if (sessionResponse.status === 404) return { status: "missing" };
-  assertOk(sessionResponse, `${input.agent} session state read`);
-  const payload =
-    asRecord(
-      await boundedJson(
-        sessionResponse,
-        `${input.agent} session state read`,
-        sessionSnapshotBudget(input.agent, 512 * 1024),
-      ),
-    ) ?? {};
+  if (sessionResponse.status === 404) return "missing";
+  const payload = await readHttpBridgeStateBody(input, sessionResponse);
+  const config = configResponse ? await readHttpBridgeStateConfig(configResponse) : undefined;
+  const queue = input.agent === "pi" ? await readHttpBridgeStateQueue(queueResponse) : undefined;
+  return {
+    payload,
+    ...(config === undefined ? {} : { config }),
+    ...(queue === undefined ? {} : { queue }),
+  };
+}
+
+export async function readHttpBridgeSessionState(
+  input: HttpBridgeSessionStateReadInput,
+): Promise<ProviderSessionStateSnapshot> {
+  const source = input.stateReads
+    ? await input.stateReads.read(input.sessionId)
+    : await fetchHttpBridgeSessionStateSource(input);
+  if (source === "missing") return { status: "missing" };
+  return mapHttpBridgeSessionState(input, source);
+}
+
+/** The provider snapshot of one state read. Pure: a reused source maps the same. */
+export function mapHttpBridgeSessionState(
+  input: Pick<HttpBridgeSessionStateReadInput, "agent" | "connection" | "planUsage">,
+  source: HttpBridgeSessionStateSource,
+): ProviderSessionStateSnapshot {
+  const payload = source.payload;
   const rawStatus = payload.status;
   const status: ProviderStatus =
     rawStatus === "idle" ||
@@ -279,13 +362,8 @@ export async function readHttpBridgeSessionState(input: {
       : "error";
   let controls: NativeAgentControlUpdate | undefined;
   let policy = isNativeAgentExecutionPolicy(payload.policy) ? payload.policy : undefined;
-  if (configResponse) {
-    assertOk(configResponse, "Codex session state config read");
-    const config = asRecord(
-      await boundedJson(configResponse, "Codex session state config read", {
-        remaining: 128 * 1024,
-      }),
-    );
+  if (source.config !== undefined) {
+    const config = source.config;
     // Config is also authoritative on bridges predating policy in /status.
     if (isNativeAgentExecutionPolicy(config?.policy)) policy = config.policy;
     controls = {
@@ -311,9 +389,7 @@ export async function readHttpBridgeSessionState(input: {
             : rawPhase === "running" || status === "running"
               ? "running"
               : "idle";
-  const bridgeQueue = queueResponse?.ok
-    ? asRecord(await boundedJson(queueResponse, "Pi queue state", { remaining: 256 * 1024 }))
-    : undefined;
+  const bridgeQueue = source.queue ?? undefined;
   const readiness = normalizeProviderReadiness(payload.readiness);
   const authNotice = normalizeProviderAuthNotice(payload.authNotice);
   const contextUsage = contextUsageWithPlanUsage(
@@ -402,6 +478,7 @@ export async function readHttpBridgeAuthoritativeSessionState(input: {
   fetchImpl: typeof fetch;
   sessionId: string;
   planUsage?: PlanUsageState;
+  stateReads?: HttpBridgeSessionStateReadInput["stateReads"];
   metadata: Map<string, HttpBridgeRuntimeMetadata>;
   refreshRuntimeMetadata: () => Promise<void>;
   readRuntimeHealth: () => Promise<ProviderRuntimeHealth>;

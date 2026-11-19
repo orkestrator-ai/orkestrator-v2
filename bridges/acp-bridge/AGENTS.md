@@ -35,6 +35,34 @@ to an earlier turn's card only while that work still runs (an unsettled card,
 an active background subagent, or a call nested under one); otherwise it
 starts a card of its own in the current turn.
 
+## Change signal: state and transcript revisions
+
+The backend learns a session moved without reading it (8102 task 2, D7;
+`src/acp-state-revision.ts`).
+
+- **One state revision covers the whole state read**: the `/status` body
+  (composer, title, policy, usage, runtime, readiness, ...) and the
+  `/approvals` and `/interactions` bodies, the three routes the backend reads
+  for an ACP session. `/status` carries it as `stateRevision` and answers
+  `{ unchanged: true, stateRevision }` to a still-current
+  `?knownStateRevision=`; without the query the body is unchanged apart from
+  the added field. The combined `revision` those bodies carry is left out of
+  the digest, because it moves with every transcript chunk.
+- **The transcript revision is `<process generation>:<state.revision>`.**
+  Every transcript change moves `state.revision`, so it moves whenever a
+  transcript route's answer would.
+- **Every mutation goes through a helper**, never a bare
+  `state.revision += 1`: `markSessionChanged` (state, and possibly the
+  transcript), `markTranscriptChanged` (rows, chunks, tool cards, trims only)
+  or `markStateChanged` (parked requests cleared, policy, read-only, runtime
+  notices: sites that never moved `revision`). Each bumps and publishes a
+  `session.changed` frame on `GET /event/subscribe?observe=1`
+  synchronously, so it is safe inside an ACP listener. When unsure, use
+  `markSessionChanged`: an extra bump costs a read, a missing one push latency.
+  `acp-state-revision.test.ts` drives every mutation path and fails one whose
+  state read changed without the state revision moving; add a step there for
+  a new one.
+
 ## Sessions without a login
 
 Grok's `authenticate` waits on an interactive sign-in instead of failing when

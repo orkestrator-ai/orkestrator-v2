@@ -36,6 +36,7 @@ import { cursorAppliedPolicy } from "./execution-policy.js";
 import { modelSelection } from "./models.js";
 import { schedulePersist } from "./persistence.js";
 import { setStructuredResult } from "./structured-results.js";
+import { sessionChanged, stateChanged } from "./state-revision.js";
 
 export { setStructuredResult } from "./structured-results.js";
 import { createRunDiagnostics, type CursorRunDiagnostics } from "./run-diagnostics.js";
@@ -296,10 +297,12 @@ async function followStartedRun(
   onSettled: () => void,
 ): Promise<DispatchHandle> {
   state.activeRun = run;
+  // `/status` reports the run's id as `turnId`.
+  stateChanged(state);
   const unsubscribeStatus = run.onDidChangeStatus((status) => {
     if (!turnStillOwned(state, promptSequence)) return;
     if (status === "running") state.status = "running";
-    state.revision += 1;
+    sessionChanged(state);
   });
 
   // Share only an in-flight cancellation. A later hard abort must reach the
@@ -345,7 +348,10 @@ async function followStartedRun(
       diagnostics?.close();
       onSettled();
       unsubscribeStatus();
-      if (state.activeRun === run) state.activeRun = undefined;
+      if (state.activeRun === run) {
+        state.activeRun = undefined;
+        stateChanged(state);
+      }
     }),
   };
 }
@@ -482,7 +488,7 @@ export async function followRun(
       if (!turnStillOwned(state, promptSequence)) return await closedTurnStopped();
       log.warn("turn.timed-out", { sessionId: state.id });
       state.error = error.message;
-      state.revision += 1;
+      sessionChanged(state);
       schedulePersist();
 
       try {
@@ -575,7 +581,7 @@ function finishTurn(
   recordUsage(state, result, streamed, input);
   recordStructuredOutput(state, result.result, input);
   journal(state, input.requestId, "completed");
-  state.revision += 1;
+  sessionChanged(state);
   boundTranscript(state);
   schedulePersist();
 }
@@ -609,7 +615,7 @@ function failTurn(
   recordUsage(state, result, streamed, input);
   recordStructuredOutput(state, undefined, input);
   journal(state, input.requestId, "failed");
-  state.revision += 1;
+  sessionChanged(state);
   boundTranscript(state);
   schedulePersist();
 }
@@ -870,7 +876,7 @@ export async function refreshAgentUsage(
       ...(account ? { account } : {}),
       ...(publicChanged ? { updatedAt: new Date().toISOString() } : {}),
     };
-    if (publicChanged) state.revision += 1;
+    if (publicChanged) sessionChanged(state);
     schedulePersist();
   }
 
@@ -982,6 +988,8 @@ function recordStreamSystemMessage(state: SessionState, event: unknown): void {
     const name = isObject(tool) ? tool.name : tool;
     return nonBlank(name) ? [name.slice(0, 128)] : [];
   });
+  // `/status` reports how many (`runtime.commands`).
+  stateChanged(state);
 }
 
 function streamMessageUsage(message: unknown): TurnUsage | undefined {

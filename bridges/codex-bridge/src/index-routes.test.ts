@@ -716,6 +716,8 @@ describe("session detail route outcomes", () => {
           status: "running",
           phase: "running",
           engineGeneration: 3,
+          // The state revision (to-do 8102 task 2) rides on every full body.
+          stateRevision: expect.stringMatching(/:\d+$/),
         });
       },
     );
@@ -2901,8 +2903,10 @@ describe("mixed-version: old backend, current bridge", () => {
     catalogue.markPolicyChanged();
     const after = await read();
     expect(after.commandRevision).toBe((before.commandRevision as number) + 1);
-    const { commandRevision: _before, ...legacyBefore } = before;
-    const { commandRevision: _after, ...legacyAfter } = after;
+    // The state revision moves with the command revision; both are additive.
+    expect(after.stateRevision).not.toBe(before.stateRevision);
+    const { commandRevision: _before, stateRevision: _beforeState, ...legacyBefore } = before;
+    const { commandRevision: _after, stateRevision: _afterState, ...legacyAfter } = after;
     expect(legacyAfter).toEqual(legacyBefore);
   });
 

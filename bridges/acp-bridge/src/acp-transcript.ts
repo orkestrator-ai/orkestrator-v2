@@ -35,6 +35,7 @@ import {
 import { schedulePersist } from "./acp-persist-writer.js";
 import { terminalDisplayOutput } from "./acp-client-methods.js";
 import { rememberEvictedRows, transcriptRowSizes } from "./acp-rows.js";
+import { markSessionChanged, markStateChanged } from "./acp-state-revision.js";
 
 /** Every `session/update` kind that appends to or mutates the transcript. */
 export const TRANSCRIPT_UPDATE_KINDS = new Set([
@@ -86,7 +87,7 @@ export function failTranscriptLimit(state: SessionState): void {
   state.status = "error";
   state.error = `${provider} output exceeded the transcript limit`;
   state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
-  state.revision += 1;
+  markSessionChanged(state);
   schedulePersist();
 }
 
@@ -766,6 +767,7 @@ export function boundTranscript(state: SessionState): boolean {
     state.outputTruncated = true;
     state.status = "error";
     state.error = `${provider} output exceeded the transcript limit`;
+    markStateChanged(state);
     truncatedCurrentMessage = true;
     state.transcriptTruncated = true;
   }

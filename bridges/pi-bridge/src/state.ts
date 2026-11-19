@@ -23,6 +23,7 @@ import type {
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { bridgeGeneration, MAX_STEER_JOURNAL } from "./config.js";
+import { stateChanged } from "./observation.js";
 import type { ResponseUsage } from "./turn-usage.js";
 
 export type JsonObject = Record<string, unknown>;
@@ -728,6 +729,8 @@ export function claimPromptTurn(state: SessionState): number {
   const claim = promptClaims;
   state.promptClaim = claim;
   state.cancelRequestedClaim = undefined;
+  // A claim reports the session running (`publicTurnStatus`).
+  stateChanged(state);
   let resolve!: () => void;
   const promise = new Promise<void>((onResolve) => {
     resolve = onResolve;
@@ -763,6 +766,7 @@ export function releasePromptClaim(state: SessionState, claim: number | undefine
   if (claim === undefined) return;
   if (state.promptClaim === claim) {
     state.promptClaim = undefined;
+    stateChanged(state);
     // Idle time starts after owned work settles, including long preflight or
     // approval waits. A stale release must not refresh a newer turn's clock.
     state.lastAccessed = Date.now();

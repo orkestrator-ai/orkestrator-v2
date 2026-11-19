@@ -140,6 +140,7 @@ import {
   type BridgeMessagePart,
   type SessionState,
 } from "./state.js";
+import { revisionChanged, stateChanged } from "./observation.js";
 
 const log = createLogger("bridge.pi");
 
@@ -290,7 +291,7 @@ function refreshAutoCompactionSetting(state: SessionState): void {
   );
   if (setting !== undefined && setting !== state.autoCompactionSetting) {
     state.autoCompactionSetting = setting;
-    state.revision += 1;
+    revisionChanged(state);
   }
 }
 
@@ -316,7 +317,7 @@ function adoptHydratedComposer(state: SessionState, hydrated: SessionState["comp
     selectedReasoningId: current.selectedReasoningId ?? hydrated.selectedReasoningId,
     fastModeAvailable: false,
   };
-  state.revision += 1;
+  revisionChanged(state);
 }
 
 /**
@@ -358,6 +359,8 @@ export async function hydrateSessionComposer(
     );
     if (hydrated.models.length === 0) {
       composerHydrationRetryAfter.set(state, Date.now() + CATALOG_TIMEOUT_MS);
+      // `piReadiness` reads the retry mark.
+      stateChanged(state);
       // An empty list from a read that *failed* is not evidence that the
       // account has no models, and the refresh route has already dropped the
       // cache that would otherwise have absorbed the failure. Emptying a
@@ -836,7 +839,7 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
       session.thinkingLevel,
     );
   }
-  state.revision += 1;
+  revisionChanged(state);
   return session;
 }
 
@@ -1113,6 +1116,7 @@ async function applyRequestedPolicy(
       // The detach yields. Another request may have narrowed the policy meanwhile.
       assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
       state.policy = policy;
+      stateChanged(state);
     } finally {
       state.dispatching = false;
       policyChanges.delete(state);
@@ -1152,7 +1156,7 @@ export function resolvePiExecutionPolicy(
 export async function setSessionReadOnly(state: SessionState, readOnly: boolean): Promise<void> {
   if ((state.readOnly === true) === readOnly) return;
   state.readOnly = readOnly;
-  state.revision += 1;
+  revisionChanged(state);
   // An explicit attach may be constructing a registry concurrently. Let it
   // publish, then dispose it before the next prompt obtains a session.
   await state.attaching?.catch(() => undefined);
@@ -1302,6 +1306,8 @@ export async function detachSession(state: SessionState): Promise<void> {
   state.session = null;
   state.runtime = undefined;
   state.unsubscribe = undefined;
+  // The runtime summary now reads `detached`, with no MCP servers.
+  stateChanged(state);
   unsubscribe?.();
   await closePiMcp(state);
   if (runtime) {
@@ -1393,7 +1399,7 @@ export function applyComposerPatch(state: SessionState, patch: ComposerPatch | u
     state.autoCompaction = patch.autoCompaction;
     changed = true;
   }
-  if (changed) state.revision += 1;
+  if (changed) revisionChanged(state);
   return changed;
 }
 
@@ -1445,7 +1451,7 @@ export async function applyComposerToSession(state: SessionState): Promise<void>
     reconciled.selectedReasoningId !== state.composer.selectedReasoningId
   ) {
     state.composer = reconciled;
-    state.revision += 1;
+    revisionChanged(state);
   }
 }
 
@@ -1791,7 +1797,7 @@ export async function setSessionTitle(state: SessionState, title: string): Promi
   const session = await ensureSession(state);
   session.setSessionName(title);
   state.title = title;
-  state.revision += 1;
+  revisionChanged(state);
 }
 
 /**
@@ -1854,7 +1860,7 @@ function hydrateHistory(state: SessionState): void {
     appendHistoricEntry(state, entry, selectedModelId);
   }
   boundTranscript(state);
-  state.revision += 1;
+  revisionChanged(state);
 }
 
 /**

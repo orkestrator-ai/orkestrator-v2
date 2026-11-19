@@ -39,6 +39,7 @@ import {
 } from "./config.js";
 import type { NativeAgentRuntimeSteerJournal } from "@orkestrator/protocol/native-agent";
 import { isObject, nonBlank, type SessionState, type SteerJournalEntry } from "./state.js";
+import { sessionChanged } from "./state-revision.js";
 
 export interface SteerJournalLimits {
   entries: number;
@@ -399,5 +400,5 @@ export function noteSteerRefusal(
       detail: `fenced runs ${state.steerFence?.runs.length ?? 0}/${limits.fenceRuns}`,
     });
   }
-  state.revision += 1;
+  sessionChanged(state);
 }

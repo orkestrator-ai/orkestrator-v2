@@ -149,6 +149,42 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   `cancelled: true` with a `reason`, or 422 `branch-summary-failed`), never
   200 and never the opaque 500.
 
+## State revisions and the observe stream
+
+The backend learns that a session moved without reading it (to-do 8102 task
+2, design D7; `src/observation.ts`, `src/state-read.ts`):
+
+- **One state revision** (`stateRevision`, `<generation>:<counter>`) covers
+  everything the backend's state read gets for a Pi session: the `/status`
+  body, `GET /session/:id/queue`, `/approvals` and `/interactions`, and the
+  composer's own revision. `/status` with a still-current
+  `?knownStateRevision=` answers `{ unchanged: true, stateRevision }`; every
+  read settles the revision against a digest of that content, so `unchanged`
+  is never wrong, even after a change no site announced.
+- **The composer has its own revision** (`composerRevision`, also in the
+  body). With a current `?knownComposerRevision=` the body omits `composer`.
+  Without either query the body is the full one plus both revisions: the
+  backend's interactive snapshot needs `composer`.
+- **The transcript revision** in each frame is `piTranscriptRevision`: the
+  process generation, `transcriptEpoch`, `droppedMessages` and `revision`,
+  which is what the transcript route's token keys on.
+- **`GET /event/subscribe?observe=1`** serves the shared
+  `BridgeObservationHub`: content-free `session.changed` frames with
+  `sessionId`, `stateRevision` and `transcriptRevision`, coalesced to one per
+  session per synchronous burst. A removed session gets one frame with no
+  revision. It never touches liveness, hydrates or re-attaches, and shutdown
+  closes it.
+- **Every mutation must announce itself.** Use `revisionChanged(state)`
+  instead of `state.revision += 1` (it moves `revision`, which `/status`
+  carries, so it always moves the state revision too), and `stateChanged`
+  for a change to the state read that does not move `revision` (prompt
+  claims, policy, detach, MCP inventory, readiness, runtime health through
+  `ObservedRuntimeHealth`). `rowChanged` announces itself, and every write
+  route announces once answered as a backstop. Both helpers are synchronous
+  and safe on the SDK listener. `src/state-revision.test.ts` drives each
+  mutation path and fails when the state read changed but the revision did
+  not; add a new path there.
+
 ## When touching the Pi bridge
 
 - The engine boundary is `src/translate.ts` and `src/tool-rendering.ts`. Every

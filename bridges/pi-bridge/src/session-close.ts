@@ -1,5 +1,6 @@
 import { closeSession, markSessionClosed } from "./agent-session.js";
 import { persistBarrier } from "./persistence.js";
+import { sessionRemoved } from "./observation.js";
 import { requestTurnCancellation } from "./prompt.js";
 import {
   clientSessionKeys,
@@ -79,6 +80,8 @@ async function runClose(state: SessionState, budgetMs: number): Promise<Retainin
   }
   const clientKey = state.clientSessionKey;
   if (sessions.get(state.id) === state) sessions.delete(state.id);
+  // The backend's next state read answers `missing`.
+  sessionRemoved(state);
   if (clientKey !== undefined && clientSessionKeys.get(clientKey) === state.id) {
     clientSessionKeys.delete(clientKey);
   }

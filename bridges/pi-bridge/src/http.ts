@@ -70,7 +70,6 @@ import {
   publicQueue,
   publicRuntime,
   publicSession,
-  publicStatus,
   publicSessionReference,
 } from "./public.js";
 import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
@@ -168,6 +167,8 @@ import {
   type SessionState,
 } from "./state.js";
 import { sessionActivityObservation } from "./session-activity.js";
+import { observationHub, revisionChanged, stateChanged } from "./observation.js";
+import { piStatusAnswer } from "./state-read.js";
 import {
   answerSessionActivityBatch,
   SESSION_ACTIVITY_BATCH_PATH,
@@ -306,6 +307,13 @@ export async function route(
   // which a token caught in flight does not carry (bridge-authority.ts).
   const refused = await admitNodeBridgeRequest(bridgeAuthority, request, MAX_BODY_BYTES);
   if (refused) return json(response, refused.status, refused.body);
+
+  // The backend observer's content-free change stream (D7). Like `/activity`
+  // it never touches liveness, hydrates or re-attaches anything.
+  if (url.pathname === "/event/subscribe" && request.method === "GET") {
+    observationHub.serve(request, response, url);
+    return;
+  }
 
   try {
     // The batched form of `/session/:id/activity`, from the same no-touch
@@ -623,6 +631,11 @@ async function routeSession(
   // session attached for as long as a tab shows it (#2062). Every
   // request is counted by route for the runtime-health body.
   observeSessionRequest(state, { method: request.method, action, subject, detail });
+  // Every write route may move what the state read returns (policy, MCP
+  // inventory, attach state, …), so each announces a change once answered.
+  // The mutation sites announce their own changes as they happen; this is
+  // the backstop for the ones a route makes without one.
+  if (request.method !== "GET") announceWhenAnswered(response, state);
 
   // `restoreComposer` drops the persisted model rows by design. Rehydrate on
   // the routes that publish or mutate composer state so a restarted bridge's
@@ -692,7 +705,13 @@ async function routeSession(
     );
   }
   if (action === "status" && request.method === "GET") {
-    return json(response, 200, publicStatus(state, piReadiness(state)));
+    // `knownStateRevision` / `knownComposerRevision` make it conditional;
+    // without them it is the full body plus both revisions (`state-read.ts`).
+    return json(
+      response,
+      200,
+      piStatusAnswer(state, piReadiness(state), (name) => url.searchParams.get(name)),
+    );
   }
   if (action === "activity" && request.method === "GET") {
     // Shared with `POST /sessions/activity`; see `sessionActivityObservation`.
@@ -862,6 +881,17 @@ async function routeSession(
   return json(response, 404, { error: "Not found" });
 }
 
+function announceWhenAnswered(response: ServerResponse, state: SessionState): void {
+  let announced = false;
+  const announce = () => {
+    if (announced) return;
+    announced = true;
+    stateChanged(state);
+  };
+  response.once("finish", announce);
+  response.once("close", announce);
+}
+
 async function handleConfig(
   request: IncomingMessage,
   response: ServerResponse,
@@ -1026,7 +1056,7 @@ async function handleCompact(
   // then aborted, silently cancelling a turn the user had just sent.
   state.dispatching = true;
   state.compacting = true;
-  state.revision += 1;
+  revisionChanged(state);
   let settle: (stopped: boolean) => void = () => undefined;
   const compaction: ManualCompaction = {
     cancelRequested: false,
@@ -1064,7 +1094,7 @@ async function handleCompact(
     state.compacting = false;
     state.lastAccessed = Date.now();
     state.dispatching = false;
-    state.revision += 1;
+    revisionChanged(state);
     schedulePersist();
     void runDeferredCommandReload(state)
       .then(() => schedulePersist())
@@ -1715,7 +1745,7 @@ async function handleAdmittedPrompt(
   state.turnStartedAt = Date.now();
   state.currentAssistantMessageId = undefined;
   state.turnOpenedAssistantRow = undefined;
-  state.revision += 1;
+  revisionChanged(state);
 
   let handle: Awaited<ReturnType<typeof dispatchPrompt>>;
   try {
@@ -1767,7 +1797,7 @@ async function handleAdmittedPrompt(
     state.turnStartedAt = undefined;
     // Refused in preflight: Pi started no run, so the id is still undelivered.
     withdrawPromptJournal(state, requestId);
-    state.revision += 1;
+    revisionChanged(state);
     schedulePersist();
     void runDeferredCommandReload(state).catch(() => undefined);
     // Pi dispatches extension commands and input handlers before it needs a
@@ -1814,7 +1844,7 @@ function answerLocally(
       local: true,
     });
   }
-  state.revision += 1;
+  revisionChanged(state);
   schedulePersist();
   return json(response, 200, { accepted: true, local: true });
 }

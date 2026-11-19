@@ -35,6 +35,7 @@ import {
 import { MAX_RESUME_ENTRIES, workingDirectory } from "./config.js";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./credentials.js";
 import { schedulePersist } from "./persistence.js";
+import { sessionChanged, stateChanged } from "./state-revision.js";
 import {
   cancelSurvivingRuns,
   cursorAgentApi,
@@ -151,6 +152,7 @@ export async function createSession(
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposer(state.composer);
     sessions.set(state.id, state);
+    stateChanged(state);
     if (clientSessionKey) clientSessionKeys.set(clientSessionKey, state.id);
     return state;
   })();
@@ -611,6 +613,8 @@ async function attach(state: SessionState): Promise<SDKAgent> {
         const resumed = await cursorAgentApi().resume(state.agentId, options);
         await disposeIfClosed(state, resumed);
         state.agent = resumed;
+        // `/status` reports the agent as attached (`runtime.state`).
+        stateChanged(state);
         recordAttachedConfig();
         markConfigResumePending(state, false);
         schedulePlanAccountRefresh();
@@ -628,6 +632,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           error: formatLogError(error, { message: false }),
         });
         state.agentId = undefined;
+        stateChanged(state);
         appendResumeFallbackNotice(state);
       }
     }
@@ -640,9 +645,11 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     // reject every valid report from the replacement as stale. Keep the latest
     // turn/context snapshot, which is still useful history, but detach all
     // account-scoped figures once the replacement is known to exist.
-    if (clearAgentScopedUsage(state)) state.revision += 1;
+    if (clearAgentScopedUsage(state)) sessionChanged(state);
     state.agent = created;
     state.agentId = created.agentId;
+    // Attached, under a (possibly new) resumable id.
+    stateChanged(state);
     recordAttachedConfig();
     markConfigResumePending(state, false);
     schedulePlanAccountRefresh();
@@ -709,6 +716,8 @@ export async function detachAgent(state: SessionState): Promise<void> {
   const releaseWarmWorkspace = state.workspaceWarmRelease;
   const hostedMcpClose = state.hostedMcpClose;
   state.agent = null;
+  // `/status` reports the agent as detached (`runtime.state`).
+  if (agent) stateChanged(state);
   state.attachedMcpKey = undefined;
   attachedConfigKeys.delete(state);
   attachedConfigRevisions.delete(state);
@@ -796,6 +805,7 @@ async function rewindOwned(state: SessionState, messageId: string): Promise<void
   }
   rewindTranscriptTo(state, messageId);
   state.error = undefined;
+  stateChanged(state);
   boundTranscript(state);
 }
 
@@ -870,7 +880,7 @@ export function applyComposerPatch(state: SessionState, patch: ComposerPatch | u
     };
     changed = true;
   }
-  if (changed) state.revision += 1;
+  if (changed) sessionChanged(state);
   return changed;
 }
 
@@ -1039,6 +1049,7 @@ async function applyRequestedPolicy(
       // The detach yields. Another request may have narrowed the policy meanwhile.
       assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
       state.policy = policy;
+      stateChanged(state);
     } finally {
       state.dispatching = false;
       policyChanges.delete(state);
@@ -1114,6 +1125,7 @@ export async function resumeSession(
     state.composer = await hydrateComposer(state.composer);
     await hydrateHistory(state, { skipRunning: true }).catch(() => undefined);
     sessions.set(state.id, state);
+    stateChanged(state);
     // Attach a surviving run before returning so `recoveringRun` is only set when
     // a live stream is actually being rebuilt — not a permanently settled dummy.
     await recoverActiveRun(state);
@@ -1170,7 +1182,8 @@ async function hydrateHistory(
     }
   }
   boundTranscript(state);
-  state.revision += 1;
+  // A rebuilt history can also restore the session's todo list.
+  sessionChanged(state);
 }
 
 /** Re-adopt a local run that survived a bridge restart. */
@@ -1197,9 +1210,9 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
     state.turnCancelRequested = true;
     return active.cancel();
   };
-  state.revision += 1;
+  sessionChanged(state);
   const unsubscribe = active.onDidChangeStatus(() => {
-    state.revision += 1;
+    sessionChanged(state);
   });
   // The provider's own reports for the tail of the run, by native call id. No
   // probe window opens here: what the workspace holds now says nothing about
@@ -1254,7 +1267,7 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       }
       state.cancelTurn = undefined;
       state.recoveringRun = undefined;
-      state.revision += 1;
+      sessionChanged(state);
     }
   })();
 }

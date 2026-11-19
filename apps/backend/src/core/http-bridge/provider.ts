@@ -47,7 +47,7 @@ import {
   nativeAgentPolicyForBridge,
   parseNativeAgentSteerRejection,
 } from "@orkestrator/protocol/native-agent";
-import { bridgeRuntimeSummary, snapshotNotices } from "./runtime-health.js";
+import { snapshotNotices } from "./runtime-health.js";
 import { ensureCodexMode, updateCodexSessionConfig } from "./codex-config.js";
 import { readBridgeMcpConfigEvidence } from "./mcp-evidence.js";
 import {
@@ -105,6 +105,8 @@ import { HttpBridgeActivityBatchReader } from "./activity-batch.js";
 import { bridgeChangeEvidenceSource } from "./change-evidence.js";
 import { readAcpTurnTerminalError } from "./turn-outcome.js";
 import { HttpBridgeObservationWakeup } from "./observation-stream.js";
+import { HttpBridgeStateReads } from "./state-revision.js";
+import { readBridgeRuntimeHealth } from "./runtime-health-read.js";
 import { readBridgeResumableSessions } from "./resumable-sessions.js";
 import { readBridgeSessionBranches, switchBridgeSessionBranch } from "./session-branches.js";
 import { readBridgeHumanPrompts } from "./human-prompts.js";
@@ -138,8 +140,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly changeEvidenceSource: ReturnType<typeof bridgeChangeEvidenceSource>;
   /** Grok only: see {@link readAcpTurnTerminalError}. */
   readonly turnTerminalError?: (sessionId: string, requestId: string) => Promise<string | null>;
-  /** Claude and Codex: the bridge event stream as the idle wakeup. */
+  /** The bridge's observe stream: the idle wakeup and the push observer's change signal. */
   private readonly observationWakeup: HttpBridgeObservationWakeup;
+  private readonly stateReads: HttpBridgeStateReads;
   private readonly steerQualification: HttpBridgeSteerQualification;
 
   constructor(
@@ -159,6 +162,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     this.transcripts = new HttpBridgeTranscriptReader(this.agent, connection, fetchImpl);
     this.stageImages = stageImages;
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
+    this.stateReads = new HttpBridgeStateReads(this.agent, connection, fetchImpl);
+    this.interactionAdapter.sideRouteCache = this.stateReads;
     this.catalogAdapter = new HttpBridgeCatalogAdapter(this.agent, connection, fetchImpl);
     this.activityBatchReader = new HttpBridgeActivityBatchReader(connection, fetchImpl);
     this.changeEvidenceSource = bridgeChangeEvidenceSource(connection, fetchImpl);
@@ -182,6 +187,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   observationStreamLive(): boolean {
     return this.observationWakeup.live();
   }
+
+  observationStreamRevisions = (): boolean => this.observationWakeup.revisionsLive();
+  /** Content-free counters of the conditional state reads (to-do 8102 task 2). */
+  stateReadMetrics = () => this.stateReads.metrics();
 
   dispose(): void {
     this.observationWakeup.close();
@@ -568,39 +577,16 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       fetchImpl: this.fetchImpl,
       sessionId,
       planUsage: this.planUsage,
+      stateReads: this.stateReads,
       metadata: this.interactiveMetadata,
       refreshRuntimeMetadata: () => this.refreshRuntimeMetadata(sessionId),
       readRuntimeHealth: () => this.runtimeHealth(sessionId),
     });
   }
 
-  /**
-   * Bounded inventory, drift and provider diagnostics for one session.
-   *
-   * Answers in band for a bridge that predates the route and for a session it
-   * does not have. A failure here must never fail the environment: this hop
-   * cannot tell "older bridge" from "gone session", and health is optional
-   * metadata either way — the authoritative liveness answer is `/activity`.
-   */
-  async runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
-    try {
-      const response = await bridgeFetch(
-        this.connection,
-        `/session/${encodeURIComponent(sessionId)}/runtime-health`,
-        {},
-        this.fetchImpl,
-      );
-      if (!response.ok) return { summary: {}, notices: [], authoritative: false };
-      const summary = bridgeRuntimeSummary(
-        await boundedJson(response, `${this.agent} runtime health read`, {
-          remaining: 512 * 1024,
-        }),
-      );
-      if (!summary) return { summary: {}, notices: [], authoritative: false };
-      return { summary, notices: summary.notices ?? [], authoritative: true };
-    } catch {
-      return { summary: {}, notices: [], authoritative: false };
-    }
+  /** See `readBridgeRuntimeHealth`. */
+  runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
+    return readBridgeRuntimeHealth(this.connection, this.fetchImpl, this.agent, sessionId);
   }
 
   /** Backend-only MCP apply evidence; see `http-bridge/mcp-evidence.ts`. */
@@ -1508,5 +1494,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   releaseSession(sessionId: string): void {
     this.codexModes.delete(sessionId);
     this.steerQualification.forget(sessionId);
+    this.stateReads.forget(sessionId);
   }
 }

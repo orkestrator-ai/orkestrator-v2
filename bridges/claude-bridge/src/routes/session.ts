@@ -11,6 +11,8 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { sessionRuntimeHealthBody } from "./runtime-health-body.js";
+import { BRIDGE_KNOWN_STATE_REVISION_PARAM } from "@orkestrator/protocol/bridge-state-revision";
+import { sessionStateRevisions } from "../services/state-revision.js";
 import { backgroundTasksForSnapshot } from "../services/background-task-snapshot.js";
 import { claudeReportedPolicy, claudeTurnPolicy } from "../services/claude-query-config.js";
 import { claudeSandboxRefusal } from "../services/claude-execution-sandbox.js";
@@ -432,7 +434,7 @@ session.get("/:id", async (c) => {
     }
   }
 
-  return c.json({
+  const body = {
     id: sessionData.id,
     title: sessionData.title,
     status: sessionData.status,
@@ -504,8 +506,37 @@ session.get("/:id", async (c) => {
     // Session-scoped: a login that stopped working during this session's
     // turns. The backend shows it as the tab's `auth` notice.
     ...(sessionData.authNotice ? { authNotice: sessionData.authNotice } : {}),
-  });
+  };
+  // One revision for this body and the side routes the backend reads beside
+  // it (to-do 8102 task 2): a still-current `knownStateRevision` gets one
+  // small `unchanged` answer and the backend skips the side routes.
+  const answer = sessionStateRevisions.answer(
+    id,
+    sessionStateRevisionContent(id, body),
+    c.req.query(BRIDGE_KNOWN_STATE_REVISION_PARAM),
+  );
+  if (answer.unchanged) return c.json(answer.body);
+  return c.json({ ...body, stateRevision: answer.revision });
 });
+
+/**
+ * Everything the backend's state read gets for a session, for the state
+ * revision's digest: the `GET /session/:id` body without `lastActivity` (the
+ * read itself moves it, and the backend never reads it) and the three side
+ * routes. Exported for the revision harness test.
+ */
+export function sessionStateRevisionContent(
+  id: string,
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  const { lastActivity: _lastActivity, ...state } = body;
+  return {
+    state,
+    questions: getPendingQuestions(id),
+    planApprovals: getPendingPlanApprovals(id),
+    interactions: getPendingInteractions(id),
+  };
+}
 
 function readinessField(): { readiness?: NativeAgentReadiness } {
   const readiness = claudeReadiness();

@@ -1,7 +1,7 @@
 # Multi-environment UI perf: Chromium launch hook times out in the aggregate run
 
 - **ID:** 2882
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-11-02
 - **Test:** `in-page deadlines > (unnamed)`, the `beforeAll` hook in
   `tests/unit/multi-environment-ui-perf.integration.test.ts` that calls
@@ -51,3 +51,26 @@ the unnamed hook that kept timing out at five seconds after the 60 s
 budget of its own. It now has a 60 s budget. Verified with
 `mise run test:logged -- --name web-ui-perf-afterall -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --rerun-each=5`
 (exit 0).
+
+## CI recurrence, reopened — 2026-11-19
+
+- **Run:** GitHub Actions CI, job "Tests (root-bridges)" (`mise run test:full`,
+  root and bridge groups, `ubuntu-latest`) on PR #2478
+  (`fix-ci-failures-14e69818d3bd-r1`), run 44572759113, job 135732014471.
+- **Base commit:** `5e9835d0a6`.
+  `mise run flaky:recurrence -- 2882 --base 5e9835d0a6 --registry-ref origin/main`
+  answered "resolved, and the base contains its fix (`ee2cc84234`). This is a
+  real recurrence", so the case is open again.
+- **Failure:** `in-page deadlines > (unnamed)` failed at 60000.28 ms: an unnamed
+  hook of the describe block (the `beforeAll` that launches Chromium or the
+  `afterAll` that closes it, both budgeted at 60 s) ran out its whole budget.
+  The root group reported 5613 pass and this one failure in 450.4 s. The
+  runner had just reported `killed 1 dangling process` for the previous file.
+- **Isolated rerun:** the runner's own rerun of the unchanged file passed alone
+  in 10.0 s.
+- **Hypothesis:** unlike the earlier five-second failures, a full minute is
+  not start-up cost under load: Chromium's launch or close hung rather than ran
+  slowly. Not reproduced; no evidence yet says which hook it was. A next step
+  is to bound `chromium.launch` and `browser.close` with their own shorter
+  timeouts and name the hook in the failure, so a recurrence says which of
+  the two hung.

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { LOCAL_BRIDGE_READY_PREFIX } from "@orkestrator/protocol/node/local-bridge-readiness";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,7 @@ printf '%s' "$PATH"
         if (new URL(request.url).pathname === "/global/health") return new Response("ok");
         return Response.json({ source: "app-server", models: [{ id: "fixture" }] });
       }});
+      process.stdout.write(${JSON.stringify(LOCAL_BRIDGE_READY_PREFIX)} + process.env.PORT + "\\n");
     `,
     );
     await writeFile(

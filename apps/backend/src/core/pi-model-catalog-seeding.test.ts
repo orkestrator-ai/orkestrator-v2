@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { LOCAL_BRIDGE_READY_PREFIX } from "@orkestrator/protocol/node/local-bridge-readiness";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { promises as fs } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -114,7 +115,16 @@ function stubBridgeSpawn(respond: (spawned: ProbeSpawn) => unknown): void {
     spawns.push(spawned);
     const child = createFakeChild();
     children.push(child);
-    void Promise.resolve(respond(spawned));
+    void Promise.resolve(respond(spawned)).then(() => {
+      const port = Number(spawned.env.PORT);
+      if (
+        servers.some((server) => {
+          const address = server.address();
+          return address && typeof address !== "string" && address.port === port;
+        })
+      )
+        child.stdout.emit("data", `${LOCAL_BRIDGE_READY_PREFIX}${port}\n`);
+    });
     return child;
   }) as never;
 }

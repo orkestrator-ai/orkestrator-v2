@@ -1077,7 +1077,8 @@ describe("gateway terminal WebSocket", () => {
       () => wireGauges(gateway).terminalOperations === 0,
       "Plain disconnect left terminal operations queued",
     );
-    expect(operations).toEqual(["terminal_write", "terminal_write", "terminal_resize"]);
+    // Disconnected clients no longer have a terminal view to resize.
+    expect(operations).toEqual(["terminal_write", "terminal_write"]);
     expect(wireGauges(gateway)).toEqual(ZERO_WIRE_GAUGES);
   });
 

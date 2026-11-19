@@ -340,7 +340,7 @@ describe("terminal operations after a credential lapses", () => {
 
       fixture.release();
       await drained(fixture);
-      expect(fixture.operations).toEqual(["terminal_write", "terminal_write", "terminal_resize"]);
+      expect(fixture.operations).toEqual(["terminal_write", "terminal_write"]);
       expect(state.authenticated).toBe(true);
       expectWatchReleased(state);
       expect(fixture.listeners(kind)).toBe(0);
@@ -362,7 +362,7 @@ describe("terminal operations after a credential lapses", () => {
 
     fixture.release();
     await drained(fixture);
-    expect(fixture.operations).toEqual(["terminal_write", "terminal_write", "terminal_resize"]);
+    expect(fixture.operations).toEqual(["terminal_write", "terminal_write"]);
     expectWatchReleased(state);
     expect(fixture.listeners("client grant")).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -419,7 +419,7 @@ describe("terminal operations after a credential lapses", () => {
 
       fixture.release();
       await drained(fixture);
-      expect(fixture.operations).toEqual(["terminal_write", "terminal_write", "terminal_resize"]);
+      expect(fixture.operations).toEqual(["terminal_write", "terminal_write"]);
       expectWatchReleased(state);
       expect(fixture.listeners("client grant")).toBe(0);
     } finally {

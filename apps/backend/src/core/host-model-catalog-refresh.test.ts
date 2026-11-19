@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { LOCAL_BRIDGE_READY_PREFIX } from "@orkestrator/protocol/node/local-bridge-readiness";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -39,7 +41,7 @@ function createFakeChild(): FakeChild {
   const emitter = new EventEmitter() as unknown as FakeChild;
   const stream = () => Object.assign(new EventEmitter(), { resume: () => undefined });
   Object.assign(emitter, {
-    pid: nextPid++,
+    pid: fakePid(nextPid++),
     exitCode: null,
     signalCode: null,
     killed: false,
@@ -84,7 +86,16 @@ function stubBridgeSpawn(respond: (spawned: ProbeSpawn, child: FakeChild) => unk
     spawns.push(spawned);
     const child = createFakeChild();
     children.push(child);
-    void Promise.resolve(respond(spawned, child));
+    void Promise.resolve(respond(spawned, child)).then(() => {
+      const port = Number(spawned.env.PORT);
+      if (
+        servers.some((server) => {
+          const address = server.address();
+          return address && typeof address !== "string" && address.port === port;
+        })
+      )
+        child.stdout.emit("data", `${LOCAL_BRIDGE_READY_PREFIX}${port}\n`);
+    });
     return child;
   }) as never;
 }

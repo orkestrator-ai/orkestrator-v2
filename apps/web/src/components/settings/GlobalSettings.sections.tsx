@@ -6,7 +6,8 @@ import { DiagnosticsExportCard } from "./DiagnosticsExportCard";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { AutoSteerSetting } from "./AutoSteerSetting";
-import { SettingField } from "./search/SettingField";
+import { SettingField, SettingExplanation } from "./search/SettingField";
+import { isLocalDesktopWindow } from "@/lib/native/window";
 import { DataSavingSetting } from "./DataSavingSetting";
 import { DebugButtonSetting } from "./DebugButtonSetting";
 import { PreviewSettings } from "./PreviewSettings";
@@ -711,27 +712,26 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         ) : null}
         {platform === "opencode" ? <OpenCodeProvidersSection /> : null}
       </SettingField>
-      <SettingField setting={`${platform}.agent-settings`}>
-        <AgentPlatformPane
-          platform={platform}
-          tier={agentSettings}
-          onChange={setAgentSettings}
-          tiers={agentTiers}
-          canInherit={false}
-          catalog={catalog}
-          disabled={isSaving}
-          tmuxModeEnabled={experimentalTmux}
-          onRefreshModels={() => void refreshModelCatalog(platform)}
-          refreshingModels={refreshingModelCatalog === platform}
-          refreshModelsDisabled={platform === "opencode" && !catalogProjectId}
-          modelCatalogScopeDescription={
-            platform === "opencode" ? openCodeCatalogScopeDescription : undefined
-          }
-          showMcpServersLink
-        >
-          {extras}
-        </AgentPlatformPane>
-      </SettingField>
+      <AgentPlatformPane
+        platform={platform}
+        tier={agentSettings}
+        onChange={setAgentSettings}
+        tiers={agentTiers}
+        canInherit={false}
+        catalog={catalog}
+        disabled={isSaving}
+        tmuxModeEnabled={experimentalTmux}
+        onRefreshModels={() => void refreshModelCatalog(platform)}
+        refreshingModels={refreshingModelCatalog === platform}
+        refreshModelsDisabled={platform === "opencode" && !catalogProjectId}
+        modelCatalogScopeDescription={
+          platform === "opencode" ? openCodeCatalogScopeDescription : undefined
+        }
+        showMcpServersLink
+        renderSettingExplanation={(setting) => <SettingExplanation setting={setting} />}
+      >
+        {extras}
+      </AgentPlatformPane>
     </SettingsPageLayout>
   );
 
@@ -2377,6 +2377,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         </SettingsSectionHeader>
         <button
           type="button"
+          role="switch"
+          aria-label="Save logs to disk"
+          aria-checked={debugLogging}
           onClick={() => setDebugLogging(!debugLogging)}
           className={cn(
             "max-w-xs w-full p-3 rounded-lg border text-left transition-colors",
@@ -2541,8 +2544,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   // Electron reads this setting from its own data directory, so a window on
   // another machine would be editing a config nothing reads it from.
-  const isLocalDesktopWindow =
-    window.orkestrator?.isolatedViewState === true && !window.orkestratorGateway?.enabled;
+  const showDirectTransport = isLocalDesktopWindow();
 
   const renderExperimental = () => (
     <SettingsPageLayout title="Experimental">
@@ -2630,7 +2632,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               />
             </SettingsRow>
           </SettingField>
-          {isLocalDesktopWindow && (
+          {showDirectTransport && (
             <SettingField
               setting="experimental.direct-transport"
               explanationClassName="px-4 pb-3 -mt-1"

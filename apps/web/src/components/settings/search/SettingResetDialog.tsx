@@ -5,7 +5,7 @@
  * opens, and the reset only goes ahead while the stored value still matches
  * that preview; if it moved, the preview refreshes and asks again.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import {
@@ -22,13 +22,23 @@ import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { isSettingsCommandUnsupported } from "@/lib/portal/command-node-config";
 import { SETTINGS_CATALOG } from "@/lib/settings-catalog/catalog";
-import { formatSettingValue, settingsSharingKey } from "@/lib/settings-catalog/provenance";
+import {
+  formatSettingValue,
+  presentSetting,
+  settingsSharingKey,
+} from "@/lib/settings-catalog/provenance";
 import { SETTING_TIMING_LABELS, isInheritedSettingKey } from "@/lib/settings-catalog/scope";
 import type { SettingDescriptor } from "@/lib/settings-catalog/types";
-import type { AppConfig, GlobalConfig } from "@/types";
+import type { GlobalConfig } from "@/types";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { isWindowMachine } from "../account-machine";
 import { useSettingsConfig } from "../settings-config";
-import { useSettingsExplain } from "./settings-explain";
+import {
+  draftIsClean,
+  useSettingsDraft,
+  useSettingsDraftRegistry,
+  useSettingsExplain,
+} from "./settings-explain";
 
 const log = createLogger("web.settings");
 
@@ -68,72 +78,70 @@ export function SettingResetDialog({
   onClose: () => void;
 }) {
   const explain = useSettingsExplain();
-  const { setConfig } = useSettingsConfig();
+  const { setConfig, ready, config } = useSettingsConfig();
+  const draft = useSettingsDraft();
+  const draftRegistry = useSettingsDraftRegistry();
+  const active = useRef(false);
+  const pending = useRef(false);
+  const canAdopt = () =>
+    active.current && (!draftRegistry || draftIsClean(draftRegistry.getSnapshot()));
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const binding = descriptor?.value ?? null;
   const machine = explain?.machine;
-  const refreshSources = explain?.refreshSources;
 
-  /** Reads the stored value now; state changes only once the read answers. */
+  const readPreview = useCallback(async () => {
+    if (!descriptor || !binding) throw new Error("Setting unavailable");
+    const [fresh, sources] = await Promise.all([
+      backend.getConfig(machine),
+      backend.getSettingSources(machine),
+    ]);
+    const presentation = presentSetting(descriptor, fresh.global, sources);
+    if (
+      !presentation?.resettable ||
+      !presentation.hasOverride ||
+      (descriptor.availability &&
+        !descriptor.availability.isAvailable({
+          global: fresh.global,
+          isWindowMachine: isWindowMachine(machine),
+        }))
+    ) {
+      throw new Error("This setting cannot be reset on the selected machine");
+    }
+    const global = fresh.global as GlobalConfig & Record<string, unknown>;
+    return { current: global[binding.key], effectiveNow: presentation.effective };
+  }, [binding, descriptor, machine]);
+
   const fetchPreview = useCallback(
-    async (changed: boolean, adoptFresh: boolean) => {
-      if (!binding) return;
+    async (changed: boolean, isCurrent: () => boolean) => {
       try {
-        const fresh = await backend.getConfig(machine);
-        // After an outcome we could not confirm, show the field what is really stored.
-        if (adoptFresh) {
-          setConfig(fresh);
-          refreshSources?.();
-        }
-        const global = fresh.global as GlobalConfig & Record<string, unknown>;
-        setPhase({
-          kind: "ready",
-          changed,
-          preview: { current: global[binding.key], effectiveNow: binding.read(fresh.global) },
-        });
+        const preview = await readPreview();
+        if (isCurrent()) setPhase({ kind: "ready", changed, preview });
       } catch (error) {
-        setPhase({
-          kind: "failed",
-          message: error instanceof Error ? error.message : String(error),
-          preview: null,
-        });
+        if (isCurrent())
+          setPhase({
+            kind: "failed",
+            message: error instanceof Error ? error.message : String(error),
+            preview: null,
+          });
       }
     },
-    [binding, machine, setConfig, refreshSources],
+    [readPreview],
   );
 
-  const loadPreview = (changed: boolean, adoptFresh = false) => {
-    setPhase({ kind: "loading" });
-    return fetchPreview(changed, adoptFresh);
-  };
-
-  // The dialog is keyed by its setting, so it starts in `loading` for each one.
   useEffect(() => {
-    if (!binding) return;
-    let cancelled = false;
-    backend.getConfig(machine).then(
-      (fresh) => {
-        if (cancelled) return;
-        const global = fresh.global as GlobalConfig & Record<string, unknown>;
-        setPhase({
-          kind: "ready",
-          changed: false,
-          preview: { current: global[binding.key], effectiveNow: binding.read(fresh.global) },
-        });
-      },
-      (error: unknown) => {
-        if (cancelled) return;
-        setPhase({
-          kind: "failed",
-          message: error instanceof Error ? error.message : String(error),
-          preview: null,
-        });
-      },
-    );
+    active.current = true;
+    let current = true;
+    void Promise.resolve().then(() => fetchPreview(false, () => current));
     return () => {
-      cancelled = true;
+      current = false;
+      active.current = false;
     };
-  }, [binding, machine]);
+  }, [fetchPreview]);
+
+  const loadPreview = (changed: boolean) => {
+    setPhase({ kind: "loading" });
+    return fetchPreview(changed, () => active.current);
+  };
 
   if (!descriptor || !binding || !explain) return null;
   const owner = isInheritedSettingKey(binding.key)
@@ -144,8 +152,16 @@ export function SettingResetDialog({
   );
   const preview = phase.kind === "loading" ? null : phase.preview;
 
+  const available =
+    ready &&
+    (!descriptor.availability ||
+      descriptor.availability.isAvailable({
+        global: config.global,
+        isWindowMachine: isWindowMachine(machine),
+      }));
   const confirm = async () => {
-    if (phase.kind !== "ready") return;
+    if (phase.kind !== "ready" || pending.current || !available || !canAdopt()) return;
+    pending.current = true;
     const expected = phase.preview.current;
     setPhase({ kind: "resetting", preview: phase.preview });
     try {
@@ -159,13 +175,14 @@ export function SettingResetDialog({
         machine,
       );
       log.info("reset.finished", { outcome: outcome.status, section: descriptor.section });
+      if (!active.current) return;
       if (outcome.status === "conflict") {
         // The stored value moved after the preview: show the new one and ask again.
-        adopt(outcome.config);
+        if (canAdopt()) setConfig(outcome.config);
         await loadPreview(true);
         return;
       }
-      adopt(outcome.config);
+      if (canAdopt()) setConfig(outcome.config);
       explain.refreshSources();
       toast.success(`${descriptor.label} reset`, {
         description: `Now ${formatSettingValue(descriptor, binding.read(outcome.config.global))}. ${SETTING_TIMING_LABELS[descriptor.appliesWhen]}.`,
@@ -177,6 +194,7 @@ export function SettingResetDialog({
         outcome: unsupported ? "unsupported" : "failed",
         error: formatLogError(error),
       });
+      if (!active.current) return;
       setPhase({
         kind: "failed",
         message: unsupported
@@ -187,14 +205,20 @@ export function SettingResetDialog({
         preview: phase.preview,
         unsupported,
       });
+    } finally {
+      pending.current = false;
     }
   };
 
-  const adopt = (config: AppConfig) => setConfig(config);
-
   return (
-    <AlertDialog open onOpenChange={(open) => !open && onClose()}>
-      <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
+    <AlertDialog open onOpenChange={(open) => !open && !pending.current && onClose()}>
+      <AlertDialogContent
+        className={Z_FULLSCREEN_DIALOG}
+        overlayClassName={Z_FULLSCREEN_DIALOG}
+        onEscapeKeyDown={(event) => {
+          if (pending.current) event.preventDefault();
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>Reset {descriptor.label}?</AlertDialogTitle>
           <AlertDialogDescription>
@@ -249,16 +273,16 @@ export function SettingResetDialog({
         ) : null}
 
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={phase.kind === "resetting"}>Cancel</AlertDialogCancel>
           {phase.kind === "failed" ? (
-            <Button type="button" variant="outline" onClick={() => void loadPreview(false, true)}>
+            <Button type="button" variant="outline" onClick={() => void loadPreview(false)}>
               Check again
             </Button>
           ) : (
             <Button
               type="button"
               variant="destructive"
-              disabled={phase.kind !== "ready"}
+              disabled={phase.kind !== "ready" || !available || !draftIsClean(draft)}
               onClick={() => void confirm()}
             >
               {phase.kind === "resetting" ? (

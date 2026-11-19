@@ -47,9 +47,12 @@ without activating it (`field-navigation.ts`, `SettingFieldNavigator.tsx`);
 a live region says what happened, including when the field is not on screen.
 
 While a search is open the section underneath stays mounted and hidden, so an
-unsaved edit survives it. Opening a result in a section drawn outside the
-shared form unmounts that form; when the form holds an edit it cannot save
-yet (a validation failure), search asks first: fix it, or discard it and open.
+unsaved edit survives it. Search asks before opening a result that changes
+the form's machine or unmounts the shared form while it holds a draft.
+Returning to the draft focuses its field when one is identified. Each result
+uses its destination's configuration and remains searchable while that
+configuration is loading or unavailable. Modified filters the current query
+when both controls are active.
 
 Keyboard: ArrowDown from the field moves into the results, ArrowUp from the
 first result returns, Enter in the field opens the first result, Escape
@@ -58,9 +61,13 @@ clears the search instead of closing Settings.
 ## Where a value comes from
 
 `get_global_setting_sources` (config domain) answers which top-level keys a
-machine stores, read from its stored file rather than the normalised config
-(normalisation fills in keys the user never set), and which it takes from the
-command node it follows. Key names only, never values, and never credentials.
+machine explicitly stores and which it takes from the command node it
+follows. The backend records override intent in the config file under the same
+lock as the setting itself. Equal-to-default keys in older files can be
+ambiguous and are reported as unknown. Shared sound and agent settings can
+identify individual fields. Replies contain key names and exclude credentials.
+Remote configuration is refreshed from its resource feed and on reconnect.
+The value on screen controls which revision of source metadata is shown.
 Settings reads it for the machine on screen and for the command node
 (`readSettingSourcesLayers` in `lib/portal/command-node-config.ts`) and
 resolves each field (`provenance.ts`):
@@ -85,15 +92,19 @@ is removed and the answer is a `conflict` with the current settings. The
 dialog then shows the new value and asks again. A reset removes the override;
 it never copies the parent value into the child. Inherited preferences are
 reset on the command node, machine settings on the machine
-(`runResetGlobalSettings`).
+(`runResetGlobalSettings`). One request affects one owner. Overrides parked
+under an external controller are unavailable for reset while the controller
+supplies the effective value.
 
 Only `RESETTABLE_GLOBAL_SETTING_KEYS` (`packages/protocol/src/setting-sources.ts`)
 qualify: keys whose absence the backend keeps through later saves.
 `storage-config-setting-sources.test.ts` proves that per key. Keys that
 normalisation or validation writes back (terminal appearance, scrollback,
 enabled platforms, the agent settings block) are explained but not offered for
-reset. Reset is disabled while the shared form has unsaved changes, because
-adopting the reset's answer re-syncs the whole form.
+reset. Allow web access uses its dedicated service control and is outside
+the generic reset allowlist. Reset is disabled while the shared form has
+unsaved changes. The preview stays open during the request and its response
+is applied only while the current form can accept it.
 
 An outcome the client cannot confirm (a transport error) is not retried; the
 dialog offers to read the current value again.
@@ -102,9 +113,10 @@ dialog offers to read the current value again.
 
 The shared form reports its unsaved keys, saving state, blocking validation
 and last error to a page-level registry (`settings-explain.tsx`). A field with
-an unsaved edit says so; a failed save keeps the edit, shows the error under
-the field and offers Retry. After a save the status line names settings that
-apply later ("Session titles applies to new agent sessions.").
+an unsaved edit says so. After an unconfirmed save, **Check saved values**
+reads the current values from their owners. If those values differ from the
+draft, the edit is kept for review and **Use saved values** explicitly loads
+the authoritative state. After a save the status line names settings that apply later ("Session titles applies to new agent sessions.").
 
 ## Measurement
 

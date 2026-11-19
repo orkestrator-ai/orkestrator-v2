@@ -15,6 +15,7 @@ import {
 } from "@/lib/settings-catalog/provenance";
 import { SETTING_TIMING_LABELS, settingScope } from "@/lib/settings-catalog/scope";
 import { cn } from "@/lib/utils";
+import { isWindowMachine } from "../account-machine";
 import { useSettingsConfig } from "../settings-config";
 import {
   draftIsClean,
@@ -62,15 +63,21 @@ export function SettingExplanation({
   const explain = useSettingsExplain();
   const draft = useSettingsDraft();
   const registry = useSettingsDraftRegistry();
-  const { config } = useSettingsConfig();
+  const { config, ready } = useSettingsConfig();
   if (!descriptor || !explain) return null;
   const global = config.global;
   const timing = SETTING_TIMING_LABELS[descriptor.appliesWhen];
   const scope = settingScope(descriptor);
   const key = descriptor.value?.key;
   const dirty = key ? draft.dirtyKeys.includes(key) : false;
-  const failed = dirty && draft.errorMessage !== null;
-  const presentation = presentSetting(descriptor, global, explain.sources);
+  const unconfirmed = !!key && draft.unconfirmedKeys?.includes(key);
+  const failed = (dirty || unconfirmed) && draft.errorMessage !== null;
+  const presentation = presentSetting(
+    descriptor,
+    global,
+    explain.sources,
+    isWindowMachine(explain.machine),
+  );
 
   let summary: ReactNode;
   if (descriptor.sensitive) {
@@ -111,7 +118,16 @@ export function SettingExplanation({
     );
   }
 
-  const canReset = presentation?.resettable === true && presentation.hasOverride === true && !dirty;
+  const canReset =
+    ready &&
+    presentation?.resettable === true &&
+    presentation.hasOverride === true &&
+    !dirty &&
+    (!descriptor.availability ||
+      descriptor.availability.isAvailable({
+        global,
+        isWindowMachine: isWindowMachine(explain.machine),
+      }));
   const formBusy = !draftIsClean(draft);
 
   return (
@@ -135,7 +151,7 @@ export function SettingExplanation({
       {failed ? (
         <span role="alert" className="flex items-center gap-1 text-failure">
           <AlertCircle className="h-3 w-3" aria-hidden="true" />
-          Not saved: {draft.errorMessage}. Your edit is kept.
+          {draft.errorMessage} Your edit is kept.
           {registry ? (
             <Button
               type="button"
@@ -144,7 +160,18 @@ export function SettingExplanation({
               className="h-auto p-0 text-[11px]"
               onClick={() => registry.retrySave()}
             >
-              Retry
+              {unconfirmed ? "Check saved values" : "Retry"}
+            </Button>
+          ) : null}
+          {registry && unconfirmed ? (
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-[11px]"
+              onClick={() => registry.retrySave(true)}
+            >
+              Use saved values
             </Button>
           ) : null}
         </span>

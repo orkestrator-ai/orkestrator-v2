@@ -48,6 +48,11 @@ export type SettingScope =
 export interface SettingValueBinding {
   /** The stored key; a reset removes this whole key. */
   readonly key: keyof GlobalConfig & string;
+  /** Key of the individual field within a shared global value. */
+  readonly field?: string;
+  readonly isExplicit?: (global: GlobalConfig) => boolean;
+  /** Account for local runtime conditions without changing override detection. */
+  readonly readEffective?: (value: unknown, onWindowMachine: boolean) => unknown;
   /** The effective value, resolved the way the form resolves it. */
   readonly read: (global: GlobalConfig) => unknown;
   /** The value that applies when nothing is stored. */

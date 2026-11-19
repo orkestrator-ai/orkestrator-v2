@@ -28,7 +28,7 @@ export type EffectiveSource =
   | { readonly kind: "controller" }
   /** Nothing is stored: the product default applies. */
   | { readonly kind: "default" }
-  | { readonly kind: "unknown"; readonly reason: "loading" | "unsupported" | "failed" };
+  | { readonly kind: "unknown"; readonly reason: "loading" | "unsupported" | "failed" | "legacy" };
 
 export interface SettingPresentation {
   /** The value in effect, as stored settings resolve it. */
@@ -47,6 +47,7 @@ export type SourcesState = SettingSourcesLayers | null;
 function storedIn(read: SettingSourcesRead, key: string): boolean | EffectiveSource {
   if (read.status === "unsupported") return { kind: "unknown", reason: "unsupported" };
   if (read.status === "failed") return { kind: "unknown", reason: "failed" };
+  if (read.sources.unknownKeys?.includes(key)) return { kind: "unknown", reason: "legacy" };
   return read.sources.storedKeys.includes(key);
 }
 
@@ -57,6 +58,9 @@ export function resolveSettingSource(key: string, layers: SourcesState): Effecti
   if (layers.node) {
     // A separate machine: its inherited preferences are the command node's.
     if (inherited) {
+      if (layers.commandNode.status === "ok" && layers.commandNode.sources.inheritedKeys !== null) {
+        return { kind: "controller" };
+      }
       const onCommand = storedIn(layers.commandNode, key);
       if (typeof onCommand !== "boolean") return onCommand;
       return onCommand ? { kind: "command-node" } : { kind: "default" };
@@ -66,7 +70,7 @@ export function resolveSettingSource(key: string, layers: SourcesState): Effecti
     return onNode ? { kind: "machine" } : { kind: "default" };
   }
   const read = layers.commandNode;
-  if (inherited && read.status === "ok" && read.sources.inheritedKeys?.includes(key)) {
+  if (inherited && read.status === "ok" && read.sources.inheritedKeys !== null) {
     return { kind: "controller" };
   }
   const own = storedIn(read, key);
@@ -79,18 +83,45 @@ export function presentSetting(
   descriptor: SettingDescriptor,
   global: GlobalConfig,
   layers: SourcesState,
+  onWindowMachine = true,
 ): SettingPresentation | null {
   const binding = descriptor.value;
   if (!binding) return null;
-  const effective = binding.read(global);
-  const source = resolveSettingSource(binding.key, layers);
-  const hasOverride = source.kind === "unknown" ? null : source.kind !== "default";
+  const stored = binding.read(global);
+  const effective = binding.readEffective?.(stored, onWindowMachine) ?? stored;
+  const baseSource = resolveSettingSource(binding.key, layers);
+  const differs = !settingValuesEqual(stored, binding.defaultValue);
+  const owner = isInheritedSettingKey(binding.key)
+    ? layers?.commandNode
+    : (layers?.node ?? layers?.commandNode);
+  const path = binding.field ? `${binding.key}.${binding.field}` : null;
+  const fieldSources = path && owner?.status === "ok" ? owner.sources : null;
+  const tracked = path && fieldSources?.storedFields?.includes(path);
+  const source: EffectiveSource =
+    path && fieldSources?.unknownKeys?.includes(path) && baseSource.kind !== "controller"
+      ? { kind: "unknown", reason: "legacy" }
+      : baseSource;
+  const hasOverride =
+    source.kind === "unknown"
+      ? null
+      : source.kind !== "default" &&
+        source.kind !== "controller" &&
+        (!binding.field ||
+          tracked === true ||
+          (binding.isExplicit ? binding.isExplicit(global) : differs));
+  const fieldSource =
+    binding.field && hasOverride === false && source.kind !== "controller"
+      ? { kind: "default" as const }
+      : source;
   return {
     effective,
-    source,
+    source: fieldSource,
     hasOverride,
-    isDifferentFromDefault: !settingValuesEqual(effective, binding.defaultValue),
-    resettable: isResettableGlobalSettingKey(binding.key) && !descriptor.sensitive,
+    isDifferentFromDefault: differs,
+    resettable:
+      source.kind !== "controller" &&
+      isResettableGlobalSettingKey(binding.key) &&
+      !descriptor.sensitive,
   };
 }
 
@@ -138,7 +169,9 @@ export function describeSource(
         ? "Checking where this value comes from…"
         : source.reason === "unsupported"
           ? `Source unknown: ${owner} runs an older Orkestrator`
-          : "Source unknown: stored settings could not be read";
+          : source.reason === "legacy"
+            ? "Source unknown: saved before override tracking"
+            : "Source unknown: stored settings could not be read";
   }
 }
 

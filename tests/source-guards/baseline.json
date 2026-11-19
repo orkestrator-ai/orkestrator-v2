@@ -319,7 +319,6 @@
     "apps/web/src/components/federation/useFederatedEnvironmentActions.tsx": 1,
     "apps/web/src/components/layout/KeyboardShortcutsDialog.tsx": 1,
     "apps/web/src/components/layout/MobileAppShellLayout.tsx": 1,
-    "apps/web/src/components/settings/GlobalSettings.sections.tsx": 1,
     "apps/web/src/components/settings/machines/ClientOptions.tsx": 1,
     "apps/web/src/components/settings/machines/SshRouteDialog.tsx": 1,
     "apps/web/src/components/settings/machines/useMachines.ts": 1,

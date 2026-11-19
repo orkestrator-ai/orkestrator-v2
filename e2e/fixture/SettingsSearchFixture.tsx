@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import { FederationProvider } from "../../apps/web/src/components/federation/FederationProvider";
 import { SettingsPage } from "../../apps/web/src/components/settings/SettingsPage";
 import { useAccountMachineStore } from "../../apps/web/src/components/settings/account-machine";
@@ -23,6 +24,9 @@ function install() {
       autoSteer: false,
       sessionTitleGeneration: "off",
       terminalHistoryEnabled: false,
+      notificationSounds: normalizeNotificationSoundSettings(
+        JSON.parse(localStorage.getItem("settings-search:sounds") ?? "null"),
+      ),
     } as GlobalConfig,
   };
   let storedKeys = [
@@ -31,13 +35,25 @@ function install() {
     "sessionTitleGeneration",
     "terminalHistoryEnabled",
   ];
+  let storedFields: string[] = localStorage.getItem("settings-search:sounds")
+    ? ["notificationSounds.prMerged"]
+    : [];
+  if (storedFields.length) storedKeys.push("notificationSounds");
   let conflictOnce = new URLSearchParams(window.location.search).has("reset-conflict");
   const answer = (command: string, args: Record<string, unknown> = {}): unknown => {
     switch (command) {
       case "get_config":
         return config;
       case "get_global_setting_sources":
-        return { storedKeys, inheritedKeys: null };
+        return { storedKeys, inheritedKeys: null, storedFields };
+      case "update_notification_sound_settings": {
+        const notificationSounds = normalizeNotificationSoundSettings(args.settings);
+        localStorage.setItem("settings-search:sounds", JSON.stringify(notificationSounds));
+        config = { ...config, global: { ...config.global, notificationSounds } };
+        storedKeys = [...new Set([...storedKeys, "notificationSounds"])];
+        storedFields = ["notificationSounds.prMerged"];
+        return config;
+      }
       case "patch_global_config": {
         const global = { ...config.global, ...(args.patch as Partial<GlobalConfig>) };
         for (const key of (args.unset as string[] | undefined) ?? []) {
@@ -54,6 +70,7 @@ function install() {
         localStorage.setItem("settings-search:resets", JSON.stringify(args));
         if (conflictOnce) {
           conflictOnce = false;
+          config = { ...config, global: { ...config.global, debugLogging: false } };
           return { status: "conflict", conflicts: keys, config };
         }
         const global = { ...config.global } as unknown as Record<string, unknown>;

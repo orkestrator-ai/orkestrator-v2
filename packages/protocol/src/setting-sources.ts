@@ -57,7 +57,6 @@ export const RESETTABLE_GLOBAL_SETTING_KEYS = [
   "experimentalSelfImprovement",
   "experimentalTmux",
   "localWindowGatewayTransport",
-  "webClientEnabled",
   "debugLogging",
 ] as const;
 
@@ -79,6 +78,10 @@ export const MAX_RESET_SETTING_KEYS = 16;
 export interface GlobalSettingSources {
   /** Top-level keys in this machine's own stored settings; credentials excluded. */
   readonly storedKeys: string[];
+  /** Legacy keys or field paths whose presence may have come from normalization. */
+  readonly unknownKeys?: string[];
+  /** Independently tracked fields of settings stored as one object. */
+  readonly storedFields?: string[];
   /**
    * Keys this machine currently takes from a command node it follows.
    * `null` when it follows none.

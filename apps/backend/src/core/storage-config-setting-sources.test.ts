@@ -49,7 +49,6 @@ const NON_DEFAULT_VALUES: Record<ResettableGlobalSettingKey, unknown> = {
   experimentalSelfImprovement: true,
   experimentalTmux: true,
   localWindowGatewayTransport: false,
-  webClientEnabled: false,
   debugLogging: true,
 };
 
@@ -72,6 +71,55 @@ describe("global setting sources", () => {
       await fs.rm(path.join(dataDir, "config.json"), { force: true });
       const fresh = new StorageService(dataDir);
       expect((await fresh.globalSettingSources()).storedKeys).toEqual([]);
+    });
+  });
+
+  test("normalization and unrelated saves do not turn defaults into overrides", async () => {
+    await withStorage(async (storage, dataDir) => {
+      await storage.patchGlobalConfig({ terminalScrollback: 4321 });
+      expect((await storage.globalSettingSources()).storedKeys).not.toContain("debugLogging");
+      await storage.patchGlobalConfig({ debugLogging: false });
+      await storage.patchGlobalConfig({ terminalScrollback: 4322 });
+      expect((await new StorageService(dataDir).globalSettingSources()).storedKeys).toContain(
+        "debugLogging",
+      );
+    });
+  });
+
+  test("equal-to-default values from older files stay ambiguous until explicitly set", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const config = await storage.loadOwnConfig();
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        JSON.stringify({
+          ...config,
+          global: { ...config.global, debugLogging: false, terminalScrollback: 4321 },
+        }),
+      );
+      const reloaded = new StorageService(dataDir);
+      await reloaded.init();
+      await reloaded.patchGlobalConfig({ terminalScrollback: 4322 });
+      expect(await reloaded.globalSettingSources()).toMatchObject({
+        storedKeys: expect.arrayContaining(["terminalScrollback"]),
+        unknownKeys: expect.arrayContaining(["debugLogging"]),
+      });
+      expect((await reloaded.globalSettingSources()).storedKeys).not.toContain("debugLogging");
+      await reloaded.patchGlobalConfig({ debugLogging: false });
+      expect((await reloaded.globalSettingSources()).storedKeys).toContain("debugLogging");
+      expect((await reloaded.globalSettingSources()).unknownKeys ?? []).not.toContain(
+        "debugLogging",
+      );
+    });
+  });
+
+  test("marks only the sound switch edited, including when it returns to its default", async () => {
+    await withStorage(async (storage) => {
+      const settings = (await storage.loadConfig()).global.notificationSounds;
+      await storage.updateNotificationSoundSettings({ ...settings, prMerged: false });
+      await storage.updateNotificationSoundSettings({ ...settings, prMerged: true });
+      expect((await storage.globalSettingSources()).storedFields).toEqual([
+        "notificationSounds.prMerged",
+      ]);
     });
   });
 
@@ -107,6 +155,20 @@ describe("resetting global settings", () => {
       });
     },
   );
+
+  test("refuses to remove a parked value when a controller owns the effective setting", async () => {
+    await withStorage(async (storage, dataDir) => {
+      await storage.patchGlobalConfig({ autoSteer: true });
+      storage.inheritedGlobalSettings = () => ({ autoSteer: false });
+      const reset = await storage.resetGlobalSettings(
+        ["autoSteer"],
+        [{ key: "autoSteer", present: true, value: true }],
+      );
+      expect(reset).toMatchObject({ status: "conflict", conflicts: ["autoSteer"] });
+      expect(reset.config.global.autoSteer).toBe(false);
+      expect((await storedOnDisk(dataDir)).autoSteer).toBe(true);
+    });
+  });
 
   test("removes nothing when a value changed after the preview", async () => {
     await withStorage(async (storage, dataDir) => {
@@ -146,6 +208,17 @@ describe("resetting global settings", () => {
       const runtime = new BackendRuntime({ emit: () => undefined });
       const context = { storage, runtime } as CommandContext;
       try {
+        await storage.patchGlobalConfig({ webClientEnabled: false });
+        await expect(
+          reset(
+            {
+              keys: ["webClientEnabled"],
+              expect: [{ key: "webClientEnabled", present: true, value: false }],
+            },
+            context,
+          ),
+        ).rejects.toThrow("cannot be reset");
+        expect((await storage.loadConfig()).global.webClientEnabled).toBe(false);
         await expect(
           reset(
             { keys: ["githubToken"], expect: [{ key: "githubToken", present: false }] },

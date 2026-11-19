@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import * as federation from "@/components/federation/FederationProvider";
+import * as nodeEvents from "@/lib/federation/node-events";
 import * as commandNode from "@/components/federation/useCommandNode";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -29,8 +30,9 @@ interface Backend {
   config: AppConfig;
   storedKeys: string[];
   resets: Array<Record<string, unknown>>;
-  /** Answers for successive reset calls. */
-  resetAnswers: Array<"reset" | "conflict">;
+  inheritedKeys: string[] | null;
+  beforeReset?: () => unknown | Promise<unknown>;
+  dropPatchResponse?: boolean;
 }
 
 function install(global: Partial<GlobalConfig>, storedKeys: string[]): Backend {
@@ -51,24 +53,29 @@ function install(global: Partial<GlobalConfig>, storedKeys: string[]): Backend {
     },
     storedKeys,
     resets: [],
-    resetAnswers: [],
+    inheritedKeys: null,
   };
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     switch (command) {
       case "get_config":
         return backend.config;
       case "get_global_setting_sources":
-        return { storedKeys: backend.storedKeys, inheritedKeys: null };
+        return { storedKeys: backend.storedKeys, inheritedKeys: backend.inheritedKeys };
       case "patch_global_config":
         backend.config = {
           ...backend.config,
           global: { ...backend.config.global, ...(args?.patch as object) } as GlobalConfig,
         };
+        if (backend.dropPatchResponse) throw new Error("Response lost");
         return backend.config;
       case "reset_global_settings": {
         backend.resets.push(args ?? {});
-        const answer = backend.resetAnswers.shift() ?? "reset";
+        await backend.beforeReset?.();
         const keys = (args?.keys ?? []) as string[];
+        const expected = (args?.expect ?? []) as Array<{ key: keyof GlobalConfig; value: unknown }>;
+        const answer = expected.every((entry) => backend.config.global[entry.key] === entry.value)
+          ? "reset"
+          : "conflict";
         if (answer === "reset") {
           const global = { ...backend.config.global } as Record<string, unknown>;
           for (const key of keys) delete global[key];
@@ -212,7 +219,13 @@ test("fields explain their effective value and source; Modified tells overrides 
 
 test("a reset previews its effect, refuses a value that moved, and removes the override on confirm", async () => {
   const backend = install({ debugLogging: true }, ["debugLogging"]);
-  backend.resetAnswers = ["conflict", "reset"];
+  backend.beforeReset = () => {
+    backend.config = {
+      ...backend.config,
+      global: { ...backend.config.global, debugLogging: false },
+    };
+    backend.beforeReset = undefined;
+  };
   renderInAppCommandScope(
     <SettingsPage open defaultSection="debug" onOpenChange={() => undefined} />,
   );
@@ -239,6 +252,7 @@ test("a reset previews its effect, refuses a value that moved, and removes the o
   });
   await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
   expect(backend.resets).toHaveLength(2);
+  expect(backend.resets[1]?.expect).toEqual([{ key: "debugLogging", present: true, value: false }]);
   await waitFor(() => {
     const explanation = document.querySelector('[data-setting-explanation="debug.save-logs"]');
     expect(explanation?.textContent).toContain("Default; nothing stored on Desk");
@@ -271,4 +285,221 @@ test("search keeps an unsaved edit and asks before leaving the form with one tha
     (screen.getByRole("textbox", { name: "Allowed domains" }) as HTMLTextAreaElement).value,
   ).toBe("github.com\nnot a domain!!");
   expect(invokeMock.mock.calls.some(([command]) => command === "patch_global_config")).toBe(false);
+});
+
+test("a controller-owned value is explained without offering reset", async () => {
+  const backend = install({ autoSteer: true }, ["autoSteer"]);
+  backend.inheritedKeys = ["autoSteer"];
+  renderInAppCommandScope(
+    <SettingsPage open defaultSection="general" onOpenChange={() => undefined} />,
+  );
+  const anchor = (await screen.findByRole("switch", { name: "Auto-steer" })).closest(
+    "[data-setting-anchor]",
+  ) as HTMLElement;
+  expect(
+    await within(anchor).findByText(/Inherited from the command node this machine follows/),
+  ).toBeTruthy();
+  expect(within(anchor).queryByRole("button", { name: /Reset/ }) === null).toBe(true);
+  expect(backend.resets).toHaveLength(0);
+});
+
+test("while reset is pending Escape cannot dismiss it, and a late reply cannot replace a newer draft", async () => {
+  const backend = install({ debugLogging: true }, ["debugLogging"]);
+  const pending = Promise.withResolvers<void>();
+  backend.beforeReset = () => pending.promise;
+  const rendered = renderInAppCommandScope(
+    <SettingsPage open defaultSection="debug" onOpenChange={() => undefined} />,
+  );
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Reset Save logs to disk to default" }),
+  );
+  const dialog = await screen.findByRole("alertdialog");
+  await within(dialog).findByTestId("reset-preview");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Reset to default" }));
+  expect(
+    (within(dialog).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(screen.getByRole("alertdialog")).toBe(dialog);
+
+  // An app-level request can still replace Settings. A late response must
+  // not touch the newly opened form or replace its draft.
+  rendered.rerender(<SettingsPage open defaultSection="network" onOpenChange={() => undefined} />);
+  const domains = (await screen.findByRole("textbox", {
+    name: "Allowed domains",
+  })) as HTMLTextAreaElement;
+  fireEvent.change(domains, { target: { value: "NOT a valid domain!" } });
+  await act(async () => pending.resolve());
+  expect(domains.value).toBe("NOT a valid domain!");
+  expect(screen.queryByRole("alertdialog") === null).toBe(true);
+});
+
+test("checking a lost save response preserves the draft and never replays the patch", async () => {
+  const backend = install({ terminalScrollback: 1000 }, []);
+  backend.dropPatchResponse = true;
+  renderInAppCommandScope(
+    <SettingsPage open defaultSection="general" onOpenChange={() => undefined} />,
+  );
+  const folder = (await screen.findByRole("textbox", {
+    name: "Default projects folder",
+  })) as HTMLInputElement;
+  fireEvent.change(folder, { target: { value: "/draft/projects" } });
+  const check = await screen.findByRole("button", { name: "Check saved values" });
+  backend.config = {
+    ...backend.config,
+    global: { ...backend.config.global, defaultProjectsDirectory: "/other-client" },
+  };
+  fireEvent.click(check);
+  expect(await screen.findByText(/saved values differ/)).toBeTruthy();
+  expect(folder.value).toBe("/draft/projects");
+  expect(
+    invokeMock.mock.calls.filter(([command]) => command === "patch_global_config"),
+  ).toHaveLength(1);
+
+  fireEvent.change(searchField(), { target: { value: "agent stopped sound" } });
+  fireEvent.click(await screen.findByRole("button", { name: /^Agent stopped sound/ }));
+  const confirm = await screen.findByRole("alertdialog");
+  fireEvent.click(within(confirm).getByRole("button", { name: "Fix the change first" }));
+  expect(folder.value).toBe("/draft/projects");
+});
+
+function installRemote() {
+  const command = install({ debugLogging: false }, ["debugLogging"]);
+  const remote = {
+    ...command.config,
+    global: { ...command.config.global, debugLogging: true, experimentalGraphs: true },
+  };
+  const nodeId = "bk_remote" as BackendId;
+  let offline = false;
+  const listeners = new Set<nodeEvents.NodeEventSubscriber>();
+  spyOn(nodeEvents, "subscribeNodeEvents").mockImplementation((_node, listener) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  });
+  const mockFederation = spyOn(federation, "useFederation");
+  const connection = (state: "connected" | "unavailable") => {
+    const nodes = [
+      {
+        nodeId,
+        view: { displayName: "Build box", connection: { state } },
+        projects: [],
+        environments: [],
+        freshness: "current",
+      },
+    ] as unknown as typeof initialPortal.nodes;
+    const portal = { ...initialPortal, selfId: "bk_desk" as BackendId, nodes };
+    portalStore.store.setState(portal);
+    mockFederation.mockReturnValue({
+      enabled: true,
+      bound: {
+        name: "Desk",
+        backendId: portal.selfId,
+        connectionId: portal.selfId,
+        colorToken: "teal",
+      },
+      portalState: portal,
+    } as never);
+  };
+  connection("connected");
+  useAccountMachineStore.getState().choose(nodeId);
+  const invokeLocal = invokeMock.getMockImplementation()!;
+  invokeMock.mockImplementation(async (name: string, args?: Record<string, unknown>) => {
+    if (name !== "invoke_on_node") return invokeLocal(name, args);
+    if (args?.command === "get_config" && offline) throw new Error("Machine unavailable");
+    return {
+      outcome: "ok",
+      result:
+        args?.command === "get_config"
+          ? { ...remote, global: { ...remote.global } }
+          : args?.command === "get_global_setting_sources"
+            ? { storedKeys: ["debugLogging", "experimentalGraphs"], inheritedKeys: null }
+            : undefined,
+    };
+  });
+  return {
+    remote,
+    connection,
+    remoteChange() {
+      for (const listener of listeners)
+        listener.onEvent("resource-changed", { resource: "config", id: "app", revision: 2 });
+    },
+    failRead: () => {
+      offline = true;
+    },
+  };
+}
+
+test("search from Review describes and opens the selected remote, then refreshes on reconnect", async () => {
+  const { remote, connection, remoteChange } = installRemote();
+  const page = <SettingsPage open defaultSection="review" onOpenChange={() => undefined} />;
+  const rendered = renderInAppCommandScope(page);
+  fireEvent.change(searchField(), { target: { value: "save logs to disk" } });
+  const results = await screen.findByRole("region", { name: "Settings search results" });
+  await within(results).findByText(/On · Set on Build box/);
+  const row = within(results)
+    .getByRole("button", { name: /^Save logs to disk/ })
+    .closest("li");
+  expect(row?.textContent).toContain("Machine setting · Build box");
+  fireEvent.click(within(results).getByRole("button", { name: /^Save logs to disk/ }));
+  const setting = await screen.findByRole("switch", { name: "Save logs to disk" });
+  await waitFor(() => expect(setting === document.activeElement).toBe(true));
+  expect(setting.getAttribute("aria-checked")).toBe("true");
+
+  act(() => {
+    connection("unavailable");
+    rendered.rerender(<SettingsPage open defaultSection="review" onOpenChange={() => undefined} />);
+  });
+  await screen.findByText(/This machine is disconnected/);
+  remote.global.debugLogging = false;
+  act(() => {
+    connection("connected");
+    rendered.rerender(<SettingsPage open defaultSection="review" onOpenChange={() => undefined} />);
+  });
+  await screen.findByText("Set on Build box");
+  expect(
+    (await screen.findByRole("switch", { name: "Save logs to disk" })).getAttribute("aria-checked"),
+  ).toBe("false");
+
+  remote.global.debugLogging = true;
+  act(remoteChange);
+  await waitFor(() => expect(setting.getAttribute("aria-checked")).toBe("true"));
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Show modified settings" })[0]!);
+  const modified = await screen.findByRole("region", { name: "Modified settings" });
+  const graphs = (await within(modified).findByRole("button", { name: /^Graphs/ })).closest(
+    "li",
+  ) as HTMLLIElement;
+  expect(graphs.textContent).toContain("Experimental settings belong");
+  expect(within(graphs).queryByRole("button", { name: /Reset/ }) === null).toBe(true);
+});
+
+test("a failed remote read leaves command-node search and navigation usable", async () => {
+  const { failRead } = installRemote();
+  failRead();
+  renderInAppCommandScope(
+    <SettingsPage open defaultSection="network" onOpenChange={() => undefined} />,
+  );
+  await screen.findByText(/Machine unavailable/);
+  fireEvent.change(searchField(), { target: { value: "code review instruction" } });
+  fireEvent.click(await screen.findByRole("button", { name: /^Code review instruction/ }));
+  await screen.findByRole("heading", { name: "Review" });
+});
+
+test("invalid remote Network draft survives a search result that opens command-node Review", async () => {
+  installRemote();
+  renderInAppCommandScope(
+    <SettingsPage open defaultSection="network" onOpenChange={() => undefined} />,
+  );
+  const domains = (await screen.findByRole("textbox", {
+    name: "Allowed domains",
+  })) as HTMLTextAreaElement;
+  fireEvent.change(domains, { target: { value: "this is invalid!" } });
+  fireEvent.change(searchField(), { target: { value: "code review instruction" } });
+  fireEvent.click(await screen.findByRole("button", { name: /^Code review instruction/ }));
+  const confirm = await screen.findByRole("alertdialog");
+  fireEvent.click(within(confirm).getByRole("button", { name: "Fix the change first" }));
+  await waitFor(() => expect(document.activeElement).toBe(domains));
+  expect(domains.value).toBe("this is invalid!");
 });

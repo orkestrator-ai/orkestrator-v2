@@ -52,6 +52,7 @@ import { CredentialsSettings } from "./CredentialsSettings";
 import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
 import {
   AccountMachineProvider,
+  type AccountMachineOption,
   useAccountMachineStore,
   useResolvedAccountMachine,
 } from "./account-machine";
@@ -60,10 +61,13 @@ import { SettingsMachineStrip } from "./SettingsMachineStrip";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { COMMAND_NODE_SECTIONS } from "@/lib/settings-catalog/scope";
+import { SETTINGS_CATALOG } from "@/lib/settings-catalog/catalog";
 import { SETTINGS_SECTION_LABELS } from "@/lib/settings-catalog/sections";
 import type { SettingDescriptor } from "@/lib/settings-catalog/types";
 import { useSettingsConfig } from "./settings-config";
 import {
+  draftIsClean,
+  useSettingsExplain,
   SettingsDraftProvider,
   SettingsDraftRegistry,
   SettingsExplainProvider,
@@ -74,6 +78,7 @@ import {
   openWouldDiscardDraft,
   useSettingsSearchResults,
   type PendingOpen,
+  type SettingsSearchTarget,
 } from "./search/SettingsSearch";
 import { SettingResetDialog } from "./search/SettingResetDialog";
 import { SettingFieldNavigator, type PendingField } from "./search/SettingFieldNavigator";
@@ -364,7 +369,10 @@ export function SettingsPage({
   } | null>(null);
   const [pendingField, setPendingField] = useState<PendingField | null>(null);
   const [pendingConflict, setPendingConflict] = useState<PendingOpen | null>(null);
-  const [resetTarget, setResetTarget] = useState<SettingDescriptor | null>(null);
+  const [resetTarget, setResetTarget] = useState<{
+    descriptor: SettingDescriptor;
+    machine: string | null;
+  } | null>(null);
   const [draftRegistry] = useState(() => new SettingsDraftRegistry());
   const resultsRef = useRef<HTMLDivElement | null>(null);
   const navigationSeqRef = useRef(0);
@@ -388,6 +396,7 @@ export function SettingsPage({
     setModifiedView(false);
     setPendingConflict(null);
     setPendingField(null);
+    setResetTarget(null);
   }
 
   const changeQuery = useCallback((next: string) => {
@@ -436,7 +445,9 @@ export function SettingsPage({
         openWouldDiscardDraft(
           open.descriptor,
           activeSection,
-          draftRegistry.getSnapshot().blocker !== null,
+          !draftIsClean(draftRegistry.getSnapshot()),
+          (COMMAND_NODE_SECTIONS.has(activeSection) ? null : resolved.machine) !==
+            (COMMAND_NODE_SECTIONS.has(open.descriptor.section) ? null : resolved.machine),
         )
       ) {
         setPendingConflict(open);
@@ -444,11 +455,11 @@ export function SettingsPage({
       }
       performOpen(open);
     },
-    [draftRegistry, performOpen],
+    [draftRegistry, performOpen, resolved.machine],
   );
 
-  const requestReset = useCallback((descriptor: SettingDescriptor) => {
-    setResetTarget(descriptor);
+  const requestReset = useCallback((descriptor: SettingDescriptor, machine: string | null) => {
+    setResetTarget({ descriptor, machine });
   }, []);
 
   const search = (placement: "sidebar" | "header") => (
@@ -505,103 +516,197 @@ export function SettingsPage({
           const locked = COMMAND_NODE_SECTIONS.has(activeSection);
           const machine = locked ? null : resolved.machine;
           const option = resolved.options.find((candidate) => candidate.nodeId === machine);
+          const resetDialog = resetTarget ? (
+            <SettingResetDialog
+              key={resetTarget.descriptor.id}
+              descriptor={resetTarget.descriptor}
+              onClose={() =>
+                setResetTarget((current) => (current === resetTarget ? null : current))
+              }
+            />
+          ) : null;
+          const selected = resolved.options.find(
+            (candidate) => candidate.nodeId === resolved.machine,
+          );
           return (
-            <MachineSettings key={machine ?? "command-node"} machine={machine} option={option}>
-              <SettingsExplainScope
-                machine={machine}
-                machineName={option?.name ?? null}
-                requestReset={requestReset}
-              >
-                {searchActive ? (
-                  <SettingsSearchResults
-                    mode={query.trim() ? "search" : "modified"}
-                    results={results}
-                    menuSections={menuSections}
-                    activeSection={activeSection}
-                    pendingConflict={pendingConflict}
-                    onOpen={(open) => requestOpen(open, activeSection)}
-                    onConfirmOpen={() => pendingConflict && performOpen(pendingConflict)}
-                    onCancelOpen={() => setPendingConflict(null)}
-                    onFixBlocker={(section) =>
-                      performOpen({
-                        descriptor: {
-                          id: `section:${section}`,
-                          section: section as GlobalSettingsSection,
-                          label:
-                            SETTINGS_SECTION_LABELS[section as GlobalSettingsSection] ?? section,
-                          description: "",
-                          appliesWhen: "immediately",
-                        },
-                        rank: -1,
-                      })
+            <>
+              {searchActive ? (
+                <SettingsResultTargets selected={selected} requestReset={requestReset}>
+                  {(commandTarget, selectedTarget) => (
+                    <SettingsSearchResults
+                      commandTarget={commandTarget}
+                      selectedTarget={selectedTarget}
+                      mode={modifiedView ? "modified" : "search"}
+                      queryActive={query.trim() !== ""}
+                      results={results}
+                      menuSections={menuSections}
+                      activeSection={activeSection}
+                      pendingConflict={pendingConflict}
+                      onOpen={(open) => requestOpen(open, activeSection)}
+                      onConfirmOpen={() => {
+                        if (!pendingConflict || draftRegistry.getSnapshot().saving) return;
+                        draftRegistry.discardOnLeave();
+                        performOpen(pendingConflict);
+                      }}
+                      onCancelOpen={() => setPendingConflict(null)}
+                      onFixBlocker={() => {
+                        changeQuery("");
+                        setModifiedView(false);
+                        const draft = draftRegistry.getSnapshot();
+                        const section = (draft.blocker?.section ??
+                          activeSection) as GlobalSettingsSection;
+                        if (!section) return;
+                        const seq = ++navigationSeqRef.current;
+                        setNavigation({ section, seq });
+                        setPendingField({
+                          descriptor: SETTINGS_CATALOG.find(
+                            (entry) =>
+                              entry.section === section &&
+                              entry.value &&
+                              draft.dirtyKeys.includes(entry.value.key),
+                          ) ?? {
+                            id: `section:${section}`,
+                            section,
+                            label: SETTINGS_SECTION_LABELS[section],
+                            description: "",
+                            appliesWhen: "immediately",
+                          },
+                          seq,
+                          rank: -1,
+                        });
+                      }}
+                      onBackToField={focusSearchField}
+                      onEscape={() => {
+                        changeQuery("");
+                        setModifiedView(false);
+                        focusSearchField();
+                      }}
+                      resultsRef={resultsRef}
+                    />
+                  )}
+                </SettingsResultTargets>
+              ) : null}
+              <div hidden={searchActive} className="h-full">
+                <MachineSettings key={machine ?? "command-node"} machine={machine} option={option}>
+                  <SettingsExplainScope
+                    machine={machine}
+                    machineName={option?.name ?? null}
+                    requestReset={requestReset}
+                  >
+                    <SettingFieldNavigator
+                      activeSection={activeSection}
+                      pending={searchActive ? null : pendingField}
+                      onSettled={() => setPendingField(null)}
+                    />
+                    <SettingsScopeBanner section={activeSection} machine={option} />
+                    {
+                      // Skills is a read-only browser of the host's skill directories, not a
+                      // config form, so it bypasses the auto-saving settings form.
+                      activeSection === "machines" ? (
+                        <MachinesSettings />
+                      ) : activeSection === "disk-usage" ? (
+                        <DiskUsageSettings />
+                      ) : activeSection === "usage" ? (
+                        <UsageSettings />
+                      ) : activeSection === "skills" ? (
+                        <SkillsSettings />
+                      ) : activeSection === "mcp" ? (
+                        <McpSettings />
+                      ) : activeSection === "mcp-servers" ? (
+                        <ProviderMcpSettings />
+                      ) : activeSection === "messaging" ? (
+                        <MessagingSettings />
+                      ) : activeSection === "schedules" && schedulingEnabled ? (
+                        <SchedulesSettings />
+                      ) : activeSection === "self-improvement" && selfImprovementEnabled ? (
+                        <SelfImprovementSettings />
+                      ) : activeSection === "permissions" ? (
+                        <PermissionsSettings />
+                      ) : activeSection === "credentials" ? (
+                        <CredentialsSettings />
+                      ) : activeSection === "docker" ? (
+                        <DockerSettings />
+                      ) : isLoading && !initialLoadDone ? (
+                        <div className="flex items-center justify-center py-12">
+                          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : activeSection === "sounds" ? (
+                        <SoundsSettings />
+                      ) : (
+                        <GlobalSettings activeSection={activeSection} />
+                      )
                     }
-                    onBackToField={focusSearchField}
-                    onEscape={() => {
-                      changeQuery("");
-                      setModifiedView(false);
-                      focusSearchField();
-                    }}
-                    resultsRef={resultsRef}
-                  />
-                ) : null}
-                {/* Kept mounted while searching, so an unsaved edit survives. */}
-                <div hidden={searchActive} className="h-full">
-                  <SettingFieldNavigator
-                    activeSection={activeSection}
-                    pending={searchActive ? null : pendingField}
-                    onSettled={() => setPendingField(null)}
-                  />
-                  <SettingsScopeBanner section={activeSection} machine={option} />
-                  {
-                    // Skills is a read-only browser of the host's skill directories, not a
-                    // config form, so it bypasses the auto-saving settings form.
-                    activeSection === "machines" ? (
-                      <MachinesSettings />
-                    ) : activeSection === "disk-usage" ? (
-                      <DiskUsageSettings />
-                    ) : activeSection === "usage" ? (
-                      <UsageSettings />
-                    ) : activeSection === "skills" ? (
-                      <SkillsSettings />
-                    ) : activeSection === "mcp" ? (
-                      <McpSettings />
-                    ) : activeSection === "mcp-servers" ? (
-                      <ProviderMcpSettings />
-                    ) : activeSection === "messaging" ? (
-                      <MessagingSettings />
-                    ) : activeSection === "schedules" && schedulingEnabled ? (
-                      <SchedulesSettings />
-                    ) : activeSection === "self-improvement" && selfImprovementEnabled ? (
-                      <SelfImprovementSettings />
-                    ) : activeSection === "permissions" ? (
-                      <PermissionsSettings />
-                    ) : activeSection === "credentials" ? (
-                      <CredentialsSettings />
-                    ) : activeSection === "docker" ? (
-                      <DockerSettings />
-                    ) : isLoading && !initialLoadDone ? (
-                      <div className="flex items-center justify-center py-12">
-                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                      </div>
-                    ) : activeSection === "sounds" ? (
-                      <SoundsSettings />
-                    ) : (
-                      <GlobalSettings activeSection={activeSection} />
-                    )
-                  }
-                </div>
-                <SettingResetDialog
-                  key={resetTarget?.id ?? "none"}
-                  descriptor={resetTarget}
-                  onClose={() => setResetTarget(null)}
-                />
-              </SettingsExplainScope>
-            </MachineSettings>
+                    {resetTarget && resetTarget.machine === machine ? resetDialog : null}
+                  </SettingsExplainScope>
+                </MachineSettings>
+              </div>
+              {resetTarget && resetTarget.machine !== machine ? (
+                <MachineSettings
+                  machine={resetTarget.machine}
+                  option={resetTarget.machine === selected?.nodeId ? selected : undefined}
+                  includeUnavailable
+                >
+                  <SettingsExplainScope
+                    machine={resetTarget.machine}
+                    machineName={
+                      resetTarget.machine === selected?.nodeId ? (selected?.name ?? null) : null
+                    }
+                    requestReset={requestReset}
+                  >
+                    {resetDialog}
+                  </SettingsExplainScope>
+                </MachineSettings>
+              ) : null}
+            </>
           );
         }}
       </FullscreenSettingsLayout>
     </SettingsDraftProvider>
   );
+}
+
+/** Search resolves each row using the configuration for its destination section. */
+function SettingsResultTargets({
+  selected,
+  requestReset,
+  children,
+}: {
+  selected: AccountMachineOption | undefined;
+  requestReset: (descriptor: SettingDescriptor, machine: string | null) => void;
+  children: (command: SettingsSearchTarget, selected: SettingsSearchTarget) => React.ReactNode;
+}) {
+  return (
+    <SettingsExplainScope machine={null} machineName={null} requestReset={requestReset}>
+      <SettingsResultTarget>
+        {(command) =>
+          selected?.nodeId ? (
+            <MachineSettings machine={selected.nodeId} option={selected} includeUnavailable>
+              <SettingsExplainScope
+                key={selected.nodeId}
+                machine={selected.nodeId}
+                machineName={selected.name}
+                requestReset={requestReset}
+              >
+                <SettingsResultTarget>{(target) => children(command, target)}</SettingsResultTarget>
+              </SettingsExplainScope>
+            </MachineSettings>
+          ) : (
+            children(command, command)
+          )
+        }
+      </SettingsResultTarget>
+    </SettingsExplainScope>
+  );
+}
+
+function SettingsResultTarget({
+  children,
+}: {
+  children: (target: SettingsSearchTarget) => React.ReactNode;
+}) {
+  const view = useSettingsConfig();
+  const explain = useSettingsExplain();
+  return children({ view, explain });
 }
 
 /** Names the machine on screen and its command node for the field explanations. */
@@ -613,12 +718,16 @@ function SettingsExplainScope({
 }: {
   machine: string | null;
   machineName: string | null;
-  requestReset: (descriptor: SettingDescriptor) => void;
+  requestReset: (descriptor: SettingDescriptor, machine: string | null) => void;
   children: React.ReactNode;
 }) {
   const commandNode = useCommandNode();
   const { enabled: federated } = useFederation();
-  const { config } = useSettingsConfig();
+  const { config, ready } = useSettingsConfig();
+  const resetHere = useCallback(
+    (descriptor: SettingDescriptor) => requestReset(descriptor, machine),
+    [requestReset, machine],
+  );
   const commandNodeName = commandNode?.name ?? null;
   const names = useMemo(
     () => ({
@@ -633,7 +742,8 @@ function SettingsExplainScope({
       machine={machine}
       names={names}
       configRevision={config.global}
-      requestReset={requestReset}
+      ready={ready}
+      requestReset={resetHere}
     >
       {children}
     </SettingsExplainProvider>
@@ -647,16 +757,24 @@ function SettingsExplainScope({
 export function MachineSettings({
   machine,
   option,
+  includeUnavailable,
   children,
 }: {
   machine: string | null;
-  option: { name: string } | undefined;
+  option: { name: string; connected?: boolean } | undefined;
+  includeUnavailable?: boolean;
   children: React.ReactNode;
 }) {
   const value = useMemo(() => ({ machine, name: option?.name ?? null }), [machine, option?.name]);
   return (
     <AccountMachineProvider value={value}>
-      <MachineConfigProvider machine={machine}>{children}</MachineConfigProvider>
+      <MachineConfigProvider
+        machine={machine}
+        connected={option?.connected}
+        includeUnavailable={includeUnavailable}
+      >
+        {children}
+      </MachineConfigProvider>
     </AccountMachineProvider>
   );
 }

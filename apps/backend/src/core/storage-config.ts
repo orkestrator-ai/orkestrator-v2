@@ -97,6 +97,64 @@ type AgentActivityState = shared.AgentActivityState;
 type AgentActivitySource = shared.AgentActivitySource;
 type AgentModelCatalogCache = shared.AgentModelCatalogCache;
 type AppConfig = shared.AppConfig;
+
+// Kept in config.json so override intent and the value commit under the same
+// lock and rename. This metadata is never part of the renderer's AppConfig.
+interface PersistedConfig extends AppConfig {
+  settingOverrides?: { explicit: string[]; unknown: string[]; fields?: string[] };
+}
+
+function trackedSettingFields(global: Record<string, unknown>): Map<string, unknown> {
+  const fields = new Map<string, unknown>();
+  for (const [name, value] of Object.entries(
+    normalizeNotificationSoundSettings(global.notificationSounds),
+  )) {
+    fields.set(`notificationSounds.${name}`, value);
+  }
+  const agents = normalizeAgentSettings(global.agentSettings);
+  if (agents.defaultAgent) fields.set("agentSettings.defaultAgent", agents.defaultAgent);
+  for (const [platform, settings] of Object.entries(agents.platforms ?? {})) {
+    for (const [name, value] of Object.entries(settings)) {
+      fields.set(`agentSettings.platforms.${platform}.${name}`, value);
+    }
+  }
+  return fields;
+}
+
+function legacySettingOverrides(
+  config: PersistedConfig | null,
+): NonNullable<PersistedConfig["settingOverrides"]> {
+  const explicit: string[] = [];
+  const unknown: string[] = [];
+  const fields: string[] = [];
+  if (config && isRecord(config.global)) {
+    const defaults = normalizePersistedConfig(defaultConfig()).global as unknown as Record<
+      string,
+      unknown
+    >;
+    const normalized = normalizePersistedConfig(config).global as unknown as Record<
+      string,
+      unknown
+    >;
+    for (const key of globalSettingSources(config.global, null).storedKeys) {
+      if (isDeepStrictEqual(normalized[key], defaults[key])) unknown.push(key);
+      else explicit.push(key);
+    }
+    const defaultFields = trackedSettingFields(defaults);
+    for (const [key, value] of trackedSettingFields(config.global)) {
+      if (
+        key.startsWith("notificationSounds.") &&
+        (!isRecord(config.global.notificationSounds) ||
+          !Object.hasOwn(config.global.notificationSounds, key.split(".")[1]!))
+      )
+        continue;
+      if (isDeepStrictEqual(value, defaultFields.get(key))) unknown.push(key);
+      else fields.push(key);
+    }
+  }
+  return { explicit, unknown, fields };
+}
+
 type ClaudeModelCatalogSnapshot = shared.ClaudeModelCatalogSnapshot;
 type ClaudeModelCatalogEntry = shared.ClaudeModelCatalogEntry;
 type CodexModelCatalogEntry = shared.CodexModelCatalogEntry;
@@ -317,20 +375,72 @@ export class ConfigRepository {
     return next as unknown as AppConfig["global"];
   }
 
+  private async readStoredConfig(): Promise<PersistedConfig | null> {
+    try {
+      await fs.access(this.files.configFile());
+    } catch (error) {
+      if (isMissingFileError(error)) return null;
+      throw error;
+    }
+    return this.context.loadJsonCached<PersistedConfig>(this.files.configFile(), defaultConfig);
+  }
+
+  /** Every config writer holds the same lock. The patch also names edits equal to a default. */
+  private async persistConfig(
+    config: AppConfig,
+    intent: { set?: readonly string[]; unset?: readonly string[]; migration?: boolean } = {},
+  ): Promise<void> {
+    const previous = await this.readStoredConfig();
+    const old = normalizePersistedConfig(previous ?? defaultConfig()).global as unknown as Record<
+      string,
+      unknown
+    >;
+    const next = config.global as unknown as Record<string, unknown>;
+    const keys = globalSettingSources(next, null).storedKeys;
+    const tracked = previous?.settingOverrides ?? legacySettingOverrides(previous);
+    const explicit = new Set(tracked.explicit);
+    const unknown = new Set(tracked.unknown);
+    const set = new Set(intent.set);
+    const removed = new Set(intent.unset);
+    for (const key of keys) {
+      if (removed.has(key)) {
+        explicit.delete(key);
+        unknown.delete(key);
+      } else if (set.has(key) || (!intent.migration && !isDeepStrictEqual(next[key], old[key]))) {
+        explicit.add(key);
+        unknown.delete(key);
+      }
+    }
+    const fields = new Set(tracked.fields);
+    const currentFields = trackedSettingFields(next);
+    if (!intent.migration) {
+      const previousFields = trackedSettingFields(old);
+      for (const [key, value] of currentFields) {
+        if (!isDeepStrictEqual(previousFields.get(key), value)) {
+          fields.add(key);
+          unknown.delete(key);
+        }
+      }
+    }
+    const retainedField = (key: string) =>
+      currentFields.has(key) && keys.includes(key.split(".")[0]!);
+    await this.context.saveSensitiveJson(this.files.configFile(), {
+      ...config,
+      settingOverrides: {
+        explicit: keys.filter((key) => explicit.has(key)),
+        unknown: [...unknown].filter((key) => keys.includes(key) || retainedField(key)).sort(),
+        fields: [...fields].filter(retainedField).sort(),
+      },
+    } satisfies PersistedConfig);
+  }
+
   /** This node's own persisted config, without anything inherited from a command node. */
   async loadOwnConfig(): Promise<AppConfig> {
-    const configExists = await fs.access(this.files.configFile()).then(
-      () => true,
-      () => false,
-    );
-    const config = await this.context.loadJsonCached<AppConfig>(
-      this.files.configFile(),
-      defaultConfig,
-    );
+    const stored = await this.readStoredConfig();
+    const { settingOverrides: _settingOverrides, ...config } =
+      stored ?? (defaultConfig() as PersistedConfig);
     const normalized = normalizePersistedConfig(config);
-    if (configExists) {
-      return normalized;
-    }
+    if (stored) return normalized;
     const sidecar = await this.context.loadJson<unknown>(
       this.files.agentPlatformsFile(),
       () => null,
@@ -411,7 +521,7 @@ export class ConfigRepository {
       );
       const normalized = normalizePersistedConfig(current);
       if (normalized === current) return;
-      await this.context.saveSensitiveJson(this.files.configFile(), normalized);
+      await this.persistConfig(normalized, { migration: true });
     });
   }
 
@@ -453,7 +563,7 @@ export class ConfigRepository {
             },
           }
         : { ...validated, global: ownGlobal };
-      await this.context.saveSensitiveJson(this.files.configFile(), next);
+      await this.persistConfig(next);
     });
     this.context.changes.announce("config", "app");
   }
@@ -631,7 +741,7 @@ export class ConfigRepository {
     await this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();
       config.desktopConnections = validated;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
     });
     this.context.changes.announce("config", "app");
   }
@@ -648,7 +758,7 @@ export class ConfigRepository {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();
       config.repositories[projectId] = { ...defaultRepositoryConfig(), ...repoConfig };
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -684,7 +794,7 @@ export class ConfigRepository {
             }
           : {}),
       };
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -717,7 +827,7 @@ export class ConfigRepository {
         ...defaultRepositoryConfig(),
         ...(next as unknown as RepositoryConfig),
       };
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -736,7 +846,7 @@ export class ConfigRepository {
         ...current,
         ...updates,
       };
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -777,6 +887,7 @@ export class ConfigRepository {
         // The patch names only what the client changed, so an inherited key
         // in it is a deliberate edit, not an echo of the command node's value.
         keepOwnInherited: false,
+        intent: { set: Object.keys(patch), unset: options.unset },
       });
     });
   }
@@ -787,17 +898,20 @@ export class ConfigRepository {
    * set), and which it takes from the command node it follows. Names only.
    */
   async globalSettingSources(): Promise<GlobalSettingSources> {
-    const configExists = await fs.access(this.files.configFile()).then(
-      () => true,
-      () => false,
-    );
-    const stored = configExists
-      ? await this.context.loadJsonCached<AppConfig>(this.files.configFile(), defaultConfig)
-      : null;
-    return globalSettingSources(
+    const stored = await this.readStoredConfig();
+    const tracked = stored?.settingOverrides ?? legacySettingOverrides(stored);
+    const sources = globalSettingSources(
       stored && isRecord(stored.global) ? stored.global : null,
       this.inheritedGlobalSettings?.() ?? null,
     );
+    const explicit = new Set(tracked.explicit);
+    const unknownKeys = tracked.unknown;
+    return {
+      ...sources,
+      storedKeys: sources.storedKeys.filter((key) => explicit.has(key)),
+      ...(unknownKeys.length ? { unknownKeys } : {}),
+      storedFields: tracked.fields ?? [],
+    };
   }
 
   /**
@@ -811,7 +925,15 @@ export class ConfigRepository {
   ): Promise<{ status: "reset" | "conflict"; conflicts: string[]; config: AppConfig }> {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();
-      const conflicts = unmetResetExpectations(config.global, expectations);
+      const inherited = this.inheritedGlobalSettings?.();
+      const conflicts = Array.from(
+        new Set([
+          ...keys.filter(
+            (key) => inherited && INHERITED_GLOBAL_SETTING_KEYS.some((entry) => entry === key),
+          ),
+          ...unmetResetExpectations(config.global, expectations),
+        ]),
+      );
       if (conflicts.length > 0) {
         return { status: "conflict", conflicts, config: this.withInheritedSettings(config) };
       }
@@ -824,6 +946,7 @@ export class ConfigRepository {
       const saved = await this.commitGlobalConfig(config, validated, {
         preserveCredentials: true,
         keepOwnInherited: false,
+        intent: { unset: keys },
       });
       return { status: "reset", conflicts: [], config: saved };
     });
@@ -965,6 +1088,7 @@ export class ConfigRepository {
       preserveCredentials?: boolean;
       preserveInheritedSettings?: boolean;
       keepOwnInherited: boolean;
+      intent?: { set?: readonly string[]; unset?: readonly string[] };
     },
   ): Promise<AppConfig> {
     validated.coordinatorProviderTierDefaultVersion = Math.max(
@@ -1032,7 +1156,7 @@ export class ConfigRepository {
             : {}),
         }
       : ownGlobal;
-    await this.context.saveSensitiveJson(this.files.configFile(), config);
+    await this.persistConfig(config, options.intent);
     this.context.changes.announce("config", "app");
     return this.withInheritedSettings(config);
   }
@@ -1067,7 +1191,7 @@ export class ConfigRepository {
           delete config.global.logDetailKeepRaised;
           break;
       }
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return action.kind;
     });
@@ -1085,7 +1209,7 @@ export class ConfigRepository {
       };
       if (Object.keys(next).length > 0) config.global.worktreeLocations = next;
       else delete config.global.worktreeLocations;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -1098,7 +1222,7 @@ export class ConfigRepository {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();
       config.global = { ...config.global, mcpManagement: settings };
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -1113,7 +1237,7 @@ export class ConfigRepository {
         ...config.global,
         notificationSounds,
       };
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -1132,7 +1256,7 @@ export class ConfigRepository {
       const config = await this.loadOwnConfig();
       if (limits) config.global.containerResourceLimits = limits;
       else delete config.global.containerResourceLimits;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -1155,7 +1279,7 @@ export class ConfigRepository {
       const next = update(config.global.agentAccountAutoSwitch);
       if (Object.keys(next).length > 0) config.global.agentAccountAutoSwitch = next;
       else delete config.global.agentAccountAutoSwitch;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -1175,7 +1299,7 @@ export class ConfigRepository {
       );
       if (Object.keys(next).length > 0) config.global.coordinatorAccountSwitchGrant = next;
       else delete config.global.coordinatorAccountSwitchGrant;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -1187,7 +1311,7 @@ export class ConfigRepository {
       const config = await this.loadOwnConfig();
       if (dismissed) config.global.githubCliReminderDismissed = true;
       else delete config.global.githubCliReminderDismissed;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -1198,7 +1322,7 @@ export class ConfigRepository {
       const config = await this.loadOwnConfig();
       if (token === null) delete config.global.githubToken;
       else config.global.githubToken = token;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -1209,7 +1333,7 @@ export class ConfigRepository {
       const config = await this.loadOwnConfig();
       if (apiKey === null) delete config.global.cursorApiKey;
       else config.global.cursorApiKey = apiKey;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -1220,7 +1344,7 @@ export class ConfigRepository {
       const config = await this.loadOwnConfig();
       if (apiKey === null) delete config.global.anthropicApiKey;
       else config.global.anthropicApiKey = apiKey;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
@@ -1231,7 +1355,7 @@ export class ConfigRepository {
       const config = await this.loadOwnConfig();
       if (apiKey === null) delete config.global.openCodeZenApiKey;
       else config.global.openCodeZenApiKey = apiKey;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });

@@ -135,6 +135,34 @@ describe("setting sources and resets across two nodes", () => {
     expect(leafStored.autoSteer).toBe(false);
   });
 
+  test("rejects mixed owners before either mutation", async () => {
+    await expect(
+      runResetGlobalSettings(
+        configTargetsForScopes(leafScope, commandScope),
+        ["autoSteer", "debugLogging"],
+        [
+          { key: "autoSteer", present: true, value: true },
+          { key: "debugLogging", present: true, value: false },
+        ],
+      ),
+    ).rejects.toThrow("one machine");
+    expect(commandClient.calls("reset_global_settings")).toHaveLength(0);
+    expect(leafClient.calls("reset_global_settings")).toHaveLength(0);
+    expect(commandStored.autoSteer).toBe(true);
+    expect(leafStored.debugLogging).toBe(true);
+  });
+
+  test("refuses a window-machine-only reset routed to another machine", async () => {
+    await expect(
+      runResetGlobalSettings(
+        configTargetsForScopes(leafScope, commandScope),
+        ["experimentalGraphs"],
+        [{ key: "experimentalGraphs", present: true, value: true }],
+      ),
+    ).rejects.toThrow("Experimental settings");
+    expect(leafClient.calls("reset_global_settings")).toHaveLength(0);
+  });
+
   test("a machine setting is reset on the machine, and a moved value is a conflict", async () => {
     const targets = configTargetsForScopes(leafScope, commandScope);
     const conflict = await runResetGlobalSettings(

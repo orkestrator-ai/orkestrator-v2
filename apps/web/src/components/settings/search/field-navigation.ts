@@ -50,11 +50,17 @@ export function locateSettingField(
     `[data-setting-anchor="${CSS.escape(descriptor.id)}"]`,
   );
   const locate = descriptor.locate;
-  const control = locate?.id
+  const locatedControl = locate?.id
     ? root.querySelector<HTMLElement>(`#${CSS.escape(locate.id)}`)
     : locate?.ariaLabel
       ? byAccessibleName(anchor ?? root, locate.ariaLabel)
       : null;
+  const control =
+    locatedControl?.getAttribute("role") === "radiogroup"
+      ? (locatedControl.querySelector<HTMLElement>(
+          '[role="radio"][aria-checked="true"]:not([disabled])',
+        ) ?? locatedControl.querySelector<HTMLElement>('[role="radio"]:not([disabled])'))
+      : locatedControl;
   if (anchor) {
     const focus =
       (control && anchor.contains(control) ? control : null) ??

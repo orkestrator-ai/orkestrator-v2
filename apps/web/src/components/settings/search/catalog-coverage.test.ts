@@ -68,8 +68,14 @@ describe("settings catalog", () => {
 
   test("every entry can be found on its page", () => {
     const unreachable = SETTINGS_CATALOG.filter((descriptor) => {
-      const suffix = descriptor.id.match(/^[a-z]+\.(agent-settings|sign-in)$/)?.[1];
-      if (suffix && SOURCE.includes(`setting={\`\${platform}.${suffix}\`}`)) return false;
+      const suffix = descriptor.id.match(/^[a-z]+\.(mode|model|sign-in)$/)?.[1];
+      if (
+        suffix &&
+        ["setting", "data-setting-anchor"].some((attribute) =>
+          SOURCE.includes(`${attribute}={\`\${platform}.${suffix}\`}`),
+        )
+      )
+        return false;
       if (
         SOURCE.includes(`setting="${descriptor.id}"`) ||
         SOURCE.includes(`data-setting-anchor="${descriptor.id}"`)
@@ -79,6 +85,8 @@ describe("settings catalog", () => {
       const locate = descriptor.locate;
       if (locate?.id && SOURCE.includes(`id="${locate.id}"`)) return false;
       if (locate?.ariaLabel && SOURCE.includes(`aria-label="${locate.ariaLabel}"`)) return false;
+      const modelPicker = locate?.id === `agent-model-${descriptor.section}`;
+      if (modelPicker && SOURCE.includes("id={`agent-model-${platform}`}")) return false;
       if (locate?.heading && SOURCE.includes(`title="${locate.heading}"`)) return false;
       return true;
     }).map((descriptor) => descriptor.id);

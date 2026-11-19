@@ -416,6 +416,8 @@ function isGlobalSettingSources(value: unknown): value is GlobalSettingSources {
   const record = value as Record<string, unknown>;
   return (
     isStringList(record.storedKeys) &&
+    (record.unknownKeys === undefined || isStringList(record.unknownKeys)) &&
+    (record.storedFields === undefined || isStringList(record.storedFields)) &&
     (record.inheritedKeys === null || isStringList(record.inheritedKeys))
   );
 }
@@ -460,9 +462,8 @@ interface ResetAnswer {
 
 /**
  * Remove stored settings on the node that owns each: inherited preferences on
- * the command node, everything else on the machine. A conflict on the first
- * node stops before the second is touched, so nothing is removed on one node
- * on the strength of a preview the other has already contradicted.
+ * the command node, everything else on the machine. Each request has one
+ * owner so a conflict always means the whole mutation was refused.
  */
 export async function runResetGlobalSettings(
   targets: ConfigTargets,
@@ -470,6 +471,12 @@ export async function runResetGlobalSettings(
   expectations: readonly ResetSettingExpectation[],
 ): Promise<ResetSettingsOutcome> {
   const inherited = new Set<string>(INHERITED_GLOBAL_SETTING_KEYS);
+  if (
+    targets.node &&
+    keys.some((key) => key.startsWith("experimental") || key === "localWindowGatewayTransport")
+  ) {
+    throw new Error("Change Experimental settings from a window connected to that machine.");
+  }
   const commandInvoke = sender(targets.commandNode);
   const groups: Array<{ invoke: ConfigInvoke; keys: string[] }> = targets.node
     ? [
@@ -477,28 +484,24 @@ export async function runResetGlobalSettings(
         { invoke: sender(targets.node), keys: keys.filter((key) => !inherited.has(key)) },
       ]
     : [{ invoke: commandInvoke, keys: [...keys] }];
-  let commandConfig: AppConfig | null = null;
-  let nodeConfig: AppConfig | null = null;
-  for (const [index, group] of groups.entries()) {
-    if (group.keys.length === 0) continue;
-    const answer = await group.invoke<ResetAnswer>(RESET_GLOBAL_SETTINGS, {
-      keys: group.keys,
-      expect: expectations.filter((entry) => group.keys.includes(entry.key)),
-    });
-    if (index === 0) commandConfig = answer.config;
-    else nodeConfig = answer.config;
-    if (answer.status === "conflict") {
-      return {
-        status: "conflict",
-        conflicts: answer.conflicts,
-        config: await effectiveAfter(targets, commandConfig, nodeConfig),
-      };
-    }
+  const owners = groups.filter((group) => group.keys.length > 0);
+  if (owners.length !== 1) {
+    throw new Error("Choose settings belonging to one machine to reset together.");
   }
+  const owner = owners[0]!;
+  const answer = await owner.invoke<ResetAnswer>(RESET_GLOBAL_SETTINGS, {
+    keys: owner.keys,
+    expect: expectations,
+  });
+  const onCommand = owner === groups[0];
   return {
-    status: "reset",
-    conflicts: [],
-    config: await effectiveAfter(targets, commandConfig, nodeConfig),
+    status: answer.status,
+    conflicts: answer.conflicts,
+    config: await effectiveAfter(
+      targets,
+      onCommand ? answer.config : null,
+      onCommand ? null : answer.config,
+    ),
   };
 }
 

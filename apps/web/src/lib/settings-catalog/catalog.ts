@@ -10,7 +10,19 @@
  */
 import { createDefaultGlobalConfig } from "@orkestrator/protocol/app-config-defaults";
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
+import {
+  resolveMultiReviewSettings,
+  SHIPPED_PLATFORM_MODES,
+  normalizeAgentSettings,
+  type AgentPlatformSettings,
+} from "@orkestrator/protocol/agent-settings";
+import {
+  normalizeNotificationSoundSettings,
+  type NotificationSoundSettings,
+} from "@orkestrator/protocol/notification-sounds";
+import { isLocalDesktopWindow } from "@/lib/native/window";
+import { platformOwnsSpeed } from "@/lib/agent-launch";
+import { desktopNotificationPermission } from "@/lib/question-desktop-notification";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
 import { resolveClaudeBackgroundCommandLimitHours } from "@orkestrator/protocol/claude-background-commands";
 import { DEFAULT_COORDINATOR_PROVIDER_TIER } from "@orkestrator/protocol/coordinator";
@@ -61,14 +73,32 @@ function stored<K extends keyof GlobalConfig & string>(
   return binding(key, (global) => global[key] ?? fallback, format);
 }
 
-const agentSettings = binding(
+const defaultAgent = binding(
   "agentSettings",
-  (global) => normalizeAgentSettings(global.agentSettings),
-  (value) => {
-    const agent = (value as { defaultAgent?: AgentPlatform }).defaultAgent;
-    return agent ? `Default agent: ${AGENT_PLATFORM_LABELS[agent] ?? agent}` : "Product defaults";
-  },
+  (global) => normalizeAgentSettings(global.agentSettings).defaultAgent,
+  labelled(AGENT_PLATFORM_LABELS),
 );
+
+const sound = (field: keyof NotificationSoundSettings): SettingValueBinding => ({
+  ...binding(
+    "notificationSounds",
+    (global) => normalizeNotificationSoundSettings(global.notificationSounds)[field],
+  ),
+  field,
+  ...(field === "questionDesktopNotification"
+    ? {
+        readEffective: (value, onWindowMachine) => {
+          if (!value || !onWindowMachine) return value;
+          const permission = desktopNotificationPermission();
+          return permission === "granted"
+            ? value
+            : permission === "denied"
+              ? "Off here (notifications blocked)"
+              : "Off here (notification permission required)";
+        },
+      }
+    : {}),
+});
 
 const messaging = <K extends keyof typeof DEFAULT_AGENT_MESSAGING_SETTINGS>(
   field: K,
@@ -91,15 +121,103 @@ const terminalHistoryOn = {
   via: "terminal.history-retention",
 };
 
-const platformPane = (platform: AgentPlatform): SettingDescriptor => ({
-  id: `${platform}.agent-settings`,
-  section: platform,
-  label: `${AGENT_PLATFORM_LABELS[platform]} model and launch settings`,
-  description: `Default model, reasoning, permission mode and how ${AGENT_PLATFORM_LABELS[platform]} launches (terminal or native) for new sessions.`,
-  aliases: ["model", "reasoning", "effort", "permission mode", "native", "terminal mode", "launch"],
-  appliesWhen: "new-sessions",
-  value: agentSettings,
+const platformEnabled = (platform: AgentPlatform) => ({
+  isAvailable: ({ global }: { global: GlobalConfig }) =>
+    (global.enabledAgentPlatforms ?? DEFAULTS.enabledAgentPlatforms ?? []).includes(platform),
+  reason: `Enable ${AGENT_PLATFORM_LABELS[platform]} in Platforms.`,
+  via: "platforms.enabled",
 });
+
+const platformField = (
+  platform: AgentPlatform,
+  field: keyof AgentPlatformSettings,
+  label: string,
+  description: string,
+  locate: NonNullable<SettingDescriptor["locate"]>,
+  fallback?: AgentPlatformSettings[keyof AgentPlatformSettings],
+  aliases?: readonly string[],
+): SettingDescriptor => {
+  const read = (global: GlobalConfig) =>
+    normalizeAgentSettings(global.agentSettings).platforms?.[platform]?.[field];
+  return {
+    id: `${platform}.${field.replace(/^claude([A-Z])/, (_, first: string) => first.toLowerCase()).replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`,
+    section: platform,
+    label,
+    description,
+    locate,
+    aliases,
+    appliesWhen: "new-sessions",
+    availability: platformEnabled(platform),
+    value: {
+      ...binding(
+        "agentSettings",
+        (global) => read(global) ?? fallback,
+        (value) => (typeof value === "boolean" ? onOff(value) : text(value, "Provider default")),
+      ),
+      field: `platforms.${platform}.${field}`,
+      isExplicit: (global) => {
+        const value = read(global);
+        return value !== undefined && value !== read(DEFAULTS);
+      },
+    },
+  };
+};
+
+const platformPane = (platform: AgentPlatform): SettingDescriptor[] => {
+  const label = AGENT_PLATFORM_LABELS[platform];
+  const model = { id: `agent-model-${platform}`, heading: "Default model" };
+  return [
+    ...(platform === "cursor"
+      ? []
+      : [
+          platformField(
+            platform,
+            "mode",
+            `${label} launch mode`,
+            "Choose Native chat or a terminal for new sessions.",
+            { ariaLabel: `${label} mode` },
+            SHIPPED_PLATFORM_MODES[platform],
+            ["native", "terminal mode"],
+          ),
+        ]),
+    platformField(
+      platform,
+      "model",
+      `Default ${label} model`,
+      "Choose the model for new sessions.",
+      model,
+    ),
+    platformField(
+      platform,
+      "reasoningEffort",
+      `${label} reasoning effort`,
+      "Choose a reasoning level in the default model picker.",
+      model,
+      undefined,
+      ["thinking level"],
+    ),
+    ...(platformOwnsSpeed(platform)
+      ? [
+          platformField(
+            platform,
+            "fastMode",
+            `${label} model speed`,
+            "Choose normal or fast speed in the default model picker where the model supports it.",
+            model,
+          ),
+        ]
+      : []),
+  ];
+};
+
+const claudeBackend = platformField(
+  "claude",
+  "claudeNativeBackend",
+  "Claude native backend",
+  "Choose the Agent SDK or experimental Tmux for Native sessions.",
+  { ariaLabel: "Claude native backend" },
+  "sdk",
+);
 
 const signIn = (platform: AgentPlatform, extra: readonly string[] = []): SettingDescriptor => ({
   id: `${platform}.sign-in`,
@@ -341,7 +459,7 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
       "The agent, model and modes new sessions start with, unless a project overrides them.",
     aliases: ["default model", "default agent", "favourite models", "favorites", "agent defaults"],
     appliesWhen: "new-sessions",
-    value: agentSettings,
+    value: { ...defaultAgent, field: "defaultAgent" },
   },
   {
     id: "platforms.enabled",
@@ -434,7 +552,29 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     description: "The reviewers, models and focus a new Multi Review starts with.",
     aliases: ["multi review", "reviewers", "code review", "review models"],
     appliesWhen: "new-sessions",
-    value: agentSettings,
+    value: {
+      ...binding(
+        "agentSettings",
+        (global) => {
+          const tier = normalizeAgentSettings(global.agentSettings);
+          const { reviewerCount, additionalReviewers, reviewerLenses } = resolveMultiReviewSettings(
+            { global: tier },
+          );
+          return {
+            reviewer: tier.actionDefaults?.review,
+            secondReviewer: tier.actionDefaults?.review2,
+            reviewerCount,
+            additionalReviewers,
+            reviewerLenses,
+          };
+        },
+        (value) => {
+          const review = value as { reviewerCount: number; reviewer?: { model?: string } };
+          return `${review.reviewerCount} reviewers${review.reviewer?.model ? ` · ${review.reviewer.model}` : ""}`;
+        },
+      ),
+      field: "multiReview",
+    },
   },
   {
     id: "review.lens-presets",
@@ -511,7 +651,44 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
       count("hours"),
     ),
   },
-  platformPane("claude"),
+  ...platformPane("claude"),
+  {
+    ...claudeBackend,
+    availability: {
+      isAvailable: ({ global }) =>
+        Boolean(
+          global.experimentalTmux ||
+          normalizeAgentSettings(global.agentSettings).platforms?.claude?.claudeNativeBackend ===
+            "tmux",
+        ),
+      reason: "Turn on Tmux in Experimental.",
+      via: "experimental.tmux",
+    },
+  },
+  platformField(
+    "claude",
+    "claudeThinkingMode",
+    "Claude thinking",
+    "Set an adaptive or fixed thinking budget.",
+    { id: "claude-thinking-mode" },
+    "adaptive",
+  ),
+  platformField(
+    "claude",
+    "claudeContext1m",
+    "1M context beta",
+    "Enable the larger Claude context window for supported models.",
+    { ariaLabel: "Claude 1M context beta" },
+    false,
+  ),
+  platformField(
+    "claude",
+    "claudeChrome",
+    "Claude in Chrome",
+    "Connect the Claude in Chrome extension to new Agent SDK sessions.",
+    { ariaLabel: "Claude in Chrome" },
+    false,
+  ),
   signIn("codex", ["openai", "chatgpt"]),
   {
     id: "codex.concurrent-threads",
@@ -526,7 +703,7 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
       count("threads"),
     ),
   },
-  platformPane("codex"),
+  ...platformPane("codex"),
   signIn("cursor"),
   {
     id: "cursor.api-key",
@@ -539,9 +716,9 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     configured: (global) => global.cursorApiKeyConfigured === true,
     owner: "machine",
   },
-  platformPane("cursor"),
+  ...platformPane("cursor"),
   signIn("grok", ["xai"]),
-  platformPane("grok"),
+  ...platformPane("grok"),
   signIn("opencode"),
   {
     id: "opencode.zen-api-key",
@@ -568,9 +745,9 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
         Array.isArray(value) && value.length === 0 ? "Every provider" : listOf("provider")(value),
     ),
   },
-  platformPane("opencode"),
+  ...platformPane("opencode"),
   signIn("pi"),
-  platformPane("pi"),
+  ...platformPane("pi"),
 
   // --- Skills, MCP ----------------------------------------------------------------
   {
@@ -654,7 +831,7 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     label: "Scrollback buffer",
     description: "How many lines a terminal keeps for scrolling back.",
     aliases: ["history lines", "buffer", "scroll"],
-    appliesWhen: "new-terminals",
+    appliesWhen: "immediately",
     value: stored("terminalScrollback", DEFAULTS.terminalScrollback, count("lines")),
   },
   {
@@ -935,7 +1112,8 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     description: "A cue when an environment finishes its work.",
     aliases: ["notifications", "alert", "audio", "bell", "done"],
     appliesWhen: "immediately",
-    owner: "machine",
+    value: sound("agentStopped"),
+    locate: { ariaLabel: "Agent stopped sound" },
   },
   {
     id: "sounds.agent-question",
@@ -944,7 +1122,8 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     description: "An urgent cue when an agent asks a question or needs your approval.",
     aliases: ["notifications", "alert", "audio", "approval", "attention"],
     appliesWhen: "immediately",
-    owner: "machine",
+    value: sound("agentQuestion"),
+    locate: { ariaLabel: "Agent question sound" },
   },
   {
     id: "sounds.pr-merged",
@@ -953,7 +1132,8 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     description: "A cue when a monitored pull request is merged.",
     aliases: ["notifications", "alert", "audio", "merge"],
     appliesWhen: "immediately",
-    owner: "machine",
+    value: sound("prMerged"),
+    locate: { ariaLabel: "Pull request merged sound" },
   },
   {
     id: "sounds.coordinator-report",
@@ -962,7 +1142,8 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     description: "A cue when a Coordinator is woken by a worker it was waiting on.",
     aliases: ["notifications", "alert", "audio", "worker"],
     appliesWhen: "immediately",
-    owner: "machine",
+    value: sound("coordinatorReport"),
+    locate: { ariaLabel: "Coordinator report sound" },
   },
   {
     id: "sounds.desktop-notifications",
@@ -977,7 +1158,7 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
       "review notifications",
     ],
     appliesWhen: "immediately",
-    owner: "machine",
+    value: sound("questionDesktopNotification"),
     locate: { ariaLabel: "Agent questions desktop notification" },
   },
 
@@ -1036,7 +1217,7 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     appliesWhen: "new-windows",
     value: stored("localWindowGatewayTransport", true, onOff),
     availability: {
-      isAvailable: ({ isWindowMachine }) => isWindowMachine,
+      isAvailable: ({ isWindowMachine }) => isWindowMachine && isLocalDesktopWindow(),
       reason: "Only shown in the desktop app, for the machine this window runs on.",
     },
   },

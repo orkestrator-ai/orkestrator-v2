@@ -16,6 +16,7 @@ import {
   type SourceNames,
 } from "@/lib/settings-catalog/provenance";
 import {
+  COMMAND_NODE_SECTIONS,
   SETTING_SCOPE_LABELS,
   SECTIONS_OUTSIDE_SHARED_FORM,
   settingScope,
@@ -26,10 +27,10 @@ import type { SettingDescriptor, SettingScope } from "@/lib/settings-catalog/typ
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 import { isWindowMachine } from "../account-machine";
-import { useSettingsConfig } from "../settings-config";
+import type { useSettingsConfig } from "../settings-config";
 import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "../SettingsPageLayout";
 import { OverrideBadge } from "./SettingField";
-import { draftIsClean, useSettingsDraft, useSettingsExplain } from "./settings-explain";
+import { draftIsClean, useSettingsDraft, type SettingsExplainValue } from "./settings-explain";
 
 export const SETTINGS_SEARCH_RESULTS_ID = "settings-search-results";
 
@@ -128,6 +129,7 @@ interface Row {
   readonly descriptor: SettingDescriptor;
   readonly hint?: string;
   readonly presentation: SettingPresentation | null;
+  readonly target: SettingsSearchTarget;
 }
 
 export interface PendingOpen {
@@ -138,8 +140,16 @@ export interface PendingOpen {
   readonly original?: SettingDescriptor;
 }
 
+export interface SettingsSearchTarget {
+  readonly view: ReturnType<typeof useSettingsConfig>;
+  readonly explain: SettingsExplainValue | null;
+}
+
 export function SettingsSearchResults({
   mode,
+  queryActive,
+  commandTarget,
+  selectedTarget,
   results,
   menuSections,
   activeSection,
@@ -153,6 +163,9 @@ export function SettingsSearchResults({
   resultsRef,
 }: {
   mode: "search" | "modified";
+  queryActive: boolean;
+  commandTarget: SettingsSearchTarget;
+  selectedTarget: SettingsSearchTarget;
   results: readonly SettingSearchResult[];
   /** The sections the menu currently offers (experimental ones may be off). */
   menuSections: ReadonlySet<string>;
@@ -162,65 +175,72 @@ export function SettingsSearchResults({
   onOpen: (open: PendingOpen) => void;
   onConfirmOpen: () => void;
   onCancelOpen: () => void;
-  onFixBlocker: (section: string) => void;
+  onFixBlocker: () => void;
   onBackToField: () => void;
   /** Escape inside the results: end the search and return to the field. */
   onEscape: () => void;
   resultsRef: RefObject<HTMLDivElement | null>;
 }) {
-  const { config } = useSettingsConfig();
-  const explain = useSettingsExplain();
   const draft = useSettingsDraft();
-  const machine = explain?.machine;
-  const onWindowMachine = isWindowMachine(machine);
-  const global = config.global;
-  const sources = explain?.sources ?? null;
   const listRef = useRef<HTMLUListElement | null>(null);
-
-  const rows: Row[] = useMemo(() => {
-    const present = (descriptor: SettingDescriptor) =>
-      // A command node's own setting is not this machine's value to show.
-      settingScope(descriptor) === "command-node" && machine
-        ? null
-        : presentSetting(descriptor, global, sources);
-    if (mode === "search") {
-      return results.map((result) => ({
-        descriptor: result.descriptor,
-        hint:
-          result.matchedIn === "alias" && result.matchedAlias
-            ? `Matches “${result.matchedAlias}”`
-            : undefined,
-        presentation: present(result.descriptor),
-      }));
-    }
-    // One stored value can back several fields; list each key once, plus every
-    // field of it whose own value differs (a terminal font size, a mail limit).
-    const byKey = new Map<string, Row[]>();
-    for (const descriptor of SETTINGS_CATALOG) {
-      const presentation = present(descriptor);
-      if (!presentation) continue;
-      const overridden =
-        presentation.hasOverride === true ||
-        (presentation.hasOverride === null && presentation.isDifferentFromDefault);
-      if (!overridden) continue;
-      const key = descriptor.value!.key;
-      byKey.set(key, [...(byKey.get(key) ?? []), { descriptor, presentation }]);
-    }
-    const modified: Row[] = [];
-    for (const [key, list] of byKey) {
-      const differing = list.filter((row) => row.presentation?.isDifferentFromDefault);
-      modified.push(
-        ...(key === "agentSettings" || differing.length === 0 ? [list[0]!] : differing),
-      );
-    }
-    return modified;
-  }, [mode, results, global, sources, machine]);
+  const candidates = queryActive ? results : SETTINGS_CATALOG.map((descriptor) => ({ descriptor }));
+  const rows: Row[] = [];
+  const shared = new Map<string, Row[]>();
+  for (const match of candidates) {
+    const { descriptor } = match;
+    const target = COMMAND_NODE_SECTIONS.has(descriptor.section) ? commandTarget : selectedTarget;
+    const presentation = target.view.ready
+      ? presentSetting(
+          descriptor,
+          target.view.config.global,
+          target.explain?.sources ?? null,
+          isWindowMachine(target.explain?.machine),
+        )
+      : null;
+    if (
+      mode === "modified" &&
+      !(
+        presentation?.hasOverride === true ||
+        (presentation?.hasOverride === null && presentation.isDifferentFromDefault)
+      )
+    )
+      continue;
+    const row: Row = {
+      descriptor,
+      target,
+      presentation,
+      hint:
+        "matchedAlias" in match && match.matchedIn === "alias" && match.matchedAlias
+          ? `Matches “${match.matchedAlias}”`
+          : undefined,
+    };
+    const binding = descriptor.value;
+    if (mode === "modified" && binding && !binding.field) {
+      const key = `${target.explain?.machine ?? ""}:${binding.key}`;
+      const group = shared.get(key);
+      if (group) group.push(row);
+      else shared.set(key, [row]);
+    } else rows.push(row);
+  }
+  for (const group of shared.values()) {
+    const differing = group.filter((row) => row.presentation?.isDifferentFromDefault);
+    rows.push(...(differing.length ? differing : group.slice(0, 1)));
+  }
+  if (mode === "modified" && queryActive) {
+    const rank = new Map(results.map((result, index) => [result.descriptor.id, index]));
+    rows.sort((a, b) => rank.get(a.descriptor.id)! - rank.get(b.descriptor.id)!);
+  }
 
   const sourcesUnknown =
     mode === "modified" &&
-    (!sources ||
-      sources.commandNode.status !== "ok" ||
-      (sources.node !== null && sources.node.status !== "ok"));
+    [commandTarget, selectedTarget].some(
+      ({ explain, view }) =>
+        !view.ready ||
+        !explain?.sources ||
+        explain.sources.commandNode.status !== "ok" ||
+        (explain.sources.node !== null && explain.sources.node.status !== "ok"),
+    );
+  const draftProblem = draft.blocker?.message ?? draft.errorMessage;
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const buttons = Array.from(
@@ -267,8 +287,8 @@ export function SettingsSearchResults({
         </h2>
         <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
           {heading}
-          {mode === "modified" && explain
-            ? ` for ${explain.names.machine}. An override is a value stored explicitly, even when it equals the default.`
+          {mode === "modified"
+            ? ". An override is a value stored explicitly, even when it equals the default."
             : ""}
         </p>
       </div>
@@ -276,38 +296,37 @@ export function SettingsSearchResults({
       {sourcesUnknown ? (
         <p className="flex items-start gap-1.5 text-xs text-amber-300">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          {!sources
-            ? "Reading which settings are stored…"
-            : "Which settings are stored could not be read, so this list shows values that differ from their defaults instead."}
+          Settings whose source is unknown are shown when their effective values differ from their
+          defaults.
         </p>
       ) : null}
 
-      {draft.blocker && pendingConflict ? (
+      {pendingConflict ? (
         <div
           role="alertdialog"
           aria-labelledby="settings-search-conflict-title"
           className="space-y-2 rounded-md border border-amber-400/30 bg-amber-400/[0.06] p-3 text-sm"
         >
           <p id="settings-search-conflict-title" className="text-amber-200">
-            Your change in{" "}
-            {SETTINGS_SECTION_LABELS[draft.blocker.section as GlobalSettingsSection] ??
-              draft.blocker.section}{" "}
-            cannot be saved yet: {draft.blocker.message}
+            {draftProblem
+              ? `Your change cannot be saved yet: ${draftProblem}`
+              : "There are unsaved changes in this section."}
           </p>
           <p className="text-xs text-muted-foreground">
             Opening {pendingConflict.descriptor.label} leaves the settings form, which discards that
             unsaved change.
           </p>
           <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" autoFocus onClick={onFixBlocker}>
+              Fix the change first
+            </Button>
             <Button
               type="button"
               size="sm"
-              autoFocus
-              onClick={() => onFixBlocker(draft.blocker!.section)}
+              variant="outline"
+              disabled={draft.saving}
+              onClick={onConfirmOpen}
             >
-              Fix the change first
-            </Button>
-            <Button type="button" size="sm" variant="outline" onClick={onConfirmOpen}>
               Discard it and open
             </Button>
             <Button type="button" size="sm" variant="ghost" onClick={onCancelOpen}>
@@ -330,11 +349,20 @@ export function SettingsSearchResults({
           onKeyDown={onKeyDown}
         >
           {rows.map((row, index) => {
-            const { descriptor, presentation } = row;
+            const {
+              descriptor,
+              presentation,
+              target: { view, explain },
+            } = row;
+            const onWindowMachine = isWindowMachine(explain?.machine);
             const unavailable =
               !menuSections.has(descriptor.section) ||
               (descriptor.availability &&
-                !descriptor.availability.isAvailable({ global, isWindowMachine: onWindowMachine }));
+                (!view.ready ||
+                  !descriptor.availability.isAvailable({
+                    global: view.config.global,
+                    isWindowMachine: onWindowMachine,
+                  })));
             const reason = !menuSections.has(descriptor.section)
               ? (descriptor.availability?.reason ?? "This section is turned off.")
               : descriptor.availability?.reason;
@@ -394,6 +422,7 @@ export function SettingsSearchResults({
                       ) : null}
                     </span>
                   ) : null}
+                  {!view.ready ? <span>Current value unavailable</span> : null}
                   {row.hint ? <span>{row.hint}</span> : null}
                   {unavailable && reason ? (
                     <span className="text-amber-300">Not shown now: {reason}</span>
@@ -401,6 +430,7 @@ export function SettingsSearchResults({
                   {descriptor.section === activeSection ? <span>On this page</span> : null}
                 </div>
                 {mode === "modified" &&
+                !unavailable &&
                 presentation?.resettable &&
                 presentation.hasOverride &&
                 explain ? (
@@ -446,10 +476,11 @@ export function openWouldDiscardDraft(
   descriptor: SettingDescriptor,
   activeSection: GlobalSettingsSection | "",
   blocked: boolean,
+  machineChanges = false,
 ): boolean {
   if (!blocked || !activeSection) return false;
   const leavingForm =
     !SECTIONS_OUTSIDE_SHARED_FORM.has(activeSection) &&
-    SECTIONS_OUTSIDE_SHARED_FORM.has(descriptor.section);
+    (machineChanges || SECTIONS_OUTSIDE_SHARED_FORM.has(descriptor.section));
   return leavingForm;
 }

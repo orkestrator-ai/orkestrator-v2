@@ -309,6 +309,8 @@ export const ConfigReadSchema = Schema.Union([
  */
 export const GlobalSettingSourcesSchema = Schema.Struct({
   storedKeys: mutableArray(Schema.String),
+  unknownKeys: optionalStrings,
+  storedFields: optionalStrings,
   inheritedKeys: Schema.NullOr(mutableArray(Schema.String)),
 });
 

@@ -20,6 +20,8 @@ import {
   type ReactNode,
 } from "react";
 import * as backend from "@/lib/backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import type { SettingSourcesLayers } from "@/lib/portal/command-node-config";
 import type { SourceNames, SourcesState } from "@/lib/settings-catalog/provenance";
 import type { SettingDescriptor } from "@/lib/settings-catalog/types";
@@ -33,6 +35,7 @@ export interface SettingsDraftSnapshot {
   /** Stored keys whose edited value has not been saved yet. */
   readonly dirtyKeys: readonly string[];
   readonly saving: boolean;
+  readonly unconfirmedKeys?: readonly string[];
   /** A validation failure that holds every save back. */
   readonly blocker: { readonly section: string; readonly message: string } | null;
   /** The last save failed; the edited values are still in the form. */
@@ -56,7 +59,8 @@ export function draftIsClean(draft: SettingsDraftSnapshot): boolean {
 export class SettingsDraftRegistry {
   private snapshot: SettingsDraftSnapshot = EMPTY_DRAFT;
   private readonly listeners = new Set<() => void>();
-  private retry: (() => void) | null = null;
+  private discard: (() => void) | null = null;
+  private retry: ((useSavedValues: boolean) => void) | null = null;
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -69,6 +73,7 @@ export class SettingsDraftRegistry {
     const current = this.snapshot;
     if (
       current.saving === next.saving &&
+      current.unconfirmedKeys?.join("\0") === next.unconfirmedKeys?.join("\0") &&
       current.errorMessage === next.errorMessage &&
       current.blocker?.message === next.blocker?.message &&
       current.blocker?.section === next.blocker?.section &&
@@ -81,13 +86,21 @@ export class SettingsDraftRegistry {
   }
 
   /** The form registers how to retry its last failed save; `null` when it unmounts. */
-  setRetry(retry: (() => void) | null): void {
+  setRetry(retry: ((useSavedValues: boolean) => void) | null): void {
     this.retry = retry;
   }
 
-  retrySave(): boolean {
+  setDiscard(discard: (() => void) | null): void {
+    this.discard = discard;
+  }
+
+  discardOnLeave(): void {
+    this.discard?.();
+  }
+
+  retrySave(useSavedValues = false): boolean {
     if (!this.retry) return false;
-    this.retry();
+    this.retry(useSavedValues);
     return true;
   }
 }
@@ -152,36 +165,66 @@ export function SettingsExplainProvider({
   machine,
   names,
   configRevision,
+  ready = true,
   requestReset,
   children,
 }: {
   machine: string | null | undefined;
   names: SourceNames;
   configRevision: unknown;
+  ready?: boolean;
   requestReset: (descriptor: SettingDescriptor) => void;
   children: ReactNode;
 }) {
-  const [sources, setSources] = useState<SourcesState>(null);
+  const { scope } = useScopesWithCommandFallback();
+  const [loaded, setLoaded] = useState<{
+    sources: SourcesState;
+    revision: unknown;
+    attempt: number;
+  } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const refreshSources = useCallback(() => setAttempt((value) => value + 1), []);
 
+  // A write can change override intent while the effective config compares
+  // equal (for example an optimistic sound switch settling, or a save at default).
   useEffect(() => {
+    if (!ready) return;
+    const stop = onResourceChanged("config", refreshSources, scope);
+    const stopResync = onResourceResync(({ resources }) => {
+      if (!resources || resources.has("config")) refreshSources();
+    }, scope);
+    return () => {
+      stop();
+      stopResync();
+    };
+  }, [ready, refreshSources, scope]);
+
+  useEffect(() => {
+    if (!ready) return;
     let cancelled = false;
     backend.getSettingSources(machine).then(
       (layers) => {
-        if (!cancelled) setSources(layers);
+        if (!cancelled) setLoaded({ sources: layers, revision: configRevision, attempt });
       },
       (error: unknown) => {
         log.warn("sources.read-failed", { error: formatLogError(error) });
         if (!cancelled) {
-          setSources(FAILED_SOURCES(error instanceof Error ? error.message : String(error)));
+          setLoaded({
+            sources: FAILED_SOURCES(error instanceof Error ? error.message : String(error)),
+            revision: configRevision,
+            attempt,
+          });
         }
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [machine, configRevision, attempt]);
+  }, [machine, configRevision, attempt, ready]);
+  const sources =
+    ready && loaded?.revision === configRevision && loaded?.attempt === attempt
+      ? loaded.sources
+      : null;
 
   const value = useMemo(
     () => ({ sources, refreshSources, names, machine, requestReset }),

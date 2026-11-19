@@ -103,6 +103,57 @@ describe("presentSetting", () => {
     expect(presentation.resettable).toBe(false);
   });
 
+  test("only the changed provider model is reported as an override", () => {
+    const config = global({
+      agentSettings: { defaultAgent: "claude", platforms: { codex: { model: "gpt-codex" } } },
+    });
+    const layers = { commandNode: ok(["agentSettings"]), node: null };
+    expect(presentSetting(settingDescriptor("codex.model")!, config, layers)).toMatchObject({
+      effective: "gpt-codex",
+      hasOverride: true,
+    });
+    for (const id of ["claude.model", "defaults.agent-defaults", "review.multi-review-defaults"]) {
+      expect(presentSetting(settingDescriptor(id)!, config, layers)?.hasOverride).toBe(false);
+    }
+  });
+
+  test("an inherited controller preference cannot be reset from the leaf", () => {
+    expect(
+      presentSetting(settingDescriptor("general.auto-steer")!, global({ autoSteer: true }), {
+        commandNode: ok(["autoSteer"], ["autoSteer"]),
+        node: null,
+      }),
+    ).toMatchObject({ source: { kind: "controller" }, hasOverride: false, resettable: false });
+  });
+
+  test("notifications report local permission independently of a stored switch", () => {
+    const binding = settingDescriptor("sounds.desktop-notifications")!;
+    const config = global({
+      notificationSounds: {
+        agentStopped: true,
+        agentQuestion: true,
+        prMerged: true,
+        coordinatorReport: true,
+        questionDesktopNotification: true,
+      },
+    });
+    const layers: SettingSourcesLayers = {
+      commandNode: {
+        status: "ok",
+        sources: {
+          storedKeys: ["notificationSounds"],
+          inheritedKeys: null,
+          storedFields: ["notificationSounds.questionDesktopNotification"],
+        },
+      },
+      node: null,
+    };
+    const local = presentSetting(binding, config, layers, true)!;
+    expect(local.effective).toMatch(/^Off here/);
+    expect(local.hasOverride).toBe(true);
+    expect(presentSetting(binding, config, layers, false)?.effective).toBe(true);
+  });
+
   test("settings without a value binding have no presentation", () => {
     expect(presentSetting(settingDescriptor("claude.api-key")!, global({}), null)).toBeNull();
   });

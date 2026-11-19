@@ -23,11 +23,14 @@ import {
   SettingsRow,
   SettingsSectionHeader,
 } from "./SettingsPageLayout";
+import { useSettingsExplain } from "./search/settings-explain";
+import { SettingField } from "./search/SettingField";
 import { cn } from "@/lib/utils";
 
 export function SoundsSettings() {
   const { machine } = useAccountMachine();
   const { config: settingsConfig, setConfig } = useSettingsConfig();
+  const explain = useSettingsExplain();
   const storedSettings = settingsConfig.global.notificationSounds;
   const updateGlobalConfig = useConfigStore((state) => state.updateGlobalConfig);
   const savedSettings = useMemo(
@@ -69,7 +72,10 @@ export function SoundsSettings() {
       }
       try {
         const savedConfig = await backend.updateNotificationSoundSettings(next, machine);
-        if (generation === saveGenerationRef.current) setConfig(savedConfig);
+        if (generation === saveGenerationRef.current) {
+          setConfig(savedConfig);
+          explain?.refreshSources();
+        }
       } catch (error) {
         if (generation !== saveGenerationRef.current) return;
         toast.error("Sound settings were not saved", {
@@ -165,7 +171,11 @@ export function SoundsSettings() {
           Questions block an agent until you answer, so they can also raise a notification outside
           Orkestrator. Clicking it opens the environment.
         </SettingsSectionHeader>
-        <div className={SETTINGS_CARD_CLASS}>
+        <SettingField
+          setting="sounds.desktop-notifications"
+          className={SETTINGS_CARD_CLASS}
+          explanationClassName="px-4 pb-3"
+        >
           <SettingsRow
             label="Agent questions"
             description={
@@ -187,7 +197,7 @@ export function SoundsSettings() {
               aria-label="Agent questions desktop notification"
             />
           </SettingsRow>
-        </div>
+        </SettingField>
       </section>
 
       <div className="flex h-5 items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
@@ -230,7 +240,7 @@ function SoundRow({
   onPreview: () => void;
 }) {
   return (
-    <div data-setting-anchor={setting}>
+    <SettingField setting={setting} explanationClassName="px-4 pb-3">
       <SettingsRow label={label} description={description}>
         <Button variant="outline" size="sm" onClick={onPreview} aria-label={`Preview ${label}`}>
           <Play className="h-3.5 w-3.5" aria-hidden="true" />
@@ -238,6 +248,6 @@ function SoundRow({
         </Button>
         <Switch checked={enabled} onCheckedChange={onEnabledChange} aria-label={`${label} sound`} />
       </SettingsRow>
-    </div>
+    </SettingField>
   );
 }

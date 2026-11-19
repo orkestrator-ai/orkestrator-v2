@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS } from "@orkestrator/protocol/claude-background-commands";
 import { shippedReviewLensPresets } from "@orkestrator/protocol/review-lens";
 import { DEFAULT_REVIEW_INSTRUCTION } from "@/prompts";
 import { configStore } from "@/stores/configStore";
@@ -14,14 +15,17 @@ describe("globalConfigPatchFromCoreFields", () => {
     expect(globalConfigPatchFromCoreFields(baseline, baseline)).toEqual({ patch: {}, unset: [] });
   });
 
-  test("defaults unset raw stored keys even when the normalized baseline equals the form", () => {
+  test("an unrelated edit preserves raw keys explicitly stored at the default", () => {
     const stored = {
       ...appCommandStore(configStore).getState().config.global,
-      claudeBackgroundCommandLimitHours: 24,
+      claudeBackgroundCommandLimitHours: DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
     };
-    const changes = globalConfigPatchFromCoreFields(baseline, baseline, stored);
-    expect(changes.patch).toEqual({});
-    expect(changes.unset).toContain("claudeBackgroundCommandLimitHours");
+    const loaded = storedCoreFields(stored);
+    const changes = globalConfigPatchFromCoreFields(
+      { ...loaded, terminalScrollback: 4567 },
+      loaded,
+    );
+    expect(changes).toEqual({ patch: { terminalScrollback: 4567 }, unset: [] });
   });
 
   test("a retired key left in the stored config is neither sent nor unset", () => {
@@ -33,7 +37,6 @@ describe("globalConfigPatchFromCoreFields", () => {
     const changes = globalConfigPatchFromCoreFields(
       { ...baseline, terminalScrollback: 1234 },
       baseline,
-      stored,
     );
     expect(changes.patch).toEqual({ terminalScrollback: 1234 });
     expect(changes.unset).not.toContain("experimentalCodexRawEventLogging" as never);

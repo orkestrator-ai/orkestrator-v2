@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ExternalLink,
@@ -45,6 +45,8 @@ import {
   RiskLabel,
   shortDigest,
   StatusBadge,
+  statusLabel,
+  useDialogFocusReturn,
   verificationLabel,
 } from "./capability-format";
 import { useCapabilityResource } from "./useCapabilityResource";
@@ -122,6 +124,16 @@ export function PackageDetail({
     basisDigest: string;
   } | null>(null);
   const detail = state.data;
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const cellDetailsId = useId();
+  const previewFocusReturn = useDialogFocusReturn();
+  const testFocusReturn = useDialogFocusReturn();
+  const loaded = detail !== null;
+  // Opening a package replaces the library row that had focus: move focus to
+  // the package's heading so keyboard and screen-reader users land on it.
+  useEffect(() => {
+    if (loaded) headingRef.current?.focus();
+  }, [loaded, packageId]);
 
   const machineNames = useMemo(
     () => Object.fromEntries(machines.map((machine) => [machine.nodeId, machine.name])),
@@ -134,14 +146,31 @@ export function PackageDetail({
       ),
     [detail],
   );
+  // A worktree's project copies and an account's private copies are rows of their own.
+  const rowLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const cell of detail?.availability ?? []) {
+      const id = availabilityRowId(cell);
+      if (!labels.has(id)) {
+        labels.set(
+          id,
+          id === cell.target.nodeId
+            ? (machineNames[cell.target.nodeId] ?? cell.target.nodeId)
+            : (cell.nodeName ?? id),
+        );
+      }
+    }
+    return labels;
+  }, [detail, machineNames]);
   const matrix = useMemo(() => {
     const rows = new Map<string, Map<string, CapabilityAvailabilityCell[]>>();
     for (const cell of detail?.availability ?? []) {
-      const row = rows.get(cell.target.nodeId) ?? new Map<string, CapabilityAvailabilityCell[]>();
+      const id = availabilityRowId(cell);
+      const row = rows.get(id) ?? new Map<string, CapabilityAvailabilityCell[]>();
       const cells = row.get(cell.target.provider) ?? [];
       cells.push(cell);
       row.set(cell.target.provider, cells);
-      rows.set(cell.target.nodeId, row);
+      rows.set(id, row);
     }
     return rows;
   }, [detail]);
@@ -166,9 +195,16 @@ export function PackageDetail({
           <ArrowLeft className="h-3.5 w-3.5" /> My library
         </Button>
         {state.status === "error" ? (
-          <p className="text-sm text-rose-300">{state.message}</p>
+          <p className="text-sm text-rose-300" role="alert">
+            {state.message}
+          </p>
         ) : (
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <Loader2
+            className="h-4 w-4 animate-spin"
+            role="status"
+            aria-hidden={false}
+            aria-label="Loading the package"
+          />
         )}
       </div>
     );
@@ -179,7 +215,7 @@ export function PackageDetail({
   const otherSetups = setups.filter((setup) => !pkg.assignedSetupIds.includes(setup.id));
   const selected = selectedCell
     ? detail.availability.filter(
-        (cell) => `${cell.target.nodeId}|${cell.target.provider}` === selectedCell,
+        (cell) => `${availabilityRowId(cell)}|${cell.target.provider}` === selectedCell,
       )
     : [];
   const hasMcp = pkg.kinds.includes("mcp-server");
@@ -197,7 +233,13 @@ export function PackageDetail({
           <ArrowLeft className="h-3.5 w-3.5" /> My library
         </Button>
         <div className="flex flex-wrap items-center gap-2">
-          <h3 className="text-lg font-semibold text-foreground">{pkg.displayName}</h3>
+          <h3
+            ref={headingRef}
+            tabIndex={-1}
+            className="text-lg font-semibold text-foreground focus-visible:outline-none"
+          >
+            {pkg.displayName}
+          </h3>
           {pkg.kinds.map((kind) => (
             <Pill key={kind}>{kindLabel(kind)}</Pill>
           ))}
@@ -411,14 +453,23 @@ export function PackageDetail({
         </p>
       ) : null}
 
-      <section className="space-y-2">
-        <h4 className="text-sm font-medium text-foreground">Where available</h4>
+      <section className="space-y-2" aria-labelledby={`${cellDetailsId}-where`}>
+        <h4 id={`${cellDetailsId}-where`} className="text-sm font-medium text-foreground">
+          Where available
+        </h4>
         {matrix.size === 0 ? (
           <p className="text-xs text-muted-foreground">
             Not assigned to any setup, so no machine has it.
           </p>
         ) : (
-          <div className="overflow-x-auto rounded-md border border-zinc-800">
+          // A narrow window scrolls the matrix sideways: the region takes focus
+          // so a keyboard can scroll it too.
+          <div
+            className="focus-hairline overflow-x-auto rounded-md border border-zinc-800"
+            role="region"
+            aria-label="Availability by machine and agent"
+            tabIndex={0}
+          >
             <table className="w-full text-left text-xs" data-testid="capability-availability">
               <thead className="text-muted-foreground">
                 <tr>
@@ -431,15 +482,14 @@ export function PackageDetail({
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-900">
-                {[...matrix.entries()].map(([nodeId, row]) => (
-                  <tr key={nodeId}>
-                    <td className="px-2 py-1.5 text-foreground">
-                      {machineNames[nodeId] ?? nodeId}
-                    </td>
+                {[...matrix.entries()].map(([rowId, row]) => (
+                  <tr key={rowId}>
+                    <td className="px-2 py-1.5 text-foreground">{rowLabels.get(rowId) ?? rowId}</td>
                     {AGENT_PLATFORMS.map((provider) => {
                       const cells = row.get(provider) ?? [];
                       const cell = worst(cells);
-                      const key = `${nodeId}|${provider}`;
+                      const key = `${rowId}|${provider}`;
+                      const machineName = rowLabels.get(rowId) ?? rowId;
                       return (
                         <td key={provider} className="px-2 py-1.5">
                           {cell ? (
@@ -450,12 +500,17 @@ export function PackageDetail({
                                 selectedCell === key && "ring-1 ring-zinc-500",
                               )}
                               onClick={() => setSelectedCell(selectedCell === key ? null : key)}
-                              aria-label={`${providerLabel(provider)} on ${machineNames[nodeId] ?? nodeId}`}
+                              aria-label={`${providerLabel(provider)} on ${machineName}: ${statusLabel(cell.status)}`}
+                              aria-expanded={selectedCell === key}
+                              aria-controls={selectedCell === key ? cellDetailsId : undefined}
                             >
                               <StatusBadge status={cell.status} title={cell.reason} />
                             </button>
                           ) : (
-                            <span className="text-muted-foreground">—</span>
+                            <span className="text-muted-foreground">
+                              <span aria-hidden>—</span>
+                              <span className="sr-only">Not assigned</span>
+                            </span>
                           )}
                         </td>
                       );
@@ -467,7 +522,12 @@ export function PackageDetail({
           </div>
         )}
         {selected.length > 0 ? (
-          <div className="space-y-2 rounded-md border border-zinc-800 p-3 text-xs">
+          <div
+            id={cellDetailsId}
+            role="region"
+            aria-label={`${providerLabel(selected[0]!.target.provider)} on ${machineNames[selected[0]!.target.nodeId] ?? selected[0]!.target.nodeId}`}
+            className="space-y-2 rounded-md border border-zinc-800 p-3 text-xs"
+          >
             {selected.map((cell) => (
               <div key={cell.componentId} className="space-y-0.5">
                 <div className="flex flex-wrap items-center gap-2">
@@ -507,8 +567,10 @@ export function PackageDetail({
         ) : null}
       </section>
 
-      <section className="space-y-2">
-        <h4 className="text-sm font-medium text-foreground">Contents</h4>
+      <section className="space-y-2" aria-labelledby={`${cellDetailsId}-contents`}>
+        <h4 id={`${cellDetailsId}-contents`} className="text-sm font-medium text-foreground">
+          Contents
+        </h4>
         <ul className="space-y-1 text-xs">
           {detail.components.map((component) => (
             <li key={component.id} className="flex flex-wrap items-center gap-2">
@@ -554,7 +616,11 @@ export function PackageDetail({
           </details>
         ) : null}
         {file ? (
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-[11px] text-zinc-300">
+          <pre
+            tabIndex={0}
+            aria-label={file.path}
+            className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-[11px] text-zinc-300"
+          >
             {file.path}
             {"\n\n"}
             {file.content}
@@ -567,6 +633,7 @@ export function PackageDetail({
           size="3xl"
           className={`${Z_FULLSCREEN_DIALOG}`}
           overlayClassName={Z_FULLSCREEN_DIALOG}
+          {...previewFocusReturn}
         >
           <DialogHeader>
             <DialogTitle>Review the plan</DialogTitle>
@@ -598,6 +665,7 @@ export function PackageDetail({
           size="xl"
           className={`${Z_FULLSCREEN_DIALOG}`}
           overlayClassName={Z_FULLSCREEN_DIALOG}
+          {...testFocusReturn}
         >
           <DialogHeader>
             <DialogTitle>Test {pkg.displayName}</DialogTitle>
@@ -655,4 +723,12 @@ export function PackageDetail({
       </Dialog>
     </div>
   );
+}
+
+/** One matrix row: the machine, or one of its worktrees or added accounts. */
+function availabilityRowId(cell: CapabilityAvailabilityCell): string {
+  if (cell.target.environmentId) return `${cell.target.nodeId}|env:${cell.target.environmentId}`;
+  if (cell.target.accountHomeId)
+    return `${cell.target.nodeId}|account:${cell.target.accountHomeId}`;
+  return cell.target.nodeId;
 }

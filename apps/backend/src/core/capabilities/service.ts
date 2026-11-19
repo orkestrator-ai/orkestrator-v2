@@ -13,7 +13,6 @@
  * plan digest the user approved.
  */
 import { createHash, randomBytes } from "node:crypto";
-import path from "node:path";
 
 import {
   AGENT_PLATFORMS,
@@ -42,6 +41,7 @@ import type {
   CapabilityActivityList,
   CapabilityChangeResult,
   CapabilityDriftList,
+  CapabilityDriftMerge,
   CapabilityExport,
   CapabilityImportPreview,
   CapabilityInventory,
@@ -61,6 +61,7 @@ import {
   capabilityRevisionComponents,
   compatibleProviders,
   resolveEffectiveAgentResources,
+  UNRESTRICTED_CAPABILITY_CEILING,
   type CapabilityLayer,
   type CapabilityPermissionCeiling,
 } from "@orkestrator/protocol/capability-resources-resolve";
@@ -69,7 +70,6 @@ import {
   capabilityLiveSemantics,
   capabilityLocation,
 } from "@orkestrator/protocol/capability-resources-support";
-import { exportCapabilityNodeItemCommand } from "@orkestrator/protocol/contract/domains/capabilities";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   nativeAgentDeniedCapabilities,
@@ -79,17 +79,43 @@ import {
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
 import { CapabilityArtifactStore } from "./artifact-store.js";
 import { authoredFiles, parseAuthoredInput } from "./authoring.js";
+import { CapabilityDriftWorkflow } from "./drift.js";
 import { CapabilityExecutor, parseNodePlanTargets, type McpInstaller } from "./executor.js";
 import {
+  abandonCapabilityHandover,
+  CapabilityHandoverReceiver,
+  completeCapabilityHandover,
+  handedOverAuthority,
+  sendCapabilityHandover,
+  type HandoverInvoke,
+} from "./handover.js";
+import {
+  addImportedPackages,
   exportSetups,
+  importedSelections,
+  isRevisionKept,
   parseManifests,
   planImport,
   readProjectManifests,
   setupSlug,
   writeProjectManifests,
 } from "./import-export.js";
+import {
+  manifestSignatureIssues,
+  verifyCapabilityLockSignature,
+  type ManifestSigningKeys,
+} from "./manifest-signing.js";
+import { inspectRegistrySource, registryLatestVersion, type RegistryFetch } from "./registry.js";
+import { CapabilityRegistryCommands } from "./registry-settings.js";
 import { collectCapabilityInventory, type InventorySources } from "./inventory.js";
-import { locationDirectory, type CapabilityHomes } from "./native-ownership.js";
+import {
+  answerLeafLaunch,
+  LeafLaunchAuthority,
+  requiredPackageIds,
+  verifyLaunchDeliveries,
+  withBlockers,
+} from "./launch-authority.js";
+import type { CapabilityHomes } from "./native-ownership.js";
 import { remoteTransport, routedTransport, type CapabilityLink } from "./node-transport.js";
 import {
   applyChangeToState,
@@ -106,14 +132,19 @@ import {
 } from "./operations.js";
 import { desiredStateForNode, installationKey, planNode, sha256, supportFor } from "./planning.js";
 import { CapabilityReconciler, localTransport } from "./reconciler.js";
-import { effectiveReceiptStatus } from "./runtime-evidence.js";
 import {
-  CapabilityError,
-  readPackageTree,
-  treeDigest,
-  validatePackageFiles,
-  type PackageFile,
-} from "./security.js";
+  containerStaging,
+  environmentDeliveryView,
+  type EnvironmentDeliveryContext,
+} from "./environment-delivery.js";
+import {
+  ScopedCapabilityDelivery,
+  scopedRequiredDelivery,
+  type ScopedEvidence,
+  type ScopedTargetSources,
+} from "./scoped-delivery.js";
+import { effectiveReceiptStatus } from "./runtime-evidence.js";
+import { CapabilityError, treeDigest, type PackageFile } from "./security.js";
 import {
   assertDistributableArtifact,
   containsLiteralMcpCredentials,
@@ -125,7 +156,12 @@ import {
   type GitFetchOptions,
   type InspectedPackage,
 } from "./source-inspection.js";
-import type { CapabilityState, SourceInspectionRecord } from "./types.js";
+import type {
+  CapabilityLaunchDelivery,
+  CapabilityState,
+  DriftAdoption,
+  SourceInspectionRecord,
+} from "./types.js";
 import { checkPackageUpdate } from "./update-checker.js";
 import {
   availabilityCells,
@@ -154,6 +190,10 @@ export interface CapabilityServiceDeps {
   link(nodeId: string): CapabilityLink | null;
   /** False on a leaf: its command node holds the authority. */
   isAuthority(): boolean;
+  /** Leaf: emits `node-capability-launch-requested` for the command node to answer. */
+  requestLaunch?(payload: { requestId: string; request: unknown }): void;
+  /** Leaf: an attached command node was in contact recently enough to answer a launch. */
+  controllerReachable?(): Promise<boolean>;
   emit(event: {
     revision: number;
     packageIds: string[];
@@ -163,9 +203,20 @@ export interface CapabilityServiceDeps {
   homes(): CapabilityHomes;
   inventory: Omit<InventorySources, "homes">;
   mcp?: McpInstaller;
+  claudePlugins?: ExecutorClaudePlugins;
   gitRun?: GitFetchOptions["run"];
+  /** This installation's graph-sharing keys, for signed manifests (`manifest-signing.ts`). */
+  signing?: ManifestSigningKeys;
+  /** Registry index and tarball fetches (`registry.ts`); the global fetch when absent. */
+  registryFetch?: RegistryFetch;
+  /** This machine's worktrees, added accounts and containers (`scoped-delivery.ts`). */
+  scoped?: ScopedTargetSources;
   now?: () => string;
 }
+
+type ExecutorClaudePlugins = NonNullable<
+  ConstructorParameters<typeof CapabilityExecutor>[0]["claudePlugins"]
+>;
 
 function asRecord(value: unknown, name: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -258,16 +309,61 @@ export class CapabilityService {
   readonly artifacts: CapabilityArtifactStore;
   readonly executor: CapabilityExecutor;
   readonly reconciler: CapabilityReconciler;
+  readonly scoped: ScopedCapabilityDelivery;
+  /** Local changes: keep, replace, adopt and merge; adopting installed items (`drift.ts`). */
+  readonly drift: CapabilityDriftWorkflow;
+  /** Package registries and the signed-manifest policy (`registry-settings.ts`). */
+  readonly registries: CapabilityRegistryCommands;
+  /** Command-node handover, receiving side (`handover.ts`). */
+  readonly handoverReceiver: CapabilityHandoverReceiver;
+  /** Leaf launch preflight answered by the command node (`launch-authority.ts`). */
+  readonly leafLaunch: LeafLaunchAuthority;
   private updateTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
+  /** This node handed (or is handing) its authority to another command node. */
+  private handedOver = false;
+  /** The observed deliveries behind a launch's effective resources, for its record. */
+  private readonly launchEvidence = new WeakMap<
+    EffectiveAgentResources,
+    { deliveries: CapabilityLaunchDelivery[]; resolvedBy?: string }
+  >();
 
   constructor(private readonly deps: CapabilityServiceDeps) {
+    // A node that handed its state over is no longer the authority, even before it becomes a leaf.
+    const nodeAuthority = deps.isAuthority;
+    this.deps = { ...deps, isAuthority: () => nodeAuthority() && !this.handedOver };
     this.artifacts = new CapabilityArtifactStore(deps.dataDir);
+    this.drift = new CapabilityDriftWorkflow({
+      storage: deps.storage,
+      artifacts: this.artifacts,
+      homes: () => this.deps.homes(),
+      selfId: () => this.deps.selfId(),
+      link: (nodeId) => this.deps.link(nodeId),
+      now: () => this.now(),
+      assertAuthority: () => this.assertAuthority(),
+      observeNode: (nodeId) => this.observeNode(nodeId),
+      storeInspection: (inspected, requestKey, adoption) =>
+        this.storeInspection(inspected, requestKey, adoption),
+      previewChange: (change, actor) => this.previewParsedChange(change, undefined, actor),
+      announce: (change) => void this.announce(change),
+      reconcileNode: (nodeId, reason) => void this.reconciler.reconcileNode(nodeId, reason),
+    });
+    this.registries = new CapabilityRegistryCommands({
+      storage: deps.storage.capabilities,
+      ...(deps.signing ? { signing: deps.signing } : {}),
+      ...(deps.registryFetch ? { fetch: deps.registryFetch } : {}),
+      ...(deps.gitRun ? { gitRun: deps.gitRun } : {}),
+      dataDir: deps.dataDir,
+      now: () => this.now(),
+      assertAuthority: () => this.assertAuthority(),
+      announce: () => void this.announce({ packageIds: [], setupIds: [], operationIds: [] }),
+    });
     this.executor = new CapabilityExecutor({
       storage: deps.storage,
       artifacts: this.artifacts,
       homes: deps.homes,
       ...(deps.mcp ? { mcp: deps.mcp } : {}),
+      ...(deps.claudePlugins ? { claudePlugins: deps.claudePlugins } : {}),
       ...(deps.now ? { now: deps.now } : {}),
     });
     const local = localTransport({
@@ -281,17 +377,45 @@ export class CapabilityService {
       local: { ...local },
       remote: remoteTransport({ selfId: deps.selfId, link: deps.link, artifacts: this.artifacts }),
     });
+    this.scoped = new ScopedCapabilityDelivery({
+      ...deps.scoped,
+      storage: deps.storage,
+      artifacts: this.artifacts,
+      selfId: deps.selfId,
+      homes: () => this.deps.homes(),
+      resolve: (state, target) =>
+        this.resolveFor(state, { target, ceiling: UNRESTRICTED_CAPABILITY_CEILING }),
+      changed: () => void this.announce({ packageIds: [], setupIds: [], operationIds: [] }),
+      now: () => this.now(),
+    });
     this.reconciler = new CapabilityReconciler({
       storage: deps.storage,
       artifacts: this.artifacts,
       selfId: deps.selfId,
+      afterSelfPass: () => this.scoped.runAll(),
       machines: deps.machines,
       transport,
-      isAuthority: deps.isAuthority,
+      isAuthority: () => this.deps.isAuthority(),
       emit: (change) => void this.announce(change),
       nodeName: async (nodeId) =>
         (await this.machineFacts()).find((machine) => machine.nodeId === nodeId)?.name ?? nodeId,
       ...(deps.now ? { now: deps.now } : {}),
+    });
+    this.handoverReceiver = new CapabilityHandoverReceiver({
+      storage: deps.storage,
+      artifacts: this.artifacts,
+      dataDir: deps.dataDir,
+      selfId: deps.selfId,
+      admitEpoch: (controllerId, epoch) => this.executor.admitEpoch(controllerId, epoch),
+      now: () => this.now(),
+    });
+    this.leafLaunch = new LeafLaunchAuthority({
+      storage: deps.storage,
+      observeSelf: () => this.observeSelf(),
+      admitEpoch: (controllerId, epoch) => this.executor.admitEpoch(controllerId, epoch),
+      controllerReachable: async () => (await this.deps.controllerReachable?.()) ?? false,
+      ...(deps.requestLaunch ? { request: deps.requestLaunch } : {}),
+      now: () => this.now(),
     });
   }
 
@@ -302,6 +426,7 @@ export class CapabilityService {
   /** Makes sure this machine has a record, then starts reconciliation and update checks. */
   async init(): Promise<void> {
     const selfId = await this.deps.selfId();
+    await this.refreshAuthority();
     this.deps.storage.capabilities.mutateCapabilityState((state) => {
       if (state.machines[selfId]) return { result: undefined, changed: false };
       state.machines[selfId] = { nodeId: selfId, enrolled: true, groups: [] };
@@ -442,7 +567,13 @@ export class CapabilityService {
     const packageId = asText(args.packageId, "packageId");
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const machines = await this.machineFacts();
-    const detail = packageDetail(state, packageId, machines, desiredByNode(state, machines));
+    const detail = packageDetail(
+      state,
+      packageId,
+      machines,
+      desiredByNode(state, machines),
+      this.scoped.scopeNames(),
+    );
     if (!detail) throw new CapabilityError("not-found", "That package is not in the library.");
     return detail;
   }
@@ -541,6 +672,8 @@ export class CapabilityService {
       ceiling: CapabilityPermissionCeiling;
       launchInventory?: CapabilityInventory;
       forLaunch?: boolean;
+      /** A worktree's, account's or container's own copies (`scoped-delivery.ts`). */
+      scopedEvidence?: ScopedEvidence;
     },
   ): EffectiveAgentResources {
     const machine = state.machines[input.target.nodeId];
@@ -602,17 +735,30 @@ export class CapabilityService {
       ...(input.forLaunch
         ? {
             requiredDelivery: (component, digest) => {
-              if (
-                input.target.environmentIncarnation !== undefined ||
-                input.target.accountHomeId !== undefined
-              ) {
-                return "The required revision cannot be verified in this container or account.";
-              }
+              // Containers, added accounts and worktrees answer from their own copies first.
+              const scoped = scopedRequiredDelivery({
+                state,
+                target: input.target,
+                ...(input.scopedEvidence ? { evidence: input.scopedEvidence } : {}),
+                component,
+                digest,
+              });
+              if (scoped.kind === "verified") return undefined;
+              if (scoped.kind === "refused") return scoped.reason;
+              // A Claude plugin's parts are delivered by the plugin's own receipt.
+              const deliveredBy = new Set([
+                component.id,
+                ...(input.target.provider === "claude"
+                  ? component.dependencies.filter(
+                      (id) => state.components[id]?.kind === "native-plugin",
+                    )
+                  : []),
+              ]);
               const matching = Object.values(state.receipts).some((receipt) => {
                 if (
                   receipt.nodeId !== input.target.nodeId ||
                   !receipt.providers.includes(input.target.provider) ||
-                  receipt.componentId !== component.id ||
+                  !deliveredBy.has(receipt.componentId) ||
                   receipt.packageDigest !== digest ||
                   receipt.outcomeUnknown ||
                   (receipt.status !== "installed-next-session" && receipt.status !== "ready")
@@ -622,7 +768,7 @@ export class CapabilityService {
                   input.launchInventory?.items.some(
                     (item) =>
                       item.ownership === "managed" &&
-                      item.componentId === component.id &&
+                      item.componentId === receipt.componentId &&
                       item.locationId === receipt.locationId &&
                       !item.drifted &&
                       item.digest === receipt.digest,
@@ -845,7 +991,7 @@ export class CapabilityService {
   private async storeInspection(
     inspected: InspectedPackage,
     requestKey: string | undefined,
-    adoption?: SourceInspectionRecord["adoption"],
+    adoption?: DriftAdoption,
   ): Promise<CapabilitySourceInspection> {
     if (inspected.secretsFound.length > 0) {
       throw new CapabilityError(
@@ -1003,9 +1149,12 @@ export class CapabilityService {
         return this.storeInspection(inspected, requestKey);
       }
       case "registry":
-        throw new CapabilityError(
-          "unsupported",
-          "No package registry is configured; add the package from its Git repository instead.",
+        return this.storeInspection(
+          await inspectRegistrySource(
+            source,
+            this.registries.context(await this.deps.storage.capabilities.loadCapabilityState()),
+          ),
+          requestKey,
         );
       case "local":
       case "managed":
@@ -1036,154 +1185,19 @@ export class CapabilityService {
     );
   }
 
-  /**
-   * Inspects an installed item on a machine as a package, so it can be
-   * adopted. An item on another machine is read through that machine's own
-   * executor; no path crosses the link, only the item's opaque id.
-   */
-  async adoptExternal(args: Record<string, unknown>): Promise<CapabilitySourceInspection> {
-    this.assertAuthority();
-    const selfId = await this.deps.selfId();
-    const nodeId = typeof args.nodeId === "string" && args.nodeId ? args.nodeId : selfId;
-    const itemId = asText(args.itemId, "itemId");
-    const files = await this.readInventoryItem(nodeId, itemId);
-    const source: PackageSource = { kind: "local", sourceMachineId: nodeId, sourceId: itemId };
-    const location = capabilityLocation(itemId.split("/")[0] ?? "");
-    const name = itemId.split("/").slice(1).join("/").replace(/\.md$/, "");
-    const rooted =
-      location?.layout === "file"
-        ? files.map((file) => ({
-            ...file,
-            path: `${location.kind === "subagent" ? "agents" : location.kind === "prompt" ? "prompts" : "commands"}/${file.path}`,
-          }))
-        : files;
-    const inspected = inspectFiles(source, rooted, { fallbackName: name });
-    return this.storeInspection(
-      inspected,
-      typeof args.requestKey === "string" ? args.requestKey : undefined,
-    );
-  }
-
-  private async readInventoryItem(nodeId: string, itemId: string): Promise<PackageFile[]> {
-    const selfId = await this.deps.selfId();
-    let files: PackageFile[];
-    if (nodeId === selfId) {
-      files = await this.exportLocalItem(itemId);
-    } else {
-      const link = this.deps.link(nodeId);
-      if (!link?.connected)
-        throw new CapabilityError("source-unavailable", "That machine is not connected.");
-      const state = await this.deps.storage.capabilities.loadCapabilityState();
-      const answer = (await link.invokeCommand(exportCapabilityNodeItemCommand, {
-        controllerId: selfId,
-        epoch: state.epoch,
-        itemId,
-      })) as { files?: unknown };
-      files = validatePackageFiles(
-        (Array.isArray(answer?.files) ? answer.files : []).map((entry: unknown) => {
-          const file = entry as { path?: unknown; data?: unknown; executable?: unknown };
-          return {
-            path: String(file.path ?? ""),
-            content: Buffer.from(String(file.data ?? ""), "base64"),
-            executable: file.executable === true,
-          };
-        }),
-      );
-    }
-    return files;
-  }
-
-  private async prepareDriftAdoption(driftId: string): Promise<CapabilityChange> {
-    const state = await this.deps.storage.capabilities.loadCapabilityState();
-    const drift = state.drift[driftId];
-    const pkg = drift?.packageId ? state.packages[drift.packageId] : undefined;
-    const component = drift?.componentId ? state.components[drift.componentId] : undefined;
-    const location = drift ? capabilityLocation(drift.locationId) : undefined;
-    if (
-      !drift ||
-      drift.state !== "open" ||
-      drift.kind !== "modified" ||
-      !drift.observedDigest ||
-      !pkg ||
-      pkg.source.kind !== "managed" ||
-      pkg.provenance !== "managed" ||
-      pkg.componentIds.length !== 1 ||
-      !component ||
-      !location
-    ) {
-      throw new CapabilityError(
-        "unsupported",
-        "Only a modified file component from a single-component authored package can be adopted here.",
-      );
-    }
-    const setup = Object.values(state.setups).find((entry) =>
-      entry.packageSelections.some(
-        ({ packageId, version }) => packageId === pkg.id && version === "latest",
-      ),
-    );
-    if (!setup || pkg.pinned || pkg.paused) {
-      throw new CapabilityError(
-        "conflict",
-        "The package must be active and selected at its latest revision before adopting changes.",
-      );
-    }
-    const inventory = await this.observeNode(drift.nodeId);
-    const item = inventory.items.find(
-      (entry) =>
-        entry.locationId === drift.locationId &&
-        entry.componentId === drift.componentId &&
-        entry.packageId === pkg.id &&
-        entry.digest === drift.observedDigest,
-    );
-    if (!item)
-      throw new CapabilityError(
-        "conflict",
-        "The local item changed again. Refresh its inventory before reviewing it.",
-      );
-    const files = await this.readInventoryItem(drift.nodeId, item.id);
-    if (treeDigest(files) !== drift.observedDigest) {
-      throw new CapabilityError("conflict", "The local file changed while it was being read.");
-    }
-    const root = component.pathOrKey;
-    const rooted =
-      location.layout === "directory"
-        ? files.map((file) => ({ ...file, path: root ? `${root}/${file.path}` : file.path }))
-        : files.map((file) => ({ ...file, path: root }));
-    const inspected = inspectFiles(pkg.source, rooted, { fallbackName: pkg.displayName });
-    if (inspected.components.length !== 1 || inspected.components[0]?.id !== component.id) {
-      throw new CapabilityError(
-        "conflict",
-        "The local files change the package's component identity.",
-      );
-    }
-    const result = await this.storeInspection(inspected, undefined, {
-      driftId,
-      digest: drift.observedDigest,
-    });
-    return {
-      kind: "add-to-setup",
-      inspectionId: result.inspectionId,
-      expectedArtifactDigest: pkg.artifactDigest,
-      setupId: setup.id,
-    };
+  /** Inspects an installed item on a machine as a package, so it can be adopted (`drift.ts`). */
+  adoptExternal(args: Record<string, unknown>): Promise<CapabilitySourceInspection> {
+    return this.drift.adoptExternal(args);
   }
 
   /** This machine's files of one inventory item; the item id names a known location. */
-  async exportLocalItem(itemId: string): Promise<PackageFile[]> {
-    const slash = itemId.indexOf("/");
-    const locationId = slash > 0 ? itemId.slice(0, slash) : "";
-    const entry = slash > 0 ? itemId.slice(slash + 1) : "";
-    const location = capabilityLocation(locationId);
-    if (!location || !/^[A-Za-z0-9@][A-Za-z0-9@._+-]*$/.test(entry)) {
-      throw new CapabilityError("invalid-request", "Not an inventory item.");
-    }
-    const directory = locationDirectory(locationId, this.deps.homes());
-    if (location.layout === "directory")
-      return readPackageTree(path.join(directory, entry), { within: directory });
-    const files = await readPackageTree(directory, { only: [entry] });
-    if (files.length !== 1)
-      throw new CapabilityError("not-found", "That item is no longer installed.");
-    return files;
+  exportLocalItem(itemId: string): Promise<PackageFile[]> {
+    return this.drift.exportLocalItem(itemId);
+  }
+
+  /** Three-way merges a package's local changes with its configured revision (`drift.ts`). */
+  mergeDrift(args: Record<string, unknown>, actor?: string): Promise<CapabilityDriftMerge> {
+    return this.drift.merge(args, actor);
   }
 
   // --- Changes and operations ---------------------------------------------
@@ -1221,7 +1235,7 @@ export class CapabilityService {
     const raw = asRecord(args.change, "change");
     const change =
       raw.kind === "adopt-drift"
-        ? await this.prepareDriftAdoption(asText(raw.driftId, "driftId"))
+        ? await this.drift.prepareAdoption(asText(raw.driftId, "driftId"), raw.mode)
         : parseCapabilityChange(raw);
     return this.previewParsedChange(
       change,
@@ -1263,10 +1277,7 @@ export class CapabilityService {
     const reasons = approvalReasonsFor(draft, applied.addedComponentIds);
     if (change.kind === "add-to-setup") {
       const inspection = state.inspections[change.inspectionId];
-      if (inspection?.adoption) {
-        reasons.push("Adopt the observed local files as the package's new revision.");
-        reasons.push(...capabilityInstallApproval(inspection.components).reasons);
-      }
+      if (inspection?.adoption) reasons.push(...this.drift.adoptionReasons(state, inspection));
     }
     if (change.kind === "update") {
       const update = state.updates[change.updateId];
@@ -1377,28 +1388,7 @@ export class CapabilityService {
       );
     }
     const change = operation.change;
-    const adoption =
-      change.kind === "add-to-setup" ? state.inspections[change.inspectionId]?.adoption : undefined;
-    if (adoption) {
-      const drift = state.drift[adoption.driftId];
-      const inventory = drift && (await this.observeNode(drift.nodeId));
-      if (
-        !drift ||
-        !inventory ||
-        !inventory.items.some(
-          (item) =>
-            item.locationId === drift.locationId &&
-            item.componentId === drift.componentId &&
-            item.packageId === drift.packageId &&
-            item.digest === adoption.digest,
-        )
-      ) {
-        throw new CapabilityError(
-          "conflict",
-          "The local files no longer match the adoption preview.",
-        );
-      }
-    }
+    await this.drift.assertAdoptionCurrent(state, change);
     if (
       change.kind === "add-to-setup" ||
       change.kind === "adopt" ||
@@ -1662,6 +1652,28 @@ export class CapabilityService {
     return this.listSetups();
   }
 
+  /** One scope's own assignment (what its checkboxes show), not what it inherits. */
+  async getAssignment(args: Record<string, unknown>): Promise<{
+    scope: string;
+    scopeId: string;
+    setupIds: string[];
+    revision: number;
+  }> {
+    const scope = asText(args.scope, "scope");
+    if (!["project", "environment", "template", "graph-node", "session"].includes(scope)) {
+      throw new CapabilityError("invalid-request", "Choose what the setups are for.");
+    }
+    const scopeId = asText(args.scopeId, "scopeId");
+    const state = await this.deps.storage.capabilities.loadCapabilityState();
+    const assignment = state.assignments[`${scope}:${scopeId}`];
+    return {
+      scope,
+      scopeId,
+      setupIds: (assignment?.setupIds ?? []).filter((setupId) => Boolean(state.setups[setupId])),
+      revision: assignment?.revision ?? 0,
+    };
+  }
+
   async assignSetup(args: Record<string, unknown>, actor?: string) {
     const rawScope = args.scope;
     if (
@@ -1814,41 +1826,8 @@ export class CapabilityService {
     return row;
   }
 
-  async resolveDrift(args: Record<string, unknown>, actor?: string) {
-    this.assertAuthority();
-    const driftId = asText(args.driftId, "driftId");
-    const decision = args.decision;
-    if (decision === "adopt") {
-      throw new CapabilityError(
-        "approval-required",
-        "Preview and approve the local revision before adopting it.",
-      );
-    }
-    if (decision !== "keep-local" && decision !== "replace") {
-      throw new CapabilityError("invalid-request", "Choose keep or replace.");
-    }
-    const entry = this.deps.storage.capabilities.mutateCapabilityState((state) => {
-      const drift = state.drift[driftId];
-      if (!drift)
-        throw new CapabilityError("not-found", "That local change is no longer reported.");
-      drift.state = decision === "keep-local" ? "kept-local" : "replaced";
-      recordActivity(state, {
-        ...(actor ? { actor } : {}),
-        action: `drift-${decision}`,
-        summary: `${drift.name} on ${drift.nodeId}: ${decision === "keep-local" ? "kept the local version" : "replaced with the configured revision"}.`,
-        packageIds: drift.packageId ? [drift.packageId] : [],
-        setupIds: [],
-        correlationId: newCorrelationId(),
-      });
-      return { result: structuredClone(drift), changed: true };
-    });
-    void this.announce({
-      packageIds: entry.packageId ? [entry.packageId] : [],
-      setupIds: [],
-      operationIds: [],
-    });
-    if (decision === "replace") void this.reconciler.reconcileNode(entry.nodeId, "drift-replace");
-    return entry;
+  resolveDrift(args: Record<string, unknown>, actor?: string) {
+    return this.drift.resolveDrift(args, actor);
   }
 
   // --- Updates and rollback ---------------------------------------------------
@@ -1858,21 +1837,27 @@ export class CapabilityService {
     const only = typeof args.packageId === "string" ? args.packageId : undefined;
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const auto: string[] = [];
+    // Each registry's index is fetched once per pass.
+    const registries = this.registries.context(state, new Map());
     for (const pkg of Object.values(state.packages)) {
       if (only && pkg.id !== only) continue;
-      if (pkg.source.kind !== "git") continue;
+      if (pkg.source.kind !== "git" && pkg.source.kind !== "registry") continue;
       try {
         const candidate = await checkPackageUpdate(state, pkg, {
           remoteHead: (target) =>
-            remoteGitHead(
-              target.source as Extract<PackageSource, { kind: "git" }>,
-              this.deps.gitRun,
-            ),
+            target.source.kind === "registry"
+              ? registryLatestVersion(target, registries)
+              : remoteGitHead(
+                  target.source as Extract<PackageSource, { kind: "git" }>,
+                  this.deps.gitRun,
+                ),
           inspect: (target) =>
-            inspectGitSource(target.source as Extract<PackageSource, { kind: "git" }>, {
-              workRoot: this.deps.dataDir,
-              ...(this.deps.gitRun ? { run: this.deps.gitRun } : {}),
-            }),
+            target.source.kind === "registry"
+              ? inspectRegistrySource(target.source, registries)
+              : inspectGitSource(target.source as Extract<PackageSource, { kind: "git" }>, {
+                  workRoot: this.deps.dataDir,
+                  ...(this.deps.gitRun ? { run: this.deps.gitRun } : {}),
+                }),
           storeArtifact: async (inspected) => {
             await this.artifacts.put(inspected.files);
             this.deps.storage.capabilities.mutateCapabilityState((current) => {
@@ -2074,7 +2059,17 @@ export class CapabilityService {
   async exportSetup(args: Record<string, unknown>): Promise<CapabilityExport> {
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const setupIds = stringList(args.setupIds, 64);
-    const exported = exportSetups(state, setupIds.length > 0 ? setupIds : [MY_SETUP_ID]);
+    let signingKey: ReturnType<ManifestSigningKeys["installationKey"]> = null;
+    if (args.sign === true) {
+      signingKey = this.deps.signing?.installationKey(true) ?? null;
+      if (!signingKey)
+        throw new CapabilityError("unsupported", "This backend has no manifest signing key.");
+    }
+    const exported = exportSetups(
+      state,
+      setupIds.length > 0 ? setupIds : [MY_SETUP_ID],
+      signingKey ? { signingKey } : {},
+    );
     let written = false;
     if (args.write === true) {
       this.assertAuthority();
@@ -2094,6 +2089,8 @@ export class CapabilityService {
       lockFile: "orkestrator.capabilities.lock.json",
       lock: exported.lockText,
       ...(written ? { written } : {}),
+      formatVersion: exported.formatVersion,
+      ...(exported.signed ? { signed: exported.signed } : {}),
     };
   }
 
@@ -2134,7 +2131,18 @@ export class CapabilityService {
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const plan = planImport(state, parsed.intent, parsed.lock);
     const approvalReasons: string[] = [];
-    const issues = [...parsed.issues];
+    // An invalid signature, or (by policy) an unsigned or untrusted one, blocks before any fetch.
+    const requireSignedManifests = state.settings.requireSignedManifests === true;
+    const signature = verifyCapabilityLockSignature(
+      parsed.lock,
+      parsed.signedPayload,
+      parsed.intent,
+      this.deps.signing,
+    );
+    const issues = [
+      ...parsed.issues,
+      ...manifestSignatureIssues(signature, requireSignedManifests),
+    ];
     if (issues.length === 0 && plan.packages.every((entry) => entry.action !== "conflict")) {
       for (const entry of parsed.lock.packages) {
         try {
@@ -2157,13 +2165,22 @@ export class CapabilityService {
           verified: true,
           intent: parsed.intent,
           lock: parsed.lock,
+          signatureStatus: signature.status,
           ...(projectId ? { projectId } : {}),
           createdAt: this.now(),
         };
         return { result: undefined, changed: true };
       });
     }
-    return { previewId, issues, ...plan, approvalReasons: [...new Set(approvalReasons)], valid };
+    return {
+      previewId,
+      issues,
+      ...plan,
+      approvalReasons: [...new Set(approvalReasons)],
+      signature,
+      requireSignedManifests,
+      valid,
+    };
   }
 
   private importBasis(
@@ -2202,6 +2219,13 @@ export class CapabilityService {
       );
       // The immutable fetch ref is distinct from the package's update channel.
       inspected.source = entry.source;
+    } else if (!cachedOnly && entry.source.kind === "registry") {
+      // The locked registry version, from a registry configured under the same id.
+      inspected = await inspectRegistrySource(
+        entry.source,
+        this.registries.context(await this.deps.storage.capabilities.loadCapabilityState()),
+        entry.revision,
+      );
     } else {
       throw new CapabilityError(
         "source-unavailable",
@@ -2258,9 +2282,15 @@ export class CapabilityService {
       );
     const intent = record.intent as NonNullable<ReturnType<typeof parseManifests>["intent"]>;
     const lock = record.lock as NonNullable<ReturnType<typeof parseManifests>["lock"]>;
+    if (state.settings.requireSignedManifests === true && record.signatureStatus !== "trusted") {
+      throw new CapabilityError(
+        "approval-required",
+        "This installation now requires manifests signed by a trusted key; preview the import again.",
+      );
+    }
     const fetched: InspectedPackage[] = [];
     for (const entry of lock.packages) {
-      if (state.packages[entry.id]?.artifactDigest !== entry.artifactDigest) {
+      if (!isRevisionKept(state, entry)) {
         fetched.push(await this.inspectLockedArtifact(entry, true));
       }
     }
@@ -2276,36 +2306,8 @@ export class CapabilityService {
         );
       }
       const now = this.now();
-      for (const inspected of fetched) {
-        for (const component of inspected.components) current.components[component.id] = component;
-        current.packages[inspected.packageId] = {
-          id: inspected.packageId,
-          source: inspected.source,
-          displayName: inspected.displayName,
-          ...(inspected.description ? { description: inspected.description } : {}),
-          revision: inspected.revision,
-          artifactDigest: inspected.artifactDigest,
-          componentIds: inspected.components.map((component) => component.id),
-          provenance: record.projectId ? "project" : "managed",
-          risk: inspected.risk,
-          ...(inspected.publisher ? { publisher: inspected.publisher } : {}),
-          previousRevisions: [],
-          createdAt: now,
-          updatedAt: now,
-        };
-        current.artifacts[inspected.artifactDigest] ??= {
-          digest: inspected.artifactDigest,
-          bytes: inspected.files.reduce((total, file) => total + file.bytes, 0),
-          files: inspected.files.map((file) => ({
-            path: file.path,
-            bytes: file.bytes,
-            executable: file.executable,
-            sha256: file.sha256,
-          })),
-          refs: [`package:${inspected.packageId}@${inspected.revision}`],
-          createdAt: now,
-        };
-      }
+      // A package locked at several revisions keeps each one, so every setup's pin resolves.
+      addImportedPackages(current, fetched, record.projectId ? "project" : "managed", now);
       const bySlug = record.projectId
         ? new Map(
             Object.keys(intent.setups).map((slug) => [
@@ -2322,12 +2324,7 @@ export class CapabilityService {
         const id =
           bySlug.get(slug) ?? (slug === MY_SETUP_ID ? MY_SETUP_ID : `toolkit-${slug}`.slice(0, 64));
         const existing = current.setups[id];
-        const selections: CapabilityPackageSelection[] = setupIntent.packages.map((entry) => ({
-          packageId: capabilityPackageId(entry.source),
-          version: entry.revision ?? "latest",
-          ...(entry.components ? { components: entry.components } : {}),
-          ...(entry.required ? { required: true } : {}),
-        }));
+        const selections = importedSelections(setupIntent, lock.setups[slug], lock);
         current.setups[id] = {
           id,
           name:
@@ -2456,6 +2453,17 @@ export class CapabilityService {
     templateId?: string;
     graphNode?: string;
   }): Promise<EffectiveAgentResources> {
+    // A leaf's store holds no setups: its command node resolves the launch.
+    if (!this.deps.isAuthority() && input.target.nodeId === (await this.deps.selfId())) {
+      const answer = await this.leafLaunch.preflight(input);
+      this.launchEvidence.set(answer.effective, {
+        deliveries: answer.deliveries,
+        ...(answer.resolvedBy ? { resolvedBy: answer.resolvedBy } : {}),
+      });
+      return answer.effective;
+    }
+    // A worktree's project copies are brought up to date before anything is checked.
+    const scopedEvidence = await this.scoped.launchEvidence(input.target).catch(() => undefined);
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const hasRequired = Object.values(state.setups).some((setup) =>
       setup.packageSelections.some(({ required }) => required === true),
@@ -2463,15 +2471,26 @@ export class CapabilityService {
     const launchInventory = hasRequired
       ? await this.observeNode(input.target.nodeId).catch(() => undefined)
       : undefined;
-    return this.resolveFor(state, {
+    const resolved = this.resolveFor(state, {
       target: input.target,
       forLaunch: true,
       ...(launchInventory ? { launchInventory } : {}),
+      ...(scopedEvidence ? { scopedEvidence } : {}),
       sessionKey: input.sessionKey,
       ...(input.templateId ? { templateId: input.templateId } : {}),
       ...(input.graphNode ? { graphNode: input.graphNode } : {}),
       ceiling: input.ceiling,
     });
+    // Every copy of a required package the provider reads must hold the recorded bytes.
+    const checked = verifyLaunchDeliveries({
+      state,
+      effective: resolved,
+      inventory: launchInventory,
+      required: requiredPackageIds(state, resolved),
+    });
+    const effective = withBlockers(resolved, checked.blockers);
+    this.launchEvidence.set(effective, { deliveries: checked.deliveries });
+    return effective;
   }
 
   /**
@@ -2540,6 +2559,7 @@ export class CapabilityService {
             id: entry.id,
             artifactDigest: entry.artifactDigest,
           })),
+          ...this.launchEvidence.get(effective),
           launchedAt: this.now(),
         };
         return { result: undefined, changed: true };
@@ -2548,6 +2568,36 @@ export class CapabilityService {
       log.warn("service.preflight-failed", { error: formatLogError(error, { message: false }) });
     }
     return effective;
+  }
+
+  // --- Environment copies (`scoped-delivery.ts`, `container-staging.ts`) ---------
+
+  private environmentDeliveryContext(): EnvironmentDeliveryContext {
+    return {
+      storage: this.deps.storage,
+      artifacts: this.artifacts,
+      selfId: () => this.deps.selfId(),
+      resolve: (state, target) =>
+        this.resolveFor(state, { target, ceiling: UNRESTRICTED_CAPABILITY_CEILING }),
+      sources: this.deps.scoped ?? {},
+      now: () => this.now(),
+    };
+  }
+
+  /** Container creation: the manifest to stage into the new inputs revision, and its hook. */
+  prepareContainerStaging(input: Parameters<typeof containerStaging>[1]) {
+    return containerStaging(this.environmentDeliveryContext(), input);
+  }
+
+  /** The environment card: its worktree copies, or its container's staged and current manifests. */
+  async getEnvironmentDelivery(args: Record<string, unknown>) {
+    const environmentId = asText(args.environmentId, "environmentId");
+    const environments = (await this.deps.scoped?.environments?.().catch(() => [])) ?? [];
+    const environment = environments.find((entry) => entry.id === environmentId);
+    if (!environment) {
+      return { environmentId, kind: "none" as const, stale: false, items: [] };
+    }
+    return environmentDeliveryView(this.environmentDeliveryContext(), environment);
   }
 
   // --- Executor (this machine, called by its command node) --------------------
@@ -2588,6 +2638,85 @@ export class CapabilityService {
         executable: file.executable,
         data: file.content.toString("base64"),
       })),
+    };
+  }
+
+  // --- Authority: command-node handover and leaf launches (handover.ts, launch-authority.ts)
+
+  private async refreshAuthority(): Promise<void> {
+    const state = await this.deps.storage.capabilities.loadCapabilityState();
+    this.handedOver = handedOverAuthority(state);
+  }
+
+  /** `stage_capability_node_handover`: the old command node sending its state here. */
+  executorStageHandover(args: Record<string, unknown>) {
+    return this.handoverReceiver.stage(args);
+  }
+
+  /** `answer_capability_node_launch`: the command node answering this leaf's launch. */
+  executorLaunchAnswer(args: Record<string, unknown>) {
+    return this.leafLaunch.receiveAnswer(args);
+  }
+
+  /** Command node: a leaf asked to resolve a launch (`node-capability-launch-requested`). */
+  answerLeafLaunch(nodeId: string, payload: unknown): Promise<{ answered: boolean }> {
+    return answerLeafLaunch(
+      {
+        storage: this.deps.storage,
+        selfId: this.deps.selfId,
+        isAuthority: () => this.deps.isAuthority(),
+        link: this.deps.link,
+        resolve: (state, input) => this.resolveFor(state, input),
+        now: () => this.now(),
+      },
+      nodeId,
+      payload,
+    ).catch((error: unknown) => {
+      log.warn("launch.answer-failed", { error: formatLogError(error, { message: false }) });
+      return { answered: false };
+    });
+  }
+
+  /** The hooks `NodeService` runs around a command-node handover. */
+  handoverHooks() {
+    const sender = {
+      storage: this.deps.storage,
+      artifacts: this.artifacts,
+      selfId: this.deps.selfId,
+      quiesce: () => this.reconciler.idle(),
+      authorityChanged: () => void this.refreshAuthority(),
+      now: () => this.now(),
+    };
+    const sent = new Map<string, boolean>();
+    return {
+      send: async (input: { handoverId: string; targetId: string; invoke: HandoverInvoke }) => {
+        // Stop acting at once; the marker written next makes it durable.
+        this.handedOver = true;
+        const result = await sendCapabilityHandover(sender, input).catch(async (error) => {
+          await this.refreshAuthority();
+          throw error;
+        });
+        sent.set(input.handoverId, result.sent);
+        await this.refreshAuthority();
+      },
+      sent: async (input: { handoverId: string; targetId: string }) => {
+        completeCapabilityHandover(sender, { ...input, sent: sent.get(input.handoverId) ?? true });
+        sent.delete(input.handoverId);
+        await this.refreshAuthority();
+      },
+      abandoned: async (handoverId: string) => {
+        abandonCapabilityHandover(sender, handoverId);
+        sent.delete(handoverId);
+        await this.refreshAuthority();
+      },
+      receive: async (input: { controllerId: string; handoverId: string }) => {
+        await this.handoverReceiver.install(input);
+        await this.refreshAuthority();
+      },
+      received: () => {
+        // The old controllers are detached now: act as the authority at once.
+        void this.refreshAuthority().then(() => this.reconciler.reconcileAll("handover"));
+      },
     };
   }
 }

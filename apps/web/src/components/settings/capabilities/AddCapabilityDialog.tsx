@@ -29,12 +29,21 @@ import { capabilitiesApi, type AuthoredCapabilityInput } from "@/lib/backend/cap
 import { cn } from "@/lib/utils";
 
 import { ChangePreview } from "./ChangePreview";
-import { describeError, kindLabel, Pill, providerLabel, RiskLabel } from "./capability-format";
+import { RegistrySourcePicker, type RegistryPick } from "./RegistrySourcePicker";
+import {
+  describeError,
+  kindLabel,
+  Pill,
+  providerLabel,
+  RiskLabel,
+  useDialogFocusReturn,
+} from "./capability-format";
 
-type SourceMode = "repository" | "marketplace" | "installed" | "upload" | "create";
+type SourceMode = "repository" | "registry" | "marketplace" | "installed" | "upload" | "create";
 
 const MODES: Array<{ id: SourceMode; label: string }> = [
   { id: "repository", label: "Repository" },
+  { id: "registry", label: "Registry" },
   { id: "marketplace", label: "Claude marketplace" },
   { id: "installed", label: "Already installed" },
   { id: "upload", label: "Upload" },
@@ -99,6 +108,7 @@ export function AddCapabilityDialog({
   const [subpath, setSubpath] = useState("");
   const [channel, setChannel] = useState("");
   const [qualifiedId, setQualifiedId] = useState("");
+  const [registryPick, setRegistryPick] = useState<RegistryPick | null>(null);
   const [inventory, setInventory] = useState<CapabilityInventory | null>(null);
   const [itemId, setItemId] = useState("");
   const [uploaded, setUploaded] = useState<AuthoredCapabilityInput["files"]>(undefined);
@@ -117,6 +127,7 @@ export function AddCapabilityDialog({
   const [pin, setPin] = useState(false);
   const [required, setRequired] = useState(false);
   const [preview, setPreview] = useState<CapabilityOperationSnapshot | null>(null);
+  const focusReturn = useDialogFocusReturn();
 
   // Closing starts the next "Add" from the beginning.
   const handleOpenChange = (next: boolean) => {
@@ -159,6 +170,11 @@ export function AddCapabilityDialog({
           repo: repo.trim(),
           subpath: subpath.trim(),
           ...(channel.trim() ? { channel: channel.trim() } : {}),
+        });
+      } else if (mode === "registry" && registryPick) {
+        result = await capabilitiesApi.inspectCapabilitySource({
+          kind: "registry",
+          ...registryPick,
         });
       } else if (mode === "marketplace") {
         result = await capabilitiesApi.inspectCapabilitySource({
@@ -217,6 +233,7 @@ export function AddCapabilityDialog({
 
   const canInspect =
     (mode === "repository" && repo.trim().length > 0) ||
+    (mode === "registry" && registryPick !== null) ||
     (mode === "marketplace" && /.+@.+/.test(qualifiedId.trim())) ||
     (mode === "installed" && itemId.length > 0) ||
     (mode === "upload" && (uploaded?.length ?? 0) > 0) ||
@@ -236,6 +253,7 @@ export function AddCapabilityDialog({
         className={`max-h-[90vh] overflow-y-auto ${Z_FULLSCREEN_DIALOG}`}
         overlayClassName={Z_FULLSCREEN_DIALOG}
         data-testid="add-capability-dialog"
+        {...focusReturn}
       >
         <DialogHeader>
           <DialogTitle>
@@ -508,6 +526,8 @@ export function AddCapabilityDialog({
                   commit is pinned.
                 </p>
               </div>
+            ) : mode === "registry" ? (
+              <RegistrySourcePicker value={registryPick} onChange={setRegistryPick} />
             ) : mode === "marketplace" ? (
               <div className="space-y-1">
                 <Label htmlFor="capability-plugin" className="text-xs">

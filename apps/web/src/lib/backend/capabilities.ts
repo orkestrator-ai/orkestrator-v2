@@ -7,13 +7,18 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   CapabilityActivityList,
   CapabilityChangeResult,
+  CapabilityDriftAdoptionMode,
   CapabilityDriftList,
+  CapabilityEnvironmentDelivery,
+  CapabilityDriftMerge,
+  CapabilityDriftMergeResolution,
   CapabilityExport,
   CapabilityImportPreview,
   CapabilityInventory,
   CapabilityLibrary,
   CapabilityMachineList,
   CapabilityOperationList,
+  CapabilityRegistryPackageList,
   CapabilitySessionView,
   CapabilitySetupList,
   CapabilitySourceInspection,
@@ -33,6 +38,8 @@ import type {
   PackageSource,
 } from "@orkestrator/protocol/capability-resources";
 
+import type { CapabilityRegistryList } from "@orkestrator/protocol/capability-registry";
+
 import { capabilitiesOn } from "@/lib/node-scope/domains/capabilities";
 import { commandBackendClient, type BackendClient } from "./client";
 
@@ -50,7 +57,7 @@ export type CapabilityChangeInput =
     }
   | { kind: "remove-from-setup"; packageId: string; setupId?: string }
   | { kind: "reconcile"; nodeIds?: string[] }
-  | { kind: "adopt-drift"; driftId: string }
+  | { kind: "adopt-drift"; driftId: string; mode?: CapabilityDriftAdoptionMode }
   | { kind: "adopt"; inspectionId: string; setupId?: string };
 
 export interface AuthoredCapabilityInput {
@@ -167,6 +174,16 @@ export function createCapabilitiesApi(client: BackendClient) {
       api().assign_capability_setup({ scope, scopeId, setupIds }) as Promise<{
         setupIds: string[];
       }>,
+    getCapabilityAssignment: (
+      scope: "project" | "environment" | "template" | "graph-node" | "session",
+      scopeId: string,
+    ) =>
+      api().get_capability_assignment({ scope, scopeId }) as Promise<{
+        scope: string;
+        scopeId: string;
+        setupIds: string[];
+        revision: number;
+      }>,
     manageCapabilityException: (
       setupId: string,
       exception: string,
@@ -192,8 +209,24 @@ export function createCapabilitiesApi(client: BackendClient) {
         packageId,
         ...state,
       }) as Promise<CapabilityPackageSummary>,
+    /** Codex only: flips the plugin's `enabled` flag in this machine's config.toml. */
+    setCapabilityPluginEnabled: (provider: "codex", qualifiedId: string, enabled: boolean) =>
+      api().set_capability_plugin_enabled({ provider, qualifiedId, enabled }) as Promise<{
+        provider: string;
+        qualifiedId: string;
+        enabled: boolean;
+        changed: boolean;
+      }>,
     resolveCapabilityDrift: (driftId: string, decision: "keep-local" | "adopt" | "replace") =>
       api().resolve_capability_drift({ driftId, decision }) as Promise<CapabilityDriftEntry>,
+    mergeCapabilityDrift: (
+      driftId: string,
+      resolved?: { basis: string; resolutions: CapabilityDriftMergeResolution[] },
+    ) =>
+      api().merge_capability_drift({
+        driftId,
+        ...(resolved ? { basis: resolved.basis, resolutions: resolved.resolutions } : {}),
+      }) as Promise<CapabilityDriftMerge>,
     refreshCapabilityUpdates: () =>
       api().refresh_capability_updates({}) as Promise<CapabilityUpdateList>,
     previewCapabilityUpdate: (updateId: string) =>
@@ -223,12 +256,37 @@ export function createCapabilitiesApi(client: BackendClient) {
         packageId,
         toRevision,
       }) as Promise<CapabilityChangeResult>,
-    exportCapabilitySetup: (setupIds: string[], projectId?: string, write?: boolean) =>
+    exportCapabilitySetup: (
+      setupIds: string[],
+      projectId?: string,
+      write?: boolean,
+      sign?: boolean,
+    ) =>
       api().export_capability_setup({
         setupIds,
         ...(projectId ? { projectId } : {}),
         ...(write ? { write } : {}),
+        ...(sign ? { sign } : {}),
       }) as Promise<CapabilityExport>,
+    listCapabilityRegistries: () =>
+      api().list_capability_registries({}) as Promise<CapabilityRegistryList>,
+    saveCapabilityRegistry: (registry: {
+      id: string;
+      label?: string;
+      indexUrl: string;
+      signingKey?: string;
+    }) => api().set_capability_registry({ registry }) as Promise<CapabilityRegistryList>,
+    removeCapabilityRegistry: (registryId: string) =>
+      api().set_capability_registry({ remove: registryId }) as Promise<CapabilityRegistryList>,
+    setCapabilityManifestPolicy: (requireSignedManifests: boolean) =>
+      api().set_capability_manifest_policy({
+        requireSignedManifests,
+      }) as Promise<CapabilityRegistryList>,
+    listCapabilityRegistryPackages: (registryId: string, query?: string) =>
+      api().list_capability_registry_packages({
+        registryId,
+        ...(query ? { query } : {}),
+      }) as Promise<CapabilityRegistryPackageList>,
     previewCapabilityImport: (input: { intent?: string; lock?: string; projectId?: string }) =>
       api().preview_capability_import(input) as Promise<CapabilityImportPreview>,
     importCapabilitySetup: (previewId: string) =>
@@ -242,6 +300,10 @@ export function createCapabilitiesApi(client: BackendClient) {
         componentIds,
         consent: true,
       }) as Promise<CapabilityVerification>,
+    getCapabilityEnvironmentDelivery: (environmentId: string) =>
+      api().get_capability_environment_delivery({
+        environmentId,
+      }) as Promise<CapabilityEnvironmentDelivery>,
   };
 }
 
@@ -274,10 +336,13 @@ export const {
   setCapabilitySetup,
   deleteCapabilitySetup,
   assignCapabilitySetup,
+  getCapabilityAssignment,
   manageCapabilityException,
   setCapabilityMachineEnrollment,
   setCapabilityPackageState,
+  setCapabilityPluginEnabled,
   resolveCapabilityDrift,
+  mergeCapabilityDrift,
   refreshCapabilityUpdates,
   previewCapabilityUpdate,
   approveCapabilityUpdate,

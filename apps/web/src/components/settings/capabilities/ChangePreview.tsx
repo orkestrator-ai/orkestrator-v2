@@ -97,13 +97,18 @@ export function ChangePreview({
               type="checkbox"
               checked={acknowledged}
               onChange={(event) => setAcknowledged(event.target.checked)}
-              aria-label="I reviewed what this package runs"
             />
             I reviewed what this package runs and connects to.
           </label>
         </div>
       ) : null}
-      <div className="max-h-72 overflow-auto rounded-md border border-zinc-800">
+      {/* Focusable so a keyboard can scroll a long or narrow plan. */}
+      <div
+        className="focus-hairline max-h-72 overflow-auto rounded-md border border-zinc-800"
+        role="region"
+        aria-label="Planned changes"
+        tabIndex={0}
+      >
         <table className="w-full text-left text-xs">
           <thead className="sticky top-0 bg-zinc-950 text-muted-foreground">
             <tr>

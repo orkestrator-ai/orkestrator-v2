@@ -9,7 +9,9 @@
  *   location table deciding which providers each copy reaches;
  * - MCP servers through this machine's `McpManagementService`, the same
  *   revisions, locks and validation the MCP servers settings use;
- * - marketplace plugin discovery without managed native writes;
+ * - Claude plugins from the approved artifact through Orkestrator's own
+ *   Claude marketplace (`provider-adapters/claude-plugins.ts`), run with
+ *   this machine's Claude CLI; other providers' plugins are discovered only;
  * - discovery from the existing skill locations, the provider plugin
  *   listings (`discoverAgentPlugins`) and MCP management's catalog.
  */
@@ -18,11 +20,17 @@ import path from "node:path";
 
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { McpMutation } from "@orkestrator/protocol/mcp-management";
-import { capabilityManagementChangedEvent } from "@orkestrator/protocol/contract/domains/capabilities";
+import {
+  capabilityLaunchRequestedEvent,
+  capabilityManagementChangedEvent,
+} from "@orkestrator/protocol/contract/domains/capabilities";
 
+import { generateGraphSharingKeyPair } from "../graph-template-signing.js";
 import { commandExists } from "../shell.js";
 import {
   createHostExtensionCommandRunner,
+  envWithManagedBinaries,
+  resolveAgentBinary,
   resolveManagedBinary,
 } from "../commands-agent-support.js";
 import type { CommandContext } from "../commands-context.js";
@@ -32,6 +40,11 @@ import type { McpInstaller } from "./executor.js";
 import type { InventoryMcpServer, InventoryPlugin } from "./inventory.js";
 import { defaultCapabilityHomes, testCapabilityHomes } from "./native-ownership.js";
 import type { CapabilityLink } from "./node-transport.js";
+import { ClaudePluginAdapter } from "./provider-adapters/claude-plugins.js";
+import { toggleCodexPlugin } from "./provider-adapters/codex-plugins.js";
+import { providerCli } from "./provider-adapters/provider-cli.js";
+import { CapabilityError } from "./security.js";
+import { capabilityScopedSources } from "./scoped-sources.js";
 import { CapabilityService } from "./service.js";
 
 export { CapabilityService } from "./service.js";
@@ -224,12 +237,75 @@ export function mcpManagementInstaller(
   };
 }
 
+/** An isolated agent-test profile writes into its own data directory, never the host's homes. */
+export function capabilityHomes(context: CommandContext) {
+  return context.runtimeFlavor === "agent-test"
+    ? testCapabilityHomes(path.join(context.storage.getDataDir(), "capability-test-home"))
+    : defaultCapabilityHomes();
+}
+
+/** A provider CLI run from this machine's home; the isolated profile's sees only its own home. */
+function capabilityProviderCli(context: CommandContext, provider: "claude" | "codex") {
+  const isolated = context.runtimeFlavor === "agent-test";
+  const homes = () => capabilityHomes(context);
+  return providerCli({
+    label: provider === "claude" ? "Claude Code" : "Codex",
+    binary: () => resolveAgentBinary(context, provider),
+    cwd: () => homes().home,
+    env: () => ({
+      ...envWithManagedBinaries(context),
+      ...(isolated
+        ? {
+            HOME: homes().home,
+            CLAUDE_CONFIG_DIR: homes().claudeConfigDir,
+            CODEX_HOME: homes().codexHome,
+          }
+        : {}),
+    }),
+  });
+}
+
+/**
+ * `set_capability_plugin_enabled` on this machine. Only Codex has a
+ * persisted per-plugin switch Orkestrator edits (`codex-plugins.ts`).
+ */
+export async function setCapabilityPluginEnabled(
+  context: CommandContext,
+  args: Record<string, unknown>,
+): Promise<{ provider: string; qualifiedId: string; enabled: boolean; changed: boolean }> {
+  const { provider, qualifiedId, enabled } = args;
+  if (typeof qualifiedId !== "string" || typeof enabled !== "boolean") {
+    throw new CapabilityError("invalid-request", "qualifiedId and enabled are required.");
+  }
+  if (provider !== "codex") {
+    throw new CapabilityError(
+      "unsupported",
+      provider === "claude"
+        ? "Claude plugins Orkestrator installs follow their setups; remove one from the setup to switch it off. Plugins you installed yourself are switched in Claude."
+        : "Only Codex plugins have a persisted switch Orkestrator can edit.",
+    );
+  }
+  const result = await toggleCodexPlugin(
+    { codexHome: capabilityHomes(context).codexHome, cli: capabilityProviderCli(context, "codex") },
+    qualifiedId,
+    enabled,
+  );
+  return {
+    provider,
+    qualifiedId: result.pluginId,
+    enabled: result.enabled,
+    changed: result.changed,
+  };
+}
+
 export interface CapabilityNodeAccess {
   selfId(): Promise<string>;
   selfName(): Promise<string>;
   machines(): Promise<Array<{ nodeId: string; name: string; connected: boolean }>>;
   link(nodeId: string): CapabilityLink | null;
   isLeaf(): boolean;
+  /** Leaf: an attached command node was in contact recently enough to answer a launch. */
+  controllerReachable?(): Promise<boolean>;
 }
 
 /** Builds the service for this backend. */
@@ -239,6 +315,11 @@ export function createCapabilityService(
 ): CapabilityService {
   const isolated = context.runtimeFlavor === "agent-test";
   const runner = createHostExtensionCommandRunner(context);
+  const homes = () => capabilityHomes(context);
+  const claudePlugins = new ClaudePluginAdapter({
+    homes,
+    cli: capabilityProviderCli(context, "claude"),
+  });
   return new CapabilityService({
     storage: {
       capabilities: context.storage.capabilities,
@@ -248,18 +329,28 @@ export function createCapabilityService(
       },
     },
     dataDir: context.storage.getDataDir(),
+    // Signed team manifests reuse the graph-sharing key pair and trusted keys (item 405).
+    signing: {
+      installationKey: (create) =>
+        create
+          ? context.storage.graphTemplates.ensureGraphSharingInstallationKey(() =>
+              generateGraphSharingKeyPair(new Date()),
+            )
+          : (context.storage.graphTemplates.getGraphSharingKeys()?.installation ?? null),
+      trusted: () => context.storage.graphTemplates.getGraphSharingKeys()?.trusted ?? [],
+    },
     selfId: nodes.selfId,
     selfName: nodes.selfName,
     machines: nodes.machines,
     link: nodes.link,
     isAuthority: () => !nodes.isLeaf(),
     emit: (event) => context.emit(capabilityManagementChangedEvent, event),
-    // An isolated agent-test profile writes into its own data directory, never the host's homes.
-    homes: () =>
-      isolated
-        ? testCapabilityHomes(path.join(context.storage.getDataDir(), "capability-test-home"))
-        : defaultCapabilityHomes(),
+    // A leaf asks its command node to resolve a launch on its own event stream.
+    requestLaunch: (payload) => context.emit(capabilityLaunchRequestedEvent, payload),
+    ...(nodes.controllerReachable ? { controllerReachable: nodes.controllerReachable } : {}),
+    homes,
     inventory: {
+      managedPlugins: () => claudePlugins.observe(),
       providers: async () =>
         Promise.all(
           AGENT_PLATFORMS.map(async (provider) => {
@@ -324,5 +415,7 @@ export function createCapabilityService(
           }),
     },
     mcp: mcpManagementInstaller(() => context.mcpManagement),
+    scoped: capabilityScopedSources(context),
+    claudePlugins,
   });
 }

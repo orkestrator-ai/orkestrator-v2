@@ -17,6 +17,7 @@ import type {
   CapabilityPackageSummary,
   CapabilityRisk,
   CapabilitySetup,
+  CapabilityTargetStatus,
   CapabilityUpdateProposal,
   ComponentKind,
   EffectiveAgentResources,
@@ -135,6 +136,64 @@ export interface CapabilityDriftList {
   drift: CapabilityDriftEntry[];
 }
 
+/** How adopted local changes are published (`adopt-drift`). */
+export type CapabilityDriftAdoptionMode =
+  /** The package's next revision; a Git or registry package then diverges from its source. */
+  | "revision"
+  /** A new package of its own (a local variant) that replaces the original in its setups. */
+  | "variant";
+
+/** One file of a three-way merge of local changes (`merge_capability_drift`). */
+export interface CapabilityDriftMergeFile {
+  /** The path inside the package. */
+  path: string;
+  componentId: string;
+  outcome: "unchanged" | "local" | "configured" | "merged" | "deleted" | "conflict";
+  /** Present for `conflict`. */
+  conflict?: {
+    kind: "text" | "binary" | "deleted-locally" | "deleted-in-revision" | "too-large";
+    /** Text of each side (absent when that side has no file, or for binary files). */
+    base?: string;
+    local?: string;
+    configured?: string;
+    /** `text`: the merge with `<<<<<<<`/`|||||||`/`=======`/`>>>>>>>` markers, to edit. */
+    merged?: string;
+    /** `text`: the conflicting regions, with their first line in the marked-up text. */
+    hunks?: Array<{ line: number; base: string; local: string; configured: string }>;
+  };
+}
+
+/** A user's resolution of one conflicted file. */
+export interface CapabilityDriftMergeResolution {
+  path: string;
+  /** The resolved text; absent with `delete`. */
+  content?: string;
+  delete?: boolean;
+}
+
+/**
+ * A three-way merge of one package's local changes on one machine: base is
+ * the revision the copy was installed from, local is the machine's files,
+ * configured is the package's current revision. A clean merge (or one whose
+ * conflicts were all resolved) comes back with `operation`, the previewed new
+ * revision to approve; otherwise `conflicts` lists what needs resolving.
+ */
+export interface CapabilityDriftMerge {
+  driftId: string;
+  nodeId: string;
+  packageId: string;
+  displayName: string;
+  baseRevision: string;
+  configuredRevision: string;
+  /** Digest of the three sides; resolutions must name it, so a moved side is refused. */
+  basis: string;
+  files: CapabilityDriftMergeFile[];
+  conflicts: number;
+  /** Binary files both sides changed: they cannot be merged; keep, adopt or replace instead. */
+  unmergeable: string[];
+  operation?: CapabilityOperationSnapshot;
+}
+
 export interface CapabilityExport {
   intentFile: string;
   intent: string;
@@ -142,6 +201,40 @@ export interface CapabilityExport {
   lock: string;
   /** Written into the project checkout as well (project exports only). */
   written?: boolean;
+  /** The lockfile format written: 1 when it suffices, 2 for mixed revisions or a signature. */
+  formatVersion?: 1 | 2;
+  /** The lockfile is signed with this installation's sharing key. */
+  signed?: { keyId: string; fingerprint: string };
+}
+
+/**
+ * A lockfile signature as an import preview reports it. `invalid` blocks the
+ * import; `unsigned` and `untrusted` block it when the policy requires signed
+ * manifests.
+ */
+export interface CapabilityManifestSignatureCheck {
+  status: "unsigned" | "trusted" | "untrusted" | "invalid";
+  keyId?: string;
+  /** The signer's raw Ed25519 public key (base64url), so the preview can offer to trust it. */
+  publicKey?: string;
+  fingerprint?: string;
+  /** The trusted key's label, or "This installation". */
+  label?: string;
+  own?: boolean;
+  reason?: string;
+}
+
+/** A registry's packages, for the Add dialog (bounded). */
+export interface CapabilityRegistryPackageList {
+  registryId: string;
+  packages: Array<{
+    qualifiedId: string;
+    displayName?: string;
+    description?: string;
+    latest: string;
+    versions: string[];
+  }>;
+  truncated: number;
 }
 
 export interface CapabilityImportPreview {
@@ -156,6 +249,10 @@ export interface CapabilityImportPreview {
     reason?: string;
   }>;
   approvalReasons: string[];
+  /** The lockfile's signature; absent when the files could not be read. */
+  signature?: CapabilityManifestSignatureCheck;
+  /** Imports require a trusted signature on this installation. */
+  requireSignedManifests?: boolean;
   valid: boolean;
 }
 
@@ -186,6 +283,41 @@ export interface CapabilitySessionView {
     liveSemantics?: string;
     reason?: string;
   }>;
+}
+
+/**
+ * One environment's own copies (`get_capability_environment_delivery`): the
+ * project setup written into a local worktree, or the manifest staged into a
+ * container's inputs, with what the current setup would put there.
+ */
+export interface CapabilityEnvironmentDelivery {
+  environmentId: string;
+  kind: "worktree" | "container" | "none";
+  /** Container: the manifest digest staged into the running container, absent when none was. */
+  installedDigest?: string;
+  /** Container: the digest the current setup stages on the next rebuild. */
+  currentDigest?: string;
+  /** Container: the installed manifest differs from the current one; a rebuild re-stages it. */
+  stale: boolean;
+  stagedAt?: string;
+  items: CapabilityEnvironmentDeliveryItem[];
+}
+
+export interface CapabilityEnvironmentDeliveryItem {
+  componentId: string;
+  name: string;
+  kind: ComponentKind;
+  packageId: string;
+  providers: AgentPlatform[];
+  /** A location id: a project directory in the worktree, or a user location in the container. */
+  locationId?: string;
+  /** Display only: worktree-relative (`.claude/skills`) or home-relative. */
+  locationLabel?: string;
+  status: CapabilityTargetStatus;
+  installedDigest?: string;
+  currentDigest?: string;
+  alsoVisibleTo?: AgentPlatform[];
+  reason?: string;
 }
 
 export type { CapabilityPackageDetail };

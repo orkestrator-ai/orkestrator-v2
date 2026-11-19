@@ -16,8 +16,10 @@
  *    lock, and records the key before it answers.
  *
  * MCP servers go through this machine's own MCP management service (the same
- * revisions and locks the MCP servers settings use). Native plugins go
- * require verified immutable content before managed delivery can be supported.
+ * revisions and locks the MCP servers settings use). Claude plugins are
+ * installed from the approved artifact through Orkestrator's own Claude
+ * marketplace (`provider-adapters/claude-plugins.ts`); other providers'
+ * plugins are unsupported.
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -34,6 +36,7 @@ import {
   capabilityLocation,
   describeCapabilitySupport,
   maxVerificationLevel,
+  type CapabilityLocation,
 } from "@orkestrator/protocol/capability-resources-support";
 
 import type { CapabilityArtifactStore } from "./artifact-store.js";
@@ -62,6 +65,10 @@ import {
   type McpDefinitionShape,
 } from "./source-inspection.js";
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import {
+  CLAUDE_PLUGIN_MANIFEST,
+  type ClaudePluginAdapter,
+} from "./provider-adapters/claude-plugins.js";
 
 export interface NodePlanTarget {
   key: string;
@@ -80,6 +87,11 @@ export interface NodePlanTarget {
   force?: boolean;
   /** Marketplace plugins: `name@marketplace`. */
   qualifiedId?: string;
+  /**
+   * A local variant's install: it may take over a copy owned by the package
+   * it was derived from (`CapabilityPackage.derivedFrom`), and nothing else.
+   */
+  takeoverFrom?: string;
 }
 
 export interface NodePlanResult {
@@ -125,7 +137,15 @@ export interface CapabilityExecutorDeps {
   storage: { capabilities: CapabilitiesStorage };
   artifacts: CapabilityArtifactStore;
   homes: () => CapabilityHomes;
+  /**
+   * A scoped writer's locations (`scoped-delivery.ts`): a worktree's project
+   * directories or an account's private directory, resolved by this machine.
+   * Absent: the machine-wide location table under `homes`.
+   */
+  locate?: (locationId: string) => { location: CapabilityLocation; directory: string } | undefined;
   mcp?: McpInstaller;
+  /** Claude plugins through Orkestrator's own marketplace (`provider-adapters/claude-plugins.ts`). */
+  claudePlugins?: ClaudePluginAdapter;
   now?: () => string;
 }
 
@@ -183,6 +203,7 @@ export function parseNodePlanTargets(value: unknown): NodePlanTarget[] {
       ...(provider ? { provider } : {}),
       ...(optional("artifactDigest") ? { artifactDigest: optional("artifactDigest")! } : {}),
       ...(raw.force === true ? { force: true } : {}),
+      ...(optional("takeoverFrom") ? { takeoverFrom: optional("takeoverFrom")! } : {}),
       ...(optional("qualifiedId") ? { qualifiedId: optional("qualifiedId")! } : {}),
     } satisfies NodePlanTarget;
   });
@@ -272,17 +293,22 @@ export class CapabilityExecutor {
     return results;
   }
 
+  private locate(locationId: string): { location: CapabilityLocation; directory: string } {
+    if (this.deps.locate) {
+      const located = this.deps.locate(locationId);
+      if (!located) throw new CapabilityError("invalid-request", "Unknown capability location.");
+      return located;
+    }
+    const location = capabilityLocation(locationId);
+    if (!location) throw new CapabilityError("invalid-request", "Unknown capability location.");
+    return { location, directory: locationDirectory(location.id, this.deps.homes()) };
+  }
+
   private async applyOne(target: NodePlanTarget): Promise<NodePlanResult> {
     const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
     const previous = executor.applied[target.key];
     if (target.kind === "mcp-server") return this.applyMcp(target, previous);
-    if (target.kind === "native-plugin")
-      return {
-        key: target.key,
-        status: "unsupported",
-        verification: "requested",
-        reason: "Managed plugin delivery requires an immutable, verified plugin artifact.",
-      };
+    if (target.kind === "native-plugin") return this.applyPlugin(target, previous !== undefined);
     if (target.kind === "hook") {
       return {
         key: target.key,
@@ -300,8 +326,7 @@ export class CapabilityExecutor {
         reason: "No location for this component.",
       };
     }
-    const location = capabilityLocation(target.locationId)!;
-    const directory = locationDirectory(location.id, this.deps.homes());
+    const { location, directory } = this.locate(target.locationId);
     const name = installName(target.componentName, target.pathOrKey, location.layout);
     const entry = location.layout === "file" ? `${name}.md` : name;
 
@@ -347,7 +372,9 @@ export class CapabilityExecutor {
       };
     }
     if (ownership.kind === "managed") {
-      if (ownership.packageId !== target.packageId) {
+      const takingOver =
+        target.takeoverFrom !== undefined && ownership.packageId === target.takeoverFrom;
+      if (ownership.packageId !== target.packageId && !takingOver) {
         return {
           key: target.key,
           status: "failed",
@@ -440,7 +467,7 @@ export class CapabilityExecutor {
         reason: "Already removed.",
       };
     }
-    if (ownership.kind === "external" || ownership.packageId !== target.packageId) {
+    if (ownership.kind === "external") {
       return {
         key: target.key,
         status: "drifted",
@@ -448,7 +475,17 @@ export class CapabilityExecutor {
         reason: "The item is not owned by this package, so it was not removed.",
       };
     }
-    const location = capabilityLocation(target.locationId!)!;
+    if (ownership.packageId !== target.packageId) {
+      // Another package (a local variant) took the copy over: this package's copy is gone.
+      this.forget(target);
+      return {
+        key: target.key,
+        status: "ready",
+        verification: "requested",
+        reason: "Another package now manages this item; it was left in place.",
+      };
+    }
+    const { location } = this.locate(target.locationId!);
     const current = await installedDigest(location, directory, entry);
     if (current !== ownership.digest && !target.force) {
       return {
@@ -574,13 +611,66 @@ export class CapabilityExecutor {
     };
   }
 
+  /** Claude plugins from the approved artifact; every other provider's plugins are unsupported. */
+  private async applyPlugin(
+    target: NodePlanTarget,
+    managedBefore: boolean,
+  ): Promise<NodePlanResult> {
+    const adapter = this.deps.claudePlugins;
+    if (target.provider !== "claude" || !adapter) {
+      const support = describeCapabilitySupport(target.provider ?? "claude", { location: "host" });
+      return {
+        key: target.key,
+        status: "unsupported",
+        verification: "requested",
+        reason: !adapter
+          ? "Claude plugin delivery is not available on this machine."
+          : (support.kinds["native-plugin"].install.reason ??
+            "Native plugins are not supported for this provider."),
+      };
+    }
+    if (target.action === "remove") {
+      const removed = await adapter.remove({
+        packageId: target.packageId,
+        componentId: target.componentId,
+        ...(target.force ? { force: true } : {}),
+      });
+      if (removed.status === "ready" || !managedBefore) this.forget(target);
+      return { key: target.key, ...removed };
+    }
+    if (target.pathOrKey !== CLAUDE_PLUGIN_MANIFEST || !target.artifactDigest) {
+      return {
+        key: target.key,
+        status: "unsupported",
+        verification: "requested",
+        reason:
+          "Claude resolves marketplace plugins from a mutable source; add the plugin from its repository so Orkestrator can review and pin its bytes.",
+      };
+    }
+    const files = await this.deps.artifacts.get(target.artifactDigest);
+    assertDistributableArtifact(files);
+    const result = await adapter.install({
+      packageId: target.packageId,
+      componentId: target.componentId,
+      files,
+      ...(target.force ? { force: true } : {}),
+    });
+    if (result.status === "installed-next-session" && result.digest) {
+      this.record(target, result.digest);
+    }
+    const { adopted: _adopted, ...answer } = result;
+    return { key: target.key, ...answer };
+  }
+
   private installedStatus(target: NodePlanTarget): CapabilityTargetStatus {
     // A copy is never `ready` on its own: runtime evidence upgrades it.
     return target.kind === "mcp-server" ? "installed-next-session" : "installed-next-session";
   }
 
   private verification(target: NodePlanTarget): CapabilityVerificationLevel | "unverified" {
-    const location = target.locationId ? capabilityLocation(target.locationId) : undefined;
+    const location = target.locationId
+      ? (this.deps.locate?.(target.locationId)?.location ?? capabilityLocation(target.locationId))
+      : undefined;
     const owner = location?.owner;
     const provider = owner && owner !== "shared" ? owner : undefined;
     if (!provider) return "present";

@@ -192,7 +192,7 @@ test("a plan with approval reasons cannot be applied until reviewed, and applies
   expect(screen.getByText(/Also visible to Cursor Agent/)).toBeTruthy();
   const approve = screen.getByTestId("capability-approve") as HTMLButtonElement;
   expect(approve.disabled).toBe(true);
-  fireEvent.click(screen.getByLabelText("I reviewed what this package runs"));
+  fireEvent.click(screen.getByLabelText("I reviewed what this package runs and connects to."));
   expect(approve.disabled).toBe(false);
   fireEvent.click(approve);
   await waitFor(() => expect(onApplied).toHaveBeenCalled());

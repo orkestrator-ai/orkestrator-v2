@@ -22,9 +22,11 @@ import type {
   CapabilityTargetStatus,
   CapabilityUpdateProposal,
   CapabilityVerificationLevel,
+  EffectiveAgentResources,
   PackageSource,
 } from "@orkestrator/protocol/capability-resources";
 import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
+import type { CapabilityRegistry } from "@orkestrator/protocol/capability-registry";
 
 export const CAPABILITY_STATE_FORMAT_VERSION = 1;
 
@@ -54,6 +56,18 @@ export interface InstallationReceipt {
   /** Present when the node answered in a way that does not prove the write happened. */
   outcomeUnknown?: boolean;
   pendingWrite?: { action: "install" | "update" | "remove"; packageDigest?: string };
+  /**
+   * A scoped copy (`scoped-delivery.ts`): written into one local worktree's
+   * project directories, or into an added account's private directory. The
+   * machine-wide reconciler never plans, observes or removes these.
+   */
+  environmentId?: string;
+  accountHomeId?: string;
+}
+
+/** True for a receipt the machine-wide reconcile pass owns (not a worktree or account copy). */
+export function isMachineWideReceipt(receipt: InstallationReceipt): boolean {
+  return receipt.environmentId === undefined && receipt.accountHomeId === undefined;
 }
 
 /** Runtime evidence for a component in a provider session generation. */
@@ -91,12 +105,33 @@ export interface PackageArtifactRecord {
   createdAt: string;
 }
 
+/**
+ * What an inspection publishes from a machine's local changes (`drift.ts`):
+ * the drift entries it settles and the observed bytes it was made from,
+ * re-checked on the machine before the change is applied.
+ */
+export interface DriftAdoption {
+  /** The entry the user acted on. */
+  driftId: string;
+  /** Its observed digest (absent for a deleted item). */
+  digest: string;
+  nodeId?: string;
+  /** Every local change the revision includes (all of the package's components). */
+  driftIds?: string[];
+  items?: Array<{ locationId: string; componentId: string; digest?: string }>;
+  mode?: "revision" | "variant";
+  /** Merged with the configured revision instead of taken as observed. */
+  merged?: boolean;
+  /** The package the local changes were made to. */
+  fromPackageId?: string;
+}
+
 /** An inspected source not yet added: short-lived, bounded. */
 export interface SourceInspectionRecord {
   id: string;
   requestKey?: string;
   secretsFound?: string[];
-  adoption?: { driftId: string; digest: string };
+  adoption?: DriftAdoption;
   source: PackageSource;
   packageId: string;
   displayName: string;
@@ -142,6 +177,8 @@ export interface CapabilityImportRecord {
   digest: string;
   intent: unknown;
   lock: unknown;
+  /** The lockfile signature's status at preview (`manifest-signing.ts`). */
+  signatureStatus?: "unsigned" | "trusted" | "untrusted" | "invalid";
   projectId?: string;
   createdAt: string;
 }
@@ -155,6 +192,10 @@ export interface CapabilitySettings {
   /** Newly enrolled machines follow My setup. */
   enrollNewMachines: boolean;
   lastUpdateCheckAt?: string;
+  /** Trusted package registries (`registry.ts`); absent means none. */
+  registries?: CapabilityRegistry[];
+  /** Imports refuse unsigned manifests and manifests signed by an untrusted key. */
+  requireSignedManifests?: boolean;
 }
 
 /** The frozen effective manifest a session was launched with. */
@@ -164,7 +205,55 @@ export interface CapabilityLaunchRecord {
   manifestDigest: string;
   permissionPolicyDigest: string;
   packages: Array<{ id: string; artifactDigest: string }>;
+  /**
+   * The installed bytes observed on the host at launch for each required
+   * component (`launch-authority.ts`): exactly what the provider can load.
+   */
+  deliveries?: CapabilityLaunchDelivery[];
+  /** The command node that resolved a leaf's launch; absent when resolved locally. */
+  resolvedBy?: string;
   launchedAt: string;
+}
+
+export interface CapabilityLaunchDelivery {
+  packageId: string;
+  componentId: string;
+  locationId: string;
+  digest: string;
+}
+
+/**
+ * The capability side of a command-node handover (`handover.ts`). On the
+ * node handing over: `sending` while the state travels, `sent` once the new
+ * command node accepted; either stops this node acting as the authority. On
+ * the node taking over: `received`, so a retried install is a no-op.
+ */
+export interface CapabilityHandoverMarker {
+  id: string;
+  role: "sending" | "sent" | "received";
+  peerId: string;
+  /** The epoch the authority moved to (`sent`, `received`) or from (`sending`). */
+  epoch: number;
+  at: string;
+}
+
+/** A leaf's last authoritative launch answers (`launch-authority.ts`), bounded. */
+export interface LeafLaunchAuthorityCache {
+  answers: Record<string, LeafLaunchAnswerRecord>;
+  /** The command node said required capabilities apply on this machine. */
+  requiredOnNode?: { value: boolean; at: string; controllerId: string };
+}
+
+export interface LeafLaunchAnswerRecord {
+  key: string;
+  controllerId: string;
+  epoch: number;
+  receivedAt: string;
+  /** Digest of this machine's applied executor keys when the answer arrived. */
+  appliedDigest: string;
+  effective: EffectiveAgentResources;
+  deliveries: CapabilityLaunchDelivery[];
+  required: string[];
 }
 
 export interface CapabilityState {
@@ -195,6 +284,10 @@ export interface CapabilityState {
   requests: Record<string, CapabilityRequestRecord>;
   imports: Record<string, CapabilityImportRecord>;
   launches: Record<string, CapabilityLaunchRecord>;
+  /** Command-node handover of this state (`handover.ts`). */
+  handover?: CapabilityHandoverMarker;
+  /** Leaf only: cached launch answers from the command node. */
+  leafAuthority?: LeafLaunchAuthorityCache;
 }
 
 export const CAPABILITY_COLLECTIONS = [

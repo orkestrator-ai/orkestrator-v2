@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Copy, FlaskConical, Sparkles } from "lucide-react";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -61,6 +61,7 @@ export function AgentInfoCapabilitiesSection({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const ids = useId();
   const ceiling = useMemo(
     () => ({
       denied: nativeAgentDeniedCapabilities(policy),
@@ -88,23 +89,40 @@ export function AgentInfoCapabilitiesSection({
   const toolkits = (setups.state.data?.setups ?? []).filter((setup) => !setup.builtIn);
 
   return (
-    <div
+    <section
       className="space-y-2 rounded-md border border-zinc-800 p-3 text-xs"
+      aria-labelledby={`${ids}-label`}
       data-testid="agent-info-capabilities"
     >
       <div className="flex flex-wrap items-center gap-2">
         <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-muted-foreground">Capabilities:</span>
-        <span className="font-medium text-foreground">{data?.label ?? "My setup"}</span>
+        <span id={`${ids}-label`}>
+          <span className="text-muted-foreground">Capabilities: </span>
+          <span className="font-medium text-foreground">{data?.label ?? "My setup"}</span>
+        </span>
         <StatusBadge status={readiness.status} label={readiness.label} />
       </div>
       <div className="flex flex-wrap gap-1">
         {!readOnly ? (
-          <Button variant="ghost" size="sm" className="h-7" onClick={() => setChanging(!changing)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7"
+            aria-expanded={changing}
+            aria-controls={changing ? `${ids}-toolkits` : undefined}
+            onClick={() => setChanging(!changing)}
+          >
             Change
           </Button>
         ) : null}
-        <Button variant="ghost" size="sm" className="h-7" onClick={() => setExpanded(!expanded)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7"
+          aria-expanded={expanded}
+          aria-controls={expanded ? `${ids}-details` : undefined}
+          onClick={() => setExpanded(!expanded)}
+        >
           {expanded ? "Hide details" : "See details"}
         </Button>
         <Button
@@ -171,7 +189,7 @@ export function AgentInfoCapabilitiesSection({
         </Button>
       </div>
       {changing ? (
-        <fieldset className="space-y-1 rounded border border-zinc-800 p-2">
+        <fieldset id={`${ids}-toolkits`} className="space-y-1 rounded border border-zinc-800 p-2">
           <legend className="px-1 text-muted-foreground">
             Toolkits for this session (in addition to My setup)
           </legend>
@@ -211,7 +229,7 @@ export function AgentInfoCapabilitiesSection({
         </fieldset>
       ) : null}
       {expanded && data ? (
-        <ul className="space-y-1">
+        <ul id={`${ids}-details`} className="space-y-1" aria-label="Capabilities in this session">
           {data.components.length === 0 ? (
             <li className="text-muted-foreground">No capability is assigned to this agent.</li>
           ) : null}
@@ -237,12 +255,15 @@ export function AgentInfoCapabilitiesSection({
           ))}
         </ul>
       ) : null}
-      {testResult ? <p className="text-muted-foreground">{testResult}</p> : null}
+      {/* Always mounted, so a screen reader announces the result when it arrives. */}
+      <p className="text-muted-foreground empty:hidden" role="status">
+        {testResult ?? (copied ? "Diagnostics copied." : "")}
+      </p>
       {error ? (
         <p className="text-rose-300" role="alert">
           {error}
         </p>
       ) : null}
-    </div>
+    </section>
   );
 }

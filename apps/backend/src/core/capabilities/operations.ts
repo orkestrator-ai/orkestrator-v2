@@ -32,6 +32,7 @@ import {
   compareCapabilityRevisions,
 } from "@orkestrator/protocol/capability-resources-resolve";
 
+import { settleAdoption } from "./drift-state.js";
 import { CapabilityError } from "./security.js";
 import { sha256 } from "./planning.js";
 import type { CapabilityState } from "./types.js";
@@ -201,7 +202,7 @@ export function applyChangeToState(
       if (
         change.kind === "add-to-setup" &&
         change.expectedArtifactDigest &&
-        (inspection.source.kind !== "managed" ||
+        ((inspection.source.kind !== "managed" && !inspection.adoption) ||
           existing?.artifactDigest !== change.expectedArtifactDigest)
       ) {
         throw new CapabilityError(
@@ -263,6 +264,8 @@ export function applyChangeToState(
               ? { pinned: true }
               : {}),
           ...(existing?.paused ? { paused: true } : {}),
+          ...(existing?.derivedFrom ? { derivedFrom: existing.derivedFrom } : {}),
+          ...(existing?.diverged ? { diverged: existing.diverged } : {}),
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
         };
@@ -312,23 +315,22 @@ export function applyChangeToState(
           exclusions.add(`machine:${nodeId}|${inspection.packageId}`);
         setup.exclusions = [...exclusions].slice(0, CAPABILITY_LIMITS.maxExclusionsPerSetup);
       }
-      if (inspection.adoption) {
-        const drift = state.drift[inspection.adoption.driftId];
-        if (
-          !drift ||
-          drift.state !== "open" ||
-          drift.observedDigest !== inspection.adoption.digest ||
-          drift.packageId !== inspection.packageId
-        ) {
-          throw new CapabilityError(
-            "conflict",
-            "The local change no longer matches the adoption preview.",
-          );
-        }
-        drift.state = "adopted";
-      }
+      settleAdoption(state, inspection, existing, {
+        now,
+        setupId: setup.id,
+        ...(actor ? { actor } : {}),
+      });
       delete state.inspections[change.inspectionId];
-      return { packageIds: [inspection.packageId], setupId: setup.id, addedComponentIds: added };
+      // A local variant also changes what the original package delivers (it is replaced).
+      const replaced =
+        inspection.adoption?.mode === "variant" && inspection.adoption.fromPackageId
+          ? [inspection.adoption.fromPackageId]
+          : [];
+      return {
+        packageIds: [inspection.packageId, ...replaced],
+        setupId: setup.id,
+        addedComponentIds: added,
+      };
     }
     case "remove-from-setup": {
       const setup = touchSetup(change.setupId);
@@ -389,6 +391,8 @@ export function applyChangeToState(
       pkg.artifactDigest = inspection.artifactDigest;
       pkg.componentIds = inspection.components.map((component) => component.id);
       pkg.updatedAt = now;
+      // Taking the source's revision ends a divergence from it.
+      delete pkg.diverged;
       update.state = "applied";
       delete state.inspections[`update:${update.id}`];
       const artifact = state.artifacts[inspection.artifactDigest];

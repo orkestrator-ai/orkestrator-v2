@@ -545,6 +545,8 @@ export interface StagedInputs {
   stagedAt: string;
   /** Files reflinked rather than copied ({@link FileCloner}); not in the manifest. */
   clonedFiles: number;
+  /** What `StagingOptions.beforeCommit` recorded in the manifest. */
+  extensions?: Record<string, unknown>;
 }
 
 class Budget {
@@ -662,6 +664,15 @@ export interface StagingOptions {
    * its files are copied, so a test can change the source in between.
    */
   afterListing?: (source: string) => Promise<void> | void;
+  /**
+   * Runs inside the partial revision after the allowlisted inputs are copied
+   * and before the revision is committed: Agent Capabilities stages the
+   * effective manifest's packages into the provider directories here
+   * (`capabilities/container-staging.ts`). Its answer is kept in the
+   * revision's manifest under `extensions`; a stage it creates is mounted
+   * like any other.
+   */
+  beforeCommit?: (partialDirectory: string) => Promise<Record<string, unknown> | undefined>;
 }
 
 /**
@@ -1275,6 +1286,23 @@ export async function stagePortableInputs(
       }
       summaries.push(copier.summary);
     }
+    const extensions = options.beforeCommit ? await options.beforeCommit(partial) : undefined;
+    if (extensions) {
+      // A stage the hook created (no host files of that kind) still needs its mount.
+      for (const spec of specs) {
+        if (!providers.has(spec.provider)) continue;
+        for (const source of spec.directories) {
+          if (mounts.some((mount) => mount.target === source.target)) continue;
+          const created = await lstat(path.join(partial, source.stage)).then(
+            (info) => info.isDirectory(),
+            () => false,
+          );
+          if (created) {
+            mounts.push({ source: path.join(directory, source.stage), target: source.target });
+          }
+        }
+      }
+    }
     const stagedAt = now.toISOString();
     await writeFile(
       path.join(partial, "manifest.json"),
@@ -1283,6 +1311,7 @@ export async function stagePortableInputs(
         revision,
         stagedAt,
         providers: summaries,
+        ...(extensions ? { extensions } : {}),
       }),
       { mode: 0o600 },
     );
@@ -1295,6 +1324,7 @@ export async function stagePortableInputs(
       specVersion: PORTABLE_INPUT_SPEC_VERSION,
       stagedAt,
       clonedFiles: cloner.cloned,
+      ...(extensions ? { extensions } : {}),
     };
   } catch (error) {
     await rm(partial, { recursive: true, force: true }).catch(() => undefined);
@@ -1486,6 +1516,7 @@ export interface EnvironmentInputsManifest {
   stagedAt: string;
   specVersion: number;
   providers: ProviderInputSummary[];
+  extensions?: Record<string, unknown>;
 }
 
 export async function readInputsManifest(

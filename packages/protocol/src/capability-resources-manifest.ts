@@ -8,7 +8,11 @@
  *   toolkits, package sources and channels, abstract target selectors,
  *   provider requirements, exclusions and required/optional components.
  * - `orkestrator.capabilities.lock.json`: the resolved immutable package
- *   digests and component ids, and the manifest format version.
+ *   digests and component ids, and the manifest format version. Format 2
+ *   lists a package once per revision and lets each setup name the exact
+ *   entry it uses, and may carry an Ed25519 signature over the lockfile and
+ *   the intent's digest; format 1 (one revision per package, unsigned) is
+ *   still read and is written whenever it suffices.
  *
  * Neither file may hold a credential, a token or a host path; the
  * validators below refuse both, so an export can be committed to Git and an
@@ -29,10 +33,15 @@ import {
   type ComponentKind,
   type PackageSource,
 } from "./capability-resources.js";
+import { canonicalCapabilityJson } from "./capability-resources-resolve.js";
 
 export const CAPABILITY_INTENT_FILE = "orkestrator.capabilities.yaml";
 export const CAPABILITY_LOCK_FILE = "orkestrator.capabilities.lock.json";
+/** The intent (`orkestrator.capabilities.yaml`) format version. */
 export const CAPABILITY_MANIFEST_VERSION = 1;
+/** Lockfile formats this version reads; it writes 1 when that suffices, else 2. */
+export const CAPABILITY_LOCK_FORMAT_VERSIONS = [1, 2] as const;
+export type CapabilityLockFormatVersion = (typeof CAPABILITY_LOCK_FORMAT_VERSIONS)[number];
 
 export interface CapabilityIntentPackage {
   source: PackageSource;
@@ -66,11 +75,40 @@ export interface CapabilityLockPackage {
   components: Array<{ id: string; kind: ComponentKind; pathOrKey: string }>;
 }
 
+/** One setup's reference to the exact lock entry (package and revision) it uses. */
+export interface CapabilityLockSetupRef {
+  packageId: string;
+  artifactDigest: string;
+}
+
+/**
+ * An Ed25519 signature over {@link capabilityLockSigningPayload}, made with
+ * the exporting installation's sharing key. Holds public data only.
+ */
+export interface CapabilityManifestSignature {
+  algorithm: "ed25519";
+  /** First 16 bytes of SHA-256 of the public key, hex. */
+  keyId: string;
+  /** Raw Ed25519 public key, base64url. */
+  publicKey: string;
+  /** SHA-256 of the validated intent's canonical JSON, so the YAML is covered too. */
+  intentDigest: string;
+  /** Base64url signature. */
+  value: string;
+}
+
+/**
+ * The lockfile, in its format 2 shape. Format 1 (one revision per package,
+ * setups list package ids) is read into it; format 2 lists each package once
+ * per revision and setups name the exact entry, so two setups can pin two
+ * revisions of one package.
+ */
 export interface CapabilityLockfile {
-  formatVersion: 1;
+  formatVersion: CapabilityLockFormatVersion;
   generatedBy: string;
   packages: CapabilityLockPackage[];
-  setups: Record<string, { packageIds: string[] }>;
+  setups: Record<string, { packageIds: string[]; packages: CapabilityLockSetupRef[] }>;
+  signature?: CapabilityManifestSignature;
 }
 
 export interface CapabilityManifestIssue {
@@ -282,23 +320,94 @@ export function validateCapabilityIntent(value: unknown): {
   return { intent: { version: 1, setups }, issues };
 }
 
-/** Validates a parsed lockfile and checks it against the intent it should resolve. */
+const SIGNATURE_KEY = /^[A-Za-z0-9_-]{43}$/;
+const SIGNATURE_VALUE = /^[A-Za-z0-9_-]{86}$/;
+const KEY_ID = /^[0-9a-f]{32}$/;
+
+function parseSignature(
+  value: unknown,
+  issues: CapabilityManifestIssue[],
+): CapabilityManifestSignature | undefined {
+  if (value === undefined) return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    record.algorithm !== "ed25519" ||
+    typeof record.keyId !== "string" ||
+    !KEY_ID.test(record.keyId) ||
+    typeof record.publicKey !== "string" ||
+    !SIGNATURE_KEY.test(record.publicKey) ||
+    typeof record.intentDigest !== "string" ||
+    !DIGEST.test(record.intentDigest) ||
+    typeof record.value !== "string" ||
+    !SIGNATURE_VALUE.test(record.value)
+  ) {
+    issues.push({ path: "$.signature", message: "The signature is malformed." });
+    return undefined;
+  }
+  return {
+    algorithm: "ed25519",
+    keyId: record.keyId,
+    publicKey: record.publicKey,
+    intentDigest: record.intentDigest,
+    value: record.value,
+  };
+}
+
+/**
+ * The text a lockfile signature covers: the lockfile as written, without the
+ * signature's `value`, as canonical JSON. The signature block's key and the
+ * intent digest are inside it, so neither can be swapped.
+ */
+export function capabilityLockSigningPayload(document: Record<string, unknown>): string {
+  const signature = document.signature;
+  const { value: _value, ...signed } =
+    signature !== null && typeof signature === "object" && !Array.isArray(signature)
+      ? (signature as Record<string, unknown>)
+      : {};
+  return canonicalCapabilityJson({ ...document, signature: signed });
+}
+
+/** The lock entry key: one package at one exact revision. */
+export function capabilityLockEntryKey(packageId: string, artifactDigest: string): string {
+  return `${packageId}\u0000${artifactDigest}`;
+}
+
+/**
+ * Validates a parsed lockfile (format 1 or 2) and checks it against the intent
+ * it should resolve. Format 1 is read into the format 2 shape: every setup
+ * reference names the single locked revision of its package.
+ */
 export function validateCapabilityLockfile(
   value: unknown,
   intent?: CapabilityIntent | null,
-): { lock: CapabilityLockfile | null; issues: CapabilityManifestIssue[] } {
+): {
+  lock: CapabilityLockfile | null;
+  issues: CapabilityManifestIssue[];
+  /** The canonical text the signature covers, when the lockfile is signed. */
+  signedPayload?: string;
+} {
   const issues: CapabilityManifestIssue[] = [];
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return { lock: null, issues: [{ path: "$", message: "The lockfile must be an object." }] };
   }
   const record = value as Record<string, unknown>;
-  if (record.formatVersion !== CAPABILITY_MANIFEST_VERSION) {
+  const formatVersion: CapabilityLockFormatVersion = record.formatVersion === 2 ? 2 : 1;
+  if (!(CAPABILITY_LOCK_FORMAT_VERSIONS as readonly unknown[]).includes(record.formatVersion)) {
     issues.push({
       path: "$.formatVersion",
-      message: `Expected format version ${CAPABILITY_MANIFEST_VERSION}.`,
+      message: `Expected format version ${CAPABILITY_LOCK_FORMAT_VERSIONS.join(" or ")}.`,
     });
   }
-  scanValues(record, "$", issues, false);
+  // The signature block is public data with a strict shape, checked below.
+  const { signature: rawSignature, ...unsigned } = record;
+  scanValues(unsigned, "$", issues, false);
+  const signature = parseSignature(rawSignature, issues);
+  if (signature && formatVersion !== 2) {
+    issues.push({ path: "$.signature", message: "Signed lockfiles use format version 2." });
+  }
   const packages: CapabilityLockPackage[] = [];
   const rawPackages = Array.isArray(record.packages) ? record.packages : [];
   rawPackages.slice(0, CAPABILITY_LIMITS.maxPackages).forEach((entry: unknown, index: number) => {
@@ -338,29 +447,83 @@ export function validateCapabilityLockfile(
       components,
     });
   });
+  const byKey = new Map<string, CapabilityLockPackage>();
+  const byId = new Map<string, CapabilityLockPackage[]>();
+  for (const pkg of packages) {
+    const key = capabilityLockEntryKey(pkg.id, pkg.artifactDigest);
+    if (byKey.has(key)) {
+      issues.push({ path: "$.packages", message: "The lockfile repeats a package revision." });
+      continue;
+    }
+    byKey.set(key, pkg);
+    byId.set(pkg.id, [...(byId.get(pkg.id) ?? []), pkg]);
+  }
+  if (formatVersion === 1 && [...byId.values()].some((entries) => entries.length > 1)) {
+    issues.push({
+      path: "$.packages",
+      message:
+        "The lockfile repeats a package identity; format version 1 holds one revision per package.",
+    });
+  }
   const setups: CapabilityLockfile["setups"] = {};
   if (record.setups && typeof record.setups === "object" && !Array.isArray(record.setups)) {
-    for (const [name, entry] of Object.entries(record.setups as Record<string, unknown>)) {
-      const ids =
-        entry &&
-        typeof entry === "object" &&
-        Array.isArray((entry as Record<string, unknown>).packageIds)
-          ? ((entry as Record<string, unknown>).packageIds as unknown[]).filter(
-              (id): id is string => typeof id === "string",
-            )
-          : [];
-      setups[name] = { packageIds: ids };
+    for (const [name, entry] of Object.entries(record.setups as Record<string, unknown>).slice(
+      0,
+      CAPABILITY_LIMITS.maxSetups,
+    )) {
+      const raw = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+      const refs: CapabilityLockSetupRef[] = [];
+      if (formatVersion === 2) {
+        for (const ref of Array.isArray(raw.packages) ? raw.packages : []) {
+          const item = ref as Record<string, unknown> | null;
+          if (
+            !item ||
+            typeof item !== "object" ||
+            typeof item.id !== "string" ||
+            typeof item.artifactDigest !== "string"
+          ) {
+            issues.push({ path: `$.setups.${name}`, message: "Expected {id, artifactDigest}." });
+            continue;
+          }
+          if (!byKey.has(capabilityLockEntryKey(item.id, item.artifactDigest))) {
+            issues.push({
+              path: `$.setups.${name}`,
+              message: `${item.id} at ${item.artifactDigest.slice(0, 19)} is not in the lockfile.`,
+            });
+            continue;
+          }
+          refs.push({ packageId: item.id, artifactDigest: item.artifactDigest });
+        }
+      } else {
+        for (const id of Array.isArray(raw.packageIds) ? raw.packageIds : []) {
+          if (typeof id !== "string") continue;
+          const locked = byId.get(id)?.[0];
+          if (locked) refs.push({ packageId: id, artifactDigest: locked.artifactDigest });
+        }
+      }
+      if (new Set(refs.map((ref) => ref.packageId)).size !== refs.length) {
+        issues.push({
+          path: `$.setups.${name}`,
+          message: "A setup selects one revision of each package.",
+        });
+      }
+      setups[name] = { packageIds: refs.map((ref) => ref.packageId), packages: refs };
     }
   }
   if (intent) {
-    const locked = new Map(packages.map((pkg) => [pkg.id, pkg]));
-    if (locked.size !== packages.length) {
-      issues.push({ path: "$.packages", message: "The lockfile repeats a package identity." });
-    }
     for (const [name, setup] of Object.entries(intent.setups)) {
+      const locked = setups[name];
+      if (!locked) {
+        issues.push({ path: `$.setups.${name}`, message: "Missing from the lockfile." });
+      }
       for (const pkg of setup.packages) {
         const id = capabilityPackageId(pkg.source);
-        const entry = locked.get(id);
+        const ref = locked?.packages.find((entry) => entry.packageId === id);
+        const entry = ref
+          ? byKey.get(capabilityLockEntryKey(ref.packageId, ref.artifactDigest))
+          : formatVersion === 1
+            ? byId.get(id)?.[0]
+            : undefined;
         if (!entry) {
           issues.push({
             path: `$.setups.${name}`,
@@ -377,19 +540,66 @@ export function validateCapabilityLockfile(
           });
         }
       }
-      if (!setups[name])
-        issues.push({ path: `$.setups.${name}`, message: "Missing from the lockfile." });
     }
   }
   return {
     lock: {
-      formatVersion: 1,
+      formatVersion,
       generatedBy:
         typeof record.generatedBy === "string" ? record.generatedBy.slice(0, 200) : "unknown",
       packages,
       setups,
+      ...(signature ? { signature } : {}),
     },
     issues,
+    ...(signature ? { signedPayload: capabilityLockSigningPayload(record) } : {}),
+  };
+}
+
+/**
+ * The lockfile as written. Format 1 is kept whenever it can express the
+ * lockfile (one revision per package, unsigned) so installations that read
+ * only format 1 can still import it; otherwise format 2.
+ */
+export function capabilityLockfileDocument(lock: CapabilityLockfile): Record<string, unknown> {
+  const ids = lock.packages.map((entry) => entry.id);
+  const needsV2 = lock.signature !== undefined || new Set(ids).size !== ids.length;
+  const packages = lock.packages.map(({ id, source, revision, artifactDigest, components }) => ({
+    id,
+    source,
+    revision,
+    artifactDigest,
+    components,
+  }));
+  if (!needsV2) {
+    return {
+      formatVersion: 1,
+      generatedBy: lock.generatedBy,
+      packages,
+      setups: Object.fromEntries(
+        Object.entries(lock.setups).map(([name, setup]) => [
+          name,
+          { packageIds: setup.packages.map((ref) => ref.packageId) },
+        ]),
+      ),
+    };
+  }
+  return {
+    formatVersion: 2,
+    generatedBy: lock.generatedBy,
+    packages,
+    setups: Object.fromEntries(
+      Object.entries(lock.setups).map(([name, setup]) => [
+        name,
+        {
+          packages: setup.packages.map((ref) => ({
+            id: ref.packageId,
+            artifactDigest: ref.artifactDigest,
+          })),
+        },
+      ]),
+    ),
+    ...(lock.signature ? { signature: lock.signature } : {}),
   };
 }
 

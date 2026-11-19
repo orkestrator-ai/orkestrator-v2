@@ -17,7 +17,7 @@ import { SettingsPageLayout } from "../SettingsPageLayout";
 import { SkillsSettings } from "../SkillsSettings";
 import { AddCapabilityDialog } from "./AddCapabilityDialog";
 import { ChangePreview } from "./ChangePreview";
-import { describeError } from "./capability-format";
+import { describeError, useDialogFocusReturn } from "./capability-format";
 import { ActivityView, MachinesView, SetupsView, UpdatesView } from "./FleetViews";
 import { LibraryView } from "./LibraryView";
 import { PackageDetail } from "./PackageDetail";
@@ -45,10 +45,13 @@ const TABS: Array<{ id: CapabilitiesTab; label: string }> = [
 export function CapabilitiesSettings({ initialTab = "library" }: { initialTab?: CapabilitiesTab }) {
   const [tab, setTab] = useState<CapabilitiesTab>(initialTab);
   const [openPackage, setOpenPackage] = useState<string | null>(null);
+  // The package whose detail was closed last, so its library row takes focus back.
+  const [closedPackage, setClosedPackage] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [activityPackage, setActivityPackage] = useState<string | undefined>(undefined);
   const [updatePreview, setUpdatePreview] = useState<CapabilityOperationSnapshot | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const updateFocusReturn = useDialogFocusReturn();
   const setups = useCapabilityResource(() => capabilitiesApi.listCapabilitySetups(), []);
   const machines = useCapabilityResource(() => capabilitiesApi.listCapabilityMachines(), []);
   const setupList = setups.state.data?.setups ?? [];
@@ -81,7 +84,7 @@ export function CapabilitiesSettings({ initialTab = "library" }: { initialTab?: 
           setOpenPackage(null);
         }}
       >
-        <TabsList variant="underline" className="flex-wrap">
+        <TabsList variant="underline" className="flex-wrap" aria-label="Capabilities views">
           {TABS.map((entry) => (
             <TabsTrigger key={entry.id} value={entry.id} className="h-7 text-xs">
               {entry.label}
@@ -94,7 +97,10 @@ export function CapabilitiesSettings({ initialTab = "library" }: { initialTab?: 
               packageId={openPackage}
               machines={machineList}
               setups={setupList}
-              onBack={() => setOpenPackage(null)}
+              onBack={() => {
+                setClosedPackage(openPackage);
+                setOpenPackage(null);
+              }}
               onShowActivity={(packageId) => {
                 setActivityPackage(packageId);
                 setTab("activity");
@@ -102,7 +108,12 @@ export function CapabilitiesSettings({ initialTab = "library" }: { initialTab?: 
               onShowInstalled={() => setTab("installed")}
             />
           ) : (
-            <LibraryView setups={setupList} onOpen={setOpenPackage} onAdd={() => setAdding(true)} />
+            <LibraryView
+              setups={setupList}
+              onOpen={setOpenPackage}
+              onAdd={() => setAdding(true)}
+              focusPackageId={closedPackage}
+            />
           )}
         </TabsContent>
         <TabsContent value="setups" className="pt-4">
@@ -156,6 +167,7 @@ export function CapabilitiesSettings({ initialTab = "library" }: { initialTab?: 
           size="3xl"
           className={`${Z_FULLSCREEN_DIALOG}`}
           overlayClassName={Z_FULLSCREEN_DIALOG}
+          {...updateFocusReturn}
         >
           <DialogHeader>
             <DialogTitle>Review the update</DialogTitle>

@@ -70,10 +70,12 @@ describe("capabilities domain", () => {
       expect((decoded.success as unknown as Record<string, unknown>).newer).toBe("kept");
   });
 
-  it("has a current and a legacy adapter, and one content-free event", () => {
+  it("has a current and a legacy adapter, and content-free events", () => {
     expect(capabilitiesClient.versions).toEqual([1, 0]);
     expect(CAPABILITIES_EVENTS.map((event) => event.name)).toEqual([
       "capability-management-changed",
+      // `node-` so a command node's event stream from its leaf carries it.
+      "node-capability-launch-requested",
     ]);
   });
 });

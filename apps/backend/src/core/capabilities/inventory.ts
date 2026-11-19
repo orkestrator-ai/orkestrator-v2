@@ -18,6 +18,7 @@ import type {
 import { CAPABILITY_LOCATIONS } from "@orkestrator/protocol/capability-resources-support";
 
 import { listLocation, type CapabilityHomes } from "./native-ownership.js";
+import type { ManagedClaudePluginObservation } from "./provider-adapters/claude-plugins.js";
 
 const MAX_ITEMS = 3_000;
 
@@ -40,6 +41,8 @@ export interface InventorySources {
   /** Which providers are installed on this machine. */
   providers(): Promise<Array<{ provider: AgentPlatform; available: boolean; version?: string }>>;
   plugins?(): Promise<InventoryPlugin[]>;
+  /** Plugins in Orkestrator's own Claude marketplace, with the bytes Claude reads. */
+  managedPlugins?(): Promise<ManagedClaudePluginObservation[]>;
   mcpServers?(): Promise<InventoryMcpServer[]>;
 }
 
@@ -90,9 +93,39 @@ export async function collectCapabilityInventory(
     }
   }
 
+  // Managed plugins are keyed like any managed installation: `plugin:<provider>` and the component.
+  const managedPluginIds = new Set<string>();
+  if (sources.managedPlugins) {
+    try {
+      for (const plugin of await sources.managedPlugins()) {
+        managedPluginIds.add(`${plugin.provider}:${plugin.qualifiedId}`);
+        if (!plugin.installed) continue;
+        items.push({
+          id: `${plugin.provider}:plugin:${plugin.qualifiedId}`,
+          provider: plugin.provider,
+          kind: "native-plugin",
+          name: plugin.name,
+          locationId: `plugin:${plugin.provider}`,
+          locationLabel: "Orkestrator's Claude plugin marketplace",
+          ownership: "managed",
+          packageId: plugin.packageId,
+          componentId: plugin.componentId,
+          expectedDigest: plugin.expectedDigest,
+          ...(plugin.digest ? { digest: plugin.digest } : {}),
+          ...(plugin.drifted ? { drifted: true } : {}),
+          qualifiedId: plugin.qualifiedId,
+          enabled: plugin.enabled,
+          visibleTo: [plugin.provider],
+        });
+      }
+    } catch {
+      errors.push({ provider: "claude", message: "Could not read Orkestrator's Claude plugins." });
+    }
+  }
   if (sources.plugins) {
     try {
       for (const plugin of await sources.plugins()) {
+        if (managedPluginIds.has(`${plugin.provider}:${plugin.qualifiedId}`)) continue;
         items.push({
           id: `${plugin.provider}:plugin:${plugin.qualifiedId}`,
           provider: plugin.provider,

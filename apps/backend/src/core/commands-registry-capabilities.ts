@@ -12,10 +12,12 @@ import { randomBytes } from "node:crypto";
 
 import {
   adoptExternalCapabilityCommand,
+  answerCapabilityNodeLaunchCommand,
   applyCapabilityChangeCommand,
   applyCapabilityNodePlanCommand,
   approveCapabilityUpdateCommand,
   assignCapabilitySetupCommand,
+  getCapabilityAssignmentCommand,
   authorCapabilityPackageCommand,
   cancelCapabilityOperationCommand,
   deleteCapabilitySetupCommand,
@@ -38,6 +40,7 @@ import {
   listCapabilitySetupsCommand,
   listCapabilityUpdatesCommand,
   manageCapabilityExceptionCommand,
+  mergeCapabilityDriftCommand,
   previewCapabilityChangeCommand,
   previewCapabilityImportCommand,
   previewCapabilityUpdateCommand,
@@ -47,13 +50,21 @@ import {
   rollbackCapabilityPackageCommand,
   setCapabilityMachineEnrollmentCommand,
   setCapabilityPackageStateCommand,
+  setCapabilityPluginEnabledCommand,
   setCapabilitySetupCommand,
   setCapabilityUpdatePolicyCommand,
   stageCapabilityNodeArtifactCommand,
+  stageCapabilityNodeHandoverCommand,
   verifyAgentCapabilityCommand,
+  getCapabilityEnvironmentDeliveryCommand,
+  listCapabilityRegistriesCommand,
+  setCapabilityRegistryCommand,
+  setCapabilityManifestPolicyCommand,
+  listCapabilityRegistryPackagesCommand,
 } from "@orkestrator/protocol/contract/domains/capabilities";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
+import { setCapabilityPluginEnabled } from "./capabilities/index.js";
 import { CapabilityError } from "./capabilities/security.js";
 import type { CapabilityService } from "./capabilities/service.js";
 import type { CommandContext } from "./commands-context.js";
@@ -145,6 +156,7 @@ export function registerCapabilityCommands(register: CommandRegistrar): void {
   r(assignCapabilitySetupCommand, (args, context) =>
     capabilities(context).assignSetup(args, actor(context)),
   );
+  r(getCapabilityAssignmentCommand, (args, context) => capabilities(context).getAssignment(args));
   r(manageCapabilityExceptionCommand, (args, context) =>
     capabilities(context).manageException(args, actor(context)),
   );
@@ -154,9 +166,15 @@ export function registerCapabilityCommands(register: CommandRegistrar): void {
   r(setCapabilityPackageStateCommand, (args, context) =>
     capabilities(context).setPackageState(args, actor(context)),
   );
+  r(setCapabilityPluginEnabledCommand, (args, context) =>
+    setCapabilityPluginEnabled(context, args),
+  );
   r(adoptExternalCapabilityCommand, (args, context) => capabilities(context).adoptExternal(args));
   r(resolveCapabilityDriftCommand, (args, context) =>
     capabilities(context).resolveDrift(args, actor(context)),
+  );
+  r(mergeCapabilityDriftCommand, (args, context) =>
+    capabilities(context).mergeDrift(args, actor(context)),
   );
   // Updates and rollback.
   r(refreshCapabilityUpdatesCommand, (args, context) => capabilities(context).refreshUpdates(args));
@@ -179,6 +197,20 @@ export function registerCapabilityCommands(register: CommandRegistrar): void {
     capabilities(context).importSetup(args, actor(context)),
   );
   r(verifyAgentCapabilityCommand, (args, context) => capabilities(context).verify(args));
+  r(getCapabilityEnvironmentDeliveryCommand, (args, context) =>
+    capabilities(context).getEnvironmentDelivery(args),
+  );
+  // Package registries and the signed-manifest policy.
+  r(listCapabilityRegistriesCommand, (_args, context) => capabilities(context).registries.list());
+  r(setCapabilityRegistryCommand, (args, context) =>
+    capabilities(context).registries.set(args, actor(context)),
+  );
+  r(setCapabilityManifestPolicyCommand, (args, context) =>
+    capabilities(context).registries.setManifestPolicy(args, actor(context)),
+  );
+  r(listCapabilityRegistryPackagesCommand, (args, context) =>
+    capabilities(context).registries.listPackages(args),
+  );
   // The executor this machine runs for its command node.
   r(getCapabilityNodeObservationCommand, (args, context) =>
     capabilities(context).executorObserve(args),
@@ -189,5 +221,13 @@ export function registerCapabilityCommands(register: CommandRegistrar): void {
   r(applyCapabilityNodePlanCommand, (args, context) => capabilities(context).executorApply(args));
   r(exportCapabilityNodeItemCommand, (args, context) =>
     capabilities(context).executorExportItem(args),
+  );
+  // Command-node handover: the old command node sends its state and artifacts here.
+  r(stageCapabilityNodeHandoverCommand, (args, context) =>
+    capabilities(context).executorStageHandover(args),
+  );
+  // The command node's answer to this leaf's launch request.
+  r(answerCapabilityNodeLaunchCommand, (args, context) =>
+    capabilities(context).executorLaunchAnswer(args),
   );
 }

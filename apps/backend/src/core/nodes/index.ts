@@ -27,6 +27,7 @@ export {
   NodeEventMultiplexer,
   type NodeEventMultiplexerOptions,
 } from "./node-event-multiplexer.js";
+export { NODE_HEARTBEAT_MS } from "./node-link.js";
 export { listProjectCopyCandidates, listProjectCopyFiles } from "./node-project-copy-files.js";
 export { NODE_RELAY_PREFIX, parseRelayPath, relayHttp, relayUpgrade } from "./node-relay.js";
 export { approveSetupCommandsOnNodes } from "./node-setup-approvals.js";

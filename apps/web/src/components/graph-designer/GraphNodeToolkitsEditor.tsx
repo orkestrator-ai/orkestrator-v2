@@ -55,7 +55,14 @@ export function GraphNodeToolkitsEditor({
       .filter((setup) => setup.targetSelectors?.includes(`graph-node:${scopeId}`))
       .map((setup) => setup.id),
   );
-  const assigned = effective.state.data?.setupRevisions.map((entry) => entry.id) ?? [];
+  const assignment = useCapabilityResource(
+    () => capabilitiesApi.getCapabilityAssignment("graph-node", scopeId),
+    [scopeId],
+  );
+  // Checked means assigned to this node; toolkits it gets from elsewhere
+  // (every machine, or a target selector) are shown as inherited.
+  const assigned = assignment.state.data?.setupIds ?? [];
+  const active = new Set(effective.state.data?.setupRevisions.map((entry) => entry.id) ?? []);
   if (setups.state.status === "error" && !setups.state.data) return null;
   return (
     <div className="flex flex-col gap-2 text-xs" data-graph-toolkits-editor="">
@@ -72,27 +79,36 @@ export function GraphNodeToolkitsEditor({
           Create a toolkit in Settings → Capabilities
         </button>
       ) : null}
-      {toolkits.map((setup) => (
-        <label key={setup.id} className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={selected.has(setup.id) || assigned.includes(setup.id)}
-            onChange={(event) => {
-              const current = assigned.filter(
-                (id) => id !== "my-setup" && toolkits.some((toolkit) => toolkit.id === id),
-              );
-              const next = event.target.checked
-                ? [...new Set([...current, setup.id])]
-                : current.filter((id) => id !== setup.id);
-              void capabilitiesApi
-                .assignCapabilitySetup("graph-node", scopeId, next)
-                .then(() => effective.reload())
-                .catch((assignError: unknown) => setError(describeError(assignError)));
-            }}
-          />
-          {setup.name}
-        </label>
-      ))}
+      {toolkits.map((setup) => {
+        const inherited =
+          !assigned.includes(setup.id) && (selected.has(setup.id) || active.has(setup.id));
+        return (
+          <label key={setup.id} className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={assigned.includes(setup.id) || inherited}
+              disabled={inherited || assignment.state.data == null}
+              onChange={(event) => {
+                const current = assigned.filter((id) =>
+                  toolkits.some((toolkit) => toolkit.id === id),
+                );
+                const next = event.target.checked
+                  ? [...new Set([...current, setup.id])]
+                  : current.filter((id) => id !== setup.id);
+                void capabilitiesApi
+                  .assignCapabilitySetup("graph-node", scopeId, next)
+                  .then(() => {
+                    assignment.reload();
+                    effective.reload();
+                  })
+                  .catch((assignError: unknown) => setError(describeError(assignError)));
+              }}
+            />
+            {setup.name}
+            {inherited ? <span className="text-muted-foreground">(inherited)</span> : null}
+          </label>
+        );
+      })}
       {effective.state.data ? (
         <ul className="flex flex-col gap-1">
           {effective.state.data.blocked.map((entry) => (
@@ -119,7 +135,11 @@ export function GraphNodeToolkitsEditor({
           </li>
         </ul>
       ) : null}
-      {error ? <p className="text-failure">{error}</p> : null}
+      {error ? (
+        <p className="text-failure" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Plus, Search } from "lucide-react";
 
 import {
@@ -36,10 +36,13 @@ export function LibraryView({
   setups,
   onOpen,
   onAdd,
+  focusPackageId,
 }: {
   setups: CapabilitySetup[];
   onOpen: (packageId: string) => void;
   onAdd: () => void;
+  /** The package whose detail was just closed: its row takes focus back once listed. */
+  focusPackageId?: string | null;
 }) {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("");
@@ -55,6 +58,18 @@ export function LibraryView({
   );
   const setupNames = Object.fromEntries(setups.map((setup) => [setup.id, setup.name]));
   const packages = state.data?.packages ?? [];
+  const rowRefs = useRef(new Map<string, HTMLButtonElement>());
+  const pendingFocus = useRef(focusPackageId ?? null);
+  const listed = packages.length;
+  useEffect(() => {
+    const id = pendingFocus.current;
+    if (!id) return;
+    const row = rowRefs.current.get(id);
+    if (row) {
+      pendingFocus.current = null;
+      row.focus();
+    }
+  }, [listed]);
 
   return (
     <div className="space-y-3" data-testid="capability-library">
@@ -103,7 +118,12 @@ export function LibraryView({
         </p>
       ) : null}
       {state.status === "loading" && packages.length === 0 ? (
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        <Loader2
+          className="h-4 w-4 animate-spin text-muted-foreground"
+          role="status"
+          aria-hidden={false}
+          aria-label="Loading your library"
+        />
       ) : null}
       {state.status !== "loading" && packages.length === 0 && !query && !kind && !setupId ? (
         <div className="rounded-lg border border-dashed border-zinc-800 p-6 text-center text-sm text-muted-foreground">
@@ -112,13 +132,20 @@ export function LibraryView({
         </div>
       ) : null}
       {packages.length > 0 ? (
-        <ul className="divide-y divide-zinc-900 rounded-lg border border-zinc-800">
+        <ul
+          className="divide-y divide-zinc-900 rounded-lg border border-zinc-800"
+          aria-label="Packages"
+        >
           {packages.map((pkg) => (
             <li key={pkg.id}>
               <button
                 type="button"
+                ref={(element) => {
+                  if (element) rowRefs.current.set(pkg.id, element);
+                  else rowRefs.current.delete(pkg.id);
+                }}
                 onClick={() => onOpen(pkg.id)}
-                className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5 text-left hover:bg-zinc-900/60 focus-visible:bg-zinc-900/60 focus-visible:outline-none"
+                className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5 text-left focus-hairline hover:bg-zinc-900/60 focus-visible:bg-zinc-900/60"
               >
                 <div className="min-w-[10rem] flex-1">
                   <div className="flex flex-wrap items-center gap-2">

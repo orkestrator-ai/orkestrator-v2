@@ -43,7 +43,7 @@ import {
 } from "./operations.js";
 import { desiredStateForNode, observedInstallations, planNode } from "./planning.js";
 import { CapabilityError, treeDigest } from "./security.js";
-import type { CapabilityState, InstallationReceipt } from "./types.js";
+import { isMachineWideReceipt, type CapabilityState, type InstallationReceipt } from "./types.js";
 
 const log = createLogger("capabilities");
 
@@ -97,6 +97,12 @@ export interface CapabilityReconcilerDeps {
   recheckMs?: number;
   /** A machine's display name for activity entries; its id when absent. */
   nodeName?(nodeId: string): Promise<string>;
+  /**
+   * After every pass over this machine (and after `reconcileAll` when this
+   * machine is not enrolled): worktree and account-home deliveries
+   * (`scoped-delivery.ts`), which follow their own assignments.
+   */
+  afterSelfPass?(): Promise<void>;
 }
 
 /** Classifies a transport failure into the vocabulary above. */
@@ -161,6 +167,16 @@ export class CapabilityReconciler {
         .filter((nodeId) => state.machines[nodeId]?.enrolled !== false)
         .map((nodeId) => this.reconcileNode(nodeId, reason)),
     );
+    if (state.machines[selfId]?.enrolled === false) await this.runAfterSelfPass();
+  }
+
+  private async runAfterSelfPass(): Promise<void> {
+    if (this.disposed || !this.deps.afterSelfPass) return;
+    try {
+      await this.deps.afterSelfPass();
+    } catch (error) {
+      log.warn("reconcile.scoped-failed", { error: formatLogError(error, { message: false }) });
+    }
   }
 
   /** One machine; concurrent calls share a pass, and a call during one runs once more after it. */
@@ -180,8 +196,9 @@ export class CapabilityReconciler {
           log.warn("reconcile.failed", { error: formatLogError(error, { message: false }) });
           return;
         }
-        if (!this.again.has(nodeId) || this.disposed) return;
+        if (!this.again.has(nodeId) || this.disposed) break;
       }
+      if (nodeId === (await this.deps.selfId())) await this.runAfterSelfPass();
     })().finally(() => this.running.delete(nodeId));
     this.running.set(nodeId, run);
     return run;
@@ -237,8 +254,10 @@ export class CapabilityReconciler {
     // What an unanswered write would have left on disk, from the artifact itself.
     const expectedDigests = new Map<string, string>();
     for (const receipt of Object.values(state.receipts)) {
-      if (receipt.nodeId !== nodeId || !receipt.outcomeUnknown) continue;
-      if (receipt.locationId.startsWith("mcp:")) {
+      if (receipt.nodeId !== nodeId || !receipt.outcomeUnknown || !isMachineWideReceipt(receipt))
+        continue;
+      // MCP definitions and Claude plugins are observed by their package digest.
+      if (receipt.locationId.startsWith("mcp:") || receipt.locationId.startsWith("plugin:")) {
         if (receipt.pendingWrite?.packageDigest)
           expectedDigests.set(receipt.id, receipt.pendingWrite.packageDigest);
         continue;
@@ -264,14 +283,14 @@ export class CapabilityReconciler {
       machine.lastSeenAt = now;
       const observed = observedInstallations(nodeId, inventory);
       for (const receipt of Object.values(current.receipts)) {
-        if (receipt.nodeId !== nodeId) continue;
+        // Worktree and account copies are observed by their own pass (`scoped-delivery.ts`).
+        if (receipt.nodeId !== nodeId || !isMachineWideReceipt(receipt)) continue;
         const fileKind =
           !receipt.locationId.startsWith("mcp:") && !receipt.locationId.startsWith("plugin:");
         const seen = observed.byKey.get(receipt.id);
         if (receipt.outcomeUnknown) {
           const expected = expectedDigests.get(receipt.id) ?? receipt.digest;
           if (
-            (fileKind || receipt.locationId.startsWith("mcp:")) &&
             expected &&
             receipt.pendingWrite?.action !== "remove" &&
             !seen?.drifted &&
@@ -302,7 +321,11 @@ export class CapabilityReconciler {
         const existing = current.drift[driftId];
         if (!seen || seen.drifted || (seen.digest && seen.digest !== receipt.digest)) {
           if (!existing || existing.state !== "open") {
-            if (existing?.state === "adopted" && seen?.digest === existing.observedDigest) continue;
+            if (existing?.state === "adopted" && seen?.digest === existing.observedDigest) {
+              // The adopted (or merged) revision holds these exact bytes: it may replace them.
+              forceKeys.add(receipt.id);
+              continue;
+            }
             if (existing?.state === "replaced") {
               forceKeys.add(receipt.id);
               continue;
@@ -424,7 +447,12 @@ export class CapabilityReconciler {
           ...(result.reason ? { reason: result.reason } : {}),
         });
         if (target.action === "remove") {
-          if (result.status === "ready") delete current.receipts[result.key];
+          if (result.status === "ready") {
+            delete current.receipts[result.key];
+            // An adopted deletion or a copy a local variant took over is settled.
+            if (current.drift[`drift:${result.key}`]?.state === "adopted")
+              delete current.drift[`drift:${result.key}`];
+          }
           continue;
         }
         const installation = desiredByKey.get(result.key);

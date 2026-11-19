@@ -32,8 +32,11 @@ import type {
   CapabilityActivityList,
   CapabilityChangeResult,
   CapabilityDriftList,
+  CapabilityDriftMerge,
+  CapabilityEnvironmentDelivery,
   CapabilityExport,
   CapabilityImportPreview,
+  CapabilityRegistryPackageList,
   CapabilityInventory,
   CapabilityLibrary,
   CapabilityMachineList,
@@ -54,6 +57,7 @@ import type {
   CapabilitySetup,
   EffectiveAgentResources,
 } from "../../../capability-resources.js";
+import type { CapabilityRegistryList } from "../../../capability-registry.js";
 import { isNodeReadCommand } from "../../../command-nodes.js";
 import { defineCommand, type CommandAccess, type WireSchema } from "../../command.js";
 import { modelRecord, OpenObject } from "../../model-schema.js";
@@ -168,6 +172,27 @@ export const CapabilityDriftListSchema = modelRecord<CapabilityDriftList>()({
 export const CapabilityDriftEntrySchema = modelRecord<CapabilityDriftEntry>()({
   id: Schema.String,
   state: Schema.String,
+});
+
+export const CapabilityDriftMergeSchema = modelRecord<CapabilityDriftMerge>()({
+  driftId: Schema.String,
+  packageId: Schema.String,
+  basis: Schema.String,
+  files: Schema.Array(OpenObject),
+  conflicts: Schema.Finite,
+  unmergeable: Strings,
+});
+
+export const CapabilityRegistryListSchema = modelRecord<CapabilityRegistryList>()({
+  revision: Schema.Finite,
+  registries: Schema.Array(OpenObject),
+  requireSignedManifests: Schema.Boolean,
+});
+
+export const CapabilityRegistryPackageListSchema = modelRecord<CapabilityRegistryPackageList>()({
+  registryId: Schema.String,
+  packages: Schema.Array(OpenObject),
+  truncated: Schema.Finite,
 });
 
 export const CapabilityExportSchema = modelRecord<CapabilityExport>()({
@@ -360,6 +385,19 @@ export const assignCapabilitySetupCommand = capabilityCommand(
   ["scope", "scopeId", "setupIds", "expectedRevision"],
   OpenObject,
 );
+/** One scope's own toolkit assignment, not the toolkits it inherits. */
+export const CapabilityAssignmentViewSchema = Schema.Struct({
+  scope: Schema.String,
+  scopeId: Schema.String,
+  setupIds: Schema.Array(Schema.String),
+  revision: Schema.Number,
+});
+export const getCapabilityAssignmentCommand = capabilityCommand(
+  "get_capability_assignment",
+  "workspace",
+  ["scope", "scopeId"],
+  CapabilityAssignmentViewSchema,
+);
 export const manageCapabilityExceptionCommand = capabilityCommand(
   "manage_capability_exception",
   "admin",
@@ -378,6 +416,22 @@ export const setCapabilityPackageStateCommand = capabilityCommand(
   ["packageId", "pinned", "paused"],
   CapabilityPackageSummarySchema,
 );
+/**
+ * Switches a provider plugin on or off on the machine that answers, where
+ * the provider keeps a per-plugin flag Orkestrator can edit (Codex's
+ * `config.toml`). The plugin must be one the provider reports as installed.
+ */
+export const setCapabilityPluginEnabledCommand = capabilityCommand(
+  "set_capability_plugin_enabled",
+  "admin",
+  ["provider", "qualifiedId", "enabled"],
+  Schema.Struct({
+    provider: Schema.String,
+    qualifiedId: Schema.String,
+    enabled: Schema.Boolean,
+    changed: Schema.Boolean,
+  }),
+);
 export const adoptExternalCapabilityCommand = capabilityCommand(
   "adopt_external_capability",
   "admin",
@@ -389,6 +443,19 @@ export const resolveCapabilityDriftCommand = capabilityCommand(
   "admin",
   ["driftId", "decision"],
   CapabilityDriftEntrySchema,
+);
+
+/**
+ * Three-way merges one package's local changes on a machine with its
+ * configured revision; with `resolutions` (and the `basis` the conflicts were
+ * shown for) it applies the user's resolved files. A clean result carries the
+ * previewed operation, approved through `apply_capability_change`.
+ */
+export const mergeCapabilityDriftCommand = capabilityCommand(
+  "merge_capability_drift",
+  "admin",
+  ["driftId", "resolutions", "basis"],
+  CapabilityDriftMergeSchema,
 );
 
 // Updates and rollback.
@@ -427,7 +494,7 @@ export const rollbackCapabilityPackageCommand = capabilityCommand(
 export const exportCapabilitySetupCommand = capabilityCommand(
   "export_capability_setup",
   "admin",
-  ["setupIds", "projectId", "write"],
+  ["setupIds", "projectId", "write", "sign"],
   CapabilityExportSchema,
 );
 export const previewCapabilityImportCommand = capabilityCommand(
@@ -447,6 +514,24 @@ export const verifyAgentCapabilityCommand = capabilityCommand(
   "workspace",
   ["target", "componentIds", "consent"],
   CapabilityVerificationSchema,
+);
+
+export const CapabilityEnvironmentDeliverySchema = modelRecord<CapabilityEnvironmentDelivery>()({
+  environmentId: Schema.String,
+  kind: Schema.String,
+  stale: Schema.Boolean,
+  items: Schema.Array(OpenObject),
+});
+
+/**
+ * One environment's own copies: its project setup in a local worktree, or
+ * the manifest staged into its container against the current one.
+ */
+export const getCapabilityEnvironmentDeliveryCommand = capabilityCommand(
+  "get_capability_environment_delivery",
+  "workspace",
+  ["environmentId"],
+  CapabilityEnvironmentDeliverySchema,
 );
 
 // The per-machine executor, called by the command node over its node link.
@@ -477,6 +562,58 @@ export const exportCapabilityNodeItemCommand = capabilityCommand(
   OpenObject,
 );
 
+/**
+ * Command-node handover: the handing-over command node sends its capability
+ * state and the artifacts it references to the node taking command, in
+ * bounded chunks verified by digest, before `accept_command_handover`.
+ */
+export const stageCapabilityNodeHandoverCommand = capabilityCommand(
+  "stage_capability_node_handover",
+  "internal",
+  ["controllerId", "epoch", "handoverId", "part", "digest", "index", "count", "data"],
+  OpenObject,
+);
+
+/**
+ * The command node's answer to a leaf's launch preflight request
+ * (`node-capability-launch-requested`): the authoritative effective
+ * resources for the leaf's target, already recorded on the command node.
+ */
+export const answerCapabilityNodeLaunchCommand = capabilityCommand(
+  "answer_capability_node_launch",
+  "internal",
+  ["controllerId", "epoch", "requestId", "answer"],
+  OpenObject,
+);
+
+// Package registries and the signed-manifest policy (`registry.ts`, `manifest-signing.ts`).
+export const listCapabilityRegistriesCommand = capabilityCommand(
+  "list_capability_registries",
+  "workspace",
+  [],
+  CapabilityRegistryListSchema,
+);
+/** Adds or replaces (`registry: {id, label, indexUrl, signingKey?}`) or removes (`remove: id`) a registry. */
+export const setCapabilityRegistryCommand = capabilityCommand(
+  "set_capability_registry",
+  "admin",
+  ["registry", "remove"],
+  CapabilityRegistryListSchema,
+);
+export const setCapabilityManifestPolicyCommand = capabilityCommand(
+  "set_capability_manifest_policy",
+  "admin",
+  ["requireSignedManifests"],
+  CapabilityRegistryListSchema,
+);
+/** A registry's packages for the Add dialog; fetches the index from the command node. */
+export const listCapabilityRegistryPackagesCommand = capabilityCommand(
+  "list_capability_registry_packages",
+  "admin",
+  ["registryId", "query"],
+  CapabilityRegistryPackageListSchema,
+);
+
 export const CAPABILITIES_COMMANDS = [
   listCapabilityPackagesCommand,
   getCapabilityPackageCommand,
@@ -500,11 +637,14 @@ export const CAPABILITIES_COMMANDS = [
   setCapabilitySetupCommand,
   deleteCapabilitySetupCommand,
   assignCapabilitySetupCommand,
+  getCapabilityAssignmentCommand,
   manageCapabilityExceptionCommand,
   setCapabilityMachineEnrollmentCommand,
   setCapabilityPackageStateCommand,
+  setCapabilityPluginEnabledCommand,
   adoptExternalCapabilityCommand,
   resolveCapabilityDriftCommand,
+  mergeCapabilityDriftCommand,
   refreshCapabilityUpdatesCommand,
   previewCapabilityUpdateCommand,
   approveCapabilityUpdateCommand,
@@ -514,8 +654,15 @@ export const CAPABILITIES_COMMANDS = [
   previewCapabilityImportCommand,
   importCapabilitySetupCommand,
   verifyAgentCapabilityCommand,
+  getCapabilityEnvironmentDeliveryCommand,
+  listCapabilityRegistriesCommand,
+  setCapabilityRegistryCommand,
+  setCapabilityManifestPolicyCommand,
+  listCapabilityRegistryPackagesCommand,
   getCapabilityNodeObservationCommand,
   stageCapabilityNodeArtifactCommand,
   applyCapabilityNodePlanCommand,
   exportCapabilityNodeItemCommand,
+  stageCapabilityNodeHandoverCommand,
+  answerCapabilityNodeLaunchCommand,
 ] as const;

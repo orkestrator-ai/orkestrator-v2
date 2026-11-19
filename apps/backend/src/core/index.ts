@@ -60,9 +60,11 @@ import {
   NodePortal,
   NodeService,
   NodeUsageSync,
+  NODE_HEARTBEAT_MS,
   type NodeServiceOptions,
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
+import { CAPABILITY_LAUNCH_REQUESTED_EVENT } from "@orkestrator/protocol/contract/domains/capabilities";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
 import {
@@ -1000,10 +1002,22 @@ export class OrkestratorBackend {
         })),
       link: (nodeId) => (isBackendId(nodeId) ? this.nodes.link(nodeId) : null),
       isLeaf: () => this.nodes.isLeaf(),
+      // Heartbeats reach a leaf every NODE_HEARTBEAT_MS while its command node is linked.
+      controllerReachable: async () =>
+        (await this.nodes.status()).controllers.some(
+          (controller) => Date.now() - Date.parse(controller.lastContactAt) < 3 * NODE_HEARTBEAT_MS,
+        ),
     });
     this.nodeCoordination.onNodeConnected((nodeId) =>
       context.capabilities?.noteNodeConnected(nodeId),
     );
+    // The capability state and its single-writer epoch move with a command handover.
+    this.nodes.setCapabilityHandover(context.capabilities.handoverHooks());
+    // A leaf's native launch is resolved here, against the authoritative state.
+    this.nodePortal.readModel.onNodeEvent((event, payload, nodeId) => {
+      if (event === CAPABILITY_LAUNCH_REQUESTED_EVENT)
+        void context.capabilities?.answerLeafLaunch(nodeId, payload);
+    });
     this.nodePortal.readModel.onNodeEvent((event, payload) =>
       this.usageSync.handleNodeEvent(event, payload),
     );

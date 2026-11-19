@@ -60,10 +60,16 @@ export function availabilityCells(
   packageId: string,
   machines: readonly MachineFact[],
   desired: ReadonlyMap<string, NodeDesiredState>,
+  scopeNames?: ReadonlyMap<string, string>,
 ): CapabilityAvailabilityCell[] {
   const pkg = state.packages[packageId];
   if (!pkg) return [];
-  const cells: CapabilityAvailabilityCell[] = [];
+  const cells: CapabilityAvailabilityCell[] = scopedAvailabilityCells(
+    state,
+    packageId,
+    machines,
+    scopeNames,
+  );
   for (const machine of machines) {
     const nodeDesired = desired.get(machine.nodeId);
     if (!nodeDesired) continue;
@@ -161,6 +167,62 @@ export function availabilityCells(
   return cells;
 }
 
+/**
+ * Rows for scoped copies (`scoped-delivery.ts`): one worktree's project
+ * delivery or one account's private directory, each its own target, so the
+ * matrix shows them per environment and per account beside the machine row.
+ */
+export function scopedAvailabilityCells(
+  state: CapabilityState,
+  packageId: string,
+  machines: readonly MachineFact[],
+  scopeNames?: ReadonlyMap<string, string>,
+): CapabilityAvailabilityCell[] {
+  const cells: CapabilityAvailabilityCell[] = [];
+  for (const receipt of Object.values(state.receipts)) {
+    if (receipt.packageId !== packageId) continue;
+    if (receipt.environmentId === undefined && receipt.accountHomeId === undefined) continue;
+    const machine = machines.find((entry) => entry.nodeId === receipt.nodeId);
+    if (!machine) continue;
+    const scopeKey = receipt.environmentId
+      ? `env:${receipt.environmentId}`
+      : `account:${receipt.accountHomeId}`;
+    const scopeName =
+      scopeNames?.get(scopeKey) ??
+      (receipt.environmentId ? `worktree ${receipt.environmentId.slice(0, 8)}` : "added account");
+    const effective = effectiveReceiptStatus(receipt);
+    const stale = state.packages[packageId]?.artifactDigest !== receipt.packageDigest;
+    for (const provider of receipt.providers) {
+      cells.push({
+        target: {
+          nodeId: receipt.nodeId,
+          provider,
+          ...(receipt.environmentId ? { environmentId: receipt.environmentId } : {}),
+          ...(receipt.accountHomeId ? { accountHomeId: receipt.accountHomeId } : {}),
+        },
+        nodeName: `${machine.name} · ${scopeName}`,
+        componentId: receipt.componentId,
+        status: effective.status,
+        verification: effective.verification,
+        installedDigest: receipt.packageDigest,
+        locationId: receipt.locationId,
+        ...(receipt.alsoVisibleTo.length > 0 ? { alsoVisibleTo: receipt.alsoVisibleTo } : {}),
+        ...(receipt.reason
+          ? { reason: receipt.reason }
+          : stale
+            ? {
+                reason:
+                  "An older revision is in place; the newest setup replaces it on the next pass.",
+              }
+            : {}),
+        ...(REMEDIES[effective.status] ? { remedy: REMEDIES[effective.status] } : {}),
+        ...(effective.lastVerifiedAt ? { lastVerifiedAt: effective.lastVerifiedAt } : {}),
+      });
+    }
+  }
+  return cells;
+}
+
 export function packageSummary(
   state: CapabilityState,
   packageId: string,
@@ -197,6 +259,16 @@ export function packageSummary(
     artifactDigest: pkg.artifactDigest,
     provenance: pkg.provenance,
     risk: pkg.risk,
+    ...(pkg.diverged ? { diverged: pkg.diverged } : {}),
+    ...(pkg.derivedFrom
+      ? {
+          derivedFrom: {
+            packageId: pkg.derivedFrom.packageId,
+            revision: pkg.derivedFrom.revision,
+            at: pkg.derivedFrom.at,
+          },
+        }
+      : {}),
     kinds,
     componentCount: components.length,
     components: components.map((component) => ({
@@ -233,10 +305,11 @@ export function packageDetail(
   packageId: string,
   machines: readonly MachineFact[],
   desired: ReadonlyMap<string, NodeDesiredState>,
+  scopeNames?: ReadonlyMap<string, string>,
 ): CapabilityPackageDetail | null {
   const pkg = state.packages[packageId];
   if (!pkg) return null;
-  const availability = availabilityCells(state, packageId, machines, desired);
+  const availability = availabilityCells(state, packageId, machines, desired, scopeNames);
   const summary = packageSummary(state, packageId, availability)!;
   const artifact = state.artifacts[pkg.artifactDigest];
   return {

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -115,6 +115,34 @@ export function describeError(error: unknown): string {
 export function shortDigest(digest: string | undefined): string {
   if (!digest) return "";
   return digest.replace(/^sha256:/, "").slice(0, 10);
+}
+
+/**
+ * Focus return for a dialog opened from state rather than a `DialogTrigger`.
+ * Radix returns focus only to its trigger, so without one a closed dialog
+ * left focus on the page body. Spread the result on `DialogContent`: it
+ * remembers what had focus when the dialog opened and focuses it again on
+ * close, if it is still on the page.
+ */
+export function useDialogFocusReturn(): {
+  onOpenAutoFocus: () => void;
+  onCloseAutoFocus: (event: Event) => void;
+} {
+  const opener = useRef<HTMLElement | null>(null);
+  return {
+    onOpenAutoFocus: () => {
+      const active = document.activeElement;
+      opener.current = active instanceof HTMLElement && active !== document.body ? active : null;
+    },
+    onCloseAutoFocus: (event) => {
+      const target = opener.current;
+      opener.current = null;
+      if (target?.isConnected) {
+        event.preventDefault();
+        target.focus();
+      }
+    },
+  };
 }
 
 export function newRequestKey(): string {

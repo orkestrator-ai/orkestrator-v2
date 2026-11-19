@@ -1,7 +1,8 @@
 /**
  * Update discovery (docs/architecture/agent-capabilities-management.md,
  * "Updates"). For each Git-sourced package the checker asks the remote for
- * the newest commit of the package's channel without fetching content; only
+ * the newest commit of the package's channel without fetching content (a
+ * registry package: its index's latest version); only
  * when the commit moved does it fetch and inspect the new revision, compare
  * it component by component, and file an update proposal. Approval is the
  * default. A trusted-source rule lets an update apply on its own only when
@@ -50,6 +51,26 @@ export function isTrustedSource(state: CapabilityState, packageId: string): bool
   );
 }
 
+/**
+ * A package that diverged from its source (adopted or merged local changes)
+ * is treated as pinned against silent updates: the proposal always needs
+ * approval and says that taking it replaces the local changes.
+ */
+export function divergedApproval(
+  pkg: CapabilityPackage,
+  approval: { requiresApproval: boolean; autoApply: boolean; reasons: string[] },
+): { requiresApproval: boolean; autoApply: boolean; reasons: string[] } {
+  if (!pkg.diverged) return approval;
+  return {
+    requiresApproval: true,
+    autoApply: false,
+    reasons: [
+      `This package diverged from its source when local changes were ${pkg.diverged.reason === "merged-local" ? "merged" : "adopted"}; taking this update replaces them.`,
+      ...approval.reasons.filter((reason) => reason !== "Updates need approval."),
+    ],
+  };
+}
+
 export interface UpdateCandidate {
   proposal: CapabilityUpdateProposal;
   inspection: SourceInspectionRecord;
@@ -62,9 +83,12 @@ export async function checkPackageUpdate(
   pkg: CapabilityPackage,
   deps: UpdateCheckDeps,
 ): Promise<UpdateCandidate | null> {
-  if (pkg.source.kind !== "git") return null;
+  // Git: the channel's newest commit. Registry: the index's latest version (`registry.ts`).
+  if (pkg.source.kind !== "git" && pkg.source.kind !== "registry") return null;
   const head = await deps.remoteHead(pkg);
-  if (!head || head === pkg.revision) return null;
+  // A diverged package holds adopted local changes: only a moved upstream is news.
+  const upstream = pkg.diverged?.upstreamRevision ?? pkg.revision;
+  if (!head || head === upstream) return null;
   if (
     Object.values(state.updates).some(
       (update) =>
@@ -74,14 +98,18 @@ export async function checkPackageUpdate(
     return null;
   }
   const inspected = await deps.inspect(pkg);
-  if (inspected.artifactDigest === pkg.artifactDigest) return null;
+  if (inspected.artifactDigest === (pkg.diverged?.upstreamDigest ?? pkg.artifactDigest))
+    return null;
   if (inspected.secretsFound.length === 0) await deps.storeArtifact(inspected);
   const before = pkg.componentIds
     .map((id) => state.components[id])
     .filter((component) => component !== undefined);
   const changes = compareCapabilityRevisions(before, inspected.components, () => true);
   const policy = packageUpdatePolicy(state, pkg.id);
-  const approval = capabilityUpdateApproval(policy, changes, isTrustedSource(state, pkg.id));
+  const approval = divergedApproval(
+    pkg,
+    capabilityUpdateApproval(policy, changes, isTrustedSource(state, pkg.id)),
+  );
   const id = `upd_${randomBytes(8).toString("hex")}`;
   const now = deps.now();
   return {
@@ -95,6 +123,7 @@ export async function checkPackageUpdate(
       detectedAt: now,
       state: "pending",
       requiresApproval: approval.requiresApproval,
+      ...(pkg.diverged ? { diverged: true } : {}),
       reasons: [
         ...approval.reasons,
         ...(inspected.secretsFound.length > 0

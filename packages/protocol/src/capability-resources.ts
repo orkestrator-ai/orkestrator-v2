@@ -219,7 +219,7 @@ export function capabilityPackageId(source: PackageSource): string {
     case "provider-marketplace":
       return `marketplace:${source.provider}:${source.qualifiedId.trim()}`;
     case "registry":
-      return `registry:${source.registryId.trim()}:${source.qualifiedId.trim()}`;
+      return `registry:${source.registryId.trim()}/${source.qualifiedId.trim()}`;
     case "local":
       return `local:${source.sourceMachineId.trim()}:${source.sourceId.trim()}`;
     case "managed":
@@ -246,6 +246,20 @@ export function parseCapabilityComponentId(
   return { packageId: componentId.slice(0, hash), kind, key: rest.slice(colon + 1) };
 }
 
+/** A configured package registry's id: a lower-case slug (`registry:<id>/...`). */
+export function isCapabilityRegistryId(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(value);
+}
+
+/** A package name inside a registry (`team/review`, `@team/review`); no `.`/`..` segment. */
+export function isCapabilityRegistryQualifiedId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[@A-Za-z0-9][@A-Za-z0-9._/-]{0,199}$/.test(value) &&
+    value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+  );
+}
+
 export function isPackageSource(value: unknown): value is PackageSource {
   if (!isPlainRecord(value)) return false;
   const text = (key: string) =>
@@ -263,7 +277,10 @@ export function isPackageSource(value: unknown): value is PackageSource {
     case "provider-marketplace":
       return isAgentPlatform(value.provider) && text("qualifiedId");
     case "registry":
-      return text("registryId") && text("qualifiedId");
+      return (
+        isCapabilityRegistryId(value.registryId) &&
+        isCapabilityRegistryQualifiedId(value.qualifiedId)
+      );
     case "local":
       return text("sourceMachineId") && text("sourceId");
     case "managed":
@@ -343,8 +360,36 @@ export interface CapabilityPackage {
   pinned?: boolean;
   /** Paused: kept in every setup but not delivered anywhere until resumed. */
   paused?: boolean;
+  /**
+   * A local variant: the package was published from a machine's local
+   * changes to another package, under its own identity. Its installations
+   * take over that package's copies on the machines it replaces it on.
+   */
+  derivedFrom?: CapabilityPackageOrigin;
+  /**
+   * The package's current revision holds adopted or merged local changes
+   * instead of its source's bytes. Upstream updates are still found, but
+   * never applied without review: taking one replaces the local changes.
+   */
+  diverged?: CapabilityPackageDivergence;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CapabilityPackageOrigin {
+  packageId: string;
+  source: PackageSource;
+  revision: string;
+  artifactDigest: string;
+  at: string;
+}
+
+export interface CapabilityPackageDivergence {
+  /** The source revision the local changes were made against. */
+  upstreamRevision: string;
+  upstreamDigest: string;
+  reason: "adopted-local" | "merged-local";
+  at: string;
 }
 
 export interface CapabilityPackageSelection {
@@ -700,6 +745,10 @@ export interface CapabilityPackageSummary {
   updateAvailable: boolean;
   pinned: boolean;
   paused: boolean;
+  /** Holds adopted or merged local changes instead of its source's bytes. */
+  diverged?: CapabilityPackageDivergence;
+  /** A local variant of another package. */
+  derivedFrom?: Pick<CapabilityPackageOrigin, "packageId" | "revision" | "at">;
   updatedAt: string;
 }
 
@@ -765,6 +814,8 @@ export interface CapabilityUpdateProposal {
   requiresApproval: boolean;
   reasons: string[];
   changes: CapabilityComponentChange[];
+  /** The package diverged from its source (adopted local changes); taking this replaces them. */
+  diverged?: boolean;
 }
 
 export interface CapabilityComponentChange {

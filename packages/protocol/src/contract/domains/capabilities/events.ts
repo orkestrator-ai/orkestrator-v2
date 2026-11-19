@@ -20,4 +20,26 @@ export const capabilityManagementChangedEvent = defineEvent({
   }),
 });
 
-export const CAPABILITIES_EVENTS = [capabilityManagementChangedEvent] as const;
+/**
+ * A leaf asks its command node to resolve a native session launch. The name
+ * starts with `node-` so the command node's event stream from the leaf
+ * carries it (`NODE_SUMMARY_EVENT_PREFIXES`). Opaque ids and digests only:
+ * the target, the permission ceiling's denials, and the leaf's managed
+ * deliveries (component, location, digest). The command node answers with
+ * `answer_capability_node_launch`.
+ */
+export const CAPABILITY_LAUNCH_REQUESTED_EVENT = "node-capability-launch-requested";
+
+export const capabilityLaunchRequestedEvent = defineEvent({
+  domain: capabilitiesDomain,
+  name: CAPABILITY_LAUNCH_REQUESTED_EVENT,
+  payload: Schema.Struct({
+    requestId: Schema.String,
+    request: Schema.Unknown,
+  }),
+});
+
+export const CAPABILITIES_EVENTS = [
+  capabilityManagementChangedEvent,
+  capabilityLaunchRequestedEvent,
+] as const;

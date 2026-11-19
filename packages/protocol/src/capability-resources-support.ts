@@ -428,9 +428,25 @@ export const BASELINE_CAPABILITY_SUPPORT: Readonly<
       S,
       no("Claude has no per-skill enable switch outside plugins; remove the skill to disable it."),
     ),
+    // Qualified against the pinned binary by provider-conformance.live.test.ts:
+    // the approved artifact is served from Orkestrator's own marketplace and
+    // every write is verified by reading `claude plugin list --json` back.
     "native-plugin": kindSupport(
-      { discover: S, runtimeInventory: S },
-      "Managed plugin delivery requires an immutable, verified plugin artifact.",
+      {
+        discover: S,
+        install: S,
+        update: S,
+        remove: S,
+        enable: no(
+          "Orkestrator enables a plugin when it installs it; to switch one off, remove it from the setup.",
+        ),
+        runtimeRefresh: no("A plugin change reaches Claude at the next session."),
+        runtimeInventory: S,
+        isolate: no(
+          "Plugins are installed at Claude's user scope, so every Claude session on the machine loads them.",
+        ),
+      },
+      "Not applicable to Claude plugins.",
     ),
     "mcp-server": mcpSupport("claude"),
     command: FILE_COMMAND(),

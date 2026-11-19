@@ -1,15 +1,14 @@
 {
   "schemaVersion": 1,
-  "digest": "sha256:4cabda17fb0e74e6ab9ed80c130d8ef383c338b571b99d542614bd40341aea4a",
+  "digest": "sha256:92a0effafbdcf1b2555c1314e5caee0fe277e7efe525396313aad1d11f6249c7",
   "document": {
     "definitions": {},
     "dialect": "draft-2020-12",
     "schema": {
       "additionalProperties": true,
       "properties": {
-        "projectId": {},
-        "setupIds": {},
-        "write": {}
+        "registry": {},
+        "remove": {}
       },
       "type": "object"
     }

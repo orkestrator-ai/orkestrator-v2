@@ -8,6 +8,7 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 
 import { SETTINGS_CARD_CLASS } from "../SettingsPageLayout";
 import { describeError, providerLabel, StatusBadge } from "./capability-format";
+import { EnvironmentDeliveryPanel } from "./EnvironmentDeliveryPanel";
 import { useCapabilityResource } from "./useCapabilityResource";
 
 /**
@@ -21,12 +22,15 @@ export function CapabilityScopeCard({
   projectId,
   environmentId,
   provider = "claude",
+  onRebuild,
 }: {
   scope: "project" | "environment";
   scopeId: string;
   projectId?: string;
   environmentId?: string;
   provider?: AgentPlatform;
+  /** A container environment: opens its existing rebuild when the staged manifest is stale. */
+  onRebuild?: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const setups = useCapabilityResource(() => capabilitiesApi.listCapabilitySetups(), []);
@@ -41,8 +45,15 @@ export function CapabilityScopeCard({
       }),
     [provider, projectId, environmentId],
   );
+  const assignment = useCapabilityResource(
+    () => capabilitiesApi.getCapabilityAssignment(scope, scopeId),
+    [scope, scopeId],
+  );
   if (setups.state.status === "error" && !setups.state.data) return null;
   const toolkits = (setups.state.data?.setups ?? []).filter((setup) => !setup.builtIn);
+  // Checked means assigned to this scope; a toolkit that already applies to
+  // every machine is shown as inherited instead.
+  const assigned = new Set(assignment.state.data?.setupIds ?? []);
   const active = new Set(effective.state.data?.setupRevisions.map((entry) => entry.id) ?? []);
   return (
     <section
@@ -65,27 +76,37 @@ export function CapabilityScopeCard({
         Toolkits every agent session in this {scope} gets, on top of My setup. To share them through
         Git, export the setup from Capabilities → Setups into the project.
       </p>
-      {toolkits.map((setup) => (
-        <label key={setup.id} className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={active.has(setup.id)}
-            onChange={(event) => {
-              const current = [...active].filter((id) =>
-                toolkits.some((toolkit) => toolkit.id === id),
-              );
-              const next = event.target.checked
-                ? [...current, setup.id]
-                : current.filter((id) => id !== setup.id);
-              void capabilitiesApi
-                .assignCapabilitySetup(scope, scopeId, next)
-                .then(() => effective.reload())
-                .catch((assignError: unknown) => setError(describeError(assignError)));
-            }}
-          />
-          {setup.name}
-        </label>
-      ))}
+      {toolkits.map((setup) => {
+        const inherited = !assigned.has(setup.id) && active.has(setup.id);
+        return (
+          <label key={setup.id} className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={assigned.has(setup.id) || inherited}
+              disabled={inherited || assignment.state.data == null}
+              onChange={(event) => {
+                const current = [...assigned].filter((id) =>
+                  toolkits.some((toolkit) => toolkit.id === id),
+                );
+                const next = event.target.checked
+                  ? [...current, setup.id]
+                  : current.filter((id) => id !== setup.id);
+                void capabilitiesApi
+                  .assignCapabilitySetup(scope, scopeId, next)
+                  .then(() => {
+                    assignment.reload();
+                    effective.reload();
+                  })
+                  .catch((assignError: unknown) => setError(describeError(assignError)));
+              }}
+            />
+            {setup.name}
+            {inherited ? (
+              <span className="text-muted-foreground">(used on every machine)</span>
+            ) : null}
+          </label>
+        );
+      })}
       {effective.state.data ? (
         <p className="text-muted-foreground">
           {providerLabel(provider)} gets {effective.state.data.resolvedPackages.length} package(s)
@@ -103,6 +124,12 @@ export function CapabilityScopeCard({
           <StatusBadge status="blocked-policy" /> {blocker.reason}
         </p>
       ))}
+      {environmentId ? (
+        <EnvironmentDeliveryPanel
+          environmentId={environmentId}
+          {...(onRebuild ? { onRebuild } : {})}
+        />
+      ) : null}
       {error ? (
         <p className="text-rose-300" role="alert">
           {error}

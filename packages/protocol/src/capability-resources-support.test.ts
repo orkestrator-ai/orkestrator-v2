@@ -81,7 +81,20 @@ describe("support matrix", () => {
     );
     expect(BASELINE_CAPABILITY_SUPPORT.pi["native-plugin"].install.level).toBe("unsupported");
     expect(BASELINE_CAPABILITY_SUPPORT.pi["native-plugin"].install.reason).toContain("excludes");
-    expect(BASELINE_CAPABILITY_SUPPORT.claude["native-plugin"].install.level).toBe("unsupported");
+  });
+
+  test("Claude plugins install from the approved artifact, never in a container", () => {
+    const claude = BASELINE_CAPABILITY_SUPPORT.claude["native-plugin"];
+    expect([claude.install.level, claude.update.level, claude.remove.level]).toEqual([
+      "supported",
+      "supported",
+      "supported",
+    ]);
+    expect(claude.isolate.level).toBe("unsupported");
+    // Hooks still never install on their own; inside a plugin they follow its approval.
+    expect(BASELINE_CAPABILITY_SUPPORT.claude.hook.install.level).toBe("unsupported");
+    const container = describeCapabilitySupport("claude", { location: "container" });
+    expect(container.kinds["native-plugin"].install.level).toBe("unsupported");
   });
 
   test("standalone hooks are never installed for any provider", () => {

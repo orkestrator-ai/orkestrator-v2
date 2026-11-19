@@ -87,8 +87,57 @@ included, is an executor. A leaf answers `get_capability_node_observation`,
 is older than the highest it has seen, or the same epoch from a different
 controller. A leaf keeps what it last applied while its command node is away,
 and its own Capabilities page refuses fleet mutations ("manage capabilities
-from the command node"). A command-node handover that transfers this state
-raises the epoch, so the previous controller is refused everywhere.
+from the command node").
+
+**Handover** (`handover.ts`, hooked into `NodeService.completeHandover` and
+`acceptHandover` through `setCapabilityHandover`). Before the old command node
+asks the target to accept command, it marks its state `sending` (from then on
+it is not the authority: its reconciler stops and its mutations refuse), waits
+for passes in flight, and sends `stage_capability_node_handover` (`internal`):
+every artifact its state references, through the chunked transfer bundle and
+verified against its digest on arrival, then the state itself (library,
+setups, assignments, operations, receipts, drift, updates, activity,
+approvals, launches; not short-lived previews) as one JSON bundle in bounded
+chunks, verified against its sha256 digest. Only the machine's current
+authority may stage (the executor's epoch check). When the target accepts, it
+installs the bundle after adopting the machines and before detaching its
+controllers: the bundle becomes its state with epoch `max(seen) + 1` and
+itself as controller, its own executor moves to that epoch, and it reconciles
+every machine against the latest desired state as they connect (operations in
+flight resume; superseded revisions are never replayed). The old node then
+records `sent` and moves its executor to the new epoch, so the old controller
+is refused by every executor, its own included. Each step is idempotent per
+handover id, so the handover journal's retry resumes a lost answer or a
+partial transfer, and an install already done answers as done. A transfer
+that fails before the target was asked to accept abandons the handover and
+the old node stays the authority. A target that predates capability
+management takes command only when there is nothing to carry (no package,
+receipt or operation in flight); otherwise the handover is refused until it is
+updated.
+
+**Leaf launches** (`launch-authority.ts`). A leaf's store holds no setups, so
+its native launch preflight asks the command node. Links run from command node
+to leaf, so the leaf emits `node-capability-launch-requested` on its own event
+stream (which the command node follows) with the target, the permission
+ceiling and its managed copies (ids and digests only). The command node
+resolves the target against the authoritative state, records the launch
+(`<nodeId>|<sessionKey>`, with the observed deliveries and `resolvedBy`), and
+answers with `answer_capability_node_launch` (`internal`, admitted only at the
+leaf's current epoch and controller). The leaf enforces the answer's launch
+blockers, re-checks the required copies against its own bytes, and caches the
+answer per target shape (target without the session id, template, graph node,
+ceiling digest). When no command node has been in contact for three heartbeats
+or none answers within five seconds, the leaf uses the cached answer only if it
+is under six hours old, came from its current controller and epoch, and this
+machine's applied installations and required copies are unchanged; otherwise
+a required component blocks the launch ("command node unreachable") and
+optional ones are a warning. Whether anything is required comes from the last
+answer; a leaf that never had one does not block.
+
+**Launch deliveries.** On every launch, each recorded machine-wide copy of a
+required component that the provider reads must be observed, managed,
+unchanged and equal to its receipt's digest; the launch record lists exactly
+the observed digests (`deliveries`).
 
 ## Resolution
 
@@ -130,10 +179,48 @@ providers, preferring locations nobody else reads, and names every provider
 that also sees the copy (`alsoVisibleTo`). All six providers need two copies
 (Claude's and the shared one). A Claude-only skill cannot be isolated: four
 other providers read `~/.claude/skills`, and Claude has no per-skill switch, so
-the UI says "Exclusion cannot be enforced" instead of promising it. Added
-Claude and Codex accounts link these directories to the host's
-(`agent-accounts-homes.ts`), so one copy serves every account and no
-credential is copied.
+the UI says "Exclusion cannot be enforced" instead of promising it.
+
+**Added accounts.** Added Claude and Codex accounts link their `skills`,
+`commands`, `agents` (Claude) and `skills`, `prompts` (Codex) directories to
+the host's (`agent-accounts-homes.ts`), so one copy serves every account. A CLI
+that saved one of them by atomic rename leaves a private directory instead;
+`scoped-delivery.ts` checks each entry (linked, private, missing, or a link
+elsewhere, which is never written through) and gives a private directory its
+own copy of the machine-wide installations, with receipts keyed
+`<node>|account:<provider>:<id>|<location>|<component>`. Only package files are
+written; the account's login is never read or copied. When the directory is
+linked again its receipts are forgotten and the host copy is left alone.
+
+**Project setups in a worktree.** Project and environment assignments
+(including imports from `orkestrator.capabilities.yaml`) are written into each
+local worktree of that project, never into the shared homes, after this
+machine's reconcile pass and before a launch from the worktree
+(`scoped-delivery.ts`, locations in `scoped-locations.ts`):
+
+| Project directory | Read by | May also be read by |
+| --- | --- | --- |
+| `.claude/skills` | Claude, OpenCode | Cursor, Grok, Pi |
+| `.agents/skills` | Codex, OpenCode, Pi | Cursor, Grok |
+| `.cursor/skills`, `.grok/skills`, `.pi/skills`, `.opencode/skills` | their own provider | |
+| `.claude/commands`, `.cursor/commands`, `.opencode/command`, `.pi/prompts` | their own provider | |
+| `.claude/agents`, `.opencode/agent` | their own provider | |
+
+Codex has no project prompts, so a command reaches Codex only through My
+setup. Packages the machine-wide copies already give a provider at the same
+revision are not written again. Receipts are keyed
+`<node>|env:<environment>|<location>|<component>`, so the "Where available"
+matrix and the environment card show the worktree as its own row, with
+`alsoVisibleTo` naming the providers in that worktree that read the same
+directory. Git never sees the copies: before writing, the managed paths (and
+the atomic writers' transient names) are listed in a block owned by the
+environment in the repository's `info/exclude` (the Git common directory, so
+linked worktrees share it; the tracked `.gitignore` is never edited). A path
+the index tracks, anything already there that Orkestrator did not write, or a
+directory reached through a link is a collision: reported on the receipt and
+left alone. A managed copy edited by hand is a Local changes entry, kept until
+the user decides. A copy is removed only when no project or environment
+assignment still selects it; the exclude block goes with the last one.
 
 ## Provider support
 
@@ -145,8 +232,8 @@ observed context: a provider that is not installed, or a container.
 
 | Provider | Skills | Native plugins | MCP servers | Commands / prompts | Hooks |
 | --- | --- | --- | --- | --- | --- |
-| Claude | install, live inventory | discovery only, pending immutable artifact delivery | through MCP management | `~/.claude/commands`, `~/.claude/agents` | unsupported for managed delivery |
-| Codex | install, live inventory | discovery only | through MCP management | prompts (unqualified) | unsupported |
+| Claude | install, live inventory | install, update, remove from the approved artifact (see below) | through MCP management | `~/.claude/commands`, `~/.claude/agents` | only inside an approved plugin |
+| Codex | install, live inventory | discovery; enable and disable of installed plugins | through MCP management | prompts (unqualified) | unsupported |
 | Cursor | install, no live inventory | unsupported (SDK has no plugin API) | through MCP management | commands (unqualified) | unsupported |
 | Grok | install, no live inventory | discovery only | through MCP management | unsupported | unsupported |
 | OpenCode | install, no live inventory | **unsupported**: the OpenCode 2 mirror strips user plugins | through MCP management | commands and agents (unqualified) | unsupported |
@@ -156,6 +243,97 @@ A plugin's portable parts (its skills and commands) are separate components:
 on a provider without that plugin format they are delivered on their own, and
 the plugin component is shown as not delivered, never as installed. Standalone
 hooks are never installed; they run programs outside the session's policy.
+
+### Claude plugins
+
+A Claude marketplace id (`name@marketplace`) resolves inside Claude at install
+time, so the bytes it installs could differ from the bytes the user approved.
+Orkestrator therefore installs a Claude plugin only from the inspected
+artifact (a Git, upload or authored package whose root has
+`.claude-plugin/plugin.json`), through a marketplace it owns
+(`provider-adapters/claude-plugins.ts`):
+
+- `<Claude home>/orkestrator-marketplace/plugins/<name>/<sha256>/` holds the
+  approved artifact, written atomically and never edited in place; an update
+  writes a new digest directory and prunes the old one.
+- `.claude-plugin/marketplace.json` lists each managed plugin at its digest
+  directory; `.orkestrator-marketplace.json` records the package and component
+  that own each plugin name.
+- The marketplace is registered with `claude plugin marketplace add <dir>
+  --scope user` (Claude's own writer for `settings.json` and
+  `known_marketplaces.json`), and the plugin is installed with `claude plugin
+  install <name>@orkestrator-managed --scope user`. An update uninstalls with
+  `--keep-data` and installs again, because Claude caches by the manifest's
+  version, which need not change between revisions.
+- Every write is followed by `claude plugin list --json`. Claude 2.1.326 reads
+  a directory marketplace's plugin in place (`readFromFolder`) and keeps a
+  copy (`installPath`): the entry must be enabled, read from the approved
+  digest directory, and both trees must hash to the approved digest. A
+  non-zero exit, a timeout or unreadable output is settled by that read-back,
+  never by running the write again; the reconciler settles an unanswered plan
+  from the inventory, which reports managed plugins at `plugin:claude` with
+  the digest Claude reads.
+- A plugin from any other marketplace is external and never updated, disabled
+  or uninstalled. A same-named external plugin that is enabled blocks
+  delivery ("Local changes") unless the user chooses Adopt and its installed
+  bytes equal the approved digest; the external copy then satisfies the
+  package and removal still leaves it installed. A marketplace named
+  `orkestrator-managed` that Orkestrator did not register is left untouched
+  and the install fails.
+- Removal uninstalls only `<name>@orkestrator-managed` (keeping the plugin's
+  data directory), and unregisters and deletes the marketplace when it is
+  empty. Edited bytes in the managed copy, or the plugin disabled in Claude,
+  are local changes: kept until the user keeps or replaces them.
+- For Claude the plugin carries its parts: its skills, commands, agents, MCP
+  servers and hooks are not delivered again on their own (they would load
+  twice), and a required part is satisfied by the plugin's receipt. Hooks
+  inside the plugin are part of the approved revision: the plugin's risk is
+  the highest of its parts and its preview lists their commands, so adding or
+  updating it needs approval. Other providers still get the portable parts.
+- A `provider-marketplace` package (a bare `name@marketplace`) has no
+  reviewed bytes and stays unsupported for delivery.
+
+### Codex plugins
+
+Codex 0.169.0 records each installed plugin as `[plugins."<name>@<marketplace>"]`
+with `enabled = true|false` in `$CODEX_HOME/config.toml`, and honours the flag
+in `codex plugin list --json` and in the skills a session gets.
+`set_capability_plugin_enabled` (admin, the machine that answers) flips that
+flag (`provider-adapters/codex-plugins.ts`) through MCP management's
+format-preserving TOML editor, for a plugin Codex reports as installed and
+whose entry is already a table: no entry is added or removed, inline or dotted
+layouts stay read-only, a linked or oversized file is refused, only `enabled`
+changes (checked by re-parsing), the file keeps its mode and is replaced only
+if unchanged since it was read, and the result is confirmed with Codex's own
+list. Installing Codex plugins stays with Codex. There is no toggle in the
+Capabilities page yet; the command and the web client function exist.
+
+### Qualification against the pinned binaries
+
+`provider-conformance.live.test.ts` (slow tier, opt-in with
+`RUN_LIVE_CAPABILITY_CONFORMANCE=1`; binaries from
+`ORKESTRATOR_CONFORMANCE_<CLAUDE|CODEX|OPENCODE2>` or the mise install of
+exactly the pinned version, never Orkestrator's own toolchain directory) runs
+each binary with a fresh HOME, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and XDG
+directories and a minimal environment, and asks the provider's own
+credential-free listing. Run 2026-11-19 on Linux x64:
+
+| Provider (pinned) | What was proven | Listing used | Result |
+| --- | --- | --- | --- |
+| Claude Code 2.1.326 | Executor skill in `~/.claude/skills` is listed, and gone after removal | `claude -p` `init` event (`apiKeySource: none`, then "Not logged in") | pass |
+| Claude Code 2.1.326 | Plugin install from the approved artifact, replay, update with an unchanged version, removal of only Orkestrator's copy with an external plugin kept; the session loads `<plugin>:<skill>` | `claude plugin list --json`, `claude plugin validate`, `init` event | pass |
+| Codex 0.169.0 | Executor skill in `~/.agents/skills` is listed, and gone after removal | `codex debug prompt-input` | pass |
+| Codex 0.169.0 | A discovered plugin switched off and on through `config.toml`; comments kept | `codex plugin list --json`, `codex debug prompt-input` | pass |
+| OpenCode 2.3.1 | Executor subagent in `~/.config/opencode/agent` is listed by the binary | `opencode debug agents --standalone` | pass (binary only) |
+| Grok Build 1.0.88, Pi 1.5.2 | Not run: no pinned binary on the host outside Orkestrator's toolchain, and no credential-free listing qualified | | skipped |
+| Cursor SDK | Not run: no CLI | | skipped |
+
+Matrix levels follow the evidence: Claude native-plugin install, update and
+remove are `supported`. OpenCode subagents and commands stay `unqualified`:
+the binary lists the agent, but Orkestrator's OpenCode 2 session configuration
+mirror is not covered, and OpenCode 2.3.1 has no credential-free command
+listing. Codex prompts, Cursor commands and Grok, Pi and Cursor skill loading
+stay as they were.
 
 ## Reconciliation and remote safety
 
@@ -173,7 +351,8 @@ One reconcile pass per machine (`CapabilityReconciler.passOnce`):
    bytes are there is confirmed, otherwise it is planned afresh (never re-sent
    blindly);
 3. record drift: a managed item with changed or missing bytes is a **Local
-   changes** entry and is skipped until the user keeps, adopts or replaces it;
+   changes** entry and is skipped until the user keeps, adopts, merges or
+   replaces it;
 4. plan, stage artifacts in chunks (verified by digest on arrival) and apply.
    A dropped answer marks the keys `outcome-unknown` and schedules another
    observation.
@@ -184,9 +363,52 @@ offline machine reconciles against the **latest** desired state when it
 returns; superseded operations are never replayed.
 
 The executor checks the ownership marker for files and the native source and entry fingerprint for MCP definitions. It leaves externally owned entries in place, and never overwrites a managed item with local changes
-unless the user chose Replace. Adopting an external item takes ownership in
+unless the user chose Replace, or approved a revision that adopted or merged
+exactly those bytes. Adopting an external item takes ownership in
 place only when its bytes equal the package's. Removal happens only when no
 setup or assignment still references the copy.
+
+### Adopting and merging local changes
+
+`drift.ts` (a collaborator of `CapabilityService`) handles a package's local
+changes on one machine together: every open entry for that package and
+machine, all of its components, read back through the machine's own executor
+(`export_capability_node_item` for a leaf) and checked against the digest the
+drift recorded. Both paths publish through the normal preview, approval and
+apply, and apply re-reads the machine and refuses if any of those bytes moved.
+
+- **Adopt** (`preview_capability_change` with `adopt-drift` and `mode`) lays
+  the local files over the package's current files (a deleted component is
+  dropped) and inspects the whole tree like any source: components, risk and
+  secrets. The user picks the identity. **Next revision** keeps the package's
+  identity (the default for authored packages); a Git, registry or marketplace
+  package then **diverges**: `CapabilityPackage.diverged` records the upstream
+  revision and digest, pending proposals made against the replaced revision are
+  dropped, the update checker compares the remote head with the upstream
+  revision, and every later proposal is marked `diverged`, needs approval and
+  never auto-applies (the inbox shows "Diverged from upstream"). Taking such an
+  update ends the divergence. **Separate package** (a local variant, the
+  default for anything with an outside source) publishes a new `managed`
+  package with `derivedFrom` naming the original; it replaces the original in
+  every setup that selected it (component choices and exceptions are re-keyed),
+  and its installs carry `takeoverFrom`, so the executor may take over a copy
+  the original owns (and nothing else). The original's removal then finds the
+  copy owned by the variant and settles without touching it.
+- **Merge** (`merge_capability_drift`) is a text three-way merge per file
+  (`merge.ts`, line-based diff3 over a bounded Myers diff): base is the
+  revision the copy was installed from (the receipt's package digest, kept in
+  the artifact cache with the previous five revisions), local is the
+  machine's files, configured is the package's current revision. A region one
+  side changed takes that side, identical changes merge, line-ending-only
+  changes do not conflict, and anything else is a conflict returned per file
+  with its three texts, the marked-up merge and hunk lines. The user resolves
+  conflicts in the merge dialog and submits the resolved text with the merge's
+  `basis` digest (a moved side is refused); text with conflict markers is
+  refused, and the result is inspected like any authored source, so detected
+  credentials block it. Binary files (NUL or not UTF-8) and conflicted files
+  over 256 KiB changed on both sides cannot be merged; the dialog offers Keep,
+  Adopt or Replace instead. A merge always publishes the package's next
+  revision (and so diverges a package with an outside source).
 
 ## Statuses and proof
 
@@ -210,10 +432,30 @@ Catalogue names are insufficient to identify the installed revision.
 
 - **Session launch**: native launches and graph activations resolve the target
   and its policy before provider work begins. A required component needs
-  a matching observed delivery on the host. Required container and alternate
-  account deliveries need target-specific evidence before they qualify.
+  a matching observed delivery for that target (`scopedRequiredDelivery`):
+  - a local worktree: its project copies are brought up to date first, and a
+    project receipt whose bytes match on disk qualifies; otherwise the host's;
+  - an added account: the host receipt when the account links that directory
+    (or will link it at launch), its own receipt and matching bytes when the
+    directory is private;
+  - a container: the record staged into its inputs revision, whose digest must
+    equal the container's `orkestrator-capabilities-digest` label and whose
+    entry for the component must be the required revision.
   The launch manifest records the selected revisions for diagnostics.
   Provider homes are shared and existing sessions can still see changes there.
+- **Containers**: a container never receives a write from outside. At
+  creation and rebuild, `container-staging.ts` resolves every staged provider
+  for the container target (My setup, toolkits, project and environment
+  setups) and stages each file component into the input directory the
+  entrypoint copies into that provider's home (`claude-config/skills`,
+  `agents-skills`, `codex-home/prompts`, ...; Cursor's skills and commands are
+  not staged), bounded (5,000 files, 64 MiB), from verified artifacts only, with
+  the executor's markers. A host item with the same name that Orkestrator did
+  not write is kept and reported. The record (per component: revision, digest,
+  staged or why not) lands in the revision's `manifest.json`, its digest on the
+  container's label. The environment card shows "installed revision X ·
+  current Y" from `get_capability_environment_delivery`; when they differ it
+  offers the existing rebuild, which re-stages.
 - **Session chip**: the agent information panel shows the owning machine's
   receipts, Change (session toolkits), See details, Test (read-only, with
   consent) and Copy diagnostics (ids and digests only).
@@ -222,6 +464,8 @@ Catalogue names are insufficient to identify the installed revision.
   denies is shown as a conflict.
 - **Project and environment settings**: the same resolver, with project and
   environment toolkit assignments, and Write to / Import from the repository.
+  An environment's card also lists its own copies: the worktree's project
+  delivery, or the container's staged and current manifests.
 
 ## Editing authored packages
 
@@ -234,13 +478,57 @@ for rollback.
 ## Updates and rollback
 
 `refresh_capability_updates` (and a six-hour timer) asks each Git package's
-remote for the newest commit of its channel; only a moved head is fetched and
+remote for the newest commit of its channel, and each registry package's index
+for its `latest` version; only a moved head or a new version is fetched and
 inspected. The proposal lists component changes and escalations (a new hook,
 program, endpoint, MCP server or higher risk). Approval is the default; a
 `trusted-auto` setup with the source on the trusted list applies updates that
 escalate nothing. Pinned packages never move. The previous five revisions are
 kept for rollback; rollback pins the package and cannot undo work a tool
 already did.
+
+### Package registries
+
+A registry is a trusted HTTPS index an administrator adds under Setups →
+Registries (`set_capability_registry`: id, name, `https://` index address and
+an optional pinned Ed25519 signing key); the list lives in the capabilities
+store (`settings.registries`). The index
+(`@orkestrator/protocol/capability-registry`) is bounded JSON:
+
+```json
+{
+  "format": "orkestrator-capability-registry",
+  "version": 1,
+  "packages": {
+    "team/review": {
+      "displayName": "Review",
+      "latest": "1.1.0",
+      "versions": [
+        { "version": "1.1.0", "git": { "repo": "https://github.com/team/tools", "subpath": "skills/review", "commit": "<40 hex>" } },
+        { "version": "1.0.0", "tarball": { "url": "https://cdn.example.com/review-1.0.0.tgz", "sha256": "<64 hex>", "subpath": "package" } }
+      ]
+    }
+  },
+  "signature": { "algorithm": "ed25519", "keyId": "<32 hex>", "value": "<base64url>" }
+}
+```
+
+The signature covers the document without `signature`, as canonical JSON
+(keys sorted, no whitespace); it is required, and checked, only when the
+registry pins a key. A registry package's identity is
+`registry:<registryId>/<qualifiedId>` and its revision is the registry
+version; its artifact digest is the inspected tree's, as for every source.
+Add → Registry browses the index (`list_capability_registry_packages`) and
+inspects the latest version: a Git version through the same safe fetch as a
+Git source, at the published commit (a different commit is refused); a
+tarball is downloaded (https on every redirect hop, at most 32 MiB, 60 s),
+checked against its SHA-256 before anything is unpacked, and unpacked in
+memory (`registry.ts`). An organisation forbids a registry with the
+`forbiddenSources` prefix `registry:<id>/`: nothing is fetched from it, its
+packages get no updates and the resolver blocks those already in setups. A
+Git version whose repository is forbidden is refused too. Importing a
+manifest that names a registry package needs a registry configured under the
+same id.
 
 ## Portable manifests
 
@@ -251,10 +539,40 @@ components). Machine, session, environment and account selectors, local-only
 packages and every credential are left out; both validators refuse secrets
 and host paths. Import previews setups and packages, verifies the locked bytes and component
 inventory before approval, and checks that the library still matches the
-preview when applying. Existing packages at a different revision go through
-the update or rollback workflow. Project imports create project-owned
-setups and leave fleet setups intact. Project-only assignments need isolated
-delivery, so they do not write into shared provider homes.
+preview when applying. Existing packages at a revision the library does not
+keep go through the update or rollback workflow; a locked revision the library
+keeps (current, or an earlier one with its inventory) is unchanged. Project
+imports create project-owned setups and leave fleet setups intact. Project-only
+assignments never write into shared provider homes: they are delivered into
+each local worktree of the project (kept out of Git) and staged into each of
+its containers at creation or rebuild (see "Shared locations and isolation").
+
+**Lockfile formats.** Format 1 locks one revision per package and lists each
+setup's package ids. Format 2 locks a package once per revision and each setup
+names the exact entry (`{ id, artifactDigest }`) it uses, so setups pinned to
+different revisions of one package export together; import creates the package
+at its first entry (the exporter's current revision), keeps the others as
+earlier revisions with their inventories and pins every setup to its entry, so
+the pinned graph is the same on both sides. Both formats are read. Export
+writes format 1 whenever it suffices (one revision per package, unsigned), so
+installations that read only format 1 can still import it, and format 2 for
+mixed revisions or a signature; an older installation refuses format 2 with
+"Expected format version 1" instead of misreading it.
+
+**Signed manifests.** Export can sign the lockfile (Setups → "Sign exports
+with this installation's key") with the installation's graph-sharing Ed25519
+key, the one graph bundles use (`graph-template-signing.ts`), creating it on
+first use. The signature block holds the algorithm, key id, public key, the
+SHA-256 of the validated intent and the signature over the lockfile without
+the signature value (canonical JSON), so an edit to either file invalidates
+it; it holds no secret and no host path (`manifest-signing.ts`). The import
+preview shows **trusted** (this installation's key or a key on the
+graph-sharing trusted list, with its label), **untrusted** (valid, unknown key:
+the preview shows the fingerprint and offers Trust key), **invalid** (blocks
+the import) or **unsigned**. With **Require signed project manifests** on
+(`set_capability_manifest_policy`), unsigned and untrusted manifests are
+blocked too, and an import previewed before the policy was turned on must be
+previewed again.
 
 ## Security
 
@@ -269,6 +587,14 @@ delivery, so they do not write into shared provider homes.
   removed before computing the artifact digest. Detected credentials block package
   inspection and revision approval. Git repository URLs with embedded credentials
   are rejected before fetch.
+- Registry fetches are https only (every redirect hop too, no credentials in
+  the address), bounded in size (index 2 MiB, tarball 32 MiB, 40 MiB
+  unpacked) and time (15 s, 60 s). A pinned registry key must sign the index.
+  A tarball's SHA-256 is checked before it is unpacked; links, devices, FIFOs,
+  absolute and escaping paths refuse the whole archive, and nothing is written
+  to disk before inspection.
+- An invalid lockfile signature always blocks an import; the signed-manifest
+  policy also blocks unsigned and untrusted ones.
 - Events (`capability-management-changed`) carry a revision and opaque ids.
 - Logs carry codes and references only (`capabilities` log area).
 
@@ -277,9 +603,16 @@ delivery, so they do not write into shared provider homes.
 - **"Waiting for machine"**: the machine is offline or its link is down. It
   applies the latest setup when it reconnects; nothing needs re-queuing.
 - **"Local changes"**: someone edited or deleted a managed item. Machines →
-  Local changes: Keep local (Orkestrator stops managing that copy's updates),
-  Adopt (review and approve local edits to a single-component authored package
-  as a new revision), or Replace.
+  Local changes: **Keep local** (Orkestrator stops managing that copy's
+  updates), **Adopt** (publish every local change to the package on that
+  machine, all components, as the package's next revision or as a separate
+  package that replaces it), **Merge** (three-way merge with the configured
+  revision; resolve conflicts in the dialog, then approve) or **Replace**.
+  Merge refuses binary files changed on both sides and offers the other
+  three. "The revision … was installed from is no longer cached" means the
+  base fell out of the five kept revisions: adopt, keep or replace instead.
+  A package that adopted local changes over its Git source shows "Diverged
+  from upstream" on its updates; approving one replaces the local changes.
 - **"Unsupported" for a plugin on OpenCode or Pi**: by design; Orkestrator's
   bridges do not load those plugins. Their skills are still delivered when the
   package has portable skills.
@@ -290,10 +623,47 @@ delivery, so they do not write into shared provider homes.
 
 ## Not yet qualified
 
-Live conformance runs against each pinned provider binary, isolated provider
+Live conformance against Grok Build, Pi and the Cursor SDK (no pinned binary
+outside Orkestrator's toolchain and no credential-free listing), a live
+Orkestrator OpenCode 2 session loading delivered agents and commands, a
+Capabilities page toggle for Codex plugins, isolated provider
 homes per session (exclusive claims are reported as not enforceable instead),
-merging local changes, a package registry, signed team manifests,
-organisation policy editing in the UI and delivery into existing containers
-(they receive capabilities through their portable inputs on a rebuild) are
-not implemented; see
+organisation policy editing in the UI, writing into a running container (a
+container takes a changed setup on its next rebuild, which the environment
+card offers), project delivery into a worktree on another machine (only the
+command node's own local worktrees are written), project MCP servers (a
+project toolkit's MCP servers are reported as not delivered to the worktree)
+and adopting a worktree copy's local changes as a new revision (keep and
+replace work) are not implemented; see
 [8314](../todo/cross-cutting/8314-agent-capabilities-follow-ups.md).
+A Claude plugin loads all of its parts: an exception on one part (a skill, a
+hook) cannot be enforced while the plugin itself is selected, and when Codex
+is not among the providers a plugin's portable skill is placed for, that copy
+can land in `~/.claude/skills` and Claude then sees it twice (as `<plugin>:<skill>`
+and on its own).
+Adopting or merging local changes covers file components (skills, commands,
+prompts, subagents); a hand-edited MCP server or plugin configuration can only
+be kept or replaced. A leaf running a build from before local variants does
+not know `takeoverFrom` and reports the variant's install as a collision until
+it is updated.
+
+Package registries and signed manifests are proven with in-memory indexes,
+tarballs and Git fakes (`registry.test.ts`, `registry-service.test.ts`,
+`manifest-signing.test.ts`), not against a published registry. Registry
+packages carry no per-file provenance beyond the index entry; a registry's
+signing key is pinned by hand (no key rotation or revocation list), and
+`forbiddenSources` is still edited outside the UI. Registry access needs no
+credentials: an index or tarball behind authentication cannot be used.
+
+Command-node handover of capabilities is proven over the real `NodeService`
+handover and node links on the in-memory network (`handover.test.ts`,
+`launch-authority.test.ts`) and across two real backends with real gateways on
+loopback (`tests/capabilities-two-node.integration.test.ts`: delivery, offline
+catch-up, a leaf launch, handover to the leaf). Not proven on real machines: a
+third machine moving with the handover (loopback routes do not move) and
+separate OS processes. Capability authority moves with the handover as a whole:
+machines the user leaves behind with the old command node keep what they last
+applied but get no new plans until they join the new one, and a node that
+handed over does not take the authority back unless command is handed back to
+it. A launch on a leaf whose command node is away records nothing on the
+command node; the leaf's own record names the cached answer's controller.

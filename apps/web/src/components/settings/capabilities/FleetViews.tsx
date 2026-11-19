@@ -4,8 +4,8 @@ import { Download, Loader2, Plus, RefreshCw, Trash2, Upload } from "lucide-react
 import {
   CAPABILITY_UPDATE_POLICIES,
   MY_SETUP_ID,
+  type CapabilityDriftEntry,
   type CapabilityMachineSummary,
-  type CapabilityOperationSnapshot,
   type CapabilitySetup,
   type CapabilityUpdatePolicy,
 } from "@orkestrator/protocol/capability-resources";
@@ -15,14 +15,6 @@ import type {
 } from "@orkestrator/protocol/capability-resources-api";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -37,7 +29,9 @@ import {
   shortDigest,
   StatusBadge,
 } from "./capability-format";
-import { ChangePreview } from "./ChangePreview";
+import { AdoptLocalChangesDialog, MergeLocalChangesDialog } from "./LocalChangesDialogs";
+import { ManifestSignatureNote } from "./ManifestSignatureNote";
+import { RegistriesSection } from "./RegistriesSection";
 import { useCapabilityResource } from "./useCapabilityResource";
 
 const POLICY_LABEL: Record<CapabilityUpdatePolicy, string> = {
@@ -71,6 +65,13 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
   const [importIntent, setImportIntent] = useState("");
   const [importLock, setImportLock] = useState("");
   const [importPreview, setImportPreview] = useState<CapabilityImportPreview | null>(null);
+  const [signExports, setSignExports] = useState(false);
+  const previewImport = () =>
+    run(async () =>
+      setImportPreview(
+        await capabilitiesApi.previewCapabilityImport({ intent: importIntent, lock: importLock }),
+      ),
+    );
 
   return (
     <div className="space-y-6" data-testid="capability-setups">
@@ -93,7 +94,10 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
             void run(async () => {
               await capabilitiesApi.setCapabilitySetup({
                 name: name.trim(),
-                machineSelectors: ["*"],
+                // A new toolkit applies only where it is assigned (a project,
+                // environment, graph node or session) until the user turns on
+                // "Use on every enrolled machine".
+                machineSelectors: [],
               });
               setName("");
               reload();
@@ -102,6 +106,14 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
         >
           <Plus className="h-3.5 w-3.5" /> Create
         </Button>
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={signExports}
+            onChange={(event) => setSignExports(event.target.checked)}
+          />
+          Sign exports with this installation's key
+        </label>
       </div>
       {error ? (
         <p className="text-xs text-rose-300" role="alert">
@@ -124,7 +136,14 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
                   disabled={busy}
                   onClick={() =>
                     void run(async () =>
-                      setExported(await capabilitiesApi.exportCapabilitySetup([setup.id])),
+                      setExported(
+                        await capabilitiesApi.exportCapabilitySetup(
+                          [setup.id],
+                          undefined,
+                          undefined,
+                          signExports,
+                        ),
+                      ),
                     )
                   }
                 >
@@ -172,15 +191,40 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
                 ))}
               </NativeSelect>
               {setup.id !== MY_SETUP_ID ? (
-                <span className="text-muted-foreground">
-                  Applies to{" "}
-                  {setup.machineSelectors.length === 0 || setup.machineSelectors.includes("*")
-                    ? "every enrolled machine"
-                    : setup.machineSelectors.join(", ")}
-                  {setup.providerSelectors.length > 0
-                    ? ` · ${setup.providerSelectors.map((selector) => providerLabel(selector.replace("provider:", ""))).join(", ")}`
-                    : ""}
-                </span>
+                <>
+                  <label className="flex items-center gap-1.5 text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={setup.machineSelectors.length > 0}
+                      disabled={busy}
+                      onChange={(event) =>
+                        void run(async () => {
+                          await capabilitiesApi.setCapabilitySetup(
+                            {
+                              id: setup.id,
+                              name: setup.name,
+                              machineSelectors: event.target.checked ? ["*"] : [],
+                            },
+                            setup.revision,
+                          );
+                          reload();
+                        })
+                      }
+                    />
+                    Use on every enrolled machine
+                  </label>
+                  <span className="text-muted-foreground">
+                    Applies to{" "}
+                    {setup.machineSelectors.length === 0
+                      ? "the projects, environments, graph nodes and sessions it is assigned to"
+                      : setup.machineSelectors.includes("*")
+                        ? "every enrolled machine"
+                        : setup.machineSelectors.join(", ")}
+                    {setup.providerSelectors.length > 0
+                      ? ` · ${setup.providerSelectors.map((selector) => providerLabel(selector.replace("provider:", ""))).join(", ")}`
+                      : ""}
+                  </span>
+                </>
               ) : (
                 <span className="text-muted-foreground">Follows every enrolled machine</span>
               )}
@@ -220,22 +264,54 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
             Commit both files to the project's repository. They name packages and pinned revisions
             only: no machine, no credential and no host path.
           </p>
-          <Label className="text-xs">{exported.intentFile}</Label>
-          <Textarea readOnly rows={8} value={exported.intent} className="font-mono text-[11px]" />
-          <Label className="text-xs">{exported.lockFile}</Label>
-          <Textarea readOnly rows={6} value={exported.lock} className="font-mono text-[11px]" />
+          {exported.signed || exported.formatVersion === 2 ? (
+            <p className="text-xs text-muted-foreground" data-testid="capability-export-format">
+              Lockfile format {exported.formatVersion ?? 1}
+              {exported.signed
+                ? ` · signed with key ${exported.signed.fingerprint}`
+                : " (setups pin different revisions of a package)"}
+            </p>
+          ) : null}
+          <Label htmlFor="capability-export-intent" className="text-xs">
+            {exported.intentFile}
+          </Label>
+          <Textarea
+            id="capability-export-intent"
+            readOnly
+            rows={8}
+            value={exported.intent}
+            className="font-mono text-[11px]"
+          />
+          <Label htmlFor="capability-export-lock" className="text-xs">
+            {exported.lockFile}
+          </Label>
+          <Textarea
+            id="capability-export-lock"
+            readOnly
+            rows={6}
+            value={exported.lock}
+            className="font-mono text-[11px]"
+          />
         </section>
       ) : null}
       <section className="space-y-2">
         <h4 className="text-sm font-medium text-foreground">Import</h4>
+        <Label htmlFor="capability-import-intent" className="text-xs">
+          Intent file (orkestrator.capabilities.yaml)
+        </Label>
         <Textarea
+          id="capability-import-intent"
           rows={4}
           placeholder="orkestrator.capabilities.yaml"
           value={importIntent}
           onChange={(event) => setImportIntent(event.target.value)}
           className="font-mono text-[11px]"
         />
+        <Label htmlFor="capability-import-lock" className="text-xs">
+          Lockfile (orkestrator.capabilities.lock.json)
+        </Label>
         <Textarea
+          id="capability-import-lock"
           rows={4}
           placeholder="orkestrator.capabilities.lock.json"
           value={importLock}
@@ -247,16 +323,7 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
             size="sm"
             variant="outline"
             disabled={busy || !importIntent || !importLock}
-            onClick={() =>
-              void run(async () =>
-                setImportPreview(
-                  await capabilitiesApi.previewCapabilityImport({
-                    intent: importIntent,
-                    lock: importLock,
-                  }),
-                ),
-              )
-            }
+            onClick={() => void previewImport()}
           >
             <Upload className="h-3.5 w-3.5" /> Preview import
           </Button>
@@ -278,6 +345,13 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
         </div>
         {importPreview ? (
           <div className="space-y-1 rounded-md border border-zinc-800 p-3 text-xs">
+            {importPreview.signature ? (
+              <ManifestSignatureNote
+                signature={importPreview.signature}
+                required={importPreview.requireSignedManifests === true}
+                onTrusted={() => void previewImport()}
+              />
+            ) : null}
             {importPreview.issues.map((issue) => (
               <p key={`${issue.path}:${issue.message}`} className="text-rose-300">
                 {issue.path}: {issue.message}
@@ -290,7 +364,7 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
             ))}
             {importPreview.packages.map((pkg) => (
               <p
-                key={pkg.packageId}
+                key={`${pkg.packageId}@${pkg.artifactDigest}`}
                 className={pkg.action === "conflict" ? "text-amber-300" : undefined}
               >
                 {pkg.packageId} at {shortDigest(pkg.artifactDigest)}: {pkg.action}
@@ -305,6 +379,7 @@ export function SetupsView({ setups, reload }: { setups: CapabilitySetup[]; relo
           </div>
         ) : null}
       </section>
+      <RegistriesSection />
     </div>
   );
 }
@@ -318,8 +393,23 @@ export function MachinesView({
   reload: () => void;
 }) {
   const { busy, error, run } = useAction();
-  const [adoption, setAdoption] = useState<CapabilityOperationSnapshot | null>(null);
+  const [adopting, setAdopting] = useState<CapabilityDriftEntry | null>(null);
+  const [merging, setMerging] = useState<CapabilityDriftEntry | null>(null);
   const drift = useCapabilityResource(() => capabilitiesApi.listCapabilityDrift(), []);
+  const machineNames = Object.fromEntries(
+    machines.map((machine) => [machine.nodeId, machine.name]),
+  );
+  const decide = (entry: CapabilityDriftEntry, decision: "keep-local" | "replace") =>
+    run(async () => {
+      await capabilitiesApi.resolveCapabilityDrift(entry.id, decision);
+      drift.reload();
+    });
+  const settled = () => {
+    setAdopting(null);
+    setMerging(null);
+    drift.reload();
+    reload();
+  };
   const [groupDraft, setGroupDraft] = useState<Record<string, string>>({});
   const open = (drift.state.data?.drift ?? []).filter((entry) => entry.state === "open");
   return (
@@ -440,75 +530,67 @@ export function MachinesView({
                   {machines.find((machine) => machine.nodeId === entry.nodeId)?.name ??
                     entry.nodeId}
                 </span>
-                <div className="ml-auto flex gap-1">
-                  {(["keep-local", "adopt", "replace"] as const)
-                    .filter((decision) => decision !== "adopt" || entry.kind === "modified")
-                    .map((decision) => (
+                <div className="ml-auto flex flex-wrap gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => void decide(entry, "keep-local")}
+                  >
+                    Keep local
+                  </Button>
+                  {entry.kind !== "unmanaged" && entry.packageId ? (
+                    <>
                       <Button
-                        key={decision}
                         size="sm"
-                        variant={decision === "replace" ? "outline" : "ghost"}
+                        variant="ghost"
                         disabled={busy}
-                        onClick={() =>
-                          void run(async () => {
-                            if (decision === "adopt") {
-                              setAdoption(
-                                (
-                                  await capabilitiesApi.previewCapabilityChange({
-                                    kind: "adopt-drift",
-                                    driftId: entry.id,
-                                  })
-                                ).operation,
-                              );
-                            } else {
-                              await capabilitiesApi.resolveCapabilityDrift(entry.id, decision);
-                            }
-                            drift.reload();
-                          })
-                        }
+                        onClick={() => setAdopting(entry)}
                       >
-                        {decision === "keep-local"
-                          ? "Keep local"
-                          : decision === "adopt"
-                            ? "Adopt"
-                            : "Replace"}
+                        Adopt
                       </Button>
-                    ))}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => setMerging(entry)}
+                        aria-label={`Merge local changes to ${entry.name}`}
+                      >
+                        Merge
+                      </Button>
+                    </>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => void decide(entry, "replace")}
+                  >
+                    Replace
+                  </Button>
                 </div>
               </li>
             ))}
           </ul>
         )}
       </section>
-      <Dialog open={adoption !== null} onOpenChange={(open) => !open && setAdoption(null)}>
-        <DialogContent
-          size="3xl"
-          className={Z_FULLSCREEN_DIALOG}
-          overlayClassName={Z_FULLSCREEN_DIALOG}
-        >
-          <DialogHeader>
-            <DialogTitle>Review local revision</DialogTitle>
-            <DialogDescription>
-              Approve the local files as a new revision for the setups that use this package.
-            </DialogDescription>
-          </DialogHeader>
-          {adoption ? (
-            <ChangePreview
-              operation={adoption}
-              machineNames={Object.fromEntries(
-                machines.map((machine) => [machine.nodeId, machine.name]),
-              )}
-              componentNames={{}}
-              onCancel={() => setAdoption(null)}
-              onApplied={() => {
-                setAdoption(null);
-                drift.reload();
-                reload();
-              }}
-            />
-          ) : null}
-        </DialogContent>
-      </Dialog>
+      <AdoptLocalChangesDialog
+        entry={adopting}
+        machineNames={machineNames}
+        onClose={() => setAdopting(null)}
+        onApplied={settled}
+      />
+      <MergeLocalChangesDialog
+        entry={merging}
+        machineNames={machineNames}
+        onClose={() => setMerging(null)}
+        onApplied={settled}
+        onFallback={(entry, decision) => {
+          setMerging(null);
+          if (decision === "adopt") setAdopting(entry);
+          else void decide(entry, decision);
+        }}
+      />
     </div>
   );
 }
@@ -566,6 +648,9 @@ export function UpdatesView({ onPreview }: { onPreview: (updateId: string) => vo
                 {update.fromRevision.slice(0, 10)} → {update.toRevision.slice(0, 10)}
               </span>
               {update.requiresApproval ? <StatusBadge status="needs-approval" /> : null}
+              {update.diverged ? (
+                <Pill className="border-amber-500/40 text-amber-200">Diverged from upstream</Pill>
+              ) : null}
               <div className="ml-auto flex gap-1">
                 <Button size="sm" onClick={() => onPreview(update.id)}>
                   Review

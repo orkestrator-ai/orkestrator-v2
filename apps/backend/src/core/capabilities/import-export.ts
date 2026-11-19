@@ -9,6 +9,12 @@
  * created or changed, and only then creates setups and packages; the
  * packages are fetched at the exact locked revision and refused if their
  * digest differs from the lockfile's.
+ *
+ * Lockfile format 2 locks a package once per revision and lets each setup
+ * name the exact entry it uses, so setups pinned to different revisions of
+ * one package export together and import back to the same pinned graph.
+ * Format 1 is written whenever it suffices (one revision per package,
+ * unsigned) so older installations can still read it.
  */
 import {
   capabilityRevisionComponents,
@@ -20,23 +26,34 @@ import path from "node:path";
 import {
   MY_SETUP_ID,
   capabilityPackageId,
+  type CapabilityComponent,
+  type CapabilityPackage,
+  type CapabilityPackageSelection,
+  type CapabilityProvenance,
   type CapabilitySetup,
 } from "@orkestrator/protocol/capability-resources";
 import {
   CAPABILITY_INTENT_FILE,
   CAPABILITY_LOCK_FILE,
   CAPABILITY_MANIFEST_VERSION,
+  capabilityLockEntryKey,
+  capabilityLockfileDocument,
   isPortableCapabilitySelector,
   validateCapabilityIntent,
   validateCapabilityLockfile,
   type CapabilityIntent,
   type CapabilityIntentSetup,
+  type CapabilityLockPackage,
+  type CapabilityLockSetupRef,
   type CapabilityLockfile,
   type CapabilityManifestIssue,
 } from "@orkestrator/protocol/capability-resources-manifest";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { graphSharingFingerprint } from "@orkestrator/protocol/graphs/sharing";
 
+import { signCapabilityLockfile } from "./manifest-signing.js";
 import { CapabilityError, writeFileAtomically } from "./security.js";
+import type { InspectedPackage } from "./source-inspection.js";
 import type { CapabilityState } from "./types.js";
 
 export function setupSlug(setup: Pick<CapabilitySetup, "id" | "name">): string {
@@ -61,20 +78,38 @@ export interface ExportResult {
   lock: CapabilityLockfile;
   intentText: string;
   lockText: string;
+  /** The lockfile format written: 1 when it suffices, 2 for mixed revisions or a signature. */
+  formatVersion: 1 | 2;
+  /** The key that signed the lockfile. */
+  signed?: { keyId: string; fingerprint: string };
   notes: string[];
 }
 
-/** Builds the two portable files for `setupIds`. */
-export function exportSetups(state: CapabilityState, setupIds: readonly string[]): ExportResult {
+/** Lock entries of one package: the library's current revision first, then older ones, newest first. */
+function revisionRank(pkg: CapabilityPackage, digest: string): number {
+  if (digest === pkg.artifactDigest) return 0;
+  const index = pkg.previousRevisions?.findIndex((entry) => entry.artifactDigest === digest) ?? -1;
+  return index < 0 ? Number.MAX_SAFE_INTEGER : index + 1;
+}
+
+/**
+ * Builds the two portable files for `setupIds`. With `signingKey`, the
+ * lockfile is signed (format 2) with this installation's sharing key.
+ */
+export function exportSetups(
+  state: CapabilityState,
+  setupIds: readonly string[],
+  options: { signingKey?: { publicKey: string; privateKey: string; keyId: string } } = {},
+): ExportResult {
   const notes: string[] = [];
   const intent: CapabilityIntent = { version: 1, setups: {} };
-  const lock: CapabilityLockfile = {
+  let lock: CapabilityLockfile = {
     formatVersion: 1,
     generatedBy: "Orkestrator",
     packages: [],
     setups: {},
   };
-  const locked = new Map<string, string>();
+  const locked = new Set<string>();
   const catalogue = new Map(Object.entries(state.components));
   const slugs = new Map<string, string>();
   for (const id of setupIds) {
@@ -86,7 +121,7 @@ export function exportSetups(state: CapabilityState, setupIds: readonly string[]
     if (!setup) throw new CapabilityError("not-found", `Setup ${id} does not exist.`);
     const slug = slugs.get(id)!;
     const packages: CapabilityIntentSetup["packages"] = [];
-    const packageIds: string[] = [];
+    const refs: CapabilityLockSetupRef[] = [];
     for (const selection of setup.packageSelections) {
       const pkg = state.packages[selection.packageId];
       if (!pkg) continue;
@@ -119,16 +154,11 @@ export function exportSetups(state: CapabilityState, setupIds: readonly string[]
         ...(selection.components ? { components: selection.components } : {}),
         ...(selection.required ? { required: true } : {}),
       });
-      packageIds.push(pkg.id);
-      const priorDigest = locked.get(pkg.id);
-      if (priorDigest && priorDigest !== digest) {
-        throw new CapabilityError(
-          "unsupported",
-          "The portable format supports one revision per package. Export these setups separately.",
-        );
-      }
-      if (!priorDigest) {
-        locked.set(pkg.id, digest);
+      refs.push({ packageId: pkg.id, artifactDigest: digest });
+      // One lock entry per package revision: two setups may pin two revisions.
+      const key = capabilityLockEntryKey(pkg.id, digest);
+      if (!locked.has(key)) {
+        locked.add(key);
         lock.packages.push({
           id: pkg.id,
           source: pkg.source,
@@ -166,21 +196,50 @@ export function exportSetups(state: CapabilityState, setupIds: readonly string[]
         : {}),
       updatePolicy: setup.updatePolicy,
     };
-    lock.setups[slug] = { packageIds };
+    lock.setups[slug] = { packageIds: refs.map((ref) => ref.packageId), packages: refs };
   }
-  lock.packages.sort((a, b) => a.id.localeCompare(b.id));
+  lock.packages.sort(
+    (a, b) =>
+      a.id.localeCompare(b.id) ||
+      revisionRank(state.packages[a.id]!, a.artifactDigest) -
+        revisionRank(state.packages[b.id]!, b.artifactDigest),
+  );
   const header = `# Orkestrator capabilities: the setups this project uses.\n# Resolved revisions are pinned in ${CAPABILITY_LOCK_FILE}. Never put credentials here.\n`;
   const intentText = `${header}${Bun.YAML.stringify(intent, null, 2)}\n`;
-  const lockText = `${JSON.stringify(lock, null, 2)}\n`;
   // The files must pass the same validation an import applies.
   const check = validateCapabilityIntent(intent);
-  if (check.issues.length > 0) {
+  if (check.issues.length > 0 || !check.intent) {
     throw new CapabilityError(
       "unsafe-content",
-      `The export would not be portable: ${check.issues[0]!.message}`,
+      `The export would not be portable: ${check.issues[0]?.message ?? "invalid manifest"}`,
     );
   }
-  return { intent, lock, intentText, lockText, notes };
+  if (options.signingKey) lock = signCapabilityLockfile(lock, check.intent, options.signingKey);
+  const document = capabilityLockfileDocument(lock);
+  const lockCheck = validateCapabilityLockfile(document, check.intent);
+  if (lockCheck.issues.length > 0) {
+    throw new CapabilityError(
+      "unsafe-content",
+      `The export would not be portable: ${lockCheck.issues[0]!.message}`,
+    );
+  }
+  const lockText = `${JSON.stringify(document, null, 2)}\n`;
+  return {
+    intent,
+    lock,
+    intentText,
+    lockText,
+    formatVersion: document.formatVersion === 2 ? 2 : 1,
+    ...(lock.signature
+      ? {
+          signed: {
+            keyId: lock.signature.keyId,
+            fingerprint: graphSharingFingerprint(lock.signature.keyId),
+          },
+        }
+      : {}),
+    notes,
+  };
 }
 
 export async function writeProjectManifests(
@@ -215,6 +274,8 @@ export function parseManifests(
   intent: CapabilityIntent | null;
   lock: CapabilityLockfile | null;
   issues: CapabilityManifestIssue[];
+  /** The canonical text a lockfile signature covers, when signed. */
+  signedPayload?: string;
 } {
   const issues: CapabilityManifestIssue[] = [];
   if (intentText.length > 1024 * 1024 || lockText.length > 4 * 1024 * 1024) {
@@ -240,7 +301,7 @@ export function parseManifests(
     intentValue === undefined
       ? { intent: null, issues: [] }
       : validateCapabilityIntent(intentValue);
-  const lockCheck =
+  const lockCheck: ReturnType<typeof validateCapabilityLockfile> =
     lockValue === undefined
       ? { lock: null, issues: [] }
       : validateCapabilityLockfile(lockValue, intentCheck.intent);
@@ -248,6 +309,7 @@ export function parseManifests(
     intent: intentCheck.intent,
     lock: lockCheck.lock,
     issues: [...issues, ...intentCheck.issues, ...lockCheck.issues],
+    ...(lockCheck.signedPayload ? { signedPayload: lockCheck.signedPayload } : {}),
   };
 }
 
@@ -260,6 +322,21 @@ export interface ImportPlan {
     artifactDigest: string;
     reason?: string;
   }>;
+}
+
+/** The library already keeps this lock entry's revision: current, or an older one with its inventory. */
+export function isRevisionKept(
+  state: CapabilityState,
+  entry: Pick<CapabilityLockPackage, "id" | "artifactDigest">,
+): boolean {
+  const existing = state.packages[entry.id];
+  return Boolean(
+    existing &&
+    (existing.artifactDigest === entry.artifactDigest ||
+      existing.previousRevisions?.some(
+        (revision) => revision.artifactDigest === entry.artifactDigest && revision.components,
+      )),
+  );
 }
 
 /** What importing would do to the current state; writes nothing. */
@@ -294,7 +371,7 @@ export function planImport(
         revision: entry.revision,
         artifactDigest: entry.artifactDigest,
       };
-    if (existing.artifactDigest === entry.artifactDigest) {
+    if (isRevisionKept(state, entry)) {
       return {
         packageId: entry.id,
         action: "unchanged" as const,
@@ -312,6 +389,112 @@ export function planImport(
     };
   });
   return { setups, packages };
+}
+
+/**
+ * Adds the packages an import fetched to `state`. A package locked at more
+ * than one revision is created at its first lock entry (the exporter's
+ * current revision) with the others kept as earlier revisions, each with its
+ * component inventory, so every setup's pinned revision resolves.
+ */
+export function addImportedPackages(
+  state: CapabilityState,
+  fetched: readonly InspectedPackage[],
+  provenance: CapabilityProvenance,
+  now: string,
+): void {
+  const byPackage = new Map<string, InspectedPackage[]>();
+  for (const inspected of fetched) {
+    byPackage.set(inspected.packageId, [...(byPackage.get(inspected.packageId) ?? []), inspected]);
+  }
+  for (const [packageId, revisions] of byPackage) {
+    const [current, ...older] = revisions as [InspectedPackage, ...InspectedPackage[]];
+    const existing = state.packages[packageId];
+    if (!existing) {
+      for (const component of current.components) state.components[component.id] = component;
+      state.packages[packageId] = {
+        id: packageId,
+        source: current.source,
+        displayName: current.displayName,
+        ...(current.description ? { description: current.description } : {}),
+        revision: current.revision,
+        artifactDigest: current.artifactDigest,
+        componentIds: current.components.map((component) => component.id),
+        provenance,
+        risk: current.risk,
+        ...(current.publisher ? { publisher: current.publisher } : {}),
+        previousRevisions: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+    } else {
+      older.unshift(current);
+    }
+    const pkg = state.packages[packageId]!;
+    for (const inspected of older) {
+      if (inspected.artifactDigest === pkg.artifactDigest) continue;
+      const components: CapabilityComponent[] = inspected.components;
+      pkg.previousRevisions = [
+        ...(pkg.previousRevisions ?? []).filter(
+          (entry) => entry.artifactDigest !== inspected.artifactDigest,
+        ),
+        {
+          revision: inspected.revision,
+          artifactDigest: inspected.artifactDigest,
+          replacedAt: now,
+          components,
+        },
+      ];
+    }
+    for (const inspected of revisions) {
+      state.artifacts[inspected.artifactDigest] ??= {
+        digest: inspected.artifactDigest,
+        bytes: inspected.files.reduce((total, file) => total + file.bytes, 0),
+        files: inspected.files.map((file) => ({
+          path: file.path,
+          bytes: file.bytes,
+          executable: file.executable,
+          sha256: file.sha256,
+        })),
+        refs: [`package:${inspected.packageId}@${inspected.revision}`],
+        createdAt: now,
+      };
+    }
+  }
+}
+
+/**
+ * The package selections an imported setup gets: each pinned to the exact
+ * lock entry the lockfile names for that setup. A selection the intent left
+ * unpinned follows the package's latest revision when the setup uses the
+ * package's first (current) lock entry.
+ */
+export function importedSelections(
+  setup: CapabilityIntentSetup,
+  lockSetup: CapabilityLockfile["setups"][string] | undefined,
+  lock: CapabilityLockfile,
+): CapabilityPackageSelection[] {
+  return setup.packages.map((entry) => {
+    const packageId = capabilityPackageId(entry.source);
+    // An import previewed before format 2 has no per-setup references.
+    const ref = lockSetup?.packages?.find((candidate) => candidate.packageId === packageId);
+    const revisions = lock.packages.filter((candidate) => candidate.id === packageId);
+    const pinned: CapabilityLockPackage | undefined = ref
+      ? revisions.find((candidate) => candidate.artifactDigest === ref.artifactDigest)
+      : undefined;
+    let version = entry.revision ?? "latest";
+    if (pinned && (entry.revision || pinned !== revisions[0])) {
+      // A revision name two lock entries share is ambiguous; the digest is not.
+      const shared = revisions.filter((candidate) => candidate.revision === pinned.revision);
+      version = shared.length > 1 ? pinned.artifactDigest : pinned.revision;
+    }
+    return {
+      packageId,
+      version,
+      ...(entry.components ? { components: entry.components } : {}),
+      ...(entry.required ? { required: true } : {}),
+    };
+  });
 }
 
 export const MANIFEST_FORMAT_VERSION = CAPABILITY_MANIFEST_VERSION;

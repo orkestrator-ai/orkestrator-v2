@@ -131,6 +131,25 @@ export interface NodeServiceOptions {
 
 export type DesktopConnectionImport = NodeImportEntry;
 
+/**
+ * The capability side of a handover (`capabilities/handover.ts`,
+ * `CapabilityService.handoverHooks`). The handing-over node sends its
+ * capability state before the target accepts, and gives up the authority once
+ * it has; the target installs the state when it accepts, with a higher
+ * single-writer epoch. Each step is idempotent per handover id.
+ */
+export interface NodeCapabilityHandover {
+  send(input: {
+    handoverId: string;
+    targetId: string;
+    invoke: (command: string, args: Record<string, unknown>) => Promise<unknown>;
+  }): Promise<void>;
+  sent(input: { handoverId: string; targetId: string }): Promise<void>;
+  abandoned(handoverId: string): Promise<void>;
+  receive(input: { controllerId: string; handoverId: string }): Promise<void>;
+  received(input: { controllerId: string; handoverId: string }): void;
+}
+
 const HANDOVER_TIMEOUT_MS = 30_000;
 
 const CONTACT_PERSIST_MS = 30_000;
@@ -145,6 +164,7 @@ export class NodeService {
   private selfId: BackendId | null = null;
   private handoverRunning = false;
   private acceptingHandover = false;
+  private capabilityHandover: NodeCapabilityHandover | null = null;
   private attachments: NodeAttachments = { version: 1, controllers: [], detachedControllers: [] };
   private registry: NodeRegistry | null = null;
   private readonly links = new Map<BackendId, NodeLink>();
@@ -228,6 +248,11 @@ export class NodeService {
 
   selfIdentity(): Promise<BackendId> {
     return this.self();
+  }
+
+  /** Capability management takes part in command handovers (set once it exists). */
+  setCapabilityHandover(hooks: NodeCapabilityHandover | null): void {
+    this.capabilityHandover = hooks;
   }
 
   selfProfile(): Promise<BackendProfile> {
@@ -1120,6 +1145,34 @@ export class NodeService {
     const { target, entries } = pending;
     const selfId = await this.self();
     const handoverLink = this.oneShotLink(target);
+    const capabilities = this.capabilityHandover;
+    if (capabilities) {
+      // The capability state travels first; the target installs it when it accepts.
+      try {
+        await capabilities.send({
+          handoverId: pending.id,
+          targetId: target.nodeId,
+          invoke: (command, args) =>
+            transport
+              ? transport.invoke(command, args, { timeoutMs: HANDOVER_TIMEOUT_MS })
+              : handoverLink.invokeWithoutAttaching(command, args, {
+                  timeoutMs: HANDOVER_TIMEOUT_MS,
+                }),
+        });
+      } catch (error) {
+        handoverLink.stop();
+        // A fresh handover has not asked the target to accept yet: nothing was adopted.
+        if (transport) {
+          await this.restoreHandoverTarget(target);
+          await capabilities.abandoned(pending.id).catch(() => undefined);
+          throw error;
+        }
+        throw new NodeOutcomeUnknownError(
+          "The command handover is pending and will retry automatically. Retrying this handover is safe.",
+          { cause: error },
+        );
+      }
+    }
     const invoke = () =>
       transport
         ? transport.invoke<CommandHandoverReceipt>(
@@ -1144,16 +1197,8 @@ export class NodeService {
           (error.code === NODE_REFUSAL_CODES.tooManyNodes ||
             error.code === NODE_REFUSAL_CODES.notController)
         ) {
-          await this.mutateRegistry((current) => ({
-            next: {
-              ...current,
-              pendingHandover: undefined,
-              nodes: current.nodes.some((node) => node.nodeId === target.nodeId)
-                ? current.nodes
-                : [...current.nodes, target],
-            },
-            result: undefined,
-          }));
+          await this.restoreHandoverTarget(target);
+          await capabilities?.abandoned(pending.id).catch(() => undefined);
           throw error;
         }
         // Same durable ID resumes partial acceptance and lost responses safely.
@@ -1169,6 +1214,14 @@ export class NodeService {
     } finally {
       handoverLink.stop();
     }
+    // The target holds the capability authority now (a higher epoch).
+    await capabilities
+      ?.sent({ handoverId: pending.id, targetId: target.nodeId })
+      .catch((error: unknown) =>
+        log.warn("handover.capabilities-release-failed", {
+          error: formatLogError(error, { message: false }),
+        }),
+      );
     // The machines the target took over are forgotten here and told to
     // detach, so each has one command node.
     const movingIds = new Set(pending.movingIds);
@@ -1210,6 +1263,20 @@ export class NodeService {
       selfIncluded: pending.selfIncluded,
       detachedControllers: accepted.detachedControllers,
     };
+  }
+
+  /** A handover that never reached the target: the target is registered here again. */
+  private async restoreHandoverTarget(target: NodeRecord): Promise<void> {
+    await this.mutateRegistry((current) => ({
+      next: {
+        ...current,
+        pendingHandover: undefined,
+        nodes: current.nodes.some((node) => node.nodeId === target.nodeId)
+          ? current.nodes
+          : [...current.nodes, target],
+      },
+      result: undefined,
+    }));
   }
 
   /**
@@ -1267,6 +1334,11 @@ export class NodeService {
               }
             : undefined,
         ));
+      // The capability state the controller sent becomes this node's authority, at a
+      // higher epoch, before the controllers are detached. A failure here fails the
+      // accept; the controller retries the same handover id.
+      if (typeof handoverId === "string")
+        await this.capabilityHandover?.receive({ controllerId, handoverId });
       for (const id of controllers) {
         if (this.attachments.controllers.some((entry) => entry.controllerId === id))
           await this.detachController(id, { byUser: true });
@@ -1287,6 +1359,8 @@ export class NodeService {
           },
           result: undefined,
         }));
+      if (typeof handoverId === "string")
+        this.capabilityHandover?.received({ controllerId, handoverId });
       return { ...counts, detachedControllers: controllers.length };
     } finally {
       this.acceptingHandover = false;

@@ -46,7 +46,11 @@ import {
 
 import type { NodePlanTarget } from "./executor.js";
 import { installName } from "./native-ownership.js";
-import type { CapabilityState } from "./types.js";
+import {
+  claudeCarriedComponents,
+  isDeliverableClaudePlugin,
+} from "./provider-adapters/claude-plugins.js";
+import { isMachineWideReceipt, type CapabilityState } from "./types.js";
 
 export function sha256(text: string): string {
   return `sha256:${createHash("sha256").update(text).digest("hex")}`;
@@ -188,9 +192,17 @@ export function desiredStateForNode(
       now: () => "",
     });
     effective.push(resolved);
+    // Parts of a delivered Claude plugin load from the plugin (claude-plugins.ts).
+    const carried = claudeCarriedComponents(
+      provider,
+      resolved.resolvedPackages,
+      (packageId, digest) =>
+        capabilityRevisionComponents(packages.get(packageId)!, digest, components),
+      (packageId) => packages.get(packageId)?.source.kind,
+    );
     for (const entry of resolved.unsupported) {
       const component = components.get(entry.componentId);
-      if (!component) continue;
+      if (!component || carried.has(entry.componentId)) continue;
       // A component with a provider hint for another provider was never meant for this one.
       if (component.providerHints.length > 0 && !component.providerHints.includes(provider))
         continue;
@@ -223,9 +235,36 @@ export function desiredStateForNode(
       const revisionComponents = new Map(selected?.map((component) => [component.id, component]));
       for (const componentId of pkg.components) {
         const component = revisionComponents.get(componentId);
-        if (!component) continue;
+        if (!component || carried.has(componentId)) continue;
         if (component.providerHints.length > 0 && !component.providerHints.includes(provider))
           continue;
+        if (component.kind === "native-plugin" && provider === "claude") {
+          if (!isDeliverableClaudePlugin(component, packages.get(pkg.id)?.source.kind)) {
+            undeliverable.push({
+              nodeId,
+              provider,
+              componentId,
+              packageId: pkg.id,
+              status: "unsupported",
+              reason:
+                "Claude resolves marketplace plugins from a mutable source; add the plugin from its repository so Orkestrator can review and pin its bytes.",
+            });
+            continue;
+          }
+          const locationId = "plugin:claude";
+          plain.push({
+            key: installationKey(nodeId, locationId, componentId),
+            nodeId,
+            locationId,
+            componentId,
+            packageId: pkg.id,
+            digest: pkg.artifactDigest,
+            providers: [provider],
+            alsoVisibleTo: [],
+            references: referencingSetups(state, pkg.id, setupIds),
+          });
+          continue;
+        }
         if (component.kind === "mcp-server") {
           const locationId = `mcp:${provider}`;
           plain.push({
@@ -396,7 +435,7 @@ export function planNode(
   const planned: CapabilityPlannedTarget[] = [];
   const desiredKeys = new Set(desired.installations.map((entry) => entry.key));
   const receipts = Object.values(state.receipts).filter(
-    (receipt) => receipt.nodeId === desired.nodeId,
+    (receipt) => receipt.nodeId === desired.nodeId && isMachineWideReceipt(receipt),
   );
 
   for (const installation of desired.installations) {
@@ -493,6 +532,7 @@ export function planNode(
       ...(pkg?.source.kind === "provider-marketplace"
         ? { qualifiedId: pkg.source.qualifiedId }
         : {}),
+      ...(pkg?.derivedFrom ? { takeoverFrom: pkg.derivedFrom.packageId } : {}),
     });
   }
 

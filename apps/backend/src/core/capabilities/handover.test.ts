@@ -5,7 +5,7 @@
  * the new command node; the old one stops acting and is refused everywhere.
  */
 import { CAPABILITY_LIMITS, MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -65,6 +65,52 @@ async function handOver(from: CapabilityNode, to: CapabilityNode) {
 }
 
 describe("command-node handover of capability authority", () => {
+  test("an apply paused in artifact verification cannot commit after handover", async () => {
+    const { desktop, mini } = await fleet();
+    await addSkill(desktop, "existing", "Existing instructions.");
+    const inspection = await desktop.cap.authorPackage({
+      kind: "skill",
+      name: "pending",
+      content: "Pending instructions.",
+    });
+    const { operation } = await desktop.cap.previewChange({
+      change: { kind: "add-to-setup", inspectionId: inspection.inspectionId, setupId: MY_SETUP_ID },
+    });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const original = desktop.cap.artifacts.get.bind(desktop.cap.artifacts);
+    let paused = false;
+    const artifact = spyOn(desktop.cap.artifacts, "get").mockImplementation(async (digest) => {
+      if (digest === inspection.artifactDigest && !paused) {
+        paused = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return original(digest);
+    });
+    const applying = desktop.cap.applyChange({
+      operationId: operation.id,
+      approvedDigest: operation.planDigest,
+    });
+    try {
+      await Promise.race([
+        entered.promise,
+        applying.then(() => {
+          throw new Error("Apply completed before its artifact was verified.");
+        }),
+      ]);
+      await handOver(desktop, mini);
+    } finally {
+      release.resolve();
+      artifact.mockRestore();
+    }
+    await expect(applying).rejects.toThrow();
+    const former = await desktop.storage.capabilities.loadCapabilityState();
+    const current = await mini.storage.capabilities.loadCapabilityState();
+    expect(former.packages[inspection.packageId]).toBeUndefined();
+    expect(current.packages[inspection.packageId]).toBeUndefined();
+  });
+
   test("the receiver retains its private session plugin through handover", async () => {
     const { desktop, mini } = await fleet();
     const toolkit = await desktop.cap.setSetup({ setup: { name: "Private tools" } });

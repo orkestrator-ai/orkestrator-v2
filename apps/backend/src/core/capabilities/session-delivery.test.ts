@@ -24,7 +24,7 @@ import {
   type CapabilityNode,
 } from "./capability-network-test-support.js";
 import { disposeFleet, fleet, skillFile, type FleetNode } from "./drift-test-support.js";
-import { parseCapabilityChange } from "./operations.js";
+import { applyChangeToState, parseCapabilityChange } from "./operations.js";
 import { sha256 } from "./planning.js";
 import { canonicalCapabilityJson } from "@orkestrator/protocol/capability-resources-resolve";
 import { sha256Hex, treeDigest, type PackageFile } from "./security.js";
@@ -395,6 +395,39 @@ async function sessionToolkit(command: FleetNode, required: boolean) {
 }
 
 describe("session launch on a host", () => {
+  test("an optional machine-wide component without a copy is pending in the chip", async () => {
+    const { command } = await fleet();
+    const inspection = await command.service.authorPackage({
+      kind: "skill",
+      name: "optional-global",
+      content: "Instructions.",
+    });
+    await command.service.reconciler.idle();
+    command.storage.capabilities.mutateCapabilityState((state) => {
+      const draft = state.inspections[inspection.inspectionId]!;
+      applyChangeToState(state, {
+        kind: "add-to-setup",
+        setupId: "my-setup",
+        inspectionId: draft.id,
+      });
+      return { changed: true, result: undefined };
+    });
+    const view = await command.service.getSessionView({
+      sessionKey: "s1",
+      target: { provider: "claude" },
+    });
+    expect(
+      view.components.find((entry) => entry.componentId === inspection.components[0]?.id)?.status,
+    ).toBe("pending");
+    const launch = await command.service.preflightSession({
+      environmentId: "env-1",
+      sessionKey: "s1",
+      provider: "claude",
+    });
+    expect(launch?.resolvedPackages).toEqual([]);
+    expect(launch?.warnings.join(" ")).toContain("not verified");
+  });
+
   test("the session chip does not promise private delivery for an old shared copy", async () => {
     const { command } = await fleet();
     const { inspection } = await sessionToolkit(command, true);

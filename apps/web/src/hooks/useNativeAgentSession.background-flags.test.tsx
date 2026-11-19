@@ -132,7 +132,13 @@ function stateSnapshot(token: string) {
 
 /** Renders the hook, counting renders and every in-flight flag value seen. */
 function renderCountedSession() {
-  const seen = { renders: 0, refreshing: [] as boolean[], stateRefreshing: [] as boolean[] };
+  const seen = {
+    renders: 0,
+    refreshing: [] as boolean[],
+    stateRefreshing: [] as boolean[],
+    /** The failure the connection surface would show, per render. */
+    failures: [] as Array<string | null>,
+  };
   const rendered = renderHookInAppCommandScope(() => {
     const session = useNativeAgentSession<TestMessage>({
       platform: "codex",
@@ -146,12 +152,14 @@ function renderCountedSession() {
     seen.renders += 1;
     seen.refreshing.push(session.isRefreshing);
     seen.stateRefreshing.push(session.sessionStateRefreshing);
+    seen.failures.push(session.transcriptError ?? session.sessionStateError ?? null);
     return session;
   });
   const reset = () => {
     seen.renders = 0;
     seen.refreshing = [];
     seen.stateRefreshing = [];
+    seen.failures = [];
   };
   return { ...rendered, seen, reset };
 }
@@ -403,5 +411,126 @@ describe("useNativeAgentSession background read flags", () => {
     expect(result.current.isRefreshing).toBe(false);
     expect(result.current.sessionStateRefreshing).toBe(false);
     expect(result.current.sessionStateAvailability).toBe("current");
+  });
+
+  describe("over a failed view", () => {
+    const unreachable = "The connection is awaiting a verified route.";
+
+    /** Connects, then fails one background read the way an unreachable node does. */
+    async function renderFailedSession() {
+      transcriptUpdates = [() => transcriptSnapshot("transcript-1", [{ id: "m1", text: "one" }])];
+      stateUpdates = [() => stateSnapshot("state-1")];
+      const rendered = renderCountedSession();
+      await act(async () => {
+        await rendered.result.current.refresh();
+      });
+      transcriptUpdates = [
+        () => {
+          throw new Error(unreachable);
+        },
+      ];
+      stateUpdates = [
+        () => {
+          throw new Error(unreachable);
+        },
+      ];
+      await act(async () => {
+        await rendered.result.current.refresh({ manual: false });
+      });
+      expect(rendered.result.current.transcriptError).toBe(unreachable);
+      expect(rendered.result.current.sessionStateError).toBe(unreachable);
+      rendered.reset();
+      return rendered;
+    }
+
+    test("a failing background retry keeps the failure on screen throughout", async () => {
+      const { result, seen } = await renderFailedSession();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      transcriptUpdates = [
+        async () => {
+          await gate;
+          throw new Error(unreachable);
+        },
+      ];
+      stateUpdates = [
+        async () => {
+          await gate;
+          throw new Error(unreachable);
+        },
+      ];
+      let inFlight!: Promise<unknown>;
+      await act(async () => {
+        inFlight = result.current.refresh({ manual: false });
+        await Promise.resolve();
+      });
+      // The poll is in flight, and the shell still has the failure to show
+      // rather than dropping to "connecting" until the poll fails again.
+      expect(result.current.transcriptError).toBe(unreachable);
+      expect(result.current.sessionStateError).toBe(unreachable);
+      expect(result.current.isRefreshing).toBe(false);
+      expect(result.current.sessionStateRefreshing).toBe(false);
+      expect(result.current.sessionStateAvailability).toBe("unavailable");
+
+      await act(async () => {
+        release();
+        await inFlight;
+      });
+      expect(seen.failures.every((failure) => failure === unreachable)).toBe(true);
+      expect(seen.refreshing.every((value) => !value)).toBe(true);
+      expect(seen.stateRefreshing.every((value) => !value)).toBe(true);
+    });
+
+    test("a background retry that succeeds clears the failure", async () => {
+      const { result } = await renderFailedSession();
+      transcriptUpdates = [() => transcriptSnapshot("transcript-2", [{ id: "m1", text: "one" }])];
+      stateUpdates = [() => stateSnapshot("state-2")];
+      await act(async () => {
+        await result.current.refresh({ manual: false });
+      });
+      expect(result.current.transcriptError).toBeNull();
+      expect(result.current.sessionStateError).toBeNull();
+      expect(result.current.sessionStateAvailability).toBe("current");
+    });
+
+    test("a background retry that finds the session gone clears the failure", async () => {
+      const { result } = await renderFailedSession();
+      transcriptUpdates = [() => ({ viewVersion: 1, status: "missing" })];
+      stateUpdates = [() => ({ viewVersion: 1, status: "missing" })];
+      await act(async () => {
+        await result.current.refresh({ manual: false });
+      });
+      expect(result.current.transcriptError).toBeNull();
+      expect(result.current.sessionStateError).toBeNull();
+      expect(result.current.projection).toBeNull();
+    });
+
+    test("a manual retry still clears the failure while it runs", async () => {
+      const { result } = await renderFailedSession();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      transcriptUpdates = [
+        () => gate.then(() => transcriptSnapshot("transcript-2", [{ id: "m1", text: "one" }])),
+      ];
+      stateUpdates = [() => gate.then(() => stateSnapshot("state-2"))];
+      let inFlight!: Promise<unknown>;
+      await act(async () => {
+        inFlight = result.current.refresh({ manual: true });
+        await Promise.resolve();
+      });
+      expect(result.current.transcriptError).toBeNull();
+      expect(result.current.sessionStateError).toBeNull();
+      expect(result.current.isRefreshing).toBe(true);
+      await act(async () => {
+        release();
+        await inFlight;
+      });
+      expect(result.current.isRefreshing).toBe(false);
+      expect(result.current.sessionStateAvailability).toBe("current");
+    });
   });
 });

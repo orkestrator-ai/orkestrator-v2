@@ -618,7 +618,17 @@ export function useNativeAgentSession<TMessage = unknown>({
       sharedProgressiveCache.identity.providerSessionId === initialProviderSessionId)
       ? sharedProgressiveCache
       : undefined;
-  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [runtimeError, setRuntimeErrorState] = useState<string | null>(null);
+  /*
+   * Mirrors of the three failures the connection surface shows. A background
+   * poll reads them to tell whether it starts over a failed view, which it
+   * must leave on screen until it has an answer of its own (see `refresh`).
+   */
+  const runtimeErrorRef = useRef<string | null>(null);
+  const setRuntimeError = useCallback((value: string | null) => {
+    runtimeErrorRef.current = value;
+    setRuntimeErrorState(value);
+  }, []);
   const [resumeSessionReplacement, setResumeSessionReplacement] = useState<{
     requestedProviderSessionId: string;
     replacementProviderSessionId: string;
@@ -669,9 +679,14 @@ export function useNativeAgentSession<TMessage = unknown>({
     [],
   );
   const [transcriptRefreshing, setTranscriptRefreshing] = useState(enabled);
-  const [transcriptError, setTranscriptError] = useState<string | null>(
+  const [transcriptError, setTranscriptErrorState] = useState<string | null>(
     matchingProgressiveCache?.transcriptError ?? null,
   );
+  const transcriptErrorRef = useRef<string | null>(transcriptError);
+  const setTranscriptError = useCallback((value: string | null) => {
+    transcriptErrorRef.current = value;
+    setTranscriptErrorState(value);
+  }, []);
   /*
    * Action authority is only ever granted by a live session-state read, so a
    * remount starts unavailable even when the shared cache still holds the
@@ -687,9 +702,14 @@ export function useNativeAgentSession<TMessage = unknown>({
     sessionStateRefreshingRef.current = value;
     setSessionStateRefreshingState(value);
   }, []);
-  const [sessionStateError, setSessionStateError] = useState<string | null>(
+  const [sessionStateError, setSessionStateErrorState] = useState<string | null>(
     matchingProgressiveCache?.stateError ?? null,
   );
+  const sessionStateErrorRef = useRef<string | null>(sessionStateError);
+  const setSessionStateError = useCallback((value: string | null) => {
+    sessionStateErrorRef.current = value;
+    setSessionStateErrorState(value);
+  }, []);
   const sessionStateAvailabilityRef = useRef(sessionStateAvailability);
   const markSessionStateAvailability = useCallback(
     (availability: NativeAgentProgressiveCacheEntry["stateAvailability"]) => {
@@ -1654,6 +1674,8 @@ export function useNativeAgentSession<TMessage = unknown>({
       markSessionStateAvailability,
       markTranscriptAvailability,
       sessionKey,
+      setSessionStateError,
+      setTranscriptError,
       updateProgressiveCache,
     ],
   );
@@ -1772,6 +1794,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       markTranscriptAvailability,
       platform,
       updateProgressiveCache,
+      setSessionStateError,
     ],
   );
 
@@ -1898,6 +1921,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       markSessionStateAvailability,
       platform,
       setSessionStateRefreshing,
+      setSessionStateError,
     ],
   );
 
@@ -1961,7 +1985,22 @@ export function useNativeAgentSession<TMessage = unknown>({
         background &&
         sessionStateAvailabilityRef.current === "current" &&
         projectionRef.current !== null;
-      if (!quiet) setIsRefreshing(true);
+      /*
+       * A background poll over a view that already shows a failure keeps that
+       * failure on screen until the read answers. Clearing it up front dropped
+       * the shell to "connecting" for the length of each attempt: while the
+       * node stayed unreachable, the error notice vanished and came back on
+       * every poll, and the transcript re-inset under it each time. Every
+       * outcome below settles the failures itself (success clears them, a
+       * missing session clears them, a failure replaces them). A manual
+       * refresh or Retry still clears first, so the user sees it start.
+       */
+      const retainFailure =
+        background &&
+        (transcriptErrorRef.current !== null ||
+          sessionStateErrorRef.current !== null ||
+          runtimeErrorRef.current !== null);
+      if (!quiet && !retainFailure) setIsRefreshing(true);
       // Background polls confirm a view this tab already holds. Raising the
       // skeleton on every 500–1500 ms tick would flicker the indicator and the
       // live region even when the displayed transcript cannot change.
@@ -1972,14 +2011,16 @@ export function useNativeAgentSession<TMessage = unknown>({
         // The only read path: a backend without it is reported, never read
         // through a full projection (`NativeAgentSyncUnsupportedError`).
         await requireNativeAgentProgressiveSync(scope);
-        setTranscriptError(null);
-        const retainedStateAvailability = beginSessionStateRefresh({ quiet });
-        setSessionStateError(null);
+        let retainedStateAvailability = sessionStateAvailabilityRef.current;
+        if (!retainFailure) {
+          setTranscriptError(null);
+          retainedStateAvailability = beginSessionStateRefresh({ quiet });
+          setSessionStateError(null);
+        }
         updateProgressiveCache({
           ...(background ? {} : { transcriptRefreshing: true }),
-          transcriptError: undefined,
+          ...(retainFailure ? {} : { transcriptError: undefined, stateError: undefined }),
           stateAvailability: retainedStateAvailability,
-          stateError: undefined,
         });
 
         const stillCurrent = () =>
@@ -2125,6 +2166,9 @@ export function useNativeAgentSession<TMessage = unknown>({
           if (update.status === "missing") {
             transcriptMissing = true;
             setTranscriptRefreshing(false);
+            // An answer, not a failure: drop one a background poll retained.
+            setTranscriptError(null);
+            updateProgressiveCache({ transcriptError: undefined });
             return "missing";
           }
           const message = update.error ?? "Transcript is temporarily unavailable";
@@ -2162,12 +2206,14 @@ export function useNativeAgentSession<TMessage = unknown>({
               result = applyTranscriptUpdate(snapshot, false);
               if (result === "retry-snapshot") {
                 setTranscriptRefreshing(false);
+                setTranscriptError(null);
                 const availability = projectionRef.current ? "cached" : "unavailable";
                 markTranscriptAvailability(availability);
                 updateProgressiveCache({
                   transcriptToken: undefined,
                   transcriptAvailability: availability,
                   transcriptRefreshing: false,
+                  transcriptError: undefined,
                 });
               }
             }
@@ -2219,7 +2265,12 @@ export function useNativeAgentSession<TMessage = unknown>({
               if (quiet) setIsRefreshing(true);
               progressiveStateTokenRef.current = undefined;
               markSessionStateAvailability("unavailable");
-              updateProgressiveCache({ stateToken: undefined, stateAvailability: "unavailable" });
+              setSessionStateError(null);
+              updateProgressiveCache({
+                stateToken: undefined,
+                stateAvailability: "unavailable",
+                stateError: undefined,
+              });
             } else {
               const message = update.error ?? "Session state is temporarily unavailable";
               if (quiet) setIsRefreshing(true);
@@ -2384,7 +2435,10 @@ export function useNativeAgentSession<TMessage = unknown>({
       markTranscriptAvailability,
       resetSyncState,
       setIsRefreshing,
+      setRuntimeError,
+      setSessionStateError,
       setSessionStateRefreshing,
+      setTranscriptError,
       updateProgressiveCache,
     ],
   );
@@ -2569,6 +2623,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     sendingHeld,
     setIsRefreshing,
     setSessionStateRefreshing,
+    setRuntimeError,
   ]);
 
   // A new identity, or a session this hook is no longer allowed to read, has
@@ -2681,6 +2736,8 @@ export function useNativeAgentSession<TMessage = unknown>({
     platform,
     resetSyncState,
     sessionKey,
+    setTranscriptError,
+    setSessionStateError,
   ]);
 
   useEffect(() => {

@@ -2,9 +2,13 @@ import {
   capabilityUpdateApproval,
   compareCapabilityRevisions,
 } from "@orkestrator/protocol/capability-resources-resolve";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { runCommand } from "../shell.js";
 import { describe, expect, test } from "bun:test";
 
-import { assertFetchableRepo, inspectFiles } from "./source-inspection.js";
+import { assertFetchableRepo, fetchGitSource, inspectFiles } from "./source-inspection.js";
 import { validatePackageFiles } from "./security.js";
 
 const files = (entries: Record<string, string>, executable: string[] = []) =>
@@ -196,4 +200,36 @@ describe("inspection", () => {
       expect(() => assertFetchableRepo(bad)).toThrow();
     }
   });
+});
+
+test("Git checkout and sparse setup run without user filter configuration", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "capability-fetch-"));
+  const inherited = process.env.GIT_CONFIG_GLOBAL;
+  const userConfig = path.join(root, "gitconfig");
+  await fs.writeFile(userConfig, '[filter "fixture"]\n\trequired = true\n');
+  process.env.GIT_CONFIG_GLOBAL = userConfig;
+  const seen: string[] = [];
+  const git = (async (_program, args, options) => {
+    const subcommand = ["init", "remote", "fetch", "sparse-checkout", "checkout", "rev-parse"].find(
+      (name) => args?.includes(name),
+    )!;
+    seen.push(subcommand);
+    expect(options?.env?.GIT_CONFIG_GLOBAL).toBe(subcommand === "fetch" ? userConfig : "/dev/null");
+    if (subcommand === "checkout" || subcommand === "sparse-checkout") {
+      expect(options?.env?.GIT_CONFIG_COUNT).toBe("0");
+      expect(options?.env?.GIT_ATTR_NOSYSTEM).toBe("1");
+    }
+    return { stdout: "a".repeat(40), stderr: "" };
+  }) satisfies typeof runCommand;
+  try {
+    await fetchGitSource(
+      { kind: "git", repo: "https://github.com/example/fixture", subpath: "packages/example" },
+      { workRoot: root, run: git },
+    );
+    expect(seen).toEqual(["init", "remote", "fetch", "sparse-checkout", "checkout", "rev-parse"]);
+  } finally {
+    if (inherited === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = inherited;
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

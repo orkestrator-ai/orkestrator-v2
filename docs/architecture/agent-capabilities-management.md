@@ -134,16 +134,19 @@ its native launch preflight asks the command node. Links run from command node
 to leaf, so the leaf emits `node-capability-launch-requested` on its own event
 stream (which the command node follows) with the target, the permission
 ceiling, its managed copies and the target's own copies (the managed copies
-in the environment's worktree, or its container's staged record and label;
-ids and digests only). The command node
+in the environment's worktree, private account copies and which locations
+link to the host, or its container's staged record and label; ids and digests
+only). The command node
 resolves the target against the authoritative state, records the launch
-(`<nodeId>|<sessionKey>`, with the observed deliveries and `resolvedBy`), and
+(keyed by node, environment, provider and logical session key, with the
+observed deliveries and `resolvedBy`), and
 answers with `answer_capability_node_launch` (`internal`, admitted only at the
 leaf's current epoch and controller). The leaf enforces the answer's launch
 blockers, re-checks the required copies against its own bytes, and caches the
 answer per logical session, target, template, graph node, worktree and
-ceiling digest. When no command node has been in contact for three heartbeats
-or none answers within five seconds, the leaf uses the cached answer only if it
+ceiling digest. The logical session key selects session assignments, so each
+new logical session needs its own answer. When no command node has been in
+contact for three heartbeats or none answers within five seconds, the leaf uses the cached answer only if it
 is under six hours old, came from its current controller and epoch, and this
 machine's applied installations and required copies are unchanged; otherwise
 a required component blocks the launch ("command node unreachable") and
@@ -725,15 +728,22 @@ private plugin stays frozen.
   and its policy before provider work begins. A required component needs
   a matching observed delivery for that target (`scopedRequiredDelivery`):
   - a local worktree: its project copies are brought up to date first (on the
-    command node), and a project receipt whose bytes match on disk qualifies
-    and is recorded; a host copy the provider also reads must still match. On
-    a leaf, the leaf reports its worktree's managed copies with the launch;
-  - an isolated graph worktree: a local command node stages supported files
-    in the activation's own branch. A leaf reports the branch's files rather
-    than the parent checkout's;
+    command node). A project file receipt qualifies when its bytes and
+    ownership match. A host copy the provider also reads must still match.
+    A leaf reports its worktree's managed copies with the launch;
+  - an isolated graph worktree: the command node selects the supported file
+    revisions. The machine hosting the activation stages and checks them in
+    the branch checkout. Each branch has a managed block in Git's shared
+    `info/exclude`. The graph worktree janitor removes the copies with the
+    checkout and clears the block;
   - an added account: the host receipt when the account links that directory
     (or will link it at launch), its own receipt and matching bytes when the
-    directory is private;
+    directory is private. A leaf checks which locations are linked again
+    before using an earlier answer;
+  - a managed MCP definition: the provider must load and enable the entry
+    from the recorded source. For a server needing credentials, an effective
+    matching user entry can satisfy a receipt. The user keeps ownership and
+    the executor checks the match again at launch;
   - a container: the record staged into its inputs revision, whose digest must
     equal the container's `orkestrator-capabilities-digest` label and whose
     entry for the component must be the required revision; host copies are
@@ -882,8 +892,8 @@ graph-sharing trusted list, with its label), **untrusted** (valid, unknown key:
 the preview shows the fingerprint and offers Trust key), **invalid** (blocks
 the import) or **unsigned**. With **Require signed project manifests** on
 (`set_capability_manifest_policy`), unsigned and untrusted manifests are
-blocked too, and an import previewed before the policy was turned on must be
-previewed again.
+blocked too. Apply rechecks the verified signer's current trust and commits
+the setup together with the approved operation.
 
 ## Security
 
@@ -891,7 +901,9 @@ previewed again.
   Markdown with unsupported frontmatter and Claude bundles with executable
   definitions outside the supported inventory are refused. Git fetches
   use `core.hooksPath=/dev/null`, `core.symlinks=false`, no submodules, no
-  `file://` or `ext::`, and only https or SSH addresses.
+  `file://` or `ext::`, and only https or SSH addresses. A checkout uses
+  isolated Git configuration so repository attributes cannot activate
+  user-configured filters.
 - Trees are bounded (2,000 files, 32 MiB, 8 MiB per file, depth 24); special
   files and escaping links are refused.
 - Writes go through `confinedPath` under a location the backend chose; no

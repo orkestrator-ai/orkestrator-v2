@@ -39,6 +39,7 @@ import {
   installName,
   installedDigest,
   readLocationIndex,
+  readMarker,
   type CapabilityHomes,
 } from "./native-ownership.js";
 import {
@@ -210,13 +211,16 @@ export async function observeWorktreeEntries(
     const located = locate(entry.locationId);
     const placed = worktreeEntryPath(entry);
     if (!located || !placed) continue;
+    const name = path.posix.basename(placed.relative);
+    const marker =
+      located.location.layout === "file"
+        ? (await readLocationIndex(located.directory)).files[name]
+        : undefined;
     observed.set(
       entry.key,
-      await installedDigest(
-        located.location,
-        located.directory,
-        path.posix.basename(placed.relative),
-      ),
+      await installedDigest(located.location, located.directory, name, {
+        recordedDigest: marker?.digest,
+      }),
     );
   }
   return observed;
@@ -398,53 +402,58 @@ export async function applyWorktreePlan(
 /** At most this many managed copies are reported per location. */
 const MAX_REPORTED_PER_LOCATION = 500;
 
-async function markerComponent(file: string): Promise<string | null> {
-  try {
-    const stat = await fs.lstat(file);
-    if (!stat.isFile() || stat.size > 64 * 1024) return null;
-    const marker = JSON.parse(await fs.readFile(file, "utf8")) as { componentId?: unknown };
-    return typeof marker.componentId === "string" ? marker.componentId : null;
-  } catch {
-    return null;
-  }
+export interface ManagedLocationEntry {
+  locationId: string;
+  packageId: string;
+  componentId: string;
+  digest: string;
 }
 
-/**
- * The managed copies in a worktree's project directories, by location and
- * component, with the digest on disk: what a leaf reports to its command
- * node at launch (ids and digests only). A directory reached through a link
- * is not read.
- */
-export async function managedWorktreeEntries(
-  worktree: string,
-): Promise<Array<{ locationId: string; componentId: string; digest: string }>> {
-  const entries: Array<{ locationId: string; componentId: string; digest: string }> = [];
+export async function managedLocationEntries(
+  location: CapabilityLocation,
+  directory: string,
+): Promise<ManagedLocationEntry[]> {
+  const entries: ManagedLocationEntry[] = [];
+  const observe = async (
+    name: string,
+    marker: { packageId: string; componentId: string; digest: string },
+  ) => {
+    const digest = await installedDigest(location, directory, name, {
+      recordedDigest: marker.digest,
+    });
+    if (digest)
+      entries.push({
+        locationId: location.id,
+        packageId: marker.packageId,
+        componentId: marker.componentId,
+        digest,
+      });
+  };
+  if (location.layout === "file") {
+    const index = await readLocationIndex(directory);
+    for (const [name, marker] of Object.entries(index.files).slice(0, MAX_REPORTED_PER_LOCATION)) {
+      await observe(name, marker);
+    }
+    return entries;
+  }
+  await recoverLocationReplacements(directory);
+  const children = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
+  for (const child of children.slice(0, MAX_REPORTED_PER_LOCATION)) {
+    if (!child.isDirectory()) continue;
+    const marker = await readMarker(path.join(directory, child.name, CAPABILITY_MARKER_FILE));
+    if (marker) await observe(child.name, marker);
+  }
+  return entries;
+}
+
+/** The managed project copies with the digest on disk, without following linked locations. */
+export async function managedWorktreeEntries(worktree: string): Promise<ManagedLocationEntry[]> {
+  const entries: ManagedLocationEntry[] = [];
   for (const location of PROJECT_CAPABILITY_LOCATIONS) {
-    const id = location.id;
     if (await linkedAncestor(worktree, location.relative)) continue;
-    const directory = path.join(worktree, ...location.relative.split("/"));
-    if (location.layout === "file") {
-      const index = await readLocationIndex(directory);
-      for (const [name, marker] of Object.entries(index.files).slice(
-        0,
-        MAX_REPORTED_PER_LOCATION,
-      )) {
-        const digest = await installedDigest(location, directory, name);
-        if (digest) entries.push({ locationId: id, componentId: marker.componentId, digest });
-      }
-      continue;
-    }
-    await recoverLocationReplacements(directory);
-    const children = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
-    for (const child of children.slice(0, MAX_REPORTED_PER_LOCATION)) {
-      if (!child.isDirectory()) continue;
-      const componentId = await markerComponent(
-        path.join(directory, child.name, CAPABILITY_MARKER_FILE),
-      );
-      if (!componentId) continue;
-      const digest = await installedDigest(location, directory, child.name);
-      if (digest) entries.push({ locationId: id, componentId, digest });
-    }
+    entries.push(
+      ...(await managedLocationEntries(location, path.join(worktree, location.relative))),
+    );
   }
   return entries;
 }

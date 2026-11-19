@@ -378,9 +378,15 @@ export class CapabilityChangeCommands {
     const operation = state.operations[operationId] as CapabilityOperationRecord | undefined;
     if (!operation) throw new CapabilityError("not-found", "That operation does not exist.");
     if (operation.state !== "awaiting-approval" && operation.state !== "planned") {
-      if (operation.approvedDigest === approvedDigest)
-        return { operation: operationSnapshot(operation), replayed: true };
-      throw new CapabilityError("conflict", "That operation was already applied or cancelled.");
+      if (operation.approvedDigest !== approvedDigest)
+        throw new CapabilityError("conflict", "That operation was already applied or cancelled.");
+      // Older versions published approval before consuming the preview.
+      const change = operation.change;
+      if (change?.kind === "import" && state.imports[change.importId]) {
+        await this.imports.completeImport(change.importId, actor);
+        void this.ctx.reconciler.reconcileAll("import");
+      }
+      return { operation: operationSnapshot(operation), replayed: true };
     }
     if (approvedDigest !== operation.planDigest) {
       throw new CapabilityError(
@@ -427,6 +433,10 @@ export class CapabilityChangeCommands {
         "The delivery plan changed. Review a fresh preview.",
       );
     }
+    const commitImport =
+      change.kind === "import"
+        ? await this.imports.prepareImport(change.importId, actor)
+        : undefined;
     const result = this.ctx.deps.storage.capabilities.mutateCapabilityState((current) => {
       this.ctx.assertAuthority();
       if (
@@ -465,6 +475,7 @@ export class CapabilityChangeCommands {
         }
       }
       const applied = applyChangeToState(current, change, actor);
+      commitImport?.(current);
       if (
         applied.packageIds.some(
           (id) =>
@@ -533,7 +544,6 @@ export class CapabilityChangeCommands {
       });
       return { result: { record: structuredClone(record), superseded, applied }, changed: true };
     });
-    if (change.kind === "import") await this.imports.completeImport(change.importId, actor);
     void this.ctx.announce({
       packageIds: result.applied.packageIds,
       setupIds: result.applied.setupId ? [result.applied.setupId] : [],

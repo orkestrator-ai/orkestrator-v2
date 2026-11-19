@@ -10,7 +10,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
-import { MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
+import { capabilityLockfileDocument } from "@orkestrator/protocol/capability-resources-manifest";
+import { capabilityPackageId, MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 import { revisionDigest } from "@orkestrator/protocol/capability-resources-resolve";
 
 import { StorageService } from "../storage.js";
@@ -78,6 +79,7 @@ async function install(
   name: string,
   routes: Map<string, Buffer | string>,
   beforeFetch?: (url: string) => Promise<void>,
+  gitRun?: typeof import("../shell.js").runCommand,
 ): Promise<Installation> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `capability-registry-${name}-`));
   const home = path.join(dir, "home");
@@ -108,6 +110,7 @@ async function install(
       providers: async () => AGENT_PLATFORMS.map((provider) => ({ provider, available: true })),
     },
     signing,
+    ...(gitRun ? { gitRun } : {}),
     registryFetch: async (url, init) => {
       await beforeFetch?.(url);
       return registryFetch(url, init);
@@ -507,6 +510,11 @@ describe("signed team manifests", () => {
     });
     expect(trusted.signature).toMatchObject({ status: "trusted", label: "Peer" });
     expect(trusted.valid).toBe(true);
+    importer.keys.trusted.length = 0;
+    await expect(importer.service.importSetup({ previewId: trusted.previewId })).rejects.toThrow(
+      "requires manifests signed by a trusted key",
+    );
+    importer.keys.trusted.push(exporter.keys.own!);
     await importer.service.importSetup({ previewId: trusted.previewId });
 
     // Unsigned manifests are blocked by the policy too.
@@ -531,4 +539,107 @@ describe("signed team manifests", () => {
     expect(preview.valid).toBe(false);
     expect(preview.issues[0]?.message).toContain("The signature is invalid");
   });
+});
+
+test("a stale registry refresh cannot overwrite a replacement endpoint's status", async () => {
+  const replacement = "https://replacement.example.com/index.json";
+  const routes = publish(["1.0.0"]);
+  routes.set(replacement, JSON.stringify(registryIndex({})));
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const node = await install("registry-race", routes, async (url) => {
+    if (url === INDEX) {
+      started.resolve();
+      await release.promise;
+    }
+  });
+  const old = configureRegistry(node);
+  try {
+    await started.promise;
+    await node.service.registries.set({
+      registry: { id: "team", label: "New", indexUrl: replacement },
+    });
+  } finally {
+    release.resolve();
+  }
+  await old;
+  expect((await node.service.registries.list()).registries[0]).toMatchObject({
+    indexUrl: replacement,
+    packageCount: 0,
+  });
+});
+
+test("direct inspection and lock preview refuse a blocked Git source before running Git", async () => {
+  let calls = 0;
+  const node = await install("git-policy", new Map(), undefined, async () => {
+    calls++;
+    throw new Error("unexpected Git call");
+  });
+  await node.service.adminPolicy.set({
+    expectedRevision: 0,
+    forbiddenSources: ["git:github.com/blocked/"],
+  });
+  const source = {
+    kind: "git" as const,
+    repo: "https://github.com/blocked/tools.git",
+    subpath: "",
+  };
+  const packageId = capabilityPackageId(source);
+  await expect(node.service.inspectSource({ source })).rejects.toThrow("policy forbids");
+  const artifactDigest = `sha256:${"a".repeat(64)}`;
+  const lock = capabilityLockfileDocument({
+    formatVersion: 2,
+    generatedBy: "Orkestrator",
+    packages: [{ id: packageId, source, revision: "a".repeat(40), artifactDigest, components: [] }],
+    setups: { tools: { packageIds: [packageId], packages: [{ packageId, artifactDigest }] } },
+  });
+  const preview = await node.service.previewImport({
+    intent:
+      "version: 1\nsetups:\n  tools:\n    packages:\n      - source: " +
+      JSON.stringify(source) +
+      "\n",
+    lock: JSON.stringify(lock),
+  });
+  expect(preview.valid).toBe(false);
+  expect(preview.issues.map((issue) => issue.message).join("\n")).toContain("policy forbids");
+  expect(calls).toBe(0);
+});
+
+test("a failed approved import remains retryable until its setup commits", async () => {
+  const routes = publish(["1.0.0"]);
+  const exporter = await install("operation-exporter", routes);
+  const importer = await install("operation-importer", routes);
+  await Promise.all([configureRegistry(exporter), configureRegistry(importer)]);
+  const kit = await exporter.service.setSetup({ setup: { name: "Imported tools" } });
+  const inspected = await exporter.service.inspectSource({ source });
+  await addToSetup(exporter, inspected.inspectionId, kit.id);
+  const exported = await exporter.service.exportSetup({ setupIds: [kit.id] });
+  const preview = await importer.service.previewImport({
+    intent: exported.intent,
+    lock: exported.lock,
+  });
+  expect(preview.valid).toBe(true);
+  const { operation } = await importer.service.previewChange({
+    change: { kind: "import", importId: preview.previewId },
+  });
+  const apply = { operationId: operation.id, approvedDigest: operation.planDigest };
+  const get = spyOn(importer.service.artifacts, "get").mockRejectedValue(
+    new Error("Artifact read failed."),
+  );
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(importer.service.applyChange(apply)).rejects.toThrow("Artifact read failed.");
+      const state = await importer.storage.capabilities.loadCapabilityState();
+      expect(state.operations[operation.id]?.approvedDigest).toBeUndefined();
+      expect(state.setups["toolkit-imported-tools"]).toBeUndefined();
+    }
+  } finally {
+    get.mockRestore();
+  }
+  await expect(importer.service.applyChange(apply)).resolves.toMatchObject({
+    operation: { state: "completed" },
+    replayed: false,
+  });
+  await expect(importer.service.applyChange(apply)).resolves.toMatchObject({ replayed: true });
+  await importer.service.reconciler.idle();
 });

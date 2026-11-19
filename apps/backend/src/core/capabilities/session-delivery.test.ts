@@ -476,7 +476,7 @@ describe("session launch on a host", () => {
         readOnly: true,
       }),
     ).rejects.toThrow("cannot have");
-    expect(await command.service.sessionPlugins("s1")).toEqual([]);
+    expect(await command.service.sessionPlugins("s1", "env-1", "claude")).toEqual([]);
   });
 
   test("active private metadata survives launch diagnostics retention", async () => {
@@ -487,9 +487,9 @@ describe("session launch on a host", () => {
       provider: "claude",
       sessionKey: "s1",
     });
-    const before = await command.service.sessionPlugins("s1");
+    const before = await command.service.sessionPlugins("s1", "env-1", "claude");
     command.storage.capabilities.mutateCapabilityState((state) => {
-      const launch = state.launches.s1!;
+      const launch = Object.values(state.launches).find((row) => row.sessionKey === "s1")!;
       const { privatePlugin: _, ...diagnostic } = launch;
       for (let index = 0; index < 2001; index++) {
         const sessionKey = `unrelated-${index}`;
@@ -501,7 +501,7 @@ describe("session launch on a host", () => {
       }
       return { result: undefined, changed: true };
     });
-    expect(await command.service.sessionPlugins("s1")).toEqual(before);
+    expect(await command.service.sessionPlugins("s1", "env-1", "claude")).toEqual(before);
   });
 
   test("a required session-only skill reaches that Claude session alone", async () => {
@@ -518,17 +518,19 @@ describe("session launch on a host", () => {
     expect(await Bun.file(skillFile(command, ".claude", "private-skill")).exists()).toBe(false);
     expect(await Bun.file(skillFile(command, ".agents", "private-skill")).exists()).toBe(false);
 
-    const record = (await command.storage.capabilities.loadCapabilityState()).launches.s1;
+    const record = Object.values(
+      (await command.storage.capabilities.loadCapabilityState()).launches,
+    ).find((row) => row.sessionKey === "s1");
     expect(record?.privatePlugin?.items.map((item) => item.packageId)).toEqual([
       inspection.packageId,
     ]);
-    const [directory] = await command.service.sessionPlugins("s1");
+    const [directory] = await command.service.sessionPlugins("s1", "env-1", "claude");
     expect(path.dirname(directory!)).toBe(sessionPluginsRoot(path.join(command.dir, "data")));
     expect(
       await fs.readFile(path.join(directory!, "skills", "private-skill", "SKILL.md"), "utf8"),
     ).toContain("Only for this session.");
     // Another session, with no assignment, receives nothing.
-    expect(await command.service.sessionPlugins("s2")).toEqual([]);
+    expect(await command.service.sessionPlugins("s2", "env-1", "claude")).toEqual([]);
 
     // The chip reports it as this session's own copy, not a shared install.
     const view = await command.service.getSessionView({
@@ -549,7 +551,7 @@ describe("session launch on a host", () => {
       provider: "claude",
       sessionKey: "s1",
     });
-    const [before] = await command.service.sessionPlugins("s1");
+    const [before] = await command.service.sessionPlugins("s1", "env-1", "claude");
     const digestBefore = treeDigest(
       await (async () => {
         const text = await fs.readFile(path.join(before!, "skills", "private-skill", "SKILL.md"));
@@ -558,7 +560,7 @@ describe("session launch on a host", () => {
     );
     await command.service.assignSetup({ scope: "session", scopeId: "s1", setupIds: [] });
     expect(toolkit.id).toBeTruthy();
-    const [after] = await command.service.sessionPlugins("s1");
+    const [after] = await command.service.sessionPlugins("s1", "env-1", "claude");
     expect(after).toBe(before);
     const text = await fs.readFile(path.join(after!, "skills", "private-skill", "SKILL.md"));
     expect(treeDigest([{ path: "SKILL.md", executable: false, sha256: sha256Hex(text) }])).toBe(
@@ -584,7 +586,11 @@ describe("session launch on a host", () => {
         environmentIncarnation: "container-1",
       }),
     ).rejects.toThrow("cannot have");
-    expect((await command.storage.capabilities.loadCapabilityState()).launches.s1).toBeUndefined();
+    expect(
+      Object.values((await command.storage.capabilities.loadCapabilityState()).launches).find(
+        (row) => row.sessionKey === "s1",
+      ),
+    ).toBeUndefined();
   });
 
   test("an optional session-only skill whose bytes are gone is dropped, never reported delivered", async () => {
@@ -604,7 +610,9 @@ describe("session launch on a host", () => {
       inspection.components[0]?.id,
     );
     expect(
-      (await command.storage.capabilities.loadCapabilityState()).launches.s1?.privatePlugin,
+      Object.values((await command.storage.capabilities.loadCapabilityState()).launches).find(
+        (row) => row.sessionKey === "s1",
+      )?.privatePlugin,
     ).toBeUndefined();
   });
 
@@ -651,12 +659,12 @@ describe("session launch on a leaf", () => {
     });
     expect(effective?.launchBlockers).toEqual([]);
     expect(effective?.resolvedPackages.map((entry) => entry.id)).toEqual([inspection.packageId]);
-    const [directory] = await gram.cap.sessionPlugins("s1");
+    const [directory] = await gram.cap.sessionPlugins("s1", "env-1", "claude");
     expect(
       await fs.readFile(path.join(directory!, "skills", "leaf-private", "SKILL.md"), "utf8"),
     ).toContain("Leaf only.");
     await fs.rm(directory!, { recursive: true });
-    expect(await gram.cap.sessionPlugins("s1")).toEqual([directory!]);
+    expect(await gram.cap.sessionPlugins("s1", "env-1", "claude")).toEqual([directory!]);
     expect(
       await fs.readFile(path.join(directory!, "skills", "leaf-private", "SKILL.md"), "utf8"),
     ).toContain("Leaf only.");
@@ -681,7 +689,9 @@ describe("session launch on a leaf", () => {
 
     // Recorded on the leaf, and never written to its shared provider homes.
     expect(
-      (await gram.storage.capabilities.loadCapabilityState()).launches.s1?.privatePlugin?.items,
+      Object.values((await gram.storage.capabilities.loadCapabilityState()).launches).find(
+        (row) => row.sessionKey === "s1",
+      )?.privatePlugin?.items,
     ).toHaveLength(1);
     expect(
       await Bun.file(
@@ -699,4 +709,41 @@ describe("session launch on a leaf", () => {
       false,
     );
   });
+});
+
+test("identical logical session keys keep private plugins separate across environments", async () => {
+  const { command } = await fleet();
+  for (const key of ["one", "two"]) {
+    const toolkit = await command.service.setSetup({ setup: { name: `Private ${key}` } });
+    const inspection = await command.service.authorPackage({
+      kind: "skill",
+      name: key,
+      content: `Only ${key}.`,
+    });
+    const { operation } = await command.service.previewChange({
+      change: {
+        kind: "add-to-setup",
+        inspectionId: inspection.inspectionId,
+        setupId: toolkit.id,
+        required: true,
+      },
+    });
+    await command.service.applyChange({
+      operationId: operation.id,
+      approvedDigest: operation.planDigest,
+    });
+    await command.service.assignSetup({ scope: "template", scopeId: key, setupIds: [toolkit.id] });
+    await command.service.preflightSession({
+      environmentId: `env-${key}`,
+      provider: "claude",
+      sessionKey: "shared",
+      templateId: key,
+    });
+  }
+  for (const key of ["one", "two"]) {
+    const [directory] = await command.service.sessionPlugins("shared", `env-${key}`, "claude");
+    expect(await fs.readdir(path.join(directory!, "skills"))).toEqual([key]);
+    expect(await command.service.sessionPlugins("shared", `env-${key}`, "pi")).toEqual([]);
+  }
+  expect(await command.service.sessionPlugins("shared", "env-three", "claude")).toEqual([]);
 });

@@ -14,18 +14,18 @@ import type {
   EffectiveAgentResources,
 } from "@orkestrator/protocol/capability-resources";
 import type { CapabilityVerification } from "@orkestrator/protocol/capability-resources-api";
-import {
-  canonicalCapabilityJson,
-  type CapabilityPermissionCeiling,
-} from "@orkestrator/protocol/capability-resources-resolve";
+import { type CapabilityPermissionCeiling } from "@orkestrator/protocol/capability-resources-resolve";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   nativeAgentDeniedCapabilities,
   nativeAgentUserMcpGrant,
 } from "@orkestrator/protocol/native-agent";
 
-import { verifyLaunchDeliveries, withBlockers } from "./launch-authority.js";
-import { sha256 } from "./planning.js";
+import {
+  permissionCeilingDigest,
+  verifyLaunchDeliveries,
+  withBlockers,
+} from "./launch-authority.js";
 import { revisionComponent, scopedRequiredDelivery } from "./scoped-delivery.js";
 import {
   pruneSessionPlugins,
@@ -46,11 +46,8 @@ import {
 } from "./runtime-proof.js";
 import { CapabilityError } from "./security.js";
 import { asRecord, parseTarget, stringList } from "./service-args.js";
-import {
-  inspectCapabilitySession,
-  localCapabilitySessionTarget,
-  matchingCapabilityLaunch,
-} from "./session-inspection.js";
+import { capabilityLaunchKey, matchingCapabilityLaunch } from "./launch-records.js";
+import { inspectCapabilitySession, localCapabilitySessionTarget } from "./session-inspection.js";
 import type { CapabilityServiceContext } from "./service-context.js";
 import type {
   CapabilityLaunchDelivery,
@@ -551,9 +548,18 @@ export class CapabilityPreflight {
    * the launch record, re-staged when it went missing. Empty for a session
    * launched without one.
    */
-  async sessionPlugins(sessionKey: string): Promise<string[]> {
+  async sessionPlugins(
+    sessionKey: string,
+    environmentId: string,
+    provider: AgentPlatform,
+  ): Promise<string[]> {
     const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
-    const record = state.launches[sessionKey]?.privatePlugin;
+    const record = matchingCapabilityLaunch(state, {
+      nodeId: await this.ctx.deps.selfId(),
+      environmentId,
+      provider,
+      sessionId: sessionKey,
+    })?.privatePlugin;
     if (!record) return [];
     const directory = await sessionPluginForTurn({
       root: sessionPluginsRoot(this.ctx.deps.dataDir),
@@ -608,13 +614,7 @@ export class CapabilityPreflight {
       const ceiling: CapabilityPermissionCeiling = {
         denied,
         userMcpServers: grant ?? null,
-        digest: sha256(
-          canonicalCapabilityJson({
-            denied: [...denied].sort(),
-            grant: grant ?? null,
-            ...(readOnly ? { readOnly } : {}),
-          }),
-        ),
+        digest: permissionCeilingDigest(denied, grant ?? null, readOnly),
       };
       effective = await this.preflightLaunch({
         target: {
@@ -637,10 +637,7 @@ export class CapabilityPreflight {
       });
     } catch (error) {
       log.warn("service.preflight-failed", { error: formatLogError(error, { message: false }) });
-      throw new CapabilityError(
-        "source-unavailable",
-        "The session’s capabilities could not be verified. Try again after reconnecting the machine.",
-      );
+      throw error;
     }
     if (effective.launchBlockers.length > 0) {
       const first = effective.launchBlockers[0]!;
@@ -653,7 +650,7 @@ export class CapabilityPreflight {
     effective = staged.effective;
     try {
       this.ctx.deps.storage.capabilities.mutateCapabilityState((state) => {
-        state.launches[input.sessionKey] = {
+        state.launches[capabilityLaunchKey(effective.target, input.sessionKey)] = {
           sessionKey: input.sessionKey,
           target: effective.target,
           manifestDigest: effective.manifestDigest,

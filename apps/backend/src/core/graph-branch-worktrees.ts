@@ -31,6 +31,13 @@
  * content; errors are one bounded line.
  */
 import path from "node:path";
+import { promises as fs } from "node:fs";
+import {
+  clearGraphRunExcludes,
+  defaultGitRunner,
+  gitCommonDir,
+  syncGraphWorktreeExclude,
+} from "./capabilities/project-git.js";
 import {
   GRAPH_BRANCH_WORKTREE_DIRECTORY,
   GRAPH_COMMIT_PATTERN,
@@ -235,6 +242,16 @@ export class GraphBranchWorktrees {
     return listed.filter((entry) => entry.path.startsWith(prefix));
   }
 
+  private async localGitCommonDir(environment: Environment): Promise<string | null> {
+    const root = environment.environmentType === "local" ? environment.worktreePath : null;
+    if (!root) return null;
+    const exists = await fs.lstat(path.join(root, ".git")).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "EACCES") return null;
+      throw error;
+    });
+    return exists ? gitCommonDir(defaultGitRunner, root) : null;
+  }
+
   /** Removes one worktree directory: Git's registration, or a confined leftover. */
   private async removeOne(
     environment: Environment,
@@ -259,6 +276,8 @@ export class GraphBranchWorktrees {
         throw errorLine("Could not remove a leftover branch directory", error);
       });
     }
+    const common = await this.localGitCommonDir(environment);
+    if (common) await syncGraphWorktreeExclude(common, relative, []);
     await this.git(runner, ["worktree", "prune"]).catch(() => undefined);
   }
 
@@ -343,6 +362,14 @@ export class GraphBranchWorktrees {
         .filter(Boolean);
     } catch {
       failed++;
+    }
+    if (failed === 0 && environment.environmentType === "local" && environment.worktreePath) {
+      try {
+        const common = await this.localGitCommonDir(environment);
+        if (common) await clearGraphRunExcludes(common, runId);
+      } catch {
+        failed++;
+      }
     }
     if (branches.length > MAX_RUN_BRANCHES) return failed + 1;
     failed += branches.length > 0 ? await this.deleteBranches(environment, runId, branches) : 0;

@@ -28,6 +28,7 @@ import { testCapabilityHomes } from "./native-ownership.js";
 import type {
   ContainerDeliveryEvidence,
   ScopedEnvironment,
+  ScopedAccount,
   ScopedTargetSources,
 } from "./scoped-delivery.js";
 import { CapabilityService } from "./service.js";
@@ -52,6 +53,7 @@ export interface CapabilityNode {
   failNextStage?: "artifact" | "state";
   /** This machine's own environments (its environment store). */
   environments: ScopedEnvironment[];
+  accounts: ScopedAccount[];
   /** Its containers' staged records (label and inputs revision), by environment. */
   containers: Map<string, ContainerDeliveryEvidence>;
   /** Answer `false` to drop this machine's container-record reads for its command node. */
@@ -111,6 +113,7 @@ export async function addCapabilityNode(
     applyCalls: [],
     reachable: true,
     environments: [],
+    accounts: [],
     containers: new Map(),
     answersContainerReads: true,
     remoteEnvironments: new Map(),
@@ -120,6 +123,7 @@ export async function addCapabilityNode(
   const scoped: ScopedTargetSources = {
     writeHeld: async ({ environmentId }) => entry.busyWorktrees?.has(environmentId ?? "") ?? false,
     environments: async () => entry.environments,
+    accounts: async () => entry.accounts,
     containerDelivery: async (environmentId) => entry.containers.get(environmentId) ?? null,
   };
   const machines = async () =>

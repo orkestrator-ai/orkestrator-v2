@@ -10,6 +10,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { graphBranchWorktreePath } from "@orkestrator/protocol/graphs/run";
+import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import { GraphBranchWorktrees } from "../graph-branch-worktrees.js";
+import type { Environment } from "../models.js";
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
 import type { RouteId } from "@orkestrator/protocol/federation";
 
@@ -21,6 +25,7 @@ import {
 import { runCommand } from "../shell.js";
 import {
   addCapabilityNode,
+  addSkill,
   disposeCapabilityNodes,
   type CapabilityNode,
 } from "./capability-network-test-support.js";
@@ -401,9 +406,9 @@ describe("a launch in a worktree on a leaf", () => {
     };
     const effective = await gram.cap.preflightSession(launch);
     expect(effective?.launchBlockers).toEqual([]);
-    const recorded = (await desktop.storage.capabilities.loadCapabilityState()).launches[
-      `${gram.id}|s1`
-    ];
+    const recorded = Object.values(
+      (await desktop.storage.capabilities.loadCapabilityState()).launches,
+    ).find((row) => row.sessionKey === "s1" && row.target.nodeId === gram.id);
     expect(recorded?.deliveries).toEqual([
       expect.objectContaining({
         packageId: inspection.packageId,
@@ -435,4 +440,53 @@ describe("a launch in a worktree on a leaf", () => {
       "cannot have",
     );
   });
+});
+
+test("a leaf stages required project and graph-only skills into the isolated branch and retires its excludes", async () => {
+  const { desktop, gram, toolkit, worktree, main } = await fleet();
+  await addSkill(desktop, "project-only", "Project skill.", {
+    setupId: toolkit.id,
+    required: true,
+  });
+  await desktop.cap.assignSetup({ scope: "project", scopeId: "proj-g", setupIds: [toolkit.id] });
+  const graph = await desktop.cap.setSetup({ setup: { name: "Graph tools" } });
+  await addSkill(desktop, "graph-only", "Graph skill.", { setupId: graph.id, required: true });
+  await desktop.cap.assignSetup({
+    scope: "graph-node",
+    scopeId: "template/node",
+    setupIds: [graph.id],
+  });
+  await reconcile(desktop);
+  const relativeWorktree = graphBranchWorktreePath("leaf-run", {
+    nodeId: "node",
+    iteration: 1,
+    branchKey: "branch",
+  });
+  const branch = path.join(worktree, relativeWorktree);
+  await git(main, "worktree", "add", "--detach", branch, "HEAD");
+  const launch = {
+    environmentId: "env-g",
+    projectId: "proj-g",
+    provider: "pi" as const,
+    templateId: "template",
+    graphNode: "template/node",
+    relativeWorktree,
+    sessionKey: "branch-session",
+  };
+  await expect(gram.cap.preflightSession(launch)).resolves.toBeTruthy();
+  const exclude = path.join(main, ".git/info/exclude");
+  expect(await fs.readFile(exclude, "utf8")).toContain("/.pi/skills/graph-only/");
+  expect(await git(branch, "status", "--porcelain", "--untracked-files=all")).toBe("");
+  const receipts = Object.values(
+    (await gram.storage.capabilities.loadCapabilityState()).launches,
+  ).find((entry) => entry.sessionKey === launch.sessionKey)?.deliveries;
+  expect(receipts).toHaveLength(2);
+  const environment = { ...gram.environments[0] } as unknown as Environment;
+  const worktrees = new GraphBranchWorktrees({
+    storage: { getEnvironment: async () => environment },
+    fence: new EnvironmentMutationFence(),
+  });
+  expect(await worktrees.removeWorktrees(environment, [relativeWorktree])).toBe(0);
+  expect(await exists(branch)).toBe(false);
+  expect(await fs.readFile(exclude, "utf8")).not.toContain("graph-only");
 });

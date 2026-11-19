@@ -31,6 +31,7 @@ import {
 import {
   CAPABILITY_LOCATION_INDEX,
   CAPABILITY_MARKER_FILE,
+  type PackageFile,
   CapabilityError,
   readPackageTree,
   recoverDirectoryReplacement,
@@ -139,6 +140,12 @@ async function readJson(file: string): Promise<unknown> {
   }
 }
 
+export async function readMarker(
+  file: string,
+): Promise<Omit<OwnershipMarker, "formatVersion"> | null> {
+  return parseMarker(await readJson(file));
+}
+
 export async function readLocationIndex(
   directory: string,
   options: { strict?: boolean } = {},
@@ -210,16 +217,28 @@ export interface LocatedItem {
   description?: string;
 }
 
+/** Single-file layouts are written as regular non-executable Markdown. */
+export function installedComponentFiles(
+  files: PackageFile[],
+  layout: CapabilityLocation["layout"],
+  entry: string,
+): PackageFile[] {
+  return layout === "file" && files.length > 0
+    ? [{ ...files[0]!, path: entry, executable: false }]
+    : files;
+}
+
 /** Digest of one installed item, computed the same way as a package artifact's subtree. */
 export async function installedDigest(
   location: CapabilityLocation,
   directory: string,
   entry: string,
+  options: { recover?: boolean; recordedDigest?: string } = {},
 ): Promise<string | null> {
   try {
     if (location.layout === "directory") {
       const destination = path.join(directory, entry);
-      recoverDirectoryReplacement(destination);
+      if (options.recover !== false) recoverDirectoryReplacement(destination);
       const files = await readPackageTree(destination);
       return treeDigest(files);
     }
@@ -227,7 +246,14 @@ export async function installedDigest(
     const stat = await fs.lstat(target);
     if (!stat.isFile()) return null;
     const content = await fs.readFile(target);
-    return treeDigest([{ path: entry, executable: false, sha256: sha256Hex(content) }]);
+    const file = { path: entry, executable: false, sha256: sha256Hex(content) };
+    const digest = treeDigest([file]);
+    // Earlier writers hashed the source's executable bit even though they wrote 0644.
+    if (options.recordedDigest && options.recordedDigest !== digest) {
+      const legacy = treeDigest([{ ...file, executable: true }]);
+      if (legacy === options.recordedDigest) return legacy;
+    }
+    return digest;
   } catch {
     return null;
   }
@@ -269,7 +295,9 @@ export async function listLocation(
         name: entry.name.slice(0, -3),
         entry: entry.name,
         managed,
-        digest: await installedDigest(location, directory, entry.name),
+        digest: await installedDigest(location, directory, entry.name, {
+          recordedDigest: managed?.digest,
+        }),
       });
     }
   }

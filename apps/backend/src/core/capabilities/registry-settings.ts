@@ -101,12 +101,17 @@ export function removeRegistry(state: CapabilityState, registryId: string): bool
 /** Records the outcome of fetching a registry's index (shown in the Registries list). */
 export function recordRegistryFetch(
   state: CapabilityState,
-  registryId: string,
+  expected: Pick<CapabilityRegistry, "id" | "indexUrl" | "signingKey">,
   outcome: { packageCount: number } | { error: string },
   now: string,
 ): boolean {
-  const registry = capabilityRegistries(state).find((entry) => entry.id === registryId);
-  if (!registry) return false;
+  const registry = capabilityRegistries(state).find((entry) => entry.id === expected.id);
+  if (
+    !registry ||
+    registry.indexUrl !== expected.indexUrl ||
+    registry.signingKey !== expected.signingKey
+  )
+    return false;
   registry.lastFetchedAt = now;
   if ("error" in outcome) {
     registry.lastError = outcome.error.slice(0, 300);
@@ -200,7 +205,7 @@ export class CapabilityRegistryCommands {
     }
     this.deps.storage.mutateCapabilityState((current) => ({
       result: undefined,
-      changed: recordRegistryFetch(current, registryId, outcome, this.deps.now()),
+      changed: recordRegistryFetch(current, registry, outcome, this.deps.now()),
     }));
   }
 

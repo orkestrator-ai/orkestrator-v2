@@ -561,7 +561,11 @@ export interface NativeAgentServiceOptions {
    * delivered to it alone (Agent Capabilities). Throws when the session's
    * recorded plugin can no longer be produced.
    */
-  capabilitySessionPlugins?: (logicalSessionKey: string) => Promise<string[]>;
+  capabilitySessionPlugins?: (
+    logicalSessionKey: string,
+    environmentId: string,
+    provider: AgentPlatform,
+  ) => Promise<string[]>;
   resolveAgentToolConnection?: (
     environmentId: string,
     projectId: string,
@@ -994,19 +998,7 @@ export {
   LEGACY_TIMESTAMP_ENVIRONMENT_NAME,
 } from "./environment-name.js";
 
-export function nativeAgentSessionStorageKey(
-  environmentId: string,
-  agent: BuildPipelineAgent,
-  logicalSessionKey: string,
-): string {
-  return createHash("sha256")
-    .update(environmentId)
-    .update("\0")
-    .update(agent)
-    .update("\0")
-    .update(logicalSessionKey)
-    .digest("hex");
-}
+export { nativeAgentSessionStorageKey } from "./native-agent-session-key.js";
 
 export type PromptDispatchPreparation =
   | { dispatch: false; notice?: IncompleteTurnNotice }

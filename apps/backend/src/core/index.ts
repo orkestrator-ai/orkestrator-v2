@@ -1407,8 +1407,10 @@ export class OrkestratorBackend {
           if (!projectGit) throw new Error("Project Git service is unavailable");
           return projectGit.beginTurnAfterMergeSync(projectId);
         },
-        capabilitySessionPlugins: async (logicalSessionKey) =>
-          context.capabilities ? context.capabilities.sessionPlugins(logicalSessionKey) : [],
+        capabilitySessionPlugins: async (logicalSessionKey, environmentId, provider) =>
+          context.capabilities
+            ? context.capabilities.sessionPlugins(logicalSessionKey, environmentId, provider)
+            : [],
         capabilityPreflight: async (input) => {
           if (!context.capabilities || !isAgentPlatform(input.agent)) return;
           await context.capabilities.preflightSession({
@@ -1814,8 +1816,10 @@ export class OrkestratorBackend {
     this.graphAgents = installGraphAgentExecutor({
       graphRuns: this.graphRuns,
       capabilityPreflight: async (input) => context.capabilities?.preflightSession(input) ?? null,
-      capabilitySessionPlugins: async (sessionKey) =>
-        context.capabilities ? context.capabilities.sessionPlugins(sessionKey) : [],
+      capabilitySessionPlugins: async (sessionKey, environmentId, provider) =>
+        context.capabilities
+          ? context.capabilities.sessionPlugins(sessionKey, environmentId, provider)
+          : [],
       artifacts: graphArtifacts,
       storage,
       invoke: invokeCommand,

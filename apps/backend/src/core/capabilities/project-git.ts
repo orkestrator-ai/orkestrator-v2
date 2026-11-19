@@ -16,8 +16,11 @@
  * Git runs read-only (`rev-parse`, `ls-files`); only `info/exclude` is
  * written, atomically, and only when its content changes.
  */
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+
+import { parseGraphBranchWorktreePath } from "@orkestrator/protocol/graphs/run";
 
 import { runCommand } from "../shell.js";
 import { CapabilityError, writeFileAtomically } from "./security.js";
@@ -106,16 +109,36 @@ function parseExclude(text: string): { outside: string[]; blocks: Map<string, st
   return { outside, blocks };
 }
 
+const excludeWrites = new Map<string, Promise<unknown>>();
+
+export function writeExcludeBlock(
+  commonDir: string,
+  owner: string,
+  patterns: readonly string[],
+  keep?: (owner: string) => boolean,
+  append = false,
+): Promise<boolean> {
+  const previous = excludeWrites.get(commonDir) ?? Promise.resolve();
+  const next = previous.then(() => updateExcludeBlock(commonDir, owner, patterns, keep, append));
+  const settled = next.catch(() => undefined);
+  excludeWrites.set(commonDir, settled);
+  void settled.then(() => {
+    if (excludeWrites.get(commonDir) === settled) excludeWrites.delete(commonDir);
+  });
+  return next;
+}
+
 /**
  * Replaces the block `owner` holds in `<commonDir>/info/exclude` with
  * `patterns` (none removes it), and drops the blocks of owners `keep` no
  * longer names. Lines outside managed blocks are kept as they are.
  */
-export async function writeExcludeBlock(
+async function updateExcludeBlock(
   commonDir: string,
   owner: string,
   patterns: readonly string[],
-  keep?: (owner: string) => boolean,
+  keep: ((owner: string) => boolean) | undefined,
+  append: boolean,
 ): Promise<boolean> {
   const name = blockName(owner);
   const infoDir = path.join(commonDir, "info");
@@ -135,8 +158,12 @@ export async function writeExcludeBlock(
   for (const existing of blocks.keys()) {
     if (existing !== name && keep && !keep(existing)) blocks.delete(existing);
   }
-  if (patterns.length > 0) blocks.set(name, [...patterns]);
-  else blocks.delete(name);
+  if (patterns.length > 0) {
+    blocks.set(
+      name,
+      [...new Set([...(append ? (blocks.get(name) ?? []) : []), ...patterns])].sort(),
+    );
+  } else blocks.delete(name);
   const lines = [...outside];
   for (const [blockOwner, body] of [...blocks.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     lines.push(`${BLOCK_START}${blockOwner} >>>`, ...body, `${BLOCK_END}${blockOwner} <<<`);
@@ -164,4 +191,31 @@ export async function linkedAncestor(root: string, relative: string): Promise<st
     }
   }
   return null;
+}
+
+function graphExcludePrefix(runId: string): string {
+  return `graph-${createHash("sha256").update(runId).digest("hex").slice(0, 32)}-`;
+}
+
+/** Linked worktrees share info/exclude. Give each activation its own removable block. */
+export async function syncGraphWorktreeExclude(
+  commonDir: string,
+  relative: string,
+  entries: ReadonlyArray<{ relative: string; directory: boolean }>,
+): Promise<void> {
+  const branch = parseGraphBranchWorktreePath(relative);
+  if (!branch) return;
+  const suffix = createHash("sha256").update(relative).digest("hex").slice(0, 32);
+  await writeExcludeBlock(
+    commonDir,
+    graphExcludePrefix(branch.runId) + suffix,
+    excludePatterns(entries),
+    undefined,
+    true,
+  );
+}
+
+export async function clearGraphRunExcludes(commonDir: string, runId: string): Promise<void> {
+  const prefix = graphExcludePrefix(runId);
+  await writeExcludeBlock(commonDir, prefix, [], (owner) => !owner.startsWith(prefix));
 }

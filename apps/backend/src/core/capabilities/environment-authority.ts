@@ -434,13 +434,13 @@ export class CapabilityEnvironmentAuthority {
     const requestId = text(args.requestId, 128);
     if (!controllerId || !requestId)
       throw new CapabilityError("invalid-request", "controllerId and requestId are required.");
-    this.deps.admitEpoch(controllerId, Number(args.epoch));
     const pending = this.pending.get(requestId);
     if (!pending) return { accepted: false };
     const value = pending.parse(args.answer);
     if (value === null)
       throw new CapabilityError("invalid-request", "The command node's answer is malformed.");
     const epoch = Number(args.epoch);
+    this.deps.admitEpoch(controllerId, epoch);
     pending.received?.(value, controllerId, epoch);
     pending.settle({ value, controllerId, epoch });
     return { accepted: true };
@@ -728,7 +728,6 @@ export class CapabilityEnvironmentAuthority {
   ): Promise<{ found: boolean; container?: unknown }> {
     const controllerId = text(args.controllerId);
     if (!controllerId) throw new CapabilityError("invalid-request", "controllerId is required.");
-    this.deps.admitEpoch(controllerId, Number(args.epoch));
     const environmentId = text(args.environmentId);
     if (!environmentId) throw new CapabilityError("invalid-request", "environmentId is required.");
     const environment = await this.ownEnvironment(environmentId);
@@ -736,6 +735,7 @@ export class CapabilityEnvironmentAuthority {
     const evidence = environment.containerId
       ? await this.deps.sources.containerDelivery?.(environmentId).catch(() => null)
       : null;
+    this.deps.admitEpoch(controllerId, Number(args.epoch));
     return { found: true, ...(evidence ? { container: wireContainer(evidence) } : {}) };
   }
 

@@ -108,6 +108,7 @@ export function projectMcpInstaller(base: McpInstaller, context: ProjectMcpConte
     ...(base.configured
       ? { configured: (provider, definition) => base.configured!(provider, definition) }
       : {}),
+    ...(base.effective ? { effective: (ownership) => base.effective!(ownership) } : {}),
     ...(base.observe ? { observe: (ownership) => base.observe!(ownership) } : {}),
     async install(input) {
       const location = projectMcpLocationFor(input.provider);
@@ -161,14 +162,27 @@ export async function observeProjectMcpEntries(
   storage: { capabilities: CapabilitiesStorage },
   installer: McpInstaller | undefined,
   keys: readonly string[],
+  forLaunch = false,
 ): Promise<Map<string, string | null>> {
   const observed = new Map<string, string | null>();
   if (keys.length === 0) return observed;
   const executor = await storage.capabilities.loadCapabilityExecutorState();
   for (const key of keys) {
     const applied = executor.applied[key];
+    if (applied?.externalMcp) {
+      const { provider, definition } = applied.externalMcp;
+      const configured =
+        !forLaunch || (await installer?.configured?.(provider, definition).catch(() => false));
+      observed.set(key, configured ? applied.digest : null);
+      continue;
+    }
     if (!applied?.mcp) {
       observed.set(key, null);
+      continue;
+    }
+    if (forLaunch && installer?.effective) {
+      const enabled = await installer.effective(applied.mcp).catch(() => false);
+      observed.set(key, enabled ? applied.digest : null);
       continue;
     }
     const seen = installer?.observe

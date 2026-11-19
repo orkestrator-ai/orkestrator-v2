@@ -36,6 +36,7 @@ import {
 import { stageCapabilityNodeHandoverCommand } from "@orkestrator/protocol/contract/domains/capabilities";
 import { isIncompatibilityError } from "@orkestrator/protocol/contract/errors";
 
+import { assertAdmissibleExecutorEpoch } from "./executor.js";
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
 import { CapabilityArtifactStore } from "./artifact-store.js";
 import { newCorrelationId, recordActivity } from "./operations.js";
@@ -359,17 +360,28 @@ export class CapabilityHandoverReceiver {
     if (await this.installed(handoverId)) return { complete: true, missing: [], installed: true };
     const controllerId = typeof args.controllerId === "string" ? args.controllerId : "";
     if (!controllerId) throw new CapabilityError("invalid-request", "controllerId is required.");
-    this.deps.admitEpoch(controllerId, Number(args.epoch));
+    const epoch = Number(args.epoch);
+    const checkEpoch = async () =>
+      assertAdmissibleExecutorEpoch(
+        await this.deps.storage.capabilities.loadCapabilityExecutorState(),
+        controllerId,
+        epoch,
+      );
+    await checkEpoch();
     const digest = typeof args.digest === "string" ? args.digest : "";
     const data = typeof args.data === "string" ? args.data : "";
     const index = Number(args.index);
     const count = Number(args.count);
-    if (args.part === "artifact") {
-      return this.deps.artifacts.stageChunk(digest, index, count, data);
-    }
-    if (args.part !== "state")
+    if (typeof args.data !== "string")
+      throw new CapabilityError("invalid-request", "Chunk data is required.");
+    if (args.part !== "artifact" && args.part !== "state")
       throw new CapabilityError("invalid-request", "Unknown handover part.");
-    return this.stageState(handoverId, controllerId, digest, index, count, data);
+    const result =
+      args.part === "artifact"
+        ? await this.deps.artifacts.stageChunk(digest, index, count, data)
+        : await this.stageState(handoverId, controllerId, digest, index, count, data, checkEpoch);
+    this.deps.admitEpoch(controllerId, epoch);
+    return result;
   }
 
   private async stageState(
@@ -379,6 +391,7 @@ export class CapabilityHandoverReceiver {
     index: number,
     count: number,
     data: string,
+    checkEpoch: () => Promise<void>,
   ): Promise<{ complete: boolean; missing: number[] }> {
     const maxChunks = Math.ceil(MAX_HANDOVER_STATE_BYTES / CAPABILITY_LIMITS.artifactChunkBytes);
     if (!STATE_DIGEST.test(digest))
@@ -426,7 +439,12 @@ export class CapabilityHandoverReceiver {
     }
     const temporary = `${staged}.${randomBytes(6).toString("hex")}.tmp`;
     await fs.writeFile(temporary, text, "utf8");
-    await fs.rename(temporary, staged);
+    try {
+      await checkEpoch();
+      await fs.rename(temporary, staged);
+    } finally {
+      await fs.rm(temporary, { force: true });
+    }
     await fs.writeFile(`${staged}.sha256`, digest, "utf8");
     return { complete: true, missing: [] };
   }

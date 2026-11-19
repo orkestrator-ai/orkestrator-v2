@@ -5,6 +5,7 @@
  * is `resolveEffectiveAgentResources` in the protocol package.
  */
 import { capabilityPolicyDenial } from "@orkestrator/protocol/capability-admin-policy";
+import { isLaunchInventoryEvidence } from "./inventory.js";
 import {
   MY_SETUP_ID,
   type CapabilityComponent,
@@ -159,7 +160,7 @@ export function resolveCapabilityTarget(
               return (
                 input.launchInventory?.items.some(
                   (item) =>
-                    item.ownership === "managed" &&
+                    isLaunchInventoryEvidence(item) &&
                     item.componentId === receipt.componentId &&
                     item.locationId === receipt.locationId &&
                     !item.drifted &&

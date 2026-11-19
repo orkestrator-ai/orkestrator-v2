@@ -19,6 +19,7 @@ import {
   capabilityInstallApproval,
 } from "@orkestrator/protocol/capability-resources-resolve";
 
+import { assertCapabilitySourceAllowed } from "./admin-policy.js";
 import {
   addImportedPackages,
   exportSetups,
@@ -32,6 +33,7 @@ import {
 } from "./import-export.js";
 import type { CapabilityLibraryReads } from "./library-reads.js";
 import {
+  isTrustedManifestSigner,
   manifestSignatureIssues,
   verifyCapabilityLockSignature,
   type ManifestSigningKeys,
@@ -197,6 +199,10 @@ export class CapabilityImportCommands {
         revision: entry.revision,
       });
     } else if (!cachedOnly && entry.source.kind === "git") {
+      assertCapabilitySourceAllowed(
+        await this.ctx.deps.storage.capabilities.loadCapabilityState(),
+        entry.id,
+      );
       inspected = await inspectGitSource(
         { ...entry.source, channel: entry.revision },
         {
@@ -260,6 +266,18 @@ export class CapabilityImportCommands {
    * half-created.
    */
   async completeImport(previewId: string, actor?: string): Promise<void> {
+    const commit = await this.prepareImport(previewId, actor);
+    this.ctx.deps.storage.capabilities.mutateCapabilityState((current) => {
+      this.ctx.assertAuthority();
+      commit(current);
+      return { result: undefined, changed: true };
+    });
+  }
+
+  async prepareImport(
+    previewId: string,
+    actor?: string,
+  ): Promise<(state: CapabilityState) => void> {
     const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
     const record = state.imports[previewId];
     if (!record?.verified)
@@ -269,7 +287,11 @@ export class CapabilityImportCommands {
       );
     const intent = record.intent as ParsedIntent;
     const lock = record.lock as ParsedLock;
-    if (state.settings.requireSignedManifests === true && record.signatureStatus !== "trusted") {
+    const trusted = () =>
+      record.signatureStatus === "trusted" &&
+      !!lock.signature &&
+      isTrustedManifestSigner(lock.signature, this.ctx.deps.signing);
+    if (state.settings.requireSignedManifests === true && !trusted()) {
       throw new CapabilityError(
         "approval-required",
         "This installation now requires manifests signed by a trusted key; preview the import again.",
@@ -281,7 +303,7 @@ export class CapabilityImportCommands {
         fetched.push(await this.inspectLockedArtifact(entry, true));
       }
     }
-    this.ctx.deps.storage.capabilities.mutateCapabilityState((current) => {
+    return (current) => {
       if (
         current.imports[previewId]?.digest !== record.digest ||
         importBasis(current, lock, record.projectId) !== record.digest ||
@@ -292,15 +314,13 @@ export class CapabilityImportCommands {
           "The library changed after this preview; review the import again.",
         );
       }
-      if (
-        current.settings.requireSignedManifests === true &&
-        current.imports[previewId]?.signatureStatus !== "trusted"
-      ) {
+      if (current.settings.requireSignedManifests === true && !trusted()) {
         throw new CapabilityError(
           "approval-required",
           "This installation now requires manifests signed by a trusted key; preview the import again.",
         );
       }
+      for (const entry of lock.packages) assertCapabilitySourceAllowed(current, entry.id);
       const now = this.ctx.now();
       // A package locked at several revisions keeps each one, so every setup's pin resolves.
       addImportedPackages(current, fetched, record.projectId ? "project" : "managed", now);
@@ -367,8 +387,7 @@ export class CapabilityImportCommands {
         setupIds: [],
         correlationId: newCorrelationId(),
       });
-      return { result: undefined, changed: true };
-    });
+    };
   }
 }
 

@@ -7,24 +7,12 @@ import {
 import type { CapabilityVerification } from "@orkestrator/protocol/capability-resources-api";
 import { getCapabilityNodeEnvironmentObservationCommand } from "@orkestrator/protocol/contract/domains/capabilities";
 
+import { matchingCapabilityLaunch } from "./launch-records.js";
 import { parseLeafScopedReport, scopedEvidenceFromReport } from "./launch-authority.js";
 import type { AccountEntryState, ScopedEvidence } from "./scoped-delivery.js";
 import { parseTarget } from "./service-args.js";
 import type { CapabilityServiceContext } from "./service-context.js";
 import type { CapabilityLaunchRecord, CapabilityState } from "./types.js";
-
-export function matchingCapabilityLaunch(state: CapabilityState, target: CapabilityTarget) {
-  if (!target.sessionId) return undefined;
-  const launch =
-    state.launches[`${target.nodeId}|${target.sessionId}`] ?? state.launches[target.sessionId];
-  if (
-    launch?.target.nodeId !== target.nodeId ||
-    launch.target.provider !== target.provider ||
-    launch.target.environmentId !== target.environmentId
-  )
-    return undefined;
-  return launch;
-}
 
 export async function localCapabilitySessionTarget(
   ctx: CapabilityServiceContext,

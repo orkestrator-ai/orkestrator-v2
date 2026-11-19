@@ -79,6 +79,19 @@ export function signCapabilityLockfile(
   };
 }
 
+/** Checks current trust for a signer whose signature has already verified. */
+export function isTrustedManifestSigner(
+  signer: { keyId: string; publicKey: string },
+  keys: ManifestSigningKeys | undefined,
+): boolean {
+  return (
+    keys?.installationKey(false)?.publicKey === signer.publicKey ||
+    keys
+      ?.trusted()
+      .some((key) => key.keyId === signer.keyId && key.publicKey === signer.publicKey) === true
+  );
+}
+
 /**
  * Checks a parsed lockfile's signature. `signedPayload` is what the
  * validator computed from the lockfile as read; `intent` is the validated

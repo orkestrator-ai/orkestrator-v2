@@ -19,6 +19,7 @@ import {
 } from "@orkestrator/protocol/capability-resources-resolve";
 import { baselineCapabilitySupport } from "@orkestrator/protocol/capability-resources-support";
 
+import { assertCapabilitySourceAllowed } from "./admin-policy.js";
 import { authoredFiles, parseAuthoredInput } from "./authoring.js";
 import { inspectRegistrySource } from "./registry.js";
 import { CapabilityError, treeDigest, type PackageFile } from "./security.js";
@@ -165,6 +166,10 @@ export class CapabilityInspectionCommands {
       throw new CapabilityError("invalid-request", "Not a valid package source.");
     switch (source.kind) {
       case "git":
+        assertCapabilitySourceAllowed(
+          await this.ctx.deps.storage.capabilities.loadCapabilityState(),
+          capabilityPackageId(source),
+        );
         return this.store(
           await inspectGitSource(source, {
             workRoot: this.ctx.deps.dataDir,

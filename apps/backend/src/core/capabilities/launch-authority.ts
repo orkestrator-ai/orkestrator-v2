@@ -16,12 +16,13 @@
  *   command the command node invokes on the leaf
  *   (`answer_capability_node_launch`), admitted by the executor's
  *   single-writer epoch. Without an answer the leaf uses its last answer for
- *   the same target only while it is recent and this machine's applied
+ *   the same logical session and target only while it is recent and this machine's applied
  *   installations and observed bytes are unchanged; otherwise required
  *   components block the launch and optional ones are a warning.
  * - {@link answerLeafLaunch}: the command node's side: resolves the leaf's
  *   target against the authoritative state, records the launch and answers.
  */
+import { parseGraphBranchWorktreePath } from "@orkestrator/protocol/graphs/run";
 import { randomBytes } from "node:crypto";
 
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -42,21 +43,28 @@ import { answerCapabilityNodeLaunchCommand } from "@orkestrator/protocol/contrac
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilityArtifactStore } from "./artifact-store.js";
+import { parseNodePlanTargets, type NodePlanTarget } from "./executor.js";
 import { installName } from "./native-ownership.js";
 import type { CapabilityLink } from "./node-transport.js";
 import { sha256 } from "./planning.js";
+import { isLaunchInventoryEvidence } from "./inventory.js";
 import {
   parseContainerCapabilityRecord,
   type ContainerCapabilityRecord,
 } from "./container-staging.js";
 import {
   containerUnstagedReason,
+  isolatedWorktreeDelivery,
+  isolatedWorktreeTargets,
   revisionComponent,
   scopedRequiredDelivery,
   type ScopedEvidence,
+  type AccountEntryState,
 } from "./scoped-delivery.js";
 import { projectCapabilityLocation, projectMcpLocation } from "./scoped-locations.js";
 import { CapabilityError } from "./security.js";
+import { capabilityLaunchKey } from "./launch-records.js";
 import {
   parseSessionPrivateItems,
   withoutPrivateItems,
@@ -217,7 +225,7 @@ export function verifyLaunchDeliveries(input: {
       for (const receipt of receipts) {
         const observed = inventory?.items.find(
           (item) =>
-            item.ownership === "managed" &&
+            isLaunchInventoryEvidence(item) &&
             item.componentId === componentId &&
             item.locationId === receipt.locationId,
         );
@@ -285,7 +293,7 @@ export function compactInventory(
       ...(entry.version ? { version: entry.version } : {}),
     })),
     items: inventory.items
-      .filter((item) => item.ownership === "managed")
+      .filter(isLaunchInventoryEvidence)
       .slice(0, MAX_REPORTED_ITEMS)
       .map((item) => ({
         // Ids and digests only: no names, labels or paths leave the machine.
@@ -300,6 +308,7 @@ export function compactInventory(
         ...(item.componentId ? { componentId: item.componentId } : {}),
         ...(item.digest ? { digest: item.digest } : {}),
         ...(item.drifted ? { drifted: true } : {}),
+        ...(typeof item.enabled === "boolean" ? { enabled: item.enabled } : {}),
         visibleTo: item.visibleTo,
       })),
   };
@@ -316,7 +325,7 @@ export function appliedDigest(executor: CapabilityExecutorState): string {
   );
 }
 
-/** One cache entry per target and logical assignment. */
+/** Cache entries include the logical session key because that key selects session assignments. */
 export function launchCacheKey(request: LaunchRequest): string {
   const { sessionId: _sessionId, ...target } = request.target;
   return sha256(
@@ -351,7 +360,12 @@ function manifestDigestFor(effective: EffectiveAgentResources): string {
  * its container with the container's label.
  */
 export interface LeafScopedReport {
-  project?: Array<{ locationId: string; componentId: string; digest: string }>;
+  project?: ReportedCopy[];
+  account?: {
+    accountHomeId: string;
+    entries: Record<string, AccountEntryState>;
+    copies: ReportedCopy[];
+  };
   container?: {
     containerId: string;
     labelDigest: string | null;
@@ -359,21 +373,44 @@ export interface LeafScopedReport {
   };
 }
 
+type ReportedCopy = { locationId: string; packageId?: string; componentId: string; digest: string };
 const MAX_REPORTED_SCOPED = 2_000;
+
+function parseScopedCopies(value: unknown): ReportedCopy[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.slice(0, MAX_REPORTED_SCOPED).flatMap((raw: unknown) => {
+    const entry = (raw ?? {}) as Record<string, unknown>;
+    const locationId = text(entry.locationId);
+    const packageId = text(entry.packageId);
+    const componentId = text(entry.componentId);
+    const digest = text(entry.digest, 200);
+    return locationId && componentId && digest
+      ? [{ locationId, componentId, digest, ...(packageId ? { packageId } : {}) }]
+      : [];
+  });
+}
 
 /** A leaf's report, bounded: it is input from a peer. */
 export function parseLeafScopedReport(value: unknown): LeafScopedReport | undefined {
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
   const report: LeafScopedReport = {};
-  if (Array.isArray(record.project)) {
-    report.project = record.project.slice(0, MAX_REPORTED_SCOPED).flatMap((raw: unknown) => {
-      const entry = (raw ?? {}) as Record<string, unknown>;
-      const locationId = text(entry.locationId);
-      const componentId = text(entry.componentId);
-      const digest = text(entry.digest, 200);
-      return locationId && componentId && digest ? [{ locationId, componentId, digest }] : [];
-    });
+  const project = parseScopedCopies(record.project);
+  if (project) report.project = project;
+  const account = record.account as Record<string, unknown> | undefined;
+  const accountHomeId = text(account?.accountHomeId);
+  if (accountHomeId && account?.entries && typeof account.entries === "object") {
+    const entries: Record<string, AccountEntryState> = Object.create(null);
+    for (const [location, status] of Object.entries(account.entries).slice(0, 16)) {
+      if (
+        status === "linked" ||
+        status === "private" ||
+        status === "missing" ||
+        status === "foreign-link"
+      )
+        entries[location] = status;
+    }
+    report.account = { accountHomeId, entries, copies: parseScopedCopies(account.copies) ?? [] };
   }
   const container = (record.container ?? null) as Record<string, unknown> | null;
   const containerId = container ? text(container.containerId) : undefined;
@@ -405,11 +442,33 @@ export function scopedEvidenceFromReport(
         continue;
       const seen = report.project.find(
         (entry) =>
-          entry.locationId === receipt.locationId && entry.componentId === receipt.componentId,
+          entry.locationId === receipt.locationId &&
+          entry.componentId === receipt.componentId &&
+          (entry.packageId === undefined || entry.packageId === receipt.packageId),
       );
       observed.set(receipt.id, seen?.digest ?? null);
     }
     evidence.project = { environmentId: target.environmentId, observed };
+  }
+  const account = report.account;
+  if (
+    account &&
+    account.accountHomeId === target.accountHomeId &&
+    target.environmentIncarnation === undefined
+  ) {
+    const observed = new Map<string, string | null>();
+    for (const receipt of Object.values(state.receipts)) {
+      if (receipt.nodeId !== target.nodeId || receipt.accountHomeId !== account.accountHomeId)
+        continue;
+      const copy = account.copies.find(
+        (entry) =>
+          entry.locationId === receipt.locationId &&
+          entry.componentId === receipt.componentId &&
+          entry.packageId === receipt.packageId,
+      );
+      observed.set(receipt.id, copy?.digest ?? null);
+    }
+    evidence.account = { ...account, provider: target.provider, observed };
   }
   return evidence;
 }
@@ -431,11 +490,26 @@ function scopedDeliveryDigest(
     );
     return item ? (item.digest ?? item.packageDigest) : null;
   }
+  if (delivery.locationId.startsWith("account:")) {
+    const locationId = delivery.locationId.slice("account:".length);
+    const account = report?.account;
+    if (account?.entries[locationId] !== "private") return null;
+    return (
+      account.copies.find(
+        (entry) =>
+          entry.locationId === locationId &&
+          entry.componentId === delivery.componentId &&
+          entry.packageId === delivery.packageId,
+      )?.digest ?? null
+    );
+  }
   if (projectCapabilityLocation(delivery.locationId) || projectMcpLocation(delivery.locationId)) {
     return (
       report?.project?.find(
         (entry) =>
-          entry.locationId === delivery.locationId && entry.componentId === delivery.componentId,
+          entry.locationId === delivery.locationId &&
+          entry.componentId === delivery.componentId &&
+          (entry.packageId === undefined || entry.packageId === delivery.packageId),
       )?.digest ?? null
     );
   }
@@ -466,7 +540,21 @@ function parseTarget(value: unknown, nodeId: string): CapabilityTarget | null {
   return target;
 }
 
-function parseCeiling(value: unknown): CapabilityPermissionCeiling {
+export function permissionCeilingDigest(
+  denied: readonly string[],
+  userMcpServers: readonly string[] | null,
+  readOnly = false,
+): string {
+  return sha256(
+    canonicalCapabilityJson({
+      denied: [...new Set(denied)].sort(),
+      userMcpServers: userMcpServers ? [...new Set(userMcpServers)].sort() : null,
+      ...(readOnly ? { readOnly: true } : {}),
+    }),
+  );
+}
+
+export function parseCeiling(value: unknown, readOnly = false): CapabilityPermissionCeiling {
   const record = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
   const denied = Array.isArray(record.denied)
     ? record.denied.filter((entry): entry is string => typeof entry === "string").slice(0, 64)
@@ -479,9 +567,7 @@ function parseCeiling(value: unknown): CapabilityPermissionCeiling {
   return {
     denied,
     userMcpServers,
-    digest:
-      text(record.digest, 200) ??
-      sha256(canonicalCapabilityJson({ denied: [...denied].sort(), userMcpServers })),
+    digest: permissionCeilingDigest(denied, userMcpServers, readOnly),
   };
 }
 
@@ -491,7 +577,12 @@ function parseItems(value: unknown): CapabilityObservedItem[] {
     if (!entry || typeof entry !== "object") return [];
     const item = entry as Record<string, unknown>;
     const locationId = text(item.locationId);
-    if (!locationId || item.ownership !== "managed") return [];
+    if (
+      !locationId ||
+      (item.ownership !== "managed" &&
+        !(item.ownership === "external" && item.kind === "mcp-server" && item.enabled === true))
+    )
+      return [];
     return [
       {
         id: text(item.id) ?? locationId,
@@ -500,7 +591,8 @@ function parseItems(value: unknown): CapabilityObservedItem[] {
         name: text(item.name, CAPABILITY_LIMITS.maxNameChars) ?? "",
         locationId,
         locationLabel: "",
-        ownership: "managed" as const,
+        ownership: item.ownership,
+        ...(typeof item.enabled === "boolean" ? { enabled: item.enabled } : {}),
         ...(text(item.packageId) ? { packageId: text(item.packageId)! } : {}),
         ...(text(item.componentId) ? { componentId: text(item.componentId)! } : {}),
         ...(text(item.digest, 200) ? { digest: text(item.digest, 200)! } : {}),
@@ -592,6 +684,10 @@ function parseAnswer(value: unknown, target: CapabilityTarget): LeafAnswer | nul
   const required = Array.isArray(record.required)
     ? record.required.filter((id): id is string => typeof id === "string").slice(0, 2_000)
     : [];
+  const worktreeTargets =
+    record.worktreeTargets === undefined
+      ? []
+      : parseNodePlanTargets(record.worktreeTargets, (id) => !!projectCapabilityLocation(id));
   const privateItems = parseSessionPrivateItems(record.privateItems);
   const privateRequired = Array.isArray(record.privateRequired)
     ? record.privateRequired
@@ -603,6 +699,7 @@ function parseAnswer(value: unknown, target: CapabilityTarget): LeafAnswer | nul
     deliveries,
     required,
     requiredOnNode: record.requiredOnNode === true,
+    ...(worktreeTargets.length > 0 ? { worktreeTargets } : {}),
     ...(privateItems.length > 0 ? { privateItems, privateRequired } : {}),
   };
 }
@@ -612,6 +709,7 @@ interface LeafAnswer {
   deliveries: CapabilityLaunchDelivery[];
   required: string[];
   requiredOnNode: boolean;
+  worktreeTargets?: NodePlanTarget[];
   /**
    * Components to deliver to this session alone (`session-delivery.ts`).
    * The command node staged their artifacts on this machine before answering.
@@ -627,6 +725,12 @@ export interface LeafLaunchAuthorityDeps {
   storage: { capabilities: CapabilitiesStorage };
   observeSelf(): Promise<CapabilityInventory>;
   admitEpoch(controllerId: string, epoch: number): void;
+  stageWorktree?(
+    request: LaunchRequest,
+    targets: readonly NodePlanTarget[],
+    controllerId: string,
+    epoch: number,
+  ): Promise<NonNullable<ScopedEvidence["isolated"]>>;
   /** Whether an attached command node has been in contact recently enough to answer. */
   controllerReachable(): Promise<boolean>;
   /** Emits `node-capability-launch-requested` on this machine's event stream. */
@@ -673,12 +777,46 @@ export class LeafLaunchAuthority {
       this.deps.request && (await this.deps.controllerReachable().catch(() => false))
         ? await this.ask(request, key, inventory, report)
         : null;
+    let staged: NonNullable<ScopedEvidence["isolated"]> = [];
+    const targets = answered?.answer.worktreeTargets;
+    if (targets?.length && answered && answered.answer.effective.launchBlockers.length === 0) {
+      staged =
+        (await this.deps
+          .stageWorktree?.(request, targets, answered.controllerId, answered.epoch)
+          .catch((error: unknown) => {
+            log.warn("launch.private-stage-failed", {
+              error: formatLogError(error, { message: false }),
+            });
+            return [];
+          })) ?? [];
+    }
     const [latestInventory, latestReport] = await Promise.all([
       this.deps.observeSelf().catch(() => undefined),
       this.deps.scopedReport?.(request.target, request.relativeWorktree).catch(() => undefined),
     ]);
     if (answered) {
-      const local = this.localDeliveryCheck(answered.answer, latestInventory, latestReport);
+      if (targets?.length && latestReport?.project) {
+        latestReport.project = latestReport.project.filter(
+          (copy) =>
+            !targets.some(
+              (entry) =>
+                entry.locationId === copy.locationId && entry.componentId === copy.componentId,
+            ) ||
+            staged.some(
+              (entry) =>
+                entry.locationId === copy.locationId &&
+                entry.componentId === copy.componentId &&
+                entry.packageId === copy.packageId &&
+                entry.digest === copy.digest,
+            ),
+        );
+      }
+      const local = this.localDeliveryCheck(
+        answered.answer,
+        latestInventory,
+        latestReport,
+        request.target,
+      );
       return {
         effective: withBlockers(
           { ...answered.answer.effective, target: request.target },
@@ -727,6 +865,7 @@ export class LeafLaunchAuthority {
             ...(request.readOnly ? { readOnly: true } : {}),
             ...(request.templateId ? { templateId: request.templateId } : {}),
             ...(request.graphNode ? { graphNode: request.graphNode } : {}),
+            ...(request.relativeWorktree ? { relativeWorktree: request.relativeWorktree } : {}),
             inventory: compactInventory(inventory),
             ...(report ? { scoped: report } : {}),
           },
@@ -745,12 +884,13 @@ export class LeafLaunchAuthority {
     if (!controllerId || !requestId)
       throw new CapabilityError("invalid-request", "controllerId and requestId are required.");
     const epoch = Number(args.epoch);
-    this.deps.admitEpoch(controllerId, epoch);
     const pending = this.pending.get(requestId);
     if (!pending) return { accepted: false };
     const answer = parseAnswer(args.answer, pending.target);
     if (!answer) throw new CapabilityError("invalid-request", "The launch answer is malformed.");
     const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
+    if (this.pending.get(requestId) !== pending) return { accepted: false };
+    this.deps.admitEpoch(controllerId, epoch);
     this.remember(pending.key, controllerId, epoch, answer, appliedDigest(executor));
     pending.settle({ answer, controllerId, epoch });
     return { accepted: true };
@@ -791,6 +931,7 @@ export class LeafLaunchAuthority {
     answer: Pick<LeafAnswer, "deliveries" | "required">,
     inventory: CapabilityInventory | undefined,
     report: LeafScopedReport | undefined,
+    target: CapabilityTarget,
   ): { blockers: Array<{ componentId: string; reason: string }> } {
     const required = new Set(answer.required);
     const blockers: Array<{ componentId: string; reason: string }> = [];
@@ -826,9 +967,21 @@ export class LeafLaunchAuthority {
           changed(delivery.componentId);
         continue;
       }
+      if (target.accountHomeId !== undefined && target.environmentIncarnation === undefined) {
+        const account = report?.account;
+        const entry = account?.entries[delivery.locationId];
+        if (
+          account?.accountHomeId !== target.accountHomeId ||
+          entry === "private" ||
+          entry === "foreign-link"
+        ) {
+          changed(delivery.componentId);
+          continue;
+        }
+      }
       const observed = inventory?.items.find(
         (item) =>
-          item.ownership === "managed" &&
+          isLaunchInventoryEvidence(item) &&
           item.componentId === delivery.componentId &&
           item.locationId === delivery.locationId,
       );
@@ -860,7 +1013,7 @@ export class LeafLaunchAuthority {
       cached.epoch === executor.epoch &&
       cached.appliedDigest === appliedDigest(executor);
     if (cached && fresh) {
-      const local = this.localDeliveryCheck(cached, inventory, report);
+      const local = this.localDeliveryCheck(cached, inventory, report, request.target);
       const effective: EffectiveAgentResources = {
         ...cached.effective,
         target: request.target,
@@ -931,7 +1084,7 @@ export interface LeafLaunchAnswerDeps {
       graphNode?: string;
       launchInventory?: CapabilityInventory;
       scopedEvidence?: ScopedEvidence;
-      forLaunch: true;
+      forLaunch?: true;
       captureRequired?: (ids: ReadonlySet<string>) => void;
       privateDelivery?: {
         deliverable: () => boolean;
@@ -939,6 +1092,7 @@ export interface LeafLaunchAnswerDeps {
       };
     },
   ): EffectiveAgentResources;
+  artifacts?: CapabilityArtifactStore;
   /** Sends one artifact to the leaf (`CapabilityNodeTransport.stage`). */
   stageArtifact?(nodeId: string, epoch: number, digest: string): Promise<void>;
   now(): string;
@@ -993,22 +1147,62 @@ export async function answerLeafLaunch(
         errors: [],
       }
     : undefined;
-  const ceiling = parseCeiling(request.ceiling);
+  const ceiling = parseCeiling(request.ceiling, request.readOnly === true);
   const templateId = text(request.templateId);
   const graphNode = text(request.graphNode);
-  // The worktree's or container's own copies, as the leaf reported them.
-  const scopedEvidence = scopedEvidenceFromReport(
-    state,
-    target,
-    parseLeafScopedReport(request.scoped),
-  );
+  const relativeWorktree = text(request.relativeWorktree, 512);
+  const isolated = relativeWorktree !== undefined && parseGraphBranchWorktreePath(relativeWorktree);
+  if (request.relativeWorktree !== undefined && !isolated) return { answered: false };
+  const report = parseLeafScopedReport(request.scoped);
+  const scopedEvidence =
+    scopedEvidenceFromReport(
+      state,
+      target,
+      isolated && report ? { ...report, project: undefined } : report,
+    ) ?? {};
+  const worktreeTargets: NodePlanTarget[] = [];
+  if (
+    isolated &&
+    target.environmentIncarnation === undefined &&
+    deps.stageArtifact &&
+    deps.artifacts
+  ) {
+    const selected = deps.resolve(state, {
+      target,
+      sessionKey,
+      ceiling,
+      ...(templateId ? { templateId } : {}),
+      ...(graphNode ? { graphNode } : {}),
+      ...(launchInventory ? { launchInventory } : {}),
+    });
+    scopedEvidence.isolated = [];
+    const sent = new Map<string, Promise<void>>();
+    for (const entry of isolatedWorktreeTargets(state, selected).slice(0, MAX_REPORTED_SCOPED)) {
+      try {
+        const delivery = await isolatedWorktreeDelivery(deps.artifacts, entry);
+        if (!delivery) continue;
+        let transfer = sent.get(delivery.packageDigest);
+        if (!transfer) {
+          transfer = deps.stageArtifact(nodeId, state.epoch, delivery.packageDigest);
+          sent.set(delivery.packageDigest, transfer);
+        }
+        await transfer;
+        scopedEvidence.isolated.push(delivery);
+        worktreeTargets.push(entry);
+      } catch (error) {
+        log.warn("launch.private-stage-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      }
+    }
+  }
   let required: ReadonlySet<string> = new Set();
   const privateItems: SessionPrivateItem[] = [];
   const resolved = deps.resolve(state, {
     captureRequired: (ids) => {
       required = ids;
     },
-    ...(deps.stageArtifact && request.readOnly !== true
+    ...(deps.stageArtifact && request.readOnly !== true && !isolated
       ? {
           privateDelivery: {
             deliverable: () => true,
@@ -1066,7 +1260,7 @@ export async function answerLeafLaunch(
     .flatMap((pkg) => pkg.components);
   if (effective.launchBlockers.length === 0) {
     deps.storage.capabilities.mutateCapabilityState((current) => {
-      current.launches[`${nodeId}|${sessionKey}`] = {
+      current.launches[capabilityLaunchKey(target, sessionKey)] = {
         sessionKey,
         target: effective.target,
         manifestDigest: effective.manifestDigest,
@@ -1075,7 +1269,15 @@ export async function answerLeafLaunch(
           id: entry.id,
           artifactDigest: entry.artifactDigest,
         })),
-        deliveries: checked.deliveries,
+        // Planned branch copies are recorded as verified on the leaf after staging.
+        deliveries: checked.deliveries.filter(
+          (entry) =>
+            !worktreeTargets.some(
+              (planned) =>
+                planned.componentId === entry.componentId &&
+                planned.locationId === entry.locationId,
+            ),
+        ),
         resolvedBy: selfId,
         launchedAt: deps.now(),
       };
@@ -1092,6 +1294,7 @@ export async function answerLeafLaunch(
         deliveries: checked.deliveries,
         required: requiredComponents,
         requiredOnNode: stateHasRequired(state),
+        ...(worktreeTargets.length > 0 ? { worktreeTargets } : {}),
         ...(sent.length > 0 && effective.launchBlockers.length === 0
           ? {
               privateItems: sent,

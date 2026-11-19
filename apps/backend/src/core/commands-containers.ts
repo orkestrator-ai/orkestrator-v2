@@ -158,7 +158,7 @@ import {
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   backendHostPortLabelArguments,
   chooseBackendHostPorts,
@@ -568,7 +568,14 @@ export async function createDockerContainer(
         provider === SHARED_SKILLS_INPUT ? "agents-skills" : provider,
       ),
     })
-    .catch(() => null);
+    .catch((error: unknown) => {
+      dockerLog.warn("capabilities.staging-failed", {
+        environmentId: environment.id,
+        phase: "prepare",
+        error: formatLogError(error, { message: false }),
+      });
+      return null;
+    });
   const stagedInputs = await stagePortableInputs(
     context.storage.getDataDir(),
     environment.id,
@@ -585,8 +592,12 @@ export async function createDockerContainer(
           beforeCommit: async (partial) => {
             try {
               return { capabilities: await capabilityStaging.stage(partial) };
-            } catch {
-              // The container still starts; its card reports no staged manifest.
+            } catch (error) {
+              dockerLog.warn("capabilities.staging-failed", {
+                environmentId: environment.id,
+                phase: "write",
+                error: formatLogError(error, { message: false }),
+              });
               return undefined;
             }
           },

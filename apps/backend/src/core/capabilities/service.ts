@@ -242,8 +242,22 @@ export class CapabilityService {
       admitEpoch: (controllerId, epoch) => this.executor.admitEpoch(controllerId, epoch),
       controllerReachable: async () => (await this.deps.controllerReachable?.()) ?? false,
       ...(deps.requestLaunch ? { request: deps.requestLaunch } : {}),
-      scopedReport: (target, relativeWorktree) =>
-        this.remoteScoped.leafReport(target, relativeWorktree),
+      scopedReport: async (target, relativeWorktree) => {
+        const [report, account] = await Promise.all([
+          this.remoteScoped.leafReport(target, relativeWorktree),
+          this.scoped.leafAccountReport(target),
+        ]);
+        return account ? { ...report, account } : report;
+      },
+      stageWorktree: (request, targets, controllerId, epoch) =>
+        request.relativeWorktree
+          ? this.scoped.stageIsolatedWorktree(
+              request.target,
+              request.relativeWorktree,
+              targets,
+              () => this.executor.assertEpoch(controllerId, epoch),
+            )
+          : Promise.resolve([]),
       now: () => this.now(),
     });
     const context: CapabilityServiceContext = {
@@ -368,17 +382,42 @@ export class CapabilityService {
       // An unreadable activity record holds every provider: err towards not changing running work.
       inventory.busyProviders = await this.deps.busyProviders().catch(() => [...AGENT_PLATFORMS]);
     }
-    const observeMcp = this.deps.mcp?.observe;
-    if (!observeMcp) return inventory;
+    const mcpInstaller = this.deps.mcp;
+    if (!mcpInstaller) return inventory;
     const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
-    for (const item of inventory.items) {
-      if (item.kind !== "mcp-server") continue;
-      const applied = Object.values(executor.applied).find(
-        ({ mcp, componentId }) =>
-          mcp && componentId && item.provider === mcp.provider && item.name === mcp.name,
+    for (const [key, applied] of Object.entries(executor.applied)) {
+      if (!applied.packageId || !applied.componentId) continue;
+      const scope = key.slice(selfId.length + 1);
+      if (!key.startsWith(`${selfId}|`) || !scope.startsWith("mcp:")) continue;
+      const { mcp, externalMcp, componentId, packageId, digest } = applied;
+      if (externalMcp) {
+        const { provider, definition } = externalMcp;
+        if (await mcpInstaller.configured?.(provider, definition).catch(() => false)) {
+          inventory.items.push({
+            id: key,
+            provider,
+            kind: "mcp-server",
+            name: definition.name,
+            locationId: `mcp:${provider}`,
+            locationLabel: "MCP configuration",
+            ownership: "external",
+            packageId,
+            componentId,
+            digest,
+            enabled: true,
+            visibleTo: [provider],
+          });
+        }
+        continue;
+      }
+      if (!mcp) continue;
+      const item = inventory.items.find(
+        (entry) =>
+          entry.kind === "mcp-server" && entry.provider === mcp.provider && entry.name === mcp.name,
       );
-      if (!applied?.mcp || !applied.packageId || !applied.componentId) continue;
-      const status = await observeMcp(applied.mcp).catch(() => "unavailable");
+      if (!item) continue;
+      const status =
+        (await mcpInstaller.observe?.(mcp).catch(() => "unavailable")) ?? "unavailable";
       if (
         status === "unavailable" &&
         !inventory.errors.some((error) => error.provider === item.provider)
@@ -389,12 +428,14 @@ export class CapabilityService {
         });
       }
       if (status === "present" || status === "drifted") {
-        item.locationId = `mcp:${applied.mcp.provider}`;
+        item.locationId = `mcp:${mcp.provider}`;
         item.ownership = "managed";
         item.packageId = applied.packageId;
         item.componentId = applied.componentId;
         item.digest = applied.digest;
         item.drifted = status === "drifted";
+        if (mcpInstaller.effective)
+          item.enabled = await mcpInstaller.effective(mcp).catch(() => false);
       }
     }
     return inventory;
@@ -651,8 +692,12 @@ export class CapabilityService {
    * Throws when a recorded plugin can no longer be produced, so a turn never
    * runs without what the session launched with.
    */
-  sessionPlugins(sessionKey: string): Promise<string[]> {
-    return this.preflight.sessionPlugins(sessionKey);
+  sessionPlugins(
+    sessionKey: string,
+    environmentId: string,
+    provider: AgentPlatform,
+  ): Promise<string[]> {
+    return this.preflight.sessionPlugins(sessionKey, environmentId, provider);
   }
 
   // --- Environment copies (`scoped-delivery.ts`, `container-staging.ts`) ---------
@@ -741,6 +786,7 @@ export class CapabilityService {
         isAuthority: () => this.deps.isAuthority(),
         link: this.deps.link,
         resolve: (state, input) => this.resolveFor(state, input),
+        artifacts: this.artifacts,
         stageArtifact: (target, epoch, digest) =>
           remoteTransport({
             selfId: this.deps.selfId,

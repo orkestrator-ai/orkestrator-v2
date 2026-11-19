@@ -7,6 +7,7 @@
  * recorded deliveries are exactly the observed bytes.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import path from "node:path";
 import { promises as fs } from "node:fs";
 
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
@@ -24,7 +25,13 @@ import {
   skillFile,
   type CapabilityNode,
 } from "./capability-network-test-support.js";
-import { COMMAND_NODE_UNREACHABLE_REASON } from "./launch-authority.js";
+import { CapabilityError } from "./security.js";
+import {
+  COMMAND_NODE_UNREACHABLE_REASON,
+  LeafLaunchAuthority,
+  parseCeiling,
+  permissionCeilingDigest,
+} from "./launch-authority.js";
 
 afterEach(async () => {
   await stopTestNodeNetworks();
@@ -75,7 +82,7 @@ describe("leaf launch authority", () => {
         expect(effective?.resolvedPackages).toEqual([]);
         expect(effective?.warnings.join(" ")).toContain("could not be sent");
       }
-      expect(await gram.cap.sessionPlugins("s1")).toEqual([]);
+      expect(await gram.cap.sessionPlugins("s1", "env-1", "claude")).toEqual([]);
       artifact.mockRestore();
     },
   );
@@ -94,9 +101,9 @@ describe("leaf launch authority", () => {
     expect(effective?.launchBlockers).toEqual([]);
 
     // Recorded on the command node, with exactly the observed bytes.
-    const recorded = (await desktop.storage.capabilities.loadCapabilityState()).launches[
-      `${gram.id}|s1`
-    ];
+    const recorded = Object.values(
+      (await desktop.storage.capabilities.loadCapabilityState()).launches,
+    ).find((row) => row.sessionKey === "s1" && row.target.nodeId === gram.id);
     expect(recorded?.resolvedBy).toBe(desktop.id);
     expect(recorded?.target.nodeId).toBe(gram.id);
     const inventory = await gram.cap.observeSelf();
@@ -108,9 +115,11 @@ describe("leaf launch authority", () => {
       expect.objectContaining({ packageId: inspection.packageId, digest: claudeCopy?.digest }),
     ]);
     // And on the leaf, naming who resolved it.
-    expect((await gram.storage.capabilities.loadCapabilityState()).launches.s1?.resolvedBy).toBe(
-      desktop.id,
-    );
+    expect(
+      Object.values((await gram.storage.capabilities.loadCapabilityState()).launches).find(
+        (row) => row.sessionKey === "s1",
+      )?.resolvedBy,
+    ).toBe(desktop.id);
 
     // Changed bytes on the leaf block the next launch.
     await fs.writeFile(skillFile(gram, ".claude", "docs"), "Local edit.");
@@ -196,7 +205,7 @@ describe("leaf launch authority", () => {
         requestId: "r1",
         answer: {},
       }),
-    ).rejects.toThrow("newer command node");
+    ).resolves.toEqual({ accepted: false });
   });
 });
 
@@ -207,7 +216,9 @@ describe("launch deliveries on the authority", () => {
     const { inspection } = await addSkill(desktop, "docs", "Write docs.", { required: true });
     const allowed = await desktop.cap.preflightSession(launch("s1"));
     expect(allowed?.launchBlockers).toEqual([]);
-    const record = (await desktop.storage.capabilities.loadCapabilityState()).launches.s1;
+    const record = Object.values(
+      (await desktop.storage.capabilities.loadCapabilityState()).launches,
+    ).find((row) => row.sessionKey === "s1");
     const observed = (await desktop.cap.observeSelf()).items.filter(
       (item) => item.ownership === "managed" && item.packageId === inspection.packageId,
     );
@@ -225,4 +236,127 @@ describe("launch deliveries on the authority", () => {
     await fs.writeFile(skillFile(desktop, ".claude", "docs"), "Edited for Claude.");
     await expect(desktop.cap.preflightSession(launch("s3"))).rejects.toThrow("cannot have");
   });
+});
+
+test("answering an unknown launch cannot admit a newer epoch", async () => {
+  const { desktop, gram } = await fleet();
+  await gram.cap.executorObserve({ controllerId: desktop.id, epoch: 2 });
+  const before = await gram.storage.capabilities.loadCapabilityExecutorState();
+  await expect(
+    gram.cap.executorLaunchAnswer({
+      controllerId: "bk_other",
+      epoch: 100,
+      requestId: "unknown",
+      answer: {},
+    }),
+  ).resolves.toEqual({ accepted: false });
+  await expect(
+    gram.environmentsAuthority.receiveAnswer({
+      controllerId: "bk_other",
+      epoch: 100,
+      requestId: "unknown",
+      answer: {},
+    }),
+  ).resolves.toEqual({ accepted: false });
+  await expect(
+    gram.environmentsAuthority.containerDeliveryForController({
+      controllerId: "bk_other",
+      epoch: 100,
+      environmentId: "unknown",
+    }),
+  ).resolves.toEqual({ found: false });
+  await expect(
+    gram.cap.executorStageHandover({
+      controllerId: "bk_other",
+      epoch: 100,
+      handoverId: "handover-unknown",
+      part: "state",
+      digest: "invalid",
+      index: 0,
+      count: 1,
+      data: "{}",
+    }),
+  ).rejects.toThrow("Not a state digest");
+  expect(await gram.storage.capabilities.loadCapabilityExecutorState()).toEqual(before);
+});
+
+test("a leaf launch preserves a capability error from its resolver", async () => {
+  const { gram } = await fleet();
+  const error = new CapabilityError("conflict", "Launch target changed.");
+  const preflight = spyOn(gram.cap.leafLaunch, "preflight").mockRejectedValue(error);
+  try {
+    await expect(gram.cap.preflightSession(launch("s1"))).rejects.toBe(error);
+  } finally {
+    preflight.mockRestore();
+  }
+});
+
+test("the controller derives permission identity from the parsed ceiling", () => {
+  const ceiling = { digest: "forged", denied: ["command", 3, "skill"], userMcpServers: ["docs"] };
+  expect(parseCeiling(ceiling, true).digest).toBe(
+    permissionCeilingDigest(["skill", "command"], ["docs"], true),
+  );
+  expect(parseCeiling(ceiling, false).digest).not.toBe(parseCeiling(ceiling, true).digest);
+});
+
+test("a leaf verifies a required host skill for an added account only while it reads the host copy", async () => {
+  const { desktop, gram } = await fleet();
+  await addSkill(desktop, "docs", "Write docs.", { required: true });
+  const home = path.join(gram.dir, "added-account");
+  await fs.mkdir(home);
+  await fs.symlink(path.join(gram.home, ".claude/skills"), path.join(home, "skills"));
+  gram.accounts.push({ accountId: "added", provider: "claude", home });
+  const input = { ...launch("account-session"), accountHomeId: "added" };
+  await expect(gram.cap.preflightSession(input)).resolves.toBeTruthy();
+  await fs.unlink(path.join(home, "skills"));
+  await fs.mkdir(path.join(home, "skills"));
+  gram.reachable = false;
+  await expect(gram.cap.preflightSession(input)).rejects.toThrow("changed on this machine");
+  gram.reachable = true;
+  await expect(gram.cap.preflightSession(input)).rejects.toThrow("keeps its own copy");
+});
+
+test("malformed and stale answers for a pending launch leave authority unchanged", async () => {
+  const { desktop, gram } = await fleet();
+  await gram.cap.executorObserve({ controllerId: desktop.id, epoch: 4 });
+  const before = await gram.storage.capabilities.loadCapabilityExecutorState();
+  const pending = Promise.withResolvers<string>();
+  const leaf = new LeafLaunchAuthority({
+    storage: gram.storage,
+    observeSelf: () => gram.cap.observeSelf(),
+    admitEpoch: (controller, epoch) => gram.cap.executor.admitEpoch(controller, epoch),
+    controllerReachable: async () => true,
+    request: ({ requestId }) => pending.resolve(requestId),
+    now: () => new Date().toISOString(),
+  });
+  const { provider, environmentId, sessionKey } = launch("pending");
+  const preflight = leaf.preflight({
+    target: { nodeId: gram.id, provider, environmentId, sessionId: sessionKey },
+    sessionKey,
+    ceiling: parseCeiling({}),
+  });
+  const requestId = await pending.promise;
+  const answer = { effective: { resolvedPackages: [] } };
+  try {
+    await expect(
+      leaf.receiveAnswer({
+        controllerId: "bk_other",
+        epoch: 100,
+        requestId,
+        answer: {},
+      }),
+    ).rejects.toThrow("malformed");
+    await expect(
+      leaf.receiveAnswer({
+        controllerId: desktop.id,
+        epoch: 3,
+        requestId,
+        answer,
+      }),
+    ).rejects.toThrow("newer command node");
+    expect(await gram.storage.capabilities.loadCapabilityExecutorState()).toEqual(before);
+  } finally {
+    await leaf.receiveAnswer({ controllerId: desktop.id, epoch: 4, requestId, answer });
+    await preflight;
+  }
 });

@@ -181,3 +181,16 @@ export async function collectCapabilityInventory(
     errors,
   };
 }
+
+/** MCP ownership and runtime eligibility answer different questions. */
+export function isLaunchInventoryEvidence(item: CapabilityObservedItem): boolean {
+  if (item.kind !== "mcp-server") return item.ownership === "managed";
+  return (
+    item.enabled !== false &&
+    (item.ownership === "managed" ||
+      (item.ownership === "external" &&
+        item.enabled === true &&
+        !!item.componentId &&
+        !!item.digest))
+  );
+}

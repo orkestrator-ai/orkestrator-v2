@@ -365,6 +365,10 @@ export interface CapabilityExecutorState {
       at: string;
       action: string;
       mcp?: CapabilityMcpOwnership;
+      externalMcp?: {
+        provider: AgentPlatform;
+        definition: import("./source-inspection.js").McpDefinitionShape;
+      };
       packageId?: string;
       componentId?: string;
     }

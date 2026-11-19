@@ -51,7 +51,7 @@ import {
 import type { CapabilityHomes } from "./native-ownership.js";
 import type { CapabilityLink } from "./node-transport.js";
 import { desiredStateForNode } from "./planning.js";
-import { defaultGitRunner, type GitRunner } from "./project-git.js";
+import { defaultGitRunner, linkedAncestor, type GitRunner } from "./project-git.js";
 import { classifyTransportError, OutcomeUnknownError } from "./reconciler.js";
 import {
   desiredProjectState,
@@ -483,6 +483,8 @@ export class RemoteScopedDelivery {
     }
     const local = await this.localWorktree(target.environmentId);
     if (local.state !== "present" || !local.worktree) return undefined;
+    if (relativeWorktree && (await linkedAncestor(local.worktree, relativeWorktree)))
+      return undefined;
     const selfId = await this.deps.selfId();
     const worktree = relativeWorktree
       ? confinedPath(local.worktree, relativeWorktree)
@@ -494,6 +496,7 @@ export class RemoteScopedDelivery {
       ([key, entry]) =>
         key.startsWith(prefix) &&
         entry.componentId !== undefined &&
+        entry.packageId !== undefined &&
         projectMcpLocation(key.slice(prefix.length).split("|")[0] ?? "") !== undefined,
     );
     if (mcpApplied.length > 0) {
@@ -509,6 +512,7 @@ export class RemoteScopedDelivery {
             })
           : undefined,
         mcpApplied.map(([key]) => key),
+        true,
       );
       for (const [key, entry] of mcpApplied) {
         const digest = observed.get(key);
@@ -516,6 +520,7 @@ export class RemoteScopedDelivery {
           project.push({
             locationId: key.slice(prefix.length).split("|")[0]!,
             componentId: entry.componentId!,
+            packageId: entry.packageId!,
             digest,
           });
         }

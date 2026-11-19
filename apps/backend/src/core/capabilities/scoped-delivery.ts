@@ -27,6 +27,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { parseGraphBranchWorktreePath } from "@orkestrator/protocol/graphs/run";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type {
@@ -49,9 +50,22 @@ import {
   type NodePlanResult,
   type NodePlanTarget,
 } from "./executor.js";
-import { installName, installedDigest, type CapabilityHomes } from "./native-ownership.js";
+import {
+  installedComponentFiles,
+  installName,
+  installedDigest,
+  readLocationIndex,
+  readMarker,
+  type CapabilityHomes,
+} from "./native-ownership.js";
 import { desiredStateForNode, type NodeDesiredState } from "./planning.js";
-import { defaultGitRunner, type GitRunner } from "./project-git.js";
+import {
+  defaultGitRunner,
+  gitCommonDir,
+  linkedAncestor,
+  syncGraphWorktreeExclude,
+  type GitRunner,
+} from "./project-git.js";
 import {
   observeProjectMcpEntries,
   projectMcpExcludeFiles,
@@ -67,10 +81,17 @@ import {
   projectMcpLocationFor,
   type ProjectMcpLocation,
 } from "./scoped-locations.js";
-import { confinedPath, treeDigest } from "./security.js";
+import {
+  CAPABILITY_MARKER_FILE,
+  confinedPath,
+  recoverDirectoryReplacement,
+  treeDigest,
+} from "./security.js";
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
 import {
   dropEmptyIndexes,
+  managedLocationEntries,
+  worktreeEntryPath,
   projectLocator,
   syncWorktreeExclude,
   worktreeCollisions,
@@ -515,7 +536,9 @@ export async function observeScopedReceipts(
   state: CapabilityState,
   receipts: readonly InstallationReceipt[],
   locate: (locationId: string) => Located | undefined,
+  options: { worktree?: string; recover?: boolean } = {},
 ): Promise<Map<string, string | null>> {
+  const { worktree, recover = false } = options;
   const observed = new Map<string, string | null>();
   for (const receipt of receipts) {
     if (receipt.status === "failed" || !receipt.digest) continue;
@@ -528,13 +551,30 @@ export async function observeScopedReceipts(
     );
     // Not this scope's to read any more (an account linked again), or a revision no longer known.
     if (!located || !component) continue;
+    const project = worktree && projectCapabilityLocation(receipt.locationId);
+    if (worktree && project && (await linkedAncestor(worktree, project.relative))) continue;
+    const entry = entryName(component, located.location.layout);
+    const destination = path.join(located.directory, entry);
+    if (recover && located.location.layout === "directory") {
+      recoverDirectoryReplacement(destination);
+    }
+    const stat = await fs.lstat(destination).catch(() => null);
+    if (!stat || (located.location.layout === "directory" ? !stat.isDirectory() : !stat.isFile())) {
+      observed.set(receipt.id, null);
+      continue;
+    }
+    const marker =
+      located.location.layout === "directory"
+        ? await readMarker(path.join(located.directory, entry, CAPABILITY_MARKER_FILE))
+        : (await readLocationIndex(located.directory)).files[entry];
     observed.set(
       receipt.id,
-      await installedDigest(
-        located.location,
-        located.directory,
-        entryName(component, located.location.layout),
-      ),
+      marker?.packageId === receipt.packageId && marker.componentId === receipt.componentId
+        ? await installedDigest(located.location, located.directory, entry, {
+            recover: false,
+            recordedDigest: marker.digest,
+          })
+        : null,
     );
   }
   return observed;
@@ -623,7 +663,7 @@ export async function runScopedPass(
   }
   const forget: string[] = [];
   for (const receipt of existing) {
-    if (desiredByKey.has(receipt.id)) continue;
+    if (desiredByKey.has(receipt.id) || input.collisions?.has(receipt.id)) continue;
     if (!input.removeFiles || receipt.status === "failed" || !observed.has(receipt.id)) {
       forget.push(receipt.id);
       continue;
@@ -724,6 +764,11 @@ export async function runScopedPass(
     }
     for (const [key, reason] of collided) {
       const installation = desiredByKey.get(key)!;
+      const previous = current.receipts[key];
+      if (previous?.digest) {
+        previous.reason = reason;
+        continue;
+      }
       current.receipts[key] = receiptFor(installation, {
         status: "failed",
         verification: "requested",
@@ -825,7 +870,7 @@ export function observable(receipt: InstallationReceipt): boolean {
 
 /** This machine's own executor over the scope's located directories. */
 function localScopedIO(
-  deps: Pick<ScopedDeliveryDeps, "storage" | "artifacts" | "homes" | "now" | "projectMcp">,
+  deps: Pick<ScopedDeliveryDeps, "storage" | "artifacts" | "homes" | "now" | "projectMcp" | "git">,
   input: ScopedPassInput,
 ): ScopedPassIO {
   const locate = input.locate;
@@ -843,8 +888,12 @@ function localScopedIO(
       : undefined;
   return {
     observe: async (state, receipts) => {
-      const observed = await observeScopedReceipts(state, receipts, locate);
-      const mcpKeys = receipts
+      const allowed = receipts.filter((receipt) => !input.collisions?.has(receipt.id));
+      const observed = await observeScopedReceipts(state, allowed, locate, {
+        worktree: input.worktree,
+        recover: true,
+      });
+      const mcpKeys = allowed
         .filter((receipt) => projectMcpLocation(receipt.locationId) && observable(receipt))
         .map((receipt) => receipt.id);
       for (const [key, digest] of await observeProjectMcpEntries(deps.storage, mcp, mcpKeys))
@@ -861,8 +910,27 @@ function localScopedIO(
         ...(mcp ? { mcp } : {}),
         ...(deps.now ? { now: deps.now } : {}),
       });
-      const results = await executor.apply(targets);
-      await dropEmptyIndexes(targets, results, locate);
+      const collisions = input.worktree
+        ? await worktreeCollisions(
+            deps.git ?? defaultGitRunner,
+            input.worktree,
+            targets.map((target) => ({
+              ...target,
+              locationId: target.locationId ?? "",
+            })),
+          )
+        : new Map<string, string>();
+      const runnable = targets.filter((target) => !collisions.has(target.key));
+      const results = [
+        ...(await executor.apply(runnable)),
+        ...Array.from(collisions, ([key, reason]): NodePlanResult => ({
+          key,
+          status: "failed",
+          verification: "requested",
+          reason,
+        })),
+      ];
+      await dropEmptyIndexes(runnable, results, locate);
       return results;
     },
   };
@@ -905,7 +973,7 @@ async function expectedScopedDigest(
   const files = componentFiles(await artifacts.get(digest), component);
   if (files.length === 0) return undefined;
   if (location.layout === "directory") return treeDigest(files);
-  return treeDigest([{ ...files[0]!, path: entryName(component, "file") }]);
+  return treeDigest(installedComponentFiles(files, location.layout, entryName(component, "file")));
 }
 
 /**
@@ -1182,6 +1250,66 @@ export function scopedRequiredDelivery(input: {
 
 // --- The service-facing class ----------------------------------------------------
 
+/** File components selected for this isolated checkout that are not machine-wide. */
+export function isolatedWorktreeTargets(
+  state: CapabilityState,
+  effective: EffectiveAgentResources,
+): NodePlanTarget[] {
+  const { nodeId, provider } = effective.target;
+  const host = desiredStateForNode(state, nodeId, state.machines[nodeId]?.inventory);
+  return effective.resolvedPackages.flatMap((pkg) =>
+    pkg.components.flatMap((id): NodePlanTarget[] => {
+      const component = revisionComponent(state, pkg.id, id, pkg.artifactDigest);
+      if (
+        !component ||
+        !FILE_KINDS.has(component.kind) ||
+        (component.providerHints.length && !component.providerHints.includes(provider)) ||
+        host.installations.some(
+          (entry) =>
+            entry.componentId === id &&
+            entry.digest === pkg.artifactDigest &&
+            entry.providers.includes(provider),
+        )
+      )
+        return [];
+      return planScopedLocations(PROJECT_CAPABILITY_LOCATIONS, component.kind, [
+        provider,
+      ]).locations.map(({ location }) => ({
+        key: `${location.id}|${id}`,
+        action: "install",
+        kind: component.kind,
+        packageId: pkg.id,
+        componentId: id,
+        componentName: component.name,
+        pathOrKey: component.pathOrKey,
+        locationId: location.id,
+        artifactDigest: pkg.artifactDigest,
+      }));
+    }),
+  );
+}
+
+/** Expected bytes of an isolated plan, verified again by the leaf after writing. */
+export async function isolatedWorktreeDelivery(
+  artifacts: CapabilityArtifactStore,
+  target: NodePlanTarget,
+): Promise<NonNullable<ScopedEvidence["isolated"]>[number] | undefined> {
+  const location = projectCapabilityLocation(target.locationId ?? "");
+  const packageDigest = target.artifactDigest;
+  if (!location || !packageDigest) return undefined;
+  const files = componentFiles(await artifacts.get(packageDigest), target);
+  if (files.length === 0) return undefined;
+  const name = installName(target.componentName, target.pathOrKey, location.layout);
+  const entry = location.layout === "file" ? `${name}.md` : name;
+  return {
+    componentId: target.componentId,
+    packageId: target.packageId,
+    locationId: location.id,
+    packageDigest,
+    digest: treeDigest(installedComponentFiles(files, location.layout, entry)),
+  };
+}
+
 /**
  * Runs the scoped passes for this machine, one at a time, and answers
  * launch evidence. Every pass reads the newest state.
@@ -1366,7 +1494,10 @@ export class ScopedCapabilityDelivery {
     const candidates = installations.flatMap((installation) =>
       entryOf(installation.key, installation, installation.digest),
     );
-    const collisions = await worktreeCollisions(git, worktree, candidates);
+    const removals = existing.flatMap((receipt) =>
+      entryOf(receipt.id, receipt, receipt.packageDigest),
+    );
+    const collisions = await worktreeCollisions(git, worktree, [...candidates, ...removals]);
 
     // Exclude before writing, so no status ever shows the copies.
     const writable = candidates.filter((candidate) => !collisions.has(candidate.key));
@@ -1479,24 +1610,18 @@ export class ScopedCapabilityDelivery {
               entry.accountId === target.accountHomeId && entry.provider === target.provider,
           ) ?? null)
         : null;
-    const launchEnvironment =
-      relativeWorktree && environment?.worktreePath
-        ? { ...environment, worktreePath: confinedPath(environment.worktreePath, relativeWorktree) }
-        : environment;
-    const evidence = await this.evidenceFor(
-      target,
-      relativeWorktree ? null : launchEnvironment,
-      account,
-    );
+    const evidence = await this.evidenceFor(target, relativeWorktree ? null : environment, account);
     if (
       relativeWorktree &&
-      launchEnvironment?.environmentType === "local" &&
-      launchEnvironment.worktreePath &&
+      environment?.environmentType === "local" &&
+      environment.worktreePath &&
       resolveWorktree
     ) {
+      const state = await this.deps.storage.capabilities.loadCapabilityState();
       evidence.isolated = await this.stageIsolatedWorktree(
-        launchEnvironment.worktreePath,
-        resolveWorktree,
+        target,
+        relativeWorktree,
+        isolatedWorktreeTargets(state, resolveWorktree(state)),
       );
     }
     if (target.environmentIncarnation !== undefined && target.environmentId) {
@@ -1506,65 +1631,57 @@ export class ScopedCapabilityDelivery {
     return evidence;
   }
 
-  private stageIsolatedWorktree(
-    worktree: string,
-    resolve: (state: CapabilityState) => EffectiveAgentResources,
+  stageIsolatedWorktree(
+    target: CapabilityTarget,
+    relativeWorktree: string,
+    targets: readonly NodePlanTarget[],
+    fence?: () => Promise<void>,
   ): Promise<NonNullable<ScopedEvidence["isolated"]>> {
     return this.serialized(async () => {
-      const state = await this.deps.storage.capabilities.loadCapabilityState();
-      const effective = resolve(state);
-      const { nodeId, provider } = effective.target;
-      const host = await this.hostDesired(state, nodeId);
-      const targets = effective.resolvedPackages.flatMap((pkg) =>
-        pkg.components.flatMap((id): NodePlanTarget[] => {
-          const component = revisionComponent(state, pkg.id, id, pkg.artifactDigest);
-          if (
-            !component ||
-            !FILE_KINDS.has(component.kind) ||
-            (component.providerHints.length && !component.providerHints.includes(provider)) ||
-            host.installations.some(
-              (entry) =>
-                entry.componentId === id &&
-                entry.digest === pkg.artifactDigest &&
-                entry.providers.includes(provider),
-            )
-          )
-            return [];
-          return planScopedLocations(PROJECT_CAPABILITY_LOCATIONS, component.kind, [
-            provider,
-          ]).locations.map(({ location }) => ({
-            key: `${location.id}|${id}`,
-            action: "install",
-            kind: component.kind,
-            packageId: pkg.id,
-            componentId: id,
-            componentName: component.name,
-            pathOrKey: component.pathOrKey,
-            locationId: location.id,
-            artifactDigest: pkg.artifactDigest,
-          }));
-        }),
+      if (!parseGraphBranchWorktreePath(relativeWorktree) || targets.length === 0) return [];
+      const environment = (await this.deps.environments?.())?.find(
+        (entry) => entry.id === target.environmentId && entry.environmentType === "local",
       );
-      if (targets.length === 0) return [];
-      const collisions = await worktreeCollisions(
-        this.git(),
-        worktree,
-        targets.map((entry) => ({
-          key: entry.key,
-          locationId: entry.locationId!,
-          componentName: entry.componentName,
-          pathOrKey: entry.pathOrKey,
-        })),
-      );
-      // Graph-owned branches live under the Git-excluded .orkestrator directory.
+      const root = environment?.worktreePath;
+      if (!root || (await linkedAncestor(root, relativeWorktree))) return [];
+      const worktree = confinedPath(root, relativeWorktree);
+      const git = this.git();
+      const [commonDir, topLevel] = await Promise.all([
+        gitCommonDir(git, worktree),
+        git(worktree, ["rev-parse", "--show-toplevel"]),
+      ]);
+      if (!commonDir || (await fs.realpath(worktree)) !== path.resolve(topLevel.trim())) return [];
+      const byKey = new Map(targets.map((entry) => [entry.key, entry]));
+      const candidates = targets.flatMap((entry) => {
+        const location = projectCapabilityLocation(entry.locationId ?? "");
+        return location?.readBy.includes(target.provider) &&
+          location.kind === entry.kind &&
+          entry.action === "install" &&
+          !entry.force &&
+          !entry.takeoverFrom
+          ? [{ ...entry, locationId: location.id }]
+          : [];
+      });
+      const collisions = await worktreeCollisions(git, worktree, candidates);
+      const writable = candidates.filter((entry) => !collisions.has(entry.key));
+      await fence?.();
+      if (writable.length > 0)
+        await syncGraphWorktreeExclude(
+          commonDir,
+          relativeWorktree,
+          writable.flatMap((entry) => {
+            const placed = worktreeEntryPath(entry);
+            return placed ? [placed] : [];
+          }),
+        );
       const executor = new CapabilityExecutor({
         storage: this.deps.storage,
         artifacts: this.deps.artifacts,
         homes: this.deps.homes,
         locate: this.projectLocator(worktree),
+        recordApplied: false,
       });
-      const results = await executor.apply(targets.filter((entry) => !collisions.has(entry.key)));
-      const byKey = new Map(targets.map((entry) => [entry.key, entry]));
+      const results = await executor.apply(writable, fence);
       return results.flatMap((result) => {
         const entry = byKey.get(result.key);
         return entry && result.digest && DELIVERED.has(result.status)
@@ -1580,6 +1697,25 @@ export class ScopedCapabilityDelivery {
           : [];
       });
     });
+  }
+
+  /** Only private account locations are read. Links to host homes use host inventory. */
+  async leafAccountReport(target: CapabilityTarget) {
+    if (!target.accountHomeId || target.environmentIncarnation !== undefined) return undefined;
+    const account = (await this.deps.accounts?.())?.find(
+      (entry) => entry.accountId === target.accountHomeId && entry.provider === target.provider,
+    );
+    if (!account) return undefined;
+    const entries = await accountHomeEvidence(account.provider, account.home, this.deps.homes());
+    const locate = this.accountLocator(account);
+    const copies = [];
+    for (const [locationId, state] of Object.entries(entries)) {
+      if (state !== "private") continue;
+      const location = locate(locationId);
+      if (location)
+        copies.push(...(await managedLocationEntries(location.location, location.directory)));
+    }
+    return { accountHomeId: account.accountId, entries, copies };
   }
 
   /** Display names for the "Where available" rows of scoped copies, from the last pass. */
@@ -1626,6 +1762,7 @@ export class ScopedCapabilityDelivery {
         state,
         receipts,
         this.projectLocator(environment.worktreePath),
+        { worktree: environment.worktreePath },
       );
       const base = this.deps.projectMcp?.(environment.id);
       const mcp = base
@@ -1639,7 +1776,12 @@ export class ScopedCapabilityDelivery {
       const mcpKeys = receipts
         .filter((receipt) => projectMcpLocation(receipt.locationId) && observable(receipt))
         .map((receipt) => receipt.id);
-      for (const [key, digest] of await observeProjectMcpEntries(this.deps.storage, mcp, mcpKeys))
+      for (const [key, digest] of await observeProjectMcpEntries(
+        this.deps.storage,
+        mcp,
+        mcpKeys,
+        true,
+      ))
         observed.set(key, digest);
       evidence.project = { environmentId: environment.id, observed };
     }

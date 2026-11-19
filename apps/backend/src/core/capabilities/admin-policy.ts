@@ -22,12 +22,19 @@ import {
   type CapabilityAdminPolicyView,
   type CapabilityPolicyEntryResult,
 } from "@orkestrator/protocol/capability-admin-policy";
+import { isCapabilitySourceForbidden } from "@orkestrator/protocol/capability-registry";
 import { capabilityRevisionComponents } from "@orkestrator/protocol/capability-resources-resolve";
 
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
 import { newCorrelationId, recordActivity } from "./operations.js";
 import { CapabilityError } from "./security.js";
 import type { CapabilityState } from "./types.js";
+
+export function assertCapabilitySourceAllowed(state: CapabilityState, packageId: string): void {
+  if (isCapabilitySourceForbidden(state.settings.forbiddenSources, packageId)) {
+    throw new CapabilityError("approval-required", "Administrator policy forbids this source.");
+  }
+}
 
 /** Packages listed as blocked in the view. */
 const MAX_BLOCKED_LISTED = 50;

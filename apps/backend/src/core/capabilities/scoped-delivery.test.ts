@@ -11,13 +11,17 @@ import os from "node:os";
 import path from "node:path";
 
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import { graphBranchWorktreePath } from "@orkestrator/protocol/graphs/run";
+import { capabilityLocation } from "@orkestrator/protocol/capability-resources-support";
 import { MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 
 import { readInputsManifest, stagePortableInputs } from "../portable-inputs.js";
 import { runCommand } from "../shell.js";
 import { StorageService } from "../storage.js";
+import { CapabilityExecutor, type NodePlanTarget } from "./executor.js";
+import { validatePackageFiles } from "./security.js";
 import { stageContainerCapabilities } from "./container-staging.js";
-import { testCapabilityHomes } from "./native-ownership.js";
+import { installedDigest, testCapabilityHomes } from "./native-ownership.js";
 import { worktreeCollisions } from "./worktree-writer.js";
 import type {
   ContainerDeliveryEvidence,
@@ -233,7 +237,11 @@ describe("project setups in a local worktree", () => {
   test("an isolated graph launch stages required project and graph-only skills in its own branch", async () => {
     const fixture = await makeFixture();
     const { main, worktree } = await repository(fixture);
-    const relativeWorktree = ".orkestrator/graph-branches/example";
+    const relativeWorktree = graphBranchWorktreePath("run-example", {
+      nodeId: "node",
+      iteration: 1,
+      branchKey: "branch",
+    });
     const branch = path.join(worktree, relativeWorktree);
     await git(main, "worktree", "add", "--detach", branch, "HEAD");
     fixture.environments = [
@@ -263,6 +271,7 @@ describe("project setups in a local worktree", () => {
       ).toContain(name);
     }
     expect(await exists(path.join(worktree, ".claude", "skills", "graph-review"))).toBe(false);
+    expect(await git(branch, "status", "--porcelain", "--untracked-files=all")).toBe("");
     const personal = path.join(fixture.home, ".claude", "skills", "graph-review");
     await fs.mkdir(personal, { recursive: true });
     await fs.writeFile(path.join(personal, "SKILL.md"), "A different personal skill.");
@@ -637,7 +646,7 @@ describe("container staging", () => {
       path.join(copy, ".orkestrator-capability.json"),
       JSON.stringify({
         packageId: staging.plan.items[0]!.packageId,
-        componentId: "x",
+        componentId: staging.plan.items[0]!.componentId,
         digest: "y",
       }),
     );
@@ -771,7 +780,9 @@ describe("launch deliveries for targets with their own copies", () => {
     };
 
     expect((await fixture.service.preflightSession(launch))?.launchBlockers).toEqual([]);
-    const recorded = (await fixture.storage.capabilities.loadCapabilityState()).launches.c1;
+    const recorded = Object.values(
+      (await fixture.storage.capabilities.loadCapabilityState()).launches,
+    ).find((row) => row.sessionKey === "c1");
     expect(recorded?.deliveries).toEqual([
       {
         packageId,
@@ -880,7 +891,9 @@ describe("launch deliveries for targets with their own copies", () => {
     const receipt = Object.values(state.receipts).find(
       (entry) => entry.environmentId === "env-w" && entry.locationId === "project-claude-skills",
     );
-    expect(state.launches.w1?.deliveries).toEqual([
+    expect(
+      Object.values(state.launches).find((row) => row.sessionKey === "w1")?.deliveries,
+    ).toEqual([
       {
         packageId,
         componentId: receipt!.componentId,
@@ -890,4 +903,180 @@ describe("launch deliveries for targets with their own copies", () => {
       },
     ]);
   });
+});
+
+test.each(["tracked", "linked"])("unassignment keeps a %s skill and its receipt", async (kind) => {
+  const fixture = await makeFixture();
+  const { main, worktree } = await repository(fixture);
+  fixture.environments = [
+    { id: "env-a", projectId: "proj-1", environmentType: "local", worktreePath: worktree },
+  ];
+  const setup = await fixture.service.setSetup({ setup: { name: "Scoped tools" } });
+  const packageId = await addToSetup(
+    fixture,
+    { kind: "skill", name: "proof", content: "Keep me." },
+    setup.id,
+  );
+  await fixture.service.assignSetup({ scope: "project", scopeId: "proj-1", setupIds: [setup.id] });
+  await settle(fixture);
+  const relative = ".claude/skills/proof/SKILL.md";
+  const file = path.join(worktree, relative);
+  const before = await fs.readFile(file, "utf8");
+  if (kind === "tracked") {
+    await git(worktree, "add", "-f", "--", relative);
+  } else {
+    await fs.cp(
+      path.join(worktree, ".claude/skills/proof"),
+      path.join(main, ".claude/skills/proof"),
+      { recursive: true },
+    );
+    await fs.rename(path.join(worktree, ".claude"), path.join(fixture.dir, "saved-claude"));
+    await fs.symlink(path.join(main, ".claude"), path.join(worktree, ".claude"));
+  }
+  const beforeIndex = await git(worktree, "ls-files", "--stage");
+  await fixture.service.assignSetup({ scope: "project", scopeId: "proj-1", setupIds: [] });
+  await settle(fixture);
+  expect(await fs.readFile(file, "utf8")).toBe(before);
+  expect(await git(worktree, "ls-files", "--stage")).toBe(beforeIndex);
+  expect(
+    Object.values((await fixture.storage.capabilities.loadCapabilityState()).receipts).some(
+      (receipt) => receipt.packageId === packageId && receipt.environmentId === "env-a",
+    ),
+  ).toBe(true);
+});
+
+test.each([
+  ["skill", ".claude/skills/proof/.orkestrator-capability.json"],
+  ["command", ".claude/commands/.orkestrator-capabilities.json"],
+] as const)(
+  "required scoped %s needs current ownership even when its contents are identical",
+  async (kind, marker) => {
+    const fixture = await makeFixture();
+    const { worktree } = await repository(fixture);
+    fixture.environments = [
+      { id: "env-a", projectId: "proj-1", environmentType: "local", worktreePath: worktree },
+    ];
+    const setup = await fixture.service.setSetup({ setup: { name: "Scoped proof" } });
+    await addToSetup(fixture, { kind, name: "proof", content: "Proof." }, setup.id, true);
+    await fixture.service.assignSetup({
+      scope: "project",
+      scopeId: "proj-1",
+      setupIds: [setup.id],
+    });
+    await settle(fixture);
+    const launch = {
+      environmentId: "env-a",
+      projectId: "proj-1",
+      provider: "claude" as const,
+      sessionKey: "proof",
+    };
+    await expect(fixture.service.preflightSession(launch)).resolves.toBeTruthy();
+    await fs.unlink(path.join(worktree, marker));
+    await expect(fixture.service.preflightSession(launch)).rejects.toThrow("not verified");
+  },
+);
+
+test("executable Markdown has a stable installed digest and replay requires ownership", async () => {
+  const fixture = await makeFixture();
+  const files = validatePackageFiles([
+    { path: "commands/proof.md", content: Buffer.from("Proof."), executable: true },
+  ]);
+  const artifactDigest = await fixture.service.artifacts.put(files);
+  const executor = new CapabilityExecutor({
+    storage: fixture.storage,
+    artifacts: fixture.service.artifacts,
+    homes: () => testCapabilityHomes(fixture.home),
+  });
+  const target: NodePlanTarget = {
+    key: "proof",
+    action: "install",
+    kind: "command",
+    locationId: "claude-user-commands",
+    componentId: "managed:proof#command:proof",
+    packageId: "managed:proof",
+    componentName: "proof",
+    pathOrKey: "commands/proof.md",
+    artifactDigest,
+  };
+  const [wrote] = await executor.apply([target]);
+  expect(wrote?.status).toBe("installed-next-session");
+  const dir = path.join(fixture.home, ".claude/commands");
+  const location = capabilityLocation(target.locationId!)!;
+  expect(await installedDigest(location, dir, "proof.md")).toBe(wrote!.digest!);
+  expect((await executor.apply([target]))[0]?.replayed).toBe(true);
+  await fs.unlink(path.join(dir, ".orkestrator-capabilities.json"));
+  expect((await executor.apply([target]))[0]?.status).toBe("drifted");
+  expect((await executor.apply([{ ...target, force: true }]))[0]?.replayed).toBeUndefined();
+  expect((await executor.apply([target]))[0]).toMatchObject({
+    replayed: true,
+    digest: wrote?.digest,
+  });
+
+  const revision = path.join(fixture.dir, "container-proof");
+  const record = await stageContainerCapabilities(
+    {
+      digest: "proof-plan",
+      undeliverable: [],
+      stages: ["claude"],
+      providers: ["claude"],
+      items: [
+        {
+          key: target.key,
+          packageId: target.packageId,
+          componentId: target.componentId,
+          packageDigest: artifactDigest,
+          componentName: "proof",
+          pathOrKey: target.pathOrKey,
+          kind: "command",
+          layout: "file",
+          locationId: target.locationId!,
+          relative: "claude-config/commands",
+          providers: ["claude"],
+        },
+      ],
+    },
+    fixture.service.artifacts,
+    revision,
+  );
+  expect(record.items[0]).toMatchObject({ status: "staged", digest: wrote?.digest });
+  expect(
+    await installedDigest(location, path.join(revision, "claude-config/commands"), "proof.md"),
+  ).toBe(wrote!.digest!);
+});
+
+test("container staging preserves the first same-named component from a package", async () => {
+  const fixture = await makeFixture();
+  const files = validatePackageFiles([
+    { path: "a/skills/review/SKILL.md", content: Buffer.from("first"), executable: false },
+    { path: "b/skills/review/SKILL.md", content: Buffer.from("second"), executable: false },
+  ]);
+  const packageDigest = await fixture.service.artifacts.put(files);
+  const revision = path.join(fixture.dir, "collision-revision");
+  const record = await stageContainerCapabilities(
+    {
+      digest: "plan",
+      undeliverable: [],
+      stages: ["claude"],
+      providers: ["claude"],
+      items: ["a", "b"].map((id) => ({
+        key: id,
+        packageId: "managed:proof",
+        componentId: `managed:proof#skill:${id}`,
+        packageDigest,
+        componentName: "review",
+        pathOrKey: `${id}/skills/review`,
+        kind: "skill",
+        layout: "directory",
+        locationId: "claude-user-skills",
+        relative: "claude-config/skills",
+        providers: ["claude"],
+      })),
+    },
+    fixture.service.artifacts,
+    revision,
+  );
+  expect(record.items.map((item) => item.status)).toEqual(["staged", "collision"]);
+  expect(
+    await fs.readFile(path.join(revision, "claude-config/skills/review/SKILL.md"), "utf8"),
+  ).toBe("first");
 });

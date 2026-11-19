@@ -35,7 +35,7 @@ import { CapabilityArtifactStore } from "./artifact-store.js";
 import { capabilityLocation } from "@orkestrator/protocol/capability-resources-support";
 
 import { componentFiles, type NodePlanResult, type NodePlanTarget } from "./executor.js";
-import { installName } from "./native-ownership.js";
+import { installedComponentFiles, installName } from "./native-ownership.js";
 import {
   finalizeOperation,
   newCorrelationId,
@@ -750,7 +750,7 @@ export async function expectedInstalledDigest(
   if (files.length === 0) return undefined;
   if (location.layout === "directory") return treeDigest(files);
   const entry = `${installName(component.name, component.pathOrKey, "file")}.md`;
-  return treeDigest([{ ...files[0]!, path: entry }]);
+  return treeDigest(installedComponentFiles(files, location.layout, entry));
 }
 
 /**

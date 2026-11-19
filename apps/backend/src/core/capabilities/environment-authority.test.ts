@@ -132,8 +132,9 @@ describe("a leaf's containers", () => {
     const effective = await gram.cap.preflightSession(containerLaunch("env-c", "ctr-1", "s1"));
     expect(effective?.launchBlockers).toEqual([]);
     expect(
-      (await desktop.storage.capabilities.loadCapabilityState()).launches[`${gram.id}|s1`]
-        ?.deliveries,
+      Object.values((await desktop.storage.capabilities.loadCapabilityState()).launches).find(
+        (row) => row.sessionKey === "s1" && row.target.nodeId === gram.id,
+      )?.deliveries,
     ).toEqual([
       expect.objectContaining({
         packageId: inspection.packageId,
@@ -261,7 +262,7 @@ describe("a leaf's containers", () => {
         requestId: "cap_leaf_x",
         answer: {},
       }),
-    ).rejects.toThrow();
+    ).resolves.toEqual({ accepted: false });
     await expect(
       gram.environmentsAuthority.containerDeliveryForController({
         controllerId: desktop.id,

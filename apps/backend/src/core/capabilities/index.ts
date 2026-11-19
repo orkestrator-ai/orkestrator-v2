@@ -79,7 +79,7 @@ export function mcpManagementInstaller(
   service: () => McpManagementService | undefined,
   scope?: { environmentId: string },
 ): McpInstaller {
-  const backendTarget = async (provider: AgentPlatform) => {
+  const backendTarget = async (provider: AgentPlatform, write = false) => {
     const mcp = service();
     if (!mcp) return { error: "MCP management is not available on this machine." } as const;
     const list = await mcp.listTargets(scope ? { environmentId: scope.environmentId } : {});
@@ -92,7 +92,7 @@ export function mcpManagementInstaller(
     );
     if (!target)
       return { error: `No ${provider} MCP configuration is managed on this machine.` } as const;
-    if (target.readOnlyReason) return { error: target.readOnlyReason } as const;
+    if (write && target.readOnlyReason) return { error: target.readOnlyReason } as const;
     const snapshot = await mcp.snapshot({ targetId: target.targetId });
     return { mcp, target, snapshot } as const;
   };
@@ -108,8 +108,27 @@ export function mcpManagementInstaller(
       if ("error" in found || found.snapshot.freshness !== "fresh") return false;
       const entryId = found.snapshot.effective[definition.name];
       return (
+        found.snapshot.definitions.some(
+          (entry) => entry.entryId === entryId && entry.status === "effective",
+        ) &&
         !!entryId &&
         found.mcp.matchesCapabilityConfiguration(found.target.targetId, entryId, definition)
+      );
+    },
+    async effective(ownership) {
+      const found = await backendTarget(ownership.provider);
+      if ("error" in found || found.snapshot.freshness !== "fresh") return false;
+      const entryId = found.snapshot.effective[ownership.name];
+      if (
+        !entryId ||
+        !found.snapshot.definitions.some(
+          (entry) => entry.entryId === entryId && entry.status === "effective",
+        )
+      )
+        return false;
+      const identity = await found.mcp.capabilityEntryIdentity(found.target.targetId, entryId);
+      return (
+        identity?.sourceId === ownership.sourceId && identity.fingerprint === ownership.fingerprint
       );
     },
     async observe(ownership) {
@@ -126,7 +145,7 @@ export function mcpManagementInstaller(
       return identity?.fingerprint === ownership.fingerprint ? "present" : "drifted";
     },
     async install({ provider, name, definition, requestId, previous, force }) {
-      const found = await backendTarget(provider);
+      const found = await backendTarget(provider, true);
       if ("error" in found) return { status: "unsupported", reason: found.error };
       const { mcp, target, snapshot } = found;
       if (snapshot.freshness !== "fresh")
@@ -230,7 +249,7 @@ export function mcpManagementInstaller(
       }
     },
     async remove({ provider, name, requestId, previous }) {
-      const found = await backendTarget(provider);
+      const found = await backendTarget(provider, true);
       if ("error" in found) return { status: "unsupported", reason: found.error };
       const { mcp, target, snapshot } = found;
       if (snapshot.freshness !== "fresh")

@@ -39,6 +39,7 @@ import { canonicalCapabilityJson } from "@orkestrator/protocol/capability-resour
 import type { CapabilityArtifactStore } from "./artifact-store.js";
 import { componentFiles } from "./executor.js";
 import {
+  installedComponentFiles,
   installName,
   markerContent,
   readLocationIndex,
@@ -318,11 +319,16 @@ function itemFor(
   };
 }
 
-async function readMarker(file: string): Promise<{ packageId?: unknown } | null> {
+async function readMarker(
+  file: string,
+): Promise<{ packageId?: unknown; componentId?: unknown } | null> {
   try {
     const stat = await fs.lstat(file);
     if (!stat.isFile() || stat.size > 64 * 1024) return null;
-    return JSON.parse(await fs.readFile(file, "utf8")) as { packageId?: unknown };
+    return JSON.parse(await fs.readFile(file, "utf8")) as {
+      packageId?: unknown;
+      componentId?: unknown;
+    };
   } catch {
     return null;
   }
@@ -372,16 +378,20 @@ export async function stageContainerCapabilities(
       const directory = path.join(revisionDirectory, ...item.relative.split("/"));
       const name = installName(item.componentName, item.pathOrKey, item.layout);
       const entry = item.layout === "file" ? `${name}.md` : name;
-      const written = item.layout === "file" ? [{ ...selected[0]!, path: entry }] : selected;
+      const written = installedComponentFiles(selected, item.layout, entry);
       const digest = treeDigest(written);
       const existing = await fs.lstat(path.join(directory, entry)).catch(() => null);
       const index = item.layout === "file" ? await readLocationIndex(directory) : null;
       if (existing) {
         const owner =
           item.layout === "directory"
-            ? (await readMarker(path.join(directory, entry, CAPABILITY_MARKER_FILE)))?.packageId
-            : index?.files[entry]?.packageId;
-        if (existing.isSymbolicLink() || owner !== item.packageId) {
+            ? await readMarker(path.join(directory, entry, CAPABILITY_MARKER_FILE))
+            : index?.files[entry];
+        if (
+          existing.isSymbolicLink() ||
+          owner?.packageId !== item.packageId ||
+          owner.componentId !== item.componentId
+        ) {
           items.push({
             ...base,
             status: "collision",

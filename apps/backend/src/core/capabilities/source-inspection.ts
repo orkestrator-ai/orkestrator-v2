@@ -788,14 +788,21 @@ export async function fetchGitSource(
     path.join(options.workRoot ?? os.tmpdir(), "orkestrator-capability-"),
   );
   const directory = path.join(root, "checkout");
-  const env = {
-    ...nonInteractiveGitEnv(undefined),
+  // The checkout processes repository-controlled attributes. Run it with no
+  // inherited Git config, config overrides, or templates that can define filters.
+  const checkoutEnv = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+    GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_LFS_SKIP_SMUDGE: "1",
+    GIT_CONFIG_COUNT: "0",
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_NO_LAZY_FETCH: "1",
   };
   const config = [
     "-c",
     "core.hooksPath=/dev/null",
+    "-c",
+    "core.attributesFile=/dev/null",
     "-c",
     "core.symlinks=false",
     "-c",
@@ -809,9 +816,14 @@ export async function fetchGitSource(
   ];
   const timeoutMs = options.timeoutMs ?? 120_000;
   try {
-    await run("git", [...config, "init", "--quiet", directory], { env, timeoutMs });
+    const fetchEnv = nonInteractiveGitEnv(undefined);
+    fetchEnv.GIT_CONFIG_NOSYSTEM = "1";
+    await run("git", [...config, "init", "--quiet", "--template=", directory], {
+      env: checkoutEnv,
+      timeoutMs,
+    });
     await run("git", [...config, "-C", directory, "remote", "add", "origin", source.repo.trim()], {
-      env,
+      env: checkoutEnv,
       timeoutMs,
     });
     await run(
@@ -829,7 +841,7 @@ export async function fetchGitSource(
         "origin",
         source.channel ?? "HEAD",
       ],
-      { env, timeoutMs },
+      { env: fetchEnv, timeoutMs },
     );
     const subpath = source.subpath
       .split("/")
@@ -839,14 +851,17 @@ export async function fetchGitSource(
       await run(
         "git",
         [...config, "-C", directory, "sparse-checkout", "set", "--no-cone", `/${subpath}/`],
-        { env, timeoutMs },
+        { env: checkoutEnv, timeoutMs },
       );
     }
     await run("git", [...config, "-C", directory, "checkout", "--quiet", "FETCH_HEAD"], {
-      env,
+      env: checkoutEnv,
       timeoutMs,
     });
-    const { stdout } = await run("git", ["-C", directory, "rev-parse", "HEAD"], { env, timeoutMs });
+    const { stdout } = await run("git", ["-C", directory, "rev-parse", "HEAD"], {
+      env: checkoutEnv,
+      timeoutMs,
+    });
     const commit = stdout.trim();
     if (!/^[0-9a-f]{40,64}$/.test(commit)) {
       throw new CapabilityError(

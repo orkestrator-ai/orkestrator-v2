@@ -98,7 +98,11 @@ export interface GraphAgentExecutorDependencies {
     "preflightSession"
   >["preflightSession"];
   /** A graph session's private capability plugins (`CapabilityService.sessionPlugins`). */
-  capabilitySessionPlugins?: (sessionKey: string) => Promise<string[]>;
+  capabilitySessionPlugins?: (
+    sessionKey: string,
+    environmentId: string,
+    provider: "claude",
+  ) => Promise<string[]>;
   storage: { getEnvironment(environmentId: string): Promise<Environment | null> };
   providers: GraphAgentProviders;
   questions: GraphAgentQuestions;

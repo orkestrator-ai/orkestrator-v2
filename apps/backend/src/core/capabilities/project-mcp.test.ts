@@ -11,6 +11,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 import { createFixture, type Fixture as McpFixture } from "../mcp-management/test-support.js";
@@ -69,6 +70,7 @@ async function makeFixture(tracked: Record<string, string> = {}): Promise<Fixtur
     inventory: {
       providers: async () => AGENT_PLATFORMS.map((provider) => ({ provider, available: true })),
     },
+    mcp: mcpManagementInstaller(() => mcp.service),
     scoped: {
       environments: async () => [
         { id: "env-1", projectId: "proj-1", environmentType: "local", worktreePath: worktree },
@@ -85,7 +87,13 @@ async function makeFixture(tracked: Record<string, string> = {}): Promise<Fixtur
 /** An MCP package for one provider (Claude by default) in a project toolkit assigned to `proj-1`. */
 async function projectServer(
   fixture: Fixture,
-  input: { name: string; url: string; envKeys?: string[]; provider?: AgentPlatform },
+  input: {
+    name: string;
+    url: string;
+    envKeys?: string[];
+    provider?: AgentPlatform;
+    required?: boolean;
+  },
   setupId?: string,
 ): Promise<{ setupId: string; packageId: string }> {
   const toolkit = setupId ?? (await fixture.service.setSetup({ setup: { name: "Tools" } })).id;
@@ -103,6 +111,7 @@ async function projectServer(
       kind: "add-to-setup",
       inspectionId: inspection.inspectionId,
       setupId: toolkit,
+      ...(input.required ? { required: true } : {}),
       excludedProviders: AGENT_PLATFORMS.filter(
         (provider) => provider !== (input.provider ?? "claude"),
       ),
@@ -302,4 +311,99 @@ describe("project MCP files", () => {
     expect(isEmptyProjectMcpFile("# note\n[mcp_servers]\n", codex)).toBe(true);
     expect(isEmptyProjectMcpFile('[mcp_servers]\n[mcp_servers.a]\nurl = "x"\n', codex)).toBe(false);
   });
+});
+
+test.each(["host", "project"])(
+  "required %s MCP checks user-supplied credentials without owning them",
+  async (scope) => {
+    const fixture = await makeFixture();
+    const command = "fixture-docs";
+    const inspection = await fixture.service.authorPackage({
+      kind: "mcp-server",
+      name: "docs",
+      mcp: { transport: "stdio", command, envKeys: ["DOCS_TOKEN"] },
+    });
+    const setupId =
+      scope === "host"
+        ? MY_SETUP_ID
+        : (await fixture.service.setSetup({ setup: { name: "Project tools" } })).id;
+    const { operation } = await fixture.service.previewChange({
+      change: {
+        kind: "add-to-setup",
+        setupId,
+        required: true,
+        inspectionId: inspection.inspectionId,
+        excludedProviders: AGENT_PLATFORMS.filter((provider) => provider !== "claude"),
+      },
+    });
+    await fixture.service.applyChange({
+      operationId: operation.id,
+      approvedDigest: operation.planDigest,
+    });
+    if (scope === "project")
+      await fixture.service.assignSetup({ scope, scopeId: "proj-1", setupIds: [setupId] });
+    await settle(fixture);
+    const launch = {
+      environmentId: "env-1",
+      projectId: "proj-1",
+      provider: "claude" as const,
+      sessionKey: "required-mcp",
+    };
+    await expect(fixture.service.preflightSession(launch)).rejects.toThrow("not verified");
+    const file = scope === "host" ? "home/.claude.json" : "worktree/.mcp.json";
+    const config = (credentials: boolean) =>
+      JSON.stringify({
+        mcpServers: {
+          docs: {
+            command,
+            ...(credentials ? { env: { DOCS_TOKEN: "fixture-value" } } : {}),
+          },
+        },
+      });
+    const external = config(true);
+    fixture.mcp.write(file, external);
+    await settle(fixture);
+    await expect(fixture.service.preflightSession(launch)).resolves.toBeTruthy();
+    fixture.mcp.write(file, config(false));
+    await expect(fixture.service.preflightSession(launch)).rejects.toThrow("not verified");
+    fixture.mcp.write(file, external);
+    if (scope === "project") {
+      await fixture.service.assignSetup({ scope, scopeId: "proj-1", setupIds: [] });
+      await settle(fixture);
+      expect(fixture.mcp.read(file)).toBe(external);
+    }
+  },
+);
+
+test("a required project MCP server blocks after Grok disables it outside the definition", async () => {
+  const fixture = await makeFixture();
+  await projectServer(fixture, {
+    name: "docs",
+    url: "https://docs.example.com/mcp",
+    provider: "grok",
+    required: true,
+  });
+  const launch = {
+    environmentId: "env-1",
+    projectId: "proj-1",
+    provider: "grok" as const,
+    sessionKey: "required-grok",
+  };
+  await expect(fixture.service.preflightSession(launch)).resolves.toBeTruthy();
+  fixture.mcp.write("home/.grok/config.toml", 'disabled_mcp_servers = ["docs"]\n');
+  await expect(fixture.service.preflightSession(launch)).rejects.toThrow("not verified");
+});
+
+test("unassignment keeps a previously managed MCP file once Git tracks it", async () => {
+  const fixture = await makeFixture();
+  await projectServer(fixture, { name: "docs", url: "https://docs.example.com/mcp" });
+  const file = path.join(fixture.worktree, ".mcp.json");
+  await git(fixture.worktree, "add", "-f", "--", ".mcp.json");
+  const contents = await fs.readFile(file, "utf8");
+  const index = await git(fixture.worktree, "ls-files", "--stage");
+  await fixture.service.assignSetup({ scope: "project", scopeId: "proj-1", setupIds: [] });
+  await settle(fixture);
+  expect(await fs.readFile(file, "utf8")).toBe(contents);
+  expect(await git(fixture.worktree, "ls-files", "--stage")).toBe(index);
+  expect(await receipts(fixture)).toHaveLength(1);
 });

@@ -1323,6 +1323,8 @@ export class NativeAgentPromptDispatch {
         try {
           capabilityPlugins = await this.host.options.capabilitySessionPlugins(
             session.logicalSessionKey,
+            input.environmentId,
+            session.agent,
           );
         } catch (error) {
           log.warn("dispatch.capability-plugins-failed", {

@@ -128,10 +128,10 @@ describe("command-node handover of capability authority", () => {
       provider: "claude",
       sessionKey: "private-session",
     });
-    const plugin = await mini.cap.sessionPlugins("private-session");
+    const plugin = await mini.cap.sessionPlugins("private-session", "env-1", "claude");
     expect(plugin).toHaveLength(1);
     await handOver(desktop, mini);
-    expect(await mini.cap.sessionPlugins("private-session")).toEqual(plugin);
+    expect(await mini.cap.sessionPlugins("private-session", "env-1", "claude")).toEqual(plugin);
   });
 
   test("state and artifacts move with a higher epoch; the old controller is refused everywhere", async () => {

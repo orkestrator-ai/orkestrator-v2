@@ -42,6 +42,7 @@ import {
 
 import type { CapabilityArtifactStore } from "./artifact-store.js";
 import {
+  installedComponentFiles,
   installName,
   installedDigest,
   locationDirectory,
@@ -110,6 +111,7 @@ type McpOwnership = import("./types.js").CapabilityMcpOwnership;
 /** Writes and removes MCP definitions in one provider's user configuration. */
 export interface McpInstaller {
   configured?(provider: AgentPlatform, definition: McpDefinitionShape): Promise<boolean>;
+  effective?(ownership: McpOwnership): Promise<boolean>;
   observe?(ownership: McpOwnership): Promise<"present" | "missing" | "drifted" | "unavailable">;
   install(input: {
     provider: AgentPlatform;
@@ -162,6 +164,8 @@ export interface CapabilityExecutorDeps {
   /** Claude plugins through Orkestrator's own marketplace (`provider-adapters/claude-plugins.ts`). */
   claudePlugins?: ClaudePluginAdapter;
   now?: () => string;
+  /** A graph's disposable worktree is owned by the activation lifecycle. */
+  recordApplied?: boolean;
 }
 
 /**
@@ -246,6 +250,29 @@ export function componentFiles(
   return file ? [file] : [];
 }
 
+/** Checks a request's authority without accepting its epoch. */
+export function assertAdmissibleExecutorEpoch(
+  state: Pick<import("./types.js").CapabilityExecutorState, "epoch" | "controllerId">,
+  controllerId: string,
+  epoch: number,
+): void {
+  if (!Number.isInteger(epoch) || epoch < 1) {
+    throw new CapabilityError("invalid-request", "The plan carries no valid epoch.");
+  }
+  if (epoch < state.epoch) {
+    throw new CapabilityError(
+      "stale-epoch",
+      "This machine follows a newer command node; the plan was refused.",
+    );
+  }
+  if (epoch === state.epoch && state.controllerId && state.controllerId !== controllerId) {
+    throw new CapabilityError(
+      "stale-epoch",
+      "Another command node holds this epoch; the plan was refused.",
+    );
+  }
+}
+
 export class CapabilityExecutor {
   private readonly locks = new Map<string, Promise<unknown>>();
 
@@ -273,22 +300,8 @@ export class CapabilityExecutor {
    * calls are then refused, so two authorities never write here.
    */
   admitEpoch(controllerId: string, epoch: number): void {
-    if (!Number.isInteger(epoch) || epoch < 1) {
-      throw new CapabilityError("invalid-request", "The plan carries no valid epoch.");
-    }
     this.deps.storage.capabilities.mutateCapabilityExecutorState((state) => {
-      if (epoch < state.epoch) {
-        throw new CapabilityError(
-          "stale-epoch",
-          "This machine follows a newer command node; the plan was refused.",
-        );
-      }
-      if (epoch === state.epoch && state.controllerId && state.controllerId !== controllerId) {
-        throw new CapabilityError(
-          "stale-epoch",
-          "Another command node holds this epoch; the plan was refused.",
-        );
-      }
+      assertAdmissibleExecutorEpoch(state, controllerId, epoch);
       state.epoch = epoch;
       state.controllerId = controllerId;
     });
@@ -400,11 +413,17 @@ export class CapabilityExecutor {
     const files = componentFiles(artifact, target);
     if (files.length === 0)
       throw new CapabilityError("not-found", "The component is not in the artifact.");
-    const writtenFiles = location.layout === "file" ? [{ ...files[0]!, path: entry }] : files;
+    const writtenFiles = installedComponentFiles(files, location.layout, entry);
     const digest = treeDigest(writtenFiles);
 
-    // A replayed key whose bytes are still in place is answered from the record.
-    if (previous && previous.digest === digest) {
+    const ownership = await this.ownership(location.layout, directory, entry);
+    if (
+      previous?.digest === digest &&
+      ownership.kind === "managed" &&
+      ownership.packageId === target.packageId &&
+      ownership.componentId === target.componentId &&
+      ownership.digest === digest
+    ) {
       const current = await installedDigest(location, directory, entry);
       if (current === digest) {
         return {
@@ -417,7 +436,6 @@ export class CapabilityExecutor {
       }
     }
 
-    const ownership = await this.ownership(location.layout, directory, entry);
     // Adoption: the user chose to manage an external item whose bytes are exactly the package's.
     const adopting =
       ownership.kind === "external" &&
@@ -445,7 +463,9 @@ export class CapabilityExecutor {
           reason: `${name} in ${location.label} belongs to another package; the two components collide.`,
         };
       }
-      const current = await installedDigest(location, directory, entry);
+      const current = await installedDigest(location, directory, entry, {
+        recordedDigest: ownership.digest,
+      });
       if (current !== null && current !== ownership.digest && current !== digest && !target.force) {
         return {
           key: target.key,
@@ -591,7 +611,9 @@ export class CapabilityExecutor {
       };
     }
     const { location } = this.locate(target.locationId!);
-    const current = await installedDigest(location, directory, entry);
+    const current = await installedDigest(location, directory, entry, {
+      recordedDigest: ownership.digest,
+    });
     if (current !== ownership.digest && !target.force) {
       return {
         key: target.key,
@@ -613,7 +635,7 @@ export class CapabilityExecutor {
 
   private async applyMcp(
     target: NodePlanTarget,
-    previous: { digest: string; mcp?: McpOwnership } | undefined,
+    previous: import("./types.js").CapabilityExecutorState["applied"][string] | undefined,
     fence?: () => Promise<void>,
   ): Promise<NodePlanResult> {
     if (!this.deps.mcp || !target.provider) {
@@ -625,6 +647,11 @@ export class CapabilityExecutor {
       };
     }
     if (target.action === "remove") {
+      if (previous?.externalMcp) {
+        await fence?.();
+        this.forget(target);
+        return { key: target.key, status: "ready", verification: "requested" };
+      }
       if (!previous?.mcp) {
         return {
           key: target.key,
@@ -668,10 +695,22 @@ export class CapabilityExecutor {
       throw new CapabilityError("not-found", "The MCP server is not in the artifact.");
     if (definition.envKeys.length > 0 || definition.headerKeys.length > 0) {
       if (await this.deps.mcp.configured?.(target.provider, definition)) {
+        await fence?.();
+        this.deps.storage.capabilities.mutateCapabilityExecutorState((state) => {
+          state.applied[target.key] = {
+            digest: target.artifactDigest!,
+            at: this.now(),
+            action: target.action,
+            packageId: target.packageId,
+            componentId: target.componentId,
+            externalMcp: { provider: target.provider!, definition },
+          };
+        });
         return {
           key: target.key,
           status: "installed-next-session",
           verification: "present",
+          digest: target.artifactDigest,
           reason: "A matching local configuration supplies the required credentials.",
         };
       }
@@ -792,6 +831,7 @@ export class CapabilityExecutor {
   }
 
   private record(target: NodePlanTarget, digest: string, mcp?: McpOwnership): void {
+    if (this.deps.recordApplied === false) return;
     this.deps.storage.capabilities.mutateCapabilityExecutorState((state) => {
       state.applied[target.key] = {
         digest,

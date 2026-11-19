@@ -1,5 +1,6 @@
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 import { USAGE_LIMIT_ERROR_CODE } from "@orkestrator/protocol/agent-usage-limits";
+import type { ProviderFailureReason } from "@orkestrator/protocol/provider-failures";
 import {
   SteerOrdering,
   DEFAULT_SESSION_RETENTION_MS,
@@ -54,7 +55,11 @@ import {
 } from "./history/rollout.js";
 import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-title-index.js";
 
-import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
+import {
+  AppServerRpcError,
+  codexFailureReason,
+  isMissingRolloutError,
+} from "./app-server/errors.js";
 
 import { type StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -1501,6 +1506,8 @@ export class CodexRuntimeSessions {
     error?: string;
     /** `usage-limit` beside `error` when app-server said `usageLimitExceeded`. */
     errorCode?: typeof USAGE_LIMIT_ERROR_CODE;
+    /** The provider-neutral reason beside `error`, when app-server's code settles it. */
+    failureReason?: ProviderFailureReason;
     /**
      * Why the last turn failed, when it was not the model's doing. `restart`:
      * an app-server restart stopped the turn partway; the thread is intact and
@@ -1563,6 +1570,9 @@ export class CodexRuntimeSessions {
       ...(phase === "failed" && error !== undefined && context?.errorCode === "usageLimitExceeded"
         ? { errorCode: USAGE_LIMIT_ERROR_CODE }
         : {}),
+      ...failureReasonField(
+        phase === "failed" && error !== undefined ? context?.errorCode : undefined,
+      ),
       // Structured so a workflow can continue the turn without matching text.
       // The notice clears when the next turn is accepted, and the error check
       // keeps a later, unrelated failure from inheriting it.
@@ -1953,4 +1963,10 @@ export class CodexRuntimeSessions {
    * The whole body runs under the thread's dispatch lock so two tabs cannot both
    * observe an idle thread and both dispatch.
    */
+}
+
+/** `failureReason` for a failed turn's app-server code, when the code settles it. */
+function failureReasonField(code: string | undefined): { failureReason?: ProviderFailureReason } {
+  const failureReason = codexFailureReason(code);
+  return failureReason ? { failureReason } : {};
 }

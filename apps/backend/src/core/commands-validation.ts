@@ -369,6 +369,11 @@ export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNati
         : undefined,
     prompt: commandPrompt?.trimStart() ?? asNonBlankString(args.prompt, "prompt"),
     requestId: asNonBlankString(args.requestId, "requestId"),
+    ...(args.failureSessionId === undefined
+      ? {}
+      : {
+          failureSessionId: asBoundedNonBlankString(args.failureSessionId, "failureSessionId", 512),
+        }),
     sessionMode:
       args.sessionMode === "plan" || args.sessionMode === "build" ? args.sessionMode : undefined,
     executionProfileId:

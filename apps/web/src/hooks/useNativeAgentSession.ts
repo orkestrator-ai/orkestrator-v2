@@ -471,6 +471,7 @@ interface UseNativeAgentSessionOptions {
 
 export interface NativeAgentSendOptions {
   requestId?: string;
+  failureSessionId?: string;
   model?: string;
   reasoningEffort?: string;
   mode?: "build" | "plan";
@@ -2789,6 +2790,7 @@ export function useNativeAgentSession<TMessage = unknown>({
                 : "Agent Session",
           prompt: text,
           requestId,
+          ...(options.failureSessionId ? { failureSessionId: options.failureSessionId } : {}),
           model: options.model,
           reasoningEffort: options.reasoningEffort,
           mode: options.mode,
@@ -2807,6 +2809,13 @@ export function useNativeAgentSession<TMessage = unknown>({
         await refresh();
         return outcome;
       } catch (error) {
+        if (options.failureSessionId && incompatibility(error)?.code === "unsupported-field") {
+          pendingDispatchRef.current = null;
+          return {
+            outcome: "rejected",
+            error: "This machine needs an update before it can retry a failed turn.",
+          };
+        }
         // Keep the stable request id. If the transport failed after acceptance,
         // an explicit retry is deduplicated by the backend/provider journal.
         await refresh();

@@ -436,9 +436,17 @@ session.get("/:id", async (c) => {
     createdAt: sessionData.createdAt.toISOString(),
     lastActivity: sessionData.lastActivity.toISOString(),
     error: sessionData.error,
+    ...(sessionData.status === "error" && sessionData.failedTurn
+      ? { failedTurn: sessionData.failedTurn }
+      : {}),
     // The provider's own refusal for a used-up plan, beside the failure only.
     ...(sessionData.status === "error" && sessionData.errorCode
       ? { errorCode: sessionData.errorCode }
+      : {}),
+    // The provider-neutral reason, beside the failure only, when the SDK's
+    // API error code settled it; otherwise the backend reads `error`'s text.
+    ...(sessionData.status === "error" && sessionData.failureReason
+      ? { failureReason: sessionData.failureReason }
       : {}),
     // Structured, so a workflow continues the turn without matching text.
     // Only beside the failure it explains; the next turn clears it.

@@ -115,6 +115,7 @@ const dispatchArgs = Schema.Struct({
   ...sessionCreation,
   prompt: optionalUnknown,
   requestId: optionalUnknown,
+  failureSessionId: optionalString,
   command: optionalUnknown,
   approvalMode: optionalUnknown,
   images: optionalUnknown,
@@ -135,6 +136,7 @@ const dispatchArgs = Schema.Struct({
 // approvalMode, interactionPolicy, executionProfileId: safety options.
 const dispatchCritical = [
   "requestId",
+  "failureSessionId",
   "command",
   "schema",
   "images",

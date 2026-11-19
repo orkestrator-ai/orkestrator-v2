@@ -10,6 +10,7 @@ import { FakeClock } from "@/lib/testing/read-coordinator";
  * sends and when it declines to send at all.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { VirtuosoMockContext } from "react-virtuoso";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
@@ -19,6 +20,10 @@ import type {
   NativeAgentSlashCommand,
   NativeAgentTabData,
 } from "@orkestrator/protocol/native-agent";
+import {
+  PROVIDER_FAILURE_RETRY_PROMPT,
+  providerFailureRetryRequestId,
+} from "@orkestrator/protocol/provider-failures";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { createNativeAgentSessionBackend } from "@/test/native-agent-session-backend";
@@ -86,6 +91,8 @@ interface ProjectionOptions {
   catalogue?: NativeAgentCommandCatalogueState | null;
   phase?: NativeAgentSessionProjection["turn"]["phase"];
   sessionId?: string;
+  messages?: NativeMessage[];
+  twoModels?: boolean;
 }
 let projectionOptions: ProjectionOptions = {};
 
@@ -98,11 +105,16 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
     sessionId: projectionOptions.sessionId ?? `${agent}-session`,
     connection: "connected",
     turn: { phase: projectionOptions.phase ?? "idle" },
-    messages: [],
+    messages: projectionOptions.messages ?? [],
     interactions: [],
     composerControls: [],
     composer: {
-      models: [{ platform: agent, id: "model-a", label: "Model A" }],
+      models: [
+        { platform: agent, id: "model-a", label: "Model A" },
+        ...(projectionOptions.twoModels
+          ? [{ platform: agent, id: "model-b", label: "Model B" }]
+          : []),
+      ],
       selectedModelId: "model-a",
       fastModeEnabled: false,
       fastModeAvailable: false,
@@ -264,7 +276,9 @@ async function renderTab(
   beforeSend?: () => Promise<void | boolean>,
 ) {
   const view = renderInAppCommandScope(
-    <AgentNativeTab tabId={tabId} data={identity(platform)} isActive beforeSend={beforeSend} />,
+    <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 60 }}>
+      <AgentNativeTab tabId={tabId} data={identity(platform)} isActive beforeSend={beforeSend} />
+    </VirtuosoMockContext.Provider>,
   );
   const input = await screen.findByRole("textbox");
   // Wait for the projection so sending is authorised.
@@ -879,6 +893,61 @@ describe("composer preflight", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     await screen.findByText("Sign in from Settings instead.");
     expect(beforeSend).not.toHaveBeenCalled();
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
+});
+
+const FAILURE_ROW: NativeMessage = {
+  id: "native-terminal:error:fixture",
+  createdAt: "2026-11-19T10:00:00.000Z",
+  role: "system",
+  content: "Fetch failed",
+  parts: [],
+};
+
+describe("transcript recovery through the composer", () => {
+  test.each([false, true])(
+    "Retry waits for preflight (allowed=%s) and keeps the draft clean",
+    async (allowed) => {
+      projectionOptions = { messages: [FAILURE_ROW] };
+      let release!: (allowed: boolean) => void;
+      const beforeSend = mock(
+        () =>
+          new Promise<boolean>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const tabId = "failure-retry";
+      await renderTab(tabId, "codex", beforeSend);
+      fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+      expect(beforeSend).toHaveBeenCalledTimes(1);
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      await act(async () => release(allowed));
+      if (allowed) {
+        expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+        expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+          prompt: PROVIDER_FAILURE_RETRY_PROMPT,
+          command: { kind: "literal" },
+          requestId: providerFailureRetryRequestId(FAILURE_ROW.id, FAILURE_ROW.createdAt),
+          failureSessionId: "codex-session",
+        });
+      } else {
+        expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      }
+      expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+      expect(draftFor(tabId)?.requestId).toBeUndefined();
+      expect(draftFor(tabId)?.text ?? "").toBe("");
+    },
+  );
+
+  test("Change model opens the composer picker", async () => {
+    projectionOptions = {
+      messages: [{ ...FAILURE_ROW, content: "Model not available" }],
+      twoModels: true,
+    };
+    await renderTab("failure-model-change");
+    fireEvent.click(await screen.findByRole("button", { name: "Change model" }));
+    expect(await screen.findByText("Model B")).toBeTruthy();
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
   });
 });

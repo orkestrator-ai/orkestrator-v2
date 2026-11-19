@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  classifyProviderFailure,
+  supportedProviderFailureRemedies,
+} from "@orkestrator/protocol/provider-failures";
+import {
   formatAcpProviderError,
   formatAcpRpcError,
   GROK_USAGE_EXHAUSTED_MESSAGE,
@@ -16,6 +20,18 @@ describe("ACP provider errors", () => {
   test("replaces Grok's generic JSON-RPC wrapper with an actionable credit error", () => {
     expect(formatAcpRpcError({ message: "Internal error", data: exhausted }, "grok")).toBe(
       GROK_USAGE_EXHAUSTED_MESSAGE,
+    );
+  });
+
+  test.each([
+    [exhausted.message, "usage-limit"],
+    ["HTTP 402 Payment Required", "billing"],
+  ] as const)("classifies the normalized Grok refusal from %s without Retry", (message, reason) => {
+    const text = formatAcpRpcError({ message: "Internal error", data: { message } }, "grok");
+    const failure = classifyProviderFailure({ text });
+    expect(failure.reason).toBe(reason);
+    expect(supportedProviderFailureRemedies(failure.reason, { retry: true })).not.toContain(
+      "retry",
     );
   });
 

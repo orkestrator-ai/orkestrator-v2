@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { GitFetchScheduler } from "../src/core/git/fetch-scheduler";
 
+/** A background fetch: one explicit remote-tracking ref, no FETCH_HEAD write. */
+const MAIN_REFSPEC = [
+  "--no-write-fetch-head",
+  "origin",
+  "+refs/heads/main:refs/remotes/origin/main",
+];
+
 interface Harness {
   scheduler: GitFetchScheduler;
   calls: string[][];
@@ -85,7 +92,7 @@ describe("GitFetchScheduler", () => {
 
     await harness.scheduler.ensureFetched("/wt/a", "main");
 
-    expect(harness.fetches).toEqual([["-C", "/wt/a", "fetch", "origin", "main"]]);
+    expect(harness.fetches).toEqual([["-C", "/wt/a", "fetch", ...MAIN_REFSPEC]]);
   });
 
   test("does not fetch again within the ttl", async () => {
@@ -201,8 +208,8 @@ describe("GitFetchScheduler", () => {
     await harness.scheduler.ensureFetched("/wt/b", "main");
 
     expect(harness.fetches).toEqual([
-      ["-C", "/wt/a", "fetch", "origin", "main"],
-      ["-C", "/wt/b", "fetch", "origin", "main"],
+      ["-C", "/wt/a", "fetch", ...MAIN_REFSPEC],
+      ["-C", "/wt/b", "fetch", ...MAIN_REFSPEC],
     ]);
   });
 
@@ -215,8 +222,8 @@ describe("GitFetchScheduler", () => {
     await harness.scheduler.ensureFetched("/wt/b", "main");
 
     expect(harness.fetches).toEqual([
-      ["-C", "/wt/a", "fetch", "origin", "main"],
-      ["-C", "/wt/b", "fetch", "origin", "main"],
+      ["-C", "/wt/a", "fetch", ...MAIN_REFSPEC],
+      ["-C", "/wt/b", "fetch", ...MAIN_REFSPEC],
     ]);
   });
 

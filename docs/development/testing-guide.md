@@ -2416,6 +2416,7 @@ Use the default suite plus the additional evidence relevant to the change:
 | --- | --- |
 | Test runner, package scripts, Turbo configuration | Focused runner unit tests, then both cold-enough and warm `mise run test` observations |
 | Backend, protocol, or bridge | Owning file/package tests; exercise subprocess cleanup when lifecycle code changed |
+| A bridge's engine boundary, or an agent SDK/CLI pin | The bridge's provider-replay corpus (`src/conformance-provider-replay.test.ts`, in its default group); read any changed expectation before regenerating it ([provider replay](../../tests/conformance/provider-replay/README.md)) |
 | React component or store | Owning component/store tests and `mise run test:browser` when browser behavior matters |
 | User-visible or background renderer flow | Isolated-stack browser cycle, including inactive-environment rehydration |
 | Electron main/preload/IPC | Focused Electron tests plus `mise run test:agent:electron` |

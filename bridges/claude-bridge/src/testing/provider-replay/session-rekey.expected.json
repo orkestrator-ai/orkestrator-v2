@@ -1,0 +1,43 @@
+[
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Continue",
+        "textLength": 8,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Continue"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Continuing under the new session.",
+        "textLength": 33,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Continuing under the new session."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "adoptedProviderSessionId": true
+    }
+  }
+]

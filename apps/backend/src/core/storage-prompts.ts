@@ -346,6 +346,17 @@ export class PromptsRepository {
         environmentId,
         "Prompt queue",
       );
+      if (message.requireProviderSessionId !== undefined) {
+        const session = await this.promptQueueNativeSession(queueKey, environmentId);
+        if (
+          !isNonBlankString(message.requireProviderSessionId) ||
+          session?.providerSessionId !== message.requireProviderSessionId
+        ) {
+          throw new Error(
+            "The destination conversation changed. Choose a started agent chat and try again.",
+          );
+        }
+      }
       return this.repos.promptQueues.updatePromptQueue(queueKey, (previous) => {
         if (previous && previous.environmentId !== environmentId) {
           throw new Error("Prompt queue belongs to another environment");

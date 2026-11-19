@@ -24,6 +24,7 @@ import {
   getAllLeaves,
 } from "@/stores";
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
+import type { EnvironmentLaunchBase } from "@/lib/launch-base";
 import { findEmbeddedTab } from "@/lib/pane-layout-embedded";
 import { getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
@@ -930,23 +931,38 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       namingPrompt?: string,
       buildPipelineId?: string,
       worktreeBaseDir?: string,
+      launchBase?: EnvironmentLaunchBase,
     ) => {
       const node = environmentNode(scope);
       beginEnvironmentCreation(node, pid);
       setLoading(true);
       setError(null);
       try {
-        const environment = await environmentsApi(scope).createEnvironment(
-          pid,
-          name,
-          networkAccessMode,
-          initialPrompt,
-          portMappings,
-          environmentType,
-          namingPrompt,
-          buildPipelineId,
-          ...(worktreeBaseDir ? [worktreeBaseDir] : []),
-        );
+        const api = environmentsApi(scope);
+        const environment = launchBase
+          ? await api.createEnvironment(
+              pid,
+              name,
+              networkAccessMode,
+              initialPrompt,
+              portMappings,
+              environmentType,
+              namingPrompt,
+              buildPipelineId,
+              worktreeBaseDir,
+              launchBase,
+            )
+          : await api.createEnvironment(
+              pid,
+              name,
+              networkAccessMode,
+              initialPrompt,
+              portMappings,
+              environmentType,
+              namingPrompt,
+              buildPipelineId,
+              ...(worktreeBaseDir ? [worktreeBaseDir] : []),
+            );
         // The backend records lastEnvironmentType in the same command and
         // announces a config change, which store-resource-sync refetches.
         addEnvironmentToStore(environment);

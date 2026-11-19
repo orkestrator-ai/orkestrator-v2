@@ -356,6 +356,7 @@ export const getProjectBaseBranchTipCommand = defineCommand({
   args: Schema.Struct({
     projectId: Schema.String,
     branch: optionalUnknown,
+    retry: optionalUnknown,
   }),
   result: ProjectBaseBranchTipSchema,
   critical: [],

@@ -44,6 +44,22 @@ export const TerminalDeliveryResultSchema = Schema.UndefinedOr(
   Schema.NullOr(Schema.Struct({ delivered: Schema.Boolean })),
 ).annotate({ identifier: "TerminalDeliveryResult" });
 
+/**
+ * A resize answer. `delivered` keeps the input answer's meaning (the PTY is
+ * there); `applied` says whether the dimensions were set, which they are not
+ * when another client owns the terminal's size, and `owned` whether the caller
+ * owns it now. Older backends answered `delivered` alone, or nothing.
+ */
+export const TerminalResizeResultSchema = Schema.UndefinedOr(
+  Schema.NullOr(
+    Schema.Struct({
+      delivered: Schema.Boolean,
+      applied: Schema.optionalKey(Schema.Boolean),
+      owned: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+).annotate({ identifier: "TerminalResizeResult" });
+
 export const TerminalOutputDeltaSchema = Schema.Struct({
   revision: Schema.Finite,
   text: Schema.String,
@@ -144,10 +160,15 @@ export const HumanPromptEntrySchema = Schema.Struct({
 const sessionArgs = Schema.Struct({ sessionId: Schema.String });
 const writeArgs = Schema.Struct({ sessionId: Schema.String, data: Schema.String });
 // Dimensions fall back to 80x24 (`asTerminalDimension`), so any value is accepted.
+// `clientId` names the window for size ownership (`terminal-size-ownership.ts`):
+// read leniently, so a malformed id reads as a client that sent none rather
+// than refusing the resize. An older backend ignores it and applies every
+// resize, as it always did.
 const resizeArgs = Schema.Struct({
   sessionId: Schema.String,
   cols: optionalUnknown,
   rows: optionalUnknown,
+  clientId: optionalUnknown,
 });
 
 // --- Terminal jobs ---
@@ -240,9 +261,56 @@ export const terminalResizeCommand = defineCommand({
   access: "workspace",
   read: false,
   args: resizeArgs,
-  result: TerminalDeliveryResultSchema,
+  result: TerminalResizeResultSchema,
   critical: [],
   hotPath: true,
+});
+
+/**
+ * Takes a shared terminal's size for `clientId` and applies its dimensions:
+ * the claim half of size ownership (`terminal-size-ownership.ts`), sent on
+ * deliberate interaction such as focusing or typing. It is deliberately not a
+ * resize lifecycle command, so it is not queued behind (or ahead of) the
+ * terminal's input: a claim sent while typing must not stall keystrokes. It
+ * serves container and local sessions alike. An older backend answers
+ * `unknown-command`; callers then send an ordinary resize.
+ */
+export const claimTerminalSizeCommand = defineCommand({
+  domain: terminalsDomain,
+  name: "claim_terminal_size",
+  since: 2,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({
+    sessionId: Schema.String,
+    clientId: Schema.String,
+    cols: optionalUnknown,
+    rows: optionalUnknown,
+  }),
+  result: TerminalResizeResultSchema,
+  critical: [],
+  hotPath: true,
+});
+
+/**
+ * Gives up the size ownership `clientId` holds, on one session or on all of
+ * them: a terminal view closing, or a window going away. `disconnected` keeps
+ * a short grace period instead, for a connection that may come straight back.
+ * An older backend answers `unknown-command`, which callers ignore.
+ */
+export const releaseTerminalSizeCommand = defineCommand({
+  domain: terminalsDomain,
+  name: "release_terminal_size",
+  since: 2,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({
+    clientId: Schema.String,
+    sessionId: optionalUnknown,
+    disconnected: optionalUnknown,
+  }),
+  result: Schema.Struct({ released: NonNegativeInt }),
+  critical: [],
 });
 
 export const detachTerminalCommand = defineCommand({
@@ -305,7 +373,7 @@ export const localTerminalResizeCommand = defineCommand({
   access: "workspace",
   read: false,
   args: resizeArgs,
-  result: TerminalDeliveryResultSchema,
+  result: TerminalResizeResultSchema,
   critical: [],
   hotPath: true,
 });
@@ -524,6 +592,8 @@ export const TERMINALS_COMMANDS = [
   startTerminalSessionCommand,
   terminalWriteCommand,
   terminalResizeCommand,
+  claimTerminalSizeCommand,
+  releaseTerminalSizeCommand,
   detachTerminalCommand,
   createLocalTerminalSessionCommand,
   startLocalTerminalSessionCommand,

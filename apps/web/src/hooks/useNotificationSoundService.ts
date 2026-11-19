@@ -11,6 +11,7 @@ import {
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { BoundedKeySet } from "@/lib/bounded-hydration";
+import { isWindowForeground } from "@/lib/window-foreground";
 import { clientStateCapabilities } from "@/lib/client-state-capabilities";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
@@ -78,12 +79,6 @@ function claimCue(last: { current: LastCue }, kind: NotificationSoundKind): bool
   return true;
 }
 
-/** The user is looking at this window right now, not just has it open. */
-function windowFocused(): boolean {
-  if (typeof document === "undefined") return false;
-  return document.visibilityState === "visible" && document.hasFocus();
-}
-
 /** The window's sound settings: those of the node it is connected to. */
 function soundSettings() {
   return normalizeNotificationSoundSettings(
@@ -104,7 +99,7 @@ function alertInputNeeded(
   lastCue: { current: LastCue },
   remote?: ReturnType<typeof remoteAttentionTarget>,
 ): void {
-  if (input.environmentId === visibleEnvironmentId && windowFocused()) return;
+  if (input.environmentId === visibleEnvironmentId && isWindowForeground()) return;
   const settings = soundSettings();
   let playback = Promise.resolve(false);
   if (settings.agentQuestion) {

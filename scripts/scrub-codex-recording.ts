@@ -2,6 +2,12 @@
 /**
  * Scrubs a recorded app-server stream so it can be committed as a replay fixture.
  *
+ * Despite the name it is format-agnostic text redaction, and it is also the
+ * scrubber for the other bridges' provider-replay recordings
+ * (`tests/conformance/provider-replay/README.md`);
+ * `tests/unit/provider-replay-conformance.test.ts` runs `scrub()` over those
+ * fixtures as `scrub-codex-recording.test.ts` does over Codex's.
+ *
  * A raw recording is a faithful copy of a real session: your prompts, the contents
  * of every file the agent read or wrote, absolute paths that leak your username,
  * and anything a tool happened to print — including tokens and keys.
@@ -143,7 +149,7 @@ export function buildRedactions(identity: ScrubIdentity = {}): Redaction[] {
     // `--check` reported as clean.
     {
       name: "home-like-path",
-      pattern: /\/(?:Users|home)\/(?!user\b)[^/\s"\\]+/g,
+      pattern: /\/(?:Users|home)\/(?!user(?=[/\s"\\]|$))[^/\s"\\]+/g,
       replacement: "/home/user",
     },
     // The negative lookaheads on these two keep the pass idempotent: their own
@@ -183,10 +189,11 @@ export function scrub(input: string, redactions: Redaction[] = buildRedactions()
   for (const redaction of redactions) {
     let count = 0;
     output = output.replace(redaction.pattern, (...args: unknown[]) => {
-      count += 1;
       // Re-run the replacement string's $n expansion by hand: we are inside a
       // function replacer, so `$1` would otherwise be taken literally.
-      return expandReplacement(redaction.replacement, args);
+      const replacement = expandReplacement(redaction.replacement, args);
+      if (replacement !== args[0]) count += 1;
+      return replacement;
     });
     if (count > 0) {
       hits[redaction.name] = count;
@@ -242,20 +249,109 @@ function stripValue(value: unknown, onBlank: () => void): unknown {
   return value;
 }
 
+// Provider replay uses an envelope around native SDK frames. These keys
+// carry text or arbitrary payloads as well as the legacy Codex prose fields.
+const PROVIDER_PAYLOAD_FIELDS = new Set([
+  "input",
+  "args",
+  "arguments",
+  "sections",
+  "rawInput",
+  "rawOutput",
+  "partialResult",
+  "toolOutput",
+  "toolArgs",
+  "tokens",
+  "command",
+  "patch",
+  "stdout",
+  "stderr",
+  "thinking",
+  "signature",
+  "oldText",
+  "newText",
+  "messageText",
+  "description",
+  "title",
+  "prompt",
+  "output",
+  "reason",
+  "summary",
+  "errorMessage",
+  "rejection",
+  "fileText",
+  "data",
+  "uri",
+]);
+
+function stripProviderValue(value: unknown, onBlank: () => void): unknown {
+  if (Array.isArray(value)) return value.map((entry) => stripProviderValue(entry, onBlank));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => {
+      if (key === "content" && Array.isArray(entry)) {
+        return [
+          key,
+          entry.map((block) =>
+            typeof block === "string"
+              ? blankValue(block, onBlank)
+              : stripProviderValue(block, onBlank),
+          ),
+        ];
+      }
+      if (key === "rawLine" && typeof entry === "string") {
+        try {
+          const raw: unknown = JSON.parse(entry);
+          return [
+            key,
+            JSON.stringify(
+              typeof raw === "string" ? blankValue(raw, onBlank) : stripProviderValue(raw, onBlank),
+            ),
+          ];
+        } catch {
+          onBlank();
+          return [key, "{"];
+        }
+      }
+      if (
+        PROVIDER_PAYLOAD_FIELDS.has(key) ||
+        (CONTENT_FIELDS as readonly string[]).includes(key) ||
+        (typeof entry === "string" &&
+          ["content", "result", "frame", "message", "error"].includes(key))
+      ) {
+        // A structured delta can carry a type and a nested text payload.
+        if (key === "delta" && entry && typeof entry === "object") {
+          return [key, stripProviderValue(entry, onBlank)];
+        }
+        return [key, blankValue(entry, onBlank)];
+      }
+      return [key, stripProviderValue(entry, onBlank)];
+    }),
+  );
+}
+
 /**
- * Blanks every payload field while keeping the record *shape* — which is all a
- * replay fixture exercises. Unparseable lines are passed through untouched so
- * the pipeline never turns a malformed line into a differently malformed one.
+ * Blanks known payload fields while preserving replay structure. An embedded
+ * malformed ACP wire line becomes a fixed malformed sample. Invalid outer
+ * JSONL is left for validation to reject. Review the result before committing.
  */
 export function stripContent(input: string): { output: string; stripped: number } {
   let stripped = 0;
   const onBlank = () => {
     stripped += 1;
   };
+  let providerReplay = false;
   const lines = input.split("\n").map((line) => {
     if (line.trim().length === 0) return line;
     try {
-      return JSON.stringify(stripValue(JSON.parse(line), onBlank));
+      const value = JSON.parse(line);
+      if (value?.replay === 1 && value.bridge) {
+        providerReplay = true;
+        return line;
+      }
+      return JSON.stringify(
+        providerReplay ? stripProviderValue(value, onBlank) : stripValue(value, onBlank),
+      );
     } catch {
       return line;
     }

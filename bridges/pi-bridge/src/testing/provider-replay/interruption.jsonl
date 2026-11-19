@@ -1,0 +1,9 @@
+{"replay":1,"bridge":"pi","scenario":"interruption","source":"synthetic","provider":"@earendil-works/pi-coding-agent","providerVersion":"1.5.2","description":"Prose streams and a long bash call starts; the user cancels before it returns."}
+{"action":"prompt","text":"Run the full test suite"}
+{"frame":{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"timestamp":1767225600000}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Starting the suite."}}}
+{"frame":{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"stopReason":"toolUse","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"timestamp":1767225601000}}}
+{"frame":{"type":"tool_execution_start","toolCallId":"call-test","toolName":"bash","args":{"command":"bun test"}}}
+{"frame":{"type":"tool_execution_update","toolCallId":"call-test","toolName":"bash","partialResult":{"content":[{"type":"text","text":"running 412 tests\n"}]}}}
+{"action":"observe","label":"mid-turn"}
+{"action":"interrupt"}

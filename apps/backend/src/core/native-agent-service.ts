@@ -58,6 +58,7 @@ import {
   controlsFromSessionInput,
   createNativeAgentProvider,
   isValidInteractionMetadata,
+  REQUIRED_CONVERSATION_CHANGED,
   nativeAgentSessionStorageKey,
   nativeCapabilities,
   nonBlank,
@@ -640,8 +641,8 @@ export class NativeAgentService {
       assertProjectionInput: (input) => this.assertProjectionInput(input),
       resolveProjectionSession: (input) => this.resolveProjectionSession(input),
       provider: (input) => this.provider(input),
-      recordAsyncQuestionAttention: (environmentId, sessionKey, itemIds) =>
-        this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds),
+      recordAsyncQuestionAttention: (environmentId, sessionKey, itemIds, logicalSessionKey) =>
+        this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds, logicalSessionKey),
       scheduleAmbiguousDispatchSettle: (input, key, requestId, provider) =>
         this.promptQueues.scheduleAmbiguousDispatchSettle(input, key, requestId, provider),
       scheduleAmbiguousSteerSettle: (input, key, requestId, provider) =>
@@ -684,8 +685,8 @@ export class NativeAgentService {
       isStopped: () => this.stopped,
       observeProvider: (input) => this.observeProvider(input),
       trackScan: (task) => this.trackScan(task),
-      recordAsyncQuestionAttention: (environmentId, sessionKey, itemIds) =>
-        this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds),
+      recordAsyncQuestionAttention: (environmentId, sessionKey, itemIds, logicalSessionKey) =>
+        this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds, logicalSessionKey),
       recordRevisedUsage: (session, provider) =>
         this.settledTurnUsage.record(
           session,
@@ -780,6 +781,8 @@ export class NativeAgentService {
             : goal.status === "blocked"
               ? "agent_waiting"
               : "agent_finished",
+          undefined,
+          session.logicalSessionKey,
         );
       },
       releaseTurnEnd: async (session) => options.onGoalReleasedTurnEnd?.(session),
@@ -1497,6 +1500,12 @@ export class NativeAgentService {
     await this.assertEnvironmentLive(input.environmentId);
     const provider = await this.provider(input);
     const existing = await this.storage.getNativeAgentSession(key);
+    if (
+      input.requireProviderSessionId &&
+      existing?.providerSessionId !== input.requireProviderSessionId
+    ) {
+      throw new PromptRejectedError(REQUIRED_CONVERSATION_CHANGED);
+    }
     if (existing) {
       this.assertSessionIdentity(existing, input, key);
       await this.assertEnvironmentLive(input.environmentId);
@@ -1541,6 +1550,9 @@ export class NativeAgentService {
           return enriched;
         }
         return existing;
+      }
+      if (input.requireProviderSessionId) {
+        throw new PromptRejectedError(REQUIRED_CONVERSATION_CHANGED);
       }
       await this.storage.invalidateNativeAgentSession(key, existing.providerSessionId);
     }
@@ -2173,6 +2185,7 @@ export class NativeAgentService {
     environmentId: string,
     sessionKey: string,
     itemIds: readonly string[],
+    logicalSessionKey?: string,
   ): Promise<void> {
     const attentionKeys = itemIds.slice(-64).map((itemId) => {
       const digest = createHash("sha256")
@@ -2187,6 +2200,8 @@ export class NativeAgentService {
       environmentId,
       attentionKeys,
       new Date(this.now()).toISOString(),
+      "agent_question",
+      logicalSessionKey,
     );
     if (attention.recorded) {
       this.options.onAsyncQuestionAttention?.({ environmentId, sessionKey });

@@ -172,6 +172,7 @@ import {
 import {
   resolveRemoteWorktreeStartPoint,
   gitRefExists,
+  isImmutableCommitRef,
   enableGitScanCaches,
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
@@ -1739,11 +1740,25 @@ export async function startEnvironmentOnce(
         },
       );
       const seedRoot = seedFilesDir(storage.getDataDir(), environment.id);
+      const worktreeStartedAt = performance.now();
+      const baseBranch = environment.worktreeBaseBranch ?? repoConfig.defaultBranch;
+      let baseCommit = environment.worktreeBaseCommit ?? environment.delegationBaseCommit;
+      let launchBaseResolveMs = 0;
+      if (environment.worktreeBaseBranch && !baseCommit && context.projectGit) {
+        // Fast Create leaves this read to the backend. It will join the dialog's
+        // fetch (or reuse its result if it finished while creating the record).
+        const tip = await context.projectGit.baseBranchTip(project.id, baseBranch);
+        launchBaseResolveMs = performance.now() - worktreeStartedAt;
+        if (tip.launchEligible && tip.commit && isImmutableCommitRef(tip.commit)) {
+          baseCommit = tip.commit;
+          await storage.updateEnvironment(environment.id, { worktreeBaseCommit: baseCommit });
+        }
+      }
       const worktree = await createLocalWorktree(
         project.localPath,
         project.name,
         environment.branch,
-        environment.delegationBaseCommit ?? repoConfig.defaultBranch,
+        baseCommit ?? baseBranch,
         repoConfig.filesToCopy,
         worktreeBaseDir,
         (await pathExists(seedRoot)) ? seedRoot : undefined,
@@ -1751,6 +1766,7 @@ export async function startEnvironmentOnce(
         project.gitUrl === project.localPath,
         (await storage.loadConfig()).global.envFilePatterns,
       );
+      const durationMs = Math.round(performance.now() - worktreeStartedAt);
       rememberWorktreeSeedRefusals(environment.id, worktree.envFileRefusals);
       // Seed files are copied once; the staging copy is not kept.
       await fs.rm(seedRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -1764,11 +1780,23 @@ export async function startEnvironmentOnce(
         worktreeBaseDir,
         branch: worktree.branch,
         createdFromCommit: worktree.createdFromCommit,
+        ...(environment.worktreeBaseBranch
+          ? { worktreeBaseCommit: worktree.createdFromCommit }
+          : {}),
         diffBaseOverride: null,
         status: "running",
         lifecycleError: null,
       });
       unpersistedWorktree = null;
+      // Includes branch allocation before the create response and the durable
+      // running transition. Content-free: no path, branch or commit.
+      log.info("worktree.created", {
+        environmentId: environment.id,
+        startPoint: worktree.startPointSource,
+        resolveMs: Math.round(launchBaseResolveMs + worktree.startPointResolveMs),
+        durationMs,
+        creationToWorktreeReadyMs: Math.max(0, Date.now() - Date.parse(environment.createdAt)),
+      });
       const result = await startEnvironmentSetup(updated, context);
       schedulePendingRename(environment.id, context);
       await context.runtime.diffStats.sync(context);
@@ -2355,6 +2383,9 @@ export async function runEnvironmentSetupNow(
   return task;
 }
 
+/** Where a new local worktree's start point came from (`createLocalWorktree`). */
+export type WorktreeStartPointSource = "pinned-commit" | "remote-fetch" | "local-branch";
+
 export async function createLocalWorktree(
   projectPath: string,
   projectName: string,
@@ -2374,6 +2405,13 @@ export async function createLocalWorktree(
   createdFromCommit: string;
   /** Matches refused under the seed-file rules, for the setup terminal. */
   envFileRefusals: ProjectSeedRefusal[];
+  /**
+   * How the start point was found: a commit pinned before the start (no
+   * network on this path), or a fetch of the base branch from the remote.
+   */
+  startPointSource: WorktreeStartPointSource;
+  /** Milliseconds spent resolving the start point, the fetch included. */
+  startPointResolveMs: number;
 }> {
   const baseDir = worktreeBaseDir ?? getWorktreeBaseDir();
   assertWorktreePathUnlinked(baseDir);
@@ -2381,10 +2419,25 @@ export async function createLocalWorktree(
   await fs.mkdir(baseDir, { recursive: true });
   const baseSlug = sanitizeBranchName(branch);
   const requestedBase = baseBranch?.trim() || "main";
-  const startPoint =
-    /^[0-9a-f]{40}$/i.test(requestedBase) && (await gitRefExists(projectPath, requestedBase))
-      ? requestedBase
-      : await resolveRemoteWorktreeStartPoint(projectPath, requestedBase, { localOnly });
+  const resolveStartedAt = performance.now();
+  // A pinned commit (chosen while the creation dialog was open, or by a
+  // coordinator) is already in this repository, so the start needs no fetch:
+  // the remote round trip, and its long deadline, stay off the blocking path.
+  const pinned = isImmutableCommitRef(requestedBase);
+  if (pinned && !(await gitRefExists(projectPath, requestedBase))) {
+    throw new Error(
+      `Starting commit ${requestedBase} is unavailable in the project checkout. Restore that commit or create a new environment from a refreshed base.`,
+    );
+  }
+  const startPoint = pinned
+    ? requestedBase
+    : await resolveRemoteWorktreeStartPoint(projectPath, requestedBase, { localOnly });
+  const startPointResolveMs = Math.round(performance.now() - resolveStartedAt);
+  const startPointSource: WorktreeStartPointSource = pinned
+    ? "pinned-commit"
+    : startPoint.startsWith("refs/heads/")
+      ? "local-branch"
+      : "remote-fetch";
   const gitBranchExists = await createGitBranchCollisionChecker({
     baseBranch: baseSlug,
     projectPath,
@@ -2473,7 +2526,14 @@ export async function createLocalWorktree(
       seedRoot,
     );
 
-    return { path: worktreePath, branch: finalBranch, createdFromCommit, envFileRefusals };
+    return {
+      path: worktreePath,
+      branch: finalBranch,
+      createdFromCommit,
+      envFileRefusals,
+      startPointSource,
+      startPointResolveMs,
+    };
   } catch (error) {
     await cleanupFailedLocalWorktree(projectPath, worktreePath, finalBranch);
     throw error;

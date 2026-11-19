@@ -7,12 +7,13 @@
 import { nativeAgentSteerRejectionMessage } from "@orkestrator/protocol/native-agent";
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { StrictMode } from "react";
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import { nativeAsyncQuestionRequestId } from "@orkestrator/protocol/native-agent";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as scrollState from "@/hooks/useVirtuosoScrollState";
+import { useAgentPlanCardScope } from "./AgentNativeTab.plan-card";
 import { disableAutoLoadEarlier } from "./useAutoLoadEarlier";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
@@ -4710,41 +4711,161 @@ describe("AgentNativeTab", () => {
       },
     );
 
-    test("Cursor createPlan without planReview still offers approve and dismiss", async () => {
+    function cursorPlan(
+      id: string,
+      markdown: string,
+      toolState: "success" | "failure" = "success",
+    ): NativeMessage {
+      return {
+        id,
+        role: "assistant",
+        content: "",
+        planReview: true,
+        createdAt: "2026-09-08T10:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Plan",
+            toolName: "createPlan",
+            toolUseId: id,
+            toolState,
+            toolOutput: markdown,
+          },
+        ],
+      };
+    }
+
+    test.each(["# Discovery\n\nUse a stream.", "Use a stream.\n"])(
+      "Cursor implements only the reviewed body of the current revision (%s)",
+      async (markdown) => {
+        fixtureState.renderVirtualizedMessages = true;
+        seedProjection({
+          composer: { selectedModeId: "plan" },
+          messages: [
+            cursorPlan("first-plan", "# Discovery\n\nUse a queue."),
+            cursorPlan("second-plan", markdown),
+          ],
+        });
+        renderInAppCommandScope(
+          <AgentNativeTab tabId="tab-cursor-create-plan" data={identity("cursor")} isActive />,
+        );
+
+        const current = await screen.findByRole("region", {
+          name: markdown.startsWith("#")
+            ? "Implementation plan: Discovery"
+            : "Implementation plan: Plan",
+        });
+        const previous = screen.getByRole("region", { name: "Superseded plan: Discovery" });
+        expect(within(current).getByText("Revision 2 of 2")).toBeTruthy();
+        expect(within(previous).getByText("Use a queue.")).toBeTruthy();
+        expect(
+          within(previous).queryByRole("button", { name: "Implement this plan" }) === null,
+        ).toBe(true);
+        expect(screen.queryByRole("button", { name: "Approve plan" }) === null).toBe(true);
+
+        fireEvent.click(within(current).getByRole("button", { name: "Implement this plan" }));
+        await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+        expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+          update: { mode: "build" },
+        });
+        expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+          prompt: `Exit plan mode and implement plan revision 2 (reference "tool:second-plan"). Use the reviewed Markdown between the markers.\n\n<<< BEGIN PLAN >>>\n${markdown}\n<<< END PLAN >>>`,
+          mode: "build",
+        });
+      },
+    );
+
+    test.each([false, true])(
+      "a later Cursor review never implements a past turn's plan (failed: %s)",
+      async (failed) => {
+        fixtureState.renderVirtualizedMessages = true;
+        const row = (id: string, role: NativeMessage["role"], content: string): NativeMessage => ({
+          id,
+          role,
+          content,
+          createdAt: "2026-09-08T10:01:00.000Z",
+          parts: [{ type: "text", content }],
+        });
+        seedProjection({
+          composer: { selectedModeId: "plan" },
+          messages: [
+            cursorPlan("old-plan", "# Old scope"),
+            row("implement", "user", "Implement the plan"),
+            row("built", "assistant", "Implementation complete"),
+            row("replan", "user", "Plan something else"),
+            failed
+              ? cursorPlan("failed-plan", "", "failure")
+              : { ...row("prose", "assistant", "Here is a prose plan."), planReview: true },
+          ],
+        });
+        renderInAppCommandScope(
+          <AgentNativeTab tabId="tab-cursor-later-plan" data={identity("cursor")} isActive />,
+        );
+        const oldPlan = await screen.findByRole("region", {
+          name: "Implementation plan: Old scope",
+        });
+        expect(
+          within(oldPlan).queryByRole("button", { name: "Implement this plan" }) === null,
+        ).toBe(true);
+        if (failed) {
+          expect(screen.getByText("Failed")).toBeTruthy();
+          expect(screen.getByRole("button", { name: "Review plan" })).toBeTruthy();
+          expect(screen.queryByRole("button", { name: "Approve plan" }) === null).toBe(true);
+          expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+        } else {
+          fireEvent.click(screen.getByRole("button", { name: "Approve plan" }));
+          await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+          expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+            prompt: "The plan is approved. Exit plan mode and implement it.",
+          });
+        }
+      },
+    );
+
+    test("an unpageable truncated transcript retains plan states and can dismiss its review", async () => {
       fixtureState.renderVirtualizedMessages = true;
       seedProjection({
         composer: { selectedModeId: "plan" },
-        messages: [
-          {
-            id: "assistant-create-plan",
-            role: "assistant",
-            content: "Here is the approach.",
-            parts: [
-              {
-                type: "tool-invocation",
-                content: "Plan",
-                toolName: "createPlan",
-                toolState: "success",
-                toolOutput: "# Split discovery\n\nDo the work.",
-              },
-            ],
-            createdAt: "2026-09-08T10:00:00.000Z",
-          },
-        ],
+        messageWindow: {
+          limit: 2,
+          truncated: true,
+          truncationReason: "count",
+          canLoadEarlier: false,
+        },
+        messages: [cursorPlan("first-plan", "# First"), cursorPlan("second-plan", "# Second")],
       });
       renderInAppCommandScope(
-        <AgentNativeTab tabId="tab-cursor-create-plan" data={identity("cursor")} isActive />,
+        <AgentNativeTab tabId="tab-cursor-truncated-plan" data={identity("cursor")} isActive />,
       );
+      fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+      expect(screen.queryByRole("button", { name: "Review plan" }) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Implement this plan" }) === null).toBe(true);
+      expect(screen.getByText("Superseded")).toBeTruthy();
+      expect(screen.getByText("Current plan")).toBeTruthy();
+      expect(screen.getByRole("region", { name: "Implementation plan: Second" })).toBeTruthy();
+      expect(screen.queryAllByText(/Revision \d+ of \d+/)).toHaveLength(0);
+    });
 
-      expect(await screen.findByRole("button", { name: "Approve plan" })).toBeTruthy();
-      expect(screen.getByRole("heading", { name: "Split discovery" })).toBeTruthy();
-      expect(screen.getByText("Do the work.")).toBeTruthy();
-
-      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-      await waitFor(() =>
-        expect(screen.queryByRole("button", { name: "Approve plan" }) === null).toBe(true),
+    test("refuses a captured implementation action once its review has changed", async () => {
+      const first = cursorPlan("first-plan", "# First");
+      const second = cursorPlan("second-plan", "# Second");
+      const switchPlanToBuild = mock(async () => {});
+      const { result, rerender } = renderHook(
+        ({ messages }) =>
+          useAgentPlanCardScope({
+            messages,
+            historyComplete: true,
+            reviewApplies: true,
+            pending: false,
+            switchPlanToBuild,
+          }),
+        { initialProps: { messages: [first] } },
       );
-      expect(screen.getByRole("heading", { name: "Split discovery" })).toBeTruthy();
+      const { index, actions } = result.current.scope;
+      rerender({ messages: [first, second] });
+      await actions!.implement(index.byKey.get(actions!.planKey)!, "# First");
+      expect(switchPlanToBuild).not.toHaveBeenCalled();
+      expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining("no longer available"));
     });
 
     test("approving a Cursor plan switches to build and asks the agent to implement", async () => {

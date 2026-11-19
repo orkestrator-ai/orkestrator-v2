@@ -327,6 +327,8 @@ export function registerEnvironmentCommands(
         controlRequestFingerprint,
         delegationBaseBranch,
         delegationBaseCommit,
+        worktreeBaseBranch,
+        worktreeBaseCommit,
         worktreeBaseDir,
       },
       context,
@@ -419,6 +421,24 @@ export function registerEnvironmentCommands(
         }
         env.delegationBaseBranch = baseBranch;
         env.delegationBaseCommit = baseCommit;
+      }
+      if (worktreeBaseBranch !== undefined || worktreeBaseCommit !== undefined) {
+        if (requestedEnvironmentType !== "local" || env.delegationBaseCommit) {
+          throw new Error("Only an ordinary local environment can choose its worktree launch base");
+        }
+        // A null branch means Create was pressed while the dialog was resolving
+        // the project default. A commit, when present, names the base it showed.
+        if (worktreeBaseBranch === null && worktreeBaseCommit === undefined) {
+          env.worktreeBaseBranch = repoConfig.defaultBranch?.trim() || "main";
+        } else {
+          const branch = asOptionalString(worktreeBaseBranch)?.trim();
+          const commit = asOptionalString(worktreeBaseCommit)?.trim();
+          if (!branch || !commit || !/^[0-9a-f]{40}$/i.test(commit)) {
+            throw new Error("worktreeBaseBranch and a full worktreeBaseCommit are required");
+          }
+          env.worktreeBaseBranch = branch;
+          env.worktreeBaseCommit = commit;
+        }
       }
       if (agentSettings !== undefined) env.agentSettings = normalizedTier(agentSettings);
       if (pendingAgentLaunch === true) {

@@ -29,6 +29,7 @@ import type {
 } from "./native-agent-service-shared.js";
 import {
   nativeAgentSessionStorageKey,
+  REQUIRED_CONVERSATION_CHANGED,
   compactInstructionsRefusal,
   nativeCapabilities,
   nonBlank,
@@ -1484,6 +1485,12 @@ export class NativeAgentPromptDispatch {
               }
             : undefined,
           async (durable) => {
+            if (
+              input.requireProviderSessionId &&
+              durable.providerSessionId !== input.requireProviderSessionId
+            ) {
+              throw new PromptRejectedError(REQUIRED_CONVERSATION_CHANGED);
+            }
             if (failureRetry) {
               if (
                 (input.failureSessionId !== undefined &&

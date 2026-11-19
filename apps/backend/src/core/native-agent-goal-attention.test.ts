@@ -161,6 +161,10 @@ describe("goal attention", () => {
         const stopped = sessionGoal((await storage.getNativeAgentSession(session.key))!);
         expect(stopped?.statusReason).toBe("token-budget");
         expect(stopped?.tokensUsed).toBe(10);
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          unreadReason: "agent_finished",
+          unreadSessionKeys: [session.logicalSessionKey],
+        });
         expect(messages).toHaveBeenCalledWith(session.providerSessionId, { limit: 42 });
         expect(stub.send).not.toHaveBeenCalled();
       },

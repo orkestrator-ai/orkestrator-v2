@@ -13,6 +13,7 @@ import { canFastForwardUpstream } from "@orkestrator/protocol/coordinator-upstre
 import { CommandFailedError, runCommand } from "./shell.js";
 import {
   backgroundBranchFetchRefspec,
+  isMissingRemoteRefFailure,
   NO_WRITE_FETCH_HEAD,
   runGitWithFsmonitorFallback,
   runRemoteGit,
@@ -98,6 +99,7 @@ function gitError(operation: ProjectGitError["operation"], error: unknown): Proj
 }
 
 type Operation = ProjectGitStatus["operationState"];
+type BaseFetchOutcome = { fetchError?: string; missingBranch?: boolean };
 
 /** The newest commit of the configured base branch, as worker launches use it. */
 export type ProjectBaseBranchTip = {
@@ -107,8 +109,16 @@ export type ProjectBaseBranchTip = {
   ref: string | null;
   /** True only when `ref` was refreshed from the remote by this read. */
   fetched: boolean;
+  /**
+   * When this service last refreshed `origin/<branch>` successfully, by this
+   * read or an earlier one inside the cooldown. Absent when it never has since
+   * the backend started, so a caller can label the commit "last fetched".
+   */
+  fetchedAt?: string;
   fetchError?: string;
   unavailableReason?: string;
+  /** Whether this tip may be used directly for an ordinary local worktree. */
+  launchEligible: boolean;
 };
 
 /** Commits and paths between two checkout commits (`checkoutChanges`). */
@@ -181,8 +191,11 @@ export class ProjectGitService {
     { force: boolean; intent: ProjectFetchIntent; promise: Promise<ProjectGitStatus> }
   >();
   private readonly fetching = new Set<string>();
-  private readonly baseFetches = new Map<string, Promise<{ fetchError?: string }>>();
-  private readonly baseFetchAttempts = new Map<string, { at: number; fetchError?: string }>();
+  private readonly baseFetches = new Map<string, Promise<BaseFetchOutcome>>();
+  private readonly baseFetchAttempts = new Map<
+    string,
+    BaseFetchOutcome & { at: number; success?: { commit: string; at: string } }
+  >();
   private readonly confirmations = new Map<
     string,
     {
@@ -872,70 +885,96 @@ export class ProjectGitService {
    * last remote-tracking ref, and a repository without that remote branch falls
    * back to the local branch. Only refs move; the checkout is never touched.
    */
-  async baseBranchTip(projectId: string, branch: string): Promise<ProjectBaseBranchTip> {
+  async baseBranchTip(
+    projectId: string,
+    branch: string,
+    retry = false,
+  ): Promise<ProjectBaseBranchTip> {
     const root = await this.root(projectId);
     await runCommand("git", ["check-ref-format", "--branch", branch], { cwd: root });
+    const remotes = (await runCommand("git", ["remote"], { cwd: root, timeoutMs: 10_000 })).stdout
+      .split("\n")
+      .map((remote) => remote.trim());
+    const hasOrigin = remotes.includes("origin");
+    const remoteRef = `refs/remotes/origin/${branch}`;
     const key = JSON.stringify([projectId, root, branch]);
     let fetched = false;
-    let fetchError: string | undefined;
+    let outcome: BaseFetchOutcome = {};
     const existing = this.baseFetches.get(key);
     const previous = this.baseFetchAttempts.get(key);
-    if (existing) {
-      ({ fetchError } = await existing);
-    } else if (previous && Date.now() - previous.at < FETCH_COOLDOWN_MS) {
-      fetchError = previous.fetchError;
+    if (!hasOrigin) {
+      this.baseFetchAttempts.delete(key);
+    } else if (existing) {
+      outcome = await existing;
+    } else if (
+      previous &&
+      Date.now() - previous.at < FETCH_COOLDOWN_MS &&
+      !(retry && previous.fetchError)
+    ) {
+      outcome = previous;
     } else {
       // Network I/O must not hold the checkout lock. Git updates the destination
       // ref atomically; serialize only our reads with checkout mutations.
       const operation = (async () => {
-        const remotes = (
-          await runCommand("git", ["remote"], { cwd: root, timeoutMs: 10_000 })
-        ).stdout
-          .split("\n")
-          .map((remote) => remote.trim());
-        let error: string | undefined;
-        if (remotes.includes("origin")) {
-          try {
-            await runRemoteGit(
-              "fetch",
-              [NO_WRITE_FETCH_HEAD, "origin", backgroundBranchFetchRefspec(branch)],
-              {
-                cwd: root,
-                timeoutMs: FETCH_TIMEOUT_MS,
-              },
-            );
-            fetched = true;
-          } catch (cause) {
-            error = gitError("fetch", cause).message;
-          }
+        let outcome: BaseFetchOutcome = {};
+        let success = previous?.success;
+        try {
+          await runRemoteGit(
+            "fetch",
+            [NO_WRITE_FETCH_HEAD, "origin", backgroundBranchFetchRefspec(branch)],
+            { cwd: root, timeoutMs: FETCH_TIMEOUT_MS },
+          );
+          const commit = await readCommit(root, remoteRef);
+          success = commit ? { commit, at: new Date().toISOString() } : undefined;
+          fetched = true;
+        } catch (cause) {
+          outcome = {
+            fetchError: gitError("fetch", cause).message,
+            missingBranch: isMissingRemoteRefFailure(cause),
+          };
         }
         // Bound completed-attempt metadata; in-flight requests stay deduplicated
         // until settlement. Failed attempts also cool down unreachable remotes.
+        // A failed attempt keeps the commit and timestamp of the last success.
         this.baseFetchAttempts.delete(key);
         this.baseFetchAttempts.set(key, {
           at: Date.now(),
-          ...(error ? { fetchError: error } : {}),
+          ...outcome,
+          success,
         });
         if (this.baseFetchAttempts.size > 128) {
           const oldest = this.baseFetchAttempts.keys().next().value;
           if (oldest !== undefined) this.baseFetchAttempts.delete(oldest);
         }
-        return error ? { fetchError: error } : {};
+        return outcome;
       })().finally(() => {
         this.baseFetches.delete(key);
       });
       this.baseFetches.set(key, operation);
-      ({ fetchError } = await operation);
+      outcome = await operation;
     }
+    const { fetchError, missingBranch } = outcome;
+    const project = hasOrigin ? null : await this.storage.getProject(projectId);
+    const localOnly = project != null && project.gitUrl === project.localPath;
+    const success = this.baseFetchAttempts.get(key)?.success;
     return this.serialize(root, async () => {
-      const remoteCommit = await readCommit(root, `refs/remotes/origin/${branch}`);
+      const remoteCommit = hasOrigin ? await readCommit(root, remoteRef) : null;
+      const unavailableReason =
+        !hasOrigin && !localOnly
+          ? "The project's origin remote is missing"
+          : missingBranch
+            ? `Base branch ${branch} was not found on origin`
+            : undefined;
       if (remoteCommit) {
         return {
           branch,
           commit: remoteCommit,
           ref: `origin/${branch}`,
-          fetched,
+          fetched: fetched && remoteCommit === success?.commit,
+          launchEligible: !missingBranch,
+          ...(remoteCommit === success?.commit ? { fetchedAt: success.at } : {}),
           ...(fetchError ? { fetchError } : {}),
+          ...(unavailableReason ? { unavailableReason } : {}),
         };
       }
       const localCommit = await readCommit(root, `refs/heads/${branch}`);
@@ -944,10 +983,13 @@ export class ProjectGitService {
         commit: localCommit,
         ref: localCommit ? branch : null,
         fetched: false,
+        launchEligible: !hasOrigin && localOnly && localCommit !== null,
         ...(fetchError ? { fetchError } : {}),
-        ...(localCommit
-          ? {}
-          : { unavailableReason: `Base branch ${branch} was not found locally or on origin` }),
+        ...(unavailableReason
+          ? { unavailableReason }
+          : !localCommit
+            ? { unavailableReason: `Base branch ${branch} was not found locally or on origin` }
+            : {}),
       };
     });
   }

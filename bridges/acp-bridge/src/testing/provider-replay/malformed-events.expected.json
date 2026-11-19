@@ -1,0 +1,46 @@
+[
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "dispatch": "dispatched",
+      "turn": {
+        "state": "completed"
+      }
+    },
+    "pending": [],
+    "drift": {
+      "unknownEvents": 2,
+      "unknownKinds": ["(unnamed)", "future_update_kind"]
+    },
+    "rows": [
+      {
+        "role": "user",
+        "text": "Say hello",
+        "textLength": 9,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Say hello"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Hello.",
+        "textLength": 6,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Hello."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  }
+]

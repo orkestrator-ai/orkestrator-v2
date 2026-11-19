@@ -1,0 +1,129 @@
+[
+  {
+    "label": "resumed",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Read the config",
+        "textLength": 15,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Read the config"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Read",
+            "toolState": "success",
+            "outputLength": 15
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Debug is off.",
+        "textLength": 13,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Debug is off."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Read the config",
+        "textLength": 15,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Read the config"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Read",
+            "toolState": "success",
+            "outputLength": 15
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Debug is off.",
+        "textLength": 13,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Debug is off."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "Turn it on",
+        "textLength": 10,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Turn it on"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Debug is now on.",
+        "textLength": 16,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Debug is now on."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 3,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  }
+]

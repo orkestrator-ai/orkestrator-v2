@@ -1,0 +1,10 @@
+{"replay":1,"bridge":"cursor","scenario":"malformed-events","source":"synthetic","provider":"@cursor/sdk","providerVersion":"1.4.1","description":"An unknown update type, an untyped update, an unknown tool variant and a tool frame without a call id arrive mid-run; the answer still renders and the run finishes."}
+{"action":"prompt","text":"Say hello"}
+{"frame":{"type":"step-started"}}
+{"frame":{"type":"future-update","payload":{"opaque":true}}}
+{"frame":{"text":"no type at all"}}
+{"frame":{"type":"tool-call-completed","callId":"call-future","modelCallId":"m1","toolCall":{"type":"futureTool","args":{"anything":1},"result":{"status":"success","value":{}}}}}
+{"frame":{"type":"tool-call-started","modelCallId":"m1","toolCall":{"type":"shell","args":{"command":"true"}}}}
+{"frame":{"type":"text-delta","text":"Hello."}}
+{"frame":{"type":"turn-ended","usage":{"inputTokens":10,"outputTokens":20,"cacheReadTokens":0,"cacheWriteTokens":0}}}
+{"action":"end","status":"finished","result":"Hello."}

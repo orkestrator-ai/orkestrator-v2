@@ -1,3 +1,4 @@
+import { replayRecorder } from "./services/replay-recorder.js";
 // Claude Bridge Server
 // Wraps the Claude Agent SDK and exposes HTTP/SSE endpoints for Orkestrator AI
 
@@ -232,7 +233,7 @@ if (parentPid !== null) {
     parentPid,
     onParentExit: () => {
       log.warn("parent.gone", { parentPid });
-      process.exit(0);
+      void exitAfterRecording();
     },
   });
 }
@@ -271,5 +272,16 @@ export const __testing = {
   },
   startBridgeServerForTesting: startBridgeServer,
 };
+
+async function exitAfterRecording(): Promise<void> {
+  await replayRecorder?.close();
+  process.exit(0);
+}
+
+if (replayRecorder && process.env.CLAUDE_BRIDGE_NO_SERVER !== "1") {
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => void exitAfterRecording());
+  }
+}
 
 startBridgeServer();

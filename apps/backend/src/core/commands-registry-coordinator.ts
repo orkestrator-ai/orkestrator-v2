@@ -428,16 +428,18 @@ export function registerCoordinatorCommands(
       manual ? "manual" : "background",
     );
   });
-  register(getProjectBaseBranchTipCommand, async ({ projectId, branch }, context) => {
+  register(getProjectBaseBranchTipCommand, async ({ projectId, branch, retry }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     const project = asNonBlankString(projectId, "projectId");
     // A named branch (a scheduled launch resolving its base at fire time), else
     // the same default a normal environment launch branches from.
-    if (typeof branch === "string" && branch.trim()) {
-      return context.projectGit.baseBranchTip(project, branch.trim());
-    }
-    const { defaultBranch } = await context.storage.getRepositoryConfig(project);
-    return context.projectGit.baseBranchTip(project, defaultBranch?.trim() || "main");
+    const selectedBranch =
+      typeof branch === "string" && branch.trim()
+        ? branch.trim()
+        : (await context.storage.getRepositoryConfig(project)).defaultBranch?.trim() || "main";
+    return retry === true
+      ? context.projectGit.baseBranchTip(project, selectedBranch, true)
+      : context.projectGit.baseBranchTip(project, selectedBranch);
   });
   register(verifyProjectLaunchBaseCommand, ({ projectId, branch, commit }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:c0dd85927fe411f6ae8f6ffa3881e16d3d18ea80a46bd6cd959dd79f4625a466",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "clientId": {
+          "type": "string"
+        },
+        "disconnected": {},
+        "sessionId": {}
+      },
+      "required": ["clientId"],
+      "type": "object"
+    }
+  }
+}

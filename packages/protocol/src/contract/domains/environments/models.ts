@@ -392,6 +392,9 @@ export const clientEnvironmentFields = {
   /** Last-write-wins timestamp for the aggregate activity snapshot. */
   agentActivityUpdatedAt: optionalString,
   createdFromCommit: optionalString,
+  /** Ordinary worktree launch source. A branch by itself requests resolution at first start. */
+  worktreeBaseBranch: optionalString,
+  worktreeBaseCommit: optionalString,
   /**
    * Where the branch now leaves its target branch, once it has taken in newer
    * target history. Backend-owned (`diff-baseline.ts`); read through
@@ -470,14 +473,34 @@ export const clientEnvironmentFields = {
   setupStartedAt: optionalString,
   setupCompletedAt: optionalString,
   /**
-   * Agent work finished here and no client has opened it since.
+   * Agent work finished here and no client has shown it since.
    *
-   * A fact about the environment, not about one window: whichever client opens
-   * it clears the badge everywhere, because the work has now been seen.
+   * A fact about the environment, not about one window: whichever client shows
+   * the result (in a foreground window, on the session's own tab when
+   * `unreadSessionKeys` names one) clears the badge everywhere, because the
+   * work has now been seen.
    */
   hasUnreadWork: optionalBoolean,
-  /** What most recently lit `hasUnreadWork`; cleared with it. */
+  /** The reason for the highest-priority unread entry. */
   unreadReason: Schema.optional(EnvironmentUnreadReasonSchema),
+  /** Logical sessions with unread work, also read by older clients. */
+  unreadSessionKeys: Schema.optional(mutableArray(Schema.String)),
+  /** Environment-wide work can remain unread alongside individual sessions. */
+  unreadEnvironmentReason: Schema.optional(EnvironmentUnreadReasonSchema),
+  /** Bounded per-session reasons and the activity each session view must cover. */
+  unreadSessionEntries: Schema.optional(
+    mutableArray(
+      Schema.Struct({
+        sessionKey: Schema.String,
+        reason: EnvironmentUnreadReasonSchema,
+        activityAt: Schema.String,
+      }),
+    ),
+  ),
+  /** The attribution bound was reached. An explicit full clear dismisses overflow. */
+  unreadSessionOverflow: optionalBoolean,
+  /** Orders unread writes, including partial clears at the same activity timestamp. */
+  unreadRevision: Schema.optional(Schema.Number),
   /** Bounded content-free dedupe keys for agent events that requested attention. */
   agentAttentionKeys: Schema.optional(mutableArray(Schema.String)),
   /** Durable intent to open the configured agent once setup is ready. */

@@ -687,7 +687,7 @@ those ranges.
 | Action | Identity | Verified immediately before writing | New index blob |
 | --- | --- | --- | --- |
 | stage | `unstaged` (index → working file), or `uncommitted-net` / `environment-net` (commit → working file) | the path's stage-0 entry holds the identity's before bytes, and the working file its after bytes | before bytes with the hunk's region replaced by the after side's |
-| unstage | `staged` (`HEAD` → index) | the entry holds the identity's after bytes | after bytes with the hunk's region put back to the before side's |
+| unstage | `staged` (`HEAD` → index) | the entry holds the identity's after bytes and the current HEAD blob holds its before bytes | after bytes with the hunk's region put back to the before side's |
 
 The splice works on raw lines, so every byte outside the hunk, line endings
 included, is the index's own. A failed check answers `precondition-failed`
@@ -701,19 +701,23 @@ or file.
 Only same-path, regular (`100644`/`100755`), text, modified files qualify.
 New, deleted and renamed files (`whole-file`), binaries, symlinks and
 submodules, a conflicted entry, a cut-off last hunk and non-UTF-8 paths are
-refused. So is a working file Git would not store byte for byte: a path
-whose `filter` attribute names a configured driver (the driver never runs),
-or one where a built-in conversion (line endings, `ident`, working-tree
-encoding) changes the hash (`changes.staging.git-conversion`).
+refused. Before staging, the backend inspects Git conversion attributes and
+line-ending settings. Paths with a filter or encoding attribute, suspected
+built-in conversion, or inconclusive inspection are refused. Blob hashing
+always uses `--no-filters`.
 
-The write is `hash-object -w --no-filters --stdin` and then
-`update-index --cacheinfo` with the entry's own mode, after re-reading the
-entry; operations on one worktree are serialized, and an owner or
-incarnation that changed since the identity was made is `owner-replaced`.
-A Git command that runs between that re-read and `update-index` is not
-fenced out, which is the residual risk. Afterwards the backend refreshes the
-environment's demanded Git scopes, because no workspace scan observes the
-index. The receipt (`applied`, the action and path id) carries no content.
+The backend writes the spliced blob, acquires Git's index lock and copies
+the current index. It validates the reviewed entry under that lock and
+updates the copy with `update-index --cacheinfo`, preserving the entry mode.
+It revalidates the runtime owner and the relevant endpoint using HEAD or a
+bounded, confined working-file read, then publishes the new index with an
+atomic rename. Git writers must acquire the same lock. Working files and
+refs can still change independently of the index lock after their final
+check. A replaced runtime is reported as `owner-replaced`.
+
+The backend refreshes the environment's demanded Git scopes and publishes
+a path-specific invalidation for both index views. The receipt carries
+the action and path ID.
 
 ## Retention and backup
 

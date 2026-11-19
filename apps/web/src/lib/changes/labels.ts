@@ -75,6 +75,8 @@ const REASONS: Record<string, string> = {
     "This change no longer matches the diff you reviewed. Reload the diff and review it again.",
   "changes.staging.worktree-changed":
     "The file changed after this diff was loaded. Reload the diff and review it again.",
+  "changes.staging.head-changed":
+    "The committed version of this file changed. Reload the diff and review it again.",
   "changes.staging.index-changed":
     "The staged version of this file changed after this diff was loaded. Reload the diff and review it again.",
   "changes.staging.index-mismatch":

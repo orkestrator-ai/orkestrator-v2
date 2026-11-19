@@ -53,7 +53,7 @@ export function navigate(
   for (let index = file - 1; index >= 0; index--) {
     if (starts[index] !== null) return starts[index]!;
   }
-  return starts[file] ?? current;
+  return current;
 }
 
 /** Keyboard shortcuts, shown in the navigation buttons' titles. */

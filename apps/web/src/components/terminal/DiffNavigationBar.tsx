@@ -29,7 +29,7 @@ interface DiffNavigationBarProps {
   /** Hunks in the shown body; null while no body is shown. */
   hunkCount: number | null;
   activePosition: number | null;
-  file: { index: number; count: number } | null;
+  file: { index: number; count: number; hasPrevious: boolean; hasNext: boolean } | null;
   onNavigate: (command: DiffNavigationCommand) => void;
   feedback: StagingFeedback | null;
   onDismissFeedback: () => void;
@@ -126,7 +126,7 @@ export function DiffNavigationBar({
                 <NavButton
                   command="previous-file"
                   label="Previous file"
-                  disabled={file.index === 0}
+                  disabled={!file.hasPrevious}
                   onNavigate={onNavigate}
                 >
                   <ChevronsUp className="h-3.5 w-3.5" />
@@ -137,7 +137,7 @@ export function DiffNavigationBar({
                 <NavButton
                   command="next-file"
                   label="Next file"
-                  disabled={file.index >= file.count - 1}
+                  disabled={!file.hasNext}
                   onNavigate={onNavigate}
                 >
                   <ChevronsDown className="h-3.5 w-3.5" />

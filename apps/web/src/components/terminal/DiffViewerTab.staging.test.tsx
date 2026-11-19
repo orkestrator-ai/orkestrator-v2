@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test, type Mock } from "bun:test";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within, act } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   changeResourceKey,
@@ -361,7 +361,10 @@ describe("DiffViewerTab selective staging", () => {
     const resolveFile = handlers.changes_resolve_live_detail!;
     handlers.changes_resolve_live_detail = (args) =>
       args?.resourceKey === STAGED_KEY
-        ? { kind: "error", error: { code: "not-found", reasonKey: "changes.error.not-found" } }
+        ? {
+            kind: "error",
+            error: { code: "not-found", reasonKey: "changes.reason.empty-index-scope" },
+          }
         : resolveFile(args);
     renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
     await screen.findByText("+new 1");
@@ -370,6 +373,91 @@ describe("DiffViewerTab selective staging", () => {
     // The switch stays available to go back.
     fireEvent.click(screen.getByRole("button", { name: "All changes" }));
     await screen.findByText("+new 1");
+  });
+
+  test.each(["file-rows-capped", "untracked-scan-capped"])(
+    "a capped comparison stays unavailable (%s)",
+    async (reason) => {
+      liveFile(1);
+      const resolveFile = handlers.changes_resolve_live_detail!;
+      handlers.changes_resolve_live_detail = (args) =>
+        args?.resourceKey === UNSTAGED_KEY
+          ? { kind: "error", error: { code: "not-found", reasonKey: `changes.reason.${reason}` } }
+          : resolveFile(args);
+      renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
+      await screen.findByText("+new 1");
+      fireEvent.click(screen.getByRole("button", { name: "Unstaged" }));
+      await screen.findByText("Diff unavailable");
+      expect(screen.queryByText("No unstaged changes in this file") === null).toBe(true);
+    },
+  );
+
+  test("file buttons are disabled when only hunkless files remain", async () => {
+    const comparison = {
+      ...identity("diff-h", "turn-net"),
+      kind: "comparison",
+      beforeSnapshotId: "a",
+      afterSnapshotId: "b",
+    } as DiffIdentity;
+    handlers.changes_get_diff = () =>
+      body(comparison, [file("before", []), file("text", [hunk(1, "text")]), file("after", [])]);
+    renderInAppCommandScope(
+      <DiffViewerTab
+        target={{ kind: "historical", diffIdentityId: "diff-h", title: "t" }}
+        isActive
+      />,
+    );
+    for (const name of ["Previous file", "Next file"]) {
+      expect((await screen.findByRole<HTMLButtonElement>("button", { name })).disabled).toBe(true);
+    }
+  });
+
+  test("the cut final hunk is disabled while earlier hunks can stage", async () => {
+    liveFile(2);
+    handlers.changes_get_diff = () =>
+      body(identity("diff-environment-net-1", "environment-net"), [
+        { ...file("src/app.ts", [hunk(1, "first"), hunk(20, "last")]), truncated: true },
+      ]);
+    renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
+    expect(
+      (await screen.findByRole<HTMLButtonElement>("button", { name: "Stage change 1" })).disabled,
+    ).toBe(false);
+    expect(
+      (await screen.findByRole<HTMLButtonElement>("button", { name: "Stage change 2" })).disabled,
+    ).toBe(true);
+  });
+
+  test("another mounted index viewer re-resolves a changed path", async () => {
+    liveFile(1);
+    const target = { ...live, resourceKey: UNSTAGED_KEY };
+    handlers.changes_stage_hunk = () => {
+      handlers.changes_get_diff = (args) =>
+        body(identity(String(args?.diffIdentityId), "unstaged"), [
+          file("src/app.ts", [hunk(20, "remaining")]),
+        ]);
+      appCommandStore(changeProjectionStore)
+        .getState()
+        .applyContentInvalidation(UNSTAGED_KEY, 1, ["u:src/app.ts"], "owner");
+      return { kind: "applied", action: "stage", pathId: "u:src/app.ts" };
+    };
+    renderInAppCommandScope(
+      <>
+        <section aria-label="First">
+          <DiffViewerTab target={target} isActive />
+        </section>
+        <section aria-label="Second">
+          <DiffViewerTab target={target} isActive />
+        </section>
+      </>,
+    );
+    const first = within(screen.getByRole("region", { name: "First" }));
+    const second = within(screen.getByRole("region", { name: "Second" }));
+    await second.findByRole("button", { name: "Stage change 1" });
+    const stage = await first.findByRole("button", { name: "Stage change 1" });
+    expect(calls("changes_resolve_live_detail")).toHaveLength(2);
+    await act(async () => fireEvent.click(stage));
+    await second.findByText("+new remaining");
+    expect(calls("changes_stage_hunk")).toHaveLength(1);
   });
 
   test("no staging without the backend capability or in the whitespace view", async () => {

@@ -164,7 +164,7 @@ function unavailableCopy(
   live: boolean,
   scope?: string,
 ): { title: string; detail: string } {
-  if (live && error.code === "not-found" && (scope === "staged" || scope === "unstaged")) {
+  if (live && error.reasonKey === "changes.reason.empty-index-scope") {
     return scope === "staged"
       ? {
           title: "No staged changes in this file",
@@ -183,6 +183,9 @@ function unavailableCopy(
           "The recorded file contents were removed by retention. The counts recorded for this change are unchanged.",
       };
     case "not-found":
+      if (error.reasonKey.startsWith("changes.reason.")) {
+        return { title: "Diff unavailable", detail: changeReason(error.reasonKey) };
+      }
       return live
         ? {
             title: "No current changes for this file",
@@ -581,7 +584,7 @@ export function DiffViewerTab({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (isEditableTarget(event.target)) return;
+    if (!isActive || isEditableTarget(event.target)) return;
     const command = navigationCommandForKey(event);
     if (!command) return;
     event.preventDefault();
@@ -632,7 +635,7 @@ export function DiffViewerTab({
           variant="ghost"
           size="sm"
           className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
-          disabled={staging.pendingKey !== null || cut || refreshing}
+          disabled={!isActive || staging.pendingKey !== null || cut || refreshing}
           aria-label={`${verb} change ${number}`}
           title={
             cut
@@ -641,7 +644,8 @@ export function DiffViewerTab({
                 ? "Stage this change: write it to the Git index, leaving every other change as it is"
                 : "Unstage this change: take it out of the Git index, leaving the working file as it is"
           }
-          onClick={() =>
+          onClick={() => {
+            if (!isActive || cut || refreshing) return;
             void staging.stage(
               {
                 diffIdentityId: identity.id,
@@ -656,8 +660,8 @@ export function DiffViewerTab({
               },
               `change ${number}`,
               stagingNote,
-            )
-          }
+            );
+          }}
         >
           {pending ? (
             <Loader2 className="h-3 w-3 animate-spin" />
@@ -675,6 +679,7 @@ export function DiffViewerTab({
   const shell = (children: ReactNode, testId = "diff-viewer") => (
     <div
       data-testid={testId}
+      inert={!isActive}
       tabIndex={-1}
       onKeyDown={onKeyDown}
       className={cn(
@@ -723,7 +728,12 @@ export function DiffViewerTab({
         activePosition={position}
         file={
           headerBody && headerBody.files.length > 1 && activeHunk
-            ? { index: activeHunk.fileIndex, count: headerBody.files.length }
+            ? {
+                index: activeHunk.fileIndex,
+                count: headerBody.files.length,
+                hasPrevious: navigate(layout, position, "previous-file") !== position,
+                hasNext: navigate(layout, position, "next-file") !== position,
+              }
             : null
         }
         onNavigate={runNavigation}

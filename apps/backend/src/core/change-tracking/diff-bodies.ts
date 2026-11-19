@@ -430,27 +430,22 @@ export class DiffBodyService {
     const pathId = row?.new_path ?? row?.path_id ?? input.pathId;
     if (!pathId)
       return { kind: "error", error: { code: "not-found", reasonKey: "changes.error.not-found" } };
-    // The index scopes list every path Git sees as changed (untracked files
-    // included), so a complete measurement without the path means it has no
-    // change in that scope.
-    if (
-      (scope === "staged" || scope === "unstaged") &&
-      !row &&
-      measurement &&
-      !measurement.completeness.reasons.includes(FILE_ROWS_CAPPED_REASON)
-    )
-      return { kind: "error", error: { code: "not-found", reasonKey: "changes.error.not-found" } };
-    // A capped Git scope has no row for most of its files, and cannot say
-    // whether this path is one of them.
-    if (
-      scope !== "environment-net" &&
-      !row &&
-      measurement?.completeness.reasons.includes(FILE_ROWS_CAPPED_REASON)
-    )
-      return {
-        kind: "error",
-        error: { code: "not-found", reasonKey: `changes.reason.${FILE_ROWS_CAPPED_REASON}` },
-      };
+    // A missing row proves an empty comparison only when the scan covered the path.
+    if (scope !== "environment-net" && !row && measurement) {
+      const cap = measurement.completeness.reasons.find(
+        (reason) => reason === FILE_ROWS_CAPPED_REASON || reason === "untracked-scan-capped",
+      );
+      if (cap)
+        return { kind: "error", error: { code: "not-found", reasonKey: `changes.reason.${cap}` } };
+      if (scope === "staged" || scope === "unstaged") {
+        const freshness = this.deps.projections.getFreshness(input.resourceKey);
+        const reasonKey =
+          freshness?.observationState === "fresh" && !freshness.stale
+            ? "changes.reason.empty-index-scope"
+            : `changes.reason.${freshness?.unavailableReason ?? "scan-failed"}`;
+        return { kind: "error", error: { code: "not-found", reasonKey } };
+      }
+    }
     // A Git scope's rows are Git's view; a path Git measures through a filter
     // program has no raw-byte body that would match it.
     if (scope !== "environment-net" && (!row || row.reason === "git-filter-unsupported"))
@@ -706,11 +701,12 @@ export class DiffBodyService {
     pathId: string,
   ): Promise<Uint8Array | null> {
     const path = Buffer.from(decodePath(pathId)).toString();
+    const object = oid === "" ? `:0:${path}` : `${oid}:${path}`;
     try {
       if (target.kind === "local") {
         const result = await runCommandBuffer(
           "git",
-          [...SAFE_GIT_CONFIG, "-C", target.worktreePath, "cat-file", "blob", `${oid}:${path}`],
+          [...SAFE_GIT_CONFIG, "-C", target.worktreePath, "cat-file", "blob", object],
           {
             timeoutMs: 20_000,
             env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
@@ -729,7 +725,7 @@ export class DiffBodyService {
           ...SAFE_GIT_CONFIG,
           "cat-file",
           "blob",
-          `${oid}:${path}`,
+          object,
         ],
         { timeoutMs: 20_000 },
       );

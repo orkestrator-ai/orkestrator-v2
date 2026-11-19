@@ -19,7 +19,7 @@
  *
  * Every other hunk, the working tree and every other index entry are left
  * untouched. Mutations run in the backend only, serialized per worktree, and
- * the index entry is re-read immediately before `update-index`.
+ * checks and publication share Git’s index lock.
  */
 
 import type { DiffIdentity } from "@orkestrator/protocol/change-resources";
@@ -34,14 +34,15 @@ import {
   isProbablyBinary,
 } from "@orkestrator/protocol/node/change-tracking/raw-line-diff";
 import { runCommandBuffer } from "../shell.js";
-import { decodePath, SAFE_GIT_CONFIG } from "./capture.js";
+import { decodePath, DEFAULT_CAPTURE_LIMITS, SAFE_GIT_CONFIG } from "./capture.js";
 import type { ChangeLedger } from "./change-ledger.js";
 import {
   INDEX_FILE_REPRESENTATION_ID,
   LIVE_FILE_REPRESENTATION_ID,
   STAGED_FILE_REPRESENTATION_ID,
 } from "./diff-bodies.js";
-import { configuredFilterDrivers, filteredPaths, type GitRunner } from "./git-scopes.js";
+import { withLockedIndex } from "./index-transaction.js";
+import type { CaptureExecutor } from "./capture.js";
 import type { ObjectStore } from "./object-store.js";
 import type { WorktreeRegistry, WorktreeTarget } from "./worktree-owner.js";
 
@@ -137,7 +138,7 @@ export class HunkStagingService {
       registry: WorktreeRegistry;
       environmentTarget: (environmentId: string) => Promise<WorktreeTarget | null>;
       /** The index of `environmentId` changed; refresh the Git scopes that read it. */
-      onIndexChanged: (environmentId: string) => void;
+      onIndexChanged: (environmentId: string, pathId: string) => void;
     },
   ) {}
 
@@ -203,16 +204,34 @@ export class HunkStagingService {
       refuse("owner-replaced", "changes.error.owner-replaced");
     }
     return this.serialized(worktree.worktreeId, async () => {
-      try {
-        this.deps.registry.owner(worktree).assertCurrent();
-      } catch {
-        refuse("owner-replaced", "changes.error.owner-replaced");
-      }
+      const owner = this.deps.registry.owner(worktree);
+      const assertTarget = async () => {
+        const target = await this.deps.environmentTarget(environmentId);
+        const current = target ? await this.deps.registry.resolve(target) : null;
+        if (
+          current?.worktreeId !== worktree.worktreeId ||
+          current.incarnation !== worktree.incarnation ||
+          this.deps.ledger.worktree(worktree.worktreeId)?.tombstoned_at !== null
+        ) {
+          refuse("owner-replaced", "changes.error.owner-replaced");
+        }
+        try {
+          owner.assertCurrent();
+        } catch {
+          refuse("owner-replaced", "changes.error.owner-replaced");
+        }
+      };
+      await assertTarget();
       await this.writeIndex({
-        target,
-        path: file.path,
-        action: request.action,
+        target:
+          worktree.runtimeKind === "host"
+            ? { kind: "local", worktreePath: worktree.canonicalRoot }
+            : { kind: "container", containerId: worktree.runtimeId, root: worktree.canonicalRoot },
+        ...file,
+        executor: owner.executor,
+        assertTarget,
         expectedIndex: request.action === "stage" ? before : after,
+        expectedHead: request.action === "unstage" ? before : null,
         expectedWorktree: request.action === "stage" ? after : null,
         indexMismatchReason:
           identity.representationPolicyId === LIVE_FILE_REPRESENTATION_ID
@@ -220,7 +239,7 @@ export class HunkStagingService {
             : "changes.staging.index-changed",
         content,
       });
-      this.deps.onIndexChanged(environmentId);
+      this.deps.onIndexChanged(environmentId, file.pathId);
       return { kind: "applied", action: request.action, pathId: file.pathId };
     });
   }
@@ -274,57 +293,83 @@ export class HunkStagingService {
   private async writeIndex(input: {
     target: WorktreeTarget;
     path: string;
-    action: ChangesStageHunkRequest["action"];
+    pathId: string;
+    executor: CaptureExecutor;
+    assertTarget: () => Promise<void>;
     expectedIndex: Uint8Array;
+    expectedHead: Uint8Array | null;
     expectedWorktree: Uint8Array | null;
     indexMismatchReason: string;
     content: Uint8Array;
   }): Promise<void> {
     const git = gitRunner(input.target);
-    const text = async (args: string[], stdin?: Uint8Array) =>
-      (await git(args, stdin)).toString("utf8");
-    const hashOf = async (bytes: Uint8Array) =>
-      (await text(["hash-object", "--no-filters", "--stdin"], bytes)).trim();
+    const hashOf = async (bytes: Uint8Array, write = false) =>
+      (await git(["hash-object", ...(write ? ["-w"] : []), "--no-filters", "--stdin"], bytes))
+        .toString("utf8")
+        .trim();
+    try {
+      const expectedIndex = await hashOf(input.expectedIndex);
+      const expectedHead = input.expectedHead ? await hashOf(input.expectedHead) : null;
+      const written = await hashOf(input.content, true);
+      const index = (await git(["rev-parse", "--path-format=absolute", "--git-path", "index"]))
+        .toString("utf8")
+        .replace(/\n$/, "");
+      if (!index.startsWith("/") || index.includes("\n") || index.includes("\0"))
+        refuse("precondition-failed", "changes.staging.git-failed");
 
-    const entry = await this.indexEntry(text, input.path);
-    if (entry.oid !== (await hashOf(input.expectedIndex))) {
-      refuse("precondition-failed", input.indexMismatchReason);
+      await withLockedIndex(input.target, index, async (alternate, publish) => {
+        const text = async (args: string[]) =>
+          (await git(["-c", "core.splitIndex=false", ...args], undefined, alternate)).toString(
+            "utf8",
+          );
+        const entry = await this.indexEntry(text, input.path);
+        if (entry.oid !== expectedIndex) refuse("precondition-failed", input.indexMismatchReason);
+        await text(["update-index", "--cacheinfo", `${entry.mode},${written},${input.path}`]);
+        await input.assertTarget();
+
+        if (expectedHead) {
+          const head = await git(["rev-parse", "--verify", `HEAD:${input.path}`]).catch(() => null);
+          if (head?.toString("utf8").trim() !== expectedHead)
+            refuse("precondition-failed", "changes.staging.head-changed");
+        }
+        if (input.expectedWorktree) {
+          await checkConversion(git, input.path, input.expectedWorktree);
+          // Bounded capture reads through a confined descriptor and checks its
+          // stamp. Reopen the path at the end to catch a replaced directory
+          // entry even when the descriptor itself remained unchanged.
+          const limits = {
+            ...DEFAULT_CAPTURE_LIMITS,
+            maxFileBytes: input.expectedWorktree.length,
+            stableReadAttempts: 1,
+          };
+          const signal = AbortSignal.timeout(10_000);
+          const [file] = await input.executor.fetch([input.pathId], limits, signal).catch(() => []);
+          if (
+            file?.kind !== "file" ||
+            !file.stable ||
+            !file.bytes ||
+            !Buffer.from(file.bytes).equals(input.expectedWorktree)
+          ) {
+            refuse("precondition-failed", "changes.staging.worktree-changed");
+          }
+          await input.assertTarget();
+          const [current] = await input.executor
+            .describe([input.pathId], limits, signal)
+            .catch(() => []);
+          if (
+            current?.kind !== "file" ||
+            !current.stable ||
+            current.stamp !== file.stamp ||
+            current.oid !== file.oid
+          )
+            refuse("precondition-failed", "changes.staging.worktree-changed");
+        }
+        await publish();
+      });
+    } catch (error) {
+      if (error instanceof StagingRefusal) throw error;
+      refuse("precondition-failed", "changes.staging.git-failed");
     }
-    if (input.expectedWorktree) {
-      const raw = (
-        await text(["hash-object", "--no-filters", "--", input.path]).catch(() =>
-          refuse("precondition-failed", "changes.staging.worktree-changed"),
-        )
-      ).trim();
-      if (raw !== (await hashOf(input.expectedWorktree))) {
-        refuse("precondition-failed", "changes.staging.worktree-changed");
-      }
-      // The working bytes must be what Git itself would store: no external
-      // filter program (never run here), and no built-in conversion (line
-      // endings, ident, working-tree encoding) that would change them.
-      const runner: GitRunner = (args) => text(args);
-      const drivers = await configuredFilterDrivers(runner);
-      if ((await filteredPaths(runner, drivers.names, [input.path])).size > 0) {
-        refuse("unsupported-capability", "changes.staging.git-conversion");
-      }
-      const converted = (
-        await text([...drivers.neutralize, "hash-object", "--", input.path]).catch(() =>
-          refuse("unsupported-capability", "changes.staging.git-conversion"),
-        )
-      ).trim();
-      if (converted !== raw) refuse("unsupported-capability", "changes.staging.git-conversion");
-    }
-    const written = (
-      await text(["hash-object", "-w", "--no-filters", "--stdin"], input.content)
-    ).trim();
-    // Re-read the entry immediately before replacing it.
-    const current = await this.indexEntry(text, input.path);
-    if (current.oid !== entry.oid || current.mode !== entry.mode) {
-      refuse("precondition-failed", "changes.staging.index-changed");
-    }
-    await text(["update-index", "--cacheinfo", `${entry.mode},${written},${input.path}`]).catch(
-      () => refuse("precondition-failed", "changes.staging.git-failed"),
-    );
   }
 
   /** The path's single stage-0 index entry of a regular file. */
@@ -358,16 +403,52 @@ export class HunkStagingService {
   }
 }
 
+/**
+ * Inspect conversion settings without ever asking Git to convert input.
+ * Explicit filters and encodings are refused even when they currently have
+ * no effect. Built-in newline and ident conversion only affect matching bytes.
+ */
+async function checkConversion(git: ReturnType<typeof gitRunner>, path: string, bytes: Uint8Array) {
+  const attributes = ["filter", "working-tree-encoding", "text", "eol", "crlf", "ident"];
+  const fail = () => refuse("unsupported-capability", "changes.staging.git-conversion");
+  const fields = (await git(["check-attr", "-z", ...attributes, "--", path]).catch(fail))
+    .toString("utf8")
+    .split("\0");
+  const values = attributes.map((attribute, index) => {
+    if (fields[index * 3] !== path || fields[index * 3 + 1] !== attribute || !fields[index * 3 + 2])
+      fail();
+    return fields[index * 3 + 2]!;
+  });
+  if (fields.length !== attributes.length * 3 + 1 || fields.at(-1) !== "") fail();
+  const [filter, encoding, text, eol, crlf, ident] = values;
+  const enabled = (value: string | undefined) => value !== "unspecified" && value !== "unset";
+  if (enabled(filter) || enabled(encoding)) fail();
+  const content = Buffer.from(bytes);
+  if (enabled(ident) && content.includes("$Id:")) fail();
+  if (!content.includes("\r\n")) return;
+  const auto = (await git(["config", "--default", "false", "--get", "core.autocrlf"]).catch(fail))
+    .toString("utf8")
+    .trim()
+    .toLowerCase();
+  if (enabled(text) || enabled(eol) || enabled(crlf) || !["false", "no", "off", "0"].includes(auto))
+    fail();
+}
+
 /** Runs Git in the environment's worktree (host or container) with optional stdin bytes. */
 function gitRunner(
   target: WorktreeTarget,
-): (args: string[], stdin?: Uint8Array) => Promise<Buffer> {
-  return async (args, stdin) => {
+): (args: string[], stdin?: Uint8Array, index?: string) => Promise<Buffer> {
+  return async (args, stdin, index) => {
     const input = stdin ? Buffer.from(stdin.buffer, stdin.byteOffset, stdin.byteLength) : undefined;
     const result =
       target.kind === "local"
         ? await runCommandBuffer("git", [...SAFE_GIT_CONFIG, "-C", target.worktreePath, ...args], {
             timeoutMs: 30_000,
+            env: {
+              ...process.env,
+              GIT_OPTIONAL_LOCKS: "0",
+              ...(index ? { GIT_INDEX_FILE: index } : {}),
+            },
             ...(input ? { stdin: input } : {}),
           })
         : await runCommandBuffer(
@@ -375,6 +456,9 @@ function gitRunner(
             [
               "exec",
               ...(input ? ["-i"] : []),
+              "-e",
+              "GIT_OPTIONAL_LOCKS=0",
+              ...(index ? ["-e", `GIT_INDEX_FILE=${index}`] : []),
               target.containerId,
               "git",
               ...SAFE_GIT_CONFIG,
@@ -384,6 +468,8 @@ function gitRunner(
             ],
             { timeoutMs: 30_000, ...(input ? { stdin: input } : {}) },
           );
+    if (args[0] === "check-attr" && result.stderr.length > 0)
+      throw new Error("attribute inspection incomplete");
     return result.stdout;
   };
 }

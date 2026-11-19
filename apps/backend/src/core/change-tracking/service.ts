@@ -36,7 +36,7 @@ import { ChangeLedger, TERMINAL_TURN_LIFECYCLES } from "./change-ledger.js";
 import { DiffBodyService } from "./diff-bodies.js";
 import { EnvironmentChangeProjector } from "./environment-projector.js";
 import { EvidenceBodyStore } from "./evidence-body-store.js";
-import { GitScopeService, isGitScope } from "./git-scopes.js";
+import { GitScopeService, gitScopeResourceKey, isGitScope } from "./git-scopes.js";
 import { HunkStagingService } from "./hunk-staging.js";
 import { ProviderEvidenceIngress, type IngestResult } from "./evidence-ingestion.js";
 import { ChangeHandoffSerializer } from "./handoff.js";
@@ -269,13 +269,24 @@ export class ChangeTrackingService {
       resetView: (resourceKey) => this.publisher.reset(resourceKey),
       demandTtlMs: () => policy().gitScopeDemandTtlMs,
     });
+    let indexContentGeneration = 0;
     this.hunkStaging = new HunkStagingService({
       ledger: this.ledger,
       store: this.objects,
       registry: this.registry,
       environmentTarget: options.environmentTarget,
       // Staging moves the index, which no workspace scan observes.
-      onIndexChanged: (environmentId) => this.gitScopes.invalidate(environmentId),
+      onIndexChanged: (environmentId, pathId) => {
+        this.gitScopes.invalidate(environmentId);
+        const generation = ++indexContentGeneration;
+        for (const scope of ["staged", "unstaged"] as const) {
+          this.publisher.contentInvalidated(
+            gitScopeResourceKey(scope, environmentId),
+            [pathId],
+            generation,
+          );
+        }
+      },
     });
     this.retention = new ChangeRetentionService({
       ledger: this.ledger,

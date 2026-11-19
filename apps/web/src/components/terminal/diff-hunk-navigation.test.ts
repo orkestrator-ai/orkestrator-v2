@@ -35,7 +35,7 @@ describe("hunkLayout and navigate", () => {
     expect(navigate(layout, 3, "next-file")).toBe(3);
     expect(navigate(layout, 4, "previous-file")).toBe(2);
     expect(navigate(layout, 2, "previous-file")).toBe(0);
-    expect(navigate(layout, 1, "previous-file")).toBe(0);
+    expect(navigate(layout, 1, "previous-file")).toBe(1);
     expect(navigate(layout, null, "previous-file")).toBe(0);
   });
 });

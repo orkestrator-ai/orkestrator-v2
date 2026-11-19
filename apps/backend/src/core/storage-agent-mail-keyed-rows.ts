@@ -2,7 +2,7 @@ import type { AgentMailMessage } from "@orkestrator/protocol/agent-mail";
 
 /**
  * Bounded state behind the agent mail store's keyed reads
- * (`AgentMailStore.mailbox`, `environmentMailboxes`, `locateMessage`): the
+ * (`AgentMailStore.mailbox`, `environmentMailboxes`, `messageStatus`): the
  * rows those reads parsed, and where each message was last seen. Both are
  * caches. A parsed row is reused only while its serialized value is unchanged,
  * and a location is only a hint that the reader verifies against the row it
@@ -85,12 +85,18 @@ export class AgentMailKeyedRows {
       if (!Array.isArray(messages)) return;
       const location = { collection, key } as const;
       for (const message of messages as Array<Partial<AgentMailMessage> | null>) {
-        if (typeof message?.id === "string") this.place(message.id, location);
+        if (typeof message?.id === "string") this.indexLocation(message.id, location);
       }
     } else if (collection === "idempotency") {
       const bounce = (parsed as { bounce?: Partial<AgentMailMessage> }).bounce;
-      if (typeof bounce?.id === "string") this.place(bounce.id, { collection, key });
+      if (typeof bounce?.id === "string") this.indexLocation(bounce.id, { collection, key });
     }
+  }
+
+  private indexLocation(messageId: string, location: AgentMailMessageLocation): void {
+    const known = this.locations.get(messageId);
+    if (known?.collection === location.collection && known.key === location.key) return;
+    this.rememberLocation(messageId, location);
   }
 
   /** Counts, for tests and diagnostics. */
@@ -98,9 +104,8 @@ export class AgentMailKeyedRows {
     return { rows: this.rows.size, length: this.length, locations: this.locations.size };
   }
 
-  private place(messageId: string, location: AgentMailMessageLocation): void {
-    const known = this.locations.get(messageId);
-    if (known?.collection === location.collection && known.key === location.key) return;
+  /** Records a verified match and refreshes its eviction order. */
+  rememberLocation(messageId: string, location: AgentMailMessageLocation): void {
     this.locations.delete(messageId);
     this.locations.set(messageId, location);
     if (this.locations.size > AGENT_MAIL_MESSAGE_LOCATION_MAX) {

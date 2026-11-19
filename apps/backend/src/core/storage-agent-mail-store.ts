@@ -297,20 +297,21 @@ function parseMailRow(collection: string, value: string): unknown {
  * a keyed read answers only where the whole-store read would. Collections
  * appear as markers (or are absent) in a row-held envelope.
  */
-function supportedEnvelope(document: string): boolean {
+function envelopeMailRevision(document: string): number | null {
   const envelope = JSON.parse(document) as unknown;
-  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return false;
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return null;
   const record = envelope as Record<string, unknown>;
-  return record.version === 1 && Boolean(record.mailboxes) && Boolean(record.idempotency);
+  if (record.version !== 1 || !record.mailboxes || !record.idempotency) return null;
+  return Number.isSafeInteger(record.revision) ? (record.revision as number) : 0;
 }
 
 export function findMessage(
   store: PersistedAgentMailStore,
   messageId: string,
-): { mailbox: PersistedMailbox; message: AgentMailMessage } | null {
-  for (const mailbox of Object.values(store.mailboxes)) {
+): { key: string; mailbox: PersistedMailbox; message: AgentMailMessage } | null {
+  for (const [key, mailbox] of Object.entries(store.mailboxes)) {
     const message = mailbox.messages.find((candidate) => candidate.id === messageId);
-    if (message) return { mailbox, message };
+    if (message) return { key, mailbox, message };
   }
   return null;
 }
@@ -386,7 +387,11 @@ export class AgentMailStore {
   /** Parsed rows of keyed reads and where messages were last seen. */
   private readonly keyed = new AgentMailKeyedRows();
   /** The last committed revision at which a keyed read found the envelope supported. */
-  private supportedEnvelope: { database: StorageDatabase; revision: number } | null = null;
+  private supportedEnvelope: {
+    database: StorageDatabase;
+    revision: number;
+    mailRevision: number;
+  } | null = null;
 
   constructor(
     private readonly context: StorageContext,
@@ -502,7 +507,7 @@ export class AgentMailStore {
   async mailbox(mailboxId: string): Promise<PersistedMailbox | undefined> {
     const selected = this.selectRows("mailboxes", { keys: [mailboxId] });
     if (!selected) return (await this.snapshot()).mailboxes[mailboxId];
-    return selected[0]?.parsed as PersistedMailbox | undefined;
+    return selected.rows[0]?.parsed as PersistedMailbox | undefined;
   }
 
   /**
@@ -514,36 +519,67 @@ export class AgentMailStore {
     if (!environmentId || environmentId.includes("\0")) return [];
     const selected = this.selectRows("mailboxes", { keyPrefix: `${environmentId}\0` });
     const mailboxes = selected
-      ? selected.map((row) => row.parsed as PersistedMailbox)
+      ? selected.rows.map((row) => row.parsed as PersistedMailbox)
       : Object.values((await this.snapshot()).mailboxes);
     return mailboxes.filter((mailbox) => mailbox.environmentId === environmentId);
   }
 
+  /** Requested mailboxes in caller order, with the mail revision from the same snapshot. */
+  async mailboxesById(
+    keys: string[],
+  ): Promise<{ revision: number; mailboxes: PersistedMailbox[] }> {
+    const selected = this.selectRows("mailboxes", { keys });
+    if (!selected) {
+      const store = await this.snapshot();
+      return {
+        revision: store.revision,
+        mailboxes: keys.flatMap((key) => store.mailboxes[key] ?? []),
+      };
+    }
+    const byKey = new Map(selected.rows.map((row) => [row.key, row.parsed as PersistedMailbox]));
+    return {
+      revision: selected.mailRevision,
+      mailboxes: keys.flatMap((key) => byKey.get(key) ?? []),
+    };
+  }
+
   /**
-   * A message's committed status by id without searching every mailbox: the
-   * mailbox (or bounced send's idempotency record) it was last seen in, then
-   * its counterpart row, each read by key. Message ids are unique across
-   * mailboxes, counterparts and bounces, so the first match is the one the
-   * whole-store search would find. `undefined` when none of those holds it,
-   * and the caller searches the whole {@link snapshot}: the location is a
-   * hint (bounded, and learnt from rows this process parsed or wrote).
+   * A message's committed status by id. Verify the last known location, then
+   * try its counterpart row. A successful whole-store search relearns the key
+   * even if the matching row's parse was already cached.
    */
   async messageStatus(messageId: string): Promise<AgentMailMessageSummary | undefined> {
     const location = this.keyed.locate(messageId);
     if (location) {
-      const [row] = this.selectRows(location.collection, { keys: [location.key] }) ?? [];
-      if (location.collection === "mailboxes") {
-        const message = (row?.parsed as PersistedMailbox | undefined)?.messages.find(
-          (candidate) => candidate.id === messageId,
-        );
-        if (message) return metadataMessage(message);
-      } else {
-        const bounce = (row?.parsed as IdempotencyRecord | undefined)?.bounce;
-        if (bounce?.id === messageId) return metadataMessage(bounce);
+      const row = this.selectRows(location.collection, { keys: [location.key] })?.rows[0];
+      const message =
+        location.collection === "mailboxes"
+          ? (row?.parsed as PersistedMailbox | undefined)?.messages.find(
+              (candidate) => candidate.id === messageId,
+            )
+          : (row?.parsed as IdempotencyRecord | undefined)?.bounce;
+      if (message?.id === messageId) {
+        this.keyed.rememberLocation(messageId, location);
+        return metadataMessage(message);
       }
     }
-    const [counterpart] = this.selectRows("counterparts", { keys: [messageId] }) ?? [];
-    return counterpart?.parsed as AgentMailMessageSummary | undefined;
+    const counterpart = this.selectRows("counterparts", { keys: [messageId] })?.rows[0];
+    if (counterpart?.parsed) return counterpart.parsed as AgentMailMessageSummary;
+
+    const store = await this.snapshot();
+    const located = findMessage(store, messageId);
+    if (located) {
+      this.keyed.rememberLocation(messageId, { collection: "mailboxes", key: located.key });
+      return metadataMessage(located.message);
+    }
+    if (store.counterparts[messageId]) return store.counterparts[messageId];
+    for (const [key, row] of Object.entries(store.idempotency)) {
+      if (row.bounce?.id === messageId) {
+        this.keyed.rememberLocation(messageId, { collection: "idempotency", key });
+        return metadataMessage(row.bounce);
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -554,7 +590,7 @@ export class AgentMailStore {
   private selectRows(
     collection: AgentMailRowCollection,
     selection: RowSelection,
-  ): Array<{ key: string; parsed: unknown }> | null {
+  ): { mailRevision: number; rows: Array<{ key: string; parsed: unknown }> } | null {
     const database = this.context.database;
     const selected = this.context.loadStoreRowsSerialized(
       this.files.agentMailFile(),
@@ -564,15 +600,20 @@ export class AgentMailStore {
         ? { documentKnownAt: this.supportedEnvelope.revision }
         : {},
     );
-    if (selected === null) return [];
+    if (selected === null) return { mailRevision: 0, rows: [] };
     if (selected === undefined || selected.mode === "document") return null;
     try {
       // Checked once per committed revision: a revision is never reused.
+      let envelope = this.supportedEnvelope;
       if (selected.document !== undefined) {
-        if (selected.document === null || !supportedEnvelope(selected.document)) return null;
-        this.supportedEnvelope = { database, revision: selected.revision };
+        const mailRevision =
+          selected.document === null ? null : envelopeMailRevision(selected.document);
+        if (mailRevision === null) return null;
+        envelope = { database, revision: selected.revision, mailRevision };
+        this.supportedEnvelope = envelope;
       }
-      return selected.rows.map(({ key, value }) => {
+      if (!envelope) return null;
+      const rows = selected.rows.map(({ key, value }) => {
         const id = mailRowId(collection, key);
         const modelled = this.readModel?.rows.get(id);
         if (modelled?.value === value) return { key, parsed: modelled.parsed };
@@ -583,6 +624,7 @@ export class AgentMailStore {
         this.keyed.index(collection, key, parsed);
         return { key, parsed };
       });
+      return { mailRevision: envelope.mailRevision, rows };
     } catch (error) {
       // An unreadable row or envelope reads as the whole-store read reads it.
       if (error instanceof SyntaxError) return null;

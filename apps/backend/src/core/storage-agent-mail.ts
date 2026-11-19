@@ -1263,16 +1263,8 @@ export class AgentMailRepository {
   }
 
   async getAgentMailStatus(messageId: string): Promise<AgentMailMessageSummary> {
-    const keyed = await this.store.messageStatus(messageId);
-    if (keyed) return keyed;
-    const store = await this.store.snapshot();
-    const located = findMessage(store, messageId);
-    if (located) return metadataMessage(located.message);
-    const counterpart = store.counterparts[messageId];
-    if (counterpart) return counterpart;
-    for (const row of Object.values(store.idempotency)) {
-      if (row.bounce?.id === messageId) return metadataMessage(row.bounce);
-    }
+    const status = await this.store.messageStatus(messageId);
+    if (status) return status;
     throw new AgentMailError("message-not-found", "Message status is no longer retained");
   }
 

@@ -3,8 +3,12 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { agentMailboxId } from "@orkestrator/protocol/agent-mail";
+import { AGENT_MAIL_MAX_STORE_BYTES, agentMailboxId } from "@orkestrator/protocol/agent-mail";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import {
+  AGENT_MAIL_MESSAGE_LOCATION_MAX,
+  type AgentMailKeyedRows,
+} from "./storage-agent-mail-keyed-rows.js";
 import {
   findMessage,
   metadataMessage,
@@ -12,6 +16,7 @@ import {
   type PersistedAgentMailStore,
 } from "./storage-agent-mail-store.js";
 import { STORAGE_DATABASE_FILE } from "./storage-database.js";
+import { LEGACY_JSON_DIRECTORY } from "./storage-stores.js";
 import { readStoredValue, seedStore, storageInternals } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 
@@ -257,19 +262,94 @@ describe("keyed agent mail reads", () => {
     });
   });
 
+  test("relearns evicted locations for retained and bounced messages", async () => {
+    await withWorld(async ({ dataDir, storage, mailStore, send }) => {
+      const sent = await send("e1", "e2");
+      await storage.updateAgentMailboxPolicy("e3", "agent", { mutedInbound: true });
+      const bounced = await send("e1", "e3");
+      expect(bounced.placement).toBe("bounced");
+      const value = await mailStore.snapshot();
+      const keyed = (mailStore as unknown as { keyed: AgentMailKeyedRows }).keyed;
+      keyed.index("mailboxes", "bulk", {
+        messages: Array.from({ length: AGENT_MAIL_MESSAGE_LOCATION_MAX }, (_, index) => ({
+          id: `bulk-${index}`,
+        })),
+      });
+      expect(keyed.locate(sent.id)).toBeUndefined();
+      expect(keyed.locate(bounced.id)).toBeUndefined();
+
+      const snapshot = spyOn(mailStore, "snapshot");
+      try {
+        expect(await storage.getAgentMailStatus(sent.id)).toEqual(metadataMessage(sent));
+        expect(await storage.getAgentMailStatus(bounced.id)).toEqual(metadataMessage(bounced));
+        expect(snapshot).toHaveBeenCalledTimes(2);
+      } finally {
+        snapshot.mockRestore();
+      }
+
+      const changed = await mailStore.load();
+      mailbox(changed, "e10").title = "unrelated change";
+      seedStore(dataDir, "agent-mail.json", changed);
+      await withoutWholeStore(mailStore, async () => {
+        expect(await storage.getAgentMailStatus(sent.id)).toEqual(
+          metadataMessage(findMessage(value, sent.id)!.message),
+        );
+        expect(await storage.getAgentMailStatus(bounced.id)).toEqual(metadataMessage(bounced));
+      });
+    });
+  });
+
   test("a moved message's stale location falls back to the whole store", async () => {
-    await withWorld(async ({ storage, mailStore, send }) => {
+    await withWorld(async ({ dataDir, storage, mailStore, send }) => {
       const sent = await send("e1", "e2");
       await storage.getAgentMailStatus(sent.id);
-      // Move it to another mailbox behind the location's back.
       const value = await mailStore.load();
       const [message] = mailbox(value, "e2").messages.splice(0, 1);
       mailbox(value, "e3").messages.push(message!);
       mailbox(value, "e2").revision += 1;
       mailbox(value, "e3").revision += 1;
-      await mailStore.save(value);
-      expect((await storage.getAgentMailStatus(sent.id)).toEnvironmentId).toBe("e2");
-      expect(findMessage(await mailStore.snapshot(), sent.id)!.mailbox.environmentId).toBe("e3");
+      seedStore(dataDir, "agent-mail.json", value);
+      const snapshot = spyOn(mailStore, "snapshot");
+      try {
+        expect((await storage.getAgentMailStatus(sent.id)).toEnvironmentId).toBe("e2");
+        expect(snapshot).toHaveBeenCalledTimes(1);
+      } finally {
+        snapshot.mockRestore();
+      }
+      await withoutWholeStore(mailStore, async () => {
+        expect((await storage.getAgentMailStatus(sent.id)).id).toBe(sent.id);
+      });
+    });
+  });
+
+  test("a scoped mailbox batch returns rows and mail revision after another connection writes", async () => {
+    await withWorld(async ({ dataDir, storage, mailStore, send }) => {
+      const sent = await send("e2", "e1");
+      const value = await mailStore.load();
+      value.revision += 10;
+      mailbox(value, "e10").title = "unrelated change";
+      seedStore(dataDir, "agent-mail.json", value);
+      const addr = (environmentId: string) => ({ environmentId, tabId: "agent" });
+      await withoutWholeStore(mailStore, async () => {
+        const single = await storage.getAgentMailMailboxes([addr("e1")]);
+        expect(single.revision).toBe(value.revision);
+        expect(single.mailboxes[0]?.messages.map((message) => message.id)).toEqual([sent.id]);
+        const batch = await storage.getAgentMailMailboxes([
+          addr("e2"),
+          addr("e1"),
+          addr("e4"),
+          addr("e2"),
+        ]);
+        expect(batch.revision).toBe(value.revision);
+        expect(batch.mailboxes.map(({ descriptor }) => descriptor.environmentId)).toEqual([
+          "e2",
+          "e1",
+        ]);
+        expect(await storage.getAgentMailMailboxes([])).toEqual({
+          revision: value.revision,
+          mailboxes: [],
+        });
+      });
     });
   });
 });
@@ -314,7 +394,59 @@ describe("keyed agent mail mutations", () => {
     });
   });
 
-  test("discarding a queued message removes it from the inject queue", async () => {
+  test("refuses receipt growth at the store limit without publishing any change", async () => {
+    await withWorld(async ({ storage, mailStore, send }) => {
+      const sent = await send("e2", "e1");
+      const { database } = storageInternals(storage).context;
+      const store = database.readStoreSerialized("agent-mail")!;
+      const bytes =
+        Buffer.byteLength(store.document ?? "") +
+        Array.from(store.rows).reduce((total, row) => total + Buffer.byteLength(row.value), 0);
+      database.updateStoreRows("agent-mail", [
+        {
+          collection: "idempotency",
+          key: "unrelated-history",
+          value: "x".repeat(AGENT_MAIL_MAX_STORE_BYTES - bytes - 2),
+        },
+      ]);
+      const header = database.readStoreHeader("agent-mail");
+      const before = await mailStore.mailbox(agentMailboxId("e1", "agent"));
+      const changes: string[] = [];
+      storage.setResourceChangeListener((change) => changes.push(change.resource));
+
+      await expect(storage.ackAgentMail("e1", "agent", sent.id)).rejects.toMatchObject({
+        code: "store-full",
+      });
+      await expect(storage.markAgentMailSeen("e1", "agent", sent.id)).rejects.toMatchObject({
+        code: "store-full",
+      });
+      expect(database.readStoreHeader("agent-mail")).toEqual(header);
+      expect(await mailStore.mailbox(agentMailboxId("e1", "agent"))).toEqual(before);
+      expect(changes).toEqual([]);
+    });
+  });
+
+  test("an archived JSON copy triggers a whole receipt save", async () => {
+    await withWorld(async ({ dataDir, storage, mailStore, send }) => {
+      const sent = await send("e2", "e1");
+      const value = await mailStore.load();
+      const archive = path.join(dataDir, LEGACY_JSON_DIRECTORY, "retired");
+      await fs.mkdir(archive, { recursive: true });
+      const copy = path.join(archive, "agent-mail.json");
+      await fs.writeFile(copy, JSON.stringify(value));
+      const save = spyOn(mailStore, "save");
+      try {
+        expect((await storage.ackAgentMail("e1", "agent", sent.id)).ackedAt).toBeString();
+        expect(save).toHaveBeenCalledTimes(1);
+      } finally {
+        save.mockRestore();
+      }
+      expect(await fs.readFile(copy, "utf8")).toBe(JSON.stringify(value));
+      expect((await mailStore.snapshot()).revision).toBe(value.revision + 1);
+    });
+  });
+
+  test("receipts preserve queued retry and verification state until discard", async () => {
     await withWorld(async ({ dataDir, storage, mailStore, send }) => {
       const config = await storage.loadConfig();
       await storage.saveConfig({
@@ -326,8 +458,24 @@ describe("keyed agent mail mutations", () => {
       });
       const queued = await send("e2", "e1");
       const kept = await send("e3", "e10");
-      const queue = (await mailStore.snapshot()).pendingInject.map((entry) => entry.messageId);
-      expect(queue).toEqual([queued.id, kept.id]);
+      const value = await mailStore.load();
+      expect(value.pendingInject.map((entry) => entry.messageId)).toEqual([queued.id, kept.id]);
+      Object.assign(value.pendingInject[0]!, {
+        retryAt: new Date().toISOString(),
+        retryAttempts: 3,
+        verificationAttempts: 2,
+        verifyRequestId: "verification",
+      });
+      seedStore(dataDir, "agent-mail.json", value);
+      for (const receipt of [
+        storage.ackAgentMail.bind(storage),
+        storage.markAgentMailSeen.bind(storage),
+      ]) {
+        await withoutWholeStore(mailStore, () => receipt("e1", "agent", queued.id));
+        expect(
+          readStoredValue<PersistedAgentMailStore>(dataDir, "agent-mail.json")!.pendingInject,
+        ).toEqual(value.pendingInject);
+      }
       await withoutWholeStore(mailStore, () => storage.discardAgentMail("e1", "agent", queued.id));
       const stored = readStoredValue<PersistedAgentMailStore>(dataDir, "agent-mail.json")!;
       expect(stored.pendingInject.map((entry) => entry.messageId)).toEqual([kept.id]);
@@ -383,6 +531,11 @@ describe("keyed reads of an unusual store", () => {
         "document mailbox",
       );
       expect((await storage.listAgentMailPullTabIds("e2")).length).toBe(2);
+      const batch = await storage.getAgentMailMailboxes([{ environmentId: "e2", tabId: "agent" }]);
+      expect(batch.revision).toBe(value.revision);
+      expect(batch.mailboxes[0]?.messages).toEqual(
+        mailbox(value, "e2").messages.map(metadataMessage),
+      );
     });
   });
 

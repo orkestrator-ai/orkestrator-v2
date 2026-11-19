@@ -1006,21 +1006,18 @@ export class AgentMailboxDirectory {
     if (addresses.length > AGENT_MAIL_MAX_MAILBOXES) {
       throw new Error(`At most ${AGENT_MAIL_MAX_MAILBOXES} mailboxes may be read at once`);
     }
-    const [store, config] = await Promise.all([
-      this.store.snapshot(),
+    const keys = Array.from(
+      new Set(addresses.map(({ environmentId, tabId }) => agentMailboxId(environmentId, tabId))),
+    );
+    const [batch, config] = await Promise.all([
+      this.store.mailboxesById(keys),
       this.repos.config.loadConfig(),
     ]);
     const defaultPolicy = normalizeAgentMessagingSettings(
       config.global.agentMessaging,
     ).defaultInjectPolicy;
     const mailboxes: AgentMailMailboxSnapshot[] = [];
-    const seen = new Set<string>();
-    for (const address of addresses) {
-      const mailboxId = agentMailboxId(address.environmentId, address.tabId);
-      if (seen.has(mailboxId)) continue;
-      seen.add(mailboxId);
-      const mailbox = store.mailboxes[mailboxId];
-      if (!mailbox) continue;
+    for (const mailbox of batch.mailboxes) {
       const messages = mailbox.messages.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
       mailboxes.push({
         descriptor: this.descriptor(mailbox, defaultPolicy),
@@ -1031,7 +1028,7 @@ export class AgentMailboxDirectory {
         revision: mailbox.revision,
       });
     }
-    return { revision: store.revision, mailboxes };
+    return { revision: batch.revision, mailboxes };
   }
 
   async getAgentMailInboxSnapshot(): Promise<AgentMailInboxSnapshot> {

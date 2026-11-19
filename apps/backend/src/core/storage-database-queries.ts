@@ -124,6 +124,64 @@ export function rowBytesExpression(db: Pick<Database, "query">): string {
   }
 }
 
+/**
+ * Additive quota metadata. SQLite maintains it even for writes from older
+ * builds. Track only stores that opt into a byte limit. Use SQL available on
+ * every supported SQLite, since other connections also run the triggers.
+ */
+export function ensureRowByteTotals(db: Database): void {
+  if (db.query("SELECT 1 FROM sqlite_master WHERE name = 'store_row_byte_totals'").get()) return;
+  db.transaction(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS store_row_byte_totals (
+        store TEXT PRIMARY KEY, bytes INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE TRIGGER IF NOT EXISTS store_row_bytes_insert AFTER INSERT ON store_rows
+      BEGIN
+        UPDATE store_row_byte_totals SET bytes = bytes + length(CAST(new.value AS BLOB))
+          WHERE store = new.store;
+      END;
+      CREATE TRIGGER IF NOT EXISTS store_row_bytes_update AFTER UPDATE OF value ON store_rows
+      BEGIN
+        UPDATE store_row_byte_totals
+          SET bytes = bytes + length(CAST(new.value AS BLOB)) - length(CAST(old.value AS BLOB))
+          WHERE store = new.store;
+      END;
+      CREATE TRIGGER IF NOT EXISTS store_row_bytes_delete AFTER DELETE ON store_rows
+      BEGIN
+        UPDATE store_row_byte_totals SET bytes = bytes - length(CAST(old.value AS BLOB))
+          WHERE store = old.store;
+      END;
+      CREATE TRIGGER IF NOT EXISTS store_row_bytes_forget AFTER DELETE ON stores
+      BEGIN
+        DELETE FROM store_row_byte_totals WHERE store = old.name;
+      END;
+    `);
+  }).immediate();
+}
+
+export function trackedRowBytes(db: Database, store: string): number | undefined {
+  return (
+    db.query("SELECT bytes FROM store_row_byte_totals WHERE store = ?").get(store) as {
+      bytes: number;
+    } | null
+  )?.bytes;
+}
+
+/** One-time backfill of a store already on disk, inside the caller's write transaction. */
+export function initializeRowBytes(db: Database, store: string): number {
+  const { bytes } = db
+    .query(
+      `
+    INSERT INTO store_row_byte_totals (store, bytes)
+    SELECT ?, coalesce(sum(${rowBytesExpression(db)}), 0) FROM store_rows WHERE store = ?
+    RETURNING bytes
+  `,
+    )
+    .get(store, store) as { bytes: number };
+  return bytes;
+}
+
 /** Owner-only modes on the database's WAL, SHM and journal files. */
 export function restrictCompanionFiles(databasePath: string): void {
   for (const suffix of ["-wal", "-shm", "-journal"]) {

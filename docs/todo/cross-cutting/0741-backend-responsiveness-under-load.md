@@ -334,9 +334,10 @@ is 1.2 MiB today and may grow to its 32 MiB limit.
   moves, which any writer in any process bumps. A rebuild reads the
   serialized rows from the connection's revision-validated cache
   (`StorageDatabase.readStoreSerialized`, `StorageContext.loadStoreSerialized`)
-  and parses only rows whose serialized value changed. Every read-only path
-  uses it: the pull-tab lookups, directory, inboxes, batch reads, summary,
-  inbox snapshot, status, sent lists, conversations, pending and interrupted
+  and parses only rows whose serialized value changed. At the time, every
+  read-only path used it, including the pull-tab lookups, directory, inboxes,
+  batch reads, summary, inbox snapshot, status, sent lists, conversations,
+  pending and interrupted
   injects, the budget-hold notice, the hourly-release pre-check, and the
   idempotent-replay check of `sendAgentMail`. A store buffered by
   `atomically`, one stored whole, or one with an unreadable row reads through
@@ -719,9 +720,10 @@ stall is inconclusive, so task 6 remains open pending live evidence.
   added beside the read model for the reads that name a mailbox or an
   environment: the inbox, a read message, the caller's identity (the pull-tab
   lookups, which now read one environment's key range), one environment's
-  directory (the MCP handshake) and a delivery status (a bounded, verified
-  location hint). Acknowledge, seen and discard commit one mailbox row. The
-  project directory, sent lists, inject sweep and summaries stay on the read
+  directory (the MCP handshake), scoped transcript batches and a delivery
+  status (a bounded, verified location hint). Acknowledge, seen and discard
+  commit one mailbox row. The project directory, sent lists, inject sweep and
+  summaries stay on the read
   model. See [storage.md](../../architecture/storage.md) for the design and
   `apps/backend/scripts/agent-mail-store-bench.ts` (`…AfterWriteMs`) for the
   measurement.
@@ -743,7 +745,10 @@ stall is inconclusive, so task 6 remains open pending live evidence.
   The inbox and directory still grow with the size of the mailboxes they read
   (ten times as many messages each at 6,000), not with the rest of the store.
   The send itself is unchanged (57–70 ms CPU at 6,000) and is what is left
-  of `ackMs`.
+  of `ackMs`. These measurements used the earlier benchmark, which grew the
+  measured mailboxes alongside the rest of the store. The benchmark now keeps
+  the read target fixed and writes unrelated mail through a second connection.
+  It also times acknowledge and seen independently of send.
 
 ### Task 5: share one frozen snapshot rather than hand out copies
 

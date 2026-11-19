@@ -2002,6 +2002,41 @@ seeing the rejection:
 The shared instruction and reminder text (`WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE`)
 names both directions of the brace fault and forbids shortening the report.
 
+**`result` sent as JSON text.** Some models pass `result` as a string holding
+the JSON instead of the object (issue #2470: Haiku 5.5 on a 24 KB consolidated
+report, with one stray `}` closing the root early). The published schema still
+asks for an object, but every result tool (`submit_*`, `validate_*`, the
+broker's `validate_workflow_result`) lets a string through its input check
+(`jsonSchemaField(..., { jsonText: true })`) and decodes it in the handler
+(`workflow-result-json-text.ts`):
+
+- Text that parses to an object is used as if the object had been sent, after
+  the same acceptance check the input schema gives an object. Text encoded twice
+  is unwrapped once.
+- Text that does not parse is refused as correctable `invalid_result` feedback
+  that spends no correction budget. The refusal gives the character offset,
+  line and column, the field path there, what was expected, and a short
+  excerpt. When fields appear after the root object has closed, it names the
+  closing bracket and the last field before it. A trailing bracket is reported
+  at its own position. `JSON.parse` gives no position under Bun, so a
+  small scanner of its own finds the fault, and runs only on text
+  `JSON.parse` already refused.
+
+**Refused calls are counted.** A call refused before validation (by the input
+check, or as unparseable text) never reaches `validate`/`submit`, so the slot
+used to look as if its tool had never been called.
+`WorkflowResultService.recordRefusedCall` keeps an in-memory count and the
+newest reason (bounded, without the excerpt) for an open slot of the caller's
+scope; the attempt-scoped tools record input-check refusals through
+`toolInput(..., { onRefused })`. (The broker records only refusals after its
+capability check, because its input check runs before authentication.)
+`get_workflow_result_status` reports `delivery.refusedCalls` with a hint that
+quotes the newest reason for the current slot. When an automatic follow-up replaces a
+slot in the same session, its refusal summary carries over in memory. The
+reminder and terminal error can therefore report the total and newest reason
+across those keys. Graph steps carry this evidence separately for each output
+port and report it for the required port named in the diagnostic.
+
 **Follow-up turns.** A Multi Review reviewer, and the preparation,
 consolidation and Fix steps, each get two bounded follow-up turns in the same
 session, under a fresh request id and result slot

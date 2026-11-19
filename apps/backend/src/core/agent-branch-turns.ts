@@ -54,13 +54,14 @@ export async function prepareAgentBranchRepair<B extends AgentBranchRecord>(
       `${error.message} The ${host.wording.subject} could not produce ${host.wording.validResult} in ${AGENT_BRANCH_MAX_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
     );
   }
+  const requestId = randomUUID();
   const previousRequestId = branch.requestId;
   const previousTransport = branch.resultTransport;
   // Retire the old slot before the new request identity reaches memory: with
   // concurrent branches, a peer's commit could otherwise persist the new id
   // while the superseded slot was still accepting submissions.
   if (previousTransport === "tool-v1" && previousRequestId) {
-    await host.closeResult?.(previousRequestId);
+    await host.closeResult?.(previousRequestId, requestId);
   }
   branch.schemaRepairAttempts = attempt;
   branch.schemaRepairPrompt = host.repairPrompt(
@@ -69,7 +70,7 @@ export async function prepareAgentBranchRepair<B extends AgentBranchRecord>(
     attempt,
     AGENT_BRANCH_MAX_SCHEMA_REPAIR_ATTEMPTS,
   );
-  branch.requestId = randomUUID();
+  branch.requestId = requestId;
   branch.dispatchState = "prepared";
   branch.resultTransport = toolTransport(context, branch);
   branch.resultSubmission = branch.resultTransport === "tool-v1" ? "preparing" : undefined;
@@ -111,14 +112,18 @@ export async function prepareAgentBranchReminder<B extends AgentBranchRecord>(
     toolName,
     submission: branch.resultSubmission,
     finalText: await finalText(),
+    ...(branch.requestId && context.host.resultRefusals
+      ? { refusals: context.host.resultRefusals(branch.requestId) }
+      : {}),
   });
   // Retire the old slot before the new request identity reaches memory, for
   // the same reason a schema repair does.
-  if (branch.requestId) await context.host.closeResult?.(branch.requestId);
+  const requestId = randomUUID();
+  if (branch.requestId) await context.host.closeResult?.(branch.requestId, requestId);
   branch.resultReminderSent = true;
   branch.continuationPrompt = prompt;
   delete branch.schemaRepairPrompt;
-  branch.requestId = randomUUID();
+  branch.requestId = requestId;
   branch.dispatchState = "prepared";
   branch.resultSubmission = "preparing";
   // The reminder is a new turn; the stall clock measures it, not the wait
@@ -152,11 +157,12 @@ export async function prepareAgentBranchRestartContinuation<B extends AgentBranc
     resultLabel: context.host.wording.resultLabel,
     ...(toolResult ? { toolName } : {}),
   });
-  if (toolResult && branch.requestId) await context.host.closeResult?.(branch.requestId);
+  const requestId = randomUUID();
+  if (toolResult && branch.requestId) await context.host.closeResult?.(branch.requestId, requestId);
   branch.restartContinuationSent = true;
   branch.continuationPrompt = prompt;
   delete branch.schemaRepairPrompt;
-  branch.requestId = randomUUID();
+  branch.requestId = requestId;
   branch.dispatchState = "prepared";
   branch.resultSubmission = toolResult ? "preparing" : undefined;
   branch.progressAt = agentBranchNowIso();
@@ -184,11 +190,12 @@ export async function prepareAgentBranchUsageLimitContinuation<B extends AgentBr
     resultLabel: context.host.wording.resultLabel,
     ...(toolResult ? { toolName } : {}),
   });
-  if (toolResult && branch.requestId) await context.host.closeResult?.(branch.requestId);
+  const requestId = randomUUID();
+  if (toolResult && branch.requestId) await context.host.closeResult?.(branch.requestId, requestId);
   branch.usageLimitResends = (branch.usageLimitResends ?? 0) + 1;
   branch.continuationPrompt = prompt;
   delete branch.schemaRepairPrompt;
-  branch.requestId = randomUUID();
+  branch.requestId = requestId;
   branch.dispatchState = "prepared";
   branch.resultSubmission = toolResult ? "preparing" : undefined;
   branch.progressAt = agentBranchNowIso();
@@ -211,12 +218,13 @@ export async function prepareAgentBranchContinuation<B extends AgentBranchRecord
   prompt: string,
 ): Promise<void> {
   if (!branch.providerSessionId) throw new Error("The branch has no session to continue");
+  const requestId = randomUUID();
   if (branch.requestId && branch.resultTransport === "tool-v1") {
-    await context.host.closeResult?.(branch.requestId);
+    await context.host.closeResult?.(branch.requestId, requestId);
   }
   branch.continuationPrompt = prompt;
   delete branch.schemaRepairPrompt;
-  branch.requestId = randomUUID();
+  branch.requestId = requestId;
   branch.dispatchState = "prepared";
   branch.status = "running";
   branch.resultTransport = toolTransport(context, branch);

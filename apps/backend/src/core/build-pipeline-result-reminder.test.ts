@@ -74,13 +74,45 @@ describe("build pipeline stage result reminder", () => {
           await service.advanceNow(started.id);
           const failed = await read(started.id);
           expect(failed.phase).toBe("failed");
-          expect(failed.error).toContain("without returning its required structured result");
+          expect(failed.error).toContain("finished without calling submit_review_preparation");
           expect(provider.sent).toHaveLength(sentBefore + 1);
         },
         { toolMode: true, toolKinds: ["review-preparation"], structuredResultDeadlineMs: 0 },
       );
     },
   );
+
+  test("Verify names the refusal on its replacement key when the reminder fails", async () => {
+    await withPipeline(
+      async ({ service, provider, read, workflowResults }) => {
+        const started = await service.start(startInput());
+        const verifying = await advanceUntil(service, read, started.id, "verifying");
+        expect(verifying.phase).toBe("verifying");
+        const first = verifying.sessions[verifying.currentSessionIndex]!;
+        const firstKey = first.structuredRequestId!;
+        expect(await workflowResults!.binding(scope, firstKey)).toMatchObject({
+          kind: "verification-result",
+        });
+        workflowResults!.recordRefusedCall(scope, firstKey, "First Verify refusal");
+        await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
+        const reminded = await read(started.id);
+        expect(reminded.phase).toBe("verifying");
+        const next = reminded.sessions[reminded.currentSessionIndex]!;
+        expect(next.resultReminderSent).toBe(true);
+        const nextKey = next.structuredRequestId!;
+        expect(nextKey).not.toBe(firstKey);
+        expect(provider.sent.at(-1)?.prompt).toContain("First Verify refusal");
+        workflowResults!.recordRefusedCall(scope, nextKey, "Newest Verify refusal");
+        const failed = await advanceUntil(service, read, started.id, "failed", 5);
+        expect(failed.error).toContain(
+          "called submit_verification_result (or its validation tool) 2 times",
+        );
+        expect(failed.error).toContain("The last refusal: Newest Verify refusal");
+      },
+      { toolMode: true, toolKinds: ["verification-result"], structuredResultDeadlineMs: 0 },
+    );
+  });
 
   test("a structured-output stage still fails without a reminder", async () => {
     await withPipeline(
@@ -105,13 +137,29 @@ describe("build pipeline stage result reminder", () => {
 });
 
 describe("build pipeline consolidation result reminder", () => {
-  test.each(["delivers", "ignores"] as const)(
-    "a tool-mode consolidation that never submits gets one reminder and %s it",
+  test.each(["delivers", "ignores", "refuses-then-silent", "refuses-twice"] as const)(
+    "a tool-mode consolidation gets one reminder (%s)",
     async (outcome) => {
       await withPipeline(
         async ({ service, provider, read, workflowResults }) => {
+          const refusedFirst = outcome === "refuses-then-silent" || outcome === "refuses-twice";
+          provider.runningConsolidation = refusedFirst;
           const started = await service.start(startInput(fourReviewers()));
           let current = await read(started.id);
+          if (refusedFirst) {
+            for (let pass = 0; pass < 30 && !current.reviewFanout?.consolidation; pass++) {
+              await service.advanceNow(started.id);
+              current = await read(started.id);
+            }
+            const first = current.reviewFanout!.consolidation!;
+            expect(first.state).toBe("sent");
+            workflowResults!.recordRefusedCall(
+              scope,
+              first.requestId,
+              "First consolidation refusal",
+            );
+            provider.runningConsolidation = false;
+          }
           for (
             let pass = 0;
             pass < 40 && !current.reviewFanout?.consolidation?.resultReminderSent;
@@ -155,6 +203,16 @@ describe("build pipeline consolidation result reminder", () => {
           });
           expect(reminder.prompt).toContain("has not received your consolidated report");
           expect(reminder.prompt).toContain("submit_consolidated_review");
+          if (refusedFirst) {
+            expect(reminder.prompt).toContain("The last refusal said: First consolidation refusal");
+          }
+          if (outcome === "refuses-twice") {
+            workflowResults!.recordRefusedCall(
+              scope,
+              reminder.requestId,
+              "Newest consolidation refusal",
+            );
+          }
 
           if (outcome === "delivers") {
             const value = await provider.structured<unknown>(
@@ -176,9 +234,19 @@ describe("build pipeline consolidation result reminder", () => {
           }
           const failed = await advanceUntil(service, read, started.id, "failed", 30);
           expect(failed.phase).toBe("failed");
-          expect(failed.error).toContain(
-            "The consolidation session finished without calling submit_consolidated_review",
-          );
+          if (refusedFirst) {
+            const repeated = outcome === "refuses-twice";
+            expect(failed.error).toContain(
+              `called submit_consolidated_review (or its validation tool) ${repeated ? "2 times" : "once"}`,
+            );
+            expect(failed.error).toContain(
+              `The last refusal: ${repeated ? "Newest" : "First"} consolidation refusal`,
+            );
+          } else {
+            expect(failed.error).toContain(
+              "The consolidation session finished without calling submit_consolidated_review",
+            );
+          }
           expect(
             provider.sent.filter((entry) => entry.sessionId === consolidation.providerSessionId),
           ).toHaveLength(2);

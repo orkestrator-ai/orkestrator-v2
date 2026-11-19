@@ -245,6 +245,44 @@ describe("graph agent node executor", () => {
     expect(activation.error).toContain("finished without calling submit_description");
   });
 
+  test.each(["silent", "refused"] as const)(
+    "the reminder and failure report refusals for the missing required output (%s reminder)",
+    async (reminder) => {
+      const { world, run } = await launched(
+        { requiredDecision: true },
+        {
+          script: async (turn, tools, provider) => {
+            if (turn.index === 2 && reminder === "silent") return "idle";
+            await submittingScript()(turn, tools, provider);
+            const refused = await tools.call("submit_decision", {
+              resultKey: turnSlots(turn).decision,
+              result: turn.index === 1 ? '{"choice":}' : '{"choice":"ship"}}',
+            });
+            expect(refused.isError).toBe(true);
+            return "idle";
+          },
+        },
+      );
+      const failed = await world.drive(run.id);
+      const turns = world.provider.turns();
+      expect(turns).toHaveLength(2);
+      expect(turns[1]!.prompt).toContain("The input check refused your 1 call before validation");
+      expect(turns[1]!.prompt).toContain("Those calls targeted `submit_decision`");
+      expect(turns[1]!.prompt).toContain("where a value of `$.choice` was expected");
+      const activation = activationOf(failed);
+      expect(activation.errorCause).toBe("invalid-result");
+      const repeated = reminder === "refused";
+      expect(activation.error).toContain(
+        `called submit_decision (or its validation tool) ${repeated ? "2 times" : "once"}`,
+      );
+      expect(activation.error).toContain(
+        repeated
+          ? "Remove the extra `}` at character 17"
+          : "where a value of `$.choice` was expected",
+      );
+    },
+  );
+
   test("a provider restart that cut the turn short is continued once", async () => {
     const { world, run } = await launched(
       {},

@@ -128,7 +128,7 @@ describe("typed Address report", () => {
           const failed = await advanceUntil(service, read, started.id, "failed", 5);
           expect(failed.phase).toBe("failed");
           expect(failed.error).toBe(
-            "The Address Findings stage finished without returning its required structured result",
+            "The Address Findings stage finished without calling submit_address_findings_result to submit its address findings result",
           );
           // The reminder was the stage's only one.
           expect(provider.sent).toHaveLength(sentBefore);

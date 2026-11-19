@@ -14,7 +14,13 @@ import {
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import { Schema } from "effect";
-import { jsonSchemaField, str, strictObject, toolInput } from "./tool-schema.js";
+import {
+  jsonSchemaField,
+  jsonSchemaFieldCheck,
+  str,
+  strictObject,
+  toolInput,
+} from "./tool-schema.js";
 import {
   CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA,
   CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA,
@@ -22,6 +28,7 @@ import {
 // Registers the built-in kinds the registry functions below look up.
 import "./workflow-result-contracts.js";
 import { graphOutputContext } from "./workflow-result-graph-output.js";
+import { decodeJsonTextResult } from "./workflow-result-json-text.js";
 import {
   workflowResultAnySlotSchema,
   workflowResultKindDefinition,
@@ -121,6 +128,101 @@ function resultKeysMismatch(expected: readonly string[]): WorkflowResultSubmissi
 }
 
 const validatedDigestSchema = str({ pattern: /^[a-f0-9]{64}$/ });
+
+/**
+ * Records a refused call against the slot it names, when the service can.
+ * Test doubles and older services without the method are left alone.
+ */
+function recordRefusal(
+  workflowResults: WorkflowResultService,
+  scope: WorkflowResultCallerScope,
+  resultKey: string,
+  reason: string,
+): void {
+  if (typeof workflowResults.recordRefusedCall !== "function") return;
+  try {
+    workflowResults.recordRefusedCall(scope, resultKey, reason);
+  } catch {
+    // Counting is evidence for the user, never a reason to change the answer.
+  }
+}
+
+/**
+ * Counts a call the input check refused (the SDK answers it; the handler never
+ * runs) against the slot it names. Only a key this connection serves is
+ * counted, so a stray key cannot grow another slot's counters.
+ */
+function countInputRefusal(
+  workflowResults: WorkflowResultService,
+  scope: WorkflowResultCallerScope,
+  servedKeys: readonly string[],
+) {
+  return (
+    value: unknown,
+    issues: ReadonlyArray<{ message: string; path?: ReadonlyArray<PropertyKey> }>,
+  ) => {
+    if (typeof value !== "object" || value === null) return;
+    const resultKey = (value as { resultKey?: unknown }).resultKey;
+    if (typeof resultKey !== "string" || !servedKeys.includes(resultKey)) return;
+    const reason = issues
+      .map((issue) => {
+        const path = (issue.path ?? []).map(String).join(".");
+        return path ? `${path}: ${issue.message}` : issue.message;
+      })
+      .join("; ");
+    recordRefusal(workflowResults, scope, resultKey, reason || "The arguments were refused.");
+  };
+}
+
+type DecodedResultArgument =
+  { ok: true; result: unknown } | { ok: false; refusal: WorkflowResultSubmission; reason: string };
+
+/**
+ * `result` as the tool's handler should use it. An object (already checked by
+ * the input schema) or a missing value passes through. A string is JSON text:
+ * it is parsed and the decoded object gets the same check the input schema
+ * gives an object. Text that does not parse is refused with where it breaks,
+ * so the model can repair that one point (issue #2470). Like an input-schema
+ * refusal, this uses no correction attempt.
+ */
+function decodeResultArgument(
+  result: unknown,
+  check: (value: unknown) => true | string,
+): DecodedResultArgument {
+  if (typeof result !== "string") return { ok: true, result };
+  const decoded = decodeJsonTextResult(result);
+  if (!decoded.ok) {
+    return {
+      ok: false,
+      reason: decoded.summary,
+      refusal: {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: decoded.message,
+          issues: [{ path: "$", code: "invalid_json_text", message: decoded.summary }],
+        },
+      },
+    };
+  }
+  const checked = check(decoded.value);
+  if (checked === true) return { ok: true, result: decoded.value };
+  const reason = `\`result\` was sent as a string of JSON text. It parses, but the object does not match the contract: ${checked}`;
+  return {
+    ok: false,
+    reason,
+    refusal: {
+      ok: false,
+      error: {
+        code: "invalid_result",
+        nextAction: "correct",
+        message: `${reason}. Correct those fields and pass the result as a JSON object in \`result\`, not as a string.`,
+        issues: [{ path: "$", code: "invalid_arguments", message: checked }],
+      },
+    },
+  };
+}
 
 function submissionDescription(
   label: string,
@@ -300,7 +402,10 @@ export function registerWorkflowResultSlotTools(
       publishedSchema === CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA
         ? CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA
         : publishedSchema;
-    const resultSchema = jsonSchemaField(publishedSchema, acceptanceSchema);
+    // A string is decoded by the handler, which reports where JSON text breaks.
+    const resultSchema = jsonSchemaField(publishedSchema, acceptanceSchema, { jsonText: true });
+    const acceptResult = jsonSchemaFieldCheck(acceptanceSchema);
+    const onRefused = countInputRefusal(workflowResults, scope, [scope.workflowResultKey]);
     const graphPort = graphOutputContext(view);
     const port = portDescription(scope);
     server.registerTool(
@@ -315,6 +420,7 @@ export function registerWorkflowResultSlotTools(
             resultKey: str({ uuid: true }),
             result: resultSchema,
           }),
+          { onRefused },
         ),
         _meta: { ...WORKFLOW_RESULT_TOOL_META },
         annotations: {
@@ -328,8 +434,13 @@ export function registerWorkflowResultSlotTools(
         if (resultKey !== scope.workflowResultKey) {
           return resultResponse(resultKeyMismatch(scope.workflowResultKey));
         }
+        const decoded = decodeResultArgument(result, acceptResult);
+        if (!decoded.ok) {
+          recordRefusal(workflowResults, scope, resultKey, decoded.reason);
+          return resultResponse(decoded.refusal);
+        }
         try {
-          return resultResponse(await workflowResults.validate(scope, resultKey, result));
+          return resultResponse(await workflowResults.validate(scope, resultKey, decoded.result));
         } catch {
           return resultResponse(storageFailure());
         }
@@ -346,6 +457,7 @@ export function registerWorkflowResultSlotTools(
             result: Schema.optionalKey(resultSchema),
             validatedDigest: Schema.optionalKey(validatedDigestSchema),
           }),
+          { onRefused },
         ),
         _meta: { ...WORKFLOW_RESULT_TOOL_META },
         annotations: {
@@ -359,9 +471,20 @@ export function registerWorkflowResultSlotTools(
         if (resultKey !== scope.workflowResultKey) {
           return resultResponse(resultKeyMismatch(scope.workflowResultKey));
         }
+        const decoded = decodeResultArgument(result, acceptResult);
+        if (!decoded.ok) {
+          recordRefusal(workflowResults, scope, resultKey, decoded.reason);
+          return resultResponse(decoded.refusal);
+        }
         try {
           return resultResponse(
-            await commitSubmission(workflowResults, scope, resultKey, result, validatedDigest),
+            await commitSubmission(
+              workflowResults,
+              scope,
+              resultKey,
+              decoded.result,
+              validatedDigest,
+            ),
           );
         } catch {
           return resultResponse(storageFailure());
@@ -509,6 +632,10 @@ async function brokerAttempt(
   return key;
 }
 
+/** Any object: the broker's validation tool serves every kind, and the service checks the slot. */
+const BROKER_VALIDATION_RESULT_SCHEMA = { type: "object" } as const;
+const acceptBrokerValidationResult = jsonSchemaFieldCheck(BROKER_VALIDATION_RESULT_SCHEMA);
+
 /**
  * Registers the stable OpenCode broker surface.
  *
@@ -560,6 +687,8 @@ export function registerWorkflowResultBrokerTools(
   }
 
   for (const kind of WORKFLOW_RESULT_KINDS) {
+    const anySlotSchema = workflowResultAnySlotSchema(kind);
+    const acceptResult = jsonSchemaFieldCheck(anySlotSchema);
     server.registerTool(
       workflowResultToolName(kind),
       {
@@ -571,7 +700,9 @@ export function registerWorkflowResultBrokerTools(
             capability: str({ min: 32, max: 2_048 }),
             // One tool serves every slot of the kind, so it takes any shape a
             // slot's own tool would; the service checks the slot's contract.
-            result: Schema.optionalKey(jsonSchemaField(workflowResultAnySlotSchema(kind))),
+            result: Schema.optionalKey(
+              jsonSchemaField(anySlotSchema, anySlotSchema, { jsonText: true }),
+            ),
             validatedDigest: Schema.optionalKey(validatedDigestSchema),
           }),
         ),
@@ -594,8 +725,19 @@ export function registerWorkflowResultBrokerTools(
           );
           if (!expectedKey) return resultResponse(capabilityDenied());
           if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
+          const decoded = decodeResultArgument(result, acceptResult);
+          if (!decoded.ok) {
+            recordRefusal(workflowResults, scope, resultKey, decoded.reason);
+            return resultResponse(decoded.refusal);
+          }
           return resultResponse(
-            await commitSubmission(workflowResults, scope, resultKey, result, validatedDigest),
+            await commitSubmission(
+              workflowResults,
+              scope,
+              resultKey,
+              decoded.result,
+              validatedDigest,
+            ),
           );
         } catch {
           return resultResponse(storageFailure());
@@ -616,7 +758,14 @@ export function registerWorkflowResultBrokerTools(
           capability: str({ min: 32, max: 2_048 }),
           // Every result kind is an object; the service validates the contract.
           // z.json() would publish a recursive $ref that some providers reject.
-          result: Schema.Record(Schema.String, Schema.Unknown),
+          // JSON text is decoded by the handler, which says where it breaks.
+          result: jsonSchemaField(
+            BROKER_VALIDATION_RESULT_SCHEMA,
+            BROKER_VALIDATION_RESULT_SCHEMA,
+            {
+              jsonText: true,
+            },
+          ),
         }),
       ),
       _meta: { ...WORKFLOW_RESULT_TOOL_META },
@@ -638,7 +787,12 @@ export function registerWorkflowResultBrokerTools(
         );
         if (!expectedKey) return resultResponse(capabilityDenied());
         if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
-        return resultResponse(await workflowResults.validate(scope, resultKey, result));
+        const decoded = decodeResultArgument(result, acceptBrokerValidationResult);
+        if (!decoded.ok) {
+          recordRefusal(workflowResults, scope, resultKey, decoded.reason);
+          return resultResponse(decoded.refusal);
+        }
+        return resultResponse(await workflowResults.validate(scope, resultKey, decoded.result));
       } catch {
         return resultResponse(storageFailure());
       }

@@ -4,6 +4,7 @@ import {
   LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
   missingWorkflowResultMessage,
+  workflowResultRefusals,
   workflowResultReminderPrompt,
   workflowRestartContinuationPrompt,
   workflowUsageLimitContinuationPrompt,
@@ -233,4 +234,64 @@ test("workflow quota continuation names both supported windows", () => {
   });
   expect(prompt).toContain("five-hour or weekly usage limit ran out");
   expect(prompt).toContain("submit_review_report");
+});
+
+describe("calls refused before validation", () => {
+  const reason =
+    "`result` is a string, and it is not valid JSON: at character 22398 (line 1, column 22399) more text follows.";
+
+  test("the failure counts refused calls instead of saying the tool was never called", () => {
+    const message = missingWorkflowResultMessage({
+      ...BASE,
+      submission: "preparing",
+      finalText: "Done.",
+      refusals: { count: 2, processed: 0, lastReason: reason },
+    });
+    expect(message).toStartWith(
+      "The consolidation model called submit_consolidated_review (or its validation tool) 2 times, and the input check refused every call before validation",
+    );
+    expect(message).toContain(`The last refusal: ${reason}`);
+    expect(message).not.toContain("finished without calling");
+  });
+
+  test("refusals beside processed calls are not reported as every call", () => {
+    const message = missingWorkflowResultMessage({
+      ...BASE,
+      submission: "preparing",
+      refusals: { count: 1, processed: 1 },
+    });
+    expect(message).toContain("made 1 call to submit_consolidated_review");
+    expect(message).not.toContain("every call");
+  });
+
+  test("the reminder quotes the newest refusal and says resending it fails the same way", () => {
+    const prompt = workflowResultReminderPrompt({
+      resultLabel: "consolidated report",
+      toolName: "submit_consolidated_review",
+      submission: "preparing",
+      refusals: { count: 4, processed: 0, lastReason: reason },
+    });
+    expect(prompt).toContain("The input check refused your 4 calls before validation");
+    expect(prompt).toContain(`The last refusal said: ${reason}`);
+    expect(prompt).toContain("Sending the same arguments again is refused the same way");
+    expect(prompt).not.toContain("No call to `submit_consolidated_review` was accepted.");
+  });
+
+  test("a long refusal reason keeps the reminder well under the 4 KiB prompt limit", () => {
+    const prompt = workflowResultReminderPrompt({
+      resultLabel: "consolidated report",
+      toolName: "submit_consolidated_review",
+      submission: "preparing",
+      refusals: { count: 1, processed: 0, lastReason: "x".repeat(5_000) },
+    });
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(3_500);
+  });
+
+  test("a service without refusal tracking reports none", () => {
+    expect(workflowResultRefusals({}, "key")).toBeUndefined();
+    expect(workflowResultRefusals(undefined, "key")).toBeUndefined();
+    expect(
+      workflowResultRefusals({ refusals: () => ({ count: 1, processed: 0 }) }, undefined),
+    ).toBeUndefined();
+  });
 });

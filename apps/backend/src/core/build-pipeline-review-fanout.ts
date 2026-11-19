@@ -71,6 +71,7 @@ import {
 import {
   lastAssistantText,
   missingWorkflowResultMessage,
+  workflowResultRefusals,
   workflowRestartContinuationPrompt,
   workflowResumeContinuationPrompt,
   workflowUsageLimitContinuationPrompt,
@@ -822,8 +823,10 @@ export class BuildPipelineReviewFanout {
               if (pending.length > 0) pipeline.pendingResultConsumptions = pending;
               else delete pipeline.pendingResultConsumptions;
             },
-            closeResult: (requestId: string) =>
-              this.deps.workflowResults!.close(requestId, "superseded"),
+            closeResult: (requestId: string, successorRequestId?: string) =>
+              this.deps.workflowResults!.close(requestId, "superseded", successorRequestId),
+            resultRefusals: (requestId: string) =>
+              workflowResultRefusals(this.deps.workflowResults, requestId),
           }
         : {}),
       save: () => this.save(pipeline),
@@ -1570,6 +1573,7 @@ export class BuildPipelineReviewFanout {
               toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
               submission: consolidation.resultSubmission,
               finalText: lastAssistantText(session.messages),
+              refusals: workflowResultRefusals(this.deps.workflowResults, consolidation.requestId),
             })
           : "The consolidation session became idle without returning its consolidated report",
         () => this.prepareConsolidationResultReminder(pipeline, consolidation, session),
@@ -1746,6 +1750,7 @@ export class BuildPipelineReviewFanout {
         submission: consolidation.resultSubmission,
         finalText: lastAssistantText(session.messages),
         workLabel: "consolidation work",
+        refusals: workflowResultRefusals(this.deps.workflowResults, consolidation.requestId),
       }),
     );
     return true;
@@ -1787,7 +1792,7 @@ export class BuildPipelineReviewFanout {
     }
     await mailbox.settle(pipeline.environmentId, tabId, claim.messageIds, "accepted");
     if (oldRequestId && worker.resultTransport === "tool-v1")
-      await this.deps.workflowResults?.close(oldRequestId, "superseded");
+      await this.deps.workflowResults?.close(oldRequestId, "superseded", requestId);
     return true;
   }
 
@@ -1811,7 +1816,11 @@ export class BuildPipelineReviewFanout {
     if (consolidation.resultTransport === "tool-v1") consolidation.resultSubmission = "preparing";
     await this.save(pipeline);
     if (consolidation.resultTransport === "tool-v1") {
-      await this.deps.workflowResults?.close(previousRequestId, "superseded");
+      await this.deps.workflowResults?.close(
+        previousRequestId,
+        "superseded",
+        consolidation.requestId,
+      );
     }
   }
 
@@ -1851,7 +1860,11 @@ export class BuildPipelineReviewFanout {
     consolidation.state = "prepared";
     delete consolidation.idleResultPolls;
     if (previousTransport === "tool-v1") {
-      await this.deps.workflowResults?.close(previousRequestId, "superseded");
+      await this.deps.workflowResults?.close(
+        previousRequestId,
+        "superseded",
+        consolidation.requestId,
+      );
     }
     await this.save(pipeline);
     return { kind: "working" };

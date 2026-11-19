@@ -50,6 +50,7 @@ import {
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
 import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
+import type { WorkflowResultRefusals } from "./workflow-result-service.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import {
@@ -450,7 +451,9 @@ export interface ReviewFanoutHost {
   stageResultConsumption?(requestId: string): void;
   finishResultConsumption?(requestId: string): void;
   beforeResult?(reviewer: ReviewerRecord): Promise<boolean>;
-  closeResult?(requestId: string): Promise<void>;
+  closeResult?(requestId: string, successorRequestId?: string): Promise<void>;
+  /** Calls the slot's tools refused before validation (`WorkflowResultService.refusals`). */
+  resultRefusals?(requestId: string): WorkflowResultRefusals | undefined;
   /**
    * Persists the host's own record.
    *
@@ -816,7 +819,13 @@ function reviewBranchHost(host: ReviewFanoutHost): AgentBranchHost<ReviewerRecor
         }
       : {}),
     ...(host.closeResult
-      ? { closeResult: (requestId: string) => host.closeResult!(requestId) }
+      ? {
+          closeResult: (requestId: string, successorRequestId?: string) =>
+            host.closeResult!(requestId, successorRequestId),
+        }
+      : {}),
+    ...(host.resultRefusals
+      ? { resultRefusals: (requestId: string) => host.resultRefusals!(requestId) }
       : {}),
     beforeResult: (reviewer) => host.beforeResult?.(reviewer) ?? Promise.resolve(false),
     save: () => host.save(),

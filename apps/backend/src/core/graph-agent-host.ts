@@ -451,7 +451,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     const extra = this.extraTools();
     const toolName = this.broker
       ? "submit_graph_output"
-      : (results?.missingTool() ?? "the result tools");
+      : (results?.missingTool(requestId) ?? "the result tools");
     if (!first) return { toolName, prepare: { workflowResultTool: toolName }, send: {} };
     return {
       toolName,
@@ -504,6 +504,10 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
 
   async projectResult(requestId: string) {
     return (await this.slots()).project(requestId);
+  }
+
+  resultRefusals(requestId: string) {
+    return this.results?.refusals(requestId);
   }
 
   async readResult<T>(requestId: string): Promise<StructuredOutputResult<T> | null> {
@@ -559,9 +563,9 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     this.executor.finishConsumption(`${this.context.run.id}\0${requestId}`);
   }
 
-  async closeResult(requestId: string): Promise<void> {
+  async closeResult(requestId: string, successorRequestId?: string): Promise<void> {
     const results = await this.slots();
-    if (results.slots.length > 0) await results.close(requestId);
+    if (results.slots.length > 0) await results.close(requestId, successorRequestId);
   }
 
   parseResult(

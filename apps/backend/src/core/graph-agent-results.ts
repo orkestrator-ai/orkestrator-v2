@@ -54,6 +54,7 @@ import {
   splitGraphOutputCombined,
   type GraphOutputStructuredPort,
 } from "./workflow-result-graph-output.js";
+import { workflowResultRefusals } from "./workflow-result-missing.js";
 import { validateRegisteredWorkflowResult } from "./workflow-result-registry.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 
@@ -91,7 +92,8 @@ export type GraphAgentResultService = Pick<
   | "claimCommitNudge"
   | "consume"
   | "close"
->;
+> &
+  Partial<Pick<WorkflowResultService, "refusals">>;
 
 export class GraphAgentResultError extends Error {
   constructor(message: string) {
@@ -264,10 +266,29 @@ export class GraphAgentResults {
     return pending.includes("preparing") ? "preparing" : undefined;
   }
 
-  /** The submission tool of the first required port still missing (for reminders). */
-  missingTool(): string {
-    const port = this.missing[0] ?? this.slots.find((slot) => slot.required)?.port.name;
+  /** The submission tool of the missing required port named in the diagnostic. */
+  missingTool(requestId: string): string {
+    const port = this.missingPort(requestId);
     return port ? `submit_${port}` : "the result tools";
+  }
+
+  refusals(requestId: string) {
+    const port = this.missingPort(requestId);
+    return workflowResultRefusals(
+      this.input.service,
+      port ? this.keys(requestId)[port] : undefined,
+    );
+  }
+
+  private missingPort(requestId: string): string | undefined {
+    const keys = this.keys(requestId);
+    // A replacement request starts with every port open again. Prefer a port
+    // whose earlier refusals still explain the failure, even on a silent turn.
+    return (
+      this.missing.find((port) => workflowResultRefusals(this.input.service, keys[port])) ??
+      this.missing[0] ??
+      this.slots.find((slot) => slot.required)?.port.name
+    );
   }
 
   /**
@@ -331,8 +352,11 @@ export class GraphAgentResults {
   }
 
   /** Retires every slot of a request a new request replaces. */
-  async close(requestId: string): Promise<void> {
-    for (const key of this.keyList(requestId)) await this.service.close(key, "superseded");
+  async close(requestId: string, successorRequestId?: string): Promise<void> {
+    const successors = successorRequestId ? this.keys(successorRequestId) : undefined;
+    for (const [port, key] of Object.entries(this.keys(requestId))) {
+      await this.service.close(key, "superseded", successors?.[port]);
+    }
   }
 
   /** One schema for a structured-output provider: one property per port. */

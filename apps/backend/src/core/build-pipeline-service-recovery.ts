@@ -27,6 +27,7 @@ import {
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
+import { workflowResultToolName } from "@orkestrator/protocol/workflow-results";
 import { boundPipelineAddressFindingsResult } from "@orkestrator/protocol/build-pipeline-address-findings-report";
 import { verifySessionJudgedCode } from "@orkestrator/protocol/build-pipeline-criteria";
 import {
@@ -68,6 +69,12 @@ import {
 } from "./build-pipeline-prompts.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
+import {
+  LAST_ASSISTANT_TEXT_READ_LIMIT,
+  lastAssistantText,
+  missingWorkflowResultMessage,
+  workflowResultRefusals,
+} from "./workflow-result-missing.js";
 
 const log = createLogger("build-pipeline");
 
@@ -161,7 +168,7 @@ export class BuildPipelineRecovery {
     delete pipeline.stallWarning;
     await this.ctx.save(pipeline, pipeline.backendRevision);
     if (previousTransport === "tool-v1" && previousRequestId) {
-      await this.ctx.options.workflowResults?.close(previousRequestId, "superseded");
+      await this.ctx.options.workflowResults?.close(previousRequestId, "superseded", requestId);
     }
     await this.stageSupervisor.dispatchPending(pipeline, provider);
   }
@@ -339,6 +346,25 @@ export class BuildPipelineRecovery {
     }
     if (elapsed >= this.ctx.structuredResultDeadlineMs) {
       if (await this.stageSupervisor.remindMissingStageResult(pipeline, provider, session)) return;
+      const kind = await this.ctx.boundWorkflowResultKind(pipeline, session);
+      if (kind) {
+        const finalText = await provider
+          .messages(session.sdkSessionId, { limit: LAST_ASSISTANT_TEXT_READ_LIMIT })
+          .then(lastAssistantText, () => undefined);
+        throw new Error(
+          missingWorkflowResultMessage({
+            subject: `The ${label}`,
+            resultLabel: kind.replaceAll("-", " "),
+            toolName: workflowResultToolName(kind),
+            submission: session.resultSubmission,
+            finalText,
+            refusals: workflowResultRefusals(
+              this.ctx.options.workflowResults,
+              session.structuredRequestId,
+            ),
+          }),
+        );
+      }
       throw new Error(`The ${label} finished without returning its required structured result`);
     }
   }

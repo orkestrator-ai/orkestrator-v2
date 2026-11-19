@@ -4,10 +4,12 @@ import {
 } from "./claude-host-credentials.js";
 export { getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
 import {
+  backgroundFetchRefspec,
   type GitFetchScheduler,
   type GitFileChange,
   HARDENED_GIT_CONFIG,
   neutralizeGitFilters,
+  NO_WRITE_FETCH_HEAD,
   parseGitDiffSummary,
   parseGitFileChanges,
   parseGitNumstat,
@@ -607,6 +609,11 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
  * {@link CONTAINER_FETCH_STDERR_BYTES} of stderr for classification into a
  * finite category host-side. `timeout(1)` bounds the in-container process,
  * which a killed `docker exec` client would not.
+ *
+ * It is a background fetch (`git/background-fetch.ts`): an explicit refspec
+ * updates `origin/<ref>` whatever the clone's configured refspec (a commit SHA
+ * fetches just that commit), and `FETCH_HEAD` in the agent's checkout is left
+ * as the agent last wrote it.
  */
 export function buildContainerFetchScript(ref: string, timeoutMs: number): string {
   const branch = quoteShell(ref);
@@ -620,12 +627,13 @@ export function buildContainerFetchScript(ref: string, timeoutMs: number): strin
       fi
       ${CONTAINER_REPO_IDENTITY_SNIPPET}
       ref=${branch}
+      refspec=${quoteShell(backgroundFetchRefspec(ref))}
       before="$(git rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" 2>/dev/null)"
       err_file="$(mktemp 2>/dev/null)" || err_file=""
       if command -v timeout >/dev/null 2>&1; then
-        timeout -k 5 ${seconds} git fetch origin "$ref" >/dev/null 2>"\${err_file:-/dev/null}"
+        timeout -k 5 ${seconds} git fetch ${NO_WRITE_FETCH_HEAD} origin "$refspec" >/dev/null 2>"\${err_file:-/dev/null}"
       else
-        git fetch origin "$ref" >/dev/null 2>"\${err_file:-/dev/null}"
+        git fetch ${NO_WRITE_FETCH_HEAD} origin "$refspec" >/dev/null 2>"\${err_file:-/dev/null}"
       fi
       status=$?
       after="$(git rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" 2>/dev/null)"

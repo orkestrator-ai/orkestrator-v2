@@ -418,7 +418,36 @@ describe("container status and fetch scripts against a local remote", () => {
   test("the status script performs no fetch of its own", () => {
     const script = buildContainerGitStatusScript("main", true);
     expect(script).not.toContain("git fetch");
-    expect(buildContainerFetchScript("main", 30_000)).toContain('git fetch origin "$ref"');
+    expect(buildContainerFetchScript("main", 30_000)).toContain(
+      'git fetch --no-write-fetch-head origin "$refspec"',
+    );
+  }, 30_000);
+
+  // The agent works in this clone: a background refresh must move origin/<ref>
+  // without replacing the FETCH_HEAD the agent last fetched, and must do so even
+  // when the clone's configured refspec does not cover <ref>.
+  test("a policy fetch moves origin/<ref> and leaves the agent's FETCH_HEAD", async () => {
+    await pushToRemote("fetch-head-side.txt", "side\n", "fetch-head-side");
+    git(
+      workspace,
+      "config",
+      "remote.origin.fetch",
+      "+refs/heads/fetch-head-side:refs/remotes/origin/fetch-head-side",
+    );
+    git(workspace, "fetch", "-q", "origin", "fetch-head-side");
+    const fetchHeadFile = path.join(workspace, ".git", "FETCH_HEAD");
+    const before = await fs.readFile(fetchHeadFile, "utf8");
+    expect(before).toContain("'fetch-head-side'");
+    const tip = await pushToRemote("fetch-head-main.txt", "main\n");
+
+    const box = container();
+    await box.read("main");
+    await box.policy.idle();
+
+    expect(box.fetchCalls).toEqual(["main"]);
+    expect(box.changes.at(-1)).toMatchObject({ ref: "main", baselineMoved: true });
+    expect(git(workspace, "rev-parse", "refs/remotes/origin/main")).toBe(tip);
+    expect(await fs.readFile(fetchHeadFile, "utf8")).toBe(before);
   }, 30_000);
 });
 

@@ -11,7 +11,12 @@ import type {
 } from "@orkestrator/protocol/coordinator";
 import { canFastForwardUpstream } from "@orkestrator/protocol/coordinator-upstream-merge";
 import { CommandFailedError, runCommand } from "./shell.js";
-import { runGitWithFsmonitorFallback, runRemoteGit } from "./git/index.js";
+import {
+  backgroundFetchArgs,
+  NO_WRITE_FETCH_HEAD,
+  runGitWithFsmonitorFallback,
+  runRemoteGit,
+} from "./git/index.js";
 import { isProjectHomeEnvironment, projectHomeBranchUpdates } from "./project-home-environment.js";
 import type { StorageService } from "./storage.js";
 
@@ -761,7 +766,11 @@ export class ProjectGitService {
       try {
         await runRemoteGit(
           "fetch",
-          prepared.remote ? ["--prune", prepared.remote] : ["--prune", "--all"],
+          // A status refresh in the user's own checkout: move remote refs only,
+          // never the FETCH_HEAD they may be about to use (`git/background-fetch.ts`).
+          prepared.remote
+            ? [NO_WRITE_FETCH_HEAD, "--prune", prepared.remote]
+            : [NO_WRITE_FETCH_HEAD, "--prune", "--all"],
           {
             cwd: root,
             timeoutMs: 60_000,
@@ -827,14 +836,10 @@ export class ProjectGitService {
         let error: string | undefined;
         if (remotes.includes("origin")) {
           try {
-            await runRemoteGit(
-              "fetch",
-              ["origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
-              {
-                cwd: root,
-                timeoutMs: 60_000,
-              },
-            );
+            await runRemoteGit("fetch", backgroundFetchArgs(branch), {
+              cwd: root,
+              timeoutMs: 60_000,
+            });
             fetched = true;
           } catch (cause) {
             error = gitError("fetch", cause).message;

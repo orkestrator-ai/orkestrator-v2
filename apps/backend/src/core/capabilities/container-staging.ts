@@ -195,14 +195,19 @@ export function containerCapabilityPlan(
     }
   }
   const byKey = new Map<string, ContainerCapabilityItem>();
-  const conflicts = new Set<string>();
+  const conflicts = new Map<string, Set<AgentPlatform>>();
   for (const [, entry] of [...wanted.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const requested = providers.filter((provider) => entry.providers.has(provider));
     const plan = planScopedLocations(table, entry.component.kind, requested);
     for (const { location, providers: served } of plan.locations) {
       const key = `${location.id}|${entry.component.id}`;
       const previous = byKey.get(key);
-      if (previous && previous.packageDigest !== entry.digest) conflicts.add(key);
+      let affected = conflicts.get(key);
+      if (previous && previous.packageDigest !== entry.digest && !affected) {
+        affected = new Set(previous.providers);
+        conflicts.set(key, affected);
+      }
+      for (const provider of served) affected?.add(provider);
       byKey.set(key, itemFor(location, entry, served));
     }
     for (const provider of plan.uncovered) {
@@ -213,7 +218,17 @@ export function containerCapabilityPlan(
       });
     }
   }
-  for (const key of conflicts) byKey.delete(key);
+  for (const [key, affected] of conflicts) {
+    const item = byKey.get(key)!;
+    for (const provider of affected) {
+      undeliverable.push({
+        provider,
+        componentId: item.componentId,
+        reason: "Different revisions share the same staged location.",
+      });
+    }
+    byKey.delete(key);
+  }
   const items = [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
   const digest = containerPlanDigest(providers, stages, items);
   return { digest, providers, stages, items, undeliverable };

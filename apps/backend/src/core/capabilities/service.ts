@@ -241,7 +241,8 @@ export class CapabilityService {
       admitEpoch: (controllerId, epoch) => this.executor.admitEpoch(controllerId, epoch),
       controllerReachable: async () => (await this.deps.controllerReachable?.()) ?? false,
       ...(deps.requestLaunch ? { request: deps.requestLaunch } : {}),
-      scopedReport: (target) => this.remoteScoped.leafReport(target),
+      scopedReport: (target, relativeWorktree) =>
+        this.remoteScoped.leafReport(target, relativeWorktree),
       now: () => this.now(),
     });
     const context: CapabilityServiceContext = {
@@ -584,6 +585,7 @@ export class CapabilityService {
     ceiling: CapabilityPermissionCeiling;
     templateId?: string;
     graphNode?: string;
+    relativeWorktree?: string;
   }): Promise<EffectiveAgentResources> {
     return this.preflight.preflightLaunch(input);
   }
@@ -596,6 +598,7 @@ export class CapabilityService {
     accountHomeId?: string;
     templateId?: string;
     graphNode?: string;
+    relativeWorktree?: string;
     provider: AgentPlatform;
     sessionKey: string;
     policy?: Parameters<typeof nativeAgentDeniedCapabilities>[0];

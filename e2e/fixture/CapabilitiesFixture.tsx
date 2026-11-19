@@ -58,6 +58,8 @@ import { CapabilityScopeCard } from "../../apps/web/src/components/settings/capa
 declare global {
   interface Window {
     capabilityFixtureCalls?: Array<{ command: string; args: Record<string, unknown> }>;
+    capabilityFixtureHoldNext?: (command: string) => void;
+    capabilityFixtureRelease?: () => void;
     capabilityFixtureFailNext?: (command: string, message: string) => void;
   }
 }
@@ -504,6 +506,7 @@ const updates: CapabilityUpdateProposal[] = [
 
 /** Toolkits assigned per scope (`session`, `project`, `environment`, `graph-node`). */
 const assignments = new Map<string, string[]>([["session:session-1", ["frontend"]]]);
+const assignmentRevisions = new Map([["session:session-1", 1]]);
 
 function effective(scopeKey: string, provider: AgentPlatform): EffectiveAgentResources {
   const toolkits = assignments.get(scopeKey) ?? [];
@@ -989,7 +992,12 @@ function answer(command: string, args: Record<string, unknown>): unknown {
       return { revision: 2, setups };
     case "assign_capability_setup": {
       const key = `${String(args.scope)}:${String(args.scopeId)}`;
+      const revision = assignmentRevisions.get(key) ?? 0;
+      if (args.expectedRevision !== undefined && args.expectedRevision !== revision) {
+        throw new Error("The selection changed elsewhere; reload it.");
+      }
       assignments.set(key, args.setupIds as string[]);
+      assignmentRevisions.set(key, revision + 1);
       return { setupIds: args.setupIds };
     }
     case "get_capability_assignment": {
@@ -998,7 +1006,7 @@ function answer(command: string, args: Record<string, unknown>): unknown {
         scope: args.scope,
         scopeId: args.scopeId,
         setupIds: assignments.get(key) ?? [],
-        revision: assignments.has(key) ? 1 : 0,
+        revision: assignmentRevisions.get(key) ?? 0,
       };
     }
     case "get_effective_agent_resources": {
@@ -1090,6 +1098,15 @@ function answer(command: string, args: Record<string, unknown>): unknown {
 function installCapabilitiesFixture() {
   const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
   const failures = new Map<string, string>();
+  const held = new Map<string, Promise<void>>();
+  window.capabilityFixtureHoldNext = (command) => {
+    held.set(
+      command,
+      new Promise((resolve) => {
+        window.capabilityFixtureRelease = resolve;
+      }),
+    );
+  };
   window.capabilityFixtureCalls = calls;
   window.capabilityFixtureFailNext = (command, message) => failures.set(command, message);
   window.orkestrator = {
@@ -1097,6 +1114,9 @@ function installCapabilitiesFixture() {
     listen: () => () => undefined,
     invoke: async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
       calls.push({ command, args: args ?? {} });
+      const gate = held.get(command);
+      held.delete(command);
+      if (gate) await gate;
       const failure = failures.get(command);
       if (failure) {
         failures.delete(command);

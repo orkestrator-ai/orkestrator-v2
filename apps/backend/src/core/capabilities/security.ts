@@ -226,7 +226,11 @@ export function validatePackageFiles(
     if (!isSafeCapabilityRelativePath(file.path)) {
       throw new CapabilityError("unsafe-content", "A file path is not a safe relative path.");
     }
-    if (isMarkerPath(file.path)) continue;
+    if (
+      isMarkerPath(file.path) ||
+      file.path.split("/").some((segment) => SKIPPED_DIRECTORIES.has(segment))
+    )
+      continue;
     const key = file.path.toLowerCase();
     if (seen.has(key)) {
       throw new CapabilityError("unsafe-content", `Two files map to ${file.path}.`);

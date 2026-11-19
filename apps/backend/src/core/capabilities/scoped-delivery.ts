@@ -28,6 +28,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type {
   CapabilityComponent,
   CapabilityTarget,
@@ -66,7 +67,7 @@ import {
   projectMcpLocationFor,
   type ProjectMcpLocation,
 } from "./scoped-locations.js";
-import { treeDigest } from "./security.js";
+import { confinedPath, treeDigest } from "./security.js";
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
 import {
   dropEmptyIndexes,
@@ -75,7 +76,9 @@ import {
   worktreeCollisions,
   type WorktreeEntry,
 } from "./worktree-writer.js";
-import type { CapabilityState, InstallationReceipt } from "./types.js";
+import type { CapabilityLaunchDelivery, CapabilityState, InstallationReceipt } from "./types.js";
+
+const log = createLogger("capabilities");
 
 /** A local or container environment, as far as delivery needs it. */
 export interface ScopedEnvironment {
@@ -938,6 +941,7 @@ async function settleUnknownOutcomes(
 
 /** What a launch can check for a target outside the machine-wide homes. */
 export interface ScopedEvidence {
+  isolated?: Array<CapabilityLaunchDelivery & { packageDigest: string }>;
   project?: { environmentId: string; observed: ReadonlyMap<string, string | null> };
   account?: {
     accountHomeId: string;
@@ -1050,6 +1054,16 @@ export function scopedRequiredDelivery(input: {
         : `${component.name} was not staged into this container; rebuild it to stage the current setup.`,
     };
   }
+  const isolated = evidence?.isolated?.filter(
+    (entry) => entry.componentId === component.id && entry.packageDigest === digest,
+  );
+  if (isolated?.length) {
+    return {
+      kind: "verified",
+      exclusive: false,
+      deliveries: isolated.map(({ locationId, digest }) => ({ locationId, digest })),
+    };
+  }
   const scopedMatch = (
     receipt: InstallationReceipt,
     observed: ReadonlyMap<string, string | null>,
@@ -1061,6 +1075,28 @@ export function scopedRequiredDelivery(input: {
     !receipt.outcomeUnknown &&
     !!receipt.digest &&
     observed.get(receipt.id) === receipt.digest;
+  if (
+    target.environmentId !== undefined &&
+    evidence?.project?.environmentId === target.environmentId
+  ) {
+    const project = evidence.project;
+    const verified = Object.values(state.receipts).filter(
+      (receipt) =>
+        receipt.nodeId === target.nodeId &&
+        receipt.environmentId === target.environmentId &&
+        scopedMatch(receipt, project.observed),
+    );
+    if (verified.length > 0) {
+      return {
+        kind: "verified",
+        exclusive: false,
+        deliveries: verified.map((receipt) => ({
+          locationId: receipt.locationId,
+          digest: receipt.digest,
+        })),
+      };
+    }
+  }
   if (target.accountHomeId !== undefined) {
     const account = evidence?.account;
     if (!account || account.accountHomeId !== target.accountHomeId) {
@@ -1113,28 +1149,6 @@ export function scopedRequiredDelivery(input: {
       reason: `This account keeps its own copy of its ${target.provider} configuration, and the required revision of ${component.name} is not verified there yet.`,
     };
   }
-  if (
-    target.environmentId !== undefined &&
-    evidence?.project?.environmentId === target.environmentId
-  ) {
-    const project = evidence.project;
-    const verified = Object.values(state.receipts).filter(
-      (receipt) =>
-        receipt.nodeId === target.nodeId &&
-        receipt.environmentId === target.environmentId &&
-        scopedMatch(receipt, project.observed),
-    );
-    if (verified.length > 0) {
-      return {
-        kind: "verified",
-        exclusive: false,
-        deliveries: verified.map((receipt) => ({
-          locationId: receipt.locationId,
-          digest: receipt.digest,
-        })),
-      };
-    }
-  }
   return { kind: "host" };
 }
 
@@ -1170,7 +1184,12 @@ export class ScopedCapabilityDelivery {
   runAll(): Promise<void> {
     return this.serialized(async () => {
       let changed = false;
-      const environments = (await this.deps.environments?.().catch(() => [])) ?? [];
+      const failed = (error: unknown) => {
+        log.warn("delivery.scope-failed", { error: formatLogError(error, { message: false }) });
+        return false as const;
+      };
+      const listed = await this.deps.environments?.().catch(failed);
+      const environments = listed || [];
       const known = new Set(environments.map((environment) => environment.id));
       const accounts = (await this.deps.accounts?.().catch(() => [])) ?? [];
       this.names = new Map([
@@ -1185,11 +1204,11 @@ export class ScopedCapabilityDelivery {
       ]);
       for (const environment of environments) {
         if (environment.environmentType !== "local") continue;
-        changed = (await this.deliverProject(environment, known)) || changed;
+        changed = (await this.deliverProject(environment, known).catch(failed)) || changed;
       }
-      changed = (await this.forgetGoneEnvironments(known)) || changed;
+      if (listed) changed = (await this.forgetGoneEnvironments(known)) || changed;
       for (const account of accounts) {
-        changed = (await this.deliverAccount(account)) || changed;
+        changed = (await this.deliverAccount(account).catch(failed)) || changed;
       }
       if (changed) this.deps.changed?.();
     });
@@ -1392,12 +1411,20 @@ export class ScopedCapabilityDelivery {
    * (the worktree's copies, the account's directories, or the container's
    * staged record).
    */
-  async launchEvidence(target: CapabilityTarget): Promise<ScopedEvidence> {
+  async launchEvidence(
+    target: CapabilityTarget,
+    relativeWorktree?: string,
+    resolveWorktree?: (state: CapabilityState) => EffectiveAgentResources,
+  ): Promise<ScopedEvidence> {
     const environments = target.environmentId
       ? ((await this.deps.environments?.().catch(() => [])) ?? [])
       : [];
     const environment = environments.find((entry) => entry.id === target.environmentId) ?? null;
-    if (environment?.environmentType === "local" && target.environmentIncarnation === undefined) {
+    if (
+      !relativeWorktree &&
+      environment?.environmentType === "local" &&
+      target.environmentIncarnation === undefined
+    ) {
       await this.deliverEnvironment(environment.id).catch(() => undefined);
     }
     const account =
@@ -1407,12 +1434,107 @@ export class ScopedCapabilityDelivery {
               entry.accountId === target.accountHomeId && entry.provider === target.provider,
           ) ?? null)
         : null;
-    const evidence = await this.evidenceFor(target, environment, account);
+    const launchEnvironment =
+      relativeWorktree && environment?.worktreePath
+        ? { ...environment, worktreePath: confinedPath(environment.worktreePath, relativeWorktree) }
+        : environment;
+    const evidence = await this.evidenceFor(
+      target,
+      relativeWorktree ? null : launchEnvironment,
+      account,
+    );
+    if (
+      relativeWorktree &&
+      launchEnvironment?.environmentType === "local" &&
+      launchEnvironment.worktreePath &&
+      resolveWorktree
+    ) {
+      evidence.isolated = await this.stageIsolatedWorktree(
+        launchEnvironment.worktreePath,
+        resolveWorktree,
+      );
+    }
     if (target.environmentIncarnation !== undefined && target.environmentId) {
       evidence.container =
         (await this.deps.containerDelivery?.(target.environmentId).catch(() => null)) ?? null;
     }
     return evidence;
+  }
+
+  private stageIsolatedWorktree(
+    worktree: string,
+    resolve: (state: CapabilityState) => EffectiveAgentResources,
+  ): Promise<NonNullable<ScopedEvidence["isolated"]>> {
+    return this.serialized(async () => {
+      const state = await this.deps.storage.capabilities.loadCapabilityState();
+      const effective = resolve(state);
+      const { nodeId, provider } = effective.target;
+      const host = await this.hostDesired(state, nodeId);
+      const targets = effective.resolvedPackages.flatMap((pkg) =>
+        pkg.components.flatMap((id): NodePlanTarget[] => {
+          const component = revisionComponent(state, pkg.id, id, pkg.artifactDigest);
+          if (
+            !component ||
+            !FILE_KINDS.has(component.kind) ||
+            (component.providerHints.length && !component.providerHints.includes(provider)) ||
+            host.installations.some(
+              (entry) =>
+                entry.componentId === id &&
+                entry.digest === pkg.artifactDigest &&
+                entry.providers.includes(provider),
+            )
+          )
+            return [];
+          return planScopedLocations(PROJECT_CAPABILITY_LOCATIONS, component.kind, [
+            provider,
+          ]).locations.map(({ location }) => ({
+            key: `${location.id}|${id}`,
+            action: "install",
+            kind: component.kind,
+            packageId: pkg.id,
+            componentId: id,
+            componentName: component.name,
+            pathOrKey: component.pathOrKey,
+            locationId: location.id,
+            artifactDigest: pkg.artifactDigest,
+          }));
+        }),
+      );
+      if (targets.length === 0) return [];
+      const collisions = await worktreeCollisions(
+        this.git(),
+        worktree,
+        targets.map((entry) => ({
+          key: entry.key,
+          locationId: entry.locationId!,
+          componentName: entry.componentName,
+          pathOrKey: entry.pathOrKey,
+        })),
+      );
+      // Graph-owned branches live under the Git-excluded .orkestrator directory.
+      const executor = new CapabilityExecutor({
+        storage: this.deps.storage,
+        artifacts: this.deps.artifacts,
+        homes: this.deps.homes,
+        locate: this.projectLocator(worktree),
+      });
+      const results = await executor.apply(targets.filter((entry) => !collisions.has(entry.key)));
+      const byKey = new Map(targets.map((entry) => [entry.key, entry]));
+      return results.flatMap((result) => {
+        const entry = byKey.get(result.key);
+        return entry && result.digest && DELIVERED.has(result.status)
+          ? [
+              {
+                componentId: entry.componentId,
+                packageId: entry.packageId,
+                locationId: entry.locationId!,
+                packageDigest: entry.artifactDigest!,
+                digest: result.digest,
+              },
+            ]
+          : [];
+      });
+    });
   }
 
   /** Display names for the "Where available" rows of scoped copies, from the last pass. */

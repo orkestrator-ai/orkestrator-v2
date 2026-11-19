@@ -142,6 +142,17 @@ describe("artifact store", () => {
     );
   });
 
+  test("the cache round-trips uploads with ignored metadata", async () => {
+    const store = new CapabilityArtifactStore(root);
+    const files = validatePackageFiles(
+      ["SKILL.md", ".DS_Store", "nested/.git/config", "node_modules/example/index.js"].map(
+        (path) => ({ path, content: Buffer.from("example") }),
+      ),
+    );
+    const digest = await store.put(files);
+    expect((await store.get(digest)).map((file) => file.path)).toEqual(["SKILL.md"]);
+  });
+
   test("a bundle that does not match the named digest is refused", async () => {
     const store = new CapabilityArtifactStore(root);
     const bundle = JSON.stringify([

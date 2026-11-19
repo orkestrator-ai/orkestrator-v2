@@ -287,7 +287,17 @@ export async function environmentDeliveryView(
     ...(installedDigest ? { installedDigest } : {}),
     currentDigest: current.digest,
     stale:
-      installedDigest !== current.digest && (items.length > 0 || installedDigest !== undefined),
+      (installedDigest !== current.digest && (items.length > 0 || installedDigest !== undefined)) ||
+      current.items.some(
+        (planned) =>
+          !record?.items.some(
+            (item) =>
+              item.locationId === planned.locationId &&
+              item.componentId === planned.componentId &&
+              item.packageDigest === planned.packageDigest &&
+              item.status === "staged",
+          ),
+      ),
     ...(record?.stagedAt ? { stagedAt: record.stagedAt } : {}),
     ...(record?.unstaged ? { notStagedReason: CONTAINER_UNSTAGED_SUMMARY } : {}),
     ...(record?.source?.kind === "cached" ? { stagedFromCacheAt: record.source.receivedAt } : {}),

@@ -104,7 +104,25 @@ export async function checkPackageUpdate(
   const before = pkg.componentIds
     .map((id) => state.components[id])
     .filter((component) => component !== undefined);
-  const changes = compareCapabilityRevisions(before, inspected.components, () => true);
+  const oldFiles = state.artifacts[pkg.artifactDigest]?.files;
+  const changes = compareCapabilityRevisions(before, inspected.components, (id) => {
+    if (!oldFiles) return true;
+    const component = inspected.components.find((entry) => entry.id === id)!;
+    const entryPath = component.pathOrKey;
+    const directory = entryPath ? `${entryPath}/` : "";
+    const wholeArtifact = component.kind === "native-plugin" || component.kind === "hook";
+    const belongs = (file: { path: string }) =>
+      wholeArtifact ||
+      file.path === entryPath ||
+      (component.kind === "skill" && file.path.startsWith(directory));
+    const fingerprint = (files: typeof oldFiles) =>
+      files
+        .filter(belongs)
+        .map(({ path, sha256, executable }) => `${path}:${sha256}:${executable}`)
+        .sort()
+        .join("\n");
+    return fingerprint(oldFiles) !== fingerprint(inspected.files);
+  });
   const policy = packageUpdatePolicy(state, pkg.id);
   const approval = divergedApproval(
     pkg,

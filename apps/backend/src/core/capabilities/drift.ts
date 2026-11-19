@@ -219,15 +219,46 @@ export class CapabilityDriftWorkflow {
       epoch: state.epoch,
       itemId,
     })) as { files?: unknown };
+    const files = answer?.files;
+    if (!Array.isArray(files)) {
+      throw new CapabilityError("invalid-request", "The machine returned no inventory files.");
+    }
+    if (files.length > CAPABILITY_LIMITS.maxPackageFiles) {
+      throw new CapabilityError("too-large", "The machine returned too many inventory files.");
+    }
+    let totalBytes = 0;
+    const encoded = files.map((entry: unknown) => {
+      const file = entry as { path?: unknown; data?: unknown; executable?: unknown } | null;
+      if (!file || typeof file.path !== "string" || typeof file.data !== "string") {
+        throw new CapabilityError(
+          "invalid-request",
+          "The machine returned an invalid inventory file.",
+        );
+      }
+      const length = file.data.length;
+      const padding = file.data.endsWith("==") ? 2 : file.data.endsWith("=") ? 1 : 0;
+      const bytes = Math.floor((length * 3) / 4) - padding;
+      totalBytes += bytes;
+      if (
+        bytes > CAPABILITY_LIMITS.maxFileBytes ||
+        totalBytes > CAPABILITY_LIMITS.maxPackageBytes
+      ) {
+        throw new CapabilityError("too-large", "The machine returned oversized inventory files.");
+      }
+      if (length % 4 !== 0 || bytes < 0) {
+        throw new CapabilityError(
+          "invalid-request",
+          "The machine returned an invalid inventory file.",
+        );
+      }
+      return { path: file.path, data: file.data, executable: file.executable === true };
+    });
     return validatePackageFiles(
-      (Array.isArray(answer?.files) ? answer.files : []).map((entry: unknown) => {
-        const file = entry as { path?: unknown; data?: unknown; executable?: unknown };
-        return {
-          path: String(file.path ?? ""),
-          content: Buffer.from(String(file.data ?? ""), "base64"),
-          executable: file.executable === true,
-        };
-      }),
+      encoded.map(({ path, data, executable }) => ({
+        path,
+        content: Buffer.from(data, "base64"),
+        executable,
+      })),
     );
   }
 

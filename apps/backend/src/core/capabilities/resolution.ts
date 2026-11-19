@@ -4,6 +4,7 @@
  * layers are built here from the setups and assignments; the resolver itself
  * is `resolveEffectiveAgentResources` in the protocol package.
  */
+import { capabilityPolicyDenial } from "@orkestrator/protocol/capability-admin-policy";
 import {
   MY_SETUP_ID,
   type CapabilityPackageSelection,
@@ -12,12 +13,14 @@ import {
 } from "@orkestrator/protocol/capability-resources";
 import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
 import {
+  capabilityRevisionComponents,
+  ceilingDenial,
   resolveEffectiveAgentResources,
   type CapabilityLayer,
   type CapabilityPermissionCeiling,
 } from "@orkestrator/protocol/capability-resources-resolve";
 
-import { sha256, supportFor } from "./planning.js";
+import { capabilityOsDenial, machineWideSetupIds, sha256, supportFor } from "./planning.js";
 import { scopedRequiredDelivery, type ScopedEvidence } from "./scoped-delivery.js";
 import type { CapabilityState } from "./types.js";
 
@@ -32,6 +35,7 @@ export interface CapabilityResolveInput {
   ceiling: CapabilityPermissionCeiling;
   launchInventory?: CapabilityInventory;
   forLaunch?: boolean;
+  captureRequired?: (ids: ReadonlySet<string>) => void;
   /** A worktree's, account's or container's own copies (`scoped-delivery.ts`). */
   scopedEvidence?: ScopedEvidence;
 }
@@ -61,14 +65,7 @@ export function resolveCapabilityTarget(
     { scope: "my-setup", setupIds: [MY_SETUP_ID] },
     {
       scope: "toolkit",
-      setupIds: Object.values(state.setups)
-        .filter(
-          (setup) =>
-            setup.id !== MY_SETUP_ID &&
-            (!setup.targetSelectors || setup.targetSelectors.length === 0) &&
-            setup.machineSelectors.length > 0,
-        )
-        .map((setup) => setup.id),
+      setupIds: machineWideSetupIds(state).filter((id) => id !== MY_SETUP_ID),
     },
     {
       scope: "project",
@@ -95,7 +92,7 @@ export function resolveCapabilityTarget(
       exclusions: input.exclusions ?? [],
     },
   ];
-  return resolveEffectiveAgentResources({
+  const effective = resolveEffectiveAgentResources({
     facts: {
       target: input.target,
       groups: machine?.groups ?? [],
@@ -161,6 +158,17 @@ export function resolveCapabilityTarget(
           },
         }
       : {}),
+    ...(input.captureRequired ? { captureRequired: input.captureRequired } : {}),
+    prerequisiteDenial: (component) => {
+      const container = input.target.environmentIncarnation !== undefined;
+      if (container && component.kind === "mcp-server") {
+        return "Managed MCP definitions cannot be verified through container capability staging.";
+      }
+      return capabilityOsDenial(
+        component,
+        container ? "linux" : (input.launchInventory ?? machine?.inventory)?.os,
+      );
+    },
     ceiling: input.ceiling,
     admin: {
       forbiddenSources: state.settings.forbiddenSources,
@@ -169,4 +177,40 @@ export function resolveCapabilityTarget(
     hash: sha256,
     now,
   });
+  if (
+    input.forLaunch &&
+    input.target.provider === "claude" &&
+    input.target.environmentIncarnation === undefined
+  ) {
+    // A managed Claude bundle may already be enabled in a shared home.
+    // Dropping it from the manifest does not prevent that provider from loading it.
+    const denied = new Set(input.ceiling.denied);
+    for (const receipt of Object.values(state.receipts)) {
+      if (receipt.nodeId !== input.target.nodeId || receipt.locationId !== "plugin:claude")
+        continue;
+      const pkg = state.packages[receipt.packageId];
+      if (!pkg) continue;
+      const revision = capabilityRevisionComponents(
+        pkg,
+        receipt.packageDigest,
+        new Map(Object.entries(state.components)),
+      );
+      const blocked = revision?.find(
+        (child) =>
+          child.dependencies.includes(receipt.componentId) &&
+          (ceilingDenial(child, denied, input.ceiling.userMcpServers) ||
+            capabilityPolicyDenial(state.settings, pkg.id, child)),
+      );
+      const disabledInResolution = effective.blocked.some(
+        (entry) => entry.componentId === receipt.componentId,
+      );
+      if (!blocked && !disabledInResolution) continue;
+      effective.launchBlockers.push({
+        componentId: receipt.componentId,
+        reason:
+          "A managed Claude plugin still enabled on this machine carries a component this session cannot use.",
+      });
+    }
+  }
+  return effective;
 }

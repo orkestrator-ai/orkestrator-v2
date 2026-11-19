@@ -143,6 +143,41 @@ const exists = (file: string) =>
   );
 
 describe("project setups in a local worktree", () => {
+  test("an isolated graph launch stages required project and graph-only skills in its own branch", async () => {
+    const fixture = await makeFixture();
+    const { main, worktree } = await repository(fixture);
+    const relativeWorktree = ".orkestrator/graph-branches/example";
+    const branch = path.join(worktree, relativeWorktree);
+    await git(main, "worktree", "add", "--detach", branch, "HEAD");
+    fixture.environments = [
+      { id: "env-graph", projectId: "proj-1", environmentType: "local", worktreePath: worktree },
+    ];
+    for (const [scope, scopeId, name] of [
+      ["project", "proj-1", "project-review"],
+      ["graph-node", "template/node", "graph-review"],
+    ] as const) {
+      const setup = await fixture.service.setSetup({ setup: { name } });
+      await addToSetup(fixture, { kind: "skill", name, content: name }, setup.id, true);
+      await fixture.service.assignSetup({ scope, scopeId, setupIds: [setup.id] });
+    }
+    await fixture.service.reconciler.idle();
+    const effective = await fixture.service.preflightSession({
+      environmentId: "env-graph",
+      projectId: "proj-1",
+      graphNode: "template/node",
+      relativeWorktree,
+      provider: "claude",
+      sessionKey: "graph-session",
+    });
+    expect(effective?.launchBlockers).toEqual([]);
+    for (const name of ["project-review", "graph-review"]) {
+      expect(
+        await fs.readFile(path.join(branch, ".claude", "skills", name, "SKILL.md"), "utf8"),
+      ).toContain(name);
+    }
+    expect(await exists(path.join(worktree, ".claude", "skills", "graph-review"))).toBe(false);
+  });
+
   test("are written into the worktree, kept out of Git and never replace a tracked file", async () => {
     const fixture = await makeFixture();
     const { main, worktree } = await repository(fixture);
@@ -398,7 +433,7 @@ describe("container staging", () => {
 
     let view = await fixture.service.getEnvironmentDelivery({ environmentId: "env-c" });
     expect(view.kind).toBe("container");
-    expect(view.stale).toBe(false);
+    expect(view.stale).toBe(true);
     expect(view.installedDigest).toBe(staging.plan.digest);
 
     // A new revision makes the container stale until a rebuild re-stages it.
@@ -407,6 +442,47 @@ describe("container staging", () => {
     expect(view.stale).toBe(true);
     expect(view.currentDigest).not.toBe(view.installedDigest);
     expect(view.items.find((item) => item.name === "format")?.status).toBe("restart-required");
+  });
+
+  test("a managed host skill excluded from the container is omitted from portable inputs", async () => {
+    const fixture = await makeFixture();
+    const added = await addToSetup(
+      fixture,
+      { kind: "skill", name: "private", content: "Private." },
+      MY_SETUP_ID,
+    );
+    const setup = await fixture.service.setSetup({
+      setup: { name: "Container exclusions", exclusions: [added] },
+    });
+    await fixture.service.assignSetup({
+      scope: "environment",
+      scopeId: "env-c",
+      setupIds: [setup.id],
+    });
+    const staging = await fixture.service.prepareContainerStaging({
+      environmentId: "env-c",
+      projectId: "proj-1",
+      providers: ["claude"],
+      stages: ["claude", "agents-skills"],
+    });
+    expect(staging.plan.items).toHaveLength(0);
+    const inputsHome = path.join(fixture.dir, "inputs-excluded-home");
+    const hostSkill = path.join(inputsHome, ".claude", "skills", "private");
+    await fs.mkdir(hostSkill, { recursive: true });
+    await fs.writeFile(path.join(hostSkill, "SKILL.md"), "Private.");
+    await fs.writeFile(path.join(hostSkill, ".orkestrator-capability.json"), "{}");
+    const staged = await stagePortableInputs(
+      path.join(fixture.dir, "data"),
+      "env-c",
+      new Set(["claude"]),
+      { home: inputsHome, agentTest: false },
+      undefined,
+      undefined,
+      { beforeCommit: async (partial) => ({ capabilities: await staging.stage(partial) }) },
+    );
+    expect(await exists(path.join(staged.directory, "claude-config", "skills", "private"))).toBe(
+      false,
+    );
   });
 
   test("a container without a staged manifest refuses a required component", async () => {

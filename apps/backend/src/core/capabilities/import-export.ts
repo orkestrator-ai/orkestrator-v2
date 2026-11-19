@@ -112,9 +112,20 @@ export function exportSetups(
   const locked = new Set<string>();
   const catalogue = new Map(Object.entries(state.components));
   const slugs = new Map<string, string>();
+  const slugOwners = new Map<string, string>();
   for (const id of setupIds) {
     const setup = state.setups[id];
-    if (setup) slugs.set(id, setupSlug(setup));
+    if (!setup) continue;
+    const slug = setupSlug(setup);
+    const owner = slugOwners.get(slug);
+    if (owner !== undefined && owner !== id) {
+      throw new CapabilityError(
+        "conflict",
+        `Toolkits "${state.setups[owner]!.name}" and "${setup.name}" have the same export name "${slug}".`,
+      );
+    }
+    slugOwners.set(slug, id);
+    slugs.set(id, slug);
   }
   for (const id of setupIds) {
     const setup = state.setups[id];

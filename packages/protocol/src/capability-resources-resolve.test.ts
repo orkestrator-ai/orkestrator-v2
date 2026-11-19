@@ -316,3 +316,34 @@ describe("approvals", () => {
     expect(ceilingDenial(skill, new Set(["shell"]), null)).toBeUndefined();
   });
 });
+
+test("a Claude bundle cannot deliver an excluded or ceiling-denied component", () => {
+  const id = "managed:bundle";
+  const plugin = component(id, "native-plugin", ".claude-plugin/plugin.json", {
+    providerHints: ["claude"],
+  });
+  const mcp = component(id, "mcp-server", "local", { dependencies: [plugin.id] });
+  const packageEntry = pkg(id, [plugin, mcp]);
+  const base = setup(MY_SETUP_ID, [id]);
+  for (const resolved of [
+    resolveEffectiveAgentResources(
+      input([packageEntry], [plugin, mcp], [{ ...base, exclusions: [mcp.id] }]),
+    ),
+    resolveEffectiveAgentResources(
+      input([packageEntry], [plugin, mcp], [base], {
+        ceiling: { denied: ["mcp:local"], userMcpServers: null, digest: "denied" },
+      }),
+    ),
+  ]) {
+    expect(resolved.resolvedPackages).toEqual([]);
+    expect(resolved.blocked.some((entry) => entry.componentId === plugin.id)).toBe(true);
+  }
+});
+
+test("a trusted update needs approval when the hook's files change", () => {
+  const hook = component("managed:hook", "hook", "guard", { executes: ["./guard.sh"] });
+  const unchanged = compareCapabilityRevisions([hook], [hook], () => false);
+  expect(unchanged).toEqual([]);
+  const changed = compareCapabilityRevisions([hook], [hook], () => true);
+  expect(capabilityUpdateApproval("trusted-auto", changed, true).requiresApproval).toBe(true);
+});

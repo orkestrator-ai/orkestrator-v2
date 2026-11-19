@@ -29,6 +29,8 @@ interface Node {
   connected: boolean;
   /** Throw after a successful apply, as a dropped link would. */
   loseNextApplyAnswer: boolean;
+  beforeStage?: () => Promise<void>;
+  beforeApply?: (targets: ReturnType<typeof parseNodePlanTargets>) => Promise<void>;
   applyCalls: Array<{ key: string; action: string; digest?: string }>;
 }
 
@@ -84,6 +86,7 @@ async function makeNode(id: string, others: () => Node[], isCommand: boolean): P
             case "get_capability_node_observation":
               return leaf.service.executorObserve(record) as never;
             case "stage_capability_node_artifact":
+              await leaf.beforeStage?.();
               return leaf.service.executorStage(record) as never;
             case "apply_capability_node_plan": {
               for (const target of record.targets as Array<Record<string, string>>) {
@@ -93,6 +96,7 @@ async function makeNode(id: string, others: () => Node[], isCommand: boolean): P
                   digest: target.artifactDigest,
                 });
               }
+              await leaf.beforeApply?.(parseNodePlanTargets(record.targets));
               const answer = await leaf.service.executorApply(record);
               if (leaf.loseNextApplyAnswer) {
                 leaf.loseNextApplyAnswer = false;
@@ -373,6 +377,55 @@ describe("remote safety", () => {
     expect(await fs.readFile(skillFile(leafB, ".claude", "docs"), "utf8")).toContain(
       "Version two.",
     );
+  });
+
+  test("rechecks desired state after staging before dispatching the write", async () => {
+    const { command, leafA } = await fleet();
+    let staged = false;
+    leafA.beforeStage = async () => {
+      if (staged) return;
+      staged = true;
+      command.storage.capabilities.mutateCapabilityState((state) => {
+        state.setups[MY_SETUP_ID]!.packageSelections = [];
+        return { result: undefined, changed: true };
+      });
+    };
+    await addSkill(command, "notes", "Take notes.");
+    expect(staged).toBe(true);
+    expect(leafA.applyCalls).toEqual([]);
+  });
+
+  test("a coded remote refusal settles the operation rather than leaving an unknown write", async () => {
+    const { command, leafA } = await fleet();
+    leafA.beforeApply = async () => {
+      throw Object.assign(new Error("refused"), { code: "stale-epoch" });
+    };
+    const { applied } = await addSkill(command, "policy-refusal", "Take notes.");
+    const operation = await command.service.getOperation({ operationId: applied.operation.id });
+    expect(operation.targets.filter((target) => target.target.nodeId === leafA.id)).toContainEqual(
+      expect.objectContaining({ status: "blocked-policy" }),
+    );
+    const state = await command.storage.capabilities.loadCapabilityState();
+    expect(Object.values(state.receipts).some((receipt) => receipt.nodeId === leafA.id)).toBe(
+      false,
+    );
+  });
+
+  test("keeps a first-install intent before the remote executor can mutate files", async () => {
+    const { command, leafA } = await fleet();
+    let journaled = false;
+    leafA.beforeApply = async (targets) => {
+      const state = await command.storage.capabilities.loadCapabilityState();
+      journaled =
+        targets.length > 0 &&
+        targets.every(
+          (target) =>
+            state.receipts[target.key]?.pendingWrite?.action === "install" &&
+            state.receipts[target.key]?.outcomeUnknown === true,
+        );
+    };
+    await addSkill(command, "notes", "Take notes.");
+    expect(journaled).toBe(true);
   });
 
   test("an unknown outcome is read back before anything is sent again", async () => {

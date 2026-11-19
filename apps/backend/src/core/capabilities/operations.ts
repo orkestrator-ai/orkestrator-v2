@@ -22,6 +22,7 @@ import {
   type CapabilityActivityEntry,
   type CapabilityChangeKind,
   type CapabilityOperationSnapshot,
+  type CapabilityPackage,
   type CapabilityPackageSelection,
   type CapabilityPlannedTarget,
   type CapabilityTargetStatus,
@@ -167,6 +168,24 @@ export function changeKind(change: CapabilityChange): CapabilityChangeKind {
   return change.kind;
 }
 
+function retainRevisions(
+  state: CapabilityState,
+  packageId: string,
+  revisions: NonNullable<CapabilityPackage["previousRevisions"]>,
+): NonNullable<CapabilityPackage["previousRevisions"]> {
+  const pins = new Set(
+    Object.values(state.setups).flatMap((setup) =>
+      setup.packageSelections
+        .filter((selection) => selection.packageId === packageId)
+        .map((selection) => selection.version),
+    ),
+  );
+  return revisions.filter(
+    (revision, index) =>
+      index < 5 || pins.has(revision.artifactDigest) || pins.has(revision.revision),
+  );
+}
+
 /**
  * Applies `change` to `state` in place. Used twice: on a copy for the
  * preview, and on the real state at apply time (inside the same transaction
@@ -248,7 +267,7 @@ export function applyChangeToState(
           ),
           ...(inspection.publisher ? { publisher: inspection.publisher } : {}),
           previousRevisions: existing
-            ? [
+            ? retainRevisions(state, existing.id, [
                 {
                   revision: existing.revision,
                   artifactDigest: existing.artifactDigest,
@@ -256,7 +275,7 @@ export function applyChangeToState(
                   components: previousComponents!,
                 },
                 ...(existing.previousRevisions ?? []),
-              ].slice(0, 5)
+              ])
             : [],
           ...(change.kind === "add-to-setup" && change.pin
             ? { pinned: true }
@@ -378,7 +397,7 @@ export function applyChangeToState(
         .map((entry) => entry.componentId);
       for (const id of pkg.componentIds) delete state.components[id];
       for (const component of inspection.components) state.components[component.id] = component;
-      pkg.previousRevisions = [
+      pkg.previousRevisions = retainRevisions(state, pkg.id, [
         {
           revision: pkg.revision,
           artifactDigest: pkg.artifactDigest,
@@ -386,7 +405,7 @@ export function applyChangeToState(
           components: before,
         },
         ...(pkg.previousRevisions ?? []),
-      ].slice(0, 5);
+      ]);
       pkg.revision = inspection.revision;
       pkg.artifactDigest = inspection.artifactDigest;
       pkg.componentIds = inspection.components.map((component) => component.id);
@@ -422,7 +441,7 @@ export function applyChangeToState(
       );
       for (const id of pkg.componentIds) delete state.components[id];
       for (const component of restored.components) state.components[component.id] = component;
-      pkg.previousRevisions = [
+      pkg.previousRevisions = retainRevisions(state, pkg.id, [
         {
           revision: pkg.revision,
           artifactDigest: pkg.artifactDigest,
@@ -432,7 +451,7 @@ export function applyChangeToState(
         ...(pkg.previousRevisions ?? []).filter(
           (entry) => entry.artifactDigest !== previous.artifactDigest,
         ),
-      ].slice(0, 5);
+      ]);
       pkg.revision = previous.revision;
       pkg.artifactDigest = previous.artifactDigest;
       pkg.componentIds = restored.components.map((component) => component.id);
@@ -513,11 +532,16 @@ const UNSETTLED: ReadonlySet<CapabilityTargetStatus> = new Set([
   "pending",
   "outcome-unknown",
   "offline",
+  "queued-until-idle",
 ]);
 const FAILED: ReadonlySet<CapabilityTargetStatus> = new Set([
   "failed",
   "drifted",
   "blocked-policy",
+  "needs-auth",
+  "needs-approval",
+  "unsupported",
+  "restart-required",
 ]);
 
 /** Completes an operation once no target is still pending or unknown. */

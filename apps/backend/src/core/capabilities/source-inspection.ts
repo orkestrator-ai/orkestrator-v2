@@ -504,6 +504,12 @@ export function detectComponents(
     if (executes.length > 0) plugin.executes = [...new Set(executes)].slice(0, 32);
   }
   if (components.length > CAPABILITY_LIMITS.maxComponentsPerPackage) {
+    if (plugin?.providerHints.includes("claude")) {
+      throw new CapabilityError(
+        "too-large",
+        "The Claude plugin has too many bundled components to verify.",
+      );
+    }
     warnings.push(
       `Only the first ${CAPABILITY_LIMITS.maxComponentsPerPackage} components are managed.`,
     );

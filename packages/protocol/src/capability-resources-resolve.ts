@@ -123,6 +123,8 @@ export const UNRESTRICTED_CAPABILITY_CEILING: CapabilityPermissionCeiling = Obje
 }) as CapabilityPermissionCeiling;
 
 export interface CapabilityResolutionInput {
+  prerequisiteDenial?: (component: CapabilityComponent) => string | undefined;
+  captureRequired?: (ids: ReadonlySet<string>) => void;
   facts: CapabilityTargetFacts;
   layers: CapabilityLayer[];
   setups: ReadonlyMap<string, CapabilitySetup>;
@@ -298,7 +300,7 @@ export function resolveEffectiveAgentResources(
   const denied = new Set(ceiling.denied);
 
   for (const packageId of [...selected.keys()].sort()) {
-    const { selection } = selected.get(packageId)!;
+    const { selection, scope } = selected.get(packageId)!;
     const required = selection.required === true;
     const pkg = packages.get(packageId);
     if (!pkg) {
@@ -332,6 +334,47 @@ export function resolveEffectiveAgentResources(
     const wanted = (selection.components ?? [...byId.keys()]).filter(
       (componentId) => !excluded.has(componentId),
     );
+    const denial = (component: CapabilityComponent) =>
+      capabilityPolicyDenial(admin, packageId, component) ??
+      (admin.maxRisk && capabilityRiskRank(component.risk) > capabilityRiskRank(admin.maxRisk)
+        ? `Administrator policy allows at most ${admin.maxRisk} components.`
+        : undefined) ??
+      ceilingDenial(component, denied, ceiling.userMcpServers);
+    const wantedIds = new Set(wanted);
+    const bundles = new Map<string, CapabilityComponent[]>();
+    if (facts.target.provider === "claude" && pkg.source.kind !== "provider-marketplace") {
+      for (const component of revisionComponents) {
+        if (
+          component.kind === "native-plugin" &&
+          component.pathOrKey === ".claude-plugin/plugin.json" &&
+          component.providerHints.includes("claude") &&
+          wantedIds.has(component.id)
+        ) {
+          bundles.set(
+            component.id,
+            revisionComponents.filter((child) => child.dependencies.includes(component.id)),
+          );
+        }
+      }
+    }
+    const bundleDenials = new Map<string, string>();
+    const carried = new Set<string>();
+    for (const [pluginId, children] of bundles) {
+      const child = children.find(
+        (entry) => !wantedIds.has(entry.id) || denial(entry) || input.prerequisiteDenial?.(entry),
+      );
+      if (child) {
+        bundleDenials.set(
+          pluginId,
+          `The native plugin includes ${child.name}: ${denial(child) ?? input.prerequisiteDenial?.(child) ?? "this component is excluded from the selection."}`,
+        );
+      } else if (
+        !denial(byId.get(pluginId)!) &&
+        support.kinds["native-plugin"].install.level !== "unsupported"
+      ) {
+        for (const entry of children) carried.add(entry.id);
+      }
+    }
     const delivered: string[] = [];
     for (const componentId of wanted) {
       const component = byId.get(componentId);
@@ -341,19 +384,20 @@ export function resolveEffectiveAgentResources(
         if (required) launchBlockers.push({ componentId, reason });
         continue;
       }
-      const reasonBlocked =
-        capabilityPolicyDenial(admin, packageId, component) ??
-        (admin.maxRisk && capabilityRiskRank(component.risk) > capabilityRiskRank(admin.maxRisk)
-          ? `Administrator policy allows at most ${admin.maxRisk} components.`
-          : undefined) ??
-        ceilingDenial(component, denied, ceiling.userMcpServers);
+      const reasonBlocked = denial(component) ?? bundleDenials.get(componentId);
       if (reasonBlocked) {
         blocked.push({ componentId, reason: reasonBlocked });
         if (required) launchBlockers.push({ componentId, reason: reasonBlocked });
         continue;
       }
+      const prerequisite = input.prerequisiteDenial?.(component);
+      if (prerequisite) {
+        unsupported.push({ componentId, reason: prerequisite });
+        if (required) launchBlockers.push({ componentId, reason: prerequisite });
+        continue;
+      }
       const install = support.kinds[component.kind].install;
-      if (install.level === "unsupported") {
+      if (install.level === "unsupported" && !carried.has(componentId)) {
         const reason = install.reason ?? "Not supported by this provider.";
         unsupported.push({ componentId, reason });
         if (required) launchBlockers.push({ componentId, reason });
@@ -365,10 +409,18 @@ export function resolveEffectiveAgentResources(
           `${component.name}: its scripts cannot run because the session denies shell; its instructions are still available.`,
         );
       }
-      if (required) {
-        const reason = input.requiredDelivery?.(component, digest);
-        if (reason) launchBlockers.push({ componentId, reason });
+      const scopedLaunch = scope === "session" || scope === "graph-node" || scope === "template";
+      const deliveryProblem =
+        required || scopedLaunch ? input.requiredDelivery?.(component, digest) : undefined;
+      if (deliveryProblem && scopedLaunch) {
+        const reason = `This provider has no verified delivery for this launch-only selection. ${deliveryProblem}`;
+        unsupported.push({ componentId, reason });
+        if (required) launchBlockers.push({ componentId, reason });
+        else warnings.push(reason);
+        continue;
       }
+      if (deliveryProblem && required)
+        launchBlockers.push({ componentId, reason: deliveryProblem });
       delivered.push(componentId);
     }
     if (delivered.length > 0) {
@@ -380,6 +432,11 @@ export function resolveEffectiveAgentResources(
     }
   }
 
+  input.captureRequired?.(
+    new Set(
+      resolvedPackages.filter(({ id }) => selected.get(id)?.selection.required).map(({ id }) => id),
+    ),
+  );
   const sortedRevisions = [...setupRevisions.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([id, revision]) => ({ id, revision }));
@@ -493,15 +550,22 @@ export function compareCapabilityRevisions(
       continue;
     }
     old.delete(component.id);
+    const bytesChanged = contentChanged(component.id);
     const modified =
       canonicalCapabilityJson(stripIds(previous)) !==
-        canonicalCapabilityJson(stripIds(component)) || contentChanged(component.id);
+        canonicalCapabilityJson(stripIds(component)) || bytesChanged;
     if (modified) {
       changes.push({
         componentId: component.id,
         kind: component.kind,
         change: "modified",
         ...escalationOf(previous, component),
+        ...(bytesChanged &&
+        (component.kind === "hook" ||
+          (component.kind === "native-plugin" &&
+            capabilityRiskRank(component.risk) >= capabilityRiskRank("executable")))
+          ? { escalation: "Changes files that an executable component may use." }
+          : {}),
       });
     }
   }

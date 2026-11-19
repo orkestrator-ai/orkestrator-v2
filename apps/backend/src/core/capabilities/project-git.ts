@@ -35,10 +35,14 @@ const BLOCK_END = "# <<< orkestrator capabilities ";
 export async function gitCommonDir(git: GitRunner, worktree: string): Promise<string | null> {
   try {
     const out = (await git(worktree, ["rev-parse", "--git-common-dir"])).trim();
-    if (!out) return null;
+    if (!out) throw new Error("Git returned no common directory.");
     return path.resolve(worktree, out);
-  } catch {
-    return null;
+  } catch (error) {
+    const stderr = (error as { stderr?: unknown } | null)?.stderr;
+    if (typeof stderr === "string" && /^fatal: not a git repository(?:[ (]|$)/m.test(stderr)) {
+      return null;
+    }
+    throw error;
   }
 }
 

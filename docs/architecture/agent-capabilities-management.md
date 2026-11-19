@@ -139,8 +139,8 @@ resolves the target against the authoritative state, records the launch
 answers with `answer_capability_node_launch` (`internal`, admitted only at the
 leaf's current epoch and controller). The leaf enforces the answer's launch
 blockers, re-checks the required copies against its own bytes, and caches the
-answer per target shape (target without the session id, template, graph node,
-ceiling digest). When no command node has been in contact for three heartbeats
+answer per logical session, target, template, graph node, worktree and
+ceiling digest. When no command node has been in contact for three heartbeats
 or none answers within five seconds, the leaf uses the cached answer only if it
 is under six hours old, came from its current controller and epoch, and this
 machine's applied installations and required copies are unchanged; otherwise
@@ -537,7 +537,7 @@ apply, and apply re-reads the machine and refuses if any of those bytes moved.
 - **Merge** (`merge_capability_drift`) is a text three-way merge per file
   (`merge.ts`, line-based diff3 over a bounded Myers diff): base is the
   revision the copy was installed from (the receipt's package digest, kept in
-  the artifact cache with the previous five revisions), local is the
+  the artifact cache with the previous five revisions and older pins), local is the
   machine's files, configured is the package's current revision. A region one
   side changed takes that side, identical changes merge, line-ending-only
   changes do not conflict, and anything else is a conflict returned per file
@@ -593,12 +593,12 @@ Catalogue names are insufficient to identify the installed revision.
   entrypoint copies into that provider's home (`claude-config/skills`,
   `agents-skills`, `codex-home/prompts`, ...; Cursor's skills and commands are
   not staged), bounded (5,000 files, 64 MiB), from verified artifacts only, with
-  the executor's markers. A host item with the same name that Orkestrator did
-  not write is kept and reported. The record (per component: revision, digest,
+  the executor's markers. Managed host skills enter through this plan. A host
+  item with the same name that Orkestrator did not write is kept and reported. The record (per component: revision, digest,
   staged or why not) lands in the revision's `manifest.json`, its digest on the
   container's label. The environment card shows "installed revision X ·
-  current Y" from `get_capability_environment_delivery`; when they differ it
-  offers the existing rebuild, which re-stages. On a leaf the plan is the
+  current Y" from `get_capability_environment_delivery`. It offers the existing
+  rebuild when revisions differ or when a planned copy failed to stage. On a leaf the plan is the
   command node's, with its artifacts transferred first; with the command node
   away, the leaf stages its last plan for that container or nothing ("Leaf
   containers and environment cards" above).
@@ -629,9 +629,10 @@ for its `latest` version; only a moved head or a new version is fetched and
 inspected. The proposal lists component changes and escalations (a new hook,
 program, endpoint, MCP server or higher risk). Approval is the default; a
 `trusted-auto` setup with the source on the trusted list applies updates that
-escalate nothing. Pinned packages never move. The previous five revisions are
-kept for rollback; rollback pins the package and cannot undo work a tool
-already did.
+escalate nothing, with trust checked again before applying. Changed files
+used by executable hooks require approval. Pinned packages never move. The
+previous five revisions and older revisions referenced by a setup are kept
+for rollback. Rollback pins the package and cannot undo work a tool already did.
 
 ### Package registries
 

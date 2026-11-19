@@ -24,7 +24,7 @@ import {
   nativeAgentUserMcpGrant,
 } from "@orkestrator/protocol/native-agent";
 
-import { requiredPackageIds, verifyLaunchDeliveries, withBlockers } from "./launch-authority.js";
+import { verifyLaunchDeliveries, withBlockers } from "./launch-authority.js";
 import { sha256 } from "./planning.js";
 import { effectiveReceiptStatus } from "./runtime-evidence.js";
 import { CapabilityError } from "./security.js";
@@ -120,6 +120,7 @@ export class CapabilityPreflight {
     ceiling: CapabilityPermissionCeiling;
     templateId?: string;
     graphNode?: string;
+    relativeWorktree?: string;
   }): Promise<EffectiveAgentResources> {
     // A leaf's store holds no setups: its command node resolves the launch.
     if (!this.ctx.deps.isAuthority() && input.target.nodeId === (await this.ctx.deps.selfId())) {
@@ -130,33 +131,39 @@ export class CapabilityPreflight {
       });
       return answer.effective;
     }
-    // A worktree's project copies are brought up to date before anything is checked.
-    const scopedEvidence = await this.ctx.scoped
-      .launchEvidence(input.target)
-      .catch(() => undefined);
-    const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
-    const hasRequired = Object.values(state.setups).some((setup) =>
-      setup.packageSelections.some(({ required }) => required === true),
-    );
-    const launchInventory = hasRequired
-      ? await this.ctx.observeNode(input.target.nodeId).catch(() => undefined)
-      : undefined;
-    const resolved = this.ctx.resolveFor(state, {
+    const resolveInput = {
       target: input.target,
-      forLaunch: true,
-      ...(launchInventory ? { launchInventory } : {}),
-      ...(scopedEvidence ? { scopedEvidence } : {}),
       sessionKey: input.sessionKey,
       ...(input.templateId ? { templateId: input.templateId } : {}),
       ...(input.graphNode ? { graphNode: input.graphNode } : {}),
       ceiling: input.ceiling,
+    };
+    const launchInventory = await this.ctx.observeNode(input.target.nodeId).catch(() => undefined);
+    const scopedEvidence = await this.ctx.scoped
+      .launchEvidence(input.target, input.relativeWorktree, (state) =>
+        this.ctx.resolveFor(state, {
+          ...resolveInput,
+          ...(launchInventory ? { launchInventory } : {}),
+        }),
+      )
+      .catch(() => undefined);
+    const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
+    let required: ReadonlySet<string> = new Set();
+    const resolved = this.ctx.resolveFor(state, {
+      ...resolveInput,
+      captureRequired: (ids) => {
+        required = ids;
+      },
+      forLaunch: true,
+      ...(launchInventory ? { launchInventory } : {}),
+      ...(scopedEvidence ? { scopedEvidence } : {}),
     });
     // Every copy of a required package the provider reads must hold the recorded bytes.
     const checked = verifyLaunchDeliveries({
       state,
       effective: resolved,
       inventory: launchInventory,
-      required: requiredPackageIds(state, resolved),
+      required,
       ...(scopedEvidence ? { scopedEvidence } : {}),
     });
     const effective = withBlockers(resolved, checked.blockers);
@@ -176,6 +183,7 @@ export class CapabilityPreflight {
     accountHomeId?: string;
     templateId?: string;
     graphNode?: string;
+    relativeWorktree?: string;
     provider: AgentPlatform;
     sessionKey: string;
     policy?: Parameters<typeof nativeAgentDeniedCapabilities>[0];
@@ -206,11 +214,15 @@ export class CapabilityPreflight {
         sessionKey: input.sessionKey,
         ...(input.templateId ? { templateId: input.templateId } : {}),
         ...(input.graphNode ? { graphNode: input.graphNode } : {}),
+        ...(input.relativeWorktree ? { relativeWorktree: input.relativeWorktree } : {}),
         ceiling,
       });
     } catch (error) {
       log.warn("service.preflight-failed", { error: formatLogError(error, { message: false }) });
-      return null;
+      throw new CapabilityError(
+        "source-unavailable",
+        "The session’s capabilities could not be verified. Try again after reconnecting the machine.",
+      );
     }
     if (effective.launchBlockers.length > 0) {
       const first = effective.launchBlockers[0]!;
@@ -236,7 +248,9 @@ export class CapabilityPreflight {
         return { result: undefined, changed: true };
       });
     } catch (error) {
-      log.warn("service.preflight-failed", { error: formatLogError(error, { message: false }) });
+      log.warn("service.launch-record-failed", {
+        error: formatLogError(error, { message: false }),
+      });
     }
     return effective;
   }

@@ -110,21 +110,25 @@ export class CapabilityUpdateCommands {
       return { result: undefined, changed: true };
     });
     for (const updateId of auto) {
-      // Trusted and nothing escalates: preview and apply as the system.
-      const current = await deps.storage.capabilities.loadCapabilityState();
-      const update = current.updates[updateId];
-      if (!update) continue;
-      const preview = await this.changes.previewParsed(
-        { kind: "update", packageId: update.packageId, updateId },
-        undefined,
-        "trusted-auto-update",
-      );
-      await this.changes
-        .applyChange(
+      try {
+        // Trusted and nothing escalates: preview and apply as the system.
+        const current = await deps.storage.capabilities.loadCapabilityState();
+        const update = current.updates[updateId];
+        if (!update) continue;
+        const preview = await this.changes.previewParsed(
+          { kind: "update", packageId: update.packageId, updateId },
+          undefined,
+          "trusted-auto-update",
+        );
+        await this.changes.applyChange(
           { operationId: preview.operation.id, approvedDigest: preview.operation.planDigest },
           "trusted-auto-update",
-        )
-        .catch(() => undefined);
+        );
+      } catch (error) {
+        log.warn("updates.package-check-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      }
     }
     void this.ctx.announce({ packageIds: [], setupIds: [], operationIds: [] });
     return this.reads.listUpdates();
@@ -146,6 +150,7 @@ export class CapabilityUpdateCommands {
       { kind: "update", packageId: update.packageId, updateId },
       `update:${updateId}`,
       actor,
+      true,
     );
   }
 

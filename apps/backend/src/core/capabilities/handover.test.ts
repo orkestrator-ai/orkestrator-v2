@@ -1,3 +1,4 @@
+import { CAPABILITY_LIMITS, MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 /**
  * Command-node handover of capability authority over real node links
  * (in-memory network, real `NodeService` handover and real capability
@@ -234,6 +235,19 @@ describe("command-node handover of capability authority", () => {
       role: "sent",
       epoch: 2,
     });
+  });
+
+  test("a multi-chunk handover preserves non-BMP text at the chunk boundary", async () => {
+    const { desktop, mini } = await fleet();
+    await addSkill(desktop, "lint", "Lint.");
+    const name = "a".repeat(CAPABILITY_LIMITS.artifactChunkBytes - 1_024) + "🐙".repeat(1024);
+    desktop.storage.capabilities.mutateCapabilityState((state) => {
+      state.setups[MY_SETUP_ID]!.description = name;
+      return { result: undefined, changed: true };
+    });
+    await handOver(desktop, mini);
+    const state = await mini.storage.capabilities.loadCapabilityState();
+    expect(state.setups[MY_SETUP_ID]?.description).toBe(name);
   });
 
   test("the receiver verifies the state and artifact digests before installing", async () => {

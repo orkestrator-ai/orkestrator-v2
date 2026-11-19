@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  capabilityPolicyDenial,
   parseForbiddenComponent,
   parseForbiddenSource,
 } from "@orkestrator/protocol/capability-admin-policy";
@@ -181,6 +182,14 @@ describe("the policy over the resolver", () => {
       reason: "Administrator policy forbids this source.",
     });
     expect(desiredStateForNode(state, "n1", undefined).installations).toEqual([]);
+  });
+
+  test("a repository ban covers its root package and subpaths only", () => {
+    const policy = { forbiddenSources: ["git:github.com/org/tools/"] };
+    const skill = component(SKILL, "skill");
+    expect(capabilityPolicyDenial(policy, "git:github.com/org/tools", skill)).toBeDefined();
+    expect(capabilityPolicyDenial(policy, PACKAGE_ID, skill)).toBeDefined();
+    expect(capabilityPolicyDenial(policy, "git:github.com/org/tools-extra", skill)).toBeUndefined();
   });
 
   test("a forbidden kind blocks only that kind", () => {

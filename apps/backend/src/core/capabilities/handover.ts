@@ -121,7 +121,10 @@ export function buildHandoverBundle(
     collections,
     artifactDigests: input.artifactDigests,
   };
-  const text = JSON.stringify(bundle);
+  const text = JSON.stringify(bundle).replace(
+    /[\u0080-\uFFFF]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
   if (text.length > MAX_HANDOVER_STATE_BYTES)
     throw new CapabilityError("too-large", "The capability state is too large to hand over.");
   return { text, digest: sha256Text(text) };
@@ -130,8 +133,6 @@ export function buildHandoverBundle(
 function chunkText(text: string): string[] {
   const size = CAPABILITY_LIMITS.artifactChunkBytes;
   const chunks: string[] = [];
-  // Code units, not bytes: a chunk may split a surrogate pair, and the
-  // receiver reassembles the exact string before checking its digest.
   for (let offset = 0; offset < text.length; offset += size)
     chunks.push(text.slice(offset, offset + size));
   return chunks.length > 0 ? chunks : [""];

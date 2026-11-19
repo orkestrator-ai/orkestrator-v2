@@ -1,3 +1,4 @@
+import { kindsFor } from "./scoped-locations.js";
 /**
  * A leaf's environments under its command node's authority
  * (docs/architecture/agent-capabilities-management.md, "Authority" and
@@ -234,7 +235,7 @@ export function parseContainerPlanAnswer(
       !DIGEST.test(packageDigest) ||
       !componentName ||
       !FILE_KINDS.has(kind) ||
-      location.kind !== kind ||
+      !kindsFor(kind).includes(location.kind) ||
       itemProviders.length === 0
     ) {
       continue;

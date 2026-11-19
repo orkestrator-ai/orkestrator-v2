@@ -275,7 +275,7 @@ export function projectCapabilityLocation(id: string): ScopedLocation | undefine
   return PROJECT_CAPABILITY_LOCATIONS.find((location) => location.id === id);
 }
 
-function kindsFor(kind: ComponentKind): ComponentKind[] {
+export function kindsFor(kind: ComponentKind): ComponentKind[] {
   return kind === "command" || kind === "prompt" ? ["command", "prompt"] : [kind];
 }
 

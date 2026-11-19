@@ -94,11 +94,14 @@ describe("leaf launch authority", () => {
     await expect(gram.cap.preflightSession(launch("s1"))).resolves.toBeTruthy();
 
     gram.reachable = false;
-    // Same target shape (a new session): the cached answer is used, with a warning.
-    const cached = await gram.cap.preflightSession(launch("s2"));
+    // Same logical session: the cached answer is used, with a warning.
+    const cached = await gram.cap.preflightSession(launch("s1"));
     expect(cached?.resolvedPackages).toHaveLength(1);
-    expect(cached?.target.sessionId).toBe("s2");
+    expect(cached?.target.sessionId).toBe("s1");
     expect(cached?.warnings.join(" ")).toContain("last answer");
+
+    // An unverified session on the same target cannot borrow this answer.
+    await expect(gram.cap.preflightSession(launch("s2"))).rejects.toThrow("unreachable");
 
     // A target never answered for: required capabilities cannot be confirmed.
     await expect(gram.cap.preflightSession(launch("s3", "env-2"))).rejects.toThrow(
@@ -113,7 +116,7 @@ describe("leaf launch authority", () => {
         action: "install",
       };
     });
-    await expect(gram.cap.preflightSession(launch("s4"))).rejects.toThrow(
+    await expect(gram.cap.preflightSession(launch("s1"))).rejects.toThrow(
       COMMAND_NODE_UNREACHABLE_REASON.slice(0, 40),
     );
 
@@ -121,9 +124,9 @@ describe("leaf launch authority", () => {
     gram.storage.capabilities.mutateCapabilityExecutorState((state) => {
       delete state.applied["bk_gram|elsewhere|x"];
     });
-    await expect(gram.cap.preflightSession(launch("s5"))).resolves.toBeTruthy();
+    await expect(gram.cap.preflightSession(launch("s1"))).resolves.toBeTruthy();
     gram.cap.leafLaunch.cacheMaxAgeMs = -1;
-    await expect(gram.cap.preflightSession(launch("s6"))).rejects.toThrow("cannot have");
+    await expect(gram.cap.preflightSession(launch("s1"))).rejects.toThrow("cannot have");
   });
 
   test("optional capabilities only warn when the command node is unreachable", async () => {

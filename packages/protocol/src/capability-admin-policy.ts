@@ -161,13 +161,20 @@ export function parseForbiddenComponent(raw: string): CapabilityPolicyEntryResul
   return { value };
 }
 
+function sourcePrefixMatches(packageId: string, prefix: string): boolean {
+  return (
+    packageId.startsWith(prefix) ||
+    (prefix.startsWith("git:") && prefix.endsWith("/") && packageId === prefix.slice(0, -1))
+  );
+}
+
 /** Why the policy forbids a component, or `undefined`. Sources win over components. */
 export function capabilityPolicyDenial(
   policy: { forbiddenSources?: readonly string[]; forbiddenComponents?: readonly string[] },
   packageId: string,
   component: { id: string; kind: ComponentKind },
 ): string | undefined {
-  if ((policy.forbiddenSources ?? []).some((prefix) => packageId.startsWith(prefix))) {
+  if ((policy.forbiddenSources ?? []).some((prefix) => sourcePrefixMatches(packageId, prefix))) {
     return "Administrator policy forbids this source.";
   }
   const forbidden = policy.forbiddenComponents ?? [];
@@ -186,7 +193,9 @@ export function capabilityPolicyPackageMatch(
   packageId: string,
   components: ReadonlyArray<{ id: string; kind: ComponentKind }>,
 ): string | undefined {
-  const source = (policy.forbiddenSources ?? []).find((prefix) => packageId.startsWith(prefix));
+  const source = (policy.forbiddenSources ?? []).find((prefix) =>
+    sourcePrefixMatches(packageId, prefix),
+  );
   if (source !== undefined) return source;
   const forbidden = policy.forbiddenComponents ?? [];
   if (forbidden.includes(packageId)) return packageId;

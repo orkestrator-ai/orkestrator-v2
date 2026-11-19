@@ -372,6 +372,17 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
         graphEnforcementGuardResult(node, platform, decision, problem, context.now()),
       ]);
       if (problem) return failed(problem, "guard-violation", facts);
+      // An isolated branch works in its own worktree (item 403), made before
+      // the baseline so the guards know where to look. A retry of this call
+      // reuses the one this activation recorded.
+      if (graphNodeIsolated(node) && !facts.worktree) {
+        try {
+          facts.worktree = await this.createWorktree(context, environment, node);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "The branch worktree failed";
+          return failed(message, "system-error", facts);
+        }
+      }
       const { run } = context;
       try {
         await this.dependencies.capabilityPreflight?.({
@@ -384,6 +395,7 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
           sessionKey: graphAgentSessionKey(run.id, activation.key),
           templateId: run.template.id,
           graphNode: `${run.template.id}/${node.id}`,
+          ...(facts.worktree ? { relativeWorktree: facts.worktree.path } : {}),
           policy: decision.compiled.policy,
         });
       } catch (error) {
@@ -392,17 +404,6 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
             ? error.message
             : "Required graph capabilities could not be verified";
         return failed(message, "guard-violation", facts);
-      }
-      // An isolated branch works in its own worktree (item 403), made before
-      // the baseline so the guards know where to look. A retry of this call
-      // reuses the one this activation recorded.
-      if (graphNodeIsolated(node) && !facts.worktree) {
-        try {
-          facts.worktree = await this.createWorktree(context, environment, node);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "The branch worktree failed";
-          return failed(message, "system-error", facts);
-        }
       }
       // Every guard fails closed: no baseline, no dispatch.
       try {

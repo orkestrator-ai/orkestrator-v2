@@ -28,6 +28,7 @@ import {
 } from "@orkestrator/protocol/login-snapshots";
 import { claudeContainerPluginSettings } from "@orkestrator/protocol/node/claude-plugin-set";
 import { SHARED_SKILLS_INPUT } from "@orkestrator/protocol/container-recovery";
+import { CAPABILITY_MARKER_FILE } from "./capabilities/security.js";
 import { claudeContainerConfig } from "./claude-container-config.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 import { platformDescriptorClone, type DescriptorClone } from "./portable-inputs-clone.js";
@@ -1052,7 +1053,35 @@ class ProviderCopier {
     options: { skill?: boolean; verify?: () => Promise<void> } = {},
   ): Promise<void> {
     const { skill = false, verify } = options;
+    // Managed skills enter the container only through its effective capability plan.
+    if (
+      skill &&
+      (await lstat(path.join(source, CAPABILITY_MARKER_FILE)).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        },
+      ))
+    )
+      return;
     const listed = await listTree(source, this.limits.directoryEntries, exclude);
+    // Some providers copy an entire configuration tree containing a skills directory.
+    const managedSkills = new Set(
+      listed.entries.flatMap((entry) => {
+        const segments = entry.relative.split("/");
+        return segments.at(-1) === CAPABILITY_MARKER_FILE && segments.at(-3) === "skills"
+          ? [segments.slice(0, -1).join("/")]
+          : [];
+      }),
+    );
+    const stagedEntries = managedSkills.size
+      ? listed.entries.filter((entry) => {
+          const segments = entry.relative.split("/");
+          const skillRoot = segments.indexOf("skills");
+          return skillRoot < 0 || !managedSkills.has(segments.slice(0, skillRoot + 2).join("/"));
+        })
+      : listed.entries;
     const skipped = new Map<SkipReason, number>();
     const leaveOut = (reason: SkipReason, count = 1) =>
       skipped.set(reason, (skipped.get(reason) ?? 0) + count);
@@ -1061,10 +1090,10 @@ class ProviderCopier {
       entry.kind === "file" && entry.size > this.limits.fileBytes;
     // Only a skill's optional files may be left out; its SKILL.md never is.
     const optional = (entry: TreeEntry) => skill && entry.relative !== "SKILL.md";
-    const dropped = listed.entries.filter((entry) => oversized(entry) && optional(entry)).length;
+    const dropped = stagedEntries.filter((entry) => oversized(entry) && optional(entry)).length;
     const entries = dropped
-      ? listed.entries.filter((entry) => !(oversized(entry) && optional(entry)))
-      : listed.entries;
+      ? stagedEntries.filter((entry) => !(oversized(entry) && optional(entry)))
+      : stagedEntries;
     if (dropped > 0) leaveOut("too-large", dropped);
     const bytes = entries.reduce((sum, entry) => sum + entry.size, 0);
     if (bytes > this.limits.directoryBytes) throw new Skip("too-large");

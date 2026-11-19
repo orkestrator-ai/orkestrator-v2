@@ -38,6 +38,7 @@ import { installName } from "./native-ownership.js";
 import {
   finalizeOperation,
   newCorrelationId,
+  planDigestOf,
   recordActivity,
   updateOperationTargets,
 } from "./operations.js";
@@ -122,6 +123,21 @@ export function classifyTransportError(error: unknown, command: string): Error {
   }
   if (incompatibility(error, command)?.code === "unknown-command") return new NodeTooOldError();
   if (error instanceof CapabilityError) return error;
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === "node-unavailable") return new NodeOfflineError();
+  switch (code) {
+    case "invalid-request":
+    case "not-found":
+    case "conflict":
+    case "unsafe-content":
+    case "too-large":
+    case "unsupported":
+    case "stale-epoch":
+    case "approval-required":
+    case "secrets-detected":
+    case "source-unavailable":
+      return new CapabilityError(code, "The machine refused the capability request.");
+  }
   return new OutcomeUnknownError();
 }
 
@@ -243,7 +259,10 @@ export class CapabilityReconciler {
       }
       if (nodeId === (await this.deps.selfId())) await this.runAfterSelfPass();
       else await this.runAfterNodePass(nodeId);
-    })().finally(() => this.running.delete(nodeId));
+    })().finally(() => {
+      this.running.delete(nodeId);
+      if (this.again.delete(nodeId)) this.scheduleRecheck(nodeId);
+    });
     this.running.set(nodeId, run);
     return run;
   }
@@ -315,7 +334,8 @@ export class CapabilityReconciler {
     // Record the observation, settle unknown outcomes and note drift.
     const forceKeys = new Set<string>();
     const driftKeys = new Set<string>();
-    this.deps.storage.capabilities.mutateCapabilityState((current) => {
+    const observedRemovals = new Map<string, { status: CapabilityTargetStatus }>();
+    const observedOperations = this.deps.storage.capabilities.mutateCapabilityState((current) => {
       const now = this.now();
       const machine = (current.machines[nodeId] ??= {
         nodeId,
@@ -347,9 +367,10 @@ export class CapabilityReconciler {
             receipt.digest = expected;
             receipt.status = "installed-next-session";
             receipt.verification = fileKind ? "present" : "enabled";
-          } else if (receipt.pendingWrite?.action === "remove" && fileKind && !seen) {
+          } else if (receipt.pendingWrite?.action === "remove" && !seen) {
             delete current.receipts[receipt.id];
-          } else if (fileKind) {
+            observedRemovals.set(receipt.id, { status: "ready" });
+          } else if (fileKind && expectedDigests.has(receipt.id) && !seen) {
             // Observed absent or different: the write did not land. Plan it afresh.
             delete current.receipts[receipt.id];
           }
@@ -401,9 +422,16 @@ export class CapabilityReconciler {
           if (receipt.status === "drifted") receipt.status = "installed-next-session";
         }
       }
-      return { result: undefined, changed: true };
+      const operations = updateOperationTargets(
+        current,
+        observedRemovals,
+        (target) => target.action === "remove",
+      );
+      return { result: operations, changed: true };
     });
 
+    if (observedOperations.length > 0)
+      this.deps.emit({ packageIds: [], setupIds: [], operationIds: observedOperations });
     state = await this.deps.storage.capabilities.loadCapabilityState();
     for (const entry of Object.values(state.drift)) {
       const key = entry.id.startsWith("drift:") ? entry.id.slice("drift:".length) : undefined;
@@ -428,6 +456,8 @@ export class CapabilityReconciler {
 
     let results: NodePlanResult[] = [];
     let unknown = false;
+    let journaled = false;
+    const priorReceipts = new Map<string, InstallationReceipt | undefined>();
     const operationId = this.activeOperationFor(state, nodeId) ?? `reconcile:${reason}`;
     if (plan.targets.length > 0) {
       try {
@@ -439,22 +469,74 @@ export class CapabilityReconciler {
           ),
         ];
         for (const digest of digests) await this.deps.transport.stage(nodeId, epoch, digest);
-        const latest = await this.deps.storage.capabilities.loadCapabilityState();
-        if (!(latest.machines[nodeId]?.enrolled ?? latest.settings.enrollNewMachines)) return;
-        this.deps.storage.capabilities.mutateCapabilityState((current) => {
+        const intent = planDigestOf(undefined, plan.planned);
+        if (!this.deps.isAuthority()) return;
+        journaled = this.deps.storage.capabilities.mutateCapabilityState((current) => {
+          if (
+            current.epoch !== epoch ||
+            !(current.machines[nodeId]?.enrolled ?? current.settings.enrollNewMachines)
+          )
+            return { result: false, changed: false };
+          const latest = planNode(current, desiredStateForNode(current, nodeId, inventory), {
+            connected: true,
+            forceKeys,
+            driftKeys,
+          });
+          if (
+            planDigestOf(undefined, latest.planned) !== intent ||
+            latest.manifestDigest !== plan.manifestDigest
+          ) {
+            return { result: false, changed: false };
+          }
+          const installations = new Map(desired.installations.map((entry) => [entry.key, entry]));
           for (const target of plan.targets) {
             const receipt = current.receipts[target.key];
-            if (receipt) {
-              receipt.outcomeUnknown = true;
-              receipt.pendingWrite = {
-                action: target.action,
-                ...(target.artifactDigest ? { packageDigest: target.artifactDigest } : {}),
-              };
-            }
+            priorReceipts.set(target.key, receipt ? structuredClone(receipt) : undefined);
+            const installation = installations.get(target.key);
+            const pending =
+              receipt ??
+              (installation
+                ? {
+                    id: target.key,
+                    nodeId,
+                    locationId: installation.locationId,
+                    componentId: installation.componentId,
+                    packageId: installation.packageId,
+                    digest: "",
+                    packageDigest: installation.digest,
+                    references: installation.references,
+                    providers: installation.providers,
+                    alsoVisibleTo: installation.alsoVisibleTo,
+                    status: "outcome-unknown" as const,
+                    verification: "requested" as const,
+                    operationId,
+                    appliedAt: this.now(),
+                  }
+                : undefined);
+            if (!pending) continue;
+            pending.outcomeUnknown = true;
+            pending.pendingWrite = {
+              action: target.action,
+              ...(target.artifactDigest ? { packageDigest: target.artifactDigest } : {}),
+            };
+            current.receipts[target.key] = pending;
           }
-          return { result: undefined, changed: true };
+          return { result: true, changed: true };
         });
+        if (!journaled) {
+          if (this.deps.isAuthority()) this.again.add(nodeId);
+          return;
+        }
         results = await this.deps.transport.apply(nodeId, epoch, operationId, plan.targets);
+        const confirmed = new Set(results.map((result) => result.key));
+        for (const target of plan.targets) {
+          if (confirmed.has(target.key)) continue;
+          unknown = true;
+          settled.set(target.key, {
+            status: "outcome-unknown",
+            reason: "Checking what the machine applied.",
+          });
+        }
       } catch (error) {
         const classified = classifyTransportError(error, "apply_capability_node_plan");
         if (classified instanceof NodeTooOldError) {
@@ -468,11 +550,17 @@ export class CapabilityReconciler {
             });
           }
         } else {
-          unknown = true;
+          unknown = journaled;
           for (const target of plan.targets)
             settled.set(target.key, {
-              status: "outcome-unknown",
-              reason: "Checking what the machine applied.",
+              status: journaled
+                ? "outcome-unknown"
+                : classified instanceof NodeOfflineError
+                  ? "offline"
+                  : "failed",
+              reason: journaled
+                ? "Checking what the machine applied."
+                : "The capability files could not be staged.",
             });
         }
       }
@@ -483,6 +571,13 @@ export class CapabilityReconciler {
     const touched = this.deps.storage.capabilities.mutateCapabilityState((current) => {
       const now = this.now();
       const desiredByKey = new Map(desired.installations.map((entry) => [entry.key, entry]));
+      const confirmed = new Set(results.map((result) => result.key));
+      for (const [key, prior] of priorReceipts) {
+        if (!confirmed.has(key) && unknown) continue;
+        if (!confirmed.has(key) && !settled.has(key)) continue;
+        if (prior) current.receipts[key] = prior;
+        else delete current.receipts[key];
+      }
       for (const result of results) {
         const target = byKey.get(result.key);
         if (!target) continue;
@@ -542,35 +637,13 @@ export class CapabilityReconciler {
         )
           delete current.drift[`drift:${result.key}`];
       }
-      if (unknown) {
-        for (const target of plan.targets) {
-          const installation = desiredByKey.get(target.key);
-          const existing = current.receipts[target.key];
-          if (existing) existing.outcomeUnknown = true;
-          else if (installation && target.action !== "remove") {
-            current.receipts[target.key] = {
-              id: target.key,
-              nodeId,
-              locationId: installation.locationId,
-              componentId: installation.componentId,
-              packageId: installation.packageId,
-              digest: "",
-              packageDigest: installation.digest,
-              references: installation.references,
-              providers: installation.providers,
-              alsoVisibleTo: installation.alsoVisibleTo,
-              status: "outcome-unknown",
-              verification: "requested",
-              operationId,
-              appliedAt: now,
-              outcomeUnknown: true,
-              pendingWrite: { action: target.action, packageDigest: installation.digest },
-            };
-          }
-        }
-      }
       const machine = current.machines[nodeId];
-      const allSettled = !unknown && results.every((result) => result.status !== "failed");
+      const allSettled =
+        !unknown &&
+        plan.targets.every((target) => confirmed.has(target.key)) &&
+        results.every(
+          (result) => result.status === "ready" || result.status === "installed-next-session",
+        );
       if (machine && allSettled) {
         machine.appliedManifestDigest = desired.manifestDigest;
         machine.syncedRevision = current.revision;

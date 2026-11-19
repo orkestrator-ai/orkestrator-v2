@@ -42,6 +42,7 @@ import { answerCapabilityNodeLaunchCommand } from "@orkestrator/protocol/contrac
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import { installName } from "./native-ownership.js";
 import type { CapabilityLink } from "./node-transport.js";
 import { sha256 } from "./planning.js";
 import {
@@ -78,23 +79,10 @@ export const COMMAND_NODE_UNREACHABLE_REASON =
 export interface LaunchRequest {
   target: CapabilityTarget;
   sessionKey: string;
+  relativeWorktree?: string;
   ceiling: CapabilityPermissionCeiling;
   templateId?: string;
   graphNode?: string;
-}
-
-/** Package ids a launch must not start without: required selections of the setups it resolved. */
-export function requiredPackageIds(
-  state: CapabilityState,
-  effective: EffectiveAgentResources,
-): Set<string> {
-  const required = new Set<string>();
-  for (const { id } of effective.setupRevisions) {
-    for (const selection of state.setups[id]?.packageSelections ?? []) {
-      if (selection.required === true) required.add(selection.packageId);
-    }
-  }
-  return required;
 }
 
 /** Whether any setup in this state requires a package (the leaf's fail-closed hint). */
@@ -150,6 +138,45 @@ export function verifyLaunchDeliveries(input: {
         if (required) blockers.push({ componentId, reason: scoped.reason });
         continue;
       }
+      if (
+        required &&
+        target.provider === "claude" &&
+        "kind" in component &&
+        component.kind === "skill" &&
+        scoped.kind === "verified" &&
+        !scoped.exclusive &&
+        inventory?.items.some((item) => {
+          if (item.locationId !== "claude-user-skills") return false;
+          const receipt = Object.values(state.receipts).find(
+            (entry) =>
+              entry.nodeId === target.nodeId &&
+              entry.locationId === item.locationId &&
+              entry.componentId === item.componentId &&
+              entry.environmentId === undefined &&
+              entry.accountHomeId === target.accountHomeId,
+          );
+          const observedComponent =
+            receipt &&
+            revisionComponent(state, receipt.packageId, receipt.componentId, receipt.packageDigest);
+          const observedName =
+            item.name ||
+            (observedComponent
+              ? installName(observedComponent.name, observedComponent.pathOrKey, "directory")
+              : "");
+          return (
+            (item.componentId === componentId ||
+              observedName === installName(component.name, component.pathOrKey, "directory")) &&
+            (receipt?.packageDigest !== pkg.artifactDigest ||
+              item.drifted ||
+              item.digest !== receipt?.digest)
+          );
+        })
+      ) {
+        blockers.push({
+          componentId,
+          reason: `A personal copy of ${component.name} shadows the required project revision.`,
+        });
+      }
       if (scoped.kind === "verified") {
         for (const entry of scoped.deliveries) {
           deliveries.push({ packageId: pkg.id, componentId, ...entry });
@@ -164,8 +191,6 @@ export function verifyLaunchDeliveries(input: {
           receipt.providers.includes(target.provider) &&
           receipt.environmentId === undefined &&
           receipt.accountHomeId === undefined &&
-          !receipt.locationId.startsWith("mcp:") &&
-          !receipt.locationId.startsWith("plugin:") &&
           !receipt.outcomeUnknown,
       );
       for (const receipt of receipts) {
@@ -229,9 +254,10 @@ export function withBlockers(
 /** What the leaf reports about its own managed copies: ids and digests only. */
 export function compactInventory(
   inventory: CapabilityInventory | undefined,
-): Pick<CapabilityInventory, "providers" | "items"> | undefined {
+): Pick<CapabilityInventory, "os" | "providers" | "items"> | undefined {
   if (!inventory) return undefined;
   return {
+    os: inventory.os,
     providers: inventory.providers.map((entry) => ({
       provider: entry.provider,
       available: entry.available,
@@ -269,12 +295,14 @@ export function appliedDigest(executor: CapabilityExecutorState): string {
   );
 }
 
-/** One cache entry per target shape: the session id changes per launch, the rest does not. */
+/** One cache entry per target and logical assignment. */
 export function launchCacheKey(request: LaunchRequest): string {
   const { sessionId: _sessionId, ...target } = request.target;
   return sha256(
     canonicalCapabilityJson({
       target,
+      sessionKey: request.sessionKey,
+      relativeWorktree: request.relativeWorktree ?? null,
       templateId: request.templateId ?? null,
       graphNode: request.graphNode ?? null,
       ceiling: request.ceiling.digest,
@@ -554,7 +582,10 @@ export interface LeafLaunchAuthorityDeps {
   /** Emits `node-capability-launch-requested` on this machine's event stream. */
   request?(payload: { requestId: string; request: unknown }): void;
   /** The target's own copies on this machine (`RemoteScopedDelivery.leafReport`). */
-  scopedReport?(target: CapabilityTarget): Promise<LeafScopedReport | undefined>;
+  scopedReport?(
+    target: CapabilityTarget,
+    relativeWorktree?: string,
+  ): Promise<LeafScopedReport | undefined>;
   now(): string;
 }
 
@@ -582,7 +613,9 @@ export class LeafLaunchAuthority {
   /** Resolves a launch on this leaf: the command node's answer, a valid cached one, or fail closed. */
   async preflight(request: LaunchRequest): Promise<LeafLaunchResult> {
     const inventory = await this.deps.observeSelf().catch(() => undefined);
-    const report = await this.deps.scopedReport?.(request.target).catch(() => undefined);
+    const report = await this.deps
+      .scopedReport?.(request.target, request.relativeWorktree)
+      .catch(() => undefined);
     const key = launchCacheKey(request);
     const answered =
       this.deps.request && (await this.deps.controllerReachable().catch(() => false))
@@ -634,6 +667,7 @@ export class LeafLaunchAuthority {
           request: {
             target: request.target,
             sessionKey: request.sessionKey,
+            relativeWorktree: request.relativeWorktree ?? null,
             ceiling: request.ceiling,
             ...(request.templateId ? { templateId: request.templateId } : {}),
             ...(request.graphNode ? { graphNode: request.graphNode } : {}),
@@ -821,6 +855,7 @@ export interface LeafLaunchAnswerDeps {
       launchInventory?: CapabilityInventory;
       scopedEvidence?: ScopedEvidence;
       forLaunch: true;
+      captureRequired?: (ids: ReadonlySet<string>) => void;
     },
   ): EffectiveAgentResources;
   now(): string;
@@ -853,7 +888,7 @@ export async function answerLeafLaunch(
     ? {
         nodeId,
         observedAt: deps.now(),
-        os: machine?.inventory?.os ?? "unknown",
+        os: text(reported.os, 64) ?? machine?.inventory?.os ?? "unknown",
         providers: Array.isArray(reported.providers)
           ? reported.providers.slice(0, 16).flatMap((entry: unknown) => {
               const provider = (entry ?? {}) as Record<string, unknown>;
@@ -884,7 +919,11 @@ export async function answerLeafLaunch(
     target,
     parseLeafScopedReport(request.scoped),
   );
+  let required: ReadonlySet<string> = new Set();
   const resolved = deps.resolve(state, {
+    captureRequired: (ids) => {
+      required = ids;
+    },
     target,
     sessionKey,
     ceiling,
@@ -894,7 +933,6 @@ export async function answerLeafLaunch(
     ...(launchInventory ? { launchInventory } : {}),
     ...(scopedEvidence ? { scopedEvidence } : {}),
   });
-  const required = requiredPackageIds(state, resolved);
   const checked = verifyLaunchDeliveries({
     state,
     effective: resolved,

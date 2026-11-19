@@ -193,8 +193,18 @@ export function claudePluginName(files: readonly PackageFile[]): string {
   }
   let name: unknown;
   try {
-    name = (JSON.parse(manifest.content.toString("utf8")) as { name?: unknown }).name;
-  } catch {
+    const parsed = JSON.parse(manifest.content.toString("utf8")) as Record<string, unknown>;
+    name = parsed.name;
+    for (const field of ["hooks", "mcpServers", "skills", "commands", "agents", "lspServers"]) {
+      if (parsed[field] !== undefined) {
+        throw new CapabilityError(
+          "unsupported",
+          "Managed Claude plugins must use the conventional component paths.",
+        );
+      }
+    }
+  } catch (error) {
+    if (error instanceof CapabilityError) throw error;
     throw new CapabilityError("unsafe-content", "The plugin manifest is not valid JSON.");
   }
   if (typeof name !== "string" || !PLUGIN_NAME.test(name) || !isSafeCapabilitySegment(name)) {

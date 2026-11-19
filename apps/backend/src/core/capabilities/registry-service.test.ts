@@ -158,7 +158,11 @@ describe("package registries", () => {
       state: "pending",
       requiresApproval: true,
     });
+    const cancelled = await node.service.previewUpdate({ updateId: updates[0]!.id });
+    await node.service.cancelOperation({ operationId: cancelled.operation.id });
     const preview = await node.service.previewUpdate({ updateId: updates[0]!.id });
+    expect(preview.operation.id).not.toBe(cancelled.operation.id);
+    expect(preview.operation.state).toBe("awaiting-approval");
     await node.service.approveUpdate({
       updateId: updates[0]!.id,
       approvedDigest: preview.operation.planDigest,
@@ -166,6 +170,37 @@ describe("package registries", () => {
     const state = await node.storage.capabilities.loadCapabilityState();
     expect(state.packages[PACKAGE_ID]?.revision).toBe("1.1.0");
     expect(state.packages[PACKAGE_ID]?.previousRevisions?.[0]?.revision).toBe("1.0.0");
+  });
+
+  test("an active historical pin survives more than five newer revisions", async () => {
+    const routes = publish(["1.0.0"]);
+    const node = await install("long-history", routes);
+    await configureRegistry(node);
+    const original = await node.service.inspectSource({ source });
+    await addToSetup(node, original.inspectionId, MY_SETUP_ID);
+    const pinned = await node.service.setSetup({
+      setup: {
+        name: "Pinned",
+        packageSelections: [{ packageId: PACKAGE_ID, version: original.artifactDigest }],
+      },
+    });
+    for (let n = 1; n <= 6; n += 1) {
+      const revision = `1.${n}.0`;
+      publish([revision], routes);
+      const update = (await node.service.refreshUpdates({})).updates.find(
+        (candidate) => candidate.toRevision === revision,
+      )!;
+      const preview = await node.service.previewUpdate({ updateId: update.id });
+      await node.service.approveUpdate({
+        updateId: update.id,
+        approvedDigest: preview.operation.planDigest,
+      });
+    }
+    const state = await node.storage.capabilities.loadCapabilityState();
+    expect(revisionDigest(state.packages[PACKAGE_ID]!, original.artifactDigest)).toBe(
+      original.artifactDigest,
+    );
+    await expect(node.service.exportSetup({ setupIds: [pinned.id] })).resolves.toBeTruthy();
   });
 
   test("forbiddenSources forbids a registry: no inspection and no update discovery", async () => {

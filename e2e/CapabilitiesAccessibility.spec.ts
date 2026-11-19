@@ -422,8 +422,13 @@ test("the session chip changes toolkits without a restart and announces its test
   });
   await expect(toolkits.getByRole("checkbox", { name: "Frontend" })).toBeChecked();
   await expect(toolkits).toContainText("Nothing restarts");
+  await page.evaluate(() => window.capabilityFixtureHoldNext?.("assign_capability_setup"));
   await toolkits.getByRole("checkbox", { name: "Research" }).focus();
   await page.keyboard.press("Space");
+  await expect(toolkits.getByRole("checkbox", { name: "Frontend" })).toBeDisabled();
+  await expect(toolkits.getByRole("checkbox", { name: "Research" })).toBeDisabled();
+  await page.evaluate(() => window.capabilityFixtureRelease?.());
+
   await expect(
     page.getByRole("region", { name: "Capabilities: My setup + Frontend + Research" }),
   ).toContainText("Next session");
@@ -431,6 +436,7 @@ test("the session chip changes toolkits without a restart and announces its test
     scope: "session",
     scopeId: "session-1",
     setupIds: ["frontend", "research"],
+    expectedRevision: 1,
   });
 
   const details = chip.getByRole("button", { name: "See details" });

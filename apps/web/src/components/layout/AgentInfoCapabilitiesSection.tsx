@@ -58,6 +58,7 @@ export function AgentInfoCapabilitiesSection({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [changing, setChanging] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
@@ -80,6 +81,11 @@ export function AgentInfoCapabilitiesSection({
     [sessionKey, nodeId, provider, environmentId, projectId, running, JSON.stringify(ceiling)],
   );
   const setups = useCapabilityResource(() => capabilitiesApi.listCapabilitySetups(), []);
+  const assignment = useCapabilityResource(
+    () => capabilitiesApi.getCapabilityAssignment("session", sessionKey),
+    [sessionKey],
+  );
+  const selection = assignment.state.data;
   const data = view.state.data;
   if (view.state.status === "error" && !data) {
     // A node too old to manage capabilities: say nothing rather than a broken section.
@@ -199,21 +205,29 @@ export function AgentInfoCapabilitiesSection({
             </p>
           ) : null}
           {toolkits.map((setup) => {
-            const checked = data?.setupIds.includes(setup.id) ?? false;
+            const checked = selection?.setupIds.includes(setup.id) ?? false;
             return (
               <label key={setup.id} className="flex items-center gap-2">
                 <input
                   type="checkbox"
                   checked={checked}
+                  disabled={saving || assignment.state.status !== "ready"}
                   onChange={(event) => {
-                    const current = (data?.setupIds ?? []).filter((id) => id !== "my-setup");
+                    if (!selection || saving) return;
+                    const current = selection.setupIds;
                     const next = event.target.checked
                       ? [...current, setup.id]
                       : current.filter((id) => id !== setup.id);
+                    setSaving(true);
+                    setError(null);
                     void capabilitiesApi
-                      .assignCapabilitySetup("session", sessionKey, next)
-                      .then(() => view.reload())
-                      .catch((assignError: unknown) => setError(describeError(assignError)));
+                      .assignCapabilitySetup("session", sessionKey, next, selection.revision)
+                      .catch((assignError: unknown) => setError(describeError(assignError)))
+                      .then(() => {
+                        assignment.reload();
+                        view.reload();
+                      })
+                      .finally(() => setSaving(false));
                   }}
                 />
                 {setup.name}

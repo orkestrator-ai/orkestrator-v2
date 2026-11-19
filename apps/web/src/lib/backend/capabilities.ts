@@ -171,8 +171,9 @@ export function createCapabilitiesApi(client: BackendClient) {
       scope: "project" | "environment" | "template" | "graph-node" | "session",
       scopeId: string,
       setupIds: string[],
+      expectedRevision?: number,
     ) =>
-      api().assign_capability_setup({ scope, scopeId, setupIds }) as Promise<{
+      api().assign_capability_setup({ scope, scopeId, setupIds, expectedRevision }) as Promise<{
         setupIds: string[];
       }>,
     getCapabilityAssignment: (

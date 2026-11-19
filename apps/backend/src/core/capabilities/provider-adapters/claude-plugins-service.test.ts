@@ -167,3 +167,38 @@ test("a marketplace-named Claude plugin is not installed: its bytes were never r
   expect(target?.reason).toContain("mutable source");
   expect(claude.calls).toEqual([]);
 });
+
+test("a deployed bundle cannot keep a hook enabled under a new denial", async () => {
+  const { service, claude } = await makeService();
+  const inspection = await service.authorPackage({
+    kind: "upload",
+    name: "demo",
+    files: pluginFiles,
+  });
+  const preview = await service.previewChange({
+    change: {
+      kind: "add-to-setup",
+      inspectionId: inspection.inspectionId,
+      setupId: MY_SETUP_ID,
+      required: true,
+    },
+  });
+  await service.applyChange({
+    operationId: preview.operation.id,
+    approvedDigest: preview.operation.planDigest,
+  });
+  await service.reconciler.idle();
+  expect(claude.installed.has("demo@orkestrator-managed")).toBe(true);
+  await expect(
+    service.preflightSession({
+      environmentId: "env-1",
+      provider: "claude",
+      sessionKey: "permitted",
+    }),
+  ).resolves.toBeTruthy();
+  await service.adminPolicy.set({ forbiddenComponents: ["kind:hook"], expectedRevision: 0 });
+  await service.reconciler.reconcileAll("policy-test");
+  await service.reconciler.idle();
+  expect(claude.installed.has("demo@orkestrator-managed")).toBe(false);
+  expect(claude.count("install")).toBe(1);
+});

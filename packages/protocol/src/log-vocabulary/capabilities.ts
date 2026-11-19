@@ -16,8 +16,10 @@ export const CAPABILITIES_LOG_AREAS = defineLogAreas({
         "A capability command was refused with a structured reason (`code`, `ref`).",
       "command.failed":
         "A capability command failed unexpectedly; `ref` is the reference the user sees.",
-      "service.preflight-failed":
-        "Resolving a session's capabilities at launch failed; the session starts without the check.",
+      "service.preflight-failed": "Resolving a session's capabilities failed before launch.",
+      "service.launch-record-failed":
+        "The capability decision could not be recorded after verification.",
+      "delivery.scope-failed": "A worktree or account delivery pass failed.",
       "service.init-failed":
         "The capability service could not start; capability pages answer with an error.",
       "launch.request-failed":

@@ -1,3 +1,4 @@
+import { isTrustedSource, packageUpdatePolicy } from "./update-checker.js";
 /**
  * Previewing, applying and cancelling a change for `CapabilityService`
  * (docs/architecture/agent-capabilities-management.md, "Operations and
@@ -87,6 +88,7 @@ export class CapabilityChangeCommands {
     change: CapabilityChange,
     requestKey: string | undefined,
     actor?: string,
+    renewCancelled = false,
   ): Promise<CapabilityChangeResult> {
     const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
     const intentDigest = sha256(canonicalCapabilityJson({ preview: change }));
@@ -100,7 +102,7 @@ export class CapabilityChangeCommands {
           );
         }
         const operation = previous.operationId ? state.operations[previous.operationId] : undefined;
-        if (operation)
+        if (operation && (!renewCancelled || operation.state !== "cancelled"))
           return {
             operation: operationSnapshot(operation as CapabilityOperationRecord),
             replayed: true,
@@ -246,6 +248,18 @@ export class CapabilityChangeCommands {
             "conflict",
             "The setup changed since the preview; review it again.",
           );
+        }
+      }
+      if (actor === "trusted-auto-update" && change.kind === "update") {
+        const update = current.updates[change.updateId];
+        if (
+          !update ||
+          update.requiresApproval ||
+          current.packages[change.packageId]?.diverged ||
+          packageUpdatePolicy(current, change.packageId) !== "trusted-auto" ||
+          !isTrustedSource(current, change.packageId)
+        ) {
+          throw new CapabilityError("approval-required", "This update now requires approval.");
         }
       }
       const applied = applyChangeToState(current, change, actor);

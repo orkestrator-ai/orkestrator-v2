@@ -129,7 +129,12 @@ export async function worktreeCollisions(
     const location = projectMcpLocation(entry.locationId);
     return location ? [{ entry, relative: location.relative }] : [];
   });
-  const commonDir = await gitCommonDir(git, worktree);
+  const commonDir = await gitCommonDir(git, worktree).catch(() => undefined);
+  if (commonDir === undefined) {
+    return new Map(
+      entries.map((entry) => [entry.key, "Git could not verify this path is safe to write."]),
+    );
+  }
   if (commonDir && mcp.length > 0) {
     let tracked: Set<string>;
     try {

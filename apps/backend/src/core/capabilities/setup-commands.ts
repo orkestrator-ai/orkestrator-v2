@@ -196,15 +196,11 @@ export class CapabilitySetupCommands {
     const assignment = this.ctx.deps.storage.capabilities.mutateCapabilityState((state) => {
       const id = `${scope}:${scopeId}`;
       const existing = state.assignments[id];
-      if (existing && expected !== undefined && expected !== existing.revision) {
+      if (expected !== undefined && expected !== (existing?.revision ?? 0)) {
         throw new CapabilityError("conflict", "The selection changed elsewhere; reload it.");
       }
       const setupIds = stringList(args.setupIds, 16, (setupId) => Boolean(state.setups[setupId]));
-      if (setupIds.length === 0) {
-        if (!existing) return { result: null, changed: false };
-        delete state.assignments[id];
-        return { result: null, changed: true };
-      }
+      if (setupIds.length === 0 && !existing) return { result: null, changed: false };
       const next = {
         id,
         scope,

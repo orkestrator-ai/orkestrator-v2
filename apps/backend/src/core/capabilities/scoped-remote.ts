@@ -1,3 +1,4 @@
+import { confinedPath } from "./security.js";
 /**
  * Project setups in worktrees on other machines
  * (docs/architecture/agent-capabilities-management.md, "Shared locations and
@@ -438,7 +439,8 @@ export class RemoteScopedDelivery {
   private async localWorktree(
     environmentId: string,
   ): Promise<{ state: RemoteEnvironmentState; worktree?: string; known: Set<string> }> {
-    const environments = (await this.deps.environments?.().catch(() => [])) ?? [];
+    const environments = await this.deps.environments?.().catch(() => undefined);
+    if (!environments) return { state: "unavailable", known: new Set() };
     const known = new Set(environments.map((environment) => environment.id));
     const environment = environments.find(
       (entry) => entry.id === environmentId && entry.environmentType === "local",
@@ -456,7 +458,10 @@ export class RemoteScopedDelivery {
    * environment's worktree with their digests, or its container's staged
    * record and label. Ids and digests only.
    */
-  async leafReport(target: CapabilityTarget): Promise<LeafScopedReport | undefined> {
+  async leafReport(
+    target: CapabilityTarget,
+    relativeWorktree?: string,
+  ): Promise<LeafScopedReport | undefined> {
     if (!target.environmentId) return undefined;
     if (target.environmentIncarnation !== undefined) {
       const delivery = await this.deps.containerDelivery?.(target.environmentId).catch(() => null);
@@ -478,10 +483,13 @@ export class RemoteScopedDelivery {
     const local = await this.localWorktree(target.environmentId);
     if (local.state !== "present" || !local.worktree) return undefined;
     const selfId = await this.deps.selfId();
-    const project = await managedWorktreeEntries(local.worktree);
+    const worktree = relativeWorktree
+      ? confinedPath(local.worktree, relativeWorktree)
+      : local.worktree;
+    const project = await managedWorktreeEntries(worktree);
     const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
     const prefix = scopedKeyPrefix(selfId, target.environmentId);
-    const mcpApplied = Object.entries(executor.applied).filter(
+    const mcpApplied = (relativeWorktree ? [] : Object.entries(executor.applied)).filter(
       ([key, entry]) =>
         key.startsWith(prefix) &&
         entry.componentId !== undefined &&

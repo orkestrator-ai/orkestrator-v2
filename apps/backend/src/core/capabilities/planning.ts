@@ -134,6 +134,29 @@ export function supportFor(
   });
 }
 
+/** Requirements are compared to the target's operating system, including architecture if named. */
+export function capabilityOsDenial(
+  component: CapabilityComponent,
+  os: string | undefined,
+): string | undefined {
+  const supported = component.requirements.os;
+  if (!supported?.length) return undefined;
+  if (!os || os === "unknown") return "The target operating system could not be verified.";
+  const normalized = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/^macos(?=-|$)/, "darwin")
+      .replace(/^windows(?=-|$)/, "win32");
+  const actual = normalized(os);
+  if (
+    !supported.some(
+      (name) => actual === normalized(name) || actual.startsWith(`${normalized(name)}-`),
+    )
+  )
+    return `This component requires ${supported.join(", ")}; the target runs ${os}.`;
+  return undefined;
+}
+
 function maps(state: CapabilityState) {
   return {
     setups: new Map<string, CapabilitySetup>(Object.entries(state.setups)),
@@ -188,6 +211,7 @@ export function desiredStateForNode(
         forbiddenSources: state.settings.forbiddenSources,
         forbiddenComponents: state.settings.forbiddenComponents,
       },
+      prerequisiteDenial: (component) => capabilityOsDenial(component, inventory?.os),
       hash: sha256,
       now: () => "",
     });
@@ -459,6 +483,9 @@ export function planNode(
       receipt.status !== "failed" &&
       receipt.status !== "needs-auth" &&
       !(installation.locationId.startsWith("mcp:") && receipt.verification === "present") &&
+      receipt.status !== "blocked-policy" &&
+      receipt.status !== "needs-approval" &&
+      receipt.status !== "unsupported" &&
       receipt.status !== "outcome-unknown" &&
       receipt.status !== "drifted";
     if (options.driftKeys?.has(installation.key) && !options.forceKeys?.has(installation.key)) {

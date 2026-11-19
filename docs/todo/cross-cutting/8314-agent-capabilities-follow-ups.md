@@ -56,7 +56,7 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 
 **Context.** `resolveCapabilityDrift` in `apps/backend/src/core/capabilities/service.ts`.
 
-**Investigation.** A three-way merge needs the base revision's bytes, which the artifact cache keeps for the previous five revisions.
+**Investigation.** A three-way merge needs the base revision's bytes, which the artifact cache keeps for the previous five revisions and for older revisions still pinned by a toolkit.
 
 **Decisions.**
 
@@ -157,7 +157,7 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 
 ### Task 3: merge base and scope
 
-- The base is the revision the machine's copy was installed from (the receipt's package digest), read from the artifact cache, which keeps the previous five revisions. When it is gone the merge is refused with "keep, adopt or replace instead"; no older base is guessed.
+- The base is the revision the machine's copy was installed from (the receipt's package digest), read from the artifact cache, which keeps the previous five revisions and older toolkit pins. When it is gone the merge is refused with "keep, adopt or replace instead"; no older base is guessed.
 - A merge (and an adoption) covers every open local change to the package on that machine, so a multi-component package is published whole. Two copies of one component that differ (for example `~/.claude/skills` edited one way and `~/.agents/skills` another) are refused until one is kept or replaced.
 - Binary files (NUL, or not UTF-8) and conflicted files over 256 KiB changed on both sides are not merged; the dialog offers keep, adopt or replace. MCP server and plugin configuration drift stays keep or replace only.
 - A merge always publishes the package's next revision (it already contains the configured revision), never a local variant.
@@ -231,7 +231,7 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 
 ### Task 5: when the command node is unreachable
 
-- A cached answer stands in only for the same target shape (target without the session id, template, graph node and ceiling digest), when under six hours old, from the leaf's current controller and epoch, and when this machine's applied installations (a digest of the executor's applied keys) and the required copies' bytes are unchanged. It is persisted in the leaf's capability store (bounded to 100), so it survives a restart.
+- A cached answer stands in only for the same logical session and target (including template, graph node, worktree and ceiling digest), when under six hours old, from the leaf's current controller and epoch, and when this machine's applied installations (a digest of the executor's applied keys) and the required copies' bytes are unchanged. It is persisted in the leaf's capability store (bounded to 100), so it survives a restart.
 - Otherwise the launch fails closed when the last answer said something is required on this machine (or the cached answer for the target had required components), and only warns when not. A leaf that never had an answer does not block: it cannot know whether anything is required, and blocking every launch on a leaf of an unreachable command node would stop users who use no required capabilities.
 - A launch resolved from the cache is not recorded on the command node; the leaf's own record names the controller whose answer it used.
 

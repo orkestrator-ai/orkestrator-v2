@@ -455,6 +455,7 @@ export class NativeAgentProgressiveSessionState {
               epoch,
               input.forceSnapshot === true,
               phases.own(() => this.readProgressiveSessionState(input, phases)),
+              input.freshSource,
             ),
           );
       if (!value) {

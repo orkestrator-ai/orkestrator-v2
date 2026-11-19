@@ -728,6 +728,7 @@ export class NativeAgentFullProjection {
             input.environmentId,
             resolved.session.key,
             attentionItemIds,
+            resolved.session.logicalSessionKey,
           );
         } catch (error) {
           // Attention is auxiliary projection metadata. A deleted environment

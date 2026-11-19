@@ -290,6 +290,7 @@ export function registerNativeAgentCommands(
           args.knownToken === undefined
             ? undefined
             : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
+        freshSource: args.freshSource,
         forceSnapshot:
           args.forceSnapshot === undefined
             ? undefined
@@ -315,6 +316,7 @@ export function registerNativeAgentCommands(
         args.knownToken === undefined
           ? undefined
           : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
+      freshSource: args.freshSource,
       forceSnapshot:
         args.forceSnapshot === undefined
           ? undefined

@@ -225,6 +225,8 @@ export interface NativeAgentTranscriptProjectionHost {
     environmentId: string,
     sessionKey: string,
     itemIds: readonly string[],
+    /** The session's logical key, which the unread badge is attributed to. */
+    logicalSessionKey?: string,
   ): Promise<void>;
   /** Settle a parked prompt dispatch against its provider in the background. */
   scheduleAmbiguousDispatchSettle(

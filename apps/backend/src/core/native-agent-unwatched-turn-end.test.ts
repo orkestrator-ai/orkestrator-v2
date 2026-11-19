@@ -153,7 +153,12 @@ describe("a bridge that dies mid-turn", () => {
     test(`${agent}: rings agent_failed, once`, async () => {
       const { reasons, unread } = await bridgeDiesMidTurn(agent);
       expect(reasons).toEqual(["agent_failed"]);
-      expect(unread).toMatchObject({ hasUnreadWork: true, unreadReason: "agent_failed" });
+      // Attributed to the session, so only its tab acknowledges the badge.
+      expect(unread).toMatchObject({
+        hasUnreadWork: true,
+        unreadReason: "agent_failed",
+        unreadSessionKeys: ["tab-1"],
+      });
     });
   }
 
@@ -425,6 +430,15 @@ describe("a backend restart across a turn", () => {
           reasons = completions.mock.calls.map((call) => call[2]);
           completions.mockRestore();
           environment = await storage.getEnvironment("env-1");
+          if (environment?.unreadSessionKeys?.includes("tab-1")) {
+            const other = await storage.setEnvironmentUnread(
+              "env-1",
+              false,
+              environment.lastActivityAt,
+              ["unrelated-tab"],
+            );
+            expect(other.unreadSessionKeys).toEqual(["tab-1"]);
+          }
         } finally {
           await restarted.shutdown();
         }
@@ -465,7 +479,7 @@ describe("a backend restart across a turn", () => {
     });
   }
 
-  test("the aggregate still announces a turn that finished across the restart", async () => {
+  test("a turn that finished across the restart stays attributed", async () => {
     const { provider, end } = endingProvider("codex", {});
     const { reasons, environment } = await restartAcross(
       "codex",
@@ -473,18 +487,19 @@ describe("a backend restart across a turn", () => {
       (storage) => adopt(storage, "codex", { requestId: "req-1" }),
       { duringRestart: async () => end() },
     );
-    expect(reasons).toEqual([]);
+    expect(reasons).toEqual(["agent_finished"]);
     expect(environment).toMatchObject({
       agentActivityState: "idle",
       hasUnreadWork: true,
       unreadReason: "agent_finished",
+      unreadSessionKeys: ["tab-1"],
     });
   });
 
   for (const [terminal, expected] of [
     ["Provider returned 401", ["agent_failed"]],
-    [TURN_STOPPED_BY_USER_MESSAGE, []],
-    [null, []],
+    [TURN_STOPPED_BY_USER_MESSAGE, ["agent_finished"]],
+    [null, ["agent_finished"]],
   ] as const) {
     test(`opencode: an outcome of ${JSON.stringify(terminal)} rings ${JSON.stringify(expected)}`, async () => {
       let activity: "working" | "idle" = "working";

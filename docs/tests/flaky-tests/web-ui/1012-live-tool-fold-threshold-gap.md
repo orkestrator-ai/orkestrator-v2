@@ -460,3 +460,24 @@ hover and status-label fixtures. The public-site suite did not start.
   `mise run test:logged -- --name browser-tool-fold-owner -- env -u NODE_ENV bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts --project desktop-chromium --workers=1 --output output/playwright/address-findings-tool-fold e2e/ToolGroupFold.spec.ts`.
 - `mise run flaky:recurrence -- 1012 --base 85c55358fd5fce578ef704b1660efdcc95db102f --registry-ref origin/main`
   confirmed this case is open. The fold assertion and implementation were untouched.
+
+## Merge validation on 2026-11-19
+
+The merge combined feature head `8073fa0c8a6a4f60c4894312201efc7b6a4dd32d`
+with target base `c2af4eebbabc6b130716e0445670639d6e0aada6`. The aggregate
+command was `mise run test:logged -- --name merge-browser-suite -- mise run test:browser`.
+The five-worker run recorded 1,864 passed, 154 skipped, seven failed, five
+interrupted and 50 not run before the 30-minute watchdog.
+
+The case `a live group crossing the fold threshold folds into its line with no-preference motion`
+in `e2e/ToolGroupFold.spec.ts:127` reported maximum gaps of 89 px on mobile
+and 5 px on desktop against a 2 px limit.
+
+```sh
+env -u NODE_ENV mise run test:logged -- --name merge-browser-ToolGroupFold -- \
+  bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- \
+  bunx playwright test --config e2e/playwright.config.ts --workers=1 --retries=0 \
+  --output=output/playwright/merge-ToolGroupFold e2e/ToolGroupFold.spec.ts
+```
+
+The owning file passed across both Chromium viewports with one worker in 104.2 seconds. The recurrence check confirmed case 1012 is open on the target base.

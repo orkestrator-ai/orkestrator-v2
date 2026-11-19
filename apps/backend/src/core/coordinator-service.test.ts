@@ -1620,12 +1620,33 @@ describe("project coordinator", () => {
         await runCommand("git", ["rev-parse", "HEAD"], { cwd: publisher })
       ).stdout.trim();
 
-      expect(await git.baseBranchTip(project.id, "main")).toEqual({
+      // Preserve the result of a user's fetch while refreshing the tracking ref.
+      await runCommand("git", ["fetch", "origin", "main"], { cwd: checkout });
+      const fetchHeadPath = path.join(checkout, ".git", "FETCH_HEAD");
+      const userFetchHead = await fs.readFile(fetchHeadPath, "utf8");
+      await runCommand("git", ["commit", "--allow-empty", "-m", "new remote tip"], {
+        cwd: publisher,
+      });
+      await runCommand("git", ["push"], { cwd: publisher });
+      const refreshedHead = (
+        await runCommand("git", ["rev-parse", "HEAD"], { cwd: publisher })
+      ).stdout.trim();
+      const tip = await git.baseBranchTip(project.id, "main");
+      expect(tip).toEqual({
         branch: "main",
-        commit: remoteHead,
+        commit: refreshedHead,
         ref: "origin/main",
         fetched: true,
+        fetchedAt: expect.any(String),
+        launchEligible: true,
       });
+      expect(await fs.readFile(fetchHeadPath, "utf8")).toBe(userFetchHead);
+      expect(
+        (
+          await runCommand("git", ["rev-parse", "refs/remotes/origin/main"], { cwd: checkout })
+        ).stdout.trim(),
+      ).toBe(refreshedHead);
+      expect(Number.isNaN(Date.parse(tip.fetchedAt ?? ""))).toBe(false);
       // Only refs moved: the checkout is still on its own branch and commit.
       expect(await checkoutHead()).toBe(featureHead);
 
@@ -1655,18 +1676,29 @@ describe("project coordinator", () => {
       });
       // A fresh service has no cooldown from the earlier successful fetch.
       const offline = await new ProjectGitService(storage).baseBranchTip(project.id, "main");
-      expect(offline).toMatchObject({ commit: remoteHead, ref: "origin/main", fetched: false });
+      expect(offline).toMatchObject({ commit: refreshedHead, ref: "origin/main", fetched: false });
       expect(offline.fetchError).toBeTruthy();
+      // That service never fetched successfully, so it cannot say when the ref was.
+      expect(offline.fetchedAt).toBeUndefined();
 
-      // A local-only branch falls back to the local ref.
-      await runCommand("git", ["remote", "remove", "origin"], { cwd: checkout });
+      // Removing origin preserves the local metadata read, but never offers
+      // unpublished commits as launch pins for a remote-backed project.
+      await runCommand("git", ["remote", "rename", "origin", "other-origin"], { cwd: checkout });
       expect(await git.baseBranchTip(project.id, "feature")).toEqual({
         branch: "feature",
         commit: featureHead,
         ref: "feature",
         fetched: false,
+        launchEligible: false,
+        unavailableReason: "The project's origin remote is missing",
       });
-      expect(await git.baseBranchTip(project.id, "nowhere")).toMatchObject({
+      await runCommand("git", ["remote", "remove", "other-origin"], { cwd: checkout });
+      const localProject = await storage.addProject(createProject(checkout, checkout));
+      expect(await git.baseBranchTip(localProject.id, "feature")).toMatchObject({
+        commit: featureHead,
+        launchEligible: true,
+      });
+      expect(await git.baseBranchTip(localProject.id, "nowhere")).toMatchObject({
         commit: null,
         unavailableReason: "Base branch nowhere was not found locally or on origin",
       });
@@ -1720,6 +1752,77 @@ describe("project coordinator", () => {
       fetch.mockRestore();
       now.mockRestore();
     }
+  });
+
+  test("a failed base refresh keeps the time of the last successful one", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    await runCommand("git", ["remote", "add", "origin", path.join(root, "gone.git")], {
+      cwd: checkout,
+    });
+    // The remote-tracking ref a real fetch would have written.
+    await runCommand("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: checkout });
+    const git = new ProjectGitService(storage);
+    const fetch = spyOn(remoteGit, "runRemoteGit")
+      .mockImplementationOnce(async () => ({ stdout: "", stderr: "" }))
+      .mockImplementationOnce(async () => {
+        throw new Error("remote unavailable");
+      });
+    const now = spyOn(Date, "now");
+    try {
+      const fresh = await git.baseBranchTip(project.id, "main");
+      expect(fresh).toMatchObject({ ref: "origin/main", fetched: true });
+      expect(fresh.fetchedAt).toEqual(expect.any(String));
+      expect(fresh.fetchError).toBeUndefined();
+
+      // Inside the cooldown no fetch runs, but the earlier one still counts.
+      const cooled = await git.baseBranchTip(project.id, "main");
+      expect(cooled).toMatchObject({ fetched: false, fetchedAt: fresh.fetchedAt });
+      expect(fetch).toHaveBeenCalledTimes(1);
+
+      now.mockReturnValue(Date.now() + 60_001);
+      const stale = await git.baseBranchTip(project.id, "main");
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(stale).toMatchObject({
+        ref: "origin/main",
+        fetched: false,
+        fetchError: "remote unavailable",
+        fetchedAt: fresh.fetchedAt,
+      });
+      await runCommand("git", ["commit", "--allow-empty", "-m", "external ref update"], {
+        cwd: checkout,
+      });
+      await runCommand("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], {
+        cwd: checkout,
+      });
+      const moved = await git.baseBranchTip(project.id, "main");
+      expect(moved.commit).not.toBe(fresh.commit);
+      expect(moved.fetchedAt).toBeUndefined();
+      expect(moved.fetchError).toBe("remote unavailable");
+    } finally {
+      fetch.mockRestore();
+      now.mockRestore();
+    }
+  });
+
+  test("explicit Retry recovers a failed origin inside the cooldown", async () => {
+    const remote = path.join(root, "remote.git");
+    await runCommand("git", ["init", "--bare", "-b", "main", remote], { cwd: root });
+    await runCommand("git", ["remote", "add", "origin", path.join(root, "gone.git")], {
+      cwd: checkout,
+    });
+    const project = await storage.addProject(createProject(remote, checkout));
+    const git = new ProjectGitService(storage);
+    expect(await git.baseBranchTip(project.id, "main")).toMatchObject({
+      launchEligible: false,
+      fetchError: expect.any(String),
+    });
+    await runCommand("git", ["remote", "set-url", "origin", remote], { cwd: checkout });
+    // Set the remote branch directly so push cannot update our tracking ref.
+    await runCommand("git", ["push", remote, "main:main"], { cwd: checkout });
+    expect((await git.baseBranchTip(project.id, "main")).launchEligible).toBe(false);
+    const retried = await git.baseBranchTip(project.id, "main", true);
+    expect(retried).toMatchObject({ ref: "origin/main", fetched: true, launchEligible: true });
+    expect(retried.fetchError).toBeUndefined();
   });
 
   test("rejects non-repositories and configured checkouts that are not the repository root", async () => {

@@ -20,6 +20,7 @@ import { createEnvironment } from "./storage-shared-core.js";
 import type { StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
+import * as remoteGit from "./git/noninteractive-env.js";
 
 const tempDirectories: string[] = [];
 
@@ -182,6 +183,8 @@ test("a new worktree gets the files the Environment Files setting matches, never
     [".env", "*.env", "config/*.env", "../outside/host-secret"],
   );
 
+  // A local-only project's own branch is its base: no remote, no fetch.
+  expect(worktree.startPointSource).toBe("local-branch");
   expect(worktree.envFileRefusals).toEqual([
     { name: "../outside/host-secret", reason: "invalid-pattern" },
     { name: "leak.env", reason: "symlink" },
@@ -209,6 +212,54 @@ async function initProject(root: string): Promise<string> {
   ]);
   return project;
 }
+
+test("a pinned start commit creates the worktree without contacting the remote", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worktree-pinned-"));
+  tempDirectories.push(root);
+  const project = await initProject(root);
+  const pinned = (await runCommand("git", ["-C", project, "rev-parse", "HEAD"])).stdout.trim();
+  // The base moves on after the dialog resolved it; the pin must still win.
+  await runCommand("git", [
+    "-C",
+    project,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "later",
+  ]);
+  // A remote nothing can reach: any fetch on the path would fail the create.
+  await runCommand("git", ["-C", project, "remote", "add", "origin", path.join(root, "gone.git")]);
+  const trees = path.join(root, "trees");
+
+  const worktree = await createLocalWorktree(project, "app", "pinned", pinned, [], trees);
+
+  expect(worktree.startPointSource).toBe("pinned-commit");
+  expect(worktree.createdFromCommit).toBe(pinned);
+  expect(worktree.startPointResolveMs).toBeGreaterThanOrEqual(0);
+  expect((await runCommand("git", ["-C", worktree.path, "rev-parse", "HEAD"])).stdout.trim()).toBe(
+    pinned,
+  );
+  // Unpinned, the same start has to fetch the base first, and that is what fails.
+  await expect(
+    createLocalWorktree(project, "app", "unpinned", "main", [], trees),
+  ).rejects.toThrow();
+});
+
+test("a missing pin reports the commit without trying to fetch it as a branch", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worktree-lost-pin-"));
+  tempDirectories.push(root);
+  const project = await initProject(root);
+  const missing = "f".repeat(40);
+  const remote = spyOn(remoteGit, "runRemoteGit");
+  await expect(
+    createLocalWorktree(project, "app", "missing-pin", missing, [], path.join(root, "trees")),
+  ).rejects.toThrow(`Starting commit ${missing} is unavailable`);
+  expect(remote).not.toHaveBeenCalled();
+});
 
 test("an opencode.json named by files-to-copy reaches the worktree, untracked or only staged", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worktree-opencode-"));

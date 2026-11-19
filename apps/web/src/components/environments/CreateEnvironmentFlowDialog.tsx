@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
+import type { EnvironmentLaunchBase } from "@/lib/launch-base";
 import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { agentSettingsTiers } from "@/lib/agent-settings";
 import { activateFeatureBuildEnvironment } from "@/lib/feature-build-activation";
@@ -52,6 +53,7 @@ export interface CreateEnvironmentFlowOperations {
     namingPrompt?: string,
     buildPipelineId?: string,
     worktreeBaseDir?: string,
+    launchBase?: EnvironmentLaunchBase,
   ) => Promise<Environment>;
   updateEnvironment: (environmentId: string, updates: Partial<Environment>) => void;
   startEnvironment: (
@@ -105,6 +107,9 @@ export function resolveEnvironmentCreateRequest(options: ClaudeOptions) {
         : undefined,
     worktreeBaseDir:
       options.environmentType === "local" ? options.worktreeBaseDir || undefined : undefined,
+    // Only a local worktree is pinned: a container clones from the remote, so
+    // its base is still resolved inside the container.
+    launchBase: options.environmentType === "local" ? options.launchBase : undefined,
   };
 }
 
@@ -286,17 +291,30 @@ export function CreateEnvironmentFlowDialog({
     );
     try {
       const request = resolveEnvironmentCreateRequest(options);
-      const environment = await createEnvironment(
-        projectId,
-        request.name,
-        request.networkAccessMode,
-        request.initialPrompt,
-        request.portMappings,
-        request.environmentType,
-        request.namingPrompt,
-        // Only a chosen folder adds arguments; otherwise the call is unchanged.
-        ...(request.worktreeBaseDir ? ([undefined, request.worktreeBaseDir] as const) : []),
-      );
+      const environment = request.launchBase
+        ? await createEnvironment(
+            projectId,
+            request.name,
+            request.networkAccessMode,
+            request.initialPrompt,
+            request.portMappings,
+            request.environmentType,
+            request.namingPrompt,
+            undefined,
+            request.worktreeBaseDir,
+            request.launchBase,
+          )
+        : await createEnvironment(
+            projectId,
+            request.name,
+            request.networkAccessMode,
+            request.initialPrompt,
+            request.portMappings,
+            request.environmentType,
+            request.namingPrompt,
+            // Only a chosen folder adds arguments; otherwise the call is unchanged.
+            ...(request.worktreeBaseDir ? ([undefined, request.worktreeBaseDir] as const) : []),
+          );
 
       setCreateStage("Saving agent settings…");
       const agentSettings = resolveEnvironmentAgentSettings(options);

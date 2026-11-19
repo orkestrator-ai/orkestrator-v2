@@ -1,0 +1,113 @@
+[
+  {
+    "label": "parked",
+    "activity": "waiting",
+    "completion": {
+      "status": "running",
+      "prompt": 202
+    },
+    "pending": [
+      {
+        "kind": "command"
+      }
+    ],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Delete the build directory",
+        "textLength": 26,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delete the build directory"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Removing it.",
+        "textLength": 12,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Removing it."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "execute",
+            "toolState": "pending"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": 202
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Delete the build directory",
+        "textLength": 26,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delete the build directory"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Removing it.",
+        "textLength": 12,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Removing it."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "execute",
+            "toolState": "failure",
+            "outputLength": 29,
+            "error": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Understood, the build directory stays.",
+        "textLength": 38,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Understood, the build directory stays."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "decisions": [
+        {
+          "outcome": {
+            "outcome": "selected",
+            "optionId": "reject-once"
+          }
+        }
+      ]
+    }
+  }
+]

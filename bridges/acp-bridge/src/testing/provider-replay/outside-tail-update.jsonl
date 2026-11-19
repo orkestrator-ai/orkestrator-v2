@@ -1,0 +1,11 @@
+{"replay":1,"bridge":"acp","scenario":"outside-tail-update","source":"synthetic","provider":"grok","providerVersion":"1.0.88","description":"A command starts in the first response; two later responses push its row out of the live tail before its completion arrives and revises that row."}
+{"action":"prompt","text":"Build, then summarise while it runs"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-1","content":{"type":"text","text":"Starting the build."}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"tool_call","toolCallId":"call-build","title":"bun run build","kind":"execute","status":"pending","rawInput":{"command":"bun run build"}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-2","content":{"type":"text","text":"Meanwhile, the first note."}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-3","content":{"type":"text","text":"And the second note."}}}}}
+{"action":"observe","label":"before-result"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-build","status":"completed","content":[{"type":"content","content":{"type":"text","text":"built in 3s"}}],"rawOutput":{"output":"built in 3s"}}}}}
+{"action":"observe","label":"after-result"}
+{"frame":{"jsonrpc":"2.0","id":"$prompt","result":{"stopReason":"end_turn"}}}
+{"action":"settle"}

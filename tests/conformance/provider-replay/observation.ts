@@ -85,7 +85,17 @@ export interface ReplayObservationInput<
     parts: unknown[];
   },
 > {
-  transcript: BridgeTranscriptSource<T>;
+  /**
+   * The session's transcript source, for an in-process adapter: the summary
+   * is built from it through the production route body.
+   */
+  transcript?: BridgeTranscriptSource<T>;
+  /**
+   * For an adapter that drives a bridge process over HTTP instead: every row
+   * (`/session/:id/messages`) and the bridge's own v2 summary of the live
+   * tail (`/session/:id/transcript?version=2&limit=REPLAY_LIVE_TAIL_ROWS`).
+   */
+  served?: { messages: readonly T[]; summary: unknown };
   activity: string;
   completion?: Record<string, unknown>;
   pending: ReplayPendingShape[];
@@ -142,10 +152,23 @@ export function observe<T extends { id: string; content: string; parts: unknown[
   label: string,
   input: ReplayObservationInput<T>,
 ): ReplayObservation {
-  const messages = input.transcript.messages;
-  const query: Record<string, string> = { version: "2", limit: String(REPLAY_LIVE_TAIL_ROWS) };
-  const body = bridgeTranscriptRouteBody(input.transcript, (name) => query[name]);
-  if (!("status" in body) || body.status !== "snapshot") {
+  let messages: readonly T[];
+  let summary: unknown;
+  if (input.transcript) {
+    messages = input.transcript.messages;
+    const query: Record<string, string> = { version: "2", limit: String(REPLAY_LIVE_TAIL_ROWS) };
+    summary = bridgeTranscriptRouteBody(input.transcript, (name) => query[name]);
+  } else if (input.served) {
+    messages = input.served.messages;
+    summary = input.served.summary;
+  } else {
+    throw new Error(`${label}: an observation needs a transcript source or served rows`);
+  }
+  const body = summary as {
+    status?: string;
+    value?: { startIndex: number; revisedMessages?: unknown[] };
+  };
+  if (body.status !== "snapshot" || !body.value) {
     throw new Error(`transcript summary for ${label} was not a snapshot`);
   }
   const indexById = new Map(messages.map((message, index) => [message.id, index]));

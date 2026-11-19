@@ -1,0 +1,101 @@
+[
+  {
+    "label": "restarted",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": 202
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "What is in the README?",
+        "textLength": 22,
+        "parts": [
+          {
+            "type": "text",
+            "text": "What is in the README?"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "It describes a replay fixture.",
+        "textLength": 30,
+        "parts": [
+          {
+            "type": "text",
+            "text": "It describes a replay fixture."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": 202
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "What is in the README?",
+        "textLength": 22,
+        "parts": [
+          {
+            "type": "text",
+            "text": "What is in the README?"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "It describes a replay fixture.",
+        "textLength": 30,
+        "parts": [
+          {
+            "type": "text",
+            "text": "It describes a replay fixture."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "And the licence?",
+        "textLength": 16,
+        "parts": [
+          {
+            "type": "text",
+            "text": "And the licence?"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "MIT.",
+        "textLength": 4,
+        "parts": [
+          {
+            "type": "text",
+            "text": "MIT."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "loadsSent": 1
+    }
+  }
+]

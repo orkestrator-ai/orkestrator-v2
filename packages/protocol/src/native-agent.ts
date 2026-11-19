@@ -1528,6 +1528,8 @@ export interface NativeAgentContextUsage {
   usedTokens: number;
   /** Cost-only snapshots use a placeholder for the required token field. */
   occupancyUnknown?: true;
+  /** Retained turns describe the context before a confirmed rewrite. */
+  contextCompacted?: true;
   maximumTokens?: number;
   percentage?: number;
   modelId?: string;
@@ -1590,6 +1592,8 @@ export interface NativeAgentTurnUsage {
    * leaves it unset.
    */
   at?: string;
+  /** Earliest possible cache access for this turn, ISO-8601. */
+  cacheAccessNotBefore?: string;
   costUsd?: number;
   /** Whether `costUsd` is a provider bill or an estimate; absent when unknown. */
   costSource?: NativeAgentCostSource;

@@ -1,3 +1,4 @@
+import { replayRecorder } from "./replay-recorder.js";
 /**
  * Process lifecycle: the HTTP server, idle detaching, and a clean shutdown.
  */
@@ -73,6 +74,7 @@ async function releaseEverything(): Promise<void> {
     // shutdown is not finished until it is.
     settleIdleDetaches(),
   ]);
+  await replayRecorder?.close();
   if (!server.listening) return;
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

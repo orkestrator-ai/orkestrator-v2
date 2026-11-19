@@ -1,0 +1,14 @@
+{"replay":1,"bridge":"cursor","scenario":"basic-turn","source":"synthetic","provider":"@cursor/sdk","providerVersion":"1.4.1","description":"Thinking, prose and a shell call in one step, then a closing answer in a second step; the run finishes."}
+{"action":"prompt","text":"List the workspace"}
+{"frame":{"type":"step-started"}}
+{"frame":{"type":"thinking-delta","text":"Listing files first."}}
+{"frame":{"type":"thinking-completed"}}
+{"frame":{"type":"text-delta","text":"Let me look."}}
+{"frame":{"type":"tool-call-started","callId":"call-ls","modelCallId":"m1","toolCall":{"type":"shell","args":{"command":"ls -1"}}}}
+{"frame":{"type":"tool-call-completed","callId":"call-ls","modelCallId":"m1","toolCall":{"type":"shell","args":{"command":"ls -1"},"result":{"status":"success","value":{"exitCode":0,"signal":"","stdout":"README.md\nsrc\n","stderr":"","executionTime":4}}}}}
+{"frame":{"type":"step-completed"}}
+{"action":"observe","label":"after-tool"}
+{"frame":{"type":"step-started"}}
+{"frame":{"type":"text-delta","text":"The workspace holds a README and a src directory."}}
+{"frame":{"type":"turn-ended","usage":{"inputTokens":10,"outputTokens":20,"cacheReadTokens":0,"cacheWriteTokens":0}}}
+{"action":"end","status":"finished","result":"The workspace holds a README and a src directory."}

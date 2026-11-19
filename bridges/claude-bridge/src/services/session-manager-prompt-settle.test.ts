@@ -18,6 +18,20 @@ function preparedTurn(options?: PromptOptions) {
 }
 
 describe("settleFailedTurn", () => {
+  test("an API rate_limit with a text-only quota refusal settles as usage-limit", () => {
+    const turn = preparedTurn();
+    turn.queryStarted = true;
+    turn.apiErrorCode = "rate_limit";
+    const error = new Error("You've hit your limit · resets 3pm");
+    try {
+      expect(() => settleFailedTurn(turn, error)).toThrow(error);
+      expect(turn.session.failureReason).toBe("usage-limit");
+      expect(turn.session.failedTurn).toMatchObject({ id: turn.promptUuid });
+    } finally {
+      finalizeTurn(turn);
+    }
+  });
+
   test("failed startup hands foreground back to a live runtime and removes only its prompt row", async () => {
     const { session, call, firstPrompt } = await releaseWithBackgroundWork("settle rollback");
     session.errorCode = "usage-limit";

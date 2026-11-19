@@ -35,6 +35,8 @@ export interface TurnStartupSnapshot {
   readonly abortController: SessionState["abortController"];
   readonly error: SessionState["error"];
   readonly errorCode: SessionState["errorCode"];
+  readonly failedTurn: SessionState["failedTurn"];
+  readonly failureReason: SessionState["failureReason"];
   readonly interruption: SessionState["interruption"];
   readonly interruptedRequestId: SessionState["interruptedRequestId"];
   readonly lastActivity: SessionState["lastActivity"];
@@ -54,6 +56,8 @@ export function captureTurnStartup(session: SessionState): TurnStartupSnapshot {
     abortController: session.abortController,
     error: session.error,
     errorCode: session.errorCode,
+    failedTurn: session.failedTurn,
+    failureReason: session.failureReason,
     interruption: session.interruption,
     interruptedRequestId: session.interruptedRequestId,
     lastActivity: session.lastActivity,
@@ -183,6 +187,7 @@ export interface TurnState {
    * request because the plan allowance is used up. Read only if the turn fails.
    */
   rateLimitRejected: boolean;
+  rejectedRateLimitResetsAt?: string;
   /**
    * The SDK's API error code on this turn's latest root assistant message:
    * the synthetic reply Claude Code writes for a model request that failed.

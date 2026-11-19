@@ -550,6 +550,9 @@ describe("Electron backend process supervisor", () => {
         ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK: "all",
         ORKESTRATOR_RECURRING_METRICS: "1",
         ORKESTRATOR_LOG_LEVEL: "build-pipeline=debug",
+        ORKESTRATOR_PROVIDER_RECORD_DIR: "/profiles/qa/capture",
+        ORKESTRATOR_PROVIDER_RECORD_CONFIRM: "1",
+        ORKESTRATOR_PROVIDER_RECORD_MAX_BYTES: "8192",
         ORKESTRATOR_PREVIEW_TRANSPORT: "1",
         ORKESTRATOR_PREVIEW_RELAY: "0",
         ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
@@ -585,6 +588,9 @@ describe("Electron backend process supervisor", () => {
     expect(isolated.ORKESTRATOR_RECURRING_METRICS).toBe("1");
     // Log levels too, so a qualification run can read an area's debug lines.
     expect(isolated.ORKESTRATOR_LOG_LEVEL).toBe("build-pipeline=debug");
+    expect(isolated.ORKESTRATOR_PROVIDER_RECORD_DIR).toBe("/profiles/qa/capture");
+    expect(isolated.ORKESTRATOR_PROVIDER_RECORD_CONFIRM).toBe("1");
+    expect(isolated.ORKESTRATOR_PROVIDER_RECORD_MAX_BYTES).toBe("8192");
     // So do the service-preview transport overrides, so a profile can
     // qualify the desktop tunnel and relay.
     expect(isolated.ORKESTRATOR_PREVIEW_TRANSPORT).toBe("1");

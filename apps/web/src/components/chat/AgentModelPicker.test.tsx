@@ -138,6 +138,25 @@ async function dragFavoriteRow(activeKey: string, overKey: string) {
 describe("AgentModelPicker", () => {
   afterEach(() => cleanup());
 
+  test("opens when a new open request arrives, and not on its first render", () => {
+    setMobileViewport(false);
+    const { rerender, onModelChange } = renderPicker({ openRequest: 3 });
+    expect(screen.queryByRole("menuitemradio", { name: /Model 2/ }) === null).toBe(true);
+
+    rerender(
+      <AgentModelPicker
+        models={models}
+        selectedModelId="model-1"
+        selectedModelLabel="Model 1"
+        onModelChange={onModelChange}
+        reasoningOptions={[]}
+        onReasoningChange={() => {}}
+        openRequest={4}
+      />,
+    );
+    expect(screen.getByRole("menuitemradio", { name: /Model 2/ })).toBeTruthy();
+  });
+
   test("keeps its own trigger defaults when a caller passes no className", () => {
     setMobileViewport(false);
     renderPicker();

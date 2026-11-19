@@ -1,0 +1,12 @@
+{"replay":1,"bridge":"pi","source":"recorded","provider":"@earendil-works/pi-coding-agent","providerVersion":"1.5.2","scenario":"basic-turn","description":"Captured Pi SDK message, text delta and agent_settled events for a short reply. System messages and IDs were omitted."}
+{"action":"prompt","text":"Reply with exactly: Replay fixture ready. Do not use any tools."}
+{"frame":{"type":"agent_start"}}
+{"frame":{"type":"turn_start"}}
+{"frame":{"type":"message_start","message":{"api":"openai-codex-responses","role":"assistant","model":"gpt-6.1-sol","provider":"openai-codex","stopReason":"pending","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"timestamp":1767225600000,"content":[]}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Replay","contentIndex":0}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":" fixture","contentIndex":0}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":" ready","contentIndex":0}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":".","contentIndex":0}}}
+{"frame":{"type":"message_end","message":{"api":"openai-codex-responses","role":"assistant","model":"gpt-6.1-sol","provider":"openai-codex","stopReason":"stop","usage":{"input":9770,"output":8,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":9778,"cost":{"input":0.01954,"output":8e-05,"cacheRead":0,"cacheWrite":0,"total":0.01962,"totalFromProvider":false}},"timestamp":1767225600000,"content":[{"type":"text","text":"Replay fixture ready."}]}}}
+{"frame":{"type":"agent_settled","aborted":false}}
+{"action":"end"}

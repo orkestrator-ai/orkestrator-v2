@@ -1,0 +1,239 @@
+[
+  {
+    "label": "before-result",
+    "activity": "working",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Build, then summarise while it runs",
+        "textLength": 35,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Build, then summarise while it runs"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the build.",
+        "textLength": 19,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the build."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "shell",
+            "toolState": "pending"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Meanwhile, the first note.",
+        "textLength": 26,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Meanwhile, the first note."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "And the second note.",
+        "textLength": 20,
+        "parts": [
+          {
+            "type": "text",
+            "text": "And the second note."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "after-result",
+    "activity": "working",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Build, then summarise while it runs",
+        "textLength": 35,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Build, then summarise while it runs"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the build.",
+        "textLength": 19,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the build."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "shell",
+            "toolState": "success",
+            "outputLength": 12
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Meanwhile, the first note.",
+        "textLength": 26,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Meanwhile, the first note."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "And the second note.",
+        "textLength": 20,
+        "parts": [
+          {
+            "type": "text",
+            "text": "And the second note."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": [1],
+      "revisedRows": [
+        {
+          "index": 1,
+          "row": {
+            "role": "assistant",
+            "text": "Starting the build.",
+            "textLength": 19,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Starting the build."
+              },
+              {
+                "type": "tool-invocation",
+                "toolName": "shell",
+                "toolState": "success",
+                "outputLength": 12,
+                "outputExcerpt": "built in 3s\n"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Build, then summarise while it runs",
+        "textLength": 35,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Build, then summarise while it runs"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the build.",
+        "textLength": 19,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the build."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "shell",
+            "toolState": "success",
+            "outputLength": 12
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Meanwhile, the first note.",
+        "textLength": 26,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Meanwhile, the first note."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "And the second note.",
+        "textLength": 20,
+        "parts": [
+          {
+            "type": "text",
+            "text": "And the second note."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": [1],
+      "revisedRows": [
+        {
+          "index": 1,
+          "row": {
+            "role": "assistant",
+            "text": "Starting the build.",
+            "textLength": 19,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Starting the build."
+              },
+              {
+                "type": "tool-invocation",
+                "toolName": "shell",
+                "toolState": "success",
+                "outputLength": 12,
+                "outputExcerpt": "built in 3s\n"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+]

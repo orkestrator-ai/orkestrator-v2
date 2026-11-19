@@ -1,5 +1,6 @@
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 import { USAGE_LIMIT_ERROR_CODE } from "@orkestrator/protocol/agent-usage-limits";
+import type { ProviderFailureReason } from "@orkestrator/protocol/provider-failures";
 import {
   SteerOrdering,
   DEFAULT_SESSION_RETENTION_MS,
@@ -54,7 +55,11 @@ import {
 } from "./history/rollout.js";
 import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-title-index.js";
 
-import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
+import {
+  AppServerRpcError,
+  codexFailureReason,
+  isMissingRolloutError,
+} from "./app-server/errors.js";
 
 import { type StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -526,6 +531,22 @@ export class CodexRuntimeSessions {
     this.clearCompactionBackstop(context.threadId);
     if (!context.compacting) return;
     context.compacting = false;
+    if (!error) {
+      const previousUsage = this.ctx.usageByThread.get(context.threadId);
+      // Compaction rewrote the prefix. Keep historical usage while marking
+      // both the old occupancy and the old cache evidence unusable.
+      this.ctx.usageByThread.set(context.threadId, {
+        ...previousUsage,
+        source: "codex",
+        estimated: false,
+        updatedAt: new Date(this.ctx.now()).toISOString(),
+        usedTokens: 0,
+        totalTokens: 0,
+        percentUsed: 0,
+        occupancyUnknown: true,
+        contextCompacted: true,
+      });
+    }
     if (!context.activeTurn && !context.dispatchInFlight && context.phase === "running") {
       this.ctx.registry.setPhase(context, error ? "failed" : "idle", error);
     }
@@ -538,7 +559,11 @@ export class CodexRuntimeSessions {
       this.ctx.options.emit({
         type: "session.updated",
         sessionId,
-        data: { compacted: true, compacting: false },
+        data: {
+          compacted: true,
+          compacting: false,
+          contextUsage: this.ctx.usageByThread.get(context.threadId),
+        },
       });
       this.ctx.options.emit({
         type: "session.idle",
@@ -1481,6 +1506,8 @@ export class CodexRuntimeSessions {
     error?: string;
     /** `usage-limit` beside `error` when app-server said `usageLimitExceeded`. */
     errorCode?: typeof USAGE_LIMIT_ERROR_CODE;
+    /** The provider-neutral reason beside `error`, when app-server's code settles it. */
+    failureReason?: ProviderFailureReason;
     /**
      * Why the last turn failed, when it was not the model's doing. `restart`:
      * an app-server restart stopped the turn partway; the thread is intact and
@@ -1543,6 +1570,9 @@ export class CodexRuntimeSessions {
       ...(phase === "failed" && error !== undefined && context?.errorCode === "usageLimitExceeded"
         ? { errorCode: USAGE_LIMIT_ERROR_CODE }
         : {}),
+      ...failureReasonField(
+        phase === "failed" && error !== undefined ? context?.errorCode : undefined,
+      ),
       // Structured so a workflow can continue the turn without matching text.
       // The notice clears when the next turn is accepted, and the error check
       // keeps a later, unrelated failure from inheriting it.
@@ -1933,4 +1963,10 @@ export class CodexRuntimeSessions {
    * The whole body runs under the thread's dispatch lock so two tabs cannot both
    * observe an idle thread and both dispatch.
    */
+}
+
+/** `failureReason` for a failed turn's app-server code, when the code settles it. */
+function failureReasonField(code: string | undefined): { failureReason?: ProviderFailureReason } {
+  const failureReason = codexFailureReason(code);
+  return failureReason ? { failureReason } : {};
 }

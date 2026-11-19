@@ -1,0 +1,105 @@
+[
+  {
+    "label": "after-tool",
+    "activity": "working",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "List the workspace",
+        "textLength": 18,
+        "parts": [
+          {
+            "type": "text",
+            "text": "List the workspace"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Let me look.",
+        "textLength": 12,
+        "parts": [
+          {
+            "type": "thinking",
+            "text": "Listing files first."
+          },
+          {
+            "type": "text",
+            "text": "Let me look."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "bash",
+            "toolState": "success",
+            "outputLength": 14
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "List the workspace",
+        "textLength": 18,
+        "parts": [
+          {
+            "type": "text",
+            "text": "List the workspace"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Let me look.",
+        "textLength": 12,
+        "parts": [
+          {
+            "type": "thinking",
+            "text": "Listing files first."
+          },
+          {
+            "type": "text",
+            "text": "Let me look."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "bash",
+            "toolState": "success",
+            "outputLength": 14
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The workspace holds a README and a src directory.",
+        "textLength": 49,
+        "parts": [
+          {
+            "type": "text",
+            "text": "The workspace holds a README and a src directory."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": []
+    }
+  }
+]

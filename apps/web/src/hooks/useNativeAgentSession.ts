@@ -1,3 +1,5 @@
+import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
+import { unreadResultActivityAt, type UnreadResultRead } from "@/lib/unread-result-view";
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import { toast } from "sonner";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -471,6 +473,7 @@ interface UseNativeAgentSessionOptions {
 
 export interface NativeAgentSendOptions {
   requestId?: string;
+  failureSessionId?: string;
   model?: string;
   reasoningEffort?: string;
   mode?: "build" | "plan";
@@ -567,6 +570,11 @@ export function useNativeAgentSession<TMessage = unknown>({
    */
   const scope = useNodeScope();
   const projectionStore = scope.store(nativeAgentProjectionStore);
+  const unreadActivityAt = useEnvironmentStore((state) =>
+    unreadResultActivityAt(state.getEnvironmentById(environmentId), sessionKey),
+  );
+  const [unreadRead, setUnreadRead] = useState<UnreadResultRead>();
+  const unreadReadRef = useRef<UnreadResultRead>(undefined);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
@@ -1915,7 +1923,17 @@ export function useNativeAgentSession<TMessage = unknown>({
     }) => {
       if (!enabled) return null;
       const background = options?.manual === false;
-      const round = background ? options.round : undefined;
+      // Sample the badge before issuing any read. A response already in
+      // flight when this event arrived cannot cover it.
+      const unreadActivityAt = unreadResultActivityAt(
+        scope.store(environmentStore).getState().getEnvironmentById(environmentId),
+        sessionKey,
+      );
+      const readUnread =
+        backgroundRefreshEnabledRef.current &&
+        unreadActivityAt !== undefined &&
+        unreadReadRef.current?.activityAt !== unreadActivityAt;
+      const round = background && !readUnread ? options.round : undefined;
       const send = <T>(command: string, input: object, run: () => Promise<T>): Promise<T> =>
         round ? round.request(command, input, run) : run();
       // A background read is never worth issuing while the session is still
@@ -1978,7 +1996,8 @@ export function useNativeAgentSession<TMessage = unknown>({
             ...(nativeTranscriptPatchesSupported(scope)
               ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
               : {}),
-            ...(forceSnapshot
+            ...(readUnread ? { freshSource: true } : {}),
+            ...(forceSnapshot || readUnread
               ? { forceSnapshot: true }
               : progressiveTranscriptTokenRef.current
                 ? { knownToken: progressiveTranscriptTokenRef.current }
@@ -2000,7 +2019,11 @@ export function useNativeAgentSession<TMessage = unknown>({
         const liveTranscriptToken = progressiveTranscriptTokenRef.current;
         const liveStateToken = progressiveStateTokenRef.current;
         const liveUpdate =
-          background && liveTranscriptToken && liveStateToken && nativeLiveUpdateSupported(scope)
+          background &&
+          !readUnread &&
+          liveTranscriptToken &&
+          liveStateToken &&
+          nativeLiveUpdateSupported(scope)
             ? readLiveUpdate<TMessage>(scope, send, {
                 ...identity,
                 viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
@@ -2012,6 +2035,8 @@ export function useNativeAgentSession<TMessage = unknown>({
                   : {}),
               })
             : null;
+        let unreadTranscriptIdentity: NativeAgentViewIdentity | undefined;
+        let unreadStateIdentity: NativeAgentViewIdentity | undefined;
         const applyTranscriptUpdate = (
           update: NativeAgentTranscriptUpdate<TMessage>,
           requestedWithToken: boolean,
@@ -2022,6 +2047,13 @@ export function useNativeAgentSession<TMessage = unknown>({
               update.token,
               messagesAtRequest,
             );
+            if (
+              readUnread &&
+              update.value.freshness !== "cached" &&
+              lastTranscriptViewRef.current?.identity === update.value.identity
+            ) {
+              unreadTranscriptIdentity = update.value.identity;
+            }
             return "applied";
           }
           if (update.status === "delta") {
@@ -2153,7 +2185,8 @@ export function useNativeAgentSession<TMessage = unknown>({
           ...(progressiveStateTokenRef.current
             ? { knownToken: progressiveStateTokenRef.current }
             : {}),
-          ...(options?.manual === true ? { forceSnapshot: true } : {}),
+          ...(readUnread ? { freshSource: true } : {}),
+          ...(readUnread || options?.manual === true ? { forceSnapshot: true } : {}),
         };
         const requestState = () =>
           send("session-state", stateInput, () =>
@@ -2166,7 +2199,8 @@ export function useNativeAgentSession<TMessage = unknown>({
           .then((update) => {
             if (!stillCurrent()) return;
             if (update.status === "snapshot") {
-              applyProgressiveState(update.value, update.token);
+              const applied = applyProgressiveState(update.value, update.token);
+              if (readUnread && applied) unreadStateIdentity = update.value.identity;
             } else if (update.status === "unchanged") {
               progressiveStateTokenRef.current = update.token;
               markSessionStateAvailability("current");
@@ -2259,6 +2293,20 @@ export function useNativeAgentSession<TMessage = unknown>({
         }
 
         await Promise.allSettled([transcriptRead, stateRead]);
+        if (
+          stillCurrent() &&
+          unreadActivityAt !== undefined &&
+          unreadTranscriptIdentity?.providerSessionId &&
+          unreadStateIdentity &&
+          sameProgressiveIdentity(unreadTranscriptIdentity, unreadStateIdentity)
+        ) {
+          const read = {
+            activityAt: unreadActivityAt,
+            sessionId: unreadTranscriptIdentity.providerSessionId,
+          };
+          unreadReadRef.current = read;
+          setUnreadRead(read);
+        }
         // A superseding refresh owns the flag from here on; clearing it would
         // report that tab as settled while its newer read is still running.
         if (stillCurrent()) setSessionStateRefreshing(false);
@@ -2327,6 +2375,8 @@ export function useNativeAgentSession<TMessage = unknown>({
       beginSessionStateRefresh,
       discoverySchedule,
       enabled,
+      environmentId,
+      sessionKey,
       flushPendingReconcile,
       identity,
       markSessionStateAvailability,
@@ -2706,6 +2756,17 @@ export function useNativeAgentSession<TMessage = unknown>({
   }, [coordinatedInvalidate]);
 
   useEffect(() => {
+    if (
+      enabled &&
+      isActive &&
+      unreadActivityAt !== undefined &&
+      unreadRead?.activityAt !== unreadActivityAt
+    ) {
+      coordinatedInvalidate();
+    }
+  }, [enabled, isActive, unreadActivityAt, unreadRead, coordinatedInvalidate]);
+
+  useEffect(() => {
     const unsubscribeChange = onResourceChanged(
       "native-agent-session",
       (change) => {
@@ -2789,6 +2850,7 @@ export function useNativeAgentSession<TMessage = unknown>({
                 : "Agent Session",
           prompt: text,
           requestId,
+          ...(options.failureSessionId ? { failureSessionId: options.failureSessionId } : {}),
           model: options.model,
           reasoningEffort: options.reasoningEffort,
           mode: options.mode,
@@ -2807,6 +2869,13 @@ export function useNativeAgentSession<TMessage = unknown>({
         await refresh();
         return outcome;
       } catch (error) {
+        if (options.failureSessionId && incompatibility(error)?.code === "unsupported-field") {
+          pendingDispatchRef.current = null;
+          return {
+            outcome: "rejected",
+            error: "This machine needs an update before it can retry a failed turn.",
+          };
+        }
         // Keep the stable request id. If the transport failed after acceptance,
         // an explicit retry is deduplicated by the backend/provider journal.
         await refresh();
@@ -3508,6 +3577,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     transcriptAvailability,
     transcriptRefreshing,
     transcriptError,
+    unreadRead,
     sessionStateAvailability,
     sessionStateRefreshing,
     sessionStateError,

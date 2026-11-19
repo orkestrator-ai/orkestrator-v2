@@ -1,5 +1,5 @@
 // Hook for managing terminal sessions with Electron backend
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   listen,
   listenOn,
@@ -17,6 +17,7 @@ import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createTerminalsApi } from "@/lib/backend/terminals";
 import { createWorkflowsApi } from "@/lib/backend/workflows";
+import { terminalSizeClientId } from "@/lib/terminal-size-client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { isAppCommandScope, onReconnectInScope } from "@/lib/node-scope-slots";
@@ -26,6 +27,16 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
 // Reaches the browser console only: the desktop saves nothing from the renderer
 // but the allowlisted startup markers (docs/architecture/logging.md).
 const log = createLogger("terminal");
+
+type TerminalSizeSession = {
+  views: number;
+  pending: number;
+  drain?: { promise: Promise<void>; resolve: () => void };
+  release?: Promise<void>;
+};
+
+// Portal moves can replace a hook instance while its last resize is in flight.
+const terminalSizeSessions = new WeakMap<NodeScope, Map<string, TerminalSizeSession>>();
 
 const RESUME_ADVICE =
   "Check the terminal before resuming: part of your last input may have reached the shell.";
@@ -158,7 +169,17 @@ interface UseTerminalReturn {
   disconnect: () => Promise<void>;
   /** Publish a successful backend bootstrap only if this session still owns the hook. */
   markBootstrapped: (sessionId: string) => boolean;
+  /**
+   * Reports this view's geometry after a layout change. The backend applies it
+   * only while this window owns the shared terminal's size, or nobody does
+   * (`terminal-size-client.ts`).
+   */
   resize: (cols: number, rows: number) => Promise<void>;
+  /**
+   * Takes the shared terminal's size for this window and applies this
+   * geometry. For deliberate interaction only: focus, a click, typing.
+   */
+  claimSize: (cols: number, rows: number) => Promise<void>;
   write: (data: string) => Promise<void>;
   /** Tear down the current attachment and attach again from scratch. */
   reconnect: () => Promise<void>;
@@ -180,6 +201,8 @@ export function terminalBackendForScope(scope: NodeScope) {
       getTerminalSession: backend.getTerminalSession,
       getTerminalStateSnapshot: backend.getTerminalStateSnapshot,
       rejectTerminalSnapshot: backend.rejectTerminalSnapshot,
+      claimTerminalSize: backend.claimTerminalSize,
+      releaseTerminalSize: backend.releaseTerminalSize,
       resizeTerminal: backend.resizeTerminal,
       resumeTerminalInput: backend.resumeTerminalInput,
       startTerminalSession: backend.startTerminalSession,
@@ -400,6 +423,72 @@ export function useTerminal({
     setIsConnecting(false);
     setError(null);
   }, [terminalTargetIdentity, existingSessionId, cleanupEventListener, api]);
+
+  const sizeAttachmentRef = useRef<{
+    sessionId: string;
+    scope: NodeScope;
+    state: TerminalSizeSession;
+  } | null>(null);
+  useLayoutEffect(() => {
+    if (!sessionId) return;
+    let sessions = terminalSizeSessions.get(scope);
+    if (!sessions) {
+      sessions = new Map();
+      terminalSizeSessions.set(scope, sessions);
+    }
+    let state = sessions.get(sessionId);
+    if (!state) {
+      state = { views: 0, pending: 0 };
+      sessions.set(sessionId, state);
+    }
+    state.views += 1;
+    const attachment = { sessionId, scope, state };
+    sizeAttachmentRef.current = attachment;
+
+    return () => {
+      sizeAttachmentRef.current = null;
+      state.views -= 1;
+      if (state.views > 0) return;
+
+      // Drain both input-ordered resizes and independent claims before release.
+      // A replacement view waits for the release before applying its own size.
+      const release = Promise.all([state.release, state.drain?.promise])
+        .then(() => api.releaseTerminalSize(sessionId, terminalSizeClientId()))
+        .catch((err: unknown) => {
+          log.debug("size.release-failed", () => ({ sessionId, error: formatLogError(err) }));
+        })
+        .finally(() => {
+          if (state.release !== release) return;
+          state.release = undefined;
+          if (state.views === 0) sessions.delete(sessionId);
+        });
+      state.release = release;
+    };
+  }, [api, scope, sessionId]);
+
+  const runSizeOperation = useCallback(
+    async (operation: (isAttached: () => boolean) => Promise<void>) => {
+      const attachment = sizeAttachmentRef.current;
+      if (!attachment || attachment.sessionId !== sessionId || attachment.scope !== scope) return;
+      const isAttached = () =>
+        sizeAttachmentRef.current === attachment && sessionIdRef.current === sessionId;
+      const { state } = attachment;
+      if (state.release) await state.release;
+      if (!isAttached()) return;
+      state.drain ??= Promise.withResolvers<void>();
+      state.pending += 1;
+      try {
+        await operation(isAttached);
+      } finally {
+        state.pending -= 1;
+        if (state.pending === 0) {
+          state.drain.resolve();
+          state.drain = undefined;
+        }
+      }
+    },
+    [scope, sessionId],
+  );
 
   // Unmount means "not currently visible", not "stop the terminal". Always
   // release only renderer consumption here; explicit disconnect/tab-close
@@ -1144,15 +1233,16 @@ export function useTerminal({
     reconnectRef.current = onReconnectRequest ?? (() => void reconnect());
   }, [onReconnectRequest, reconnect]);
 
-  const resize = useCallback(
+  const applyResize = useCallback(
     async (newCols: number, newRows: number) => {
       if (!sessionId) return;
 
+      const clientId = terminalSizeClientId();
       try {
         if (isLocalRef.current) {
-          await api.resizeLocalTerminal(sessionId, newCols, newRows);
+          await api.resizeLocalTerminal(sessionId, newCols, newRows, clientId);
         } else {
-          await api.resizeTerminal(sessionId, newCols, newRows);
+          await api.resizeTerminal(sessionId, newCols, newRows, clientId);
         }
       } catch (err) {
         // Session not found errors are expected during cleanup/tab switching
@@ -1163,6 +1253,44 @@ export function useTerminal({
       }
     },
     [api, sessionId],
+  );
+
+  const resize = useCallback(
+    (cols: number, rows: number) => runSizeOperation(() => applyResize(cols, rows)),
+    [applyResize, runSizeOperation],
+  );
+
+  // A claim is not ordered against input (it is not a resize lifecycle
+  // command), so claiming while typing never holds keystrokes back. A backend
+  // that predates size ownership applies every resize anyway, so there the
+  // claim becomes an ordinary one; the answer is remembered per backend.
+  const claimUnsupportedRef = useRef<{ api: unknown; unsupported: boolean }>({
+    api: null,
+    unsupported: false,
+  });
+  const claimSize = useCallback(
+    (newCols: number, newRows: number) =>
+      runSizeOperation(async (isAttached) => {
+        if (!sessionId) return;
+        if (claimUnsupportedRef.current.api !== api) {
+          claimUnsupportedRef.current = { api, unsupported: false };
+        }
+        if (!claimUnsupportedRef.current.unsupported) {
+          try {
+            if (await api.claimTerminalSize(sessionId, newCols, newRows, terminalSizeClientId())) {
+              return;
+            }
+            claimUnsupportedRef.current = { api, unsupported: true };
+          } catch (err) {
+            if (!String(err).includes("Session not found")) {
+              log.error("session.resize-failed", { sessionId, error: formatLogError(err) });
+            }
+            return;
+          }
+        }
+        if (isAttached()) await applyResize(newCols, newRows);
+      }),
+    [api, applyResize, runSizeOperation, sessionId],
   );
 
   // Every way a keystroke can fail to reach a shell reports the same way. The
@@ -1295,6 +1423,7 @@ export function useTerminal({
     disconnect,
     markBootstrapped,
     resize,
+    claimSize,
     write,
     reconnect,
   };

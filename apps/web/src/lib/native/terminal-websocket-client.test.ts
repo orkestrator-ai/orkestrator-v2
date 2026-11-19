@@ -417,9 +417,16 @@ describe("TerminalWebSocketClient", () => {
     );
     expect(await inputResult).toBe(true);
 
-    const resizeResult = client.resize("session-b", 120, 40);
+    const resizeResult = client.resize("session-b", 120, 40, "window-1");
     const resize = sentControls(first).findLast((frame) => frame.type === "resize")!;
-    expect(resize).toMatchObject({ type: "resize", channelId: 22, cols: 120, rows: 40 });
+    // The window's size-ownership id rides on the update; an older server ignores it.
+    expect(resize).toMatchObject({
+      type: "resize",
+      channelId: 22,
+      cols: 120,
+      rows: 40,
+      clientId: "window-1",
+    });
     first.receive(
       JSON.stringify({
         type: "operation-result",
@@ -1055,7 +1062,7 @@ describe("TerminalWebSocketClient", () => {
 
   test("resubscribes before sending input when a snapshot reports a new generation", async () => {
     const { client, sockets } = createHarness();
-    client.subscribe("session-a", () => undefined);
+    client.subscribe("session-a", () => undefined, "sizing-owner");
     const socket = sockets[0]!;
     openAndReady(socket);
     acceptSubscription(socket, "session-a", 4, 1, 0);
@@ -1069,7 +1076,8 @@ describe("TerminalWebSocketClient", () => {
     expect(sentControls(socket)).toContainEqual({ type: "unsubscribe", channelId: 4 });
     expect(client.enqueueInput("session-a", "x")).toBeNull();
     expect(sentBinaries(socket)).toHaveLength(0);
-    expect(sentControls(socket).filter((frame) => frame.type === "subscribe")).toHaveLength(2);
+    const subscriptions = sentControls(socket).filter((frame) => frame.type === "subscribe");
+    expect(subscriptions.map((frame) => frame.clientId)).toEqual(["sizing-owner", "sizing-owner"]);
   });
 
   test("backs off repeatedly denied subscriptions instead of polling at a fixed interval", async () => {

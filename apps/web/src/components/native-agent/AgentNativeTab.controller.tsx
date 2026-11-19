@@ -1,3 +1,4 @@
+import { useRenderedUnreadResult } from "@/lib/unread-result-view";
 import { useCoordinatorActionHistory } from "@/components/projects/useCoordinatorActionHistory";
 import { useCoordinatorActionMarking } from "@/components/projects/useCoordinatorActionMarking";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -83,6 +84,10 @@ import {
   mergeArtifactPublications,
 } from "@/lib/chat/artifact-publication-merge";
 import { BackgroundTaskChildrenContext } from "@/components/chat/NativeMessage.shared";
+import { providerFailureRetryRequestId } from "@orkestrator/protocol/provider-failures";
+import { actionableProviderFailureId } from "@/lib/provider-failure";
+import { ProviderFailureActionsContext } from "@/components/chat/provider-failure-actions";
+import { useProviderFailureRecovery } from "./useProviderFailureRecovery";
 import {
   NativeChangeScopeContext,
   type NativeChangeScope,
@@ -553,6 +558,7 @@ export function SharedNativeAgentController({
     transcriptAvailability,
     transcriptRefreshing,
     transcriptError,
+    unreadRead,
     sessionStateAvailability,
     sessionStateRefreshing,
     sessionStateError,
@@ -2053,6 +2059,22 @@ export function SharedNativeAgentController({
     [composeScope, data.environmentId, platform, sessionKey],
   );
 
+  const latestFailure = messages.at(-1);
+  const latestFailureRequestId =
+    latestFailure && actionableProviderFailureId(messages)
+      ? providerFailureRetryRequestId(latestFailure.id, latestFailure.createdAt)
+      : undefined;
+  const currentRetryTarget = useRef({
+    requestId: latestFailureRequestId,
+    sessionId: projection?.sessionId,
+  });
+  useLayoutEffect(() => {
+    currentRetryTarget.current = {
+      requestId: latestFailureRequestId,
+      sessionId: projection?.sessionId,
+    };
+  }, [latestFailureRequestId, projection?.sessionId]);
+
   const submit = useCallback(
     async (
       text: string,
@@ -2063,6 +2085,7 @@ export function SharedNativeAgentController({
         literal?: boolean;
         noQueue?: boolean;
         preflight?: boolean;
+        failureSessionId?: string;
       },
     ) => {
       if (queueEditPendingRef.current || submitInFlightRef.current || beforeSendPendingRef.current)
@@ -2160,7 +2183,7 @@ export function SharedNativeAgentController({
        * (launch and review prompts) are never commands.
        */
       const commandSubmission: NativeCommandSubmission = preparedPrompt
-        ? { kind: "prompt" }
+        ? { kind: "prompt", ...(literal ? { intent: { kind: "literal" } } : {}) }
         : classifyCommand({
             text,
             literal,
@@ -2430,13 +2453,23 @@ export function SharedNativeAgentController({
           if (composerLifetimeRef.current === lifetime) setPreparingSend(false);
         }
       }
+      if (
+        submitOptions?.failureSessionId &&
+        (currentRetryTarget.current.requestId !== requestId ||
+          currentRetryTarget.current.sessionId !== submitOptions.failureSessionId)
+      ) {
+        reportSendError("That failure is no longer current. No retry was sent.");
+        return false;
+      }
       updateDraft(sessionKey, { submissionError: undefined });
       submitInFlightRef.current = true;
       setIsSubmitting(true);
       const dispatchRequestId = canQueue
         ? undefined
         : (requestId ?? draft.requestId ?? crypto.randomUUID());
-      if (dispatchRequestId) updateDraft(sessionKey, { requestId: dispatchRequestId });
+      const failureRetry = submitOptions?.failureSessionId !== undefined;
+      if (dispatchRequestId && !failureRetry)
+        updateDraft(sessionKey, { requestId: dispatchRequestId });
       reportSendError(null);
       transcriptConfirmedRequestIdRef.current = null;
       setOptimisticPrompt({
@@ -2449,6 +2482,9 @@ export function SharedNativeAgentController({
       });
       const options = {
         requestId: dispatchRequestId,
+        ...(submitOptions?.failureSessionId
+          ? { failureSessionId: submitOptions.failureSessionId }
+          : {}),
         model: composer?.selectedModelId,
         reasoningEffort: composer?.selectedReasoningId,
         mode: modeOverride ?? composer?.selectedModeId,
@@ -2480,10 +2516,12 @@ export function SharedNativeAgentController({
             }
           : undefined;
       if (transcriptConfirmation) {
-        updateDraft(sessionKey, {
-          requestId: dispatchRequestId,
-          pendingTranscriptConfirmation: transcriptConfirmation,
-        });
+        if (!failureRetry) {
+          updateDraft(sessionKey, {
+            requestId: dispatchRequestId,
+            pendingTranscriptConfirmation: transcriptConfirmation,
+          });
+        }
         setOptimisticPrompt((current) =>
           current && current.requestId === dispatchRequestId
             ? { ...current, confirmation: transcriptConfirmation }
@@ -2559,7 +2597,7 @@ export function SharedNativeAgentController({
           // The transcript echo may already have cleared this prompt, and a
           // dispatch can take long enough for the next one to be typed since.
           const ownedDraft = composeDrafts.getState().drafts.get(sessionKey);
-          if (ownedDraft?.requestId === dispatchRequestId) {
+          if (!failureRetry && ownedDraft?.requestId === dispatchRequestId) {
             clearDraft(sessionKey);
             consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
             discardProvisionalDraft();
@@ -2603,6 +2641,7 @@ export function SharedNativeAgentController({
           queueMicrotask(() => inputRef.current?.focus());
         }
       }
+      if (failureRetry) return false;
       updateDraft(sessionKey, {
         text,
         mentions: draft.mentions,
@@ -2689,6 +2728,43 @@ export function SharedNativeAgentController({
     },
     [submit],
   );
+
+  // Retry owns its request id independently of the composer's draft.
+  const sendPreparedRetry = useCallback(
+    async (text: string, requestId: string) => {
+      const failureSessionId = projection?.sessionId;
+      const draftAtClick = nativeComposeDraft(composeDrafts.getState(), sessionKey);
+      if (
+        !failureSessionId ||
+        draftAtClick.text.trim() ||
+        draftAtClick.attachments.length ||
+        draftAtClick.annotations.length
+      )
+        return false;
+      return submit(text, requestId, true, undefined, {
+        literal: true,
+        noQueue: true,
+        preflight: true,
+        failureSessionId,
+      });
+    },
+    [composeDrafts, projection?.sessionId, sessionKey, submit],
+  );
+  const failureRecovery = useProviderFailureRecovery({
+    messages,
+    sendPrepared: sendPreparedRetry,
+    draftInUse:
+      draft.text.trim().length > 0 || draft.attachments.length > 0 || draft.annotations.length > 0,
+    sendUnavailableReason:
+      sendingHeldReason ??
+      (isRunning || isProviderTurnActive
+        ? "Wait for the current turn to finish."
+        : sendLocked
+          ? "Sending is not available right now."
+          : undefined),
+    modelChangeAvailable:
+      Boolean(composer) && !settingsLocked && resolvedComposer.models.length > 1,
+  });
 
   useEffect(() => {
     sendAsTextRef.current = () => {
@@ -3570,6 +3646,18 @@ export function SharedNativeAgentController({
     Boolean(requestedResumeSessionId) ||
     (hasConnectedSession &&
       (messages.length > 0 || authenticationRequired || allInteractions.length > 0));
+  useRenderedUnreadResult(
+    sessionKey,
+    !setupPending &&
+      isActive &&
+      !hiddenByLayout &&
+      !transcriptError &&
+      sessionStateAvailability === "current" &&
+      (transcriptAvailability === "current" || transcriptAvailability === "empty") &&
+      unreadRead?.sessionId === projection?.sessionId
+      ? unreadRead
+      : undefined,
+  );
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -4332,6 +4420,7 @@ export function SharedNativeAgentController({
                   />
                 ) : null}
                 <AgentModelPicker
+                  openRequest={failureRecovery.modelPickerOpenRequest}
                   models={resolvedComposer.models}
                   favorites={favorites}
                   enabledPlatforms={[platform]}
@@ -4728,27 +4817,29 @@ export function SharedNativeAgentController({
         <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
           <GoalDetailLoaderContext.Provider value={loadGoalDetail}>
             <SuborkGroupActionsContext.Provider value={suborkActions}>
-              <div className="@container flex h-full min-h-0 flex-col">
-                <ThreadChangesHeader
-                  environmentId={data.environmentId}
-                  logicalSessionKey={sessionKey}
-                  turnActive={isTurnActive}
-                  containment={<EnvironmentContainmentTag environmentId={data.environmentId} />}
-                />
-                <div className="min-h-0 flex-1">{chatShell}</div>
-                {floatingNotices && agentPrompts.length > 0 ? (
-                  <HumanPromptBanner prompts={agentPrompts} />
+              <ProviderFailureActionsContext.Provider value={failureRecovery.actions}>
+                <div className="@container flex h-full min-h-0 flex-col">
+                  <ThreadChangesHeader
+                    environmentId={data.environmentId}
+                    logicalSessionKey={sessionKey}
+                    turnActive={isTurnActive}
+                    containment={<EnvironmentContainmentTag environmentId={data.environmentId} />}
+                  />
+                  <div className="min-h-0 flex-1">{chatShell}</div>
+                  {floatingNotices && agentPrompts.length > 0 ? (
+                    <HumanPromptBanner prompts={agentPrompts} />
+                  ) : null}
+                </div>
+                {openSubork && openSuborkView ? (
+                  <SuborkTranscriptDialog
+                    environmentId={data.environmentId}
+                    containerId={data.containerId}
+                    batchId={openSubork.batchId}
+                    subork={openSuborkView}
+                    onClose={() => setOpenSubork(null)}
+                  />
                 ) : null}
-              </div>
-              {openSubork && openSuborkView ? (
-                <SuborkTranscriptDialog
-                  environmentId={data.environmentId}
-                  containerId={data.containerId}
-                  batchId={openSubork.batchId}
-                  subork={openSuborkView}
-                  onClose={() => setOpenSubork(null)}
-                />
-              ) : null}
+              </ProviderFailureActionsContext.Provider>
             </SuborkGroupActionsContext.Provider>
           </GoalDetailLoaderContext.Provider>
         </RichTranscriptScopeContext.Provider>

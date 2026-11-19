@@ -50,6 +50,7 @@
  * toasts are saved as `output/visual-previews/5160-bell-<platform>-<case>.png`.
  */
 import { expect, test, type Page } from "./browser-test";
+import type { Route } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
@@ -327,6 +328,83 @@ function containerBridgePid(containerId: string): number | undefined {
   return result.status === 0 && Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
+/** Keep the real provider read pending while the mobile pane switcher changes views. */
+async function viewUnreadCodexResult(
+  page: Page,
+  identity: { logicalSessionKey: string },
+  environmentName: string,
+  open: () => Promise<void>,
+  unread: () => Promise<string | null>,
+) {
+  const gateway = "**/__orkestrator/invoke";
+  let requested = false;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const capture = async (name: string) => {
+    const row = page.getByRole("button", { name: new RegExp(`^${environmentName}\\b`) }).first();
+    const shot = path.join(
+      repositoryRoot,
+      "output",
+      "visual-previews",
+      `unread-${runId}-${name}.png`,
+    );
+    mkdirSync(path.dirname(shot), { recursive: true });
+    await row.screenshot({ path: shot });
+  };
+  await capture("desktop-unseen");
+  const delayResult = async (route: Route) => {
+    const body = route.request().postDataJSON();
+    if (
+      body?.command !== "get_native_agent_transcript_update" ||
+      body.args?.logicalSessionKey !== identity.logicalSessionKey ||
+      body.args?.freshSource !== true
+    ) {
+      await route.fallback();
+      return;
+    }
+    requested = true;
+    await held;
+    if (!route.request().failure()) await route.fallback();
+  };
+  await page.route(gateway, delayResult);
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open();
+    const panes = page.getByRole("tablist", { name: "Split panes" });
+    const other = panes.getByRole("tab", { name: /Other pane/ });
+    const result = panes.getByRole("tab", { name: /codex bell/ });
+    await expect(other).toHaveAttribute("aria-selected", "true");
+    expect(await unread()).toBe("agent_failed");
+    await expect(page.getByText(TOAST_TITLES.agent_failed, { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Open projects and environments", exact: true }).click();
+    await capture("mobile-unseen");
+    await page
+      .getByRole("button", { name: "Close projects and environments", exact: true })
+      .first()
+      .click();
+
+    await result.click();
+    await expect(result).toHaveAttribute("aria-selected", "true");
+    await expect.poll(() => requested).toBe(true);
+    expect(await unread()).toBe("agent_failed");
+    release();
+    await expect.poll(unread, { timeout: 30_000 }).toBeNull();
+    await page.getByRole("button", { name: "Open projects and environments", exact: true }).click();
+    await capture("mobile-viewed");
+    await page
+      .getByRole("button", { name: "Close projects and environments", exact: true })
+      .first()
+      .click();
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await capture("desktop-viewed");
+  } finally {
+    release();
+    await page.unroute(gateway, delayResult);
+  }
+}
+
 async function dismissStartupDialogs(page: Page) {
   for (const name of ["Continue without Claude", "Continue without Docker", "Hide"]) {
     const button = page.getByRole("button", { name, exact: true });
@@ -346,6 +424,14 @@ test.describe("failed native turns ring the right bell", () => {
       for (const name of ["Continue without Claude", "Continue without Docker"]) {
         const button = page.getByRole("button", { name, exact: true });
         await page.addLocatorHandler(button, () => button.click());
+      }
+      if (!IN_CONTAINER) {
+        const reachability = page.getByRole("dialog", {
+          name: "Docker containers can't reach Orkestrator",
+        });
+        await page.addLocatorHandler(reachability, () =>
+          reachability.getByRole("button", { name: "Close", exact: true }).first().click(),
+        );
       }
       const progress = (step: string) => console.log(`[bell] ${platform} ${step}`);
       let status = readyStatus();
@@ -438,6 +524,8 @@ test.describe("failed native turns ring the right bell", () => {
           });
           created.push(parked.id);
           const tabId = `bell-${platform}`;
+          const checkSplitUnread =
+            platform === "codex" && !IN_CONTAINER && CASES.includes("refused");
           const identity = {
             environmentId: bell.id,
             agent: platform,
@@ -468,31 +556,52 @@ test.describe("failed native turns ring the right bell", () => {
             const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
               environmentId: bell.id,
             });
+            const agentPane = {
+              kind: "leaf",
+              id: "bell-pane",
+              activeTabId: tabId,
+              tabs: [
+                {
+                  id: tabId,
+                  type: "agent-native",
+                  displayTitle: `${platform} bell`,
+                  nativeAgentData: {
+                    environmentId: bell.id,
+                    platform,
+                    isLocal: !IN_CONTAINER,
+                  },
+                  ...(modelRef ? { initialAgentModel: modelRef } : {}),
+                },
+              ],
+            };
+            const otherPane = {
+              kind: "leaf",
+              id: "other-bell-pane",
+              activeTabId: "other-bell-tab",
+              tabs: [
+                {
+                  id: "other-bell-tab",
+                  type: "browser",
+                  displayTitle: "Other pane",
+                  browserData: { url: "" },
+                },
+              ],
+            };
             await invoke("save_pane_layout", {
               environmentId: bell.id,
               expectedRevision: layout?.revision ?? 0,
               layout: {
                 version: PANE_LAYOUT_VERSION,
                 containerId,
-                activePaneId: "bell-pane",
-                root: {
-                  kind: "leaf",
-                  id: "bell-pane",
-                  activeTabId: tabId,
-                  tabs: [
-                    {
-                      id: tabId,
-                      type: "agent-native",
-                      displayTitle: `${platform} bell`,
-                      nativeAgentData: {
-                        environmentId: bell.id,
-                        platform,
-                        isLocal: !IN_CONTAINER,
-                      },
-                      ...(modelRef ? { initialAgentModel: modelRef } : {}),
-                    },
-                  ],
-                },
+                activePaneId: checkSplitUnread ? otherPane.id : agentPane.id,
+                root: checkSplitUnread
+                  ? {
+                      kind: "split",
+                      id: "bell-split",
+                      direction: "horizontal",
+                      children: [otherPane, agentPane],
+                    }
+                  : agentPane,
               },
             });
           };
@@ -643,11 +752,16 @@ test.describe("failed native turns ring the right bell", () => {
             record.turnPhase = turn?.phase;
             record.turnError = turn?.error?.slice(0, 200);
             expect(record.unreadReason).toBe(expected);
-            await goto(bell.name);
-            await expect(page.getByText(TOAST_TITLES[expected], { exact: true })).toBeVisible({
-              timeout: 10_000,
-            });
-            record.toast = true;
+            if (checkSplitUnread && kind === "refused") {
+              await viewUnreadCodexResult(page, identity, bell.name, () => goto(bell.name), unread);
+              record.toast = true;
+            } else {
+              await goto(bell.name);
+              await expect(page.getByText(TOAST_TITLES[expected], { exact: true })).toBeVisible({
+                timeout: 10_000,
+              });
+              record.toast = true;
+            }
             // Let the toast finish sliding in before the screenshot.
             await sleep(800);
             const shot = path.join(
@@ -657,7 +771,7 @@ test.describe("failed native turns ring the right bell", () => {
               `5160-bell-${platform}-${kind}.png`,
             );
             mkdirSync(path.dirname(shot), { recursive: true });
-            await page.screenshot({ path: shot });
+            if (!checkSplitUnread || kind !== "refused") await page.screenshot({ path: shot });
             record.ms = Date.now() - startedAt;
             record.result = "passed";
             writeSummary();

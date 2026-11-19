@@ -10,6 +10,7 @@ import {
  * journal of every request id it has taken and refuses to reuse one whose
  * outcome a previous bridge process could not record.
  */
+import { replayRecorder } from "./replay-recorder.js";
 import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
@@ -28,7 +29,7 @@ import { denyAllApprovals } from "./interactions.js";
 import { piSessionCostSource, piTurnCostSource, type PiCostParts } from "./cost-source.js";
 import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
-import { appendTurnFailure } from "./translate.js";
+import { appendTurnFailure, settleInterruptedTools } from "./translate.js";
 import {
   latestStoredModel,
   readEntryCount,
@@ -242,6 +243,7 @@ export async function dispatchPrompt(
   clearTurnUsage(state);
   state.turnEntryOffset = readEntryCount(session);
   let run: Promise<void>;
+  replayRecorder?.prompt(state.id);
   try {
     run = session.prompt(text, {
       ...(input.images.length > 0 ? { images: input.images.map(toImageContent) } : {}),
@@ -601,6 +603,7 @@ function finishTurn(state: SessionState, session: AgentSession, input: DispatchI
     failTurn(state, session, new Error(state.turnError), input);
     return;
   }
+  if (cancelled) settleInterruptedTools(state);
   settleTurn(state, session);
   recordTurnEnded(state, piRunId(state), cancelled ? "cancelled" : "succeeded");
   // A cancelled turn is not an error: someone asked for it, and the partial

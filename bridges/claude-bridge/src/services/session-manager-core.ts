@@ -1161,6 +1161,7 @@ export async function buildClaudeUsageSnapshot(
     // The result message arrives once per turn, so this is the turn's own
     // time rather than whenever a later read republished it.
     at: updatedAt,
+    cacheAccessNotBefore: session.turnStartedAt,
     costUsd: totals.cost,
     costSource: CLAUDE_COST_SOURCE,
     inputTokens: totals.input,

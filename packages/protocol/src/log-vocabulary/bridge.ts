@@ -35,6 +35,10 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "shutdown.failed": "Releasing the bridge failed during shutdown; it still exits.",
       "credential.not-hardened":
         "The bridge could not mark itself non-dumpable, so a same-uid process can read its memory; `reason` says why.",
+      "replay-recorder.notice":
+        "The provider-traffic recorder needs attention: it is on, or was asked for without its confirmation.",
+      "replay-recorder.write-failed":
+        "Writing a provider-traffic recording failed; its lines were dropped.",
     },
   },
   "bridge.acp": {

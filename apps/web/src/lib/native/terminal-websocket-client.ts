@@ -28,6 +28,7 @@ type Snapshot = { generation: number; revision: number };
 type TerminalCallback = (payload: TerminalSocketPayload) => unknown;
 
 type DesiredChannel = {
+  sizeClientId?: string;
   sessionId: string;
   callbacks: Map<TerminalCallback, number>;
   ready: Promise<void>;
@@ -193,7 +194,7 @@ export class TerminalWebSocketClient {
     document.addEventListener("visibilitychange", this.onVisibilityChange);
   }
 
-  subscribe(sessionId: string, callback: TerminalCallback): () => void {
+  subscribe(sessionId: string, callback: TerminalCallback, sizeClientId?: string): () => void {
     let channel = this.desired.get(sessionId);
     if (!channel) {
       let resolveReady = () => {};
@@ -202,6 +203,7 @@ export class TerminalWebSocketClient {
       });
       channel = {
         sessionId,
+        sizeClientId,
         callbacks: new Map(),
         ready,
         resolveReady,
@@ -301,7 +303,11 @@ export class TerminalWebSocketClient {
     return true;
   }
 
-  async resize(sessionId: string, cols: number, rows: number): Promise<boolean> {
+  /**
+   * `clientId` names this window for size ownership (`terminal-size-client.ts`);
+   * an older server ignores it.
+   */
+  async resize(sessionId: string, cols: number, rows: number, clientId?: string): Promise<boolean> {
     const channel = this.usableChannel(sessionId);
     if (!channel) return false;
     const socket = this.socket;
@@ -310,7 +316,14 @@ export class TerminalWebSocketClient {
     const operationId = this.nextOperationId();
     const completion = this.registerOperation(operationId, channel, "resize", 0);
     try {
-      this.send({ type: "resize", channelId: channel.channelId!, operationId, cols, rows });
+      this.send({
+        type: "resize",
+        channelId: channel.channelId!,
+        operationId,
+        cols,
+        rows,
+        ...(clientId === undefined ? {} : { clientId }),
+      });
     } catch (error) {
       const sendError = this.asError(error, "Terminal resize could not be sent");
       this.rejectOperation(operationId, sendError);
@@ -873,17 +886,20 @@ export class TerminalWebSocketClient {
     const requestId = this.requestId;
     channel.pendingRequestId = requestId;
     this.pendingRequests.set(requestId, channel);
+    const identity = channel.sizeClientId === undefined ? {} : { clientId: channel.sizeClientId };
     this.send(
       channel.generation === null || channel.revision === null
         ? {
             type: "subscribe",
             requestId,
             sessionId: channel.sessionId,
+            ...identity,
           }
         : {
             type: "subscribe",
             requestId,
             sessionId: channel.sessionId,
+            ...identity,
             knownGeneration: channel.generation,
             knownRevision: channel.revision,
           },

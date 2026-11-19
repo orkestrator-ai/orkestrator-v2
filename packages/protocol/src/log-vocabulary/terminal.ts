@@ -50,6 +50,12 @@ export const TERMINAL_LOG_AREAS = defineLogAreas({
       "session.stopped-while-disconnected": "A session ended while its event stream was down.",
       "session.disconnect-failed": "Closing or detaching a terminal session failed.",
       "session.resize-failed": "Resizing a terminal session failed, other than for a gone session.",
+      "size.owner-changed":
+        "Another client took over setting a shared terminal's size, by a claim or because nobody held it.",
+      "size.owner-released":
+        "A client gave up setting shared terminals' sizes: its view closed or its connection dropped.",
+      "size.release-failed":
+        "Giving up a terminal's size ownership failed; its lease still lapses.",
       "session.id-stored": "A new backend session id was saved for a terminal tab.",
       "session-key.environment-missing": "A local session key was built with no environment id.",
       "clipboard.image-failed": "An image pasted into a terminal could not be saved.",

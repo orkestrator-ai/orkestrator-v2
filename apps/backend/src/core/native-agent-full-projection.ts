@@ -678,6 +678,10 @@ export class NativeAgentFullProjection {
       const terminalMessages = nativeTerminalMessages({
         notices: snapshot.notices,
         error: snapshot.error,
+        failedTurn: snapshot.failedTurn,
+        failureRequestId: resolved.session.dispatchedRequestIds?.at(-1),
+        ...(snapshot.failureReason ? { failureReason: snapshot.failureReason } : {}),
+        ...(snapshot.rateLimits ? { rateLimits: snapshot.rateLimits } : {}),
         stopNotice,
         turnStartedAt: snapshot.turnStartedAt,
       });
@@ -724,6 +728,7 @@ export class NativeAgentFullProjection {
             input.environmentId,
             resolved.session.key,
             attentionItemIds,
+            resolved.session.logicalSessionKey,
           );
         } catch (error) {
           // Attention is auxiliary projection metadata. A deleted environment

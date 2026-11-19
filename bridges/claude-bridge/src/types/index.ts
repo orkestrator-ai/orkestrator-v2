@@ -544,6 +544,13 @@ export interface SessionState {
    */
   errorCode?: import("@orkestrator/protocol/agent-usage-limits").TurnFailureKind;
   /**
+   * The provider-neutral reason beside `status: "error"`, when the failed
+   * turn's SDK API error code settles it (`claudeFailureReason`). Set and
+   * cleared with `error`.
+   */
+  failedTurn?: { id: string; occurredAt: string; resetsAt?: string };
+  failureReason?: import("@orkestrator/protocol/provider-failures").ProviderFailureReason;
+  /**
    * Set beside `status: "error"` when a bridge restart cut the last turn short:
    * the rollout is intact and a new prompt continues it. Cleared when the next
    * turn starts. See `session-manager-turn-interruption.ts`.
@@ -1000,6 +1007,7 @@ export interface SessionUsageSnapshot {
     turnId: string;
     /** When this turn was finalized, ISO-8601; what dates recorded usage. */
     at?: string;
+    cacheAccessNotBefore?: string;
     costUsd?: number;
     costSource?: NativeAgentCostSource;
     inputTokens?: number;

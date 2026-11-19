@@ -7,6 +7,7 @@
  * reconciled against `thread/read` first, or the same turn can run twice and
  * duplicate command executions and file edits.
  */
+import type { ProviderFailureReason } from "@orkestrator/protocol/provider-failures";
 import type { EngineError, EngineGeneration } from "../engine/types.js";
 
 /** app-server's documented "ingress queue full, safe to retry" code. */
@@ -258,6 +259,37 @@ export function codexErrorInfoToCode(info: unknown): string | undefined {
     return keys.length === 1 ? keys[0] : undefined;
   }
   return undefined;
+}
+
+/**
+ * The provider-neutral failure reason for an app-server `codexErrorInfo`
+ * code, or undefined when the code does not settle it (`badRequest`,
+ * `other`, a policy refusal) and the error text should decide. See
+ * `@orkestrator/protocol/provider-failures`.
+ */
+export function codexFailureReason(code: string | undefined): ProviderFailureReason | undefined {
+  switch (code) {
+    case "unauthorized":
+      return "authentication";
+    case "usageLimitExceeded":
+      return "usage-limit";
+    case "rateLimitExceeded":
+      return "rate-limit";
+    case "modelNotFound":
+      return "model-unavailable";
+    case "contextWindowExceeded":
+      return "context-exhausted";
+    case "serverOverloaded":
+    case "internalServerError":
+    case "flexUnavailable":
+    case "policyCapacityUnavailable":
+      return "provider-unavailable";
+    // The connection variants carry an upstream HTTP status the stored code
+    // drops, and a 401 there is a refused login, not an outage: the text
+    // decides those.
+    default:
+      return undefined;
+  }
 }
 
 /**

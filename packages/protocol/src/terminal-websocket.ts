@@ -1,3 +1,5 @@
+import { parseTerminalSizeClientId } from "./terminal-size-ownership.js";
+
 /** Version 1 of the multiplexed gateway terminal protocol. */
 export const TERMINAL_WEBSOCKET_PROTOCOL_VERSION = 1 as const;
 /**
@@ -73,6 +75,7 @@ export type TerminalWebSocketClientControlFrame =
     }
   | ({
       type: "subscribe";
+      clientId?: string;
       requestId: number;
       sessionId: string;
     } & TerminalSubscriptionCursor)
@@ -84,6 +87,13 @@ export type TerminalWebSocketClientControlFrame =
       operationId: number;
       cols: number;
       rows: number;
+      /**
+       * The window sending this size update (`terminal-size-ownership.ts`).
+       * Optional and read leniently: an older server ignores it, and a
+       * malformed id is dropped rather than closing every terminal on the
+       * socket. Claims are not sent here; they are their own command.
+       */
+      clientId?: string;
     }
   | { type: "ack"; channelId: number; generation: number; revision: number }
   /**
@@ -376,25 +386,31 @@ export function parseTerminalWebSocketClientControlFrame(
       if (hasGeneration !== hasRevision) {
         return malformed("knownGeneration and knownRevision must be supplied together");
       }
-      if (!hasGeneration) return { type, requestId, sessionId };
+      const clientId = parseTerminalSizeClientId(object.clientId);
+      const identity = clientId === null ? {} : { clientId };
+      if (!hasGeneration) return { type, requestId, sessionId, ...identity };
       return {
         type,
         requestId,
         sessionId,
+        ...identity,
         knownGeneration: readGeneration(object, "knownGeneration"),
         knownRevision: readRevision(object, "knownRevision"),
       };
     }
     case "unsubscribe":
       return { type, channelId: readChannelId(object) };
-    case "resize":
+    case "resize": {
+      const clientId = parseTerminalSizeClientId(object.clientId);
       return {
         type,
         channelId: readChannelId(object),
         operationId: readInteger(object, "operationId", 0, Number.MAX_SAFE_INTEGER) as number,
         cols: readInteger(object, "cols", 1, 0xffff) as number,
         rows: readInteger(object, "rows", 1, 0xffff) as number,
+        ...(clientId === null ? {} : { clientId }),
       };
+    }
     case "ack":
       return {
         type,

@@ -569,28 +569,37 @@ export function ProjectSearchBar({
             Search projects and environments, including containerized and local environments.
           </DialogDescription>
 
-          <div className="flex items-center gap-2 border-b border-border/70 px-4 py-3 has-[>input:focus-visible]:focus-hairline-frame">
-            <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <input
-              ref={inputRef}
-              role="combobox"
-              aria-expanded="true"
-              aria-controls={RESULTS_LIST_ID}
-              aria-activedescendant={
-                selectedHit ? projectSearchOptionId(selectedHit.id) : undefined
-              }
-              aria-autocomplete="list"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={handleInputKeyDown}
-              placeholder="Search projects, environments..."
-              aria-label="Search projects and environments"
-              autoCorrect="off"
-              autoCapitalize="off"
-              autoComplete="off"
-              spellCheck={false}
-              className="h-8 min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-            />
+          {/*
+           * The focus line frames an inset field rather than the full-width header,
+           * whose square corners the dialog's rounded clip would cut off.
+           */}
+          <div className="flex items-center gap-1.5 border-b border-border/70 px-2.5 py-2">
+            <div
+              data-testid="project-search-field"
+              className="flex h-[34px] min-w-0 flex-1 items-center gap-2 rounded-[9px] bg-input-surface px-2.5 has-[>input:focus-visible]:focus-hairline-frame"
+            >
+              <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <input
+                ref={inputRef}
+                role="combobox"
+                aria-expanded="true"
+                aria-controls={RESULTS_LIST_ID}
+                aria-activedescendant={
+                  selectedHit ? projectSearchOptionId(selectedHit.id) : undefined
+                }
+                aria-autocomplete="list"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={handleInputKeyDown}
+                placeholder="Search projects, environments..."
+                aria-label="Search projects and environments"
+                autoCorrect="off"
+                autoCapitalize="off"
+                autoComplete="off"
+                spellCheck={false}
+                className="h-8 min-w-0 flex-1 !bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              />
+            </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button

@@ -74,7 +74,7 @@ export function ChangePreview({
   };
 
   return (
-    <div className="space-y-4" data-testid="capability-change-preview">
+    <div className="min-w-0 space-y-4" data-testid="capability-change-preview">
       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
         {Object.entries(counts).map(([action, count]) => (
           <span key={action}>

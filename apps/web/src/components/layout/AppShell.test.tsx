@@ -317,7 +317,7 @@ describe("AppShell", () => {
     },
   );
 
-  test("an open files sheet stays hidden over a remote workspace across layout changes", () => {
+  test("an open files sheet waits for a remote scope across layout changes", () => {
     filesPanelOpen = true;
     isMobile = false;
     act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));

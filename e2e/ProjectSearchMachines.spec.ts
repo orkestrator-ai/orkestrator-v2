@@ -48,9 +48,9 @@ test("one row per machine, offline rows greyed, and every row fits the dialog", 
     }
   }
 
-  // Tab cycles to environments: the remote environment stays, projects go.
-  await input.press("Tab");
-  await input.press("Tab");
+  // Alt+Down cycles to environments: the remote environment stays, projects go.
+  await input.press("Alt+ArrowDown");
+  await input.press("Alt+ArrowDown");
   await expect(projects).toHaveCount(0);
   await expect(
     page.getByRole("option", { name: "run-desktop-app, environment of orkestrator-v2 on mbp3" }),
@@ -60,8 +60,20 @@ test("one row per machine, offline rows greyed, and every row fits the dialog", 
 test("the machine filter narrows the merged list to one machine", async ({ page }) => {
   const input = await openSearch(page);
   await input.fill("orkestrator");
-  await page.getByTestId("project-search-filter").click();
-  await page.getByRole("menuitemradio", { name: /mbp3/ }).click();
+  const filter = page.getByTestId("project-search-filter");
+  await input.press("Tab");
+  await expect(filter).toBeFocused();
+  await filter.press("Enter");
+  const remote = page.getByRole("menuitemradio", { name: /mbp3/ });
+  await expect(remote).toBeVisible();
+  await expect(page.getByRole("menuitemradio", { name: "All", exact: true })).toBeFocused();
+  const items = page.getByRole("menuitemradio");
+  for (let step = 0; step < (await items.count()); step++) {
+    if (await remote.evaluate((element) => element === document.activeElement)) break;
+    await page.keyboard.press("ArrowDown");
+  }
+  await expect(remote).toBeFocused();
+  await remote.press("Enter");
   await expect(page.getByLabel("Filter results: All, mbp3")).toBeVisible();
   await expect(page.getByRole("option", { name: /^orkestrator-v2, project on / })).toHaveCount(1);
   await expect(page.getByTestId("federated-search-incomplete")).toHaveCount(0);

@@ -457,33 +457,39 @@ describe("ProjectSearchBar", () => {
     expect(onSelectEnvironment).toHaveBeenCalledWith("env-container");
   });
 
-  test("cycles the type filter with Tab and Shift+Tab", async () => {
+  test("cycles the type filter with Alt+Down and Alt+Up", async () => {
     renderSearchBar();
     const input = await openSearch();
 
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     expect(await screen.findByLabelText("Filter results: Projects")).toBeTruthy();
     expectDomAbsent(screen.queryByTestId("project-search-item-env-local"), "hidden environment");
     expect(screen.getByTestId("project-search-item-project-1")).toBeTruthy();
 
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     expect(await screen.findByLabelText("Filter results: Environments")).toBeTruthy();
     expectDomAbsent(screen.queryByTestId("project-search-item-project-1"), "hidden project");
     expect(screen.getByTestId("project-search-item-env-container")).toBeTruthy();
 
-    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    fireEvent.keyDown(input, { key: "ArrowUp", altKey: true });
     expect(await screen.findByLabelText("Filter results: Projects")).toBeTruthy();
 
-    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    fireEvent.keyDown(input, { key: "ArrowUp", altKey: true });
     expect(await screen.findByLabelText("Filter results: All")).toBeTruthy();
     expect(screen.getByTestId("project-search-item-env-local")).toBeTruthy();
   });
 
-  test("starts from All and Shift+Tab moves to Environments", async () => {
+  test("starts from All and Alt+Up steps back through History, Settings and Actions to Environments", async () => {
     renderSearchBar();
     const input = await openSearch();
 
-    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    fireEvent.keyDown(input, { key: "ArrowUp", altKey: true });
+    expect(await screen.findByLabelText("Filter results: History")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "ArrowUp", altKey: true });
+    expect(await screen.findByLabelText("Filter results: Settings")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "ArrowUp", altKey: true });
+    expect(await screen.findByLabelText("Filter results: Actions")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "ArrowUp", altKey: true });
     expect(await screen.findByLabelText("Filter results: Environments")).toBeTruthy();
     expectDomAbsent(screen.queryByTestId("project-search-item-project-1"), "hidden project");
   });
@@ -536,8 +542,8 @@ describe("ProjectSearchBar", () => {
     });
     const input = await openSearch();
 
-    fireEvent.keyDown(input, { key: "Tab" });
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     expect(await screen.findByLabelText("Filter results: Environments")).toBeTruthy();
     expectActiveOption(input, "env-container");
 
@@ -560,8 +566,8 @@ describe("ProjectSearchBar", () => {
     const { onSelectEnvironment, rerender } = renderSearchBar();
     const input = await openSearch();
 
-    fireEvent.keyDown(input, { key: "Tab" });
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     fireEvent.keyDown(input, { key: "ArrowDown" });
     expectActiveOption(input, "env-container");
 
@@ -586,7 +592,7 @@ describe("ProjectSearchBar", () => {
     const input = await openSearch();
 
     fireEvent.change(input, { target: { value: "build" } });
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     expect(await screen.findByLabelText("Filter results: Projects")).toBeTruthy();
 
     fireEvent.keyDown(window, { key: "k", metaKey: true });
@@ -604,7 +610,7 @@ describe("ProjectSearchBar", () => {
     const input = await openSearch();
 
     fireEvent.change(input, { target: { value: "build" } });
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     await waitFor(() => expectDomAbsent(screen.queryByRole("dialog"), "closed search palette"));
 
@@ -621,8 +627,8 @@ describe("ProjectSearchBar", () => {
 
     renderSearchBar({ environments: [] });
     const noEnvs = await openSearch();
-    fireEvent.keyDown(noEnvs, { key: "Tab" });
-    fireEvent.keyDown(noEnvs, { key: "Tab" });
+    fireEvent.keyDown(noEnvs, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(noEnvs, { key: "ArrowDown", altKey: true });
     expect(await screen.findByText("No environments yet")).toBeTruthy();
     cleanup();
 

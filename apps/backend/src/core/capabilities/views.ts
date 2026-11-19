@@ -134,7 +134,7 @@ export function availabilityCells(
           continue;
         }
         const stale = receipt.packageDigest !== installation.digest;
-        const effective = effectiveReceiptStatus(state, receipt, provider);
+        const effective = effectiveReceiptStatus(receipt);
         const status: CapabilityTargetStatus = stale ? "pending" : effective.status;
         cells.push({
           target: { nodeId: machine.nodeId, provider },

@@ -116,7 +116,11 @@ export function PackageDetail({
   const [testResult, setTestResult] = useState<CapabilityVerification | null>(null);
   const [useOnSetup, setUseOnSetup] = useState("");
   const [file, setFile] = useState<{ path: string; content: string } | null>(null);
-  const [editing, setEditing] = useState<{ path: string; content: string } | null>(null);
+  const [editing, setEditing] = useState<{
+    path: string;
+    content: string;
+    basisDigest: string;
+  } | null>(null);
   const detail = state.data;
 
   const machineNames = useMemo(
@@ -362,7 +366,7 @@ export function PackageDetail({
                       const result = await capabilitiesApi.previewCapabilityChange({
                         kind: "add-to-setup",
                         inspectionId: inspection.inspectionId,
-                        expectedArtifactDigest: pkg.artifactDigest,
+                        expectedArtifactDigest: editing.basisDigest,
                         setupId: pkg.assignedSetupIds[0] ?? "my-setup",
                       });
                       setEditing(null);
@@ -388,7 +392,11 @@ export function PackageDetail({
                   if (source.truncated) {
                     throw new Error("This source exceeds the editor's preview limit.");
                   }
-                  setEditing({ path: source.path, content: source.content });
+                  setEditing({
+                    path: source.path,
+                    content: source.content,
+                    basisDigest: pkg.artifactDigest,
+                  });
                 })
               }
             >

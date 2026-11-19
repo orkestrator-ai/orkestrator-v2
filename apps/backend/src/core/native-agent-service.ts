@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_ACCOUNT_ID } from "@orkestrator/protocol/agent-accounts";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import { turnOutcomeFailureKind } from "./agent-usage-limits.js";
@@ -3011,8 +3012,14 @@ export class NativeAgentService {
             environment.environmentType === "local" ? "host" : "container",
           )
         : undefined;
+    const accountHomeId =
+      environment?.environmentType === "local" &&
+      (input.agent === "claude" || input.agent === "codex")
+        ? this.options.localBridgeAccountId?.(`${input.agent}:${input.environmentId}`)
+        : undefined;
     await this.options.capabilityPreflight?.({
       environmentId: input.environmentId,
+      ...(accountHomeId && accountHomeId !== DEFAULT_AGENT_ACCOUNT_ID ? { accountHomeId } : {}),
       ...(environment && environment.environmentType !== "local"
         ? { environmentIncarnation: environment.containerId ?? environment.id }
         : {}),

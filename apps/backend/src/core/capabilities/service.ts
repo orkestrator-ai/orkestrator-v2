@@ -58,6 +58,7 @@ import type {
 import {
   canonicalCapabilityJson,
   capabilityInstallApproval,
+  capabilityRevisionComponents,
   compatibleProviders,
   resolveEffectiveAgentResources,
   type CapabilityLayer,
@@ -114,6 +115,7 @@ import {
   type PackageFile,
 } from "./security.js";
 import {
+  assertDistributableArtifact,
   containsLiteralMcpCredentials,
   inspectFiles,
   inspectGitSource,
@@ -676,10 +678,14 @@ export class CapabilityService {
     });
     const matrix = supportFor(state.machines[target.nodeId]?.inventory, target.provider);
     const components: CapabilitySessionView["components"] = [];
+    const catalogue = new Map(Object.entries(state.components));
     for (const pkg of effective.resolvedPackages) {
-      for (const componentId of pkg.components) {
-        const component = state.components[componentId];
-        if (!component) continue;
+      const record = state.packages[pkg.id];
+      const revision =
+        record && capabilityRevisionComponents(record, pkg.artifactDigest, catalogue);
+      for (const component of revision ?? []) {
+        const componentId = component.id;
+        if (!pkg.components.includes(componentId)) continue;
         const receipt = Object.values(state.receipts).find(
           (entry) =>
             entry.nodeId === target.nodeId &&
@@ -687,9 +693,7 @@ export class CapabilityService {
             entry.packageDigest === pkg.artifactDigest &&
             entry.providers.includes(target.provider),
         );
-        const status = receipt
-          ? effectiveReceiptStatus(state, receipt, target.provider).status
-          : "pending";
+        const status = receipt ? effectiveReceiptStatus(receipt).status : "pending";
         components.push({
           componentId,
           name: component.name,
@@ -841,6 +845,7 @@ export class CapabilityService {
   private async storeInspection(
     inspected: InspectedPackage,
     requestKey: string | undefined,
+    adoption?: SourceInspectionRecord["adoption"],
   ): Promise<CapabilitySourceInspection> {
     if (inspected.secretsFound.length > 0) {
       throw new CapabilityError(
@@ -854,6 +859,7 @@ export class CapabilityService {
     const record: SourceInspectionRecord = {
       id,
       ...(requestKey ? { requestKey } : {}),
+      ...(adoption ? { adoption } : {}),
       source: inspected.source,
       packageId: inspected.packageId,
       displayName: inspected.displayName,
@@ -1040,6 +1046,26 @@ export class CapabilityService {
     const selfId = await this.deps.selfId();
     const nodeId = typeof args.nodeId === "string" && args.nodeId ? args.nodeId : selfId;
     const itemId = asText(args.itemId, "itemId");
+    const files = await this.readInventoryItem(nodeId, itemId);
+    const source: PackageSource = { kind: "local", sourceMachineId: nodeId, sourceId: itemId };
+    const location = capabilityLocation(itemId.split("/")[0] ?? "");
+    const name = itemId.split("/").slice(1).join("/").replace(/\.md$/, "");
+    const rooted =
+      location?.layout === "file"
+        ? files.map((file) => ({
+            ...file,
+            path: `${location.kind === "subagent" ? "agents" : location.kind === "prompt" ? "prompts" : "commands"}/${file.path}`,
+          }))
+        : files;
+    const inspected = inspectFiles(source, rooted, { fallbackName: name });
+    return this.storeInspection(
+      inspected,
+      typeof args.requestKey === "string" ? args.requestKey : undefined,
+    );
+  }
+
+  private async readInventoryItem(nodeId: string, itemId: string): Promise<PackageFile[]> {
+    const selfId = await this.deps.selfId();
     let files: PackageFile[];
     if (nodeId === selfId) {
       files = await this.exportLocalItem(itemId);
@@ -1064,21 +1090,82 @@ export class CapabilityService {
         }),
       );
     }
-    const source: PackageSource = { kind: "local", sourceMachineId: nodeId, sourceId: itemId };
-    const location = capabilityLocation(itemId.split("/")[0] ?? "");
-    const name = itemId.split("/").slice(1).join("/").replace(/\.md$/, "");
-    const rooted =
-      location?.layout === "file"
-        ? files.map((file) => ({
-            ...file,
-            path: `${location.kind === "subagent" ? "agents" : location.kind === "prompt" ? "prompts" : "commands"}/${file.path}`,
-          }))
-        : files;
-    const inspected = inspectFiles(source, rooted, { fallbackName: name });
-    return this.storeInspection(
-      inspected,
-      typeof args.requestKey === "string" ? args.requestKey : undefined,
+    return files;
+  }
+
+  private async prepareDriftAdoption(driftId: string): Promise<CapabilityChange> {
+    const state = await this.deps.storage.capabilities.loadCapabilityState();
+    const drift = state.drift[driftId];
+    const pkg = drift?.packageId ? state.packages[drift.packageId] : undefined;
+    const component = drift?.componentId ? state.components[drift.componentId] : undefined;
+    const location = drift ? capabilityLocation(drift.locationId) : undefined;
+    if (
+      !drift ||
+      drift.state !== "open" ||
+      drift.kind !== "modified" ||
+      !drift.observedDigest ||
+      !pkg ||
+      pkg.source.kind !== "managed" ||
+      pkg.provenance !== "managed" ||
+      pkg.componentIds.length !== 1 ||
+      !component ||
+      !location
+    ) {
+      throw new CapabilityError(
+        "unsupported",
+        "Only a modified file component from a single-component authored package can be adopted here.",
+      );
+    }
+    const setup = Object.values(state.setups).find((entry) =>
+      entry.packageSelections.some(
+        ({ packageId, version }) => packageId === pkg.id && version === "latest",
+      ),
     );
+    if (!setup || pkg.pinned || pkg.paused) {
+      throw new CapabilityError(
+        "conflict",
+        "The package must be active and selected at its latest revision before adopting changes.",
+      );
+    }
+    const inventory = await this.observeNode(drift.nodeId);
+    const item = inventory.items.find(
+      (entry) =>
+        entry.locationId === drift.locationId &&
+        entry.componentId === drift.componentId &&
+        entry.packageId === pkg.id &&
+        entry.digest === drift.observedDigest,
+    );
+    if (!item)
+      throw new CapabilityError(
+        "conflict",
+        "The local item changed again. Refresh its inventory before reviewing it.",
+      );
+    const files = await this.readInventoryItem(drift.nodeId, item.id);
+    if (treeDigest(files) !== drift.observedDigest) {
+      throw new CapabilityError("conflict", "The local file changed while it was being read.");
+    }
+    const root = component.pathOrKey;
+    const rooted =
+      location.layout === "directory"
+        ? files.map((file) => ({ ...file, path: root ? `${root}/${file.path}` : file.path }))
+        : files.map((file) => ({ ...file, path: root }));
+    const inspected = inspectFiles(pkg.source, rooted, { fallbackName: pkg.displayName });
+    if (inspected.components.length !== 1 || inspected.components[0]?.id !== component.id) {
+      throw new CapabilityError(
+        "conflict",
+        "The local files change the package's component identity.",
+      );
+    }
+    const result = await this.storeInspection(inspected, undefined, {
+      driftId,
+      digest: drift.observedDigest,
+    });
+    return {
+      kind: "add-to-setup",
+      inspectionId: result.inspectionId,
+      expectedArtifactDigest: pkg.artifactDigest,
+      setupId: setup.id,
+    };
   }
 
   /** This machine's files of one inventory item; the item id names a known location. */
@@ -1131,7 +1218,11 @@ export class CapabilityService {
     actor?: string,
   ): Promise<CapabilityChangeResult> {
     this.assertAuthority();
-    const change = parseCapabilityChange(args.change);
+    const raw = asRecord(args.change, "change");
+    const change =
+      raw.kind === "adopt-drift"
+        ? await this.prepareDriftAdoption(asText(raw.driftId, "driftId"))
+        : parseCapabilityChange(raw);
     return this.previewParsedChange(
       change,
       typeof args.requestKey === "string" ? args.requestKey.slice(0, 200) : undefined,
@@ -1170,6 +1261,13 @@ export class CapabilityService {
     }
     const { applied, targets, planDigest, draft } = await this.planChange(state, change);
     const reasons = approvalReasonsFor(draft, applied.addedComponentIds);
+    if (change.kind === "add-to-setup") {
+      const inspection = state.inspections[change.inspectionId];
+      if (inspection?.adoption) {
+        reasons.push("Adopt the observed local files as the package's new revision.");
+        reasons.push(...capabilityInstallApproval(inspection.components).reasons);
+      }
+    }
     if (change.kind === "update") {
       const update = state.updates[change.updateId];
       const inspection = state.inspections[`update:${change.updateId}`];
@@ -1279,6 +1377,28 @@ export class CapabilityService {
       );
     }
     const change = operation.change;
+    const adoption =
+      change.kind === "add-to-setup" ? state.inspections[change.inspectionId]?.adoption : undefined;
+    if (adoption) {
+      const drift = state.drift[adoption.driftId];
+      const inventory = drift && (await this.observeNode(drift.nodeId));
+      if (
+        !drift ||
+        !inventory ||
+        !inventory.items.some(
+          (item) =>
+            item.locationId === drift.locationId &&
+            item.componentId === drift.componentId &&
+            item.packageId === drift.packageId &&
+            item.digest === adoption.digest,
+        )
+      ) {
+        throw new CapabilityError(
+          "conflict",
+          "The local files no longer match the adoption preview.",
+        );
+      }
+    }
     if (
       change.kind === "add-to-setup" ||
       change.kind === "adopt" ||
@@ -1698,19 +1818,24 @@ export class CapabilityService {
     this.assertAuthority();
     const driftId = asText(args.driftId, "driftId");
     const decision = args.decision;
-    if (decision !== "keep-local" && decision !== "replace" && decision !== "adopt") {
-      throw new CapabilityError("invalid-request", "Choose keep, adopt or replace.");
+    if (decision === "adopt") {
+      throw new CapabilityError(
+        "approval-required",
+        "Preview and approve the local revision before adopting it.",
+      );
+    }
+    if (decision !== "keep-local" && decision !== "replace") {
+      throw new CapabilityError("invalid-request", "Choose keep or replace.");
     }
     const entry = this.deps.storage.capabilities.mutateCapabilityState((state) => {
       const drift = state.drift[driftId];
       if (!drift)
         throw new CapabilityError("not-found", "That local change is no longer reported.");
-      drift.state =
-        decision === "keep-local" ? "kept-local" : decision === "replace" ? "replaced" : "adopted";
+      drift.state = decision === "keep-local" ? "kept-local" : "replaced";
       recordActivity(state, {
         ...(actor ? { actor } : {}),
         action: `drift-${decision}`,
-        summary: `${drift.name} on ${drift.nodeId}: ${decision === "keep-local" ? "kept the local version" : decision === "replace" ? "replaced with the configured revision" : "adopting the local version"}.`,
+        summary: `${drift.name} on ${drift.nodeId}: ${decision === "keep-local" ? "kept the local version" : "replaced with the configured revision"}.`,
         packageIds: drift.packageId ? [drift.packageId] : [],
         setupIds: [],
         correlationId: newCorrelationId(),
@@ -2290,7 +2415,7 @@ export class CapabilityService {
         const item = inventory?.items.find(
           (entry) => entry.componentId === componentId && entry.locationId === receipt.locationId,
         );
-        const effective = effectiveReceiptStatus(state, receipt, target.provider);
+        const effective = effectiveReceiptStatus(receipt);
         const matches = item && !item.drifted && item.digest === receipt.digest;
         const fileKind =
           !receipt.locationId.startsWith("mcp:") && !receipt.locationId.startsWith("plugin:");
@@ -2316,16 +2441,6 @@ export class CapabilityService {
         });
       }
     }
-    this.deps.storage.capabilities.mutateCapabilityState((current) => {
-      const now = this.now();
-      for (const check of checks) {
-        for (const receipt of Object.values(current.receipts)) {
-          if (receipt.nodeId === target.nodeId && receipt.componentId === check.componentId)
-            receipt.verifiedAt = now;
-        }
-      }
-      return { result: undefined, changed: checks.length > 0 };
-    });
     return { target, checks, verifiedAt: this.now() };
   }
 
@@ -2342,7 +2457,12 @@ export class CapabilityService {
     graphNode?: string;
   }): Promise<EffectiveAgentResources> {
     const state = await this.deps.storage.capabilities.loadCapabilityState();
-    const launchInventory = await this.observeNode(input.target.nodeId).catch(() => undefined);
+    const hasRequired = Object.values(state.setups).some((setup) =>
+      setup.packageSelections.some(({ required }) => required === true),
+    );
+    const launchInventory = hasRequired
+      ? await this.observeNode(input.target.nodeId).catch(() => undefined)
+      : undefined;
     return this.resolveFor(state, {
       target: input.target,
       forLaunch: true,
@@ -2355,12 +2475,9 @@ export class CapabilityService {
   }
 
   /**
-   * The native-session launch hook. Resolves the session's effective
-   * resources under its own policy, records the frozen manifest (its digest is
-   * what the session keeps until an explicit refresh), and refuses the launch
-   * when a required component cannot be delivered. Any other failure here is
-   * logged and never blocks a session: capability management must not take
-   * agents down with it.
+   * The native-session and graph launch hook. Resolves resources under the
+   * launch policy, blocks unverified required delivery, and records the
+   * selected revision digest for diagnostics. Provider homes stay shared.
    */
   async preflightSession(input: {
     environmentId: string;
@@ -2464,6 +2581,7 @@ export class CapabilityService {
   ): Promise<{ files: Array<{ path: string; executable: boolean; data: string }> }> {
     this.executor.admitEpoch(asText(args.controllerId, "controllerId"), Number(args.epoch));
     const files = await this.exportLocalItem(asText(args.itemId, "itemId"));
+    assertDistributableArtifact(files);
     return {
       files: files.map((file) => ({
         path: file.path,

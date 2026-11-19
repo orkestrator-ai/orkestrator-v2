@@ -537,6 +537,9 @@ function escalationOf(
   if (capabilityRiskRank(after.risk) > capabilityRiskRank(before.risk)) {
     return { escalation: `Risk rises from ${before.risk} to ${after.risk}.` };
   }
+  if (after.kind === "mcp-server" && after.mcpDefinitionDigest !== before.mcpDefinitionDigest) {
+    return { escalation: "Changes how the MCP server runs or where it connects." };
+  }
   const newPrograms = (after.executes ?? []).filter(
     (entry) => !(before.executes ?? []).includes(entry),
   );

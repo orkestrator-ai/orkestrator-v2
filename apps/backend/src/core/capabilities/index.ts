@@ -68,6 +68,15 @@ export function mcpManagementInstaller(
     return { mcp, target, snapshot } as const;
   };
   return {
+    async configured(provider, definition) {
+      const found = await backendTarget(provider);
+      if ("error" in found || found.snapshot.freshness !== "fresh") return false;
+      const entryId = found.snapshot.effective[definition.name];
+      return (
+        !!entryId &&
+        found.mcp.matchesCapabilityConfiguration(found.target.targetId, entryId, definition)
+      );
+    },
     async observe(ownership) {
       const found = await backendTarget(ownership.provider);
       if ("error" in found || found.snapshot.freshness !== "fresh") return "unavailable";

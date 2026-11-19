@@ -56,7 +56,11 @@ import {
   writeFileAtomically,
   type PackageFile,
 } from "./security.js";
-import { parseMcpDefinitions } from "./source-inspection.js";
+import {
+  assertDistributableArtifact,
+  parseMcpDefinitions,
+  type McpDefinitionShape,
+} from "./source-inspection.js";
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
 
 export interface NodePlanTarget {
@@ -91,6 +95,7 @@ type McpOwnership = import("./types.js").CapabilityMcpOwnership;
 
 /** Writes and removes MCP definitions in one provider's user configuration. */
 export interface McpInstaller {
+  configured?(provider: AgentPlatform, definition: McpDefinitionShape): Promise<boolean>;
   observe?(ownership: McpOwnership): Promise<"present" | "missing" | "drifted" | "unavailable">;
   install(input: {
     provider: AgentPlatform;
@@ -305,7 +310,9 @@ export class CapabilityExecutor {
 
     if (!target.artifactDigest)
       throw new CapabilityError("invalid-request", "The plan names no artifact.");
-    const files = componentFiles(await this.deps.artifacts.get(target.artifactDigest), target);
+    const artifact = await this.deps.artifacts.get(target.artifactDigest);
+    assertDistributableArtifact(artifact);
+    const files = componentFiles(artifact, target);
     if (files.length === 0)
       throw new CapabilityError("not-found", "The component is not in the artifact.");
     const writtenFiles = location.layout === "file" ? [{ ...files[0]!, path: entry }] : files;
@@ -499,6 +506,7 @@ export class CapabilityExecutor {
     if (!target.artifactDigest)
       throw new CapabilityError("invalid-request", "The plan names no artifact.");
     const files = await this.deps.artifacts.get(target.artifactDigest);
+    assertDistributableArtifact(files);
     const warnings: string[] = [];
     const definitions = [".mcp.json", "mcp.json"]
       .map((name) => files.find((file) => file.path === name))
@@ -514,6 +522,14 @@ export class CapabilityExecutor {
     if (!definition)
       throw new CapabilityError("not-found", "The MCP server is not in the artifact.");
     if (definition.envKeys.length > 0 || definition.headerKeys.length > 0) {
+      if (await this.deps.mcp.configured?.(target.provider, definition)) {
+        return {
+          key: target.key,
+          status: "installed-next-session",
+          verification: "present",
+          reason: "A matching local configuration supplies the required credentials.",
+        };
+      }
       return {
         key: target.key,
         status: "needs-auth",

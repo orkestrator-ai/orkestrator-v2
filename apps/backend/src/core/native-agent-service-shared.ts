@@ -542,7 +542,7 @@ export interface NativeAgentServiceOptions {
   };
   /**
    * Agent Capabilities launch preflight (docs/architecture/agent-capabilities-management.md,
-   * "Runtime connection points"): resolves the session's frozen effective
+   * "Runtime connection points"): resolves the session's effective
    * manifest before its provider session is created, and throws, with the
    * reason, when a component the session's setups mark required cannot be
    * delivered. Optional components never block.
@@ -550,6 +550,7 @@ export interface NativeAgentServiceOptions {
   capabilityPreflight?: (input: {
     environmentId: string;
     environmentIncarnation?: string;
+    accountHomeId?: string;
     projectId?: string;
     agent: string;
     logicalSessionKey: string;

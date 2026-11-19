@@ -1,3 +1,4 @@
+import { compareCapabilityRevisions } from "@orkestrator/protocol/capability-resources-resolve";
 import { describe, expect, test } from "bun:test";
 
 import { assertFetchableRepo, inspectFiles } from "./source-inspection.js";
@@ -64,6 +65,29 @@ describe("inspection", () => {
       ),
     ).toBe(true);
     expect(inspected.risk).toBe("privileged");
+  });
+
+  test("MCP argument and same-host path changes escalate with redacted metadata", () => {
+    const components = (definition: object) =>
+      inspectFiles(
+        source,
+        files({
+          ".mcp.json": JSON.stringify({ docs: definition }),
+        }),
+      ).components;
+    const local = { command: "local-tool", args: ["--default"] };
+    const remote = { url: "https://example.com/one" };
+    expect(
+      compareCapabilityRevisions(
+        components(local),
+        components({ ...local, args: ["--different"] }),
+      )[0]?.escalation,
+    ).toContain("MCP server");
+    const changedRemote = components({ url: "https://example.com/two" });
+    expect(changedRemote[0]?.endpoints).toEqual(["example.com"]);
+    expect(compareCapabilityRevisions(components(remote), changedRemote)[0]?.escalation).toContain(
+      "MCP server",
+    );
   });
 
   test("a skill's nested reference SKILL.md is not a second skill", () => {

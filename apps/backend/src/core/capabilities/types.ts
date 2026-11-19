@@ -96,6 +96,7 @@ export interface SourceInspectionRecord {
   id: string;
   requestKey?: string;
   secretsFound?: string[];
+  adoption?: { driftId: string; digest: string };
   source: PackageSource;
   packageId: string;
   displayName: string;

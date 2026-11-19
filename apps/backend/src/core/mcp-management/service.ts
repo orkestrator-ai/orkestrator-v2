@@ -535,6 +535,42 @@ export class McpManagementService {
     };
   }
 
+  /** Checks a user-configured entry without granting capability ownership. */
+  async matchesCapabilityConfiguration(
+    targetId: string,
+    entryId: string,
+    expected: {
+      transport: string;
+      command?: string;
+      args?: string[];
+      url?: string;
+      envKeys: string[];
+      headerKeys: string[];
+    },
+  ): Promise<boolean> {
+    await this.init();
+    const target = await resolveTarget(targetId, this.options.storage);
+    const { catalog } = await this.loadTargetCatalog(target, await this.specsFor(target));
+    const entry = catalog.entries.find((candidate) => candidate.entryId === entryId);
+    const definition = entry?.definition;
+    return (
+      !!definition &&
+      !entry?.conflict &&
+      !entry?.issue &&
+      !entry?.skipReason &&
+      !entry?.disabledReason &&
+      !definition.invalidReason &&
+      !definition.unsupportedReason &&
+      definition.enabled !== false &&
+      definition.transport === expected.transport &&
+      definition.command === expected.command &&
+      definition.url === expected.url &&
+      JSON.stringify(definition.args) === JSON.stringify(expected.args ?? []) &&
+      expected.envKeys.every((key) => !!definition.env[key]) &&
+      expected.headerKeys.every((key) => !!definition.headers[key])
+    );
+  }
+
   async getOperation(args: { operationId?: unknown }): Promise<McpOperationSnapshot> {
     await this.init();
     await this.operations.refresh();

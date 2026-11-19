@@ -5,6 +5,7 @@ import {
   CAPABILITY_UPDATE_POLICIES,
   MY_SETUP_ID,
   type CapabilityMachineSummary,
+  type CapabilityOperationSnapshot,
   type CapabilitySetup,
   type CapabilityUpdatePolicy,
 } from "@orkestrator/protocol/capability-resources";
@@ -14,6 +15,14 @@ import type {
 } from "@orkestrator/protocol/capability-resources-api";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -28,6 +37,7 @@ import {
   shortDigest,
   StatusBadge,
 } from "./capability-format";
+import { ChangePreview } from "./ChangePreview";
 import { useCapabilityResource } from "./useCapabilityResource";
 
 const POLICY_LABEL: Record<CapabilityUpdatePolicy, string> = {
@@ -308,6 +318,7 @@ export function MachinesView({
   reload: () => void;
 }) {
   const { busy, error, run } = useAction();
+  const [adoption, setAdoption] = useState<CapabilityOperationSnapshot | null>(null);
   const drift = useCapabilityResource(() => capabilitiesApi.listCapabilityDrift(), []);
   const [groupDraft, setGroupDraft] = useState<Record<string, string>>({});
   const open = (drift.state.data?.drift ?? []).filter((entry) => entry.state === "open");
@@ -430,32 +441,74 @@ export function MachinesView({
                     entry.nodeId}
                 </span>
                 <div className="ml-auto flex gap-1">
-                  {(["keep-local", "adopt", "replace"] as const).map((decision) => (
-                    <Button
-                      key={decision}
-                      size="sm"
-                      variant={decision === "replace" ? "outline" : "ghost"}
-                      disabled={busy}
-                      onClick={() =>
-                        void run(async () => {
-                          await capabilitiesApi.resolveCapabilityDrift(entry.id, decision);
-                          drift.reload();
-                        })
-                      }
-                    >
-                      {decision === "keep-local"
-                        ? "Keep local"
-                        : decision === "adopt"
-                          ? "Adopt"
-                          : "Replace"}
-                    </Button>
-                  ))}
+                  {(["keep-local", "adopt", "replace"] as const)
+                    .filter((decision) => decision !== "adopt" || entry.kind === "modified")
+                    .map((decision) => (
+                      <Button
+                        key={decision}
+                        size="sm"
+                        variant={decision === "replace" ? "outline" : "ghost"}
+                        disabled={busy}
+                        onClick={() =>
+                          void run(async () => {
+                            if (decision === "adopt") {
+                              setAdoption(
+                                (
+                                  await capabilitiesApi.previewCapabilityChange({
+                                    kind: "adopt-drift",
+                                    driftId: entry.id,
+                                  })
+                                ).operation,
+                              );
+                            } else {
+                              await capabilitiesApi.resolveCapabilityDrift(entry.id, decision);
+                            }
+                            drift.reload();
+                          })
+                        }
+                      >
+                        {decision === "keep-local"
+                          ? "Keep local"
+                          : decision === "adopt"
+                            ? "Adopt"
+                            : "Replace"}
+                      </Button>
+                    ))}
                 </div>
               </li>
             ))}
           </ul>
         )}
       </section>
+      <Dialog open={adoption !== null} onOpenChange={(open) => !open && setAdoption(null)}>
+        <DialogContent
+          size="3xl"
+          className={Z_FULLSCREEN_DIALOG}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
+          <DialogHeader>
+            <DialogTitle>Review local revision</DialogTitle>
+            <DialogDescription>
+              Approve the local files as a new revision for the setups that use this package.
+            </DialogDescription>
+          </DialogHeader>
+          {adoption ? (
+            <ChangePreview
+              operation={adoption}
+              machineNames={Object.fromEntries(
+                machines.map((machine) => [machine.nodeId, machine.name]),
+              )}
+              componentNames={{}}
+              onCancel={() => setAdoption(null)}
+              onApplied={() => {
+                setAdoption(null);
+                drift.reload();
+                reload();
+              }}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -16,6 +16,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/capabilities";
 import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
 
+import { assertDistributableArtifact } from "./source-inspection.js";
 import { CapabilityArtifactStore } from "./artifact-store.js";
 import type { NodePlanResult, NodePlanTarget } from "./executor.js";
 import {
@@ -64,7 +65,9 @@ export function remoteTransport(input: {
     async stage(nodeId, epoch, digest) {
       const link = connectedLink(nodeId);
       const controllerId = await input.selfId();
-      const chunks = CapabilityArtifactStore.bundleChunks(await input.artifacts.get(digest));
+      const files = await input.artifacts.get(digest);
+      assertDistributableArtifact(files);
+      const chunks = CapabilityArtifactStore.bundleChunks(files);
       for (let index = 0; index < chunks.length; index += 1) {
         try {
           const answer = (await link.invokeCommand(stageCapabilityNodeArtifactCommand, {

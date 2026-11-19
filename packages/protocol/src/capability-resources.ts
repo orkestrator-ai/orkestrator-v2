@@ -312,6 +312,8 @@ export interface CapabilityComponent {
   executes?: string[];
   /** Hosts a networked component connects to. */
   endpoints?: string[];
+  /** Redacted identity of the MCP transport, executable arguments and endpoint. */
+  mcpDefinitionDigest?: string;
   /** Hook triggers (`PreToolUse`, ...). */
   triggers?: string[];
 }

@@ -419,6 +419,7 @@ export function planNode(
       !options.forceKeys?.has(installation.key) &&
       receipt.status !== "failed" &&
       receipt.status !== "needs-auth" &&
+      !(installation.locationId.startsWith("mcp:") && receipt.verification === "present") &&
       receipt.status !== "outcome-unknown" &&
       receipt.status !== "drifted";
     if (options.driftKeys?.has(installation.key) && !options.forceKeys?.has(installation.key)) {

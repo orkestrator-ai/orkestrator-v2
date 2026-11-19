@@ -50,6 +50,7 @@ export type CapabilityChangeInput =
     }
   | { kind: "remove-from-setup"; packageId: string; setupId?: string }
   | { kind: "reconcile"; nodeIds?: string[] }
+  | { kind: "adopt-drift"; driftId: string }
   | { kind: "adopt"; inspectionId: string; setupId?: string };
 
 export interface AuthoredCapabilityInput {

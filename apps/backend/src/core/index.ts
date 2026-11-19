@@ -1375,6 +1375,7 @@ export class OrkestratorBackend {
           if (!context.capabilities || !isAgentPlatform(input.agent)) return;
           await context.capabilities.preflightSession({
             environmentId: input.environmentId,
+            ...(input.accountHomeId ? { accountHomeId: input.accountHomeId } : {}),
             ...(input.environmentIncarnation
               ? { environmentIncarnation: input.environmentIncarnation }
               : {}),

@@ -312,6 +312,21 @@ export function applyChangeToState(
           exclusions.add(`machine:${nodeId}|${inspection.packageId}`);
         setup.exclusions = [...exclusions].slice(0, CAPABILITY_LIMITS.maxExclusionsPerSetup);
       }
+      if (inspection.adoption) {
+        const drift = state.drift[inspection.adoption.driftId];
+        if (
+          !drift ||
+          drift.state !== "open" ||
+          drift.observedDigest !== inspection.adoption.digest ||
+          drift.packageId !== inspection.packageId
+        ) {
+          throw new CapabilityError(
+            "conflict",
+            "The local change no longer matches the adoption preview.",
+          );
+        }
+        drift.state = "adopted";
+      }
       delete state.inspections[change.inspectionId];
       return { packageIds: [inspection.packageId], setupId: setup.id, addedComponentIds: added };
     }
@@ -337,6 +352,9 @@ export function applyChangeToState(
       }
       if (update.state !== "pending" && update.state !== "approved") {
         throw new CapabilityError("conflict", "That update was already handled.");
+      }
+      if (pkg.pinned) {
+        throw new CapabilityError("conflict", "The package is pinned; unpin it to take updates.");
       }
       if (pkg.artifactDigest !== update.fromDigest) {
         throw new CapabilityError(

@@ -106,7 +106,7 @@ function frontmatterHead(text: string): string {
   return end > 0 ? text.slice(3, end) : "";
 }
 
-interface McpDefinitionShape {
+export interface McpDefinitionShape {
   name: string;
   transport: "stdio" | "http" | "sse";
   command?: string;
@@ -205,6 +205,12 @@ function sanitizeMcpFile(file: PackageFile): PackageFile {
 
 export function containsLiteralMcpCredentials(files: PackageFile[]): boolean {
   return files.some((file) => sanitizeMcpFile(file) !== file);
+}
+
+export function assertDistributableArtifact(files: PackageFile[]): void {
+  if (scanPackageSecrets(files).length > 0 || containsLiteralMcpCredentials(files)) {
+    throw new CapabilityError("secrets-detected", "The artifact contains credential material.");
+  }
 }
 
 function endpointHost(url: string): string | undefined {
@@ -370,17 +376,20 @@ function detectMcp(
         ? `${definition.transport.toUpperCase()} server at ${host ?? "a configured address"}`
         : `Runs ${definition.command ?? "a local program"}`,
       risk: definition.transport === "stdio" ? "executable" : "network",
-      ...(definition.command
-        ? {
-            executes: [
-              definition.command,
-              `arguments:${sha256Hex(JSON.stringify(definition.args ?? []))}`,
-            ],
-          }
-        : {}),
-      ...(host && definition.url
-        ? { endpoints: [host, `endpoint:${sha256Hex(new URL(definition.url).href)}`] }
-        : {}),
+      ...(definition.command ? { executes: [definition.command] } : {}),
+      ...(host ? { endpoints: [host] } : {}),
+      mcpDefinitionDigest: sha256Hex(
+        JSON.stringify({
+          transport: definition.transport,
+          command: definition.command,
+          args: definition.args,
+          endpoint: definition.url
+            ? (URL.parse(definition.url)?.href ?? definition.url)
+            : undefined,
+          envKeys: [...definition.envKeys].sort(),
+          headerKeys: [...definition.headerKeys].sort(),
+        }),
+      ),
       providerHints,
       requirements: {
         ...(definition.command ? { binaries: [path.posix.basename(definition.command)] } : {}),

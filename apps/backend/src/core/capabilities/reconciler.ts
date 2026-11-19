@@ -273,6 +273,7 @@ export class CapabilityReconciler {
           if (
             (fileKind || receipt.locationId.startsWith("mcp:")) &&
             expected &&
+            receipt.pendingWrite?.action !== "remove" &&
             !seen?.drifted &&
             seen?.digest === expected &&
             seen.packageId === receipt.packageId
@@ -291,11 +292,17 @@ export class CapabilityReconciler {
           }
           continue;
         }
-        if (!fileKind || receipt.status === "unsupported" || receipt.status === "failed") continue;
+        if (
+          (!fileKind && !seen?.drifted) ||
+          receipt.status === "unsupported" ||
+          receipt.status === "failed"
+        )
+          continue;
         const driftId = `drift:${receipt.id}`;
         const existing = current.drift[driftId];
         if (!seen || seen.drifted || (seen.digest && seen.digest !== receipt.digest)) {
           if (!existing || existing.state !== "open") {
+            if (existing?.state === "adopted" && seen?.digest === existing.observedDigest) continue;
             if (existing?.state === "replaced") {
               forceKeys.add(receipt.id);
               continue;
@@ -456,7 +463,11 @@ export class CapabilityReconciler {
           appliedAt: now,
         };
         current.receipts[result.key] = receipt;
-        if (forceKeys.has(result.key) && result.status !== "failed")
+        if (
+          (forceKeys.has(result.key) ||
+            current.drift[`drift:${result.key}`]?.state === "adopted") &&
+          result.status !== "failed"
+        )
           delete current.drift[`drift:${result.key}`];
       }
       if (unknown) {
@@ -539,9 +550,15 @@ export async function expectedInstalledDigest(
   state: CapabilityState,
   receipt: InstallationReceipt,
 ): Promise<string | undefined> {
-  const component = state.components[receipt.componentId];
   const location = capabilityLocation(receipt.locationId);
   const digest = receipt.pendingWrite?.packageDigest ?? receipt.packageDigest;
+  const pkg = state.packages[receipt.packageId];
+  const component =
+    pkg?.artifactDigest === digest
+      ? state.components[receipt.componentId]
+      : pkg?.previousRevisions
+          ?.find((entry) => entry.artifactDigest === digest)
+          ?.components?.find((entry) => entry.id === receipt.componentId);
   if (!component || !location || !digest || receipt.pendingWrite?.action === "remove")
     return undefined;
   const files = componentFiles(await artifacts.get(digest), component);

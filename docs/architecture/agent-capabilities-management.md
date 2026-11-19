@@ -278,7 +278,8 @@ delivery, so they do not write into shared provider homes.
   applies the latest setup when it reconnects; nothing needs re-queuing.
 - **"Local changes"**: someone edited or deleted a managed item. Machines →
   Local changes: Keep local (Orkestrator stops managing that copy's updates),
-  Adopt (inspect the local version as a new package), or Replace.
+  Adopt (review and approve local edits to a single-component authored package
+  as a new revision), or Replace.
 - **"Unsupported" for a plugin on OpenCode or Pi**: by design; Orkestrator's
   bridges do not load those plugins. Their skills are still delivered when the
   package has portable skills.

@@ -271,6 +271,71 @@ describe("add once, use wherever compatible", () => {
       }),
     ).rejects.toThrow("GitHub token");
   });
+
+  test("a cached secret-bearing revision cannot be approved through update or rollback", async () => {
+    const { command, leafA } = await fleet();
+    const { inspection } = await addSkill(command, "safe", "Clean revision.");
+    const files = validatePackageFiles([
+      { path: "SKILL.md", content: Buffer.from("Synthetic test fixture"), executable: false },
+      { path: ".env", content: Buffer.from("EXAMPLE=fixture"), executable: false },
+    ]);
+    const digest = await command.service.artifacts.put(files);
+    const now = new Date().toISOString();
+    const updateId = "legacy-secret-update";
+    command.storage.capabilities.mutateCapabilityState((state) => {
+      const pkg = state.packages[inspection.packageId]!;
+      state.updates[updateId] = {
+        id: updateId,
+        packageId: pkg.id,
+        fromRevision: pkg.revision,
+        toRevision: "legacy",
+        fromDigest: pkg.artifactDigest,
+        toDigest: digest,
+        detectedAt: now,
+        state: "pending",
+        requiresApproval: true,
+        reasons: [],
+        changes: [],
+      };
+      state.inspections[`update:${updateId}`] = {
+        id: `update:${updateId}`,
+        packageId: pkg.id,
+        source: pkg.source,
+        displayName: pkg.displayName,
+        revision: "legacy",
+        artifactDigest: digest,
+        components: inspection.components,
+        createdAt: now,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      };
+      pkg.previousRevisions = [{ revision: "legacy", artifactDigest: digest, replacedAt: now }];
+      state.artifacts[digest] = {
+        digest,
+        bytes: files.reduce((sum, file) => sum + file.bytes, 0),
+        files: files.map(({ path, bytes, executable, sha256 }) => ({
+          path,
+          bytes,
+          executable,
+          sha256,
+        })),
+        refs: [`package:${pkg.id}@legacy`],
+        createdAt: now,
+      };
+      return { result: undefined, changed: true };
+    });
+    const calls = leafA.applyCalls.length;
+    await expect(
+      command.service.approveUpdate({ updateId, approvedDigest: "legacy-approval" }),
+    ).rejects.toHaveProperty("code", "secrets-detected");
+    await expect(
+      command.service.rollbackPackage({ packageId: inspection.packageId, toRevision: "legacy" }),
+    ).rejects.toHaveProperty("code", "secrets-detected");
+    expect(leafA.applyCalls).toHaveLength(calls);
+    expect(
+      (await command.service.getPackage({ packageId: inspection.packageId })).package
+        .artifactDigest,
+    ).toBe(inspection.artifactDigest);
+  });
 });
 
 describe("remote safety", () => {
@@ -446,6 +511,32 @@ describe("ownership and drift", () => {
       (await command.service.listDrift({})).drift.filter((entry) => entry.state === "open"),
     ).toEqual([]);
     expect(inspection.packageId).toBeTruthy();
+  });
+
+  test("approving adoption publishes observed local bytes as an authored revision", async () => {
+    const { command, leafA, leafB } = await fleet();
+    const { inspection } = await addSkill(command, "style", "Original.");
+    const filename = skillFile(leafA, ".claude", "style");
+    const original = await fs.readFile(filename, "utf8");
+    await fs.writeFile(filename, original.replace("Original.", "Local edit."));
+    await command.service.reconciler.reconcileNode(leafA.id, "recheck");
+    const drift = (await command.service.listDrift({})).drift.find(
+      (entry) => entry.nodeId === leafA.id && entry.packageId === inspection.packageId,
+    );
+    expect(drift?.state).toBe("open");
+    const preview = await command.service.previewChange({
+      change: { kind: "adopt-drift", driftId: drift!.id },
+    });
+    expect(preview.operation.requiresApproval).toBe(true);
+    expect(await fs.readFile(skillFile(leafB, ".claude", "style"), "utf8")).toContain("Original.");
+    await command.service.applyChange({
+      operationId: preview.operation.id,
+      approvedDigest: preview.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    expect(await fs.readFile(skillFile(leafB, ".claude", "style"), "utf8")).toContain(
+      "Local edit.",
+    );
   });
 
   test("an external skill with the same name is never overwritten", async () => {
@@ -701,6 +792,52 @@ describe("session launch", () => {
     ).rejects.toThrow("cannot have");
     await fs.writeFile(skillFile(command, ".claude", "docs"), "Local changes.");
     await expect(command.service.preflightSession(launch)).rejects.toThrow("not verified");
+  });
+});
+
+describe("session scope", () => {
+  test("a session-only toolkit never writes its components to shared provider homes", async () => {
+    const { command, leafA } = await fleet();
+    const toolkit = await command.service.setSetup({ setup: { name: "Session tools" } });
+    const { inspection } = await addSkill(
+      command,
+      "session-skill",
+      "Scoped instructions.",
+      toolkit.id,
+    );
+    await command.service.assignSetup({
+      scope: "session",
+      scopeId: "private",
+      setupIds: [toolkit.id],
+    });
+    await command.service.reconciler.idle();
+    expect(leafA.applyCalls).toEqual([]);
+    expect(await Bun.file(skillFile(command, ".claude", "session-skill")).exists()).toBe(false);
+    const result = await command.service.getSessionView({
+      sessionKey: "private",
+      target: { provider: "claude" },
+    });
+    expect(result.effective?.resolvedPackages.map(({ id }) => id)).toContain(inspection.packageId);
+  });
+
+  test("names supplied by one session do not prove either session loaded a revision", async () => {
+    const { command, leafA } = await fleet();
+    const { inspection } = await addSkill(command, "notes", "Notes.");
+    for (const sessionKey of ["one", "two"]) {
+      const result = await command.service.getSessionView({
+        sessionKey,
+        target: { provider: "claude", nodeId: leafA.id },
+        sessionRunning: true,
+        ...(sessionKey === "one"
+          ? { catalogue: { state: "ready", names: ["notes"], generation: "1" } }
+          : {}),
+      });
+      expect(result.effective?.target.nodeId).toBe(leafA.id);
+      expect(
+        result.components.find(({ componentId }) => componentId === inspection.components[0]?.id)
+          ?.status,
+      ).toBe("installed-next-session");
+    }
   });
 });
 

@@ -282,9 +282,10 @@ export function registerEnvironmentCommands(
   register(getEnvironmentCommand, async ({ environmentId, includeFinalPrState }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (environment) {
-      const { openingInteraction: _openingInteraction, ...detail } =
-        await reconcileProjectHomeEnvironment(environment, storage);
-      return detail;
+      const detail = await reconcileProjectHomeEnvironment(environment, storage);
+      if (!detail.openingInteraction) return detail;
+      const { openingInteraction: _openingInteraction, ...clientDetail } = detail;
+      return clientDetail;
     }
     return includeFinalPrState === true
       ? storage.getFinalEnvironmentPr(asString(environmentId, "environmentId"))

@@ -53,6 +53,11 @@ async function run(env: Record<string, string>): Promise<HarnessOutput> {
       CWD: workspace,
       CODEX_BRIDGE_TOKEN: "http-harness-token",
       FAKE_CODEX_SCRIPT: "auto-complete",
+      // The harness is this process's child, so this process is the parent it
+      // watches. Inheriting the variable (an agent shell carries the backend's
+      // PID) would let an unrelated process's exit drain the bridge mid-run:
+      // exit 0, no result line, "app-server is stopped" (flake 0233).
+      ORKESTRATOR_PARENT_PID: String(process.pid),
       ...env,
     },
     stdout: "pipe",
@@ -65,8 +70,17 @@ async function run(env: Record<string, string>): Promise<HarnessOutput> {
     proc.exited,
   ]);
 
-  const line = stdout.trim().split("\n").filter(Boolean).at(-1);
+  // The result is the last JSON line; bridge diagnostics (`[bridge-diagnostics] ...`,
+  // printed when ORKESTRATOR_BRIDGE_DEBUG is set) can share stdout with it.
+  const line = stdout
+    .trim()
+    .split("\n")
+    .filter((entry) => entry.startsWith("{"))
+    .at(-1);
   if (!line) {
+    // Exit 0 with no result is the bridge's own SIGTERM/SIGINT or parent-exit
+    // drain: something outside the test stopped the harness. The harness says
+    // which signal on stderr.
     throw new Error(`harness produced no output (exit ${code}):\n${stderr.slice(0, 3_000)}`);
   }
   return JSON.parse(line) as HarnessOutput;

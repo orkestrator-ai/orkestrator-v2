@@ -1,7 +1,7 @@
 # CLI lost-submission lookup misses the shared deadline under load
 
 - **ID:** 9880
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-22
 - **Test:** `waiting through a lost submission response > submission and an absent-key lookup share one deadline`
 - **File:** `packages/cli/tests/client-waits.test.ts:351`
@@ -63,3 +63,33 @@ Full failure names, counts, evidence paths and unresolved limitations are in [98
   virtual-clock case regressed. No CLI code, assertion, timeout or skip changed;
   contention consuming the recovery budget is a hypothesis, not an established
   product cause.
+
+## Resolution of the real-clock siblings (2026-11-19)
+
+- **Root cause:** the same as the 2026-11-15 repair, in the two siblings it
+  did not cover: `recovery and final observation share the remaining deadline`
+  (160 ms real submission delay inside a 300 ms `--timeout`, then a 450 ms
+  wall-clock bound) and `environment --wait through a lost submission response > exec recovery and final observation share the --timeout deadline`
+  (400 ms inside 500 ms, then an 850 ms bound). On a starved host the real
+  delay used the whole budget before the recovery lookup answered, so the
+  result was `transport-uncertain` instead of `deadline-exceeded`, or the
+  elapsed bound failed.
+- **Reproduced:** yes. A copy of the unchanged test file under
+  `bun scripts/test-under-contention.ts --burners 6 -- bun --cwd=packages/cli test --preload ../../tests/setup-node.ts <copy> -t "recovery and final observation" --rerun-each=10`
+  (macOS, burners unpinned) failed 3 of 20: two `transport-uncertain` where
+  `deadline-exceeded` was expected (both siblings) and one elapsed 553 ms
+  against the 450 ms bound. Base `fe9d1f5d6`.
+- **Fix:** both siblings now use the virtual clock the 2026-11-15 repair
+  introduced: the fake gateway advances it by 4.25 s when it receives the
+  submission (`onSubmit`, now also accepted by `lostEnvironmentMutation`),
+  the IO's `sleep` advances it, and the `--timeout` is 10 s. Each asserts
+  `deadline-exceeded`, exactly one recovery lookup, and that the whole wait
+  ended within the original 10 s budget (a fresh budget after recovery would
+  run past 14.25 s). No wall-clock bound remains in either case.
+- **Verified under the same condition:** the fixed file with the same
+  contention command passed 20 of 20, then 40 of 40 with `--rerun-each=20`.
+- **Stress:** `mise run test:logged -- --name f-a-cli-waits-owner -- bun --cwd=packages/cli test --preload ../../tests/setup-node.ts ./tests/client-waits.test.ts --parallel=1 --only-failures --rerun-each=3`
+  passed (exit 0, 7.6 s). The remaining real-clock siblings (`a stalled lookup is bounded…`,
+  `recovered lifecycle bounds a stalled … read`, `ordinary admission retains…`)
+  measure real elapsed time on purpose and have no recorded failure; they
+  were not changed.

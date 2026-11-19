@@ -132,6 +132,15 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
+// index.ts drains the engine and exits 0 on these signals, before main() can
+// print a result. Say so, so an interrupted run is not mistaken for a failed
+// handshake (flake 0233).
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    process.stderr.write(`[http-flag-harness] received ${signal}; exiting without a result\n`);
+  });
+}
+
 main().catch((error: unknown) => {
   process.stdout.write(
     `${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}\n`,

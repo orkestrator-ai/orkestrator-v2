@@ -16,6 +16,23 @@ import { useUIChromeStore } from "@/stores/uiChromeStore";
  */
 export const SIDEBAR_SETTLE_MS = SIDEBAR_WIDTH_TRANSITION_MS + 40;
 
+/**
+ * The sidebar panel's width transitions that have not finished. The settle
+ * timer starts when the mode changes, but a loaded renderer can start the
+ * transition itself a frame or more later; releasing the pins while it still
+ * runs lays the content out at an intermediate width (flake 4290).
+ */
+function unfinishedWidthTransitions(element: HTMLElement | null): Animation[] {
+  if (!element || typeof element.getAnimations !== "function") return [];
+  return element
+    .getAnimations()
+    .filter(
+      (animation) =>
+        (animation as Animation & { transitionProperty?: string }).transitionProperty ===
+          "flex-grow" && animation.playState !== "finished",
+    );
+}
+
 export interface SidebarMotionPins {
   sidebar: number;
   main: number;
@@ -50,11 +67,18 @@ export function useSidebarPanelMotion(input: {
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restoreFrame = useRef(0);
   const releaseFrame = useRef(0);
+  /** Bumped by every width change, so a deferred release cannot settle a later one. */
+  const motionGeneration = useRef(0);
+  /** The `full` width is applied a frame after the change; the motion starts then. */
+  const restorePending = useRef(false);
+  /** The settle timer fired before that frame; arm it again once the width is applied. */
+  const settleAfterRestore = useRef<(() => void) | null>(null);
 
   const settle = useCallback(() => {
     if (settleTimer.current === null) return;
     clearTimeout(settleTimer.current);
     settleTimer.current = null;
+    settleAfterRestore.current = null;
     setPins(null);
     if (previousMode.current === "hidden") setContentShown(false);
     // A frame on, once the release is laid out: a terminal's fit from this event
@@ -92,6 +116,29 @@ export function useSidebarPanelMotion(input: {
 
     if (settleTimer.current !== null) clearTimeout(settleTimer.current);
     settleTimer.current = null;
+    settleAfterRestore.current = null;
+    const generation = ++motionGeneration.current;
+    // Release the pins once the transition has run: a fixed time after it
+    // starts, and never while the panel is still moving.
+    const armSettle = () => {
+      settleTimer.current = setTimeout(() => {
+        if (motionGeneration.current !== generation) return;
+        if (restorePending.current) {
+          settleAfterRestore.current = armSettle;
+          return;
+        }
+        const running = unfinishedWidthTransitions(sidebarElement);
+        if (running.length === 0) {
+          settle();
+          return;
+        }
+        void Promise.all(running.map((animation) => animation.finished.catch(() => null))).then(
+          () => {
+            if (motionGeneration.current === generation) settle();
+          },
+        );
+      }, SIDEBAR_SETTLE_MS);
+    };
     const dragging =
       sidebarElement?.parentElement?.querySelector('[data-separator="active"]') != null;
     if (sidebarElement && mainElement && shouldAnimateSidebarWidth({ reducedMotion, dragging })) {
@@ -118,7 +165,7 @@ export function useSidebarPanelMotion(input: {
               : 0,
         }),
       );
-      settleTimer.current = setTimeout(settle, SIDEBAR_SETTLE_MS);
+      armSettle();
     } else {
       setPins(null);
       if (mode === "hidden") setContentShown(false);
@@ -126,13 +173,19 @@ export function useSidebarPanelMotion(input: {
 
     // The new limits reach the group on its next render; restore after them.
     cancelAnimationFrame(restoreFrame.current);
+    restorePending.current = false;
     if (mode === "full") {
+      restorePending.current = true;
       restoreFrame.current = requestAnimationFrame(() => {
+        restorePending.current = false;
         try {
           panelRef.current?.resize(`${target}px`);
         } catch {
           // Not laid out yet; it opens at its default size instead.
         }
+        const rearm = settleAfterRestore.current;
+        settleAfterRestore.current = null;
+        if (rearm && motionGeneration.current === generation) rearm();
       });
     }
   }, [mainElement, mode, panelRef, reducedMotion, settle, sidebarElement]);
@@ -143,6 +196,8 @@ export function useSidebarPanelMotion(input: {
       cancelAnimationFrame(releaseFrame.current);
       if (settleTimer.current !== null) clearTimeout(settleTimer.current);
       settleTimer.current = null;
+      settleAfterRestore.current = null;
+      motionGeneration.current += 1;
     },
     [],
   );

@@ -1,7 +1,7 @@
 # `Electron backend command registry > rehydration resumes only persisted cleanup after a merge was already confirmed` (`apps/backend/tests/commands-registry-environments.test.ts`)
 
 - **ID:** 0142
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-07
 - **Original command:** `bun run test` (full four-group concurrent suite) on `fix-session-wakeup-2275ef14bae5-r1`, the same run as the tmux entry above
 - **Worker configuration:** the aggregate root/agent-support group, `--parallel` with the planned root worker pool.
@@ -37,3 +37,20 @@ and under `scripts/test-under-contention.ts --burners 6` (see the 2026-11-15
 resolutions of 0013 and 9886). The 2026-09-07 failure recorded no assertion,
 so no root cause is established and the case stays open until a recurrence
 names the failing line.
+
+## Resolution — 2026-11-19 (stale)
+
+- **Status reason:** stale. The only observation is the 2026-09-07 aggregate,
+  which recorded no failing assertion. No recurrence has been recorded in the
+  ten weeks since, through the cleanup-ledger isolation (2026-10-20) and the
+  2026-11-15 hardening that replaced the storage poll with an awaited
+  recovery task. The case has since been renamed `startup recovery resumes
+  only persisted cleanup after a merge was already confirmed`
+  (`apps/backend/tests/commands-registry-environments.test.ts`).
+- **Root cause:** not established; nothing remains to investigate without a
+  failing line.
+- **Change in this pass:** none to code.
+- **Verification (base `fe9d1f5d6`, macOS):**
+  `mise run test:logged -- --name reg-env-0142 -- bun scripts/test-under-contention.ts --burners 6 -- bun --cwd=apps/backend test ./tests/commands-registry-environments.test.ts -t "resumes only persisted cleanup" --rerun-each=20`
+  → PASS (6.0 s).
+- **On recurrence:** reopen this case with the failing assertion.

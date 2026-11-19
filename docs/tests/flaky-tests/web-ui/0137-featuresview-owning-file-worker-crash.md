@@ -14,3 +14,17 @@
 ## Triage note (2026-11-15)
 
 Not changed; stays `open`. A worker `SIGTERM` is the runner terminating the process, not a test deadline, and nothing in the file's timing can cause or prevent it; the single observation has no diagnostics. If it recurs, capture the runner's reason for the signal.
+
+## Review — 2026-11-19 (stays open)
+
+No recurrence has been recorded since the single 2026-08-18 observation
+(`mise run flaky:recurrence -- 0137`: open, no resolving commit). One known way
+a Bun test worker received a stray `SIGTERM` was removed on 2026-11-06
+(`ee2cc8423`): fixtures that handed plausible fake pids to real termination
+code (`process.kill(-pid, "SIGTERM")`, then `SIGKILL`) could signal unrelated
+host processes or process groups, which could include a sibling test worker.
+Fake pids now come from `@orkestrator/protocol/testing/fake-pids`, above every
+`pid_max`. Nothing ties this observation to that mechanism, so the case is not
+closed. Nothing in `FeaturesView.test.tsx` can cause or prevent a signal from
+outside. If it recurs, record which process sent the signal before changing
+the test.

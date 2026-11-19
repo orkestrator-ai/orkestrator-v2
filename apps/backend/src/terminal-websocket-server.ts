@@ -47,6 +47,12 @@ export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS_PER_SESSION = 256;
 export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES_PER_SESSION = 1024 * 1024;
 export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS = 4_096;
 export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES = 8 * 1024 * 1024;
+/**
+ * Size-ownership client ids remembered per socket, so a dropped connection
+ * can give up what its client owned. A normal client sends one; ids past the
+ * bound still resize, and their ownership lapses with its lease instead.
+ */
+export const TERMINAL_WEBSOCKET_MAX_SIZE_CLIENT_IDS = 8;
 
 /**
  * Channel frames stop moving to the socket once it holds this much. The backlog
@@ -114,6 +120,8 @@ type SocketState = {
   pendingInputResults: Map<number, number>;
   invalidChannelFrames: number;
   pendingOperations: number;
+  /** Client ids this socket's resizes named (`terminal-size-ownership.ts`). */
+  sizeClientIds: Set<string>;
 };
 
 export type TerminalWebSocketServerOptions = {
@@ -371,6 +379,7 @@ export class TerminalWebSocketGateway {
       pendingInputResults: new Map(),
       invalidChannelFrames: 0,
       pendingOperations: 0,
+      sizeClientIds: new Set(),
     };
     this.sockets.add(state);
     this.options.metrics?.recordTerminalWebSocketOpened();
@@ -497,6 +506,12 @@ export class TerminalWebSocketGateway {
           );
           break;
         }
+        if (
+          frame.clientId !== undefined &&
+          state.sizeClientIds.size < TERMINAL_WEBSOCKET_MAX_SIZE_CLIENT_IDS
+        ) {
+          state.sizeClientIds.add(frame.clientId);
+        }
         this.enqueueOperation({
           state,
           channelId: channel.id,
@@ -504,12 +519,17 @@ export class TerminalWebSocketGateway {
           operationId: frame.operationId,
           operation: "resize",
           bytes: 16,
-          invoke: () =>
-            this.options.backend.invoke("terminal_resize", {
+          invoke: () => {
+            // Input already accepted by the gateway must drain. A queued
+            // geometry update has no meaning once its view has unsubscribed.
+            if (state.channels.get(channel.id) !== channel) return { delivered: false };
+            return this.options.backend.invoke("terminal_resize", {
               sessionId: channel.sessionId,
               cols: frame.cols,
               rows: frame.rows,
-            }),
+              ...(frame.clientId === undefined ? {} : { clientId: frame.clientId }),
+            });
+          },
         });
         break;
       }
@@ -666,6 +686,9 @@ export class TerminalWebSocketGateway {
     state.sessions.set(channel.sessionId, channel);
     this.channelCount += 1;
     this.options.metrics?.recordTerminalWebSocketChannelOpened();
+    if (frame.clientId && state.sizeClientIds.size < TERMINAL_WEBSOCKET_MAX_SIZE_CLIENT_IDS) {
+      state.sizeClientIds.add(frame.clientId);
+    }
     try {
       const [statusValue, snapshotValue] = await Promise.all([
         this.options.backend.invoke("get_terminal_session", { sessionId: frame.sessionId }),
@@ -1123,7 +1146,10 @@ export class TerminalWebSocketGateway {
       options.state.pendingOperations -= 1;
       if (options.state.pendingOperations === 0) {
         this.operationSockets.delete(options.state);
-        if (!this.sockets.has(options.state)) this.releaseCredentialWatch(options.state);
+        if (!this.sockets.has(options.state)) {
+          this.releaseCredentialWatch(options.state);
+          this.releaseSizeOwnership(options.state);
+        }
       }
       if (this.sessionOperations.get(options.sessionId) === sequence && sequence.count === 0) {
         this.sessionOperations.delete(options.sessionId);
@@ -1225,6 +1251,10 @@ export class TerminalWebSocketGateway {
     // admitted it lapses, so the watch is released when the last operation settles.
     // Each socket kept this way holds an operation, so the operation bounds bound it.
     if (state.pendingOperations === 0) this.releaseCredentialWatch(state);
+    this.sockets.delete(state);
+    // After the queue, like the credential watch: a resize still queued would
+    // otherwise renew the lease this release shortens.
+    if (state.pendingOperations === 0) this.releaseSizeOwnership(state);
     if (state.authTimer) clearTimeout(state.authTimer);
     if (state.closeTimer) clearTimeout(state.closeTimer);
     state.authTimer = null;
@@ -1235,12 +1265,38 @@ export class TerminalWebSocketGateway {
     state.controlQueue = [];
     state.pendingInputResults.clear();
     state.queuedBytes = 0;
-    this.sockets.delete(state);
     this.channelCount = Math.max(0, this.channelCount - channelCount);
     for (let index = 0; index < channelCount; index += 1) {
       this.options.metrics?.recordTerminalWebSocketChannelClosed();
     }
     this.options.metrics?.recordTerminalWebSocketClosed();
+  }
+
+  /**
+   * A dropped connection keeps what its client owned only for the backend's
+   * disconnect grace period, so another client's next resize can take a
+   * terminal over once this one is really gone. A client id that another
+   * live socket still uses (a reconnect that overtook this close) keeps it.
+   */
+  private releaseSizeOwnership(state: SocketState): void {
+    const clientIds = Array.from(state.sizeClientIds);
+    state.sizeClientIds.clear();
+    for (const clientId of clientIds) {
+      let stillConnected = false;
+      for (const other of this.sockets) {
+        if (other.sizeClientIds.has(clientId)) stillConnected = true;
+      }
+      if (stillConnected) continue;
+      void Promise.resolve()
+        .then(() =>
+          this.options.backend.invoke("release_terminal_size", { clientId, disconnected: true }),
+        )
+        .catch((error: unknown) =>
+          log.debug("size-release-failed", () => ({
+            error: formatLogError(error, { stack: false }),
+          })),
+        );
+    }
   }
 
   private releaseCredentialWatch(state: SocketState): void {

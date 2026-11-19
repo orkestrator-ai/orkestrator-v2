@@ -251,8 +251,59 @@ export function createTerminalsApi(client: BackendClient) {
     }
   }
 
-  async function resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
-    await domain().terminal_resize({ sessionId, cols, rows });
+  /**
+   * A passive size update. `clientId` names this window for size ownership
+   * (`terminal-size-client.ts`): the backend applies the size only while this
+   * window owns it or nobody does. Without it the call reads as an older
+   * client's.
+   */
+  async function resizeTerminal(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    clientId?: string,
+  ): Promise<void> {
+    await domain().terminal_resize({
+      sessionId,
+      cols,
+      rows,
+      ...(clientId === undefined ? {} : { clientId }),
+    });
+  }
+
+  /**
+   * Takes a terminal's size for this window and applies `cols` x `rows`, for
+   * a container or a local session alike. Returns false when the backend
+   * predates size ownership (it then applies every resize anyway, so the
+   * caller sends an ordinary one instead).
+   */
+  async function claimTerminalSize(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    clientId: string,
+  ): Promise<boolean> {
+    try {
+      await domain().claim_terminal_size({ sessionId, clientId, cols, rows });
+      return true;
+    } catch (error) {
+      if (incompatibility(error, "claim_terminal_size")?.code === "unknown-command") return false;
+      throw error;
+    }
+  }
+
+  /**
+   * Gives up this window's size ownership of one terminal, for a container or
+   * a local session alike. Best effort: an older backend has no such command
+   * and keeps no ownership to give up, so its refusal reads as nothing released.
+   */
+  async function releaseTerminalSize(sessionId: string, clientId: string): Promise<void> {
+    try {
+      await domain().release_terminal_size({ clientId, sessionId });
+    } catch (error) {
+      if (incompatibility(error, "release_terminal_size")?.code === "unknown-command") return;
+      throw error;
+    }
   }
 
   return {
@@ -273,6 +324,8 @@ export function createTerminalsApi(client: BackendClient) {
     writeTerminal,
     resumeTerminalInput,
     resizeTerminal,
+    claimTerminalSize,
+    releaseTerminalSize,
   };
 }
 
@@ -297,5 +350,7 @@ export const {
   writeTerminal,
   resumeTerminalInput,
   resizeTerminal,
+  claimTerminalSize,
+  releaseTerminalSize,
 } = createTerminalsApi(commandBackendClient);
 // --- Configuration Commands ---

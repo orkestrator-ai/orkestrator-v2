@@ -1,0 +1,93 @@
+[
+  {
+    "label": "mid-turn",
+    "activity": "working",
+    "completion": {
+      "status": "running",
+      "dispatch": "dispatched"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Run the full test suite",
+        "textLength": 23,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Run the full test suite"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the suite.",
+        "textLength": 19,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the suite."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "execute",
+            "toolState": "pending"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "dispatch": "dispatched",
+      "turn": {
+        "state": "completed"
+      }
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Run the full test suite",
+        "textLength": 23,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Run the full test suite"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Starting the suite.",
+        "textLength": 19,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Starting the suite."
+          },
+          {
+            "type": "tool-invocation",
+            "toolName": "execute",
+            "toolState": "failure",
+            "error": true
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "cancelsSent": 1
+    }
+  }
+]

@@ -77,7 +77,7 @@ export function useNodeWorkspaceServices(): void {
   useGlobalActivityMonitor();
   // Setup lifecycle events and resume/reconnect reconciliation, once per node.
   useEnvironmentLifecycleService();
-  // Opening an environment clears its unread badge for every client.
+  // A foreground view acknowledges only the unread work it has displayed.
   useUnreadEnvironmentSync();
 }
 

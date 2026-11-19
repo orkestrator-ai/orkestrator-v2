@@ -1,0 +1,15 @@
+{"replay":1,"bridge":"pi","scenario":"basic-turn","source":"synthetic","provider":"@earendil-works/pi-coding-agent","providerVersion":"1.5.2","description":"Thinking, prose and a bash call in one response, then a closing answer in a second response."}
+{"action":"prompt","text":"List the workspace"}
+{"frame":{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"timestamp":1767225600000}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Listing files first."}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Let me look."}}}
+{"frame":{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"stopReason":"toolUse","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"timestamp":1767225601000}}}
+{"frame":{"type":"tool_execution_start","toolCallId":"call-ls","toolName":"bash","args":{"command":"ls -1"}}}
+{"frame":{"type":"tool_execution_end","toolCallId":"call-ls","toolName":"bash","result":{"content":[{"type":"text","text":"README.md\nsrc\n"}]},"isError":false,"durationMs":5}}
+{"action":"observe","label":"after-tool"}
+{"frame":{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"timestamp":1767225600000}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"The workspace holds a README and a src directory."}}}
+{"frame":{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"stopReason":"stop","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"timestamp":1767225601000}}}
+{"frame":{"type":"turn_end","message":{"role":"assistant","content":[]}}}
+{"frame":{"type":"agent_settled","aborted":false}}
+{"action":"end"}

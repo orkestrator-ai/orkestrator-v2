@@ -1,0 +1,106 @@
+[
+  {
+    "label": "parked",
+    "activity": "waiting",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [
+      {
+        "kind": "command-approval",
+        "toolName": "Bash"
+      }
+    ],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Delete the build directory",
+        "textLength": 26,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delete the build directory"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "pending"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Delete the build directory",
+        "textLength": 26,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delete the build directory"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "failure",
+            "error": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Understood, I left the build directory in place.",
+        "textLength": 48,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Understood, I left the build directory in place."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id",
+      "decisions": [
+        {
+          "toolName": "Bash",
+          "behavior": "deny"
+        }
+      ]
+    }
+  }
+]

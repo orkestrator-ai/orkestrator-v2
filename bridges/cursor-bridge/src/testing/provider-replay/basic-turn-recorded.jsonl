@@ -1,0 +1,8 @@
+{"replay":1,"bridge":"cursor","source":"recorded","provider":"@cursor/sdk","providerVersion":"1.4.1","scenario":"basic-turn","description":"Captured Cursor SDK text deltas, turn-ended update and successful run.wait result."}
+{"action":"prompt","text":"Reply with exactly: Replay fixture ready. Do not use any tools."}
+{"frame":{"type":"text-delta","text":"Replay"}}
+{"frame":{"type":"text-delta","text":" fixture"}}
+{"frame":{"type":"text-delta","text":" ready"}}
+{"frame":{"type":"text-delta","text":"."}}
+{"frame":{"type":"turn-ended","usage":{"inputTokens":9773,"outputTokens":31,"cacheReadTokens":3968,"cacheWriteTokens":0,"reasoningTokens":27}}}
+{"action":"cursor-terminal","result":{"status":"finished","result":"Replay fixture ready.","durationMs":2623,"usage":{"inputTokens":9773,"outputTokens":31,"cacheReadTokens":3968,"cacheWriteTokens":0,"totalTokens":9804,"reasoningTokens":27}}}

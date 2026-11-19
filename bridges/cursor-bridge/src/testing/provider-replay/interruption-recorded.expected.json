@@ -1,0 +1,77 @@
+[
+  {
+    "label": "mid-turn",
+    "activity": "working",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Run sleep 12.",
+        "textLength": 13,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Run sleep 12."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "shell",
+            "toolState": "pending"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Run sleep 12.",
+        "textLength": 13,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Run sleep 12."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "shell",
+            "toolState": "failure",
+            "error": true
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  }
+]

@@ -12,6 +12,7 @@
  * JSONL session file, and re-attaching reopens that file. Losing this bridge's
  * state costs a rendered transcript; it never costs the conversation.
  */
+import { replayRecorder } from "./replay-recorder.js";
 import { randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
@@ -808,6 +809,7 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
   // release it: a listener left attached to a disposed session keeps the whole
   // object graph — messages, tools, extension runner — alive.
   state.unsubscribe = session.subscribe((event) => {
+    replayRecorder?.frame(state.id, event);
     captureHistoryEntries(state, session.sessionManager);
     applySessionEvent(state, event);
     abortCancelledCompactionOnStart(state, event, session);
@@ -1264,6 +1266,13 @@ export function watchSessionFileWrites(state: SessionState, manager: SessionMana
 function approvalExtension(state: SessionState): (pi: ExtensionAPI) => void {
   return (pi) => {
     pi.on("tool_call", async (event) => {
+      // Recorded in the shape the replay suite routes back to the approval gate.
+      replayRecorder?.frame(state.id, {
+        type: "tool_call",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.input,
+      });
       const decision = await requestToolApproval(
         state,
         event.toolCallId,

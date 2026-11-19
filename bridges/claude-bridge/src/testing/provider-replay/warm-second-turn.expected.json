@@ -1,0 +1,64 @@
+[
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Summarise the README",
+        "textLength": 20,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Summarise the README"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The README describes a small replay fixture project.",
+        "textLength": 52,
+        "parts": [
+          {
+            "type": "text",
+            "text": "The README describes a small replay fixture project."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "Confirm the summary",
+        "textLength": 19,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Confirm the summary"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Summary confirmed.",
+        "textLength": 18,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Summary confirmed."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  }
+]

@@ -343,6 +343,10 @@ describe("DiffViewerTab selective staging", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Staged" }));
     await screen.findByRole("button", { name: "Unstage change 1" });
+    // The staged diff ends at the index, not the working file.
+    expect(screen.getByTestId("diff-viewer-endpoints").textContent).toContain(
+      "Staged version (index)",
+    );
     expect(calls("changes_resolve_live_detail").at(-1)).toEqual({
       resourceKey: STAGED_KEY,
       pathId: "u:src/app.ts",

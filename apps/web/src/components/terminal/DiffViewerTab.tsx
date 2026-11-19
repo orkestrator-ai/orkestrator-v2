@@ -936,7 +936,12 @@ function DiffHeader({
   const scopeKey = measurement?.scope ?? identity?.scope ?? null;
   const baseline = measurement?.baselineVersion ?? null;
   const beforeLabel = baseline ? formatBaselineVersion(baseline) : "Before";
-  const afterLabel = isLive ? "Current workspace file" : "After";
+  // The staged diff's after side is the index entry, not the working file.
+  const afterLabel = isLive
+    ? identity?.scope === "staged"
+      ? "Staged version (index)"
+      : "Current workspace file"
+    : "After";
   // A live comparison is titled with its full baseline ("vs <commit>"), as the
   // Files panel names it; a historical one with both endpoints.
   const endpointTitle = isLive

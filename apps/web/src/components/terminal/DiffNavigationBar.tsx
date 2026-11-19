@@ -187,7 +187,7 @@ export function DiffNavigationBar({
               type="button"
               variant="outline"
               size="sm"
-              className="h-6 gap-1 px-2"
+              className="h-6 gap-1 px-2 text-[11px]"
               onClick={onReload}
             >
               <RefreshCw className="h-3 w-3" />

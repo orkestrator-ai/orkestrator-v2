@@ -729,6 +729,22 @@ describe("MultiReviewFindingsBadge", () => {
     );
   });
 
+  test("sits in the action row as bare pills at the inspector buttons' height", () => {
+    renderInAppCommandScope(<MultiReviewFindingsBadge findings={[]} reviewerCount={0} />);
+    // No outlined container around the pills: it made the row taller than
+    // the buttons beside it.
+    const badge = screen.getByTestId("multi-review-findings-badge");
+    for (const frame of ["border", "border-border", "p-1", "bg-flow-node/95"]) {
+      expect(badge.classList.contains(frame)).toBe(false);
+    }
+    for (const severity of ["P0", "P1", "P2"]) {
+      // h-7 matches INSPECTOR_BUTTON_CLASS in MultiReviewTab.
+      expect(
+        screen.getByTestId(`multi-review-findings-badge-${severity}`).classList.contains("h-7"),
+      ).toBe(true);
+    }
+  });
+
   test("explains an empty list", () => {
     const view = renderInAppCommandScope(
       <MultiReviewFindingsBadge findings={[]} reviewerCount={0} />,

@@ -113,7 +113,9 @@ export function ProjectGroupHeader({
   coordinatorActivity?: CoordinatorActivityState | null;
   newEnvironment: { label: string; title: string };
 }) {
-  const anchorRef = useRef<HTMLButtonElement>(null);
+  // Anchor after the whole row so the hover card leaves its home activity and
+  // other header actions clickable.
+  const anchorRef = useRef<HTMLSpanElement>(null);
   const tooltip = useHoverTooltip();
   const leadingIcon =
     icon ??
@@ -136,12 +138,12 @@ export function ProjectGroupHeader({
           : "hover:bg-hover",
       )}
     >
+      <span ref={anchorRef} aria-hidden="true" className="pointer-events-none absolute inset-0" />
       <ContextMenu>
         <ContextMenuTrigger className="contents">
           <button
             {...(sortable ? dragAttributes : {})}
             {...(sortable ? dragListeners : {})}
-            ref={anchorRef}
             type="button"
             aria-current={ariaCurrent}
             aria-label={accessibleLabel}

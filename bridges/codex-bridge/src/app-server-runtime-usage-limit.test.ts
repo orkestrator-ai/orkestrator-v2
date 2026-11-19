@@ -7,7 +7,7 @@ jest.setTimeout(30_000);
  * The status snapshot names a usage limit by app-server's own code, so the
  * backend does not have to match the error's wording.
  */
-describe("usage-limit failure code", () => {
+describe("failure codes", () => {
   async function failedTurn(h: Harness, error: Record<string, unknown>) {
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
@@ -46,6 +46,32 @@ describe("usage-limit failure code", () => {
     const status = h.runtime.getStatus(sessionId);
     expect(status).toMatchObject({ status: "error", error: "Invalid request" });
     expect(status).not.toHaveProperty("errorCode");
+    // `badRequest` does not settle a reason either; the text decides.
+    expect(status).not.toHaveProperty("failureReason");
+  });
+
+  for (const [codexErrorInfo, failureReason] of [
+    ["usageLimitExceeded", "usage-limit"],
+    ["contextWindowExceeded", "context-exhausted"],
+    ["modelNotFound", "model-unavailable"],
+    ["rateLimitExceeded", "rate-limit"],
+    ["internalServerError", "provider-unavailable"],
+    ["unauthorized", "authentication"],
+  ] as const) {
+    test(`${codexErrorInfo} reports failureReason ${failureReason}`, async () => {
+      const h = await harness();
+      const sessionId = await failedTurn(h, { message: "It failed.", codexErrorInfo });
+      expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "error", failureReason });
+    });
+  }
+
+  test("a connection failure leaves the reason to the text, since its status is dropped", async () => {
+    const h = await harness();
+    const sessionId = await failedTurn(h, {
+      message: "unexpected status 401 Unauthorized",
+      codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
+    });
+    expect(h.runtime.getStatus(sessionId)).not.toHaveProperty("failureReason");
   });
 
   test("the next accepted turn clears the code with the error", async () => {
@@ -62,5 +88,6 @@ describe("usage-limit failure code", () => {
     const status = h.runtime.getStatus(sessionId);
     expect(status).toMatchObject({ status: "running" });
     expect(status).not.toHaveProperty("errorCode");
+    expect(status).not.toHaveProperty("failureReason");
   });
 });

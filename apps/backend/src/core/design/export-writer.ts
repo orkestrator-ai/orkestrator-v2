@@ -1,10 +1,10 @@
 /**
  * Safe repository export of design canvases (`.orkdes` files).
  *
- * The generic `write_local_file` / `write_container_file` writers overwrite
- * unconditionally (and the container one truncates the destination before the
- * payload has arrived). Export instead follows the destination write protocol
- * described in docs/architecture/design-canvas.md:
+ * The generic `write_local_file` / `write_container_file` writers stage the
+ * payload and support digest and absence checks (`file-write-precondition.ts`).
+ * Export applies its own rules for `.orkdes` paths and recovery. It follows the
+ * destination write protocol described in docs/architecture/design-canvas.md:
  *
  * 1. validate a repository-relative `.orkdes` path (folders allowed);
  * 2. serialize Orkestrator writers per destination and pin parent directories;

@@ -343,7 +343,7 @@ export const writeLocalFileCommand = defineCommand({
   read: false,
   args: Schema.Struct({
     worktreePath: Schema.String,
-    // The editor's precondition `{ sha256 }`, checked by `parseFileWritePrecondition`.
+    // The editor's digest or absence check, validated by parseFileWritePrecondition.
     expected: optionalUnknown,
     filePath: Schema.String,
     base64Data: Schema.String,

@@ -62,6 +62,35 @@ const REASONS: Record<string, string> = {
   "changes.reason.capture-timeout": "Capturing the workspace took too long",
   "changes.reason.executor-private-endpoints":
     "Measured by the bridge; the file contents were not retained",
+  "changes.staging.unsupported-identity":
+    "Hunks can be staged only from a current workspace diff (unstaged, uncommitted or environment changes) and unstaged from the staged diff",
+  "changes.staging.side-unknown": "One side of this diff could not be read, so it cannot be staged",
+  "changes.staging.whole-file":
+    "New, deleted and renamed files are staged as a whole file, not by hunk",
+  "changes.staging.path-encoding": "This file's path cannot be staged by hunk",
+  "changes.staging.binary": "Binary files cannot be staged by hunk",
+  "changes.staging.too-large": "This file is too large to stage by hunk",
+  "changes.staging.truncated": "This change is cut off in the view, so it cannot be staged by hunk",
+  "changes.staging.hunk-changed":
+    "This change no longer matches the diff you reviewed. Reload the diff and review it again.",
+  "changes.staging.worktree-changed":
+    "The file changed after this diff was loaded. Reload the diff and review it again.",
+  "changes.staging.head-changed":
+    "The committed version of this file changed. Reload the diff and review it again.",
+  "changes.staging.index-changed":
+    "The staged version of this file changed after this diff was loaded. Reload the diff and review it again.",
+  "changes.staging.index-mismatch":
+    "This file already has staged changes, so this diff is not against the index. Switch to Unstaged to stage from the current index.",
+  "changes.staging.index-conflict": "This file has unresolved merge conflicts in the index",
+  "changes.staging.not-in-index": "This file is not tracked by Git",
+  "changes.staging.special-file": "Symlinks and submodules cannot be staged by hunk",
+  "changes.staging.git-conversion":
+    "Git converts this file when staging it (line endings or a filter), so it cannot be staged by hunk",
+  "changes.staging.git-failed":
+    "Git could not update the index (another Git command may be running). Try again.",
+  "changes.error.owner-replaced":
+    "The workspace was replaced after this diff was loaded. Reload the diff.",
+  "changes.error.runtime-unavailable": "The environment is not running",
 };
 
 export function changeLabel(key: string, args: Record<string, string | number> = {}): string {
@@ -71,7 +100,8 @@ export function changeLabel(key: string, args: Record<string, string | number> =
 
 export function changeReason(key: string): string {
   return (
-    REASONS[key] ?? key.replace(/^changes\.(reason|body|error|restore)\./, "").replaceAll("-", " ")
+    REASONS[key] ??
+    key.replace(/^changes\.(reason|body|error|restore|staging)\./, "").replaceAll("-", " ")
   );
 }
 

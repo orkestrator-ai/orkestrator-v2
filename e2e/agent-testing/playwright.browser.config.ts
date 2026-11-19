@@ -28,6 +28,7 @@ export default defineConfig({
     "renderer-error-ring-browser.spec.ts",
     "pull-request-pane.spec.ts",
     "backend-owned-state.spec.ts",
+    "file-save-conflicts.spec.ts",
     "agent-accounts.spec.ts",
     "permission-rules.spec.ts",
     "design-canvas.spec.ts",

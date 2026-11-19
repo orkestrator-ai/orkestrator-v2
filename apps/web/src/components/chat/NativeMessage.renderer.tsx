@@ -30,7 +30,13 @@ import {
   TranscriptReferencePart,
   canLoadImagePreview,
 } from "./NativeMessage.file-parts";
-import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
+import {
+  CompactionPart,
+  ImagePart,
+  RetryPart,
+  StatusLine,
+  StatusPart,
+} from "./NativeMessage.notice-parts";
 import { AgentGroupPart, SubagentPart, TaskGroupPart } from "./NativeMessage.agent-parts";
 import { NativeAsyncQuestionCard } from "./NativeAsyncQuestionCard";
 import { ArtifactPart } from "./rich/ArtifactPart";
@@ -405,7 +411,7 @@ function MessagePartContent({
     case "retry":
       return <RetryPart part={part} />;
     case "status":
-      return <StatusPart part={part} />;
+      return embedded ? <StatusLine part={part} /> : <StatusPart part={part} />;
     case "image":
       return <ImagePart part={part} containerId={containerId} />;
     case "subagent":

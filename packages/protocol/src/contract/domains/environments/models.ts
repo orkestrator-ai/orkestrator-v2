@@ -387,6 +387,8 @@ export const clientEnvironmentFields = {
   agentSessionCompletedAt: optionalString,
   /** Backend-owned aggregate agent activity shared by every frontend. */
   agentActivityState: Schema.optional(AgentActivityStateSchema),
+  /** A native tab is waiting, even when another activity source is working. */
+  hasWaitingNativeTab: Schema.optional(Schema.Boolean),
   /** Last-write-wins timestamp for the aggregate activity snapshot. */
   agentActivityUpdatedAt: optionalString,
   createdFromCommit: optionalString,

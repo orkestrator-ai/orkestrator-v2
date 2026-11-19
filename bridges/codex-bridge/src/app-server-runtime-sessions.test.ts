@@ -2162,6 +2162,43 @@ describe("compaction", () => {
     ).toBe(true);
   });
 
+  test("confirmed compaction invalidates old usage until a fresh token report", async () => {
+    const { h, sessionId } = await compactableSession();
+    const notifyUsage = (turnId: string, usedTokens: number) =>
+      h.child().notify("thread/tokenUsage/updated", {
+        threadId: "thread-1",
+        turnId,
+        tokenUsage: {
+          total: { totalTokens: 200_000, cachedInputTokens: 90_000 },
+          last: { totalTokens: usedTokens, cachedInputTokens: 40_000 },
+          modelContextWindow: 200_000,
+        },
+      });
+    notifyUsage("turn-1", 150_000);
+    await h.drain();
+    expect(h.runtime.getStatus(sessionId)?.contextUsage?.usedTokens).toBe(150_000);
+
+    expect(await h.runtime.compactSession(sessionId)).toBe("accepted");
+    h.child().notify("thread/compacted", { threadId: "thread-1", turnId: "turn-compact" });
+    await h.drain();
+
+    const invalidated = h.runtime.getStatus(sessionId)?.contextUsage;
+    expect(invalidated).toMatchObject({
+      usedTokens: 0,
+      occupancyUnknown: true,
+      contextCompacted: true,
+      cacheReadTokens: 90_000,
+      turns: [{ turnId: "turn-1", cacheReadTokens: 40_000 }],
+    });
+    notifyUsage("turn-1", 150_000);
+    await h.drain();
+    expect(h.runtime.getStatus(sessionId)?.contextUsage).toEqual(invalidated);
+    notifyUsage("turn-2", 40_000);
+    await h.drain();
+    expect(h.runtime.getStatus(sessionId)?.contextUsage).toMatchObject({ usedTokens: 40_000 });
+    expect(h.runtime.getStatus(sessionId)?.contextUsage?.contextCompacted).toBeUndefined();
+  });
+
   test("a compacting thread is never detached by the idle sweep", async () => {
     const { h, sessionId } = await compactableSession();
     await h.runtime.compactSession(sessionId);

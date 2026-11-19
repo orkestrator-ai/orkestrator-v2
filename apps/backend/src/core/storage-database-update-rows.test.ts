@@ -107,24 +107,18 @@ describe("updateStoreRows", () => {
     });
   });
 
-  test("carries the cached store forward, so the next reader fetches no rows", async () => {
+  test("invalidates the whole-store cache after commit and leaves its old snapshot intact", async () => {
     const db = await database();
     seedMail(db);
-    db.readStoreSerialized("mail");
+    const before = db.readStoreSerialized("mail")!;
     db.updateStoreRows("mail", [{ collection: "mailboxes", key: "b", value: { n: 9 } }]);
 
-    const query = spyOn(db.db, "query");
-    try {
-      const serialized = db.readStoreSerialized("mail")!;
-      expect(serialized.revision).toBe(db.storeRevision("mail")!);
-      expect(
-        query.mock.calls.some(([sql]) => String(sql).includes("FROM store_rows WHERE store")),
-      ).toBe(false);
-      const rows = [...serialized.rows].map((row) => [row.key, row.value]);
-      expect(rows).toContainEqual(["b", JSON.stringify({ n: 9 })]);
-    } finally {
-      query.mockRestore();
-    }
+    const serialized = db.readStoreSerialized("mail")!;
+    expect(serialized.revision).toBe(before.revision + 1);
+    expect([...before.rows].find((row) => row.key === "b")?.value).toBe(JSON.stringify({ n: 2 }));
+    expect([...serialized.rows].find((row) => row.key === "b")?.value).toBe(
+      JSON.stringify({ n: 9 }),
+    );
     // Another connection reads the same committed value.
     const other = await database(path.dirname(db.path));
     expect((other.readStore("mail")!.value as { mailboxes: unknown }).mailboxes).toEqual({
@@ -171,6 +165,40 @@ describe("updateStoreRows", () => {
       }),
     ).toBe(true);
     expect(db.storeRevision("mail")).toBe(before! + 1);
+  });
+
+  test("tracks UTF-8 bytes across commits, rollbacks and another connection's writes", async () => {
+    const db = await database();
+    seedMail(db);
+    // Existing stores bootstrap the byte total on the first capped update.
+    const size = () => {
+      const stored = db.readStoreSerialized("mail")!;
+      return (
+        Buffer.byteLength(stored.document ?? "") +
+        Array.from(stored.rows).reduce((total, row) => total + Buffer.byteLength(row.value), 0)
+      );
+    };
+    db.updateStoreRows("mail", [], { maxBytes: size() });
+    const other = await database(path.dirname(db.path));
+    other.updateStoreRows("mail", [
+      { collection: "mailboxes", key: "b", value: "π" },
+      { collection: "mailboxes", key: "c", value: "Ꙭ" },
+    ]);
+    const revision = db.storeRevision("mail");
+    const limit = size();
+    const query = spyOn(db.db, "query");
+    try {
+      const edits = [{ collection: "mailboxes", key: "b", value: "ππ" }];
+      expect(() => db.updateStoreRows("mail", edits, { maxBytes: limit + 1 })).toThrow(
+        StoreTooLargeError,
+      );
+      expect(db.storeRevision("mail")).toBe(revision);
+      expect(db.updateStoreRows("mail", edits, { maxBytes: limit + 2 })).toBe(true);
+      expect(query.mock.calls.some(([sql]) => /sum\(/i.test(sql))).toBe(false);
+    } finally {
+      query.mockRestore();
+    }
+    expect(size()).toBe(limit + 2);
   });
 
   test("sets a record row's indexed owner", async () => {

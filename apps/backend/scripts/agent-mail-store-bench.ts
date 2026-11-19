@@ -1,3 +1,4 @@
+import { StorageService } from "../src/core/storage.js";
 import { benchOption as option, createAgentMailBenchFixture } from "./agent-mail-bench-fixture.js";
 
 /**
@@ -10,13 +11,15 @@ import { benchOption as option, createAgentMailBenchFixture } from "./agent-mail
  * Times the storage reads behind `check_inbox` (identity, then the inbox),
  * `send_message` (directory, send, recipient mailbox), `message_status`, the
  * inject sweep and the UI summary, and two writes (send and acknowledge).
- * `readAfterWriteMs` is an inbox read that follows a send, so it never finds
- * the store unchanged. Each figure is the mean milliseconds per call and the
- * CPU milliseconds per call. Figures are machine- and load-specific; compare
- * runs on one host only. Todo 0741 records measured runs.
+ * The after-write reads target one fixed environment and inbox after a
+ * second connection sends elsewhere. Only unrelated mail grows with
+ * `--messages`. The receipt-only samples prepare a fresh message in the same
+ * recipient mailbox on that second connection outside the timed interval.
+ * Figures are mean wall and CPU milliseconds per call. Compare runs on one
+ * host with the same environment, tab and iteration counts.
  */
 
-const environments = Math.max(2, option("environments", 100));
+const environments = Math.max(3, option("environments", 100));
 const tabs = Math.max(1, option("tabs", 6));
 const messages = option("messages", 600);
 const iterations = Math.max(1, option("iterations", 200));
@@ -26,8 +29,10 @@ const fixture = await createAgentMailBenchFixture({
   environments,
   tabs,
   messages,
+  reserveFirstEnvironment: true,
 });
 const { storage } = fixture;
+const writer = new StorageService(fixture.dataDir);
 const round = (value: number) => Math.round(value * 100) / 100;
 let sequence = 0;
 
@@ -44,21 +49,46 @@ async function measure(operation: (index: number) => Promise<unknown>) {
   };
 }
 
-const env = (index: number) => `env-${index % environments}`;
+/** Time the operation alone, after a commit on the other connection. */
+async function measureAfterSend(
+  prepare: (index: number) => ReturnType<typeof send>,
+  operation: (message: Awaited<ReturnType<typeof send>>) => Promise<unknown>,
+) {
+  let wall = 0;
+  let cpu = 0;
+  for (let index = 0; index < iterations + 5; index += 1) {
+    const message = await prepare(index);
+    const cpuBefore = process.cpuUsage();
+    const started = performance.now();
+    await operation(message);
+    if (index < 5) continue;
+    wall += performance.now() - started;
+    const used = process.cpuUsage(cpuBefore);
+    cpu += (used.user + used.system) / 1_000;
+  }
+  return { ms: round(wall / iterations), cpuMs: round(cpu / iterations) };
+}
+
+const env = (index: number) => `env-${1 + (index % (environments - 1))}`;
 const tab = (index: number) => `tab-${index % tabs}`;
-const send = (index: number) =>
-  storage.sendAgentMail(
+const target = { environmentId: "env-0", tabId: "tab-0" };
+const send = (index: number, recipient = { environmentId: env(index + 1), tabId: tab(index) }) =>
+  writer.sendAgentMail(
     { kind: "tab", environmentId: env(index), projectId: "project", tabId: "tab-0" },
     {
       requestId: `bench-run-${(sequence += 1)}`,
-      toEnvironmentId: env(index + 1),
-      toTabId: tab(index),
+      toEnvironmentId: recipient.environmentId,
+      toTabId: recipient.tabId,
       body: "m".repeat(1_800),
     },
   );
 
+const sendElsewhere = (index: number) => send(index);
+const sendToTarget = (index: number) => send(index, target);
+
 try {
-  const sent = await send(0);
+  await writer.init();
+  const sent = await sendToTarget(0);
   const results = {
     pullTabIdsMs: await measure((index) => storage.listAgentMailPullTabIds(env(index))),
     directoryMs: await measure((index) =>
@@ -79,13 +109,38 @@ try {
       const message = await send(index);
       await storage.ackAgentMail(message.toEnvironmentId, message.toTabId, message.id);
     }),
-    readAfterWriteMs: await measure(async (index) => {
-      const message = await send(index);
-      await storage.getAgentMailMailbox(message.toEnvironmentId, message.toTabId, { limit: 50 });
-    }),
+    identityAfterWriteMs: await measureAfterSend(sendElsewhere, () =>
+      storage.listAgentMailPullTabIds(target.environmentId),
+    ),
+    directoryAfterWriteMs: await measureAfterSend(sendElsewhere, () =>
+      storage.listAgentMailboxes({
+        environmentId: target.environmentId,
+        currentEnvironmentId: target.environmentId,
+        limit: 200,
+      }),
+    ),
+    inboxAfterWriteMs: await measureAfterSend(sendElsewhere, () =>
+      storage.getAgentMailMailbox(target.environmentId, target.tabId, {
+        unreadOnly: true,
+        limit: 50,
+      }),
+    ),
+    mailboxBatchAfterWriteMs: await measureAfterSend(sendElsewhere, () =>
+      storage.getAgentMailMailboxes([target]),
+    ),
+    statusAfterWriteMs: await measureAfterSend(sendElsewhere, () =>
+      storage.getAgentMailStatus(sent.id),
+    ),
+    acknowledgeOnlyMs: await measureAfterSend(sendToTarget, (message) =>
+      storage.ackAgentMail(target.environmentId, target.tabId, message.id),
+    ),
+    seenOnlyMs: await measureAfterSend(sendToTarget, (message) =>
+      storage.markAgentMailSeen(target.environmentId, target.tabId, message.id),
+    ),
   };
   fixture.log(JSON.stringify({ environments, tabs, messages, iterations, ...results }));
 } finally {
+  writer.close();
   await fixture.dispose();
 }
 process.exit(0);

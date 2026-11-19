@@ -15,11 +15,40 @@ interface FileDirtyEntry {
    * (`originalContent` follows disk so the tab shows the real difference).
    */
   baseContent?: string;
+  /**
+   * A save was refused and the file could not be read back: it was deleted,
+   * or it is no longer something the editor opens. Cleared when disk is read.
+   */
+  diskUnreadable?: "unreadable" | "missing";
+  /** Changes when an external action explicitly replaces the editor document. */
+  documentRevision?: number;
 }
 
 /** The content a save requires the file to still hold. */
 export function fileSaveBaseline(entry: FileDirtyEntry): string {
   return entry.baseContent ?? entry.originalContent;
+}
+
+/**
+ * The editor's conflict state: the buffer has unsaved edits and the file on
+ * disk is no longer what they were made from. Both versions are kept until the
+ * user chooses: `disk` is the newer version as last read, the buffer is
+ * `entry.content`. A save in this state is refused by the backend precondition
+ * rather than replacing the newer work.
+ */
+export type FileSaveConflict =
+  | { kind: "changed"; disk: string; mine: string }
+  | { kind: "unreadable" | "missing"; mine: string };
+
+export function fileSaveConflict(entry: FileDirtyEntry | undefined): FileSaveConflict | null {
+  if (!entry) return null;
+  if (entry.diskUnreadable) return { kind: entry.diskUnreadable, mine: entry.content };
+  if (entry.baseContent === undefined || entry.content === entry.originalContent) return null;
+  return { kind: "changed", disk: entry.originalContent, mine: entry.content };
+}
+
+function revisionOf(entry?: FileDirtyEntry): Pick<FileDirtyEntry, "documentRevision"> {
+  return entry?.documentRevision === undefined ? {} : { documentRevision: entry.documentRevision };
 }
 
 export interface FileDirtyState {
@@ -37,6 +66,17 @@ export interface FileDirtyState {
    * from, so a later save still reports the change instead of overwriting it.
    */
   observeDiskContent: (tabId: string, content: string) => void;
+
+  /** Record that a refused save could not read the file back (see `diskUnreadable`). */
+  markDiskUnreadable: (tabId: string, missing?: boolean) => void;
+
+  /** Replace a document only while it is still the observed entry. */
+  replaceDocument: (
+    tabId: string,
+    expected: FileDirtyEntry,
+    content: string,
+    fromDisk?: boolean,
+  ) => boolean;
 
   /**
    * Update the current content for a file tab.
@@ -87,7 +127,11 @@ export const fileDirtyStore = defineScopedStore<FileDirtyState>("file-dirty", ()
       const existing = newMap.get(tabId);
       if (existing) {
         // Update original, keep current content
-        newMap.set(tabId, { content: existing.content, originalContent: content });
+        newMap.set(tabId, {
+          content: existing.content,
+          originalContent: content,
+          ...revisionOf(existing),
+        });
       } else {
         // Initialize both to the same content (not dirty)
         newMap.set(tabId, { content, originalContent: content });
@@ -100,18 +144,45 @@ export const fileDirtyStore = defineScopedStore<FileDirtyState>("file-dirty", ()
     set((state) => {
       const newMap = new Map(state.dirtyFiles);
       const existing = newMap.get(tabId);
-      if (!existing) {
-        newMap.set(tabId, { content, originalContent: content });
+      if (
+        !existing ||
+        (!existing.diskUnreadable && existing.content === existing.originalContent)
+      ) {
+        newMap.set(tabId, { content, originalContent: content, ...revisionOf(existing) });
         return { dirtyFiles: newMap };
       }
       const base = fileSaveBaseline(existing);
       newMap.set(tabId, {
         content: existing.content,
         originalContent: content,
+        ...revisionOf(existing),
         ...(base === content ? {} : { baseContent: base }),
       });
       return { dirtyFiles: newMap };
     });
+  },
+
+  markDiskUnreadable: (tabId, missing) => {
+    set((state) => {
+      const existing = state.dirtyFiles.get(tabId);
+      if (!existing) return state;
+      const newMap = new Map(state.dirtyFiles);
+      newMap.set(tabId, { ...existing, diskUnreadable: missing ? "missing" : "unreadable" });
+      return { dirtyFiles: newMap };
+    });
+  },
+
+  replaceDocument: (tabId, expected, content, fromDisk) => {
+    const current = get().dirtyFiles;
+    if (current.get(tabId) !== expected) return false;
+    const dirtyFiles = new Map(current);
+    dirtyFiles.set(tabId, {
+      ...(fromDisk ? { originalContent: content } : expected),
+      content,
+      documentRevision: (expected.documentRevision ?? 0) + 1,
+    });
+    set({ dirtyFiles });
+    return true;
   },
 
   setContent: (tabId, content) => {
@@ -119,6 +190,7 @@ export const fileDirtyStore = defineScopedStore<FileDirtyState>("file-dirty", ()
       const newMap = new Map(state.dirtyFiles);
       const existing = newMap.get(tabId);
       if (existing) {
+        if (existing.content === content) return state;
         newMap.set(tabId, { ...existing, content });
       } else {
         // Content set without original - treat original as empty

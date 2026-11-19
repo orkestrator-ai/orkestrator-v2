@@ -35,6 +35,7 @@ import { NativeResumeSessionFixture } from "./NativeResumeSessionFixture";
 import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
+import { EnvironmentAttentionFixture } from "./EnvironmentAttentionFixture";
 import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
 import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
@@ -249,6 +250,9 @@ const FocusHairlineFixture = lazy(async () => {
   fixture.installFocusHairlineFixture();
   return { default: fixture.FocusHairlineFixture };
 });
+const ProviderFailureFixture = lazy(async () => ({
+  default: (await import("./ProviderFailureFixture")).ProviderFailureFixture,
+}));
 const MailTilesFixture = lazy(async () => ({
   default: (await import("./MailTilesFixture")).MailTilesFixture,
 }));
@@ -1484,17 +1488,26 @@ function installDiffViewerFixture() {
     statusParam === "new" ? "new" : statusParam === "deleted" ? "deleted" : "modified";
   const filePath = diffViewerFixturePath;
   const baselineVersion = `${params.get("branch") ?? "main"}@${diffFixtureObjectId}`;
+  const staging = params.has("staging");
   const body = liveDiffFixtureBody({ path: filePath, status, baselineVersion });
 
   window.orkestrator = {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
       switch (command) {
         case "changes_resolve_live_detail":
-          assertFixtureArgs(command, args, { resourceKey: diffFixtureResourceKey, path: filePath });
+          assertFixtureArgs(command, args, {
+            resourceKey: diffFixtureResourceKey,
+            ...(args?.pathId ? { pathId: body.files[0]?.pathId } : { path: filePath }),
+          });
           return { kind: "identity", identity: body.identity } as T;
         case "changes_get_diff":
           assertFixtureArgs(command, args, { diffIdentityId: body.identity.id });
           return body as T;
+        case "changes_get_capabilities":
+          if (!staging) throw new Error("Staging disabled in this fixture");
+          return { hunkStaging: true } as T;
+        case "changes_stage_hunk":
+          return { kind: "applied", action: "stage", pathId: body.files[0]?.pathId } as T;
         case "changes_get_view":
           // The shared projection subscription; the viewer does not depend on it.
           return {
@@ -1512,21 +1525,28 @@ function installDiffViewerFixture() {
 function DiffViewerFixture() {
   const filePath = diffViewerFixturePath;
   const [viewFileCount, setViewFileCount] = useState(0);
+  const [secondActive, setSecondActive] = useState(false);
+  const twoTabs = new URLSearchParams(window.location.search).has("staging");
+  const target = {
+    kind: "live",
+    resourceKey: diffFixtureResourceKey,
+    path: filePath,
+    title: "frontend-state-audit.md",
+  } as const;
 
   return (
-    <main className="h-screen bg-background text-foreground">
-      <section data-testid="diff-viewer-pane" className="relative h-full w-full">
+    <main className="flex h-screen flex-col bg-background text-foreground">
+      {twoTabs && (
+        <button onClick={() => setSecondActive((active) => !active)}>Switch diff tab</button>
+      )}
+      <section data-testid="diff-viewer-pane" className="relative min-h-0 w-full flex-1">
         <DiffViewerTab
-          target={{
-            kind: "live",
-            resourceKey: diffFixtureResourceKey,
-            path: filePath,
-            title: "frontend-state-audit.md",
-          }}
+          target={target}
           filePath={filePath}
-          isActive
+          isActive={!secondActive}
           onSwitchToFileView={() => setViewFileCount((count) => count + 1)}
         />
+        {twoTabs && <DiffViewerTab target={target} filePath={filePath} isActive={secondActive} />}
       </section>
       <output data-testid="view-file-count" className="sr-only">
         {viewFileCount}
@@ -2035,6 +2055,13 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/coordinator-pane-tree") return <CoordinatorPaneTreeFixture />;
   if (window.location.pathname === "/add-project") return <AddProjectDialogFixture />;
+  if (window.location.pathname === "/provider-failure") {
+    return (
+      <Suspense fallback={null}>
+        <ProviderFailureFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/mail-tiles") {
     return (
       <Suspense fallback={null}>
@@ -2112,6 +2139,7 @@ function fixtureForPath() {
     return <ProjectSearchMachinesFixture />;
   if (window.location.pathname === "/environment-status-marker")
     return <EnvironmentStatusMarkerFixture />;
+  if (window.location.pathname === "/environment-attention") return <EnvironmentAttentionFixture />;
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
   if (window.location.pathname === "/agent-account-status") return <AgentAccountStatusFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;

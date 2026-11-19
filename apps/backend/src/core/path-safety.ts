@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { dlopen, FFIType, ptr, read, type Pointer } from "bun:ffi";
+import { FILE_WRITE_CONFLICT_MESSAGE } from "@orkestrator/protocol/file-write-precondition";
 import { CommandFailedError, runCommandBuffer } from "./command-capture.js";
 import { APP_SLUG } from "./constants.js";
 import { assertNoNestedRepositories } from "./workspace-removal-preflight.js";
@@ -528,6 +529,24 @@ type ConfinedWriteOptions = {
   maxBytes?: number;
   /** Final mode applied to the still-open temporary inode before publication. */
   fileMode?: number;
+  /**
+   * Replacing an existing regular file keeps its permission bits instead of
+   * `fileMode` (an editor save must not drop a script's execute bit or narrow
+   * a shared file to owner-only). `fileMode` still applies to a new file.
+   */
+  preserveExistingMode?: boolean;
+  /**
+   * Publish only while the destination is a regular file whose bytes hash to
+   * this lower-case hex SHA-256. Checked after the payload is fully written to
+   * the temporary file and immediately before the rename; a mismatch, a
+   * missing file or a non-file fails with `FILE_WRITE_CONFLICT_MESSAGE` and
+   * leaves the destination untouched. This is check-then-rename, not an
+   * atomic compare-and-swap: a write by another process that lands between
+   * the check and the rename is still replaced.
+   */
+  expectedSha256?: string;
+  /** Map an occupied exclusive destination or missing parent to a save conflict. */
+  expectedAbsent?: boolean;
   /** Test-only synchronization point after the destination directory is pinned. */
   testHooks?: ConfinedPathTestHooks;
 };
@@ -538,30 +557,59 @@ type ConfinedWriteOptions = {
 // pathname lookup can reach a replacement directory outside the worktree.
 const PINNED_CWD_WRITE_HELPER = String.raw`
 const fs = require("node:fs"), path = require("node:path");
-const [targetPath, mode, expectedDev, expectedIno, expectedBytes, fileMode, ancestorMode, readyToken] = process.argv.slice(1);
-const invalidAncestor = () => { process.stderr.write("symlink or non-directory ancestor"); process.exit(73); };
+const [targetPath, mode, expectedDev, expectedIno, expectedBytes, fileMode, ancestorMode, modePolicy, expectedSha256, digestLimit, readyToken] = process.argv.slice(1);
+const checked = expectedSha256 !== "-";
+const invalidAncestor = () => { process.stderr.write("symlink or non-directory ancestor"); process.exit(checked ? 78 : 73); };
 const cwd = fs.statSync(".");
 if (String(cwd.dev) !== expectedDev || String(cwd.ino) !== expectedIno) invalidAncestor();
 const rootPath = process.cwd();
-const segments = targetPath.split("/");
-const target = segments.pop();
-for (const segment of segments) {
-  try {
-    const stat = fs.lstatSync(segment);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) invalidAncestor();
-  } catch (error) {
-    if (!error || error.code !== "ENOENT") throw error;
-    if (ancestorMode === "existing") {
-      process.stderr.write("ENOENT_ANCESTOR");
-      process.exit(77);
+let segments;
+let target;
+function pinParent(relative) {
+  segments = relative.split("/");
+  target = segments.pop();
+  for (const segment of segments) {
+    try {
+      const stat = fs.lstatSync(segment);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) invalidAncestor();
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      if (ancestorMode === "existing") {
+        process.stderr.write("ENOENT_ANCESTOR");
+        process.exit(checked ? 78 : 77);
+      }
+      try { fs.mkdirSync(segment, { mode: 0o700 }); }
+      catch (mkdirError) { if (mkdirError.code !== "EEXIST") throw mkdirError; }
     }
-    try { fs.mkdirSync(segment, { mode: 0o700 }); }
-    catch (mkdirError) { if (!mkdirError || mkdirError.code !== "EEXIST") throw mkdirError; }
+    const expected = fs.lstatSync(segment);
+    if (expected.isSymbolicLink() || !expected.isDirectory()) invalidAncestor();
+    process.chdir(segment);
+    const pinned = fs.statSync(".");
+    if (pinned.dev !== expected.dev || pinned.ino !== expected.ino) invalidAncestor();
   }
-  const expected = fs.lstatSync(segment);
-  process.chdir(segment);
-  const pinned = fs.statSync(".");
-  if (pinned.dev !== expected.dev || pinned.ino !== expected.ino) invalidAncestor();
+}
+pinParent(targetPath);
+let referent;
+if (modePolicy === "existing" && expectedSha256 !== "absent") {
+  try {
+    if (fs.lstatSync(target).isSymbolicLink()) {
+      referent = fs.realpathSync(target);
+      const relative = path.relative(rootPath, referent);
+      if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+        invalidAncestor();
+      }
+      process.chdir(rootPath);
+      const root = fs.statSync(".");
+      if (root.dev !== cwd.dev || root.ino !== cwd.ino) invalidAncestor();
+      pinParent(relative);
+    }
+  } catch (error) {
+    if (error.code === "ELOOP" || (error.code === "ENOENT" && referent === undefined)) {
+      if (error.code === "ELOOP") invalidAncestor();
+      // Missing entries are handled at publication. A dangling link still
+      // exists and fails the final lstat check.
+    } else throw error;
+  }
 }
 const assertDirectoryStillNamed = () => {
   let current = rootPath, named;
@@ -589,7 +637,7 @@ process.stdin.on("data", (chunk) => {
 });
 process.stdin.on("end", () => {
   if (bytes !== Number(expectedBytes)) process.exit(74);
-  const temp = "." + target + "." + require("node:crypto").randomUUID() + ".tmp";
+  const temp = ".orkestrator-save." + require("node:crypto").randomUUID();
   let fd;
   let identity;
   let published = false;
@@ -598,12 +646,58 @@ process.stdin.on("end", () => {
     fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
     identity = fs.fstatSync(fd);
     fs.writeFileSync(fd, Buffer.concat(chunks));
-    fs.fchmodSync(fd, Number(fileMode));
     fs.fsyncSync(fd);
+    let finalMode = Number(fileMode);
+    const conflict = () => { const error = new Error("file changed"); error.code = "FILE_WRITE_CONFLICT"; throw error; };
+    if (referent) {
+      try {
+        if (fs.realpathSync(path.join(rootPath, targetPath)) !== referent) conflict();
+      } catch { conflict(); }
+    }
+    if (expectedSha256 !== "absent" && (checked || modePolicy === "existing")) {
+      let current;
+      try { current = fs.lstatSync(target); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      if (checked) {
+        let matches = false;
+        const limit = Number(digestLimit);
+        if (current && current.isFile() && current.size <= limit) {
+          let existingFd;
+          try {
+            existingFd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+            const opened = fs.fstatSync(existingFd);
+            if (opened.isFile() && opened.dev === current.dev && opened.ino === current.ino && opened.size <= limit) {
+              const hash = require("node:crypto").createHash("sha256");
+              const buffer = Buffer.allocUnsafe(65536);
+              let total = 0;
+              while (total <= limit) {
+                const read = fs.readSync(existingFd, buffer, 0, Math.min(buffer.length, limit + 1 - total), null);
+                if (read === 0) break;
+                hash.update(buffer.subarray(0, read));
+                total += read;
+              }
+              const final = fs.fstatSync(existingFd);
+              const named = fs.lstatSync(target);
+              matches = total <= limit && total === final.size && final.size === opened.size &&
+                final.mtimeMs === opened.mtimeMs && final.ctimeMs === opened.ctimeMs &&
+                named.dev === opened.dev && named.ino === opened.ino &&
+                hash.digest("hex") === expectedSha256;
+            }
+          } catch {} finally { if (existingFd !== undefined) try { fs.closeSync(existingFd); } catch {} }
+        }
+        if (!matches) conflict();
+      }
+      if (current && !current.isFile()) throw new Error("target is not a regular file");
+      if (modePolicy === "existing" && current) finalMode = current.mode & 0o777;
+    }
+    fs.fchmodSync(fd, finalMode);
     fs.closeSync(fd);
     fd = undefined;
+    assertDirectoryStillNamed();
     if (mode === "exclusive") {
-      fs.linkSync(temp, target);
+      try { fs.linkSync(temp, target); } catch (error) {
+        if (expectedSha256 === "absent" && error.code === "EEXIST") conflict();
+        throw error;
+      }
       fs.unlinkSync(temp);
     } else {
       fs.renameSync(temp, target);
@@ -626,7 +720,7 @@ process.stdin.on("end", () => {
     } catch {}
     const code = error && typeof error.code === "string" ? error.code : "WRITE_FAILED";
     process.stderr.write(code);
-    process.exit(76);
+    process.exit(code === "FILE_WRITE_CONFLICT" ? 78 : 76);
   }
 });
 `;
@@ -653,7 +747,12 @@ fs.rmSync(target, { recursive: true, force: true });
 const MAX_HELPER_DIAGNOSTIC_CHARS = 1_024;
 const READY_TOKEN = "ORK_WRITE_READY";
 
+/** Exit status of the write helper when `expectedSha256` no longer matches. */
+const CONFINED_WRITE_CONFLICT_EXIT = 78;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
 function confinedWriteFailure(stderr: string, exitCode: number | null): Error {
+  if (exitCode === CONFINED_WRITE_CONFLICT_EXIT) return new Error(FILE_WRITE_CONFLICT_MESSAGE);
   const diagnostic = stderr.slice(0, MAX_HELPER_DIAGNOSTIC_CHARS);
   return new Error(`Confined file write failed (${diagnostic || `exit ${exitCode}`})`);
 }
@@ -714,6 +813,7 @@ async function writeFromPinnedRoot(
   exclusive: boolean,
   fileMode: number,
   createAncestors: boolean,
+  publish: { preserveExistingMode: boolean; expectedSha256?: string; expectedAbsent?: boolean },
   testHooks: ConfinedPathTestHooks = {},
 ): Promise<void> {
   const helperArgs = [
@@ -726,6 +826,9 @@ async function writeFromPinnedRoot(
     String(content.byteLength),
     String(fileMode),
     createAncestors ? "create" : "existing",
+    publish.preserveExistingMode ? "existing" : "fixed",
+    publish.expectedAbsent ? "absent" : (publish.expectedSha256 ?? "-"),
+    String(MAX_TEXT_FILE_BYTES),
   ];
   if (testHooks.afterDirectoriesOpened) {
     await writeThroughHandshake(rootPath, helperArgs, content, testHooks.afterDirectoriesOpened);
@@ -793,8 +896,10 @@ export async function removeConfinedDirectory(
 }
 
 /**
- * Writes one command-owned artifact into a worktree without following a
- * repository symlink.
+ * Writes a file inside a worktree using pinned directories.
+ *
+ * Artifact writes reject symlinked ancestors. Editor writes can follow a
+ * final link whose referent stays inside the worktree and can be pinned.
  *
  * Every ancestor is created and checked segment by segment, and the file itself
  * is opened with `O_NOFOLLOW`. Re-checking the path and descriptor identity
@@ -824,6 +929,16 @@ export async function writeConfinedFile(
   if (!Number.isInteger(fileMode) || fileMode < 0 || fileMode > 0o777) {
     throw new Error("Invalid confined file mode");
   }
+  if (options.expectedSha256 !== undefined) {
+    if (!SHA256_HEX.test(options.expectedSha256)) throw new Error("Invalid expected file digest");
+    if (options.exclusive !== false) throw new Error("An expected digest needs an overwrite write");
+  }
+  if (
+    options.expectedAbsent &&
+    (options.exclusive === false || options.expectedSha256 !== undefined)
+  ) {
+    throw new Error("An absent destination needs an exclusive write");
+  }
   const canonicalRoot = await fs.realpath(rootPath);
   const fullPath = path.join(canonicalRoot, target);
   const rootStats = await fs.lstat(canonicalRoot);
@@ -838,6 +953,11 @@ export async function writeConfinedFile(
     options.exclusive !== false,
     fileMode,
     options.createAncestors !== false,
+    {
+      preserveExistingMode: options.preserveExistingMode === true,
+      expectedSha256: options.expectedSha256,
+      expectedAbsent: options.expectedAbsent,
+    },
     options.testHooks,
   );
   return fullPath;

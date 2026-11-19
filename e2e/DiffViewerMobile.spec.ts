@@ -211,3 +211,33 @@ test("the desktop diff keeps its mode controls and full-ref tooltip", async ({
   await expect(baseReference).toHaveAttribute("title", `main@${fullObjectId} → ${afterLabel}`);
   await expect(baseReference).toHaveText(`vs main@63d1257 · ${afterLabel}`);
 });
+
+test("an inactive mounted diff cannot receive staging focus or keyboard activation", async ({
+  page,
+}) => {
+  await page.goto("/diff-viewer?staging");
+  const viewers = page.getByTestId("diff-viewer");
+  const first = viewers.nth(0);
+  const stage = first.getByRole("button", { name: "Stage change 1" });
+  await expect(stage).toBeEnabled();
+  await stage.focus();
+  await expect(stage).toBeFocused();
+
+  await page.getByRole("button", { name: "Switch diff tab" }).click();
+  await expect(first).toHaveAttribute("inert", "");
+  const hiddenStage = first.locator('button[aria-label="Stage change 1"]');
+  await expect(hiddenStage).toBeDisabled();
+  // Programmatic focus attempts exercise the browser's native inert boundary.
+  await hiddenStage.evaluate((button) => (button as HTMLElement).focus());
+  await expect(hiddenStage).not.toBeFocused();
+  const nextStage = viewers.nth(1).getByRole("button", { name: "Stage change 1" });
+  await expect(nextStage).toBeEnabled();
+  await nextStage.focus();
+  await expect(nextStage).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(viewers.nth(1).getByTestId("diff-viewer-staging-feedback")).toContainText(
+    "Staged change 1",
+  );
+  await expect(nextStage).toBeEnabled();
+  await expect(first.getByTestId("diff-viewer-staging-feedback")).toHaveCount(0);
+});

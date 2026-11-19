@@ -19,6 +19,7 @@ import {
   type ChangesPrepareRestoreResult,
   type ChangesRefreshResult,
   type ChangesResolveLiveDetailResult,
+  type ChangesStageHunkResult,
   type ChangeViewResult,
 } from "@orkestrator/protocol/change-resources";
 import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
@@ -37,6 +38,7 @@ import {
   changesPrepareRestoreCommand,
   changesRefreshCommand,
   changesResolveLiveDetailCommand,
+  changesStageHunkCommand,
 } from "@orkestrator/protocol/contract/domains/git";
 import type { CommandContext } from "./commands-context.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
@@ -146,8 +148,15 @@ export function registerChangeCommands(registerCommand: CommandRegistrar): void 
   register(
     changesResolveLiveDetailCommand,
     async (args, context): Promise<ChangesResolveLiveDetailResult> => {
+      const resourceKey = text(args.resourceKey, "resourceKey", 1_024);
+      const scope = parseChangeResourceKey(resourceKey)?.scope;
+      // The index scopes are read fresh: their rows (and the index side the
+      // identity binds) must reflect the index now, not the last recompute.
+      if (scope === "staged" || scope === "unstaged") {
+        await tracking(context).ensureResource(resourceKey);
+      }
       return tracking(context).diffBodies.resolveLiveDetail({
-        resourceKey: text(args.resourceKey, "resourceKey", 1_024),
+        resourceKey,
         revision: optionalInteger(args.revision, "revision"),
         rowId: optionalText(args.rowId, "rowId"),
         pathId: optionalText(args.pathId, "pathId", 8_192),
@@ -212,6 +221,32 @@ export function registerChangeCommands(registerCommand: CommandRegistrar): void 
     },
   );
 
+  register(changesStageHunkCommand, async (args, context): Promise<ChangesStageHunkResult> => {
+    const action = text(args.action, "action", 16);
+    if (action !== "stage" && action !== "unstage") {
+      throw new Error("action must be stage or unstage");
+    }
+    const hunk =
+      args.hunk && typeof args.hunk === "object" ? (args.hunk as Record<string, unknown>) : null;
+    if (!hunk) throw new Error("hunk must be an object");
+    const field = (name: string) => {
+      const value = optionalInteger(hunk[name], `hunk.${name}`, 100_000_000);
+      if (value === undefined) throw new Error(`hunk.${name} must be a nonnegative integer`);
+      return value;
+    };
+    return tracking(context).hunkStaging.apply({
+      diffIdentityId: text(args.diffIdentityId, "diffIdentityId"),
+      action,
+      hunk: {
+        index: field("index"),
+        oldStart: field("oldStart"),
+        oldLines: field("oldLines"),
+        newStart: field("newStart"),
+        newLines: field("newLines"),
+      },
+    });
+  });
+
   register(changesGetDiagnosticsCommand, async (_args, context) => tracking(context).diagnostics());
 
   register(
@@ -226,6 +261,7 @@ export function registerChangeCommands(registerCommand: CommandRegistrar): void 
         gitScopes: true,
         operationVolume: true,
         strictCheckpoints: policy.strictCheckpoints,
+        hunkStaging: true,
       };
     },
   );

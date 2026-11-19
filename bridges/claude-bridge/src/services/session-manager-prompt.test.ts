@@ -5087,6 +5087,7 @@ describe("sendPrompt", () => {
             turnId: expect.any(String),
             // When the turn was finalized; what dates recorded usage.
             at: expect.any(String),
+            cacheAccessNotBefore: expect.any(String),
             costUsd: 0,
             costSource: "estimate",
             inputTokens: 12,

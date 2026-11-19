@@ -493,11 +493,12 @@ export function HierarchicalSidebar() {
           environment.lifecycleOperation !== "deleting" &&
           (environment.hasUnreadWork ||
             (environment.projectHome &&
-              resolveEnvironmentAgentActivity(
-                environment,
-                state.containerStates,
-                state.containerStateUpdatedAt,
-              ) === "waiting")),
+              ((environment.status === "running" && environment.hasWaitingNativeTab) ||
+                resolveEnvironmentAgentActivity(
+                  environment,
+                  state.containerStates,
+                  state.containerStateUpdatedAt,
+                ) === "waiting"))),
       ).length,
   );
 

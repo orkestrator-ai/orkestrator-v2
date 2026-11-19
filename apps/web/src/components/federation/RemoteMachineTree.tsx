@@ -460,16 +460,6 @@ export function RemoteProjectGroup({
       project.ref.projectId,
       home?.ref.environmentId,
     ) && !openedByHeading;
-  const live = machine.transport === "connected";
-  const homeStatus =
-    home && live
-      ? projectHomeStatus({
-          deleting: home.deleting,
-          buildActive: home.buildActive === true,
-          activity: home.activity,
-          hasUnreadWork: home.hasUnreadWork,
-        })
-      : null;
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (revealRevision === null) return;
@@ -554,20 +544,12 @@ export function RemoteProjectGroup({
             deleteProject: () => openProjectDialog("delete-project"),
           }}
           homeActivity={
-            home && homeStatus ? (
-              <ProjectHomeActivityButton
-                status={homeStatus}
+            home ? (
+              <RemoteProjectHomeActivity
+                machine={machine}
+                environment={home}
                 projectName={project.name}
                 compact
-                onOpen={() =>
-                  openMachineWorkspace({
-                    connectionId: machine.connectionId,
-                    projectId: project.ref.projectId,
-                    environmentId: home.ref.environmentId,
-                    boardTab: "home",
-                    title: project.name,
-                  })
-                }
               />
             ) : null
           }
@@ -705,6 +687,61 @@ export function RemoteEnvironmentItem({
             source={nodeAgentSummarySource(environment.ref.backendId)}
           />
         ) : null
+      }
+      attentionSource={nodeAgentSummarySource(environment.ref.backendId)}
+      onOpenAttention={(tabId, interactionId) => {
+        clearMultiSelection();
+        if (tabId) actions.openTab(tabId, interactionId);
+        else actions.open();
+      }}
+    />
+  );
+}
+
+/** Shared by remote project headers and the activity list. */
+export function RemoteProjectHomeActivity({
+  machine,
+  environment,
+  projectName,
+  compact,
+}: {
+  machine: MachineView;
+  environment: FederatedEnvironment;
+  projectName: string;
+  compact?: boolean;
+}) {
+  if (machine.transport !== "connected") return null;
+  const status = projectHomeStatus({
+    deleting: environment.deleting,
+    buildActive: environment.buildActive === true,
+    activity: environment.activity,
+    hasUnreadWork: environment.hasUnreadWork,
+    hasWaitingNativeTab: environment.status === "running" && environment.hasWaitingNativeTab,
+  });
+  if (!status) return null;
+  const {
+    projectId,
+    ref: { environmentId, backendId },
+  } = environment;
+  return (
+    <ProjectHomeActivityButton
+      status={status}
+      projectName={projectName}
+      environmentId={environmentId}
+      source={nodeAgentSummarySource(backendId)}
+      lastActivityAt={environment.lastActivityAt}
+      compact={compact}
+      onOpen={(tabId, interactionId) =>
+        openMachineWorkspace({
+          connectionId: machine.connectionId,
+          projectId,
+          environmentId,
+          boardTab: "home",
+          title: projectName,
+          ...(tabId
+            ? { workTarget: { type: "worker-tab", projectId, environmentId, tabId, interactionId } }
+            : {}),
+        })
       }
     />
   );

@@ -1,3 +1,4 @@
+import type { AgentInteractionKind, AgentInteractionRequest } from "./agent-interactions.js";
 import type { AgentPlatform } from "./agent-platforms.js";
 import type { NativeAgentGoalSummary } from "./native-agent-goal.js";
 
@@ -34,6 +35,31 @@ export interface AgentRegistryEntry {
    * between iterations reads `idle` while `goal.running` says it will continue.
    */
   goal?: NativeAgentGoalSummary;
+  /**
+   * What a `waiting` native tab is waiting on: its oldest pending approval or
+   * question, summarised for one line. Present only when the snapshot was
+   * asked for it (`includePending`) and the tab's provider reported one.
+   */
+  pending?: AgentPendingInteractionSummary;
+}
+
+/**
+ * One line about the approval or question a tab is waiting on, safe for a
+ * sidebar row: a fixed label for its kind and, where the request carries a
+ * reliable short summary that cannot hold a secret, that summary. Never the
+ * request's body, options, URL or any answer.
+ */
+export interface AgentPendingInteractionSummary {
+  interactionId: string;
+  kind: AgentInteractionKind;
+  /** Fixed wording for the kind, e.g. "Needs approval" or "Question". */
+  label: string;
+  /** A bounded single-line summary; absent where none is reliable or it may be sensitive. */
+  detail?: string;
+  /** When the request was made, epoch milliseconds (its authority's clock). */
+  since: number;
+  /** How many requests the tab has pending, this one included. */
+  count: number;
 }
 
 export interface AgentRegistryEnvironmentSummary {
@@ -80,4 +106,121 @@ export function describeAgentRegistrySummary(summary: AgentRegistryEnvironmentSu
   if (summary.waiting) parts.push(`${summary.waiting} waiting`);
   if (summary.stopped) parts.push(`${summary.stopped} stopped`);
   return parts.join(" · ");
+}
+
+/** The longest detail a pending-interaction summary carries. */
+export const PENDING_INTERACTION_DETAIL_MAX = 120;
+
+const PENDING_INTERACTION_LABELS: Record<AgentInteractionKind, string> = {
+  question: "Question",
+  "plan-approval": "Plan ready for review",
+  "command-approval": "Needs approval",
+  "file-approval": "Needs approval",
+  permission: "Needs approval",
+  "mcp-form": "Needs input",
+  "mcp-url": "Needs you to open a link",
+  elicitation: "Needs input",
+  "terminal-selection": "Needs a choice",
+};
+
+/** The fixed titles assigned by the Codex mapper, with no operation payload. */
+const FIXED_APPROVAL_TITLES = new Map<AgentInteractionKind, ReadonlyMap<string, string>>([
+  [
+    "command-approval",
+    new Map([
+      ["Approve command", "Needs command approval"],
+      ["Approve network access", "Needs network approval"],
+    ]),
+  ],
+  ["file-approval", new Map([["Approve file changes", "Needs file approval"]])],
+  ["permission", new Map([["Approve permissions", "Needs permission approval"]])],
+]);
+
+/**
+ * Titles bridges use when the provider gave nothing more specific. They say no
+ * more than the label does, so the summary leaves them out.
+ */
+const GENERIC_TITLES = new Set([
+  "approve command",
+  "approve file changes",
+  "approve permissions",
+  "approve network access",
+  "approval requested",
+  "claude needs input",
+  "grok needs input",
+  "codex needs input",
+  "opencode needs input",
+  "pi needs input",
+  "cursor needs input",
+  "question",
+  "input requested",
+]);
+
+/** One line, no control characters, bounded on a character boundary. */
+function singleLine(text: string, max = PENDING_INTERACTION_DETAIL_MAX): string | undefined {
+  // oxlint-disable-next-line no-control-regex -- stripping control characters is the point
+  const line = text
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!line) return undefined;
+  const chars = Array.from(line);
+  return chars.length > max
+    ? `${chars
+        .slice(0, max - 1)
+        .join("")
+        .trimEnd()}…`
+    : line;
+}
+
+/**
+ * The detail for one request, or `undefined` when it has no reliable summary
+ * or might show sensitive input. Secret questions, MCP forms, links and plans
+ * get only their fixed label.
+ */
+function pendingInteractionDetail(request: AgentInteractionRequest): string | undefined {
+  const { presentation } = request;
+  if (request.kind === "mcp-url" || request.kind === "mcp-form") return undefined;
+  if (presentation.questions.some((question) => question.secret)) return undefined;
+  if (request.kind === "plan-approval") return undefined;
+  if (request.kind === "question" || request.kind === "elicitation") {
+    const prompt = presentation.questions[0]?.prompt;
+    const fromPrompt = prompt ? singleLine(prompt) : undefined;
+    if (fromPrompt) return fromPrompt;
+  }
+  const title = singleLine(presentation.title);
+  if (!title || GENERIC_TITLES.has(title.toLowerCase())) return undefined;
+  return title;
+}
+
+/**
+ * The summary of a tab's oldest pending request (blocking ones first), or
+ * `undefined` when none is pending. `requests` is the provider's pending list.
+ */
+export function summarizePendingInteractions(
+  requests: readonly AgentInteractionRequest[],
+): AgentPendingInteractionSummary | undefined {
+  const live = requests.filter(
+    (request) => request.state === "pending" || request.state === "answering",
+  );
+  if (live.length === 0) return undefined;
+  const [first] = [...live].sort(
+    (a, b) =>
+      Number(b.blocking !== false) - Number(a.blocking !== false) ||
+      a.createdAt - b.createdAt ||
+      a.id.localeCompare(b.id),
+  );
+  if (!first) return undefined;
+  const detail = pendingInteractionDetail(first);
+  const label =
+    FIXED_APPROVAL_TITLES.get(first.kind)?.get(first.presentation.title) ??
+    PENDING_INTERACTION_LABELS[first.kind];
+  return {
+    interactionId: first.id.slice(0, 512),
+    kind: first.kind,
+    label: label ?? "Needs input",
+    ...(detail ? { detail } : {}),
+    since: first.createdAt,
+    count: live.length,
+  };
 }

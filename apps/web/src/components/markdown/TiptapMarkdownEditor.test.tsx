@@ -93,6 +93,29 @@ describe("TiptapMarkdownEditor", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  test("focusing a heading-only document does not change the source saved by the shortcut", async () => {
+    const onSave = mock((_markdownOverride?: string) => {});
+    const onChange = mock((_markdown: string) => {});
+    render(
+      <TiptapMarkdownEditor
+        markdown={"# Restored\n"}
+        fontFamily="Fira Code"
+        fontSize={14}
+        onChange={onChange}
+        onSave={onSave}
+      />,
+    );
+    const element = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
+    await waitFor(() => expect(element.editor).toBeTruthy());
+    act(() => {
+      const editor = element.editor;
+      editor.view.dispatch(editor.state.tr.setMeta("focus", {}));
+    });
+    fireEvent.keyDown(element, { key: "s", ctrlKey: true });
+    expect(onSave).toHaveBeenCalledWith(undefined);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   test("handles Cmd+S and Ctrl+S inside rendered mode", async () => {
     const onSave = mock((_markdownOverride?: string) => {});
 

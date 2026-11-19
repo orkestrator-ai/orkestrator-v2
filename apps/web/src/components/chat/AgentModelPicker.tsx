@@ -126,6 +126,12 @@ interface AgentModelPickerProps {
   disabled?: boolean;
   title?: string;
   onRefreshModels?: () => void;
+  /**
+   * Opens the menu each time this number changes to a new non-zero value: a
+   * control elsewhere (a failed turn's "Change model") asks for the picker
+   * without owning its open state.
+   */
+  openRequest?: number;
 }
 
 const MODEL_ROW_HEIGHT_CLASS = "h-14";
@@ -741,12 +747,23 @@ export function AgentModelPicker({
   disabled = false,
   title,
   onRefreshModels,
+  openRequest = 0,
 }: AgentModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [catalogView, setCatalogView] = useState<AgentPlatform | "favorites">(() =>
     preferredCatalogView(favorites, selectedPlatform, models),
   );
+  // Adjusted during render, not in an effect: the request is an input, and
+  // reacting to it here opens the menu in the same commit.
+  const [seenOpenRequest, setSeenOpenRequest] = useState(openRequest);
+  if (openRequest !== seenOpenRequest) {
+    setSeenOpenRequest(openRequest);
+    if (openRequest !== 0 && !disabled && !open) {
+      setOpen(true);
+      setCatalogView(preferredCatalogView(favorites, selectedPlatform, models));
+    }
+  }
   const [mobileSubmenu, setMobileSubmenu] = useState<MobileSubmenu | null>(null);
   const mobileViewId = useId();
   const mobileReasoningTriggerRef = useRef<HTMLDivElement>(null);

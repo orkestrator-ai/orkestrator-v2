@@ -34,6 +34,7 @@ interface Fixture {
   storage: StorageService;
   service: CapabilityService;
   environments: ScopedEnvironment[];
+  failEnvironmentList?: boolean;
   accounts: ScopedAccount[];
   container: { evidence: ContainerDeliveryEvidence | null };
 }
@@ -80,7 +81,10 @@ async function makeFixture(): Promise<Fixture> {
       providers: async () => AGENT_PLATFORMS.map((provider) => ({ provider, available: true })),
     },
     scoped: {
-      environments: async () => fixture.environments,
+      environments: async () => {
+        if (fixture.failEnvironmentList) throw new Error("environment list unavailable");
+        return fixture.environments;
+      },
       accounts: async () => fixture.accounts,
       containerDelivery: async () => fixture.container.evidence,
     },
@@ -162,6 +166,32 @@ describe("project setups in a local worktree", () => {
     );
     expect(collisions.get(entry.key)).toContain("Git could not verify");
     expect(await exists(path.join(worktree, ".claude", "skills", "review"))).toBe(false);
+  });
+
+  test("an unavailable environment list preserves existing worktree receipts", async () => {
+    const fixture = await makeFixture();
+    const { worktree } = await repository(fixture);
+    fixture.environments = [
+      { id: "env-a", projectId: "proj-1", environmentType: "local", worktreePath: worktree },
+    ];
+    const setup = await fixture.service.setSetup({ setup: { name: "Project review" } });
+    await addToSetup(fixture, { kind: "skill", name: "review", content: "Review." }, setup.id);
+    await fixture.service.assignSetup({
+      scope: "project",
+      scopeId: "proj-1",
+      setupIds: [setup.id],
+    });
+    await settle(fixture);
+    const before = Object.values(
+      (await fixture.storage.capabilities.loadCapabilityState()).receipts,
+    ).filter((receipt) => receipt.environmentId === "env-a");
+    expect(before.length).toBeGreaterThan(0);
+    fixture.failEnvironmentList = true;
+    await settle(fixture);
+    const after = Object.values(
+      (await fixture.storage.capabilities.loadCapabilityState()).receipts,
+    ).filter((receipt) => receipt.environmentId === "env-a");
+    expect(after).toEqual(before);
   });
 
   test("an isolated graph launch stages required project and graph-only skills in its own branch", async () => {

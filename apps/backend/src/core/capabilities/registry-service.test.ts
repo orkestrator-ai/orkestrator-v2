@@ -74,7 +74,11 @@ function publish(versions: string[], routes = new Map<string, Buffer | string>()
   return routes;
 }
 
-async function install(name: string, routes: Map<string, Buffer | string>): Promise<Installation> {
+async function install(
+  name: string,
+  routes: Map<string, Buffer | string>,
+  beforeFetch?: (url: string) => Promise<void>,
+): Promise<Installation> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `capability-registry-${name}-`));
   const home = path.join(dir, "home");
   await fs.mkdir(home, { recursive: true });
@@ -89,6 +93,7 @@ async function install(name: string, routes: Map<string, Buffer | string>): Prom
     trusted: () =>
       keys.trusted.map((key) => ({ keyId: key.keyId, publicKey: key.publicKey, label: "Peer" })),
   };
+  const registryFetch = fakeRegistryFetch(routes);
   const service = new CapabilityService({
     storage: { capabilities: storage.capabilities },
     dataDir: path.join(dir, "data"),
@@ -103,7 +108,10 @@ async function install(name: string, routes: Map<string, Buffer | string>): Prom
       providers: async () => AGENT_PLATFORMS.map((provider) => ({ provider, available: true })),
     },
     signing,
-    registryFetch: fakeRegistryFetch(routes),
+    registryFetch: async (url, init) => {
+      await beforeFetch?.(url);
+      return registryFetch(url, init);
+    },
   });
   await service.init();
   const node = { dir, storage, service, keys };
@@ -179,6 +187,41 @@ describe("package registries", () => {
     await expect(node.service.exportSetup({ setupIds: [first.id, second.id] })).rejects.toThrow(
       "same export name",
     );
+  });
+
+  test("revoking trust while the update downloads leaves the update pending", async () => {
+    const routes = publish(["1.0.0"]);
+    const downloading = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const node = await install("trust-revocation", routes, async (url) => {
+      if (url !== tarballUrl("1.1.0")) return;
+      downloading.resolve();
+      await resume.promise;
+    });
+    await configureRegistry(node);
+    const initial = await node.service.inspectSource({ source });
+    await addToSetup(node, initial.inspectionId, MY_SETUP_ID);
+    await node.service.setUpdatePolicy({
+      setupId: MY_SETUP_ID,
+      policy: "trusted-auto",
+      trustedSources: ["registry:team/"],
+    });
+    publish(["1.1.0"], routes);
+    const checking = node.service.refreshUpdates({});
+    try {
+      await downloading.promise;
+      await node.service.setUpdatePolicy({
+        setupId: MY_SETUP_ID,
+        policy: "trusted-auto",
+        trustedSources: [],
+      });
+    } finally {
+      resume.resolve();
+    }
+    expect((await checking).updates[0]?.state).toBe("pending");
+    expect(
+      (await node.storage.capabilities.loadCapabilityState()).packages[PACKAGE_ID]?.revision,
+    ).toBe("1.0.0");
   });
 
   test("an active historical pin survives more than five newer revisions", async () => {

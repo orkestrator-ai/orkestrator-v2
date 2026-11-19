@@ -27,8 +27,11 @@ import {
   disposeCapabilityNodes,
   type CapabilityNode,
 } from "./capability-network-test-support.js";
-import type { ContainerCapabilityRecord } from "./container-staging.js";
-import { COMMAND_NODE_UNREACHABLE_NOTICE } from "./environment-authority.js";
+import { containerPlanDigest, type ContainerCapabilityRecord } from "./container-staging.js";
+import {
+  COMMAND_NODE_UNREACHABLE_NOTICE,
+  parseContainerPlanAnswer,
+} from "./environment-authority.js";
 import { CONTAINER_UNSTAGED_SUMMARY } from "./scoped-delivery.js";
 
 afterEach(async () => {
@@ -316,4 +319,27 @@ describe("the environment card for another machine's worktree", () => {
     expect(unknown.kind).toBe("container");
     expect(unknown.notice).toContain("could not be asked");
   });
+});
+
+test("a leaf preserves command items in a shared prompt location and digest", () => {
+  const providers = ["pi"] as const;
+  const stages = ["pi"];
+  const item = {
+    key: "pi-user-prompts|component",
+    locationId: "pi-user-prompts",
+    packageId: "managed:tool",
+    packageDigest: `sha256:${"e".repeat(64)}`,
+    componentId: "component",
+    componentName: "Check",
+    kind: "command",
+    pathOrKey: "commands/check.md",
+    providers: [...providers],
+  };
+  const digest = containerPlanDigest(providers, stages, [item]);
+  const answer = parseContainerPlanAnswer(
+    { plan: { digest, items: [item] } },
+    { providers, stages },
+  );
+  expect(answer?.items).toContainEqual(expect.objectContaining({ key: item.key, kind: "command" }));
+  expect(answer?.digest).toBe(digest);
 });

@@ -703,7 +703,7 @@ export function MultiReviewFindingsBadge({
         onClick={() => setOpen((current) => !current)}
         // No frame of its own: the pills sit in the inspector's action row at
         // the buttons' height (h-7), so the row stays one button tall.
-        className="group flex items-center gap-1.5 rounded-full focus-hairline [--focus-hairline-offset:2px]"
+        className="group flex items-center gap-1 rounded-full focus-hairline focus-hairline-outset"
       >
         {counts.map(([severity, count]) => (
           // The opaque backing keeps a pill legible once the badge is stuck
@@ -712,7 +712,7 @@ export function MultiReviewFindingsBadge({
             <span
               data-testid={`multi-review-findings-badge-${severity}`}
               className={cn(
-                "flex h-7 items-center rounded-full border px-2.5 font-mono text-xs tabular-nums transition-[filter] group-hover:brightness-125",
+                "flex h-7 items-center rounded-full border px-2 font-mono text-[11px] tabular-nums transition-[filter] group-hover:brightness-125",
                 reviewSeverityStyles[severity],
                 count === 0 && "opacity-40",
               )}

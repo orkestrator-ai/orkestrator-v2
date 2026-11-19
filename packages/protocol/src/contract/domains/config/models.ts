@@ -303,6 +303,26 @@ export const ConfigReadSchema = Schema.Union([
   }),
 ]);
 
+/**
+ * `GlobalSettingSources` (`setting-sources.ts`): which settings this machine
+ * stores and which it takes from a command node. Key names only, no values.
+ */
+export const GlobalSettingSourcesSchema = Schema.Struct({
+  storedKeys: mutableArray(Schema.String),
+  inheritedKeys: Schema.NullOr(mutableArray(Schema.String)),
+});
+
+/**
+ * A guarded reset: `reset` removed the keys; `conflict` removed nothing
+ * because a stored value no longer matched what the client previewed, and
+ * names those keys. Both answer the machine's current settings.
+ */
+export const ResetGlobalSettingsResultSchema = Schema.Struct({
+  status: Schema.Literals(["reset", "conflict"]),
+  conflicts: mutableArray(Schema.String),
+  config: AppConfigSchema,
+});
+
 /** `StoredDesktopConnections` (`connections.ts`): the desktop's saved machines. */
 export const DesktopConnectionsSchema = openRecord({
   activeConnectionId: Schema.String,

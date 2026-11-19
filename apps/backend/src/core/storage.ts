@@ -773,6 +773,16 @@ export class StorageService {
     return this.repos.config.patchGlobalConfig(...args);
   }
 
+  globalSettingSources(): ReturnType<ConfigRepository["globalSettingSources"]> {
+    return this.repos.config.globalSettingSources();
+  }
+
+  resetGlobalSettings(
+    ...args: Parameters<ConfigRepository["resetGlobalSettings"]>
+  ): ReturnType<ConfigRepository["resetGlobalSettings"]> {
+    return this.repos.config.resetGlobalSettings(...args);
+  }
+
   patchRepositorySettings(
     ...args: Parameters<ConfigRepository["patchRepositorySettings"]>
   ): Promise<AppConfig> {

@@ -29,6 +29,13 @@ import {
 } from "./coordinator-providers.js";
 import { normalizeTerminalHistoryRetention } from "@orkestrator/protocol/terminal-history";
 import {
+  globalSettingSources,
+  unmetResetExpectations,
+  type GlobalSettingSources,
+  type ResetSettingExpectation,
+  type ResettableGlobalSettingKey,
+} from "@orkestrator/protocol/setting-sources";
+import {
   MAX_SSH_AGENT_SOCKET_PATH_CHARS,
   SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
 } from "@orkestrator/protocol/ssh-agent-socket";
@@ -771,6 +778,54 @@ export class ConfigRepository {
         // in it is a deliberate edit, not an echo of the command node's value.
         keepOwnInherited: false,
       });
+    });
+  }
+
+  /**
+   * Which global settings this node stores, read from the stored file rather
+   * than the normalised config (normalisation fills in keys the user never
+   * set), and which it takes from the command node it follows. Names only.
+   */
+  async globalSettingSources(): Promise<GlobalSettingSources> {
+    const configExists = await fs.access(this.files.configFile()).then(
+      () => true,
+      () => false,
+    );
+    const stored = configExists
+      ? await this.context.loadJsonCached<AppConfig>(this.files.configFile(), defaultConfig)
+      : null;
+    return globalSettingSources(
+      stored && isRecord(stored.global) ? stored.global : null,
+      this.inheritedGlobalSettings?.() ?? null,
+    );
+  }
+
+  /**
+   * Remove stored settings so this node follows their defaults, under the
+   * config lock, and only while each still holds the value the client
+   * previewed. A mismatch removes nothing and reports the keys that moved.
+   */
+  async resetGlobalSettings(
+    keys: readonly ResettableGlobalSettingKey[],
+    expectations: readonly ResetSettingExpectation[],
+  ): Promise<{ status: "reset" | "conflict"; conflicts: string[]; config: AppConfig }> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadOwnConfig();
+      const conflicts = unmetResetExpectations(config.global, expectations);
+      if (conflicts.length > 0) {
+        return { status: "conflict", conflicts, config: this.withInheritedSettings(config) };
+      }
+      const merged = { ...config.global } as unknown as Record<string, unknown>;
+      for (const key of keys) delete merged[key];
+      const validated = this.validateGlobalConfigForSave(
+        merged as unknown as AppConfig["global"],
+        {},
+      );
+      const saved = await this.commitGlobalConfig(config, validated, {
+        preserveCredentials: true,
+        keepOwnInherited: false,
+      });
+      return { status: "reset", conflicts: [], config: saved };
     });
   }
 

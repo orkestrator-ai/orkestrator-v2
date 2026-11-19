@@ -519,7 +519,13 @@ export class PromptsRepository {
       const held = [...(previous?.messages ?? []), previous?.inFlight?.message];
       const session = await this.promptQueueNativeSession(queueKey, environmentId);
       const matchingHeld =
-        message && held.find((entry) => isRecord(entry) && entry.text === message.text);
+        message &&
+        held.find(
+          (entry) =>
+            isRecord(entry) &&
+            entry.text === message.text &&
+            !(isNonBlankString(entry.id) && promptQueueEditLease(previous, entry.id)),
+        );
       const duplicate = coalesce
         ? (previous?.jobReceipts?.find(
             (entry) =>

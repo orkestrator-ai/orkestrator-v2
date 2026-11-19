@@ -189,9 +189,7 @@ export function registerPromptCommands(
           messageId: asString(messageId, "messageId"),
           leaseId: asString(leaseId, "leaseId"),
         },
-        outcome === "commit"
-          ? { outcome, text: asString(text, "text"), attachments }
-          : { outcome: "cancel" },
+        outcome === "commit" ? { outcome, text: asString(text, "text"), attachments } : { outcome },
       );
       // The held item may be the head: let the queue move on now rather than
       // on the next sweep.

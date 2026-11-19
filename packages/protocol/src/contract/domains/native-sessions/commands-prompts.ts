@@ -164,7 +164,8 @@ export const renewPromptQueueMessageEditCommand = defineCommand({
 /**
  * Ends an in-place edit. `commit` replaces the item's text and attachments
  * together (absent `attachments` removes them) and releases the lease;
- * `cancel` releases it unchanged. A lease taken over, an item removed or
+ * `cancel` releases it unchanged. `release-expired` releases only the
+ * named lease and only if it has expired on the host. A lease taken over, an item removed or
  * changed since the edit began answers `conflict` and changes nothing.
  */
 export const finishPromptQueueMessageEditCommand = defineCommand({
@@ -178,7 +179,7 @@ export const finishPromptQueueMessageEditCommand = defineCommand({
     environmentId: Schema.String,
     messageId: Schema.String,
     leaseId: Schema.String,
-    outcome: Schema.Literals(["commit", "cancel"]),
+    outcome: Schema.Literals(["commit", "cancel", "release-expired"]),
     text: Schema.optionalKey(Schema.String),
     attachments: optionalUnknown,
   }),

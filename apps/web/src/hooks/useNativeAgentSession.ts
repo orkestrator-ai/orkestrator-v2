@@ -37,6 +37,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { getNativeAgentLiveUpdate } from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
+import type { PromptQueueEditFinish } from "@/lib/prompt-queue-edit";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { errorCode, ipcErrorText } from "@orkestrator/protocol/contract/ipc-error";
 import {
@@ -2968,7 +2969,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ...(options.takeOver ? { takeOver: true } : {}),
         });
       } finally {
-        await refresh();
+        await refresh().catch(() => undefined);
       }
     },
     [scope, environmentId, queueKey, refresh],
@@ -2984,13 +2985,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     [scope, environmentId, queueKey],
   );
   const finishQueuedEdit = useCallback(
-    async (
-      messageId: string,
-      leaseId: string,
-      finish:
-        | { outcome: "cancel" }
-        | { outcome: "commit"; text: string; attachments?: readonly unknown[] },
-    ) => {
+    async (messageId: string, leaseId: string, finish: PromptQueueEditFinish) => {
       try {
         return await backendForScope(scope).finishPromptQueueMessageEdit({
           queueKey,
@@ -3000,7 +2995,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ...finish,
         });
       } finally {
-        await refresh();
+        await refresh().catch(() => undefined);
       }
     },
     [scope, environmentId, queueKey, refresh],

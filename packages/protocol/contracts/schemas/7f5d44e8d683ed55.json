@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "sha256:69d74303e8c17dd00224b185e14786ee233c0c6d3ba6c8f74f8600d7df787add",
+  "digest": "sha256:7f5d44e8d683ed55d41610922eceac8f324fbb6e5d57ea15f9fdd22d52077cc9",
   "document": {
     "definitions": {},
     "dialect": "draft-2020-12",
@@ -18,7 +18,7 @@
           "type": "string"
         },
         "outcome": {
-          "enum": ["commit", "cancel"],
+          "enum": ["commit", "cancel", "release-expired"],
           "type": "string"
         },
         "queueKey": {

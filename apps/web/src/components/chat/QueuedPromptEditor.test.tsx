@@ -74,6 +74,21 @@ describe("QueuedPromptEditor", () => {
     expect(screen.queryByRole("button", { name: "Use mine" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: "Discard mine" })).toBeTruthy();
   });
+
+  test.each([undefined, "changed"] as const)(
+    "composing Escape preserves the editor with conflict %s",
+    (conflict) => {
+      const props = renderEditor({ conflict });
+      const textarea = screen.getByRole("textbox", { name: "Queued prompt 2 text" });
+      fireEvent.keyDown(textarea, { key: "Escape", isComposing: true });
+      fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true, isComposing: true });
+      expect(props.onCancel).not.toHaveBeenCalled();
+      expect(props.onDiscard).not.toHaveBeenCalled();
+      expect(props.onSave).not.toHaveBeenCalled();
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      expect(conflict ? props.onDiscard : props.onCancel).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 describe("QueuedPromptStack edit states", () => {

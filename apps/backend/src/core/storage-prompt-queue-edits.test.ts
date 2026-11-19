@@ -242,6 +242,43 @@ describe("editing a queued prompt in place", () => {
     expect(finished.status).toBe("committed");
   });
 
+  test("release requires the observed lease to still own the row and be expired", async () => {
+    const storage = await createStorage();
+    await seedThree(storage);
+    const now = Date.now();
+    const expired = now - PROMPT_QUEUE_EDIT_LEASE_MS - 1;
+    const original = await storage.promptQueueEdits.beginPromptQueueMessageEdit(target("first"), {
+      now: expired,
+    });
+    if (original.status !== "editing") throw new Error("expected a lease");
+    const observed = { ...target("first"), leaseId: original.lease.leaseId };
+    const release = (leaseId: string, at: number) =>
+      storage.promptQueueEdits.finishPromptQueueMessageEdit(
+        { ...target("first"), leaseId },
+        { outcome: "release-expired" },
+        { now: at },
+      );
+
+    await storage.promptQueueEdits.renewPromptQueueMessageEdit(observed, { now });
+    expect(await release(observed.leaseId, now)).toMatchObject({ status: "conflict" });
+    expect(await storage.reservePromptQueueHeadForDispatch(QUEUE)).toBeNull();
+
+    const replacement = await storage.promptQueueEdits.beginPromptQueueMessageEdit(
+      target("first"),
+      { takeOver: true, now },
+    );
+    if (replacement.status !== "editing") throw new Error("expected a replacement");
+    const deadline = now + PROMPT_QUEUE_EDIT_LEASE_MS;
+    expect(await release(observed.leaseId, deadline)).toMatchObject({ status: "conflict" });
+    expect(await storage.reservePromptQueueHeadForDispatch(QUEUE)).toBeNull();
+    expect(await release(replacement.lease.leaseId, deadline)).toMatchObject({
+      status: "released",
+    });
+    expect(await storage.reservePromptQueueHeadForDispatch(QUEUE)).toMatchObject({
+      message: { id: "first", text: "one" },
+    });
+  });
+
   test("a prompt removed during the edit answers a conflict", async () => {
     const storage = await createStorage();
     await seedThree(storage);
@@ -283,6 +320,85 @@ describe("editing a queued prompt in place", () => {
     const after = await storage.getPromptQueue(QUEUE);
     expect(after?.messages[1]).toEqual({ id: "second", text: "rewritten" });
     expect(after?.editLeases?.[0]?.leaseId).toBe(begun.lease.leaseId);
+    await storage.movePromptQueueMessage(QUEUE, ENVIRONMENT, "second", "up");
+    expect(await storage.reservePromptQueueHeadForDispatch(QUEUE)).toBeNull();
+    expect(
+      await storage.promptQueueEdits.finishPromptQueueMessageEdit(
+        { ...target("second"), leaseId: begun.lease.leaseId },
+        { outcome: "cancel" },
+      ),
+    ).toMatchObject({ status: "released" });
+    expect(await storage.reservePromptQueueHeadForDispatch(QUEUE)).toMatchObject({
+      message: { id: "second", text: "rewritten" },
+    });
+  });
+
+  test("a job and its coalesced resend keep their original payload binding", async () => {
+    const storage = await createStorage();
+    const job = { id: "message", requestId: "job", text: "original job" };
+    const receipt = {
+      requestId: "job",
+      fingerprint: "a".repeat(64),
+      status: "accepted",
+      queued: true,
+    } as const;
+    await storage.reserveNativeAgentJobRequest(QUEUE, ENVIRONMENT, receipt, job, true);
+    expect(
+      await storage.promptQueueEdits.beginPromptQueueMessageEdit(target(job.id)),
+    ).toMatchObject({ status: "refused", reason: "frozen" });
+    const resend = await storage.reserveNativeAgentJobRequest(
+      QUEUE,
+      ENVIRONMENT,
+      { ...receipt, requestId: "resend" },
+      { ...job, id: "resend", requestId: "resend" },
+      true,
+    );
+    expect(resend.dispatchRequestId).toBe("job");
+    expect((await storage.getPromptQueue(QUEUE))?.messages).toEqual([job]);
+  });
+
+  test("a coalesced job freezes its target, while a live edit cannot acquire a new job alias", async () => {
+    const storage = await createStorage();
+    await seedThree(storage);
+    const receipt = {
+      requestId: "job",
+      fingerprint: "a".repeat(64),
+      status: "accepted",
+      queued: true,
+    } as const;
+    const alias = await storage.reserveNativeAgentJobRequest(
+      QUEUE,
+      ENVIRONMENT,
+      receipt,
+      { id: "job", text: "one" },
+      true,
+    );
+    expect(alias.dispatchRequestId).toBe("first");
+    expect(
+      await storage.promptQueueEdits.beginPromptQueueMessageEdit(target("first")),
+    ).toMatchObject({
+      status: "refused",
+      reason: "frozen",
+    });
+
+    const edit = await storage.promptQueueEdits.beginPromptQueueMessageEdit(target("second"));
+    if (edit.status !== "editing") throw new Error("expected a lease");
+    const otherJob = { id: "other-job", text: "two" };
+    const otherReceipt = await storage.reserveNativeAgentJobRequest(
+      QUEUE,
+      ENVIRONMENT,
+      { ...receipt, requestId: otherJob.id, fingerprint: "b".repeat(64) },
+      otherJob,
+      true,
+    );
+    expect(otherReceipt.dispatchRequestId).toBeUndefined();
+    expect(
+      await storage.promptQueueEdits.finishPromptQueueMessageEdit(
+        { ...target("second"), leaseId: edit.lease.leaseId },
+        { outcome: "commit", text: "edited second" },
+      ),
+    ).toMatchObject({ status: "committed" });
+    expect((await storage.getPromptQueue(QUEUE))?.messages.at(-1)).toEqual(otherJob);
   });
 
   test("backend-authored items and slash commands are not edited in place", async () => {
@@ -320,7 +436,7 @@ describe("editing a queued prompt in place", () => {
         text: "x",
         attachments: [{ type: "file" }],
       }),
-    ).rejects.toThrow("by path");
+    ).rejects.toThrow("attachment path");
     expect((await storage.getPromptQueue(QUEUE))?.editLeases).toHaveLength(1);
   });
 

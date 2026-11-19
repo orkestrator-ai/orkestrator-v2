@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { AlertCircle, ImageIcon, Paperclip, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { WorkspaceFilePickerDialog, type NativeAttachmentFileSearch } from "./NativeAttachmentMenu";
 import {
   describePromptQueueEditConflict,
   queuedPromptAttachmentName,
@@ -8,10 +9,11 @@ import {
   type QueuedPromptStoredAttachment,
 } from "@/lib/prompt-queue-edit";
 import { cn } from "@/lib/utils";
+import type { FileCandidate } from "@/types";
 
 export interface QueuedPromptEditorProps {
   /** 1-based position of the prompt in the queue, for its label. */
-  position: number;
+  position?: number;
   length: number;
   text: string;
   attachments: readonly QueuedPromptStoredAttachment[];
@@ -19,6 +21,10 @@ export interface QueuedPromptEditorProps {
   busy: boolean;
   onTextChange: (text: string) => void;
   onRemoveAttachment: (path: string) => void;
+  filePicker?: {
+    search: NativeAttachmentFileSearch;
+    select: (file: FileCandidate) => void;
+  };
   onSave: () => void;
   onCancel: () => void;
   /** After a conflict: write this text over whatever the prompt holds now. */
@@ -45,6 +51,7 @@ export function QueuedPromptEditor({
   busy,
   onTextChange,
   onRemoveAttachment,
+  filePicker,
   onSave,
   onCancel,
   onOverwrite,
@@ -53,6 +60,7 @@ export function QueuedPromptEditor({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const hintId = useId();
   const conflictId = useId();
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -62,17 +70,20 @@ export function QueuedPromptEditor({
   }, []);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      if (conflict) onDiscard();
-      else onCancel();
+      if (!busy) {
+        if (conflict) onDiscard();
+        else onCancel();
+      }
       return;
     }
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       event.stopPropagation();
-      if (!conflict) onSave();
+      if (!busy && !conflict) onSave();
     }
   };
 
@@ -81,7 +92,9 @@ export function QueuedPromptEditor({
     <div
       data-testid="compose-queue-editor"
       role="group"
-      aria-label={`Editing queued prompt ${position} of ${length}`}
+      aria-label={
+        position ? `Editing queued prompt ${position} of ${length}` : "Queued prompt edit"
+      }
       className="flex flex-col gap-1.5 border-b border-border/40 px-3 py-2"
     >
       <textarea
@@ -90,7 +103,7 @@ export function QueuedPromptEditor({
         rows={rows}
         onChange={(event) => onTextChange(event.target.value)}
         onKeyDown={handleKeyDown}
-        aria-label={`Queued prompt ${position} text`}
+        aria-label={position ? `Queued prompt ${position} text` : "Queued prompt text"}
         aria-describedby={conflict ? `${conflictId} ${hintId}` : hintId}
         readOnly={busy}
         className="w-full resize-none rounded border border-border/60 bg-background/60 px-2 py-1 text-xs leading-relaxed text-foreground outline-none focus-hairline"
@@ -135,6 +148,30 @@ export function QueuedPromptEditor({
         </div>
       ) : null}
       <div className="flex items-center gap-2">
+        {filePicker && !conflict ? (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 shrink-0 px-2 text-xs"
+              disabled={busy || !filePicker.search.isAvailable}
+              onClick={() => setPickerOpen(true)}
+            >
+              <Paperclip className="size-3" aria-hidden="true" />
+              Attach file
+            </Button>
+            <WorkspaceFilePickerDialog
+              open={pickerOpen}
+              onOpenChange={setPickerOpen}
+              fileSearch={filePicker.search}
+              onSelectFile={filePicker.select}
+              onCloseAutoFocus={() => textareaRef.current?.focus()}
+              title="Attach workspace file"
+              description="Choose a file to attach to this queued prompt."
+            />
+          </>
+        ) : null}
         <span id={hintId} className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
           {conflict
             ? "Escape discards your edit."

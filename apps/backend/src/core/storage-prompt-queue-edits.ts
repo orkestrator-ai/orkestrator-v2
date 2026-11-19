@@ -7,7 +7,9 @@ import {
   type PromptQueueEditConflict,
   type PromptQueueEditLease,
 } from "@orkestrator/protocol/prompt-queue-edit";
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import type { PersistedPromptQueue } from "./models.js";
+import { assertValidPromptAttachments, type PromptAttachment } from "./prompt-attachments.js";
 import { promptQueueMessageFingerprint } from "./storage-record-upgrades.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import {
@@ -59,8 +61,6 @@ interface EditTarget {
   messageId: string;
 }
 
-const MAX_EDIT_ATTACHMENTS = 64;
-
 function validTarget(target: EditTarget): void {
   if (!isNonBlankString(target.queueKey)) throw new Error("Prompt queue key must not be blank");
   if (!isNonBlankString(target.environmentId)) {
@@ -73,23 +73,26 @@ function validTarget(target: EditTarget): void {
 }
 
 /**
- * Backend-authored items (a typed `origin`: annotation requests, goal turns)
- * and slash commands, whose intent is bound to their text, are never edited
- * in place.
+ * Backend-authored items, slash commands and job receipts bind their intent
+ * to the existing payload.
  */
-function editable(message: Record<string, unknown>): boolean {
+function editable(queue: PersistedPromptQueue, message: Record<string, unknown>): boolean {
   if (isRecord(message.origin) && isNonBlankString(message.origin.kind)) return false;
-  return message.command === undefined;
+  return (
+    message.command === undefined &&
+    !queue.jobReceipts?.some((receipt) => {
+      const requestId = receipt.dispatchRequestId ?? receipt.requestId;
+      return requestId === message.requestId || requestId === message.id;
+    })
+  );
 }
 
 /** The commit's attachments, checked: images and files by workspace path. */
-function commitAttachments(value: unknown): Record<string, unknown>[] {
+function commitAttachments(value: unknown): PromptAttachment[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) throw new Error("Queued prompt attachments must be an array");
-  if (value.length > MAX_EDIT_ATTACHMENTS) {
-    throw new Error(`A queued prompt carries at most ${MAX_EDIT_ATTACHMENTS} attachments`);
-  }
-  return value.map((candidate) => {
+  const attachments = assertValidPromptAttachments(value);
+  for (const candidate of value) {
     if (
       !isRecord(candidate) ||
       (candidate.type !== "image" && candidate.type !== "file") ||
@@ -99,8 +102,8 @@ function commitAttachments(value: unknown): Record<string, unknown>[] {
     ) {
       throw new Error("Queued prompt attachment must name an image or file by path");
     }
-    return candidate;
-  });
+  }
+  return attachments;
 }
 
 /** `queue` holding exactly `leases`, unchanged otherwise. */
@@ -166,7 +169,7 @@ export class PromptQueueEditsRepository {
           if (!found) {
             return { result: { status: "refused", reason: "missing", queue: previous } };
           }
-          if (!editable(found.message)) {
+          if (!editable(previous, found.message)) {
             return { result: { status: "refused", reason: "frozen", queue: previous } };
           }
           const now = options.now ?? Date.now();
@@ -248,20 +251,31 @@ export class PromptQueueEditsRepository {
 
   async finishPromptQueueMessageEdit(
     target: EditTarget & { leaseId: string },
-    finish: { outcome: "cancel" } | ({ outcome: "commit" } & PromptQueueEditCommit),
+    finish:
+      { outcome: "cancel" | "release-expired" } | ({ outcome: "commit" } & PromptQueueEditCommit),
+    options: { now?: number } = {},
   ): Promise<PromptQueueEditFinishResult> {
     validTarget(target);
     if (!isNonBlankString(target.leaseId)) throw new Error("Edit lease ID must not be blank");
-    let replacement: { text: string; attachments: Record<string, unknown>[] } | undefined;
+    let replacement: { text: string; attachments: PromptAttachment[] } | undefined;
     if (finish.outcome === "commit") {
       if (typeof finish.text !== "string") throw new Error("Queued prompt text must be a string");
       const attachments = commitAttachments(finish.attachments);
       if (!finish.text.trim() && attachments.length === 0) {
         throw new Error("A queued prompt needs text or an attachment");
       }
-      replacement = { text: finish.text, attachments };
-    } else if (finish.outcome !== "cancel") {
-      throw new Error("Edit outcome must be commit or cancel");
+      const text = finish.text.trim()
+        ? finish.text
+        : buildInitialPromptWithAttachmentReferences(
+            "",
+            attachments.map(({ filename, path }) => ({
+              name: filename ?? path.split(/[\\/]/).at(-1) ?? "attachment",
+              path,
+            })),
+          );
+      replacement = { text, attachments };
+    } else if (finish.outcome !== "cancel" && finish.outcome !== "release-expired") {
+      throw new Error("Invalid queued prompt edit outcome");
     }
     const { queueKey, environmentId, messageId, leaseId } = target;
     return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
@@ -284,8 +298,12 @@ export class PromptQueueEditsRepository {
           }
           const leases = promptQueueEditLeases(previous);
           const held = leases.find((lease) => lease.messageId === messageId);
-          if (!held || held.leaseId !== leaseId) {
-            // Cancelling an edit that is no longer this client's changes nothing.
+          if (
+            !held ||
+            held.leaseId !== leaseId ||
+            (finish.outcome === "release-expired" &&
+              !promptQueueEditLeaseExpired(held, options.now ?? Date.now()))
+          ) {
             return {
               result: {
                 status: "conflict",
@@ -300,9 +318,12 @@ export class PromptQueueEditsRepository {
             const queue = withLeases(previous, others);
             return { result: { status: "released", queue }, value: queue };
           }
-          if (promptQueueMessageFingerprint(found.message) !== held.baseFingerprint) {
-            // Something rewrote the item under the lease (an older client's
-            // whole-list save). Keep the lease: the user decides.
+          if (
+            !editable(previous, found.message) ||
+            promptQueueMessageFingerprint(found.message) !== held.baseFingerprint
+          ) {
+            // The payload or its editability changed under this lease.
+            // Keep the lease until the editor resolves the conflict.
             return {
               result: {
                 status: "conflict",

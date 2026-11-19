@@ -327,7 +327,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
       }
     };
 
-    if (length === 0) return null;
+    if (length === 0 && !queue.editor) return null;
     const actionClass =
       "shrink-0 rounded text-muted-foreground outline-none transition-colors focus-hairline focus-hairline-outset aria-disabled:cursor-wait aria-disabled:opacity-50";
     return (
@@ -335,34 +335,36 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
         data-testid="compose-queue-strip"
         className="mx-auto w-[95%] rounded-t-lg border border-b-0 border-border/70 bg-input-surface text-xs"
       >
-        <div className="flex items-center gap-2 border-b border-border/40 px-3 py-0.5 text-[11px] text-muted-foreground">
-          {queue.error ? (
-            <AlertCircle className="h-3 w-3 shrink-0 text-failure" aria-hidden="true" />
-          ) : null}
-          {/* The button below announces the count when there is one. */}
-          <span className="min-w-0 flex-1 truncate" aria-hidden={queue.onOpen ? true : undefined}>
-            {queue.error ? `Blocked: ${queue.error.message}` : `${length} queued`}
-          </span>
-          {queue.onOpen ? (
-            <button
-              type="button"
-              onClick={queue.onOpen}
-              className="shrink-0 rounded outline-none transition-colors hover:text-foreground focus-hairline focus-hairline-outset"
-              aria-label={
-                queue.error
-                  ? `${length} queued prompts blocked: ${queue.error.message}`
-                  : `View queued prompts (${length})`
-              }
-              title={
-                queue.error
-                  ? `Queued prompt was not sent: ${queue.error.message}`
-                  : "View queued prompts"
-              }
-            >
-              View all
-            </button>
-          ) : null}
-        </div>
+        {length > 0 ? (
+          <div className="flex items-center gap-2 border-b border-border/40 px-3 py-0.5 text-[11px] text-muted-foreground">
+            {queue.error ? (
+              <AlertCircle className="h-3 w-3 shrink-0 text-failure" aria-hidden="true" />
+            ) : null}
+            {/* The button below announces the count when there is one. */}
+            <span className="min-w-0 flex-1 truncate" aria-hidden={queue.onOpen ? true : undefined}>
+              {queue.error ? `Blocked: ${queue.error.message}` : `${length} queued`}
+            </span>
+            {queue.onOpen ? (
+              <button
+                type="button"
+                onClick={queue.onOpen}
+                className="shrink-0 rounded outline-none transition-colors hover:text-foreground focus-hairline focus-hairline-outset"
+                aria-label={
+                  queue.error
+                    ? `${length} queued prompts blocked: ${queue.error.message}`
+                    : `View queued prompts (${length})`
+                }
+                title={
+                  queue.error
+                    ? `Queued prompt was not sent: ${queue.error.message}`
+                    : "View queued prompts"
+                }
+              >
+                View all
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {queue.editor}
         <span id={hintId} className="sr-only">
           Up and Down arrows move between queued prompts. Escape returns to the prompt input.

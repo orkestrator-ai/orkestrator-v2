@@ -3562,11 +3562,33 @@ export function SharedNativeAgentController({
   // (the composer edit) is the fallback for slash commands and for nodes that
   // predate in-place edits. Called before the setup overlay's early return.
   const queuedPromptEditing = useNativeQueuedPromptEditing({
+    queueIdentity: `${composeScope.nodeId}\u0000${sessionKey}`,
     messages: queuedMessages,
     editing: projection?.queue?.editing,
     begin: beginQueuedEdit,
     renew: renewQueuedEdit,
     finish: finishQueuedEdit,
+    filePicker: canSearchFiles
+      ? {
+          search: fileSearch,
+          context: (messageId) => {
+            const queued = queuedMessages.find((message) => message.id === messageId);
+            const modelId = (queued as { model?: unknown } | undefined)?.model;
+            const model =
+              typeof modelId === "string"
+                ? resolvedComposer.models.find((candidate) => candidate.id === modelId)
+                : selectedModel;
+            return {
+              containerId: data.containerId,
+              worktreePath: envWorktreePath ?? coordinatorWorkspacePath,
+              allowFiles: attachmentCapabilities.files,
+              allowImages: attachmentCapabilities.images,
+              modelSupportsImages: model?.supportsImageInput,
+              modelLabel: model?.label,
+            };
+          },
+        }
+      : undefined,
   });
   if (setupPending) {
     return (
@@ -4512,12 +4534,12 @@ export function SharedNativeAgentController({
             await submit(ADDRESS_ALL_REVIEW_PROMPT, undefined, false, "build");
           }}
           queue={
-            projection?.queue
+            projection?.queue || queuedPromptEditing.editor
               ? {
                   // A blocked goal turn has no row of its own, but its error and
                   // Retry must still show.
-                  length: queuedMessages.length || (projection.queue.blocked ? 1 : 0),
-                  error: projection.queue.blocked
+                  length: queuedMessages.length || (projection?.queue?.blocked ? 1 : 0),
+                  error: projection?.queue?.blocked
                     ? { message: projection.queue.blocked.error }
                     : null,
                   onOpen: () => setQueueDialogOpen(true),

@@ -147,12 +147,17 @@ describe("usePromptQueueEdit", () => {
     expect(edited.finish).not.toHaveBeenCalled();
   });
 
-  test("releasing another client's unfinished edit takes it over and cancels it", async () => {
+  test("release targets the observed lease and reports a stale observation", async () => {
     const api = fakeApi();
+    api.finish.mockResolvedValueOnce({ status: "conflict", reason: "lease-lost", queue: null });
     const { result } = renderHook(() => usePromptQueueEdit(api));
-    await act(() => result.current.release("second"));
-    expect(api.begin).toHaveBeenCalledWith("second", { takeOver: true });
-    expect(api.finish).toHaveBeenCalledWith("second", "lease-1", { outcome: "cancel" });
+    await act(async () => {
+      await expect(result.current.release("second", "expired")).rejects.toThrow(
+        "no longer available",
+      );
+    });
+    expect(api.begin).not.toHaveBeenCalled();
+    expect(api.finish).toHaveBeenCalledWith("second", "expired", { outcome: "release-expired" });
     expect(result.current.session).toBeNull();
   });
 
@@ -162,8 +167,89 @@ describe("usePromptQueueEdit", () => {
     await act(() => result.current.begin("second"));
     act(() => result.current.setText("unsaved"));
     await act(async () => {
-      await expect(result.current.begin("third")).rejects.toThrow("Save or cancel");
+      await expect(result.current.begin("third")).rejects.toThrow("Save or discard");
     });
     expect(result.current.session?.messageId).toBe("second");
   });
+
+  test.each(["discard", "cancel", "unmount"] as const)(
+    "%s after a changed conflict releases the original lease",
+    async (action) => {
+      const api = fakeApi();
+      api.finish.mockResolvedValueOnce({ status: "conflict", reason: "changed", queue: null });
+      const { result, unmount } = renderHook(() => usePromptQueueEdit(api));
+      await act(() => result.current.begin("second"));
+      act(() => result.current.setText("unsaved"));
+      await act(() => result.current.save());
+      expect(result.current.session?.conflict).toBe("changed");
+      await act(async () => {
+        await expect(result.current.begin("third")).rejects.toThrow("Save or discard");
+      });
+      expect(result.current.session?.text).toBe("unsaved");
+      expect(api.begin).toHaveBeenCalledTimes(1);
+      expect(api.finish).toHaveBeenCalledTimes(1);
+      if (action === "unmount") unmount();
+      else {
+        await act(() => result.current[action]());
+        expect(result.current.session).toBeNull();
+        await act(() => result.current.begin("third"));
+        expect(result.current.session?.messageId).toBe("third");
+      }
+      expect(api.finish).toHaveBeenNthCalledWith(2, "second", "lease-1", { outcome: "cancel" });
+    },
+  );
+
+  test("overlapping edit and save requests cannot acquire or replace a newer session", async () => {
+    const api = fakeApi();
+    const grant = Promise.withResolvers<Awaited<ReturnType<typeof api.begin>>>();
+    api.begin.mockReturnValueOnce(grant.promise);
+    const { result } = renderHook(() => usePromptQueueEdit(api));
+    await act(async () => {
+      const first = result.current.begin("second");
+      await expect(result.current.begin("third")).rejects.toThrow("in progress");
+      grant.resolve({ status: "editing", lease: lease("first"), message: stored, queue: null });
+      await first;
+    });
+    expect(api.begin).toHaveBeenCalledTimes(1);
+    expect(result.current.session?.leaseId).toBe("first");
+    act(() => result.current.setText("save me"));
+    const saved = Promise.withResolvers<Awaited<ReturnType<typeof api.finish>>>();
+    api.finish.mockReturnValueOnce(saved.promise);
+    await act(async () => {
+      const save = result.current.save();
+      await expect(result.current.begin("third")).rejects.toThrow("in progress");
+      await expect(result.current.cancel()).rejects.toThrow("in progress");
+      saved.resolve({ status: "committed", queue: null });
+      await save;
+    });
+    expect(result.current.session).toBeNull();
+    expect(api.begin).toHaveBeenCalledTimes(1);
+    expect(api.finish).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(["unmount", "change queue"] as const)(
+    "a lease granted after %s is cancelled through its initiating queue",
+    async (action) => {
+      const api = fakeApi();
+      const other = fakeApi();
+      const grant = Promise.withResolvers<Awaited<ReturnType<typeof api.begin>>>();
+      api.begin.mockReturnValueOnce(grant.promise);
+      const { result, rerender, unmount } = renderHook(usePromptQueueEdit, {
+        initialProps: { ...api, queueIdentity: "first" },
+      });
+      const opening = result.current.begin("second");
+      if (action === "unmount") unmount();
+      else {
+        rerender({ ...other, queueIdentity: "other" });
+        await act(() => result.current.begin("third"));
+      }
+      await act(async () => {
+        grant.resolve({ status: "editing", lease: lease("late"), message: stored, queue: null });
+        await opening;
+      });
+      expect(api.finish).toHaveBeenCalledWith("second", "late", { outcome: "cancel" });
+      expect(other.finish).not.toHaveBeenCalled();
+      if (action === "change queue") expect(result.current.session?.messageId).toBe("third");
+    },
+  );
 });

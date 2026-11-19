@@ -10,6 +10,7 @@ import {
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import type {
   PromptQueueEditBeginResult,
+  PromptQueueEditFinish,
   PromptQueueEditFinishResult,
   PromptQueueEditRenewResult,
 } from "@/lib/prompt-queue-edit";
@@ -813,9 +814,7 @@ export function createWorkflowsApi(client: BackendClient) {
       environmentId: string;
       messageId: string;
       leaseId: string;
-    } & (
-      { outcome: "cancel" } | { outcome: "commit"; text: string; attachments?: readonly unknown[] }
-    ),
+    } & PromptQueueEditFinish,
   ): Promise<PromptQueueEditFinishResult> {
     return asWebModel<PromptQueueEditFinishResult>(
       native().finish_prompt_queue_message_edit(
@@ -834,7 +833,7 @@ export function createWorkflowsApi(client: BackendClient) {
               environmentId: input.environmentId,
               messageId: input.messageId,
               leaseId: input.leaseId,
-              outcome: "cancel",
+              outcome: input.outcome,
             },
       ),
     );

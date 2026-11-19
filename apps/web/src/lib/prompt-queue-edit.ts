@@ -39,6 +39,10 @@ export type PromptQueueEditFinishResult =
   | { status: "committed" | "released"; queue: unknown }
   | { status: "conflict"; reason: PromptQueueEditConflict; current?: unknown; queue: unknown };
 
+export type PromptQueueEditFinish =
+  | { outcome: "cancel" | "release-expired" }
+  | { outcome: "commit"; text: string; attachments?: readonly unknown[] };
+
 /** A file or image a queued prompt carries, as stored. */
 export interface QueuedPromptStoredAttachment {
   type: "image" | "file";

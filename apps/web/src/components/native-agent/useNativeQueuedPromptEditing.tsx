@@ -1,10 +1,15 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
 import { QueuedPromptEditor } from "@/components/chat/QueuedPromptEditor";
+import type { NativeAttachmentFileSearch } from "@/components/chat/NativeAttachmentMenu";
 import { usePromptQueueEdit, type PromptQueueEditApi } from "@/hooks/usePromptQueueEdit";
 import { describePromptQueueActionError } from "@/lib/prompt-queue-errors";
+import {
+  resolveWorkspaceAttachment,
+  type WorkspaceAttachmentContext,
+} from "@/lib/chat/workspace-attachments";
 import {
   queuedPromptEditStates,
   type PromptQueueEditView,
@@ -23,6 +28,10 @@ export interface NativeQueuedPromptEditingInput extends PromptQueueEditApi {
   messages: readonly QueuedMessage[];
   /** The projection's `queue.editing`. */
   editing: readonly PromptQueueEditView[] | undefined;
+  filePicker?: {
+    search: NativeAttachmentFileSearch;
+    context: (messageId: string) => WorkspaceAttachmentContext;
+  };
 }
 
 /**
@@ -64,10 +73,25 @@ export function useNativeQueuedPromptEditing(
   // this client's after `changed`, another's id in the projection after
   // `lease-lost`, so each row reads correctly either way.
   const localLeaseId = session?.leaseId;
-  const states = useMemo(
-    () => queuedPromptEditStates(input.editing, localLeaseId),
-    [input.editing, localLeaseId],
+  const [, refreshExpiry] = useState(0);
+  const states = queuedPromptEditStates(input.editing, localLeaseId);
+  const deadline = Math.min(
+    Infinity,
+    ...(input.editing ?? [])
+      .filter(({ messageId }) => states.get(messageId) === "elsewhere")
+      .map(({ expiresAt }) => Date.parse(expiresAt)),
   );
+  useEffect(() => {
+    if (!Number.isFinite(deadline)) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const expire = () => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) refreshExpiry((count) => count + 1);
+      else timer = setTimeout(expire, Math.min(remaining, 2_147_483_647));
+    };
+    timer = setTimeout(expire, Math.min(Math.max(0, deadline - Date.now()), 2_147_483_647));
+    return () => clearTimeout(timer);
+  }, [deadline]);
 
   const edit = async (message: QueuedMessage, editInComposer: EditInComposer) => {
     if (composerOnly || isSlashCommand(message) || webAnnotationQueueOrigin(message)) {
@@ -95,22 +119,40 @@ export function useNativeQueuedPromptEditing(
   const index = session
     ? input.messages.findIndex((message) => message.id === session.messageId)
     : -1;
-  if (session && (index >= 0 || session.conflict)) {
+  if (session) {
+    const picker = input.filePicker;
     editor = (
       <QueuedPromptEditor
         key={session.messageId}
-        position={index >= 0 ? index + 1 : input.messages.length + 1}
-        length={Math.max(input.messages.length, index + 1)}
+        position={index >= 0 ? index + 1 : undefined}
+        length={input.messages.length}
         text={session.text}
         attachments={session.attachments}
-        conflict={session.conflict ?? (index < 0 ? "missing" : undefined)}
+        conflict={index < 0 ? "missing" : session.conflict}
         busy={session.busy}
         onTextChange={controller.setText}
         onRemoveAttachment={controller.removeAttachment}
+        filePicker={
+          picker && {
+            search: picker.search,
+            select: (file) => {
+              const resolved = resolveWorkspaceAttachment(file, {
+                ...picker.context(session.messageId),
+                attachedCount: session.attachments.length,
+              });
+              if ("error" in resolved) {
+                toast.error(resolved.error, { description: resolved.description });
+                return;
+              }
+              const { type, path, name } = resolved.attachment;
+              controller.addAttachment({ type, path, filename: name });
+            },
+          }
+        }
         onSave={report(controller.save)}
         onCancel={report(controller.cancel)}
         onOverwrite={report(controller.overwrite)}
-        onDiscard={controller.discard}
+        onDiscard={report(controller.discard)}
       />
     );
   }
@@ -118,7 +160,12 @@ export function useNativeQueuedPromptEditing(
   return {
     edit,
     editState: (messageId) => states.get(messageId),
-    release: controller.release,
+    release: async (messageId) => {
+      const observed = input.editing?.find((lease) => lease.messageId === messageId);
+      if (observed && states.get(messageId) === "review") {
+        await controller.release(messageId, observed.leaseId);
+      }
+    },
     editor,
   };
 }

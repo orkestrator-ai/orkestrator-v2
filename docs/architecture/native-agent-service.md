@@ -233,8 +233,9 @@ change together.
   the queue row as `editLeases`, with the item's fingerprint. A live lease
   held by another client refuses with `held-elsewhere` unless the caller asks
   to take it over; an expired one is taken over without asking. Annotation
-  requests, goal turns and slash commands are `frozen` and keep the composer
-  edit.
+  requests, goal turns, slash commands and prompts bound to job receipts are
+  frozen for in-place edits. The existing composer fallback handles slash
+  commands and annotations.
 - While a lease names an item, `reservePromptQueueHeadForDispatch` and the
   steer reservation (`reservePromptQueueSteer`) leave it alone, in the same
   row transaction under the queue lease. A held head blocks the items behind
@@ -244,13 +245,18 @@ change together.
 - The editing client renews every 20 seconds; a lease lasts 60. A lease that
   runs out is never released silently: it keeps holding the item, and the
   row reads "edit unfinished" until someone edits it again (taking it over)
-  or releases it unchanged.
-- `finish_prompt_queue_message_edit` commits or cancels. A commit whose lease
+  or releases it unchanged. The renderer updates the badge at the lease deadline
+  and the host checks that the observed lease still owns the item and has expired
+  before releasing it.
+- `finish_prompt_queue_message_edit` commits, cancels or releases an expired
+  lease. The queued editor uses the workspace file picker with its own draft.
+  The host validates attachments against the dispatch limits and supplies
+  workspace references for attachment-only prompts. A commit whose lease
   was taken over (`lease-lost`), whose item left the queue (`missing`) or was
   rewritten under the lease (`changed`) changes nothing and answers the
   conflict with the item as it now stands; the editor keeps the person's text
-  and offers to write it over or discard it. Finishing announces the queue,
-  which wakes its drain.
+  and offers to write it over or discard it. Discarding releases any lease the
+  editor still owns. Finishing announces the queue, which wakes its drain.
 - A lease follows its item through moves and leaves with it on removal
   (`nextPromptQueue`). Committing a rejected head clears its dispatch error
   exactly as any other change to it does; cancelling keeps it.

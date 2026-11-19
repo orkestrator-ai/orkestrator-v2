@@ -21,6 +21,7 @@ import {
   createProviderStub,
   withService,
 } from "../src/core/native-agent-service-projection-test-support.js";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { BackendPush } from "../src/core/push/index.js";
 import { registryCommandAccess } from "../src/core/nodes/workspace-grant-test-support.js";
 import {
@@ -191,7 +192,9 @@ describe("gateway push", () => {
           liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
         } as const;
         await service.ensureSession(identity);
+        const clock = new ManualClock();
         const push = new BackendPush({
+          hub: { timers: clock, now: () => clock.now() },
           nativeAgents: () => service,
           sessionExists: async () => true,
         });
@@ -230,11 +233,20 @@ describe("gateway push", () => {
                 ),
               );
             };
-            await awaitFrames(1);
+            const publish = async (expected: number) => {
+              clock.advance(0);
+              await waitUntil(
+                () => push.nativeSessions.metrics().changes === expected,
+                "observer did not publish its projection",
+              );
+              clock.advance(50);
+              await awaitFrames(expected);
+            };
+            await publish(1);
             const baseline = providerReads;
             phase = "running";
             push.nativeSessions.wake(identity);
-            await awaitFrames(2);
+            await publish(2);
             expect(providerReads).toBe(baseline + 1);
             const results = await Promise.all(
               streams.map(() =>

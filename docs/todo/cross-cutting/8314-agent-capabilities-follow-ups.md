@@ -6,13 +6,16 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 
 ### Tasks
 
-1. **Live provider conformance for capability installs**: done for Claude Code 2.1.326, Codex 0.169.0, OpenCode 2.3.1 and the Pi SDK 1.5.2 (2026-11-19); Grok Build and the Cursor SDK remain open (no pinned binary outside Orkestrator's toolchain, no credential-free listing). See [Assumptions and decisions](#assumptions-and-decisions).
+1. **Live provider conformance for capability installs**: done for Claude Code 2.1.326, Codex 0.169.0, OpenCode 2.3.1, Grok Build 1.0.88 (`grok inspect --json`) and the Pi SDK 1.5.2 (2026-11-19); the Cursor SDK remains open (it discovers skills only inside an authenticated run). See [Assumptions and decisions](#assumptions-and-decisions).
 2. **Isolated provider homes for exclusive session selections**: done for Claude through session-private delivery (2026-11-19); Codex, Cursor, Grok, OpenCode and Pi remain open (their pinned bridges have no per-session plugin channel). See [Assumptions and decisions](#assumptions-and-decisions).
 3. **Merge for local changes**: done (2026-11-19; see [Assumptions and decisions](#assumptions-and-decisions)).
 4. **Package registries and signed team manifests**: done (2026-11-19; with lockfile format 2 for mixed revisions; see [Assumptions and decisions](#assumptions-and-decisions)).
 5. **Command-node handover of capability state**: done (2026-11-19; with leaf launch authority; see [Assumptions and decisions](#assumptions-and-decisions)).
 6. **Native plugin lifecycle beyond Claude**: Codex enablement done (2026-11-19), and Claude managed installs restored from immutable artifacts; Grok, OpenCode and Pi remain open by decision (structured unsupported reasons; see [Assumptions and decisions](#assumptions-and-decisions)).
 7. **Container delivery through portable inputs**: done (2026-11-19; with project delivery into local worktrees and added-account verification; see [Assumptions and decisions](#assumptions-and-decisions)).
+8. **Runtime proof (`load-confirmed`, `observed-in-use`)**: done for Claude sessions and Grok's machine listing (2026-11-19); other providers open (no per-session report). See [Assumptions and decisions](#assumptions-and-decisions).
+9. **Running work keeps shared deliveries frozen**: done (2026-11-19). See [Assumptions and decisions](#assumptions-and-decisions).
+10. **Qualification on real separate machines**: open (depends on two enrolled machines; in-memory and loopback proofs exist).
 
 ### 1. Live provider conformance for capability installs
 
@@ -139,6 +142,60 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
   - **Write into running containers with `docker exec`.**
     - Pros: immediate.
     - Cons: a second writer inside the container boundary; conflicts with the in-container firewall and ownership rules.
+
+### 8. Runtime proof
+
+**Problem.** The verification ladder had `load-confirmed` and `observed-in-use` in its vocabulary, but nothing produced them: Test re-read files only, and a catalogue name cannot prove which bytes loaded.
+
+**Context.** `CapabilityPreflight.verify`, the Claude bridge's `system/init` handling (`plugins[]` with directories, `skills[]`), session-private plugins in content-addressed directories (`session-delivery.ts`), and Grok's `grok inspect --json`.
+
+**Investigation.** The pinned Claude Code 2.1.326 reports each loaded plugin's directory in `init`; the session plugin's directory name is a digest of its exact revisions, so a match binds the bytes and the query generation. Grok 1.0.88 lists each discovered skill with its `SKILL.md` path without a login.
+
+**Decisions.**
+
+- **Where the evidence comes from.**
+  - **The provider's own report, on a no-touch bridge route (recommended).**
+    - Pros: never inferred from what was sent; never touches liveness.
+    - Cons: Claude only for per-session evidence.
+  - **The command catalogue names.**
+    - Pros: available for more providers.
+    - Cons: names cannot prove the loaded revision.
+
+### 9. Running work keeps shared deliveries frozen
+
+**Problem.** A write into a shared provider home reached every session of that provider at once, so running work could gain, lose or change a capability mid-task.
+
+**Context.** `planNode` and `CapabilityReconciler.passOnce`; environments persist `agentActivityState` from every activity observer.
+
+**Investigation.** Provider homes are shared per OS user, so freezing them per session is impossible without isolated homes (task 2); holding the write while readers work is the safe equivalent for running work.
+
+**Decisions.**
+
+- **How to protect running work.**
+  - **Hold writes at locations a busy provider reads, report Queued until idle, apply the latest revision afterwards (recommended).**
+    - Pros: running work never changes; offline-style convergence onto the latest state.
+    - Cons: a machine whose agents never go idle delays shared changes.
+  - **Apply immediately.**
+    - Pros: fastest delivery.
+    - Cons: changes running work (plan sections 3.4, 5 and 7).
+
+### 10. Qualification on real separate machines
+
+**Problem.** Multi-machine reconciliation, offline catch-up, unknown outcomes and command-node handover are proven on the in-memory node network and on two backends over loopback, not on separate machines.
+
+**Context.** `tests/capabilities-two-node.integration.test.ts`, `handover.test.ts`, `launch-authority.test.ts`; plan scenarios 4, 5 and 20.
+
+**Investigation.** Needs two enrolled machines (macOS and Linux) running this build; the batching index for live runs is [0031](0031-live-provider-and-platform-qualification.md).
+
+**Decisions.**
+
+- **How to run it.**
+  - **A scripted run across the release Linux builder and the Mac (recommended).**
+    - Pros: real processes, routes and clocks.
+    - Cons: needs both machines on the same build.
+  - **More loopback cases.**
+    - Pros: automatic.
+    - Cons: cannot move routes or separate OS processes.
 
 ## Assumptions and decisions
 
@@ -460,6 +517,16 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 
 - **Decision.** Report discovery and a structured reason for each other operation, rather than load them: Grok manages its own plugins and needs a restart Orkestrator does not trigger; the OpenCode 2 mirror strips user plugins; Pi extensions and packages would run inside the shared bridge process, where they could answer another session's approvals (`bridges/pi-bridge/AGENTS.md`). The plan allows a structured reason where no safe path exists; a plugin's portable parts still reach these providers as separate components.
 - **Next step, if wanted.** A per-session OpenCode plugin path in the configuration mirror, and Pi extensions in a separate process, each needing a security review first.
+
+### Task 8: runtime proof grading
+
+- **Chosen.** A session-private component is `load-confirmed` when the session's latest query loaded the `orkestrator-session` plugin from the directory its launch record names, and `observed-in-use` once its skill was invoked through the `Skill` tool; a shared copy listed by name is `advertised` at most; Grok's listing of the installed `SKILL.md` path is `advertised` for the next session. Each grade is kept as a runtime observation.
+- **Why.** Only a content-addressed directory binds the loaded bytes; a name does not. The bridge route is no-touch and answers unknown sessions in band, like `/activity`.
+
+### Task 9: what counts as running work
+
+- **Chosen.** The persisted `agentActivityState` of local environments, with the providers of their native sessions; terminal-only Claude work holds Claude; a working environment with no identifiable session holds every provider; containers are ignored. Each machine reports its busy providers in its own observation, and the reconciler re-checks every 15 seconds while anything is held.
+- **Why.** That state is authoritative and backend-owned (fed by every activity observer), so a hold never depends on a mounted renderer. Erring towards holding keeps running work unchanged.
 
 ## Related
 

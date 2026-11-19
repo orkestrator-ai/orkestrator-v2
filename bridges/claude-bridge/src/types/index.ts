@@ -583,6 +583,11 @@ export interface SessionState {
   /** Last init's plugin errors, so unchanged load failures do not reissue advisories each turn. */
   pluginErrorSignatures?: string[];
   /**
+   * Agent Capabilities runtime evidence: the latest load's plugins and skills
+   * and the skills the agent invoked (`capability-evidence.ts`).
+   */
+  capabilityEvidence?: import("../services/capability-evidence.js").CapabilityEvidenceState;
+  /**
    * Ultracode requested for the live turn. The CLI can decline the request.
    */
   ultracode?: boolean;

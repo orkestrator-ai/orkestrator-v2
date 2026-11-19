@@ -135,20 +135,14 @@ export function AgentInfoCapabilitiesSection({
           variant="ghost"
           size="sm"
           className="h-7"
-          title="Checks the installed files for this agent; never runs anything"
+          title="Checks the installed files and what this session reported loading; never runs anything"
           onClick={() =>
             void capabilitiesApi
               .verifyAgentCapability(
-                { nodeId, provider, environmentId },
+                { nodeId, provider, environmentId, sessionId: sessionKey },
                 (data?.components ?? []).map((component) => component.componentId),
               )
-              .then((result) =>
-                setTestResult(
-                  result.checks.length === 0
-                    ? "Nothing to check."
-                    : `${result.checks.filter((check) => check.status !== "drifted" && check.status !== "pending").length} of ${result.checks.length} checks found the files in place.`,
-                ),
-              )
+              .then((result) => setTestResult(describeVerification(result.checks)))
               .catch((testError: unknown) => setError(describeError(testError)))
           }
         >
@@ -287,4 +281,28 @@ export function AgentInfoCapabilitiesSection({
       ) : null}
     </section>
   );
+}
+
+/**
+ * One line for a Test result: how many checks found the files, and how many
+ * the session itself confirmed loading or using. A copy with no runtime
+ * report is never counted as loaded.
+ */
+export function describeVerification(
+  checks: ReadonlyArray<{ level: string; status: string }>,
+): string {
+  if (checks.length === 0) return "Nothing to check.";
+  const inPlace = checks.filter(
+    (check) =>
+      check.status !== "drifted" && check.status !== "pending" && check.status !== "failed",
+  ).length;
+  const loaded = checks.filter(
+    (check) => check.level === "load-confirmed" || check.level === "observed-in-use",
+  ).length;
+  const used = checks.filter((check) => check.level === "observed-in-use").length;
+  const proof =
+    loaded === 0
+      ? " None is confirmed loaded by the session yet."
+      : ` ${loaded} confirmed loaded by this session${used > 0 ? `, ${used} used` : ""}.`;
+  return `${inPlace} of ${checks.length} checks found the files in place.${proof}`;
 }

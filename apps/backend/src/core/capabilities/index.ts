@@ -49,6 +49,7 @@ import { providerCli } from "./provider-adapters/provider-cli.js";
 import { CapabilityError } from "./security.js";
 import type { ScopedEnvironment } from "./scoped-delivery.js";
 import { projectMcpLocationFor } from "./scoped-locations.js";
+import { busyHostProviders } from "./running-work.js";
 import { capabilityScopedSources } from "./scoped-sources.js";
 import { CapabilityService } from "./service.js";
 
@@ -280,11 +281,13 @@ export function capabilityHomes(context: CommandContext) {
 }
 
 /** A provider CLI run from this machine's home; the isolated profile's sees only its own home. */
-function capabilityProviderCli(context: CommandContext, provider: "claude" | "codex") {
+function capabilityProviderCli(context: CommandContext, provider: "claude" | "codex" | "grok") {
   const isolated = context.runtimeFlavor === "agent-test";
   const homes = () => capabilityHomes(context);
   return providerCli({
-    label: provider === "claude" ? "Claude Code" : "Codex",
+    label: provider === "claude" ? "Claude Code" : provider === "codex" ? "Codex" : "Grok Build",
+    // Discovery listings answer quickly; a hung one must not hold a Test click.
+    ...(provider === "grok" ? { timeoutMs: 30_000 } : {}),
     binary: () => resolveAgentBinary(context, provider),
     cwd: () => homes().home,
     env: () => ({
@@ -461,6 +464,25 @@ export function createCapabilityService(
           }),
     },
     mcp: mcpManagementInstaller(() => context.mcpManagement),
+    // Runtime proof: the session's own no-touch report (`runtime-proof.ts`).
+    sessionEvidence: async ({ environmentId, provider, sessionKey }) =>
+      context.nativeAgents
+        ? context.nativeAgents.capabilityEvidenceIfRunning(
+            environmentId,
+            provider as never,
+            sessionKey,
+            { signal: AbortSignal.timeout(10_000) },
+          )
+        : { state: "not-running" },
+    providerCli: (provider) => {
+      try {
+        resolveAgentBinary(context, provider);
+      } catch {
+        return null;
+      }
+      return capabilityProviderCli(context, provider);
+    },
+    busyProviders: () => busyHostProviders(context),
     scoped: {
       ...capabilityScopedSources(context),
       // A project setup's MCP servers, into each worktree's project MCP file.

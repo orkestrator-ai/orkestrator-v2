@@ -40,6 +40,10 @@ export const CAPABILITIES_LOG_AREAS = defineLogAreas({
         "A session's private capability plugin could not be staged; a required component stops the launch, an optional one is dropped.",
       "launch.private-stage-failed":
         "An artifact a leaf session receives privately did not reach the leaf; that component is reported not delivered.",
+      "service.grok-discovery-failed":
+        "Grok's own discovery listing could not be read for a Test; the check keeps the installed-files result.",
+      "service.observation-record-failed":
+        "Runtime evidence a Test found could not be recorded; the Test result itself is unaffected.",
       "environment-card.container-read-failed":
         "The command node could not read a container's staged record from its machine; the card says so.",
     },

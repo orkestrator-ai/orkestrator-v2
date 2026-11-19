@@ -20,7 +20,7 @@
  * (`import-commands.ts`), verification and launch preflight (`preflight.ts`)
  * and the executor commands (`executor-handlers.ts`).
  */
-import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   CapabilitySetup,
   CapabilityTarget,
@@ -347,6 +347,10 @@ export class CapabilityService {
       { ...this.deps.inventory, homes: this.deps.homes() },
       () => this.now(),
     );
+    if (this.deps.busyProviders) {
+      // An unreadable activity record holds every provider: err towards not changing running work.
+      inventory.busyProviders = await this.deps.busyProviders().catch(() => [...AGENT_PLATFORMS]);
+    }
     const observeMcp = this.deps.mcp?.observe;
     if (!observeMcp) return inventory;
     const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();

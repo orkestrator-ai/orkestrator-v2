@@ -24,6 +24,7 @@ import {
   commandUnavailableResponse,
   readBridgePromptCommandFields,
 } from "@orkestrator/protocol/agent-command-catalogue";
+import { capabilityEvidenceBody } from "../services/capability-evidence.js";
 import {
   createOrRecoverSession,
   getSession,
@@ -1306,6 +1307,16 @@ session.get("/:id/activity", async (c) => {
  */
 session.get("/:id/runtime-health", (c) => {
   return c.json(sessionRuntimeHealthBody(peekSession(c.req.param("id"))));
+});
+
+/**
+ * Agent Capabilities runtime proof for one session (`capability-evidence.ts`):
+ * the plugins and skills its latest query loaded and the skills it invoked.
+ * No-touch like `/activity` and `/runtime-health`, and answered in band
+ * (`missing`) for a session this bridge does not hold, never 404.
+ */
+session.get("/:id/capability-evidence", (c) => {
+  return c.json(capabilityEvidenceBody(peekSession(c.req.param("id"))));
 });
 
 /**

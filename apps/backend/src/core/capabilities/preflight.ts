@@ -37,10 +37,22 @@ import {
   type SessionPrivatePluginRecord,
 } from "./session-delivery.js";
 import { effectiveReceiptStatus } from "./runtime-evidence.js";
+import {
+  gradeGrokDiscovery,
+  gradeSessionEvidence,
+  grokDiscoveredSkills,
+  strongerLevel,
+  type RuntimeProof,
+} from "./runtime-proof.js";
 import { CapabilityError } from "./security.js";
 import { parseTarget, stringList } from "./service-args.js";
 import type { CapabilityServiceContext } from "./service-context.js";
-import type { CapabilityLaunchDelivery } from "./types.js";
+import type {
+  CapabilityLaunchDelivery,
+  CapabilityLaunchRecord,
+  CapabilityState,
+  InstallationReceipt,
+} from "./types.js";
 
 const log = createLogger("capabilities");
 
@@ -72,11 +84,20 @@ export class CapabilityPreflight {
         "Testing reads the machine's configuration; confirm to continue.",
       );
     }
-    const target = parseTarget(args.target, await this.ctx.deps.selfId());
+    const selfId = await this.ctx.deps.selfId();
+    const target = parseTarget(args.target, selfId);
     const componentIds = stringList(args.componentIds, 200);
     const inventory = await this.ctx.observeNode(target.nodeId);
     const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
+    const local = target.nodeId === selfId;
+    const launch = target.sessionId ? state.launches[target.sessionId] : undefined;
+    // What the provider itself reported: never inferred from what was sent.
+    const proofs = local
+      ? await this.sessionProofs(target, launch, componentIds, state)
+      : new Map<string, RuntimeProof>();
     const checks: CapabilityVerification["checks"] = [];
+    const matching = new Set<string>();
+    const grokReceipts: InstallationReceipt[] = [];
     for (const componentId of componentIds) {
       const receipts = Object.values(state.receipts).filter(
         (receipt) =>
@@ -84,6 +105,24 @@ export class CapabilityPreflight {
           receipt.componentId === componentId &&
           receipt.providers.includes(target.provider),
       );
+      const privateItem = launch?.privatePlugin?.items.find(
+        (entry) => entry.componentId === componentId,
+      );
+      if (privateItem) {
+        const proof = proofs.get(componentId);
+        checks.push(
+          proof
+            ? { componentId, level: proof.level, status: proof.status, detail: proof.detail }
+            : {
+                componentId,
+                level: "present",
+                status: "installed-next-session",
+                detail:
+                  "Delivered to this session alone. The session has not reported loading it yet, so loading is not confirmed.",
+              },
+        );
+        continue;
+      }
       if (receipts.length === 0) {
         checks.push({
           componentId,
@@ -99,31 +138,122 @@ export class CapabilityPreflight {
         );
         const effective = effectiveReceiptStatus(receipt);
         const matches = item && !item.drifted && item.digest === receipt.digest;
+        if (matches) {
+          matching.add(receipt.id);
+          if (target.provider === "grok") grokReceipts.push(receipt);
+        }
         const fileKind =
           !receipt.locationId.startsWith("mcp:") && !receipt.locationId.startsWith("plugin:");
+        const proof = matches ? proofs.get(componentId) : undefined;
         checks.push({
           componentId,
-          level: effective.verification,
+          level: proof
+            ? strongerLevel(effective.verification, proof.level)
+            : effective.verification,
           status:
             !matches &&
             (effective.status === "ready" || effective.status === "installed-next-session")
               ? "drifted"
               : effective.status,
-          detail: fileKind
-            ? item
-              ? !matches
-                ? "The files are present but have local changes."
-                : effective.verification === "unverified"
-                  ? "The files are present. This agent reports no live inventory, so loading cannot be confirmed until it is used."
-                  : "The files are present and match the installed revision."
-              : "The files are missing from the machine."
-            : matches
-              ? "The managed definition matches the recorded revision."
-              : "The managed definition could not be verified.",
+          detail: proof
+            ? proof.detail
+            : fileKind
+              ? item
+                ? !matches
+                  ? "The files are present but have local changes."
+                  : effective.verification === "unverified"
+                    ? "The files are present. This agent reports no live inventory, so loading cannot be confirmed until it is used."
+                    : "The files are present and match the installed revision."
+                : "The files are missing from the machine."
+              : matches
+                ? "The managed definition matches the recorded revision."
+                : "The managed definition could not be verified.",
         });
       }
     }
+    if (local && grokReceipts.length > 0) {
+      const grok = await this.grokProofs(grokReceipts, matching, state);
+      for (const check of checks) {
+        const proof = grok.get(check.componentId);
+        if (!proof || check.status === "drifted") continue;
+        check.level = strongerLevel(check.level, proof.level);
+        check.detail = proof.detail;
+        proofs.set(check.componentId, proof);
+      }
+    }
+    this.recordObservations(target, proofs);
     return { target, checks, verifiedAt: this.ctx.now() };
+  }
+
+  /** A Claude session's own report, graded (`runtime-proof.ts`); empty without one. */
+  private async sessionProofs(
+    target: CapabilityTarget,
+    launch: CapabilityLaunchRecord | undefined,
+    componentIds: readonly string[],
+    state: CapabilityState,
+  ): Promise<Map<string, RuntimeProof>> {
+    const read = this.ctx.deps.sessionEvidence;
+    if (!read || !target.sessionId || !target.environmentId) return new Map();
+    const evidence = await read({
+      environmentId: target.environmentId,
+      provider: target.provider,
+      sessionKey: target.sessionId,
+    }).catch(() => ({ state: "none" }) as const);
+    if (evidence.state !== "evidence") return new Map();
+    return gradeSessionEvidence({ launch, evidence, componentIds, state });
+  }
+
+  /** Grok's own discovery listing on this machine, graded; empty when it cannot say. */
+  private async grokProofs(
+    receipts: readonly InstallationReceipt[],
+    matching: ReadonlySet<string>,
+    state: CapabilityState,
+  ): Promise<Map<string, RuntimeProof>> {
+    const cli = this.ctx.deps.providerCli?.("grok");
+    if (!cli) return new Map();
+    try {
+      const discovered = await grokDiscoveredSkills(cli);
+      if (!discovered) return new Map();
+      return gradeGrokDiscovery({
+        receipts,
+        matching,
+        discovered,
+        homes: this.ctx.deps.homes(),
+        state,
+      });
+    } catch (error) {
+      log.warn("service.grok-discovery-failed", {
+        error: formatLogError(error, { message: false }),
+      });
+      return new Map();
+    }
+  }
+
+  /** Keeps the runtime evidence a check found, bounded by the store's observation limit. */
+  private recordObservations(target: CapabilityTarget, proofs: ReadonlyMap<string, RuntimeProof>) {
+    if (proofs.size === 0) return;
+    const now = this.ctx.now();
+    try {
+      this.ctx.deps.storage.capabilities.mutateCapabilityState((current) => {
+        for (const proof of proofs.values()) {
+          const id = `${target.nodeId}|${target.provider}|${target.sessionId ?? "machine"}|${proof.componentId}`;
+          current.observations[id] = {
+            id,
+            target,
+            componentId: proof.componentId,
+            level: proof.level,
+            source: proof.source,
+            ...(proof.generation ? { generation: proof.generation } : {}),
+            observedAt: now,
+          };
+        }
+        return { result: undefined, changed: true };
+      });
+    } catch (error) {
+      log.warn("service.observation-record-failed", {
+        error: formatLogError(error, { message: false }),
+      });
+    }
   }
 
   /**

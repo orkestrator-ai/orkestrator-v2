@@ -7,6 +7,8 @@
  * (`library-reads.ts`, `change-commands.ts`, `setup-commands.ts`, ...) takes
  * this context; none extends another.
  */
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { CapabilitySessionEvidenceRead } from "@orkestrator/protocol/capability-evidence";
 import type { EffectiveAgentResources } from "@orkestrator/protocol/capability-resources";
 import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
 
@@ -19,6 +21,7 @@ import type { LeafLaunchAuthority } from "./launch-authority.js";
 import type { ManifestSigningKeys } from "./manifest-signing.js";
 import type { CapabilityHomes } from "./native-ownership.js";
 import type { CapabilityLink } from "./node-transport.js";
+import type { ProviderCli } from "./provider-adapters/provider-cli.js";
 import type { CapabilityReconciler } from "./reconciler.js";
 import type { RegistryFetch } from "./registry.js";
 import type { CapabilityRegistryCommands } from "./registry-settings.js";
@@ -69,6 +72,22 @@ export interface CapabilityServiceDeps {
   scoped?: ScopedTargetSources;
   /** Another machine's environments, from the federation read model (`scoped-remote.ts`). */
   remoteEnvironments?(nodeId: string): Promise<ScopedEnvironment[] | null>;
+  /**
+   * Runtime proof (`runtime-proof.ts`): a running session's own report of
+   * what it loaded and invoked, read without touching the session.
+   */
+  sessionEvidence?(input: {
+    environmentId: string;
+    provider: AgentPlatform;
+    sessionKey: string;
+  }): Promise<CapabilitySessionEvidenceRead>;
+  /** A provider CLI run on this machine, for discovery listings (Grok's `inspect`). */
+  providerCli?(provider: "grok"): ProviderCli | null;
+  /**
+   * Providers with work in flight on this machine (`running-work.ts`): shared
+   * provider-home writes they read wait until it ends.
+   */
+  busyProviders?(): Promise<AgentPlatform[]>;
   now?: () => string;
 }
 

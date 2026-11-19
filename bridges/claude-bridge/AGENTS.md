@@ -305,6 +305,13 @@ never on a read-only turn: unlike a coordinator mirror, these skills keep their
 frontmatter. They are part of the launch's plugin set, so they go through
 `resolveClaudeTurnPlugins` like every other plugin.
 
+Runtime proof comes from what the CLI reported, never from what was sent:
+`capability-evidence.ts` records each `system/init`'s loaded plugins (with
+their directories) and skills, and the skills a `Skill` call invoked (names
+only, never its arguments). `GET /session/:id/capability-evidence` serves them
+and is no-touch like `/activity`: `peekSession` only, and an unknown session is
+`{ state: "missing" }`, never 404.
+
 ## Coordinator skills
 
 A coordinator gets the user's and the project's skills only as the mirrored

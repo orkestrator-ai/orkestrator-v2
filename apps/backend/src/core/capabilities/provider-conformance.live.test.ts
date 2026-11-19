@@ -45,15 +45,17 @@ import {
 } from "./provider-adapters/codex-plugins.js";
 import { providerCli } from "./provider-adapters/provider-cli.js";
 import { treeDigest, validatePackageFiles } from "./security.js";
+import { gradeGrokDiscovery, grokDiscoveredSkills, loadedPrivatePlugin } from "./runtime-proof.js";
 import { sessionPluginsRoot, stageSessionPlugin } from "./session-delivery.js";
 
 const LIVE = process.env.RUN_LIVE_CAPABILITY_CONFORMANCE === "1";
 const TIMEOUT_MS = 180_000;
 
-type Tool = "claude" | "codex" | "opencode2";
+type Tool = "claude" | "codex" | "opencode2" | "grok";
 
 const MISE_LAYOUT: Record<Tool, { tool: string; relative: string }> = {
   claude: { tool: "claude", relative: "claude" },
+  grok: { tool: "grok", relative: "grok" },
   codex: { tool: "codex", relative: path.join("bin", "codex") },
   opencode2: { tool: "opencode", relative: path.join("node_modules", ".bin", "opencode2") },
 };
@@ -184,7 +186,12 @@ async function claudeInit(
   binary: string,
   box: Sandbox,
   extraArgs: string[] = [],
-): Promise<{ skills: string[]; plugins: string[]; version: string }> {
+): Promise<{
+  skills: string[];
+  plugins: string[];
+  loaded: Array<{ name: string; path?: string }>;
+  version: string;
+}> {
   const result = await cliFor(
     binary,
     box,
@@ -209,6 +216,10 @@ async function claudeInit(
           skills: (event.skills as string[]) ?? [],
           plugins: ((event.plugins as Array<{ source: string }>) ?? []).map(
             (entry) => entry.source,
+          ),
+          // The rows the Claude bridge records as runtime evidence (`capability-evidence.ts`).
+          loaded: ((event.plugins as Array<{ name: string; path?: string }>) ?? []).map(
+            (entry) => ({ name: entry.name, ...(entry.path ? { path: entry.path } : {}) }),
           ),
           version: String(event.claude_code_version ?? ""),
         };
@@ -236,6 +247,7 @@ const SKILL = (name: string) => [
 const claude = LIVE ? pinnedBinary("claude") : undefined;
 const codex = LIVE ? pinnedBinary("codex") : undefined;
 const opencode2 = LIVE ? pinnedBinary("opencode2") : undefined;
+const grok = LIVE ? pinnedBinary("grok") : undefined;
 
 describe.skipIf(!claude)(`Claude Code ${PINNED_TOOLCHAIN_VERSIONS.claude}`, () => {
   test(
@@ -298,7 +310,21 @@ describe.skipIf(!claude)(`Claude Code ${PINNED_TOOLCHAIN_VERSIONS.claude}`, () =
       // The SDK hands an inline plugin to the CLI as --plugin-dir.
       const withPlugin = await claudeInit(claude!, box, ["--plugin-dir", staged.directory]);
       expect(withPlugin.skills).toContain("orkestrator-session:ork-session-skill");
+      // Runtime proof: the CLI reports the content-addressed directory it loaded,
+      // which is what grades the session's copy load-confirmed.
+      const evidence = {
+        state: "evidence" as const,
+        generation: 1,
+        loadedAt: new Date().toISOString(),
+        plugins: withPlugin.loaded,
+        skills: withPlugin.skills,
+        usedSkills: [],
+      };
+      expect(loadedPrivatePlugin(evidence, staged.record.digest)).toBe(true);
       const without = await claudeInit(claude!, box);
+      expect(
+        loadedPrivatePlugin({ ...evidence, plugins: without.loaded }, staged.record.digest),
+      ).toBe(false);
       expect(without.skills.some((name) => name.includes("ork-session-skill"))).toBe(false);
       expect(await fs.readdir(path.join(box.homes.claudeConfigDir)).catch(() => [])).not.toContain(
         "skills",
@@ -547,7 +573,97 @@ describe.skipIf(!opencode2)(`OpenCode ${PINNED_TOOLCHAIN_VERSIONS.opencode2}`, (
   );
 });
 
-// Grok Build, Pi and the Cursor SDK have no pinned binary on a developer host
-// through mise, and no credential-free listing Orkestrator has qualified;
-// their matrix entries stay `unqualified` or `unsupported`.
-test.skip("Grok Build, Pi and Cursor: no credential-free listing qualified", () => {});
+describe.skipIf(!grok)(`Grok Build ${PINNED_TOOLCHAIN_VERSIONS.grok}`, () => {
+  test(
+    "the pinned binary is the one under test",
+    async () => {
+      const box = await sandbox();
+      expect(await versionOf(grok!, box)).toContain(PINNED_TOOLCHAIN_VERSIONS.grok);
+    },
+    TIMEOUT_MS,
+  );
+
+  test(
+    "skills the executor writes to ~/.grok/skills and ~/.agents/skills are in Grok's own discovery listing at their installed paths, and gone after removal",
+    async () => {
+      const box = await sandbox();
+      const cli = cliFor(grok!, box, "Grok Build");
+      const own = await deliverFile(
+        box,
+        "skill",
+        "grok-user-skills",
+        "ork-grok-skill",
+        SKILL("ork-grok-skill"),
+      );
+      const shared = await deliverFile(
+        box,
+        "skill",
+        "agents-shared-skills",
+        "ork-shared-skill",
+        SKILL("ork-shared-skill"),
+      );
+      expect(own.installed?.status).toBe("installed-next-session");
+      expect(shared.installed?.status).toBe("installed-next-session");
+      const listed = await grokDiscoveredSkills(cli);
+      expect(listed).not.toBeNull();
+      const paths = new Map(listed!.map((entry) => [entry.name, path.resolve(entry.path)]));
+      expect(paths.get("ork-grok-skill")).toBe(
+        path.join(box.homes.home, ".grok", "skills", "ork-grok-skill", "SKILL.md"),
+      );
+      expect(paths.get("ork-shared-skill")).toBe(
+        path.join(box.homes.home, ".agents", "skills", "ork-shared-skill", "SKILL.md"),
+      );
+      // The listing grades the matching receipt advertised, by path, not by name.
+      const proofs = gradeGrokDiscovery({
+        receipts: [
+          {
+            id: "r1",
+            nodeId: "self",
+            locationId: "grok-user-skills",
+            componentId: "c1",
+            packageId: "p1",
+            digest: "d",
+            packageDigest: "pd",
+            references: [],
+            providers: ["grok"],
+            alsoVisibleTo: [],
+            status: "installed-next-session",
+            verification: "present",
+            operationId: "op",
+            appliedAt: new Date().toISOString(),
+          },
+        ],
+        matching: new Set(["r1"]),
+        discovered: listed!,
+        homes: box.homes,
+        state: {
+          components: {
+            c1: {
+              id: "c1",
+              packageId: "p1",
+              kind: "skill",
+              name: "ork-grok-skill",
+              pathOrKey: "",
+              dependencies: [],
+              providerHints: [],
+              requirements: {},
+            } as never,
+          },
+        },
+      });
+      expect(proofs.get("c1")?.level).toBe("advertised");
+      expect((await own.remove())?.status).toBe("ready");
+      expect((await shared.remove())?.status).toBe("ready");
+      const after = (await grokDiscoveredSkills(cli)) ?? [];
+      expect(after.some((entry) => entry.name.startsWith("ork-"))).toBe(false);
+    },
+    TIMEOUT_MS,
+  );
+});
+
+// Pi is qualified through its pinned SDK (bridges/pi-bridge,
+// capability-delivery-conformance.test.ts). The Cursor SDK has no
+// credential-free listing: it discovers skills only inside an authenticated
+// run, so its entries stay `unqualified` here; the bridge's own read-only
+// skill tool is qualified in bridges/cursor-bridge.
+test.skip("Cursor SDK: no credential-free listing qualified", () => {});

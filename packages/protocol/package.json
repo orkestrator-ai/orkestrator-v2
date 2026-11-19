@@ -244,6 +244,7 @@
     "./machine-load": "./src/machine-load.ts",
     "./macos-permissions": "./src/macos-permissions.ts",
     "./mcp-management": "./src/mcp-management.ts",
+    "./capability-evidence": "./src/capability-evidence.ts",
     "./capability-resources": "./src/capability-resources.ts",
     "./capability-resources-support": "./src/capability-resources-support.ts",
     "./capability-resources-resolve": "./src/capability-resources-resolve.ts",

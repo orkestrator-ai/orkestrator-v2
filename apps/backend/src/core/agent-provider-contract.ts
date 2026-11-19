@@ -1163,6 +1163,15 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     sessionId: string,
     options?: ProviderReadOptions,
   ): Promise<ProviderMcpConfigReport>;
+  /**
+   * Agent Capabilities runtime proof: what the session's provider reported
+   * loading and invoking, from the no-touch `/session/:id/capability-evidence`
+   * route (`http-bridge/capability-evidence.ts`). Backend only.
+   */
+  capabilityEvidence?(
+    sessionId: string,
+    options?: ProviderReadOptions,
+  ): Promise<import("@orkestrator/protocol/capability-evidence").CapabilitySessionEvidenceRead>;
 }
 
 /**

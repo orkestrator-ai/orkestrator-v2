@@ -46,6 +46,7 @@ import {
 
 import type { NodePlanTarget } from "./executor.js";
 import { installName } from "./native-ownership.js";
+import { heldByRunningWork, RUNNING_WORK_HOLD_REASON } from "./running-work.js";
 import {
   claudeCarriedComponents,
   isDeliverableClaudePlugin,
@@ -453,8 +454,19 @@ export function planNode(
     forceKeys?: ReadonlySet<string>;
     /** Installations with open local changes: skipped until the user decides. */
     driftKeys?: ReadonlySet<string>;
+    /**
+     * Providers with work in flight on the machine (`running-work.ts`): a
+     * write at a location one of them reads waits until the work ends.
+     */
+    busyProviders?: ReadonlySet<AgentPlatform>;
   },
 ): NodePlan {
+  const readersOf = (locationId: string): AgentPlatform[] =>
+    locationId.startsWith("mcp:") || locationId.startsWith("plugin:")
+      ? [locationId.split(":")[1] as AgentPlatform]
+      : [...(capabilityLocation(locationId)?.readBy ?? [])];
+  const held = (locationId: string) =>
+    heldByRunningWork(readersOf(locationId), options.busyProviders);
   const targets: NodePlanTarget[] = [];
   const planned: CapabilityPlannedTarget[] = [];
   const desiredKeys = new Set(desired.installations.map((entry) => entry.key));
@@ -580,6 +592,15 @@ export function planNode(
         : {}),
     });
     if (action === "keep") continue;
+    if (held(installation.locationId)) {
+      // Running work keeps what it started with; the latest revision applies after it.
+      const entry = planned[planned.length - 1]!;
+      entry.action = "skip";
+      entry.status = "queued-until-idle";
+      entry.liveSemantics = "queued-until-idle";
+      entry.reason = RUNNING_WORK_HOLD_REASON;
+      continue;
+    }
     targets.push({
       key: installation.key,
       action: action === "update" ? "update" : "install",
@@ -624,6 +645,21 @@ export function planNode(
       receipt.locationId.startsWith("mcp:") || receipt.locationId.startsWith("plugin:")
         ? (receipt.locationId.split(":")[1] as AgentPlatform)
         : undefined;
+    if (held(receipt.locationId)) {
+      planned.push({
+        key: receipt.id,
+        target: { nodeId: desired.nodeId, provider: receipt.providers[0] ?? "claude" },
+        componentId: receipt.componentId,
+        packageId: receipt.packageId,
+        action: "skip",
+        fromDigest: receipt.digest,
+        locationId: receipt.locationId,
+        status: "queued-until-idle",
+        liveSemantics: "queued-until-idle",
+        reason: RUNNING_WORK_HOLD_REASON,
+      });
+      continue;
+    }
     planned.push({
       key: receipt.id,
       target: { nodeId: desired.nodeId, provider: receipt.providers[0] ?? "claude" },

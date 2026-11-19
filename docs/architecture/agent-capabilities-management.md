@@ -419,7 +419,7 @@ observed context: a provider that is not installed, or a container.
 | Claude | install, live inventory | install, update, remove from the approved artifact (see below) | through MCP management | `~/.claude/commands`, `~/.claude/agents` | only inside an approved plugin |
 | Codex | install, live inventory | discovery; enable and disable of installed plugins | through MCP management | prompts (unqualified) | unsupported |
 | Cursor | install, no live inventory | unsupported (SDK has no plugin API) | through MCP management | commands (unqualified) | unsupported |
-| Grok | install, no live inventory | discovery only | through MCP management | unsupported | unsupported |
+| Grok | install; the binary's own discovery listing (`grok inspect --json`) confirms the installed path | discovery only | through MCP management | unsupported | unsupported |
 | OpenCode | install, no live inventory | **unsupported**: the OpenCode 2 mirror strips user plugins | through MCP management | commands and agents (unqualified) | unsupported |
 | Pi | install (`~/.pi/agent/skills`, `~/.agents/skills`), no live inventory | **unsupported**: the Pi bridge excludes discovered extensions and packages | through MCP management | prompts | unsupported |
 
@@ -501,7 +501,7 @@ machine that answers). Other providers have no switch.
 
 `provider-conformance.live.test.ts` (slow tier, opt-in with
 `RUN_LIVE_CAPABILITY_CONFORMANCE=1`; binaries from
-`ORKESTRATOR_CONFORMANCE_<CLAUDE|CODEX|OPENCODE2>` or the mise install of
+`ORKESTRATOR_CONFORMANCE_<CLAUDE|CODEX|OPENCODE2|GROK>` or the mise install of
 exactly the pinned version, never Orkestrator's own toolchain directory) runs
 each binary with a fresh HOME, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and XDG
 directories and a minimal environment, and asks the provider's own
@@ -516,15 +516,17 @@ credential-free listing. Run 2026-11-19 on Linux x64:
 | OpenCode 2.3.1 | Executor subagent in `~/.config/opencode/agent` is listed by the binary | `opencode debug agents --standalone` | pass (binary only) |
 | Claude Code 2.1.326 | A session plugin staged by `session-delivery.ts` is listed as `orkestrator-session:<skill>` only when passed with `--plugin-dir`; nothing lands in `CLAUDE_CONFIG_DIR` | `init` event with and without `--plugin-dir` | pass |
 | Pi SDK 1.5.2 (same version as the pinned `pi` binary) | Skills in `~/.pi/agent/skills` and `~/.agents/skills` and templates in `~/.pi/agent/prompts` are listed, also with project resources off; the repository's `.pi/` resources are not; `~/.claude/skills` is never read | the bridge's resource-only loader (`readResourceCommands`), `bridges/pi-bridge/src/capability-delivery-conformance.test.ts`, default tier | pass |
-| Grok Build 1.0.88 | Not run: no pinned binary on the host outside Orkestrator's toolchain, and no credential-free listing qualified | | skipped |
-| Cursor SDK | Not run: no CLI | | skipped |
+| Claude Code 2.1.326 | The `init` event reports the session plugin's content-addressed directory, which `loadedPrivatePlugin` (`runtime-proof.ts`) matches; without `--plugin-dir` it does not | `init` event `plugins[].path` | pass |
+| Grok Build 1.0.88 | Executor skills in `~/.grok/skills` and `~/.agents/skills` are listed at their installed `SKILL.md` paths, graded `advertised` by path, and gone after removal | `grok inspect --json` (no login needed) | pass |
+| Cursor SDK 1.4.1 | Not run: the SDK discovers skills only inside an authenticated run and has no CLI or credential-free listing; the bridge's own read-only skill tool for coordinators is covered by `bridges/cursor-bridge` tests | | skipped |
 
 Matrix levels follow the evidence: Claude native-plugin install, update and
 remove are `supported`. OpenCode subagents and commands stay `unqualified`:
 the binary lists the agent, but Orkestrator's OpenCode 2 session configuration
 mirror is not covered, and OpenCode 2.3.1 has no credential-free command
-listing. Codex prompts, Cursor commands and Grok and Cursor skill loading stay
-as they were. The Pi run found two defects, both fixed: the Pi bridge loaded
+listing. Codex prompts, Cursor commands and Cursor skill loading stay
+as they were; Grok skill delivery is proven against Grok's own listing (re-run
+2026-11-19, all ten live cases pass on Linux x64). The Pi run found two defects, both fixed: the Pi bridge loaded
 no skill or template at all unless the session enabled project resources
 (user-level ones now load; the project's stay behind project trust), and the
 location table claimed Pi reads `~/.claude/skills`, so a Pi-only skill could
@@ -568,6 +570,23 @@ Triggers: a change, a machine connecting (`NodeCoordination.onNodeConnected`),
 backend start (resuming operations in flight) and a five-minute timer. An
 offline machine reconciles against the **latest** desired state when it
 returns; superseded operations are never replayed.
+
+**Approval covers desired state, not a frozen write list.** Every change to
+desired state (adding, updating, removing or retargeting a package, a toolkit
+change, an import, an update or a rollback) is approved against its exact plan
+digest, and apply refuses when the plan moved. Delivery then converges each
+machine onto the newest approved desired state, so a write the machine
+performs was always part of an approved plan, and an approval that a later
+approved change superseded is never executed on its own (scenario 4: no
+obsolete write is replayed). Executing each approval's original write list
+instead would replay superseded writes after a long offline period. Inside a
+pass, the journaled intent is re-planned at commit and the pass is abandoned
+when it no longer matches.
+
+**A managed copy the user deleted** is a Local change of kind `removed`: it is
+not silently reinstalled (plan section 3.5). Replace reinstalls it, Keep local
+leaves it absent, and the executor reinstalls a genuinely absent file without
+requiring force.
 
 The executor checks the ownership marker for files and the native source and entry fingerprint for MCP definitions. It leaves externally owned entries in place, and never overwrites a managed item with local changes
 unless the user chose Replace, or approved a revision that adopted or merged
@@ -623,7 +642,7 @@ apply, and apply re-reads the machine and refuses if any of those bytes moved.
 | --- | --- |
 | Ready | Runtime evidence (`advertised` or better) for a session generation. |
 | Next session | Files present; no running session has reported it yet. |
-| Queued until idle | Will load when the running session is idle. |
+| Queued until idle | Held while agents on that machine that read the location are working ("Running work"); the latest revision applies when they finish. |
 | Waiting for machine | The machine is offline; it applies the latest setup on reconnect. |
 | Checking | An unknown outcome is being read back. |
 | Local changes | Drift, kept until the user decides. |
@@ -634,6 +653,61 @@ Verification levels: `requested` → `present` → `enabled` → `allowed` →
 `advertised` → `load-confirmed` → `observed-in-use`. A copy is `present`; a
 provider without artifact-specific runtime evidence stays "installed; not runtime-verified".
 Catalogue names are insufficient to identify the installed revision.
+
+### Runtime proof
+
+`runtime-proof.ts` grades only what a provider itself reported, through
+**Test** on the session chip or a package's "Where available" row
+(`verify_agent_capability`, with consent; it never runs anything):
+
+- **Claude sessions.** The Claude bridge records, per session, the plugins and
+  skills each query's `system/init` reported (with the plugin directories) and
+  the skills the agent invoked through the `Skill` tool, and serves them on the
+  no-touch `GET /session/:id/capability-evidence` route
+  (`bridges/claude-bridge/src/services/capability-evidence.ts`; names and
+  directories only, bounded, never a skill's arguments). The backend reads it
+  through `NativeAgentService.capabilityEvidenceIfRunning`, which never starts
+  a bridge, touches liveness or re-attaches. A session-private component is
+  `load-confirmed` when the latest query loaded the `orkestrator-session`
+  plugin from the content-addressed directory its launch record names (the
+  name is a digest of the exact revisions, so the bytes are bound; the
+  generation is the query's), and `observed-in-use` once the agent invoked its
+  skill. A load that did not include that directory is reported as failed. A
+  shared copy the query lists by name is `advertised` at most: a name cannot
+  prove which bytes loaded.
+- **Grok.** `grok inspect --json` is Grok's own discovery for the machine. A
+  listed `SKILL.md` inside a receipt's installed directory, whose bytes the
+  inventory just matched, is `advertised` for the next Grok session. Grok has
+  no per-session report, so nothing is `load-confirmed`.
+- **Everything else** keeps the receipt's level: present files are
+  "installed; not runtime-verified".
+
+Each grade found is kept as a runtime observation (source, generation and
+time; bounded by `CAPABILITY_LIMITS.maxObservations`).
+
+### Running work
+
+A machine-wide provider home is read by every session of that provider on the
+machine, so a write there would reach work already under way. The reconciler
+holds an add, update or removal at a shared location while any provider that
+reads it has work in flight on that machine (`running-work.ts`), shows those
+targets as **Queued until idle**, does not mark the machine as having applied
+its manifest, and looks again every 15 seconds. When the work ends, the
+**latest** desired revision is applied, not each queued step. Work in flight
+is the activity each local environment persists (`agentActivityState`, fed by
+the native-agent, graph-run, build-pipeline and terminal observers); the
+providers are the native sessions in those environments (terminal-only Claude
+work holds Claude; a working environment with no identifiable session holds
+every provider). Containerized environments are not counted: their agents
+read their own staged copies. Each machine reports its own busy providers in
+its observation (`CapabilityInventory.busyProviders`); a machine running a
+build from before this field reports none, so nothing is held there.
+
+So a graph run, scheduled job or turn never gains, loses or changes a shared
+skill, command, MCP server or plugin while it works. Between turns an idle
+interactive session does see a machine-wide change on its next turn (the chip
+reports the newer manifest); only its private plugin stays frozen for the
+whole session.
 
 ## Runtime connection points
 
@@ -661,8 +735,9 @@ Catalogue names are insufficient to identify the installed revision.
   other provider or a container it is reported as unsupported, and a
   required selection in that state stops the launch.
   The launch manifest records the selected revisions for diagnostics.
-  Shared provider homes stay shared: an existing session can still see a
-  machine-wide change there, but never a change to its private plugin.
+  Shared provider homes stay shared, but a write there waits while work that
+  reads it is in flight ("Running work" above); an idle session sees a
+  machine-wide change on its next turn, never a change to its private plugin.
 - **Containers**: a container never receives a write from outside. At
   creation and rebuild, `container-staging.ts` resolves every staged provider
   for the container target (My setup, toolkits, project and environment
@@ -849,8 +924,8 @@ previewed again.
 
 ## Not yet qualified
 
-Live conformance against Grok Build and the Cursor SDK (no pinned binary
-outside Orkestrator's toolchain and no credential-free listing), a live
+Live conformance against the Cursor SDK (no credential-free listing), runtime
+proof for providers other than Claude sessions and Grok's machine listing, a live
 Orkestrator OpenCode 2 session loading delivered agents and commands, switching
 another machine's Codex plugins from this window, per-session delivery for
 providers other than Claude (Codex, Cursor, Grok, OpenCode and Pi bridges have

@@ -24,6 +24,7 @@
  * (which resumes every operation still in flight) and a periodic timer.
  * Running sessions are never restarted to meet a deadline.
  */
+import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { CapabilityTargetStatus } from "@orkestrator/protocol/capability-resources";
 import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
@@ -448,7 +449,21 @@ export class CapabilityReconciler {
     }
     if (!(state.machines[nodeId]?.enrolled ?? state.settings.enrollNewMachines)) return;
     const desired = desiredStateForNode(state, nodeId, inventory);
-    const plan = planNode(state, desired, { connected: true, forceKeys, driftKeys });
+    // Shared writes wait while the machine's agents are mid-task (`running-work.ts`).
+    const busyProviders = new Set(
+      (Array.isArray(inventory.busyProviders) ? inventory.busyProviders : []).filter(
+        (provider): provider is AgentPlatform => isAgentPlatform(provider),
+      ),
+    );
+    const plan = planNode(state, desired, {
+      connected: true,
+      forceKeys,
+      driftKeys,
+      busyProviders,
+    });
+    const heldForRunningWork = plan.planned.some(
+      (target) => target.action === "skip" && target.status === "queued-until-idle",
+    );
 
     // Planned targets that will not be written settle now (unsupported, drift, kept).
     const settled = new Map<string, { status: CapabilityTargetStatus; reason?: string }>();
@@ -488,6 +503,7 @@ export class CapabilityReconciler {
             connected: true,
             forceKeys,
             driftKeys,
+            busyProviders,
           });
           if (
             planDigestOf(undefined, latest.planned) !== intent ||
@@ -647,6 +663,7 @@ export class CapabilityReconciler {
       const machine = current.machines[nodeId];
       const allSettled =
         !unknown &&
+        !heldForRunningWork &&
         plan.targets.every((target) => confirmed.has(target.key)) &&
         results.every(
           (result) => result.status === "ready" || result.status === "installed-next-session",
@@ -682,7 +699,8 @@ export class CapabilityReconciler {
       return { result: ids, changed: true };
     });
     this.deps.emit({ packageIds: [], setupIds: [], operationIds: touched });
-    if (unknown) this.scheduleRecheck(nodeId);
+    // Held writes apply once the work ends: look again until nothing is held.
+    if (unknown || heldForRunningWork) this.scheduleRecheck(nodeId);
   }
 
   private activeOperationFor(state: CapabilityState, nodeId: string): string | undefined {

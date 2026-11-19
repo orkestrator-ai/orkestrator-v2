@@ -2926,6 +2926,29 @@ export class NativeAgentService {
     return provider.mcpConfigEvidence(session.providerSessionId, options);
   }
 
+  /**
+   * Agent Capabilities runtime proof for one session
+   * (`capabilities/runtime-proof.ts`), observation-only on every hop exactly
+   * as {@link mcpConfigEvidenceIfRunning}: never starts a bridge, touches
+   * liveness or re-attaches. A provider without the report is `unsupported`.
+   */
+  async capabilityEvidenceIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+    options: ProviderReadOptions = {},
+  ): Promise<import("@orkestrator/protocol/capability-evidence").CapabilitySessionEvidenceRead> {
+    const session = await this.storage.getNativeAgentSession(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    if (!session?.providerSessionId) return { state: "none" };
+    const provider = await this.observeProvider({ environmentId, agent, logicalSessionKey });
+    if (!provider) return { state: "not-running" };
+    if (!provider.capabilityEvidence) return { state: "unsupported" };
+    options.signal?.throwIfAborted();
+    return provider.capabilityEvidence(session.providerSessionId, options);
+  }
+
   private trackScan(task: Promise<void>): Promise<void> {
     const tracked = task.finally(() => {
       this.scanTasks.delete(tracked);

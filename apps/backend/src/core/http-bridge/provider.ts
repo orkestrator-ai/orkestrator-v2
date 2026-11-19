@@ -50,6 +50,7 @@ import {
 import { bridgeRuntimeSummary, snapshotNotices } from "./runtime-health.js";
 import { ensureCodexMode, updateCodexSessionConfig } from "./codex-config.js";
 import { readBridgeMcpConfigEvidence } from "./mcp-evidence.js";
+import { readBridgeCapabilityEvidence } from "./capability-evidence.js";
 import {
   refreshHttpBridgeRuntimeMetadata,
   type HttpBridgeRuntimeMetadata,
@@ -607,6 +608,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   mcpConfigEvidence(sessionId: string, { signal }: ProviderReadOptions = {}) {
     const { connection, fetchImpl, agent } = this;
     return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId, signal });
+  }
+
+  /** Agent Capabilities runtime proof; see `http-bridge/capability-evidence.ts`. */
+  capabilityEvidence(sessionId: string, { signal }: ProviderReadOptions = {}) {
+    const { connection, fetchImpl, agent } = this;
+    return readBridgeCapabilityEvidence({ connection, fetchImpl, agent, sessionId, signal });
   }
 
   private refreshRuntimeMetadata(sessionId: string): Promise<void> {

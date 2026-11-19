@@ -75,6 +75,12 @@ export interface CapabilityInventory {
   items: CapabilityObservedItem[];
   truncated: number;
   errors: Array<{ provider?: AgentPlatform; message: string }>;
+  /**
+   * Providers with work in flight on the machine when it was observed. The
+   * reconciler holds writes to shared locations they read until the work
+   * ends. Absent from a machine that predates the field: nothing is held.
+   */
+  busyProviders?: AgentPlatform[];
 }
 
 export interface CapabilityTargetSupportResult {

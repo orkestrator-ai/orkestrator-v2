@@ -37,6 +37,7 @@ import { DiffBodyService } from "./diff-bodies.js";
 import { EnvironmentChangeProjector } from "./environment-projector.js";
 import { EvidenceBodyStore } from "./evidence-body-store.js";
 import { GitScopeService, isGitScope } from "./git-scopes.js";
+import { HunkStagingService } from "./hunk-staging.js";
 import { ProviderEvidenceIngress, type IngestResult } from "./evidence-ingestion.js";
 import { ChangeHandoffSerializer } from "./handoff.js";
 import type { WorktreeActivity } from "./inert-hints.js";
@@ -158,6 +159,7 @@ export class ChangeTrackingService {
   readonly restore: ChangeRestoreService;
   readonly retention: ChangeRetentionService;
   readonly gitScopes: GitScopeService;
+  readonly hunkStaging: HunkStagingService;
   readonly generation = randomUUID();
   private readonly pulls = new Map<string, Promise<number>>();
   /** Last evidence source seen per environment and provider, for turn-end pulls. */
@@ -266,6 +268,14 @@ export class ChangeTrackingService {
       announce: (resourceKey) => this.publisher.announce(resourceKey),
       resetView: (resourceKey) => this.publisher.reset(resourceKey),
       demandTtlMs: () => policy().gitScopeDemandTtlMs,
+    });
+    this.hunkStaging = new HunkStagingService({
+      ledger: this.ledger,
+      store: this.objects,
+      registry: this.registry,
+      environmentTarget: options.environmentTarget,
+      // Staging moves the index, which no workspace scan observes.
+      onIndexChanged: (environmentId) => this.gitScopes.invalidate(environmentId),
     });
     this.retention = new ChangeRetentionService({
       ledger: this.ledger,

@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1006,
-    "defined": 1006,
+    "commands": 1007,
+    "defined": 1007,
     "untyped": 0,
     "events": 45
   },
@@ -773,7 +773,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:4e4957dbf7cd8d925aeb07e2b1f05b1d857816c683f2678ba65373b088253a75"
+      "resultDigest": "sha256:2f26a5704660c52065d54186e91df8f3a3eebdbafd310f1bc08b761c1da61751"
     },
     "changes_get_diagnostics": {
       "domain": "git",
@@ -882,6 +882,15 @@
       "critical": [],
       "argsDigest": "sha256:42eca411d60367f1875059e373d302ead708800c71e98014655c055b113e426d",
       "resultDigest": "sha256:ddd444abd724210485205b96bbcb165744a5dbd106267d3b67b82207a1d27c50"
+    },
+    "changes_stage_hunk": {
+      "domain": "git",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": ["hunk"],
+      "argsDigest": "sha256:3fc96b96ca611dff18dcd3f85868c9600c367435a55945bb14a4432443be22d1",
+      "resultDigest": "sha256:bf9c55b3da20edbd8e6d0c9cba0b8ed08f4ba2bc92486ee739a2caf85c30aa79"
     },
     "check_any_ai_cli": {
       "domain": "agent-servers",

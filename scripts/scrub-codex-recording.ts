@@ -2,6 +2,12 @@
 /**
  * Scrubs a recorded app-server stream so it can be committed as a replay fixture.
  *
+ * Despite the name it is format-agnostic text redaction, and it is also the
+ * scrubber for the other bridges' provider-replay recordings
+ * (`tests/conformance/provider-replay/README.md`);
+ * `tests/unit/provider-replay-conformance.test.ts` runs `scrub()` over those
+ * fixtures as `scrub-codex-recording.test.ts` does over Codex's.
+ *
  * A raw recording is a faithful copy of a real session: your prompts, the contents
  * of every file the agent read or wrote, absolute paths that leak your username,
  * and anything a tool happened to print — including tokens and keys.

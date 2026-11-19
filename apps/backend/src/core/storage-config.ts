@@ -20,6 +20,7 @@ import {
   resolveLogDetail,
   type LogDetailExpiryAction,
 } from "@orkestrator/protocol/log-policy";
+import { isBuildIntent } from "@orkestrator/protocol/environment-interaction";
 import { isMultiReviewEngine } from "@orkestrator/protocol/multi-review";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import {
@@ -784,6 +785,7 @@ export class ConfigRepository {
       delete userSettings.lastEnvironmentType;
       delete userSettings.lastEnvironmentAgentSelection;
       delete userSettings.lastBuildNetworkAccessMode;
+      delete userSettings.lastBuildIntent;
       config.repositories[projectId] = {
         ...defaultRepositoryConfig(),
         ...userSettings,
@@ -792,6 +794,11 @@ export class ConfigRepository {
           : {}),
         ...(current.lastBuildNetworkAccessMode !== undefined
           ? { lastBuildNetworkAccessMode: current.lastBuildNetworkAccessMode }
+          : {}),
+        // The create dialog's remembered Build choice is written only by its
+        // own patch; a whole-record settings save must not revert it.
+        ...(current.lastBuildIntent !== undefined
+          ? { lastBuildIntent: current.lastBuildIntent }
           : {}),
         ...(current.lastEnvironmentAgentSelection !== undefined
           ? {
@@ -826,12 +833,19 @@ export class ConfigRepository {
         "lastBuildNetworkAccessMode",
       ]);
       for (const key of backendOwned) delete userUpdates[key];
+      if ("lastBuildIntent" in userUpdates && !isBuildIntent(userUpdates.lastBuildIntent)) {
+        throw new Error("lastBuildIntent must be feature, task or interactive");
+      }
       const next = { ...current, ...userUpdates } as Record<string, unknown>;
       for (const key of unset) if (!backendOwned.has(key)) delete next[key];
-      config.repositories[projectId] = {
+      const repository = {
         ...defaultRepositoryConfig(),
         ...(next as unknown as RepositoryConfig),
       };
+      if (isDeepStrictEqual(config.repositories[projectId], repository)) {
+        return this.withInheritedSettings(config);
+      }
+      config.repositories[projectId] = repository;
       await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);

@@ -15,7 +15,7 @@ import {
   MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES,
   serializedInitialPromptAttachmentBytes,
 } from "@orkestrator/protocol/initial-prompt-attachments";
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useEffectEvent, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -103,6 +103,7 @@ import {
   defaultFeatureBuildModels,
   featureBuildIdentity,
   buildIntentInteractionMode,
+  rememberedBuildIntent,
   featureBuildRequest,
   type BuildIntent,
   type FeatureBuildModelState,
@@ -310,6 +311,11 @@ const environmentDrafts = defineScopedSlot(
   () => new Map<string, CreateEnvironmentHandoff>(),
 );
 
+const pendingBuildIntents = defineScopedSlot(
+  "create-environment-build-intents",
+  () => new Map<string, { intent: BuildIntent; saved: Promise<void> }>(),
+);
+
 export function CreateEnvironmentDialog({
   open,
   onOpenChange,
@@ -335,6 +341,8 @@ export function CreateEnvironmentDialog({
   // scope's, as for `useScopeBackend` above.
   const dialogScope = useScopesWithCommandFallback().scope;
   const drafts = environmentDrafts(dialogScope);
+  const buildIntentSaves = pendingBuildIntents(dialogScope);
+  const configStore = dialogScope.store(useConfigStore.def);
   const preserveSavedDraft = Boolean(handoff && projectId && drafts.has(projectId));
   const remoteMachine = useRemoteMachineView(
     dialogScope.role === "command" ? null : dialogScope.nodeId,
@@ -805,6 +813,22 @@ export function CreateEnvironmentDialog({
     };
   }, [catalogRefreshRevision, open, projectId, nodeBackend]);
 
+  const initializeBuildIntent = useEffectEvent(() => {
+    const intent = projectId
+      ? (buildIntentSaves.get(projectId)?.intent ??
+        configStore.getState().getRepositoryConfig(projectId)?.lastBuildIntent)
+      : undefined;
+    const initialIntent = rememberedBuildIntent(intent, Boolean(onCreateFeatureBuild));
+    buildIntentRef.current = initialIntent;
+    setBuildIntent(initialIntent);
+  });
+
+  // Each opening starts on the Build choice this project last created with.
+  // Declared before the handoff effect, which overrides it with a carried form.
+  useEffect(() => {
+    if (open) initializeBuildIntent();
+  }, [open, projectId, dialogScope]);
+
   // A handoff belongs to this opening. An empty prompt can fall back to the
   // destination's draft, while an empty Feature description stays empty.
   useEffect(() => {
@@ -814,7 +838,8 @@ export function CreateEnvironmentDialog({
     if (!form) return;
     setInitialPrompt(form.feature || form.prompt ? form.prompt : (saved?.prompt ?? ""));
     setEnvironmentName(form.name);
-    const intent = form.feature ? "feature" : (form.interactionMode ?? DEFAULT_PROMPT_INTENT);
+    // A draft that carried no choice keeps the one this opening started on.
+    const intent = form.feature ? "feature" : (form.interactionMode ?? buildIntentRef.current);
     buildIntentRef.current = intent;
     setBuildIntent(intent);
     setFeatureName(form.feature?.name ?? "");
@@ -1542,6 +1567,44 @@ export function CreateEnvironmentDialog({
   const deferredTerminalPrompt =
     buildIntent !== "feature" && terminalAgent && (!launchAgent || !hasOpeningWork);
 
+  // Keep the choice available across openings while the save is in flight.
+  // Queue the patches in create-completion order for this project and node.
+  const recordBuildIntent = useCallback(
+    (intent: BuildIntent) => {
+      if (!projectId) return;
+      const previousSave = buildIntentSaves.get(projectId)?.saved ?? Promise.resolve();
+      const saved = previousSave
+        .then(async () => {
+          const before = configStore.getState().getRepositoryConfig(projectId)?.lastBuildIntent;
+          const result = await nodeBackend.patchRepositorySettings(
+            projectId,
+            { lastBuildIntent: intent },
+            [],
+          );
+          if (dialogScope.disposed) return;
+          const state = configStore.getState();
+          const current = state.getRepositoryConfig(projectId);
+          const updated = result.repositories[projectId];
+          // The response can contain older settings. Apply only the saved
+          // choice, and keep a newer value already delivered by config sync.
+          if (updated?.lastBuildIntent === intent && current?.lastBuildIntent === before) {
+            state.setRepositoryConfig(projectId, {
+              ...(current ?? updated),
+              lastBuildIntent: intent,
+            });
+          }
+        })
+        .catch((error: unknown) =>
+          log.warn("create.build-intent-save-failed", { error: formatLogError(error) }),
+        )
+        .finally(() => {
+          if (buildIntentSaves.get(projectId)?.saved === saved) buildIntentSaves.delete(projectId);
+        });
+      buildIntentSaves.set(projectId, { intent, saved });
+    },
+    [buildIntentSaves, configStore, dialogScope, nodeBackend, projectId],
+  );
+
   const launchBaseRequest = launchBaseForCreate(launchBase.state);
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -1604,6 +1667,7 @@ export function CreateEnvironmentDialog({
           featureAttemptModelsRef.current = requestModels;
           const started = await onCreateFeatureBuild(request);
           if (started === false) return;
+          recordBuildIntent("feature");
           // A new key only after the request succeeded: a retry of a create
           // whose response was lost has to reuse this one.
           featureRequestIdRef.current = createUuid();
@@ -1642,6 +1706,7 @@ export function CreateEnvironmentDialog({
           portMappings: environmentType === "containerized" ? portMappings : [],
         });
         if (created === false) return;
+        recordBuildIntent(buildIntent);
         // Clear the draft on successful creation and close directly
         // (bypass handleOpenChange which would re-save the draft)
         if (projectId) {
@@ -1693,6 +1758,7 @@ export function CreateEnvironmentDialog({
       validatePortMappings,
       drafts,
       preserveSavedDraft,
+      recordBuildIntent,
     ],
   );
 

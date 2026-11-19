@@ -61,7 +61,14 @@ tab. The old PIPELINE stage list (`PipelineStageRail`) is gone.
 
 The New environment dialog offers "Pipeline", "Task" and "Interactive" and
 says under them which kind of environment each creates and whether it is
-interactive. Internal names still say "feature build" (`BuildIntent =
+interactive. It opens on the choice the project last created an environment
+with: after a successful create the dialog patches the project's
+`lastBuildIntent` (`patch_repository_settings`), and the next opening starts
+there unless a carried form (a machine switch or saved draft) names its own.
+Pipeline is remembered only where the dialog can launch one; otherwise, and
+for a project with nothing recorded, it opens on Task. A whole-record
+repository settings save keeps the stored value, and the field is left out of
+the public settings revision. Internal names still say "feature build" (`BuildIntent =
 "feature" | "task" | "interactive"`, `createFeatureBuild`, the
 `create_feature_build` command, `featureBuildRequestHash`, the
 `feature-build.*` log events): they are persisted or part of the backend

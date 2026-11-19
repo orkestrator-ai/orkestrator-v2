@@ -240,41 +240,62 @@ describe("CreateEnvironmentDialog machine dropdown", () => {
     });
   }
 
-  test("hands off an interactive form and keeps the source draft recoverable", async () => {
+  test("an interactive handoff and source draft override the remembered Task choice", async () => {
     federated();
     const onSelectMachine = mock(
       (_machine: CreateEnvironmentMachine, _form: CreateEnvironmentHandoff) => true,
     );
     const projectId = "project-recovery";
-    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], onSelectMachine, { projectId }));
-    fireEvent.click(screen.getByRole("button", { name: "Interactive" }));
-    fireEvent.change(screen.getByLabelText("Environment name (optional)"), {
-      target: { value: "dark-mode" },
+    const store = appCommandStore(configStore);
+    const initialConfig = store.getState().config;
+    const rememberedTask = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      lastBuildIntent: "task",
+    } as const;
+    store.getState().setConfig({
+      ...initialConfig,
+      repositories: {
+        ...initialConfig.repositories,
+        [projectId]: rememberedTask,
+        [STUDIO.projectId]: rememberedTask,
+      },
     });
-    fireEvent.change(screen.getByLabelText("Initial prompt (optional)"), {
-      target: { value: "Add a dark mode" },
-    });
-    fireEvent.click(screen.getByRole("combobox", { name: "Machine" }));
-    fireEvent.click(await screen.findByRole("option", { name: /Studio/ }));
-    const handoff = {
-      prompt: "Add a dark mode",
-      name: "dark-mode",
-      interactionMode: "interactive",
-    } satisfies CreateEnvironmentHandoff;
-    expect(onSelectMachine.mock.calls).toEqual([[STUDIO, handoff]]);
-    cleanup();
+    try {
+      renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], onSelectMachine, { projectId }));
+      expect(screen.getByRole("button", { name: "Task", pressed: true })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Interactive" }));
+      fireEvent.change(screen.getByLabelText("Environment name (optional)"), {
+        target: { value: "dark-mode" },
+      });
+      fireEvent.change(screen.getByLabelText("Initial prompt (optional)"), {
+        target: { value: "Add a dark mode" },
+      });
+      fireEvent.click(screen.getByRole("combobox", { name: "Machine" }));
+      fireEvent.click(await screen.findByRole("option", { name: /Studio/ }));
+      const handoff = {
+        prompt: "Add a dark mode",
+        name: "dark-mode",
+        interactionMode: "interactive",
+      } satisfies CreateEnvironmentHandoff;
+      expect(onSelectMachine.mock.calls).toEqual([[STUDIO, handoff]]);
+      cleanup();
 
-    renderInAppCommandScope(
-      dialogWithMachines([STUDIO], () => true, { projectId: STUDIO.projectId, handoff }),
-    );
-    expect(screen.getByRole("button", { name: "Interactive", pressed: true })).toBeTruthy();
-    cleanup();
+      renderInAppCommandScope(
+        dialogWithMachines([STUDIO], () => true, { projectId: STUDIO.projectId, handoff }),
+      );
+      expect(screen.getByRole("button", { name: "Interactive", pressed: true })).toBeTruthy();
+      cleanup();
 
-    renderInAppCommandScope(dialogWithMachines([OWN], () => true, { projectId }));
-    expect(screen.getByRole("button", { name: "Interactive", pressed: true })).toBeTruthy();
-    expect((screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value).toBe(
-      "Add a dark mode",
-    );
+      renderInAppCommandScope(dialogWithMachines([OWN], () => true, { projectId }));
+      expect(screen.getByRole("button", { name: "Interactive", pressed: true })).toBeTruthy();
+      expect(
+        (screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value,
+      ).toBe("Add a dark mode");
+    } finally {
+      cleanup();
+      store.getState().setConfig(initialConfig);
+    }
   });
 });
 

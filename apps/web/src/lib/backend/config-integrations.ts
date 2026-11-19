@@ -490,6 +490,18 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     return (await settings().get_repository_config({ projectId })) as RepositoryConfig;
   }
 
+  async function patchRepositorySettings(
+    projectId: string,
+    updates: Partial<RepositoryConfig>,
+    unset: readonly (keyof RepositoryConfig)[],
+  ): Promise<AppConfig> {
+    return (await settings().patch_repository_settings({
+      projectId,
+      updates,
+      ...(unset.length > 0 ? { unset: [...unset] } : {}),
+    })) as AppConfig;
+  }
+
   async function getLogDirectory(machine?: AccountMachine): Promise<string> {
     return environmentsOn(machine).getLogDirectory({});
   }
@@ -828,6 +840,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     rotateControlMcpCredential,
     revokeControlMcpCredential,
     getRepositoryConfig,
+    patchRepositorySettings,
     getLogDirectory,
     getLogStorageStats,
     cleanupLogs,

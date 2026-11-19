@@ -1,4 +1,4 @@
-import { Fragment, useMemo } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 import type {
   ChangeDiffFileBody,
   ChangeDiffHunk,
@@ -12,7 +12,22 @@ import { cn } from "@/lib/utils";
  * split mode pairs each run of removals with the following run of additions
  * for side-by-side display. Both are layouts of the same rows — no diff is
  * computed in the client.
+ *
+ * A host can annotate the rows (`annotations`): a control beside each line
+ * and hunk header, and content after them, such as review comments. Without
+ * it the view is read-only.
  */
+
+export interface ChangeHunksAnnotations {
+  /** A control for one line, shown in the row's gutter. */
+  lineAction?: (hunkIndex: number, line: ChangeDiffLine) => ReactNode;
+  /** Content after a row; in split view one row carries up to two lines. */
+  afterLines?: (hunkIndex: number, lines: readonly ChangeDiffLine[]) => ReactNode;
+  /** A control on a hunk header. */
+  hunkAction?: (hunkIndex: number) => ReactNode;
+  /** Content after a hunk header. */
+  afterHeader?: (hunkIndex: number) => ReactNode;
+}
 
 type SplitRow = { left: ChangeDiffLine | null; right: ChangeDiffLine | null };
 
@@ -67,11 +82,26 @@ export function ChangeHunksView({
   file,
   mode = "unified",
   maxHeightClass = "max-h-64",
+  annotations,
 }: {
   file: ChangeDiffFileBody;
   mode?: "unified" | "split";
   maxHeightClass?: string;
+  annotations?: ChangeHunksAnnotations;
 }) {
+  // Annotated rows leave a gutter for the line control.
+  const gutterPadding = annotations?.lineAction ? "pl-7 pr-3" : "px-3";
+  const hunkHeader = (header: string, hunkIndex: number) => (
+    <div
+      className={cn(
+        "group/diff-line relative py-0.5 bg-blue-500/10 text-blue-400",
+        annotations?.hunkAction ? "pl-7 pr-3" : "px-3",
+      )}
+    >
+      {annotations?.hunkAction?.(hunkIndex)}
+      {header}
+    </div>
+  );
   const split = useMemo(
     () => (mode === "split" ? file.hunks.map(splitRows) : null),
     [file.hunks, mode],
@@ -96,14 +126,22 @@ export function ChangeHunksView({
         <pre className="text-xs font-mono">
           {file.hunks.map((hunk, hunkIndex) => (
             <Fragment key={hunkIndex}>
-              <div className="px-3 py-0.5 bg-blue-500/10 text-blue-400">{hunk.header}</div>
+              {hunkHeader(hunk.header, hunkIndex)}
+              {annotations?.afterHeader?.(hunkIndex)}
               {hunk.lines.map((line, index) => (
-                <div
-                  key={index}
-                  className={cn("px-3 py-0.5 whitespace-pre-wrap break-all", lineClass(line))}
-                >
-                  {lineText(line)}
-                </div>
+                <Fragment key={index}>
+                  <div
+                    className={cn(
+                      "group/diff-line relative py-0.5 whitespace-pre-wrap break-all",
+                      gutterPadding,
+                      lineClass(line),
+                    )}
+                  >
+                    {annotations?.lineAction?.(hunkIndex, line)}
+                    {lineText(line)}
+                  </div>
+                  {annotations?.afterLines?.(hunkIndex, [line])}
+                </Fragment>
               ))}
             </Fragment>
           ))}
@@ -112,29 +150,44 @@ export function ChangeHunksView({
         <div className="text-xs font-mono">
           {split.map((rows, hunkIndex) => (
             <Fragment key={hunkIndex}>
-              <div className="px-3 py-0.5 bg-blue-500/10 text-blue-400">
-                {file.hunks[hunkIndex]!.header}
-              </div>
-              {rows.map((row, index) => (
-                <div key={index} className="grid grid-cols-2">
-                  <div
-                    className={cn(
-                      "px-3 py-0.5 whitespace-pre-wrap break-all border-r border-border/30",
-                      lineClass(row.left),
-                    )}
-                  >
-                    {row.left?.type === "add" ? "" : lineText(row.left)}
-                  </div>
-                  <div
-                    className={cn(
-                      "px-3 py-0.5 whitespace-pre-wrap break-all",
-                      lineClass(row.right),
-                    )}
-                  >
-                    {row.right?.type === "remove" ? "" : lineText(row.right)}
-                  </div>
-                </div>
-              ))}
+              {hunkHeader(file.hunks[hunkIndex]!.header, hunkIndex)}
+              {annotations?.afterHeader?.(hunkIndex)}
+              {rows.map((row, index) => {
+                const left = row.left?.type === "add" ? null : row.left;
+                const right = row.right?.type === "remove" ? null : row.right;
+                // A context row shows one line on both sides; it is one line.
+                const rowLines =
+                  left && right && left === right
+                    ? [left]
+                    : [left, right].filter((line): line is ChangeDiffLine => line !== null);
+                return (
+                  <Fragment key={index}>
+                    <div className="grid grid-cols-2">
+                      <div
+                        className={cn(
+                          "group/diff-line relative py-0.5 whitespace-pre-wrap break-all border-r border-border/30",
+                          gutterPadding,
+                          lineClass(row.left),
+                        )}
+                      >
+                        {left && left !== right && annotations?.lineAction?.(hunkIndex, left)}
+                        {left ? lineText(left) : ""}
+                      </div>
+                      <div
+                        className={cn(
+                          "group/diff-line relative py-0.5 whitespace-pre-wrap break-all",
+                          gutterPadding,
+                          lineClass(row.right),
+                        )}
+                      >
+                        {right && annotations?.lineAction?.(hunkIndex, right)}
+                        {right ? lineText(right) : ""}
+                      </div>
+                    </div>
+                    {annotations?.afterLines?.(hunkIndex, rowLines)}
+                  </Fragment>
+                );
+              })}
             </Fragment>
           ))}
         </div>

@@ -704,6 +704,7 @@ export function FileViewerTab({
         <LazyDiffViewerTab
           target={changeDiff}
           filePath={filePath}
+          environmentId={environmentId}
           isActive={isActive}
           onSwitchToFileView={() => setShowDiff(false)}
         />

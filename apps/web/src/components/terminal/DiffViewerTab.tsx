@@ -33,6 +33,9 @@ import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { Button } from "@/components/ui/button";
 import { TruncatedPath } from "@/components/ui/truncated-path";
 import { ChangeHunksView } from "@/components/changes/ChangeHunksView";
+import { CommentableHunks, diffContentKey } from "@/components/changes/DiffComments";
+import { DiffCommentTray } from "@/components/changes/DiffCommentTray";
+import { useDiffCommentsStore } from "@/stores/diffCommentsStore";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 
 /**
@@ -45,12 +48,18 @@ import type { ChangeDiffTarget } from "@/types/paneLayout";
  * the explicit "current workspace file" view: it resolves to a fresh
  * immutable identity and resolves again whenever the backend says the file's
  * content may have changed.
+ *
+ * With an environment, lines and hunks take review comments
+ * (`DiffComments.tsx`), which the environment's comment tray sends to an
+ * agent as one correction request.
  */
 
 interface DiffViewerTabProps {
   target: ChangeDiffTarget;
   /** Tab path, used only as a label when the backend names no path. */
   filePath?: string;
+  /** The environment whose workspace this diff is of; enables review comments. */
+  environmentId?: string;
   isActive: boolean;
   /** Offered for live targets: opens the current file in the editor. */
   onSwitchToFileView?: () => void;
@@ -186,6 +195,7 @@ function filePathLabel(file: Pick<ChangeDiffFileBody, "oldPathDisplay" | "newPat
 export function DiffViewerTab({
   target,
   filePath,
+  environmentId,
   isActive,
   onSwitchToFileView,
 }: DiffViewerTabProps) {
@@ -422,6 +432,18 @@ export function DiffViewerTab({
 
   const reload = useCallback(() => setReloadCount((count) => count + 1), []);
 
+  // A live view tells the comment store what content each path shows now, so
+  // a comment written on earlier content reads as outdated.
+  const observeLiveContent = useDiffCommentsStore((state) => state.observeLiveContent);
+  const observedBody = isLive && body?.kind === "body" && body.key === bodyKey ? body : null;
+  useEffect(() => {
+    if (!environmentId || !observedBody) return;
+    const contentKey = diffContentKey(observedBody.identity);
+    if (contentKey === null) return;
+    for (const file of observedBody.files)
+      observeLiveContent(environmentId, file.pathId, contentKey);
+  }, [environmentId, observeLiveContent, observedBody]);
+
   // ---------------------------------------------------------------------------
   // Rendering
   // ---------------------------------------------------------------------------
@@ -432,6 +454,7 @@ export function DiffViewerTab({
       style={{ backgroundColor: terminalAppearance.backgroundColor }}
     >
       {children}
+      {environmentId && <DiffCommentTray environmentId={environmentId} />}
     </div>
   );
 
@@ -567,7 +590,19 @@ export function DiffViewerTab({
                   <span className="shrink-0 opacity-70">{STATUS_TEXT[file.status]}</span>
                 </div>
               )}
-              <ChangeHunksView file={file} mode={effectiveMode} maxHeightClass="max-h-none" />
+              {environmentId ? (
+                <CommentableHunks
+                  file={file}
+                  mode={effectiveMode}
+                  context={{
+                    environmentId,
+                    identity: shownBody.identity,
+                    source: isLive ? "live" : "historical",
+                  }}
+                />
+              ) : (
+                <ChangeHunksView file={file} mode={effectiveMode} maxHeightClass="max-h-none" />
+              )}
             </section>
           );
         })}

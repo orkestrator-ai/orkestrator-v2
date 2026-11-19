@@ -89,7 +89,7 @@ describe("FilePart attachment routing", () => {
     );
     expect(screen.getByRole("button", { name: /^Preview file: export\.zip/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^Preview file: recording\.mp4/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Open full image/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open full image/ }) === null).toBe(true);
   });
 
   test.each(["?version=2", "#preview"])(

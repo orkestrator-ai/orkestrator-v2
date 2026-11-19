@@ -816,7 +816,7 @@ describe("Electron backend command registry", () => {
       );
 
       await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
-        "fetch --no-recurse-submodules origin main",
+        "fetch --no-recurse-submodules --no-write-fetch-head origin +refs/heads/main:refs/remotes/origin/main",
       );
     });
   });
@@ -1568,7 +1568,7 @@ exit 1
       `#!/bin/sh
 if [ "$1" = "exec" ]; then
   case "$*" in
-    *"git fetch origin"*)
+    *"ORKESTRATOR_FETCH_END"*)
       printf 'FETCH\\n' >> "$FAKE_DOCKER_EXEC_LOG"
       printf '%s' '${fetchResponse}'
       ;;

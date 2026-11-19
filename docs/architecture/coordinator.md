@@ -2004,6 +2004,12 @@ disables the branch picker and Sync for the same reason and names who holds it
 focused is not refused only after confirming a discard. Refresh stays enabled,
 because a fetch does not touch the checkout.
 
+The toolbar's Fetch and refresh action updates Git's `FETCH_HEAD`. Automatic
+status refreshes and launch-base lookups preserve that file, even when the
+merge follower bypasses the fetch cooldown. With no upstream, an automatic
+refresh prunes and fetches each eligible remote separately so older Git
+versions apply the no-write flag to each fetch.
+
 The panel cannot work this out alone. Only the front tab of each group is
 mounted, and only a mounted tab keeps its projection current, so a stored
 projection misses a turn that started behind another tab and keeps saying

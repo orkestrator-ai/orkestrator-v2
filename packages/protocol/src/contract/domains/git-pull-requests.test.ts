@@ -39,9 +39,11 @@ import {
 
 const ADMIN = new Set(["changes_get_diagnostics"]);
 const INTERNAL = new Set(["pr_monitor_agent_turn_completed", "pr_monitor_probe_environment"]);
+/** Commands added after the domain's conversion, with the version that introduced them. */
+const ADDED_SINCE: Record<string, number> = { changes_stage_hunk: 2 };
 
 const DOMAINS = [
-  { domain: gitDomain, commands: GIT_COMMANDS as readonly AnyCommandDef[], count: 22, version: 2 },
+  { domain: gitDomain, commands: GIT_COMMANDS as readonly AnyCommandDef[], count: 23, version: 2 },
   {
     domain: pullRequestsDomain,
     commands: PULL_REQUESTS_COMMANDS as readonly AnyCommandDef[],
@@ -52,14 +54,14 @@ const DOMAINS = [
 
 describe("git and pull-requests definitions", () => {
   for (const { domain, commands, count, version } of DOMAINS) {
-    it(`defines ${domain.name}'s ${count} commands once each, since version 1`, () => {
+    it(`defines ${domain.name}'s ${count} commands once each, since version 1 unless added later`, () => {
       const names = commands.map((def) => def.name);
       expect(names).toHaveLength(count);
       expect(new Set(names).size).toBe(count);
       expect(domain).toMatchObject({ version, min: 1 });
       for (const def of commands) {
         expect(def.domain).toBe(domain);
-        expect(def.since).toBe(1);
+        expect(def.since).toBe(ADDED_SINCE[def.name] ?? 1);
         expect(def.encoded).toBe(false);
       }
     });

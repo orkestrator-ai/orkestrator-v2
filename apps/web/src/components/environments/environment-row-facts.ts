@@ -10,6 +10,7 @@ import {
   environmentDeletionStep,
   environmentHasDeletionTombstone,
   isEnvironmentDeletionStep,
+  isNodeUnreadReason,
   type AgentActivity,
 } from "@orkestrator/protocol/node-summaries";
 import { machineStatusText } from "@/components/federation/MachineDot";
@@ -63,10 +64,16 @@ export function localEnvironmentRowFacts(
     prState: environment.prState ?? null,
     autoMerge: environment.autoMerge === true,
     activity: inputs.activity,
+    hasWaitingNativeTab: environment.hasWaitingNativeTab === true,
     running: inputs.running,
     live: true,
     busy: false,
     hasUnreadWork: environment.hasUnreadWork === true,
+    unreadReason:
+      environment.hasUnreadWork === true && isNodeUnreadReason(environment.unreadReason)
+        ? environment.unreadReason
+        : null,
+    lastActivityAt: environment.lastActivityAt ?? null,
     prMergeState: inputs.prMergeState,
     machine: inputs.machine
       ? {
@@ -120,6 +127,7 @@ export function nodeEnvironmentRowFacts(
     autoMerge: environment.autoMerge === true,
     // Pipeline sessions need not project agent activity onto their environment.
     activity: environment.buildActive ? "working" : environment.activity,
+    hasWaitingNativeTab: environment.hasWaitingNativeTab === true,
     // As `useEnvironmentDisplayActivity` decides it on the machine itself.
     running:
       environment.environmentType === "local" ||
@@ -127,6 +135,8 @@ export function nodeEnvironmentRowFacts(
     live: machine.transport === "connected",
     busy: actions.busy,
     hasUnreadWork: environment.hasUnreadWork,
+    unreadReason: environment.unreadReason ?? null,
+    lastActivityAt: environment.lastActivityAt ?? null,
     // Decided from the machine's relayed PR reading and monitor health.
     prMergeState: nodeEnvironmentPrMergeState(environment, machine, requireChecks),
     machine: {

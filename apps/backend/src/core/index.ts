@@ -18,6 +18,7 @@ import type { InstalledApplicationLogging } from "@orkestrator/protocol/node/app
 import { listRunningBridgeTargets } from "./log-policy-bridges.js";
 import { startLogPolicyService } from "./log-policy-service.js";
 import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
+import { summarizePendingInteractions } from "@orkestrator/protocol/agent-registry";
 import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent-goal-check.js";
 import { NativeAgentGoalVerifier } from "./native-agent-goal-verifier.js";
 import { NativeAgentSuborkService } from "./native-agent-suborks.js";
@@ -1421,6 +1422,14 @@ export class OrkestratorBackend {
         );
         const goal = session ? sessionGoal(session) : undefined;
         return goal ? goalStatusSummary(goal) : undefined;
+      },
+      pending: async (environmentId, agent, logicalSessionKey) => {
+        const requests = await this.nativeAgents.sessionPendingInteractions({
+          environmentId,
+          agent,
+          logicalSessionKey,
+        });
+        return requests ? summarizePendingInteractions(requests) : undefined;
       },
     });
     context.mcpManagement = new McpManagementService({

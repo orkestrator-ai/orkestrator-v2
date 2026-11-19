@@ -532,6 +532,14 @@ describe("Git scopes and live details past the cap", () => {
       kind: "error",
       error: { code: "not-found", reasonKey: `changes.reason.${FILE_ROWS_CAPPED_REASON}` },
     });
+    const unstagedKey = gitScopeResourceKey("unstaged", "env-1");
+    await h.service.ensureResource(unstagedKey);
+    expect(
+      await h.service.diffBodies.resolveLiveDetail({ resourceKey: unstagedKey, pathId: unlisted }),
+    ).toEqual({
+      kind: "error",
+      error: { code: "not-found", reasonKey: `changes.reason.${FILE_ROWS_CAPPED_REASON}` },
+    });
   });
 
   test("the environment's explicit current-file action still opens a path with no row", async () => {

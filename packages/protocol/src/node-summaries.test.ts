@@ -4,11 +4,13 @@ import {
   ENVIRONMENT_DELETION_STEPS,
   environmentDeletionStepLabel,
   MAX_SUMMARY_MAIL_COUNT,
+  NODE_UNREAD_REASONS,
   repositoryHint,
   toNodeProjectSummary,
   toNodeEnvironmentSummary,
 } from "./node-summaries.js";
 import { classifyRouteFailure } from "./node/node-link/routes.js";
+import { EnvironmentUnreadReasonSchema } from "./contract/domains/environments/models.js";
 
 test("repository identities retain namespaces and ports and normalize HTTPS/SCP remotes", () => {
   const first = "https://gitlab.example/team-a/shared/app.git";
@@ -369,3 +371,22 @@ for (const field of ["deletionError", "cleanupAfterMergeError"]) {
     expect(JSON.stringify(summary)).not.toContain("example.com");
   });
 }
+
+test("an unread reason travels only as a known word, and only while something is unread", () => {
+  // The summary's list is the environments contract's list.
+  expect([...NODE_UNREAD_REASONS].sort()).toEqual(
+    [...EnvironmentUnreadReasonSchema.literals].sort(),
+  );
+  const summary = (raw: Record<string, unknown>) =>
+    toNodeEnvironmentSummary("bk_test" as never, { id: "e", projectId: "p", ...raw })!;
+  expect(summary({ hasUnreadWork: true, unreadReason: "agent_question" }).unreadReason).toBe(
+    "agent_question",
+  );
+  for (const raw of [
+    { hasUnreadWork: false, unreadReason: "agent_question" },
+    { hasUnreadWork: true, unreadReason: "Which API should this use?" },
+    { hasUnreadWork: true },
+  ]) {
+    expect(Object.keys(summary(raw))).not.toContain("unreadReason");
+  }
+});

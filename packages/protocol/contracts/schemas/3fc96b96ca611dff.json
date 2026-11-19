@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:3fc96b96ca611dff18dcd3f85868c9600c367435a55945bb14a4432443be22d1",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "diffIdentityId": {
+          "type": "string"
+        },
+        "hunk": {}
+      },
+      "required": ["action", "diffIdentityId"],
+      "type": "object"
+    }
+  }
+}

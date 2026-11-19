@@ -119,7 +119,10 @@ export const TiptapMarkdownEditor = forwardRef<
     onCreate: ({ editor: createdEditor }) => {
       editorRef.current = createdEditor;
     },
-    onUpdate: ({ editor: updatedEditor }) => {
+    onUpdate: ({ editor: updatedEditor, transaction }) => {
+      // Focus can cause the trailing-node extension to add an empty paragraph.
+      // That view change must not rewrite untouched or restored source.
+      if (!transaction.docChanged) return;
       editorRef.current = updatedEditor;
       hasPendingChangesRef.current = true;
 

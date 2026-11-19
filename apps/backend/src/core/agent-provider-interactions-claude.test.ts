@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { summarizePendingInteractions } from "@orkestrator/protocol/agent-registry";
 import {
   AGENT_INTERACTION_LIMITS,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
@@ -250,8 +251,9 @@ describe("Claude interaction adapter", () => {
         id: "form-1",
         kind: "mcp-form",
         serverName: "linear",
+        title: "Private team credential",
         message: "Which team?",
-        schema: { type: "object", properties: { team: { type: "string" } } },
+        schema: { type: "object", properties: { team: { type: "string", writeOnly: true } } },
         requestedAt,
         expiresAt,
       },
@@ -308,10 +310,16 @@ describe("Claude interaction adapter", () => {
       AgentInteractionRequest,
       AgentInteractionRequest,
     ];
-    expect(form.presentation).toMatchObject({ title: "linear needs input", body: "Which team?" });
+    expect(form.presentation).toMatchObject({
+      title: "Private team credential",
+      body: "Which team?",
+    });
+    const summary = summarizePendingInteractions([form]);
+    expect(summary?.label).toBe("Needs input");
+    expect(summary).not.toHaveProperty("detail");
     expect(JSON.parse(form.presentation.questions[0]!.description!)).toEqual({
       type: "object",
-      properties: { team: { type: "string" } },
+      properties: { team: { type: "string", writeOnly: true } },
     });
     expect(link.presentation).toMatchObject({
       title: "Sign in to linear",

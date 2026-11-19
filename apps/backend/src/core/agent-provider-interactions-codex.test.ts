@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { summarizePendingInteractions } from "@orkestrator/protocol/agent-registry";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   AGENT_INTERACTION_LIMITS,
@@ -197,6 +198,15 @@ describe("Codex interaction adapter", () => {
       "mcp-form",
       "mcp-url",
     ]);
+    const summaries = first.requests
+      .slice(0, 3)
+      .map((request) => summarizePendingInteractions([request]));
+    expect(summaries.map((summary) => summary?.label)).toEqual([
+      "Needs command approval",
+      "Needs file approval",
+      "Needs permission approval",
+    ]);
+    for (const summary of summaries) expect(summary).not.toHaveProperty("detail");
     expect(first.requests[0]!.presentation.body).toContain("Reason: Needs package metadata");
     expect(first.requests[0]!.presentation.body).toContain("Command: bun install");
     expect(first.requests[0]!.presentation.body).toContain("Network host: registry.npmjs.org");
@@ -348,6 +358,9 @@ describe("Codex interaction adapter", () => {
     const request = (await provider.interactions!.listPendingInteractions("session-1"))
       .requests[0]!;
     expect(request.presentation.title).toBe("Approve network access");
+    const sidebarSummary = summarizePendingInteractions([request]);
+    expect(sidebarSummary?.label).toBe("Needs network approval");
+    expect(sidebarSummary).not.toHaveProperty("detail");
     expect(request.presentation.body).toContain("Network host: probe-host.example.test");
     expect(request.presentation.confirmDisabled).toBe(false);
 

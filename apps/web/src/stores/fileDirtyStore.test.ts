@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { fileDirtyStore, fileSaveBaseline } from "./fileDirtyStore";
+import { fileDirtyStore, fileSaveBaseline, fileSaveConflict } from "./fileDirtyStore";
 import { appCommandStore } from "@/test/app-command-store";
 
 beforeEach(() => {
@@ -89,5 +89,48 @@ describe("fileDirtyStore", () => {
     expect(
       fileSaveBaseline(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("draft")!),
     ).toBe("edited from");
+  });
+
+  test("reports a conflict only while unsaved edits sit on a file that moved", () => {
+    const store = appCommandStore(fileDirtyStore).getState();
+    const entry = () => appCommandStore(fileDirtyStore).getState().dirtyFiles.get("tab");
+    expect(fileSaveConflict(undefined)).toBeNull();
+    store.setOriginalContent("tab", "loaded");
+    store.setContent("tab", "mine");
+    expect(fileSaveConflict(entry())).toBeNull();
+
+    store.observeDiskContent("tab", "theirs");
+    expect(fileSaveConflict(entry())).toEqual({ kind: "changed", disk: "theirs", mine: "mine" });
+
+    // Editing during the conflict keeps both versions apart.
+    store.setContent("tab", "merged");
+    expect(fileSaveConflict(entry())).toEqual({ kind: "changed", disk: "theirs", mine: "merged" });
+
+    // A buffer that already matches disk has nothing to resolve.
+    store.setContent("tab", "theirs");
+    expect(fileSaveConflict(entry())).toBeNull();
+  });
+
+  test("an unreadable disk is a conflict until disk is read again", () => {
+    const store = appCommandStore(fileDirtyStore).getState();
+    const entry = () => appCommandStore(fileDirtyStore).getState().dirtyFiles.get("tab");
+    store.markDiskUnreadable("missing");
+    expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.has("missing")).toBe(false);
+
+    store.setOriginalContent("tab", "loaded");
+    store.setContent("tab", "mine");
+    store.markDiskUnreadable("tab");
+    expect(fileSaveConflict(entry())).toEqual({ kind: "unreadable", mine: "mine" });
+    store.setContent("tab", "mine, edited");
+    expect(fileSaveConflict(entry())).toEqual({ kind: "unreadable", mine: "mine, edited" });
+
+    store.observeDiskContent("tab", "back again");
+    expect(fileSaveConflict(entry())).toEqual({
+      kind: "changed",
+      disk: "back again",
+      mine: "mine, edited",
+    });
+    store.markSaved("tab", "mine, edited");
+    expect(fileSaveConflict(entry())).toBeNull();
   });
 });

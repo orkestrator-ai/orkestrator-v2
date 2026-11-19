@@ -22,6 +22,17 @@ import {
   type StoreRow,
 } from "./storage-database-rows.js";
 import {
+  ensureRowByteTotals,
+  initializeRowBytes,
+  readSelectionHeader,
+  restrictCompanionFiles,
+  rowBytesExpression,
+  selectSerializedRows,
+  trackedRowBytes,
+  type RowSelection,
+  type SelectedStoreRows,
+} from "./storage-database-queries.js";
+import {
   instrumentSqliteConnection,
   storageDatabaseName,
   type SlowStorageOperations,
@@ -50,7 +61,7 @@ const log = createLogger("storage");
  */
 
 export { STORAGE_DATABASE_FILE };
-export { applyArrayRowUpdate };
+export { applyArrayRowUpdate, rowBytesExpression };
 
 /**
  * The change-tracking ledger's own database file, beside
@@ -337,18 +348,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function restrictCompanionFiles(databasePath: string): void {
-  for (const suffix of ["-wal", "-shm", "-journal"]) {
-    const companion = `${databasePath}${suffix}`;
-    try {
-      if (fs.lstatSync(companion).isFile()) fs.chmodSync(companion, 0o600);
-    } catch (error) {
-      // Another backend closing the database removes its WAL and SHM.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
-}
-
 export class StorageDatabase {
   readonly path: string;
   readonly db: Database;
@@ -455,6 +454,7 @@ export class StorageDatabase {
         throw error;
       }
       this.ensureIndexes();
+      ensureRowByteTotals(this.db);
       this.instanceId = (
         this.db.query("SELECT value FROM storage_meta WHERE key = 'instance'").get() as {
           value: string;
@@ -878,6 +878,42 @@ export class StorageDatabase {
   }
 
   /**
+   * Selected rows of one collection and the committed revision, in one read
+   * snapshot, without filling the cache; see `selectSerializedRows` and
+   * `readSelectionHeader` (`documentKnownAt`).
+   */
+  readStoreRowsSerialized(
+    store: string,
+    collection: string,
+    selection: RowSelection,
+    options: { documentKnownAt?: number } = {},
+  ): SelectedStoreRows | null {
+    this.timing.store = store;
+    return this.db
+      .transaction((): SelectedStoreRows | null => {
+        const header = readSelectionHeader(this.db, store, options.documentKnownAt);
+        if (!header) return null;
+        const { revision, document } = header;
+        if (header.mode !== "rows") return { revision, mode: "document", document, rows: [] };
+        this.observe?.("read");
+        const cached = this.pendingCache?.has(store)
+          ? this.pendingCache.get(store)
+          : this.cache.get(store);
+        const known = cached?.revision === header.revision && cached.mode === "rows";
+        const selected = selectSerializedRows(
+          this.db,
+          store,
+          collection,
+          selection,
+          known ? cached.rows : null,
+        );
+        this.fetched(selected.fetched);
+        return { revision, mode: "rows", document, rows: selected.rows };
+      })
+      .deferred();
+  }
+
+  /**
    * Persists `value` as the store's complete new state, writing only the rows
    * that changed. Returns the new revision. With `expectedRevision` the write
    * is refused when the store moved since that revision, and with `maxBytes`
@@ -897,9 +933,14 @@ export class StorageDatabase {
     }
     const next = decompose(layout, value);
     if (options.maxBytes !== undefined) {
-      let bytes = next.document === null ? 0 : Buffer.byteLength(next.document, "utf8");
-      for (const row of next.rows.values()) bytes += Buffer.byteLength(row.value, "utf8");
-      if (bytes > options.maxBytes) throw new StoreTooLargeError(store, bytes);
+      let rowBytes = 0;
+      for (const row of next.rows.values()) rowBytes += Buffer.byteLength(row.value, "utf8");
+      const total = rowBytes + Buffer.byteLength(next.document ?? "", "utf8");
+      if (total > options.maxBytes) throw new StoreTooLargeError(store, total);
+      // Install a zero baseline for a new store before its row inserts.
+      if (committed === null && next.mode === "rows") {
+        this.db.query("INSERT INTO store_row_byte_totals (store, bytes) VALUES (?, 0)").run(store);
+      }
     }
     const previous =
       committed === null ? null : this.loadCachedInTransaction(store, committed, "stat");
@@ -1179,10 +1220,13 @@ export class StorageDatabase {
     if (options.document && layout.kind !== "envelope") {
       throw new Error(`Store ${store} has no envelope document`);
     }
-    const bytes = (text: string | null) => (text === null ? 0 : Buffer.byteLength(text, "utf8"));
     return this.transaction(() => {
       const header = this.readStoreHeader(store);
       if (!header || header.mode !== "rows") return false;
+      const beforeRows =
+        options.maxBytes === undefined
+          ? undefined
+          : (trackedRowBytes(this.db, store) ?? initializeRowBytes(this.db, store));
       this.observe?.("read");
       // A store this connection holds at the committed revision answers the
       // rows' old values without fetching them again.
@@ -1193,13 +1237,13 @@ export class StorageDatabase {
       const select = this.db.query(
         "SELECT position, value FROM store_rows WHERE store = ? AND collection = ? AND key = ?",
       );
-      const written = new Map<string, StoreRow | null>();
+      const written = new Set<string>();
       const markers = new Set<string>();
-      let growth = 0;
       for (const { collection = "", key, value } of rows) {
         let existing: { position: number; value: string } | null;
-        if (known) {
-          existing = known.rows.get(rowId(collection, key)) ?? null;
+        const id = rowId(collection, key);
+        if (known && !written.has(id)) {
+          existing = known.rows.get(id) ?? null;
         } else {
           existing = select.get(store, collection, key) as typeof existing;
           this.fetched(existing?.value.length ?? 0);
@@ -1209,8 +1253,7 @@ export class StorageDatabase {
           this.db
             .query("DELETE FROM store_rows WHERE store = ? AND collection = ? AND key = ?")
             .run(store, collection, key);
-          growth -= bytes(existing.value);
-          written.set(rowId(collection, key), null);
+          written.add(id);
           continue;
         }
         const serialized = JSON.stringify(value);
@@ -1233,8 +1276,7 @@ export class StorageDatabase {
                owner = excluded.owner, value = excluded.value`,
           )
           .run(store, collection, key, position, owner ?? null, serialized);
-        growth += bytes(serialized) - bytes(existing?.value ?? null);
-        written.set(rowId(collection, key), { collection, key, position, value: serialized });
+        written.add(id);
         if (collection) markers.add(collection);
       }
       let document = header.document;
@@ -1243,37 +1285,19 @@ export class StorageDatabase {
         options.document?.(envelope);
         for (const collection of markers) envelope[collection] = STORAGE_COLLECTION_MARKER;
         document = JSON.stringify(envelope);
-        growth += bytes(document) - bytes(header.document);
       }
       if (written.size === 0 && document === header.document) return true;
-      if (options.maxBytes !== undefined && growth > 0) {
-        this.rowBytesSql ??= rowBytesExpression(this.db);
-        const total =
-          (
-            this.db
-              .query(
-                `SELECT coalesce(sum(${this.rowBytesSql}), 0) AS total FROM store_rows WHERE store = ?`,
-              )
-              .get(store) as { total: number }
-          ).total + bytes(document);
-        if (total > options.maxBytes) throw new StoreTooLargeError(store, total);
+      if (options.maxBytes !== undefined && beforeRows !== undefined) {
+        const before = beforeRows + Buffer.byteLength(header.document ?? "", "utf8");
+        const total = trackedRowBytes(this.db, store)! + Buffer.byteLength(document ?? "", "utf8");
+        if (total > before && total > options.maxBytes) throw new StoreTooLargeError(store, total);
       }
-      const revision = header.revision + 1;
       this.db
         .query("UPDATE stores SET revision = ?, document = ?, updated_at = ? WHERE name = ?")
-        .run(revision, document, Date.now(), store);
-      // Carried forward as updateStoreRow does, so the next whole-store reader
-      // fetches nothing for the rows this write did not touch.
-      if (known) {
-        const next = new Map(known.rows);
-        for (const [id, row] of written) {
-          if (row) next.set(id, row);
-          else next.delete(id);
-        }
-        this.setCache(store, { ...known, revision, document, rows: next });
-      } else {
-        this.setCache(store, null);
-      }
+        .run(header.revision + 1, document, Date.now(), store);
+      // Publish invalidation only after commit. Keyed reads can select their
+      // own rows; a whole-store reader rebuilds the cache on demand.
+      this.setCache(store, null);
       return true;
     }, store);
   }
@@ -1964,20 +1988,5 @@ export class StorageDatabase {
       holderAgeMs,
       waitedMs,
     });
-  }
-}
-
-/**
- * The SQL for a row value's UTF-8 length. `octet_length` (SQLite 3.43) reads the
- * length from the record header, so sizing a value never reads its overflow
- * pages. Bun on macOS loads the system library, which varies with the macOS
- * version, so the slower cast stays as the fallback.
- */
-export function rowBytesExpression(db: Pick<Database, "query">): string {
-  try {
-    db.query("SELECT octet_length('')").get();
-    return "octet_length(value)";
-  } catch {
-    return "length(CAST(value AS BLOB))";
   }
 }

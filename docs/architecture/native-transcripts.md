@@ -146,13 +146,22 @@ offers no control for it (a click that finds no cursor retires the control).
 history, so it shows the live window plus one page (up to 200 rows and
 1 MiB), and again whenever the transcript's head comes within 800 px of the
 viewport. It pages from the cursor the tab holds
-(`canLoadEarlierAutomatically`), which is always a direct one. A background poll that lands
-while a page is in flight does not retire it: the page merges into the live
-tail current when it lands, and is dropped only when a mutation, a later page,
-a read that replaced its cursor (a rotated history, a collapse to the live
-tail) or a read that found the session gone superseded it. A held row that a
-poll revised while the page was in flight keeps the poll's copy; the page
-refreshes only held rows still as it found them. A page that leaves the head where it was (superseded, or
+(`canLoadEarlierAutomatically`), which is always a direct one. A page has its
+own request identity (`native-history-page-fence.ts`), separate from the
+live-tail reads: requesting one does not cancel a tail read already in flight,
+and a background poll that lands while a page is in flight does not retire
+it. The page merges into the live tail current when it lands, after checking
+that it is still the newest page, that no mutation took over the transcript,
+that session state and the live tail agree on the generation, and that the
+generation, paging epoch and cursor it was fetched behind are unchanged.
+A page is dropped when a mutation, a later
+page, a new session generation, a read that replaced its epoch or cursor (a
+rotated history, a collapse to the live tail) or a read that found the
+session gone supersedes it. A held row that a poll revised while the page
+was in flight keeps the poll's copy. If a poll instead arrives after a page
+and carries a conflicting revision, the client keeps the displayed copy,
+applies the live tail, and reconciles the held history with a fresh read.
+A page that leaves the head where it was (superseded, or
 failed) is retried once; after a second
 it stops until the head moves some other way. Those two pages per head count
 for the whole session, even if the head moved in between, so a transcript that

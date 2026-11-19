@@ -5,6 +5,8 @@ export const WEB_FILES_LOG_AREAS = defineLogAreas({
     description: "The files panel, file viewer and file search.",
     events: {
       "file.save-failed": "A file could not be saved.",
+      "file.conflict-read-failed":
+        "After a save was refused because the file changed, its newer version could not be read back.",
       "git-changes.load-failed": "The files panel could not load the git changes.",
       "file-tree.load-failed": "The file tree could not be loaded.",
       "changes.refresh-failed": "Refreshing the files panel's changes failed.",

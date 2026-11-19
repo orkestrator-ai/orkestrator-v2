@@ -17,6 +17,7 @@ import {
   normalizeAgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
 import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-defaults";
+import { isBuildIntent } from "@orkestrator/protocol/environment-interaction";
 import { normalizeAgentAccountAutoSwitchSettings } from "@orkestrator/protocol/agent-account-auto-switch";
 import { sanitizeReviewLensPresets } from "@orkestrator/protocol/review-lens";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
@@ -441,14 +442,24 @@ function migrateRepositories(
     // An empty tier means "inherit everything", which absence already says, so
     // it is omitted rather than written as a `{}` every repository would carry.
     const agentSettings = isEmptyAgentSettings(migrated) ? undefined : migrated;
-    if (JSON.stringify(repository.agentSettings) === JSON.stringify(agentSettings)) {
+    const agentSettingsChanged =
+      JSON.stringify(repository.agentSettings) !== JSON.stringify(agentSettings);
+    // Older clients could store arbitrary extension keys in a repository.
+    const invalidBuildIntent =
+      "lastBuildIntent" in repository && !isBuildIntent(repository.lastBuildIntent);
+    if (!agentSettingsChanged && !invalidBuildIntent) {
       next[id] = repository;
       continue;
     }
     changed = true;
-    const stripped = stripLegacyKeys({ ...repository }, LEGACY_REPOSITORY_AGENT_KEYS);
-    if (agentSettings) stripped.agentSettings = agentSettings;
-    else delete stripped.agentSettings;
+    const stripped = agentSettingsChanged
+      ? stripLegacyKeys(repository, LEGACY_REPOSITORY_AGENT_KEYS)
+      : { ...repository };
+    if (agentSettingsChanged) {
+      if (agentSettings) stripped.agentSettings = agentSettings;
+      else delete stripped.agentSettings;
+    }
+    if (invalidBuildIntent) delete stripped.lastBuildIntent;
     next[id] = stripped;
   }
   return changed ? (next as AppConfig["repositories"]) : repositories;

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { decodeCommandResult } from "@orkestrator/protocol/contract/command";
+import { getConfigCommand } from "@orkestrator/protocol/contract/domains/config";
 
 import { BackendRuntime } from "./backend-runtime.js";
 import { createCommandRegistry } from "./commands-registry.js";
@@ -242,6 +244,42 @@ describe("patching repository settings", () => {
       ).rejects.toThrow("lastBuildIntent must be feature, task or interactive");
       expect((await storage.loadOwnConfig()).repositories.p4?.lastBuildIntent).toBe("interactive");
     });
+  });
+
+  test("get_config decodes legacy repositories with an invalid remembered Build choice", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-config-legacy-build-intent-"));
+    const runtime = new BackendRuntime({ emit: () => undefined });
+    try {
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        JSON.stringify({
+          ...defaultConfig(),
+          repositories: {
+            legacy: { defaultBranch: "trunk", prBaseBranch: "trunk", lastBuildIntent: "later" },
+            valid: { defaultBranch: "main", prBaseBranch: "main", lastBuildIntent: "interactive" },
+          },
+        }),
+      );
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      const context = { storage, runtime } as CommandContext;
+      const raw = await createCommandRegistry().get("get_config")!({}, context);
+      expect(decodeCommandResult(getConfigCommand, raw)).toMatchObject({
+        _tag: "Success",
+        success: {
+          repositories: {
+            legacy: { defaultBranch: "trunk" },
+            valid: { lastBuildIntent: "interactive" },
+          },
+        },
+      });
+      expect((await storage.loadOwnConfig()).repositories.legacy).not.toHaveProperty(
+        "lastBuildIntent",
+      );
+    } finally {
+      runtime.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   test("unsetting a required field falls back to its default", async () => {

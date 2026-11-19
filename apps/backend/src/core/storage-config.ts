@@ -838,10 +838,14 @@ export class ConfigRepository {
       }
       const next = { ...current, ...userUpdates } as Record<string, unknown>;
       for (const key of unset) if (!backendOwned.has(key)) delete next[key];
-      config.repositories[projectId] = {
+      const repository = {
         ...defaultRepositoryConfig(),
         ...(next as unknown as RepositoryConfig),
       };
+      if (isDeepStrictEqual(config.repositories[projectId], repository)) {
+        return this.withInheritedSettings(config);
+      }
+      config.repositories[projectId] = repository;
       await this.persistConfig(config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);

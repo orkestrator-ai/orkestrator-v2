@@ -15,7 +15,7 @@ import {
   MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES,
   serializedInitialPromptAttachmentBytes,
 } from "@orkestrator/protocol/initial-prompt-attachments";
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useEffectEvent, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -311,6 +311,11 @@ const environmentDrafts = defineScopedSlot(
   () => new Map<string, CreateEnvironmentHandoff>(),
 );
 
+const pendingBuildIntents = defineScopedSlot(
+  "create-environment-build-intents",
+  () => new Map<string, { intent: BuildIntent; saved: Promise<void> }>(),
+);
+
 export function CreateEnvironmentDialog({
   open,
   onOpenChange,
@@ -336,6 +341,8 @@ export function CreateEnvironmentDialog({
   // scope's, as for `useScopeBackend` above.
   const dialogScope = useScopesWithCommandFallback().scope;
   const drafts = environmentDrafts(dialogScope);
+  const buildIntentSaves = pendingBuildIntents(dialogScope);
+  const configStore = dialogScope.store(useConfigStore.def);
   const preserveSavedDraft = Boolean(handoff && projectId && drafts.has(projectId));
   const remoteMachine = useRemoteMachineView(
     dialogScope.role === "command" ? null : dialogScope.nodeId,
@@ -344,10 +351,6 @@ export function CreateEnvironmentDialog({
   const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
   const repoConfig = projectId ? config.repositories[projectId] : undefined;
-  const lastBuildIntent = rememberedBuildIntent(
-    repoConfig?.lastBuildIntent,
-    Boolean(onCreateFeatureBuild),
-  );
 
   const enabledAgentPlatforms = useMemo(
     () =>
@@ -810,15 +813,21 @@ export function CreateEnvironmentDialog({
     };
   }, [catalogRefreshRevision, open, projectId, nodeBackend]);
 
+  const initializeBuildIntent = useEffectEvent(() => {
+    const intent = projectId
+      ? (buildIntentSaves.get(projectId)?.intent ??
+        configStore.getState().getRepositoryConfig(projectId)?.lastBuildIntent)
+      : undefined;
+    const initialIntent = rememberedBuildIntent(intent, Boolean(onCreateFeatureBuild));
+    buildIntentRef.current = initialIntent;
+    setBuildIntent(initialIntent);
+  });
+
   // Each opening starts on the Build choice this project last created with.
   // Declared before the handoff effect, which overrides it with a carried form.
-  /* oxlint-disable react-hooks/exhaustive-deps -- read the remembered choice only when the dialog opens */
   useEffect(() => {
-    if (!open) return;
-    buildIntentRef.current = lastBuildIntent;
-    setBuildIntent(lastBuildIntent);
-  }, [open]);
-  /* oxlint-enable react-hooks/exhaustive-deps */
+    if (open) initializeBuildIntent();
+  }, [open, projectId, dialogScope]);
 
   // A handoff belongs to this opening. An empty prompt can fall back to the
   // destination's draft, while an empty Feature description stays empty.
@@ -1558,19 +1567,42 @@ export function CreateEnvironmentDialog({
   const deferredTerminalPrompt =
     buildIntent !== "feature" && terminalAgent && (!launchAgent || !hasOpeningWork);
 
-  // Remember the Build choice for this project's next opening. Best effort:
-  // the environment already exists, so a failed save only loses the default.
-  // The backend announces the config change, and the store resyncs from it.
+  // Keep the choice available across openings while the save is in flight.
+  // Queue the patches in create-completion order for this project and node.
   const recordBuildIntent = useCallback(
     (intent: BuildIntent) => {
-      if (!projectId || repoConfig?.lastBuildIntent === intent) return;
-      Promise.resolve()
-        .then(() => nodeBackend.patchRepositorySettings(projectId, { lastBuildIntent: intent }, []))
+      if (!projectId) return;
+      const previousSave = buildIntentSaves.get(projectId)?.saved ?? Promise.resolve();
+      const saved = previousSave
+        .then(async () => {
+          const before = configStore.getState().getRepositoryConfig(projectId)?.lastBuildIntent;
+          const result = await nodeBackend.patchRepositorySettings(
+            projectId,
+            { lastBuildIntent: intent },
+            [],
+          );
+          if (dialogScope.disposed) return;
+          const state = configStore.getState();
+          const current = state.getRepositoryConfig(projectId);
+          const updated = result.repositories[projectId];
+          // The response can contain older settings. Apply only the saved
+          // choice, and keep a newer value already delivered by config sync.
+          if (updated?.lastBuildIntent === intent && current?.lastBuildIntent === before) {
+            state.setRepositoryConfig(projectId, {
+              ...(current ?? updated),
+              lastBuildIntent: intent,
+            });
+          }
+        })
         .catch((error: unknown) =>
           log.warn("create.build-intent-save-failed", { error: formatLogError(error) }),
-        );
+        )
+        .finally(() => {
+          if (buildIntentSaves.get(projectId)?.saved === saved) buildIntentSaves.delete(projectId);
+        });
+      buildIntentSaves.set(projectId, { intent, saved });
     },
-    [nodeBackend, projectId, repoConfig?.lastBuildIntent],
+    [buildIntentSaves, configStore, dialogScope, nodeBackend, projectId],
   );
 
   const launchBaseRequest = launchBaseForCreate(launchBase.state);

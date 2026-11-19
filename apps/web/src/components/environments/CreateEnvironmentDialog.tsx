@@ -132,6 +132,9 @@ import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { launchBaseForCreate, type EnvironmentLaunchBase } from "@/lib/launch-base";
+import { LaunchBaseRow } from "./LaunchBaseRow";
+import { useLaunchBase } from "./useLaunchBase";
 import { useProjectSetupRequirements } from "@/hooks/useBuildLaunchOptions";
 import { aptPackagesNotice } from "@/lib/apt-packages-notice";
 
@@ -228,6 +231,11 @@ export interface ClaudeOptions {
   environmentName: string;
   /** A folder the user picked for a local worktree; absent uses the default location. */
   worktreeBaseDir?: string;
+  /**
+   * The exact commit a local worktree starts from, resolved while the dialog
+   * was open (`lib/launch-base.ts`). Absent lets the start resolve the base.
+   */
+  launchBase?: EnvironmentLaunchBase;
   launchAgent: boolean;
   agentType: AgentType;
   claudeMode: ClaudeMode;
@@ -641,6 +649,17 @@ export function CreateEnvironmentDialog({
     });
   }, [agentType, config, fastMode, model, modelCatalog, projectId, reasoningEffort]);
   const [buildIntent, setBuildIntent] = useState<BuildIntent>(DEFAULT_PROMPT_INTENT);
+  const loadLaunchBaseTip = useCallback(
+    (pid: string, retry: boolean) => nodeBackend.getProjectBaseBranchTip(pid, retry),
+    [nodeBackend],
+  );
+  // Refreshed while the dialog is open, so the start needs no fetch of its own.
+  const launchBase = useLaunchBase({
+    enabled:
+      open && environmentType === "local" && buildIntent !== "feature" && localEnvironmentAvailable,
+    projectId: projectId ?? null,
+    load: loadLaunchBaseTip,
+  });
   const [featureName, setFeatureName] = useState("");
   const [featureAcceptanceCriteria, setFeatureAcceptanceCriteria] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -1454,6 +1473,7 @@ export function CreateEnvironmentDialog({
   const deferredTerminalPrompt =
     buildIntent !== "feature" && terminalAgent && (!launchAgent || !hasOpeningWork);
 
+  const launchBaseRequest = launchBaseForCreate(launchBase.state);
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
@@ -1530,6 +1550,9 @@ export function CreateEnvironmentDialog({
           environmentType,
           environmentName: environmentName.trim(),
           ...(environmentType === "local" && worktreeBaseDir ? { worktreeBaseDir } : {}),
+          ...(environmentType === "local" && launchBaseRequest
+            ? { launchBase: launchBaseRequest }
+            : {}),
           launchAgent,
           agentType,
           claudeMode,
@@ -1570,6 +1593,7 @@ export function CreateEnvironmentDialog({
       environmentType,
       environmentName,
       worktreeBaseDir,
+      launchBaseRequest,
       launchAgent,
       agentType,
       buildIntent,
@@ -2303,6 +2327,11 @@ export function CreateEnvironmentDialog({
           </Tabs>
         </form>
 
+        <LaunchBaseRow
+          state={launchBase.state}
+          onRefresh={launchBase.refresh}
+          disabled={isLoading}
+        />
         <DialogFooter className="m-0 grid shrink-0 grid-cols-2 border-t border-divider px-4 py-2.5 sm:m-0 sm:flex sm:flex-row sm:px-6">
           <Button
             type="button"

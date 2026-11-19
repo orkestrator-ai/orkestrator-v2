@@ -11,10 +11,13 @@ import type {
   GitHubPullRequestListItem,
   GitHubPullRequestListResult,
   GitHubPullRequestRef,
+  GitHubPullRequestReviewThread,
 } from "@orkestrator/protocol/github-pull-requests";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { pullRequestsStore } from "@/stores/pullRequestsStore";
 import { appCommandStore } from "@/test/app-command-store";
+
+export const comparisonBase = { ref: "main", sha: "d".repeat(40) };
 
 export const prRef: GitHubPullRequestRef = { owner: "acme", repo: "widget", number: 42 };
 
@@ -109,9 +112,36 @@ export function makeFiles(overrides: Partial<GitHubPullRequestFiles> = {}): GitH
   return {
     ref: prRef,
     headSha: "abc1234def5678",
+    comparisonBase,
     files: [makeFile()],
     threads: [],
     truncated: false,
+    ...overrides,
+  };
+}
+
+export function makeThread(
+  overrides: Partial<GitHubPullRequestReviewThread> & { id: string },
+): GitHubPullRequestReviewThread {
+  return {
+    path: "src/app.ts",
+    line: 2,
+    startLine: null,
+    side: "RIGHT",
+    isResolved: false,
+    isOutdated: false,
+    viewerCanResolve: true,
+    comments: [
+      {
+        id: 1,
+        nodeId: `node-${overrides.id}`,
+        body: `body of ${overrides.id}`,
+        author: { login: "grace" },
+        createdAt: "2026-10-22T10:00:00.000Z",
+        updatedAt: "2026-10-22T10:00:00.000Z",
+        htmlUrl: "https://github.com/acme/widget/pull/42#discussion",
+      },
+    ],
     ...overrides,
   };
 }
@@ -202,6 +232,7 @@ export function resetPullRequestsStore() {
     timelines: new Map(),
     files: new Map(),
     lists: new Map(),
+    filePatches: new Map(),
     loading: new Set(),
     errors: new Map(),
     loadedAt: new Map(),

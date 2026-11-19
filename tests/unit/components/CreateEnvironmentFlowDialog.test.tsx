@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState } from "react";
@@ -949,6 +949,40 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(getContainerGitHubCredentialStatusMock).not.toHaveBeenCalled();
   });
 
+  test("passes the displayed base through the flow to create and starts the resulting environment", async () => {
+    const commit = "c".repeat(40);
+    const read = spyOn(realBackend, "getProjectBaseBranchTip").mockResolvedValue({
+      branch: "main",
+      ref: "origin/main",
+      commit,
+      launchEligible: true,
+      fetched: true,
+    });
+    const create = mock(async (..._args: unknown[]) => ({ id: "env-pinned" }) as Environment);
+    const start = mock(async (..._args: unknown[]) => {});
+    try {
+      renderInAppCommandScope(
+        <CreateEnvironmentFlowDialog
+          open
+          onOpenChange={() => {}}
+          projectId="project-1"
+          createEnvironment={create}
+          updateEnvironment={() => {}}
+          startEnvironment={start}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Local/ }));
+      await screen.findByText(commit);
+      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+      await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+      expect(create.mock.calls[0]).toHaveLength(10);
+      expect(create.mock.calls[0]?.[9]).toEqual({ branch: "main", commit });
+      expect(start.mock.calls[0]?.[0]).toBe("env-pinned");
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   test("persists the durable launch intent when the agent will be launched", async () => {
     const call = await submitCreateFlow();
     expect(call[0]).toBe("env-created");
@@ -1563,6 +1597,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       environmentType: "containerized",
       namingPrompt: "repair stale sessions",
       worktreeBaseDir: undefined,
+      launchBase: undefined,
     });
 
     expect(

@@ -252,6 +252,8 @@ import {
 } from "./AgentNativeTab.helpers";
 import { NativeInteractionAnchor } from "./NativeInteractionAnchor";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
+import { CredentialRequestCard, pendingCredentialRequests } from "./CredentialRequestCard";
+import { useCredentialSnapshot } from "@/hooks/useCredentialSnapshot";
 import {
   commandSubmissionIntent,
   draftCommandBusyTitle,
@@ -263,6 +265,8 @@ import { useConversationScrollTarget } from "./useConversationScrollTarget";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
+import { PlanCardScopeContext } from "@/components/chat/plan-card-context";
+import { useAgentPlanCardScope } from "./AgentNativeTab.plan-card";
 import {
   completedTurnElapsedSeconds,
   findLatestBackendTurnElapsedSeconds,
@@ -274,6 +278,8 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { agentSettingsCanSignIn, agentTerminalSignInCommand } from "@/lib/agent-sign-in";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { ThreadChangesHeader } from "@/components/changes/ThreadChangesHeader";
+import { queuedPromptEditNote } from "@/lib/prompt-queue-edit";
+import { useNativeQueuedPromptEditing } from "./useNativeQueuedPromptEditing";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeLoginRefusalNotice } from "@/lib/claude-auth";
 import {
@@ -575,6 +581,9 @@ export function SharedNativeAgentController({
     removeQueued,
     steerQueued,
     moveQueued,
+    beginQueuedEdit,
+    renewQueuedEdit,
+    finishQueuedEdit,
     retryQueue,
     retryRecoverableDispatch,
     discardRecoverableDispatch,
@@ -3130,20 +3139,22 @@ export function SharedNativeAgentController({
     phase === "idle" &&
     latestIsPlanReview &&
     latestAssistantMessage !== undefined &&
+    transcriptTail.latestAssistantIndex > transcriptTail.lastUserTurnIndex &&
     latestAssistantMessage.id !== dismissedPlanReviewId;
   const latestAssistantMessageId = latestAssistantMessage?.id;
   const composerModelId = composer?.selectedModelId;
   const composerReasoningId = composer?.selectedReasoningId;
   const composerFastModeEnabled = composer?.fastModeEnabled;
+  // With a prompt, asks the agent to implement; without one, only leaves plan mode.
   const switchPlanToBuild = useCallback(
-    async (implement: boolean) => {
+    async (implementPrompt?: string) => {
       if (planTransitionPending) return;
       setPlanTransitionPending(true);
       try {
         await updateControls({ mode: "build" });
         setDismissedPlanReviewId(latestAssistantMessageId ?? null);
-        if (implement) {
-          const outcome = await send("The plan is approved. Exit plan mode and implement it.", {
+        if (implementPrompt) {
+          const outcome = await send(implementPrompt, {
             model: composerModelId,
             reasoningEffort: composerReasoningId,
             mode: "build",
@@ -3169,6 +3180,13 @@ export function SharedNativeAgentController({
       updateControls,
     ],
   );
+  const planCards = useAgentPlanCardScope({
+    messages,
+    historyComplete: !canLoadEarlierHistory && projection?.messageWindow?.truncated !== true,
+    reviewApplies: platform === "cursor" && showPlanReview,
+    pending: planTransitionPending,
+    switchPlanToBuild,
+  });
 
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
@@ -3461,6 +3479,10 @@ export function SharedNativeAgentController({
   const pinnedInteractions = allInteractions.filter(
     (interaction) => interaction.kind !== "question" && interaction.kind !== "plan-approval",
   );
+  // An agent's credential requests (docs/architecture/agent-credentials.md),
+  // read from the backend so a hidden or reloaded tab shows them again.
+  const credentials = useCredentialSnapshot(data.environmentId, tabId);
+  const credentialRequests = pendingCredentialRequests(credentials.snapshot);
   // Claude signs in again through the backend's `claude auth login`, which its
   // card drives; the generic banner's routes do not reach it. One card,
   // whichever of the readiness, Claude's own reply or a turn-time auth notice
@@ -3640,6 +3662,38 @@ export function SharedNativeAgentController({
     Boolean(requestedResumeSessionId) ||
     (hasConnectedSession &&
       (messages.length > 0 || authenticationRequired || allInteractions.length > 0));
+  // Edits queued prompts in place, holding each where it is; `editQueuedPrompt`
+  // (the composer edit) is the fallback for slash commands and for nodes that
+  // predate in-place edits. Called before the setup overlay's early return.
+  const queuedPromptEditing = useNativeQueuedPromptEditing({
+    queueIdentity: `${composeScope.nodeId}\u0000${sessionKey}`,
+    messages: queuedMessages,
+    editing: projection?.queue?.editing,
+    begin: beginQueuedEdit,
+    renew: renewQueuedEdit,
+    finish: finishQueuedEdit,
+    filePicker: canSearchFiles
+      ? {
+          search: fileSearch,
+          context: (messageId) => {
+            const queued = queuedMessages.find((message) => message.id === messageId);
+            const modelId = (queued as { model?: unknown } | undefined)?.model;
+            const model =
+              typeof modelId === "string"
+                ? resolvedComposer.models.find((candidate) => candidate.id === modelId)
+                : selectedModel;
+            return {
+              containerId: data.containerId,
+              worktreePath: envWorktreePath ?? coordinatorWorkspacePath,
+              allowFiles: attachmentCapabilities.files,
+              allowImages: attachmentCapabilities.images,
+              modelSupportsImages: model?.supportsImageInput,
+              modelLabel: model?.label,
+            };
+          },
+        }
+      : undefined,
+  });
   useRenderedUnreadResult(
     sessionKey,
     !setupPending &&
@@ -3685,6 +3739,7 @@ export function SharedNativeAgentController({
    * an unconditional wrapper would permanently reserve pinned clearance for a tab
    * that has nothing pinned.
    */
+  const reviewPlan = planCards.reviewPlan;
   const pinnedCards: ReactNode[] = [
     resumeSessionReplacement && tabId.startsWith("multi-review-fix:") ? (
       <div
@@ -3695,13 +3750,31 @@ export function SharedNativeAgentController({
         {MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE}
       </div>
     ) : null,
-    showPlanReview ? (
+    // A structured plan is implemented from its card, where its body is visible.
+    showPlanReview && !planCards.actionsVisible ? (
       <CodexPlanModeCard
         key="plan-review"
         className="mx-0 my-0"
         isSubmitting={planTransitionPending}
-        onApproveAndBuild={() => switchPlanToBuild(true)}
-        onSwitchToBuild={() => switchPlanToBuild(false)}
+        onApproveAndBuild={() =>
+          switchPlanToBuild("The plan is approved. Exit plan mode and implement it.")
+        }
+        onReviewPlan={
+          reviewPlan
+            ? () => {
+                const index = messages.findIndex((message) => message.id === reviewPlan.messageId);
+                scrollToIndex(
+                  index,
+                  {
+                    rowKey: reviewPlan.messageId,
+                    partId: reviewPlan.partId,
+                  },
+                  "message-link",
+                );
+              }
+            : undefined
+        }
+        onSwitchToBuild={() => switchPlanToBuild()}
         onDismiss={() => setDismissedPlanReviewId(latestAssistantMessage?.id ?? null)}
       />
     ) : null,
@@ -4104,7 +4177,8 @@ export function SharedNativeAgentController({
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   };
-  const canSteerQueuedPrompt = (message: { id: string }) => queuedPromptSteerable(message);
+  const canSteerQueuedPrompt = (message: { id: string }) =>
+    queuedPromptEditing.editState(message.id) === undefined && queuedPromptSteerable(message);
   // Why a row offers no Steer while the turn runs. Annotation requests and
   // question answers have their own cards, so they get no note here.
   const queuedRowSteerNote = (message: { id: string }) => {
@@ -4201,6 +4275,15 @@ export function SharedNativeAgentController({
         ...(agentPrompts.length > 0 && !floatingNotices
           ? [<HumanPromptBanner key="human-prompts" prompts={agentPrompts} />]
           : []),
+        ...credentialRequests.map((request) => (
+          <CredentialRequestCard
+            key={`credential-${request.id}`}
+            request={request}
+            connections={credentials.snapshot?.connections ?? []}
+            vault={credentials.snapshot!.vault}
+            onAnswered={credentials.refresh}
+          />
+        )),
         ...pinnedInteractions.map((interaction) => (
           <NativeInteractionAnchor
             key={interaction.id}
@@ -4605,33 +4688,47 @@ export function SharedNativeAgentController({
             await submit(ADDRESS_ALL_REVIEW_PROMPT, undefined, false, "build");
           }}
           queue={
-            projection?.queue
+            projection?.queue || queuedPromptEditing.editor
               ? {
                   // A blocked goal turn has no row of its own, but its error and
                   // Retry must still show.
-                  length: queuedMessages.length || (projection.queue.blocked ? 1 : 0),
-                  error: projection.queue.blocked
+                  length: queuedMessages.length || (projection?.queue?.blocked ? 1 : 0),
+                  error: projection?.queue?.blocked
                     ? { message: projection.queue.blocked.error }
                     : null,
                   onOpen: () => setQueueDialogOpen(true),
+                  editor: queuedPromptEditing.editor,
                   items: queuedMessages.map((message) => {
                     // Annotation requests are frozen briefs, and removing one
                     // cancels it, so both stay behind the dialog.
                     const inline = !webAnnotationQueueOrigin(message);
-                    const note = queuedRowSteerNote(message);
+                    const editState = queuedPromptEditing.editState(message.id);
+                    const note = editState
+                      ? queuedPromptEditNote(editState)
+                      : queuedRowSteerNote(message);
                     const attachments = queuedPromptAttachments(message);
                     return {
                       id: message.id,
                       text: message.text,
                       ...(attachments.length > 0 ? { attachments } : {}),
                       ...(note ? { note } : {}),
+                      ...(editState ? { editState } : {}),
                       onSteer:
                         steerQueuedPrompt && canSteerQueuedPrompt(message)
                           ? () => runInlineQueueAction(() => steerQueuedPrompt(message))
                           : undefined,
-                      onEdit: inline
-                        ? () => runInlineQueueAction(() => editQueuedPrompt(message))
-                        : undefined,
+                      onEdit:
+                        inline && editState !== "local"
+                          ? () =>
+                              runInlineQueueAction(() =>
+                                queuedPromptEditing.edit(message, editQueuedPrompt),
+                              )
+                          : undefined,
+                      onRelease:
+                        editState === "review"
+                          ? () =>
+                              runInlineQueueAction(() => queuedPromptEditing.release(message.id))
+                          : undefined,
                       onRemove: inline
                         ? () => runInlineQueueAction(() => removeQueued(message.id))
                         : undefined,
@@ -4714,7 +4811,11 @@ export function SharedNativeAgentController({
                   onOpenWebAnnotationRequest={(requestId) =>
                     openWebAnnotationRequest(data.environmentId, requestId, composeScope)
                   }
-                  onEdit={editQueuedPrompt}
+                  onEdit={async (message) => {
+                    await queuedPromptEditing.edit(message, editQueuedPrompt);
+                    // The editor (or the composer) is below the dialog.
+                    setQueueDialogOpen(false);
+                  }}
                   onMove={async (fromIndex, toIndex) => {
                     const message = queuedMessages[fromIndex];
                     if (!message || fromIndex === toIndex) return;
@@ -4758,7 +4859,16 @@ export function SharedNativeAgentController({
                             {attachments} attachment{attachments === 1 ? "" : "s"}
                           </span>
                         ) : null}
-                        {steerNote ? <span>{steerNote}</span> : null}
+                        {(() => {
+                          const editState = queuedPromptEditing.editState(message.id);
+                          return editState ? (
+                            <span data-testid="queued-prompt-edit-state">
+                              {queuedPromptEditNote(editState)}
+                            </span>
+                          ) : steerNote ? (
+                            <span>{steerNote}</span>
+                          ) : null;
+                        })()}
                       </>
                     );
                   }}
@@ -4810,7 +4920,11 @@ export function SharedNativeAgentController({
                     turnActive={isTurnActive}
                     containment={<EnvironmentContainmentTag environmentId={data.environmentId} />}
                   />
-                  <div className="min-h-0 flex-1">{chatShell}</div>
+                  <div className="min-h-0 flex-1">
+                    <PlanCardScopeContext.Provider value={planCards.scope}>
+                      {chatShell}
+                    </PlanCardScopeContext.Provider>
+                  </div>
                   {floatingNotices && agentPrompts.length > 0 ? (
                     <HumanPromptBanner prompts={agentPrompts} />
                   ) : null}

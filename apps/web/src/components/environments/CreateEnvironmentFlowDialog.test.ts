@@ -117,4 +117,16 @@ describe("resolveEnvironmentCreateRequest", () => {
       ).worktreeBaseDir,
     ).toBeUndefined();
   });
+
+  test("pins a local worktree to the base resolved in the dialog, never a container", () => {
+    const launchBase = { branch: "main", commit: "a".repeat(40) };
+    expect(
+      resolveEnvironmentCreateRequest(options({ environmentType: "local", launchBase })).launchBase,
+    ).toEqual(launchBase);
+    // A container clones from the remote; its base is resolved inside it.
+    expect(
+      resolveEnvironmentCreateRequest(options({ environmentType: "containerized", launchBase }))
+        .launchBase,
+    ).toBeUndefined();
+  });
 });

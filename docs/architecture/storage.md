@@ -44,7 +44,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 The area fields are `kanban` (`KanbanStorage`), `linear` (`LinearStorage`), `coordinators`
 (`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
 `nodes` (`NodesStorage`), `machineLoadHistory` (`MachineLoadHistoryStorage`), `previewServices` (`PreviewServicesStorage`),
-`agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
+`agentAccounts` (`AgentAccountsStorage`), `promptQueueEdits` (`PromptQueueEditsStorage`), `graphTemplates`
 (`GraphTemplatesStorage`), `graphRuns` (`GraphRunsStorage`), `graphEffects`
 (`GraphEffectsStorage`), `clientState` (`ClientStateStorage`), `setupApprovals`
 (`SetupApprovalsStorage`), `environmentIsolation` (`EnvironmentIsolationStorage`), `suborks` (`SuborksStorage`), `watchedPullRequests`
@@ -71,6 +71,7 @@ the change journal.
 | `NativeAgentDeliveries` | `storage-native-deliveries.ts` | The dispatch and steer journals on a session record, and a queued steer's reservation and settlement in the prompt queue |
 | `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, row reads and row writes, and the restore of claims older backends left on disk |
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
+| `PromptQueueEditsRepository` | `storage-prompt-queue-edits.ts` | In-place edits of queued prompts, reached as `storage.promptQueueEdits`: the edit lease (`editLeases` on the queue row) that the dispatch and steer reservations respect, its renewal, and the commit of text and attachments together ([native-agent-service.md](native-agent-service.md#editing-a-queued-prompt-in-place)) |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
 | `AgentMailRepository` | `storage-agent-mail.ts` | Agent mail: sending, replies, per-message state, conversations, deletion and retention (an environment's deletion is planned in `storage-agent-mail-deletion.ts`) |
@@ -97,6 +98,7 @@ the change journal.
 | `EnvironmentIsolationRepository` | `storage-environment-isolation.ts` | No store of its own: reserves a local environment's host port block ([environment-isolation.md](environment-isolation.md)) as `isolationPortBase` on its environment row, chosen and written under the environment store's lease so two environments are never handed the same block; row reservation removed on deletion, with bound ports excluded by host probes before reassignment |
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
 | `PermissionRulesRepository` | `storage-permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |
+| `CredentialsRepository` | `storage-credentials.ts` | Adapts the agent credential records ([agent-credentials.md](agent-credentials.md)): `credential-connections` (one row per saved credential) and `credential-requests`, `credential-grants`, `credential-operations` (owned by the environment, at most 400 rows each per environment, settled rows pruned first). Metadata only: values live in the credential vault, never in the database; the store owns its row transactions and announces the `credential` resource |
 
 A store written by more than one repository is written under the same lease
 by each, or only through transactions; the guard checks that per store. The
@@ -884,6 +886,11 @@ filesystem. Its full record of tasks 1 to 4 (runs, samplers, the A/B arms):
   so its change-tracking ledger did less work there than on btrfs.
 
 ## Provider secrets at rest
+
+Credentials agents use in tasks are a separate store with its own vault (the
+system keychain where one works); see
+[agent-credentials.md](agent-credentials.md#storage). This section covers only
+the provider sign-in keys.
 
 **Accepted risk (2026-11-05, security finding L17):** the stored provider secrets
 are plaintext in owner-only files. No keychain or `safeStorage` storage path

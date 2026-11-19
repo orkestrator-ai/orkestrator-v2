@@ -100,6 +100,13 @@ export const RESOURCE_KINDS = [
    * clients re-read `get_coordinator_action_marks`. A hint only.
    */
   "coordinator-action-marks",
+  /**
+   * Agent credentials changed: a request, grant or operation of one
+   * environment (the id is the environment id), or the saved connections
+   * (the id is `connections`). Clients re-read `get_credential_snapshot` or
+   * `get_credential_overview`. A hint only, and content-free.
+   */
+  "credential",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

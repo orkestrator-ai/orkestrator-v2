@@ -7,9 +7,12 @@ import type {
   GitHubPullRequestReviewThread,
 } from "@orkestrator/protocol/github-pull-requests";
 import { cn } from "@/lib/utils";
-import { usePullRequestsStore } from "@/stores/pullRequestsStore";
 import { PullRequestReviewThread } from "./PullRequestReviewThread";
-import { CommentComposer } from "./pull-request-shared";
+import {
+  InlineReviewDraftComposer,
+  useReviewDraft,
+  useReviewDraftStore,
+} from "./pull-request-review-drafts";
 
 export type DiffSide = "LEFT" | "RIGHT";
 
@@ -98,22 +101,19 @@ export function PullRequestDiff({
   file,
   threads,
   commitId,
+  comparisonKey = commitId,
   canComment,
 }: {
   pullRequest: GitHubPullRequestRef;
   file: GitHubPullRequestFile;
   threads: GitHubPullRequestReviewThread[];
   commitId: string;
+  comparisonKey?: string;
   canComment: boolean;
 }) {
-  const addReviewComment = usePullRequestsStore((state) => state.addReviewComment);
-  const [composerAt, setComposerAt] = useState<{
-    key: string;
-    commitId: string;
-    path: string;
-    side: DiffSide;
-    line: number;
-  } | null>(null);
+  const drafts = useReviewDraftStore();
+  const { draft, setDraft } = useReviewDraft(drafts, "inline", file.path, (draft) => draft?.anchor);
+  const [autoFocus, setAutoFocus] = useState(false);
   const anchored = useMemo(() => anchorThreads(file, threads), [file, threads]);
   const gutterWidth = useMemo(() => {
     let max = 0;
@@ -123,12 +123,28 @@ export function PullRequestDiff({
     return `${Math.max(2, String(max).length) + 1}ch`;
   }, [file.hunks]);
 
-  if (file.hunks.length === 0) {
-    return <div className="px-3 py-2 text-xs text-muted-foreground">No textual changes.</div>;
-  }
+  const draftLine = draft && file.hunks[draft.hunkIndex]?.lines[draft.lineIndex];
+  const draftAnchor = draftLine && commentAnchorForLine(draftLine);
+  const draftOnLine =
+    draft &&
+    draft.comparisonKey === comparisonKey &&
+    draftAnchor?.side === draft.side &&
+    draftAnchor.line === draft.line;
+  const composer = draft && canComment && (
+    <InlineReviewDraftComposer
+      pullRequest={pullRequest}
+      store={drafts}
+      path={file.path}
+      comparisonKey={comparisonKey}
+      autoFocus={autoFocus && Boolean(draftOnLine)}
+    />
+  );
 
   return (
     <div data-testid="pull-request-diff" className="font-mono text-xs leading-5">
+      {file.hunks.length === 0 && (
+        <div className="px-3 py-2 text-xs text-muted-foreground">No textual changes.</div>
+      )}
       {file.hunks.map((hunk, hunkIndex) => (
         <Fragment key={hunkIndex}>
           <div className="bg-sky-500/10 px-3 py-0.5 break-all whitespace-pre-wrap text-sky-300/90">
@@ -138,7 +154,8 @@ export function PullRequestDiff({
             const key = lineKey(hunkIndex, lineIndex);
             const lineThreads = anchored.byLine.get(key);
             const anchor = canComment ? commentAnchorForLine(line) : null;
-            const composerOpen = composerAt?.key === key && anchor !== null;
+            const composerOpen =
+              draftOnLine && draft.hunkIndex === hunkIndex && draft.lineIndex === lineIndex;
             return (
               <Fragment key={lineIndex}>
                 <div
@@ -168,11 +185,25 @@ export function PullRequestDiff({
                     )}
                   >
                     {lineSign(line)}
-                    {anchor && (
+                    {anchor && !draft && (
                       <button
                         type="button"
                         aria-label={`Comment on ${anchor.side === "LEFT" ? "old" : "new"} line ${anchor.line}`}
-                        onClick={() => setComposerAt({ key, commitId, path: file.path, ...anchor })}
+                        onClick={() => {
+                          setAutoFocus(true);
+                          setDraft({
+                            anchor: {
+                              comparisonKey,
+                              commitId,
+                              path: file.path,
+                              hunkIndex,
+                              lineIndex,
+                              ...anchor,
+                            },
+                            body: "",
+                            submitting: false,
+                          });
+                        }}
                         className="absolute top-0.5 left-0 flex size-4 items-center justify-center rounded bg-primary-fill text-primary-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                       >
                         <Plus className="size-3" />
@@ -202,32 +233,7 @@ export function PullRequestDiff({
                         canReply={canComment}
                       />
                     ))}
-                    {composerOpen && composerAt && (
-                      <div className="rounded-lg border border-border bg-card/60 p-2">
-                        {composerAt.commitId !== commitId && (
-                          <p className="mb-2 font-sans text-xs text-muted-foreground">
-                            Commenting on the original revision {composerAt.commitId.slice(0, 7)},{" "}
-                            {composerAt.path}, {composerAt.side} line {composerAt.line}.
-                          </p>
-                        )}
-                        <CommentComposer
-                          autoFocus
-                          placeholder="Add a review comment"
-                          ariaLabel="Review comment"
-                          submitLabel="Add comment"
-                          onCancel={() => setComposerAt(null)}
-                          onSubmit={async (body) => {
-                            await addReviewComment(pullRequest, composerAt.commitId, {
-                              path: composerAt.path,
-                              line: composerAt.line,
-                              side: composerAt.side,
-                              body,
-                            });
-                            setComposerAt(null);
-                          }}
-                        />
-                      </div>
-                    )}
+                    {composerOpen && composer}
                   </div>
                 )}
               </Fragment>
@@ -235,6 +241,7 @@ export function PullRequestDiff({
           })}
         </Fragment>
       ))}
+      {composer && !draftOnLine && <div className="px-2 py-2">{composer}</div>}
       {anchored.unplaced.length > 0 && (
         <div
           data-testid="diff-unplaced-threads"

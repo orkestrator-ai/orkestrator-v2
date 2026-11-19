@@ -817,6 +817,111 @@ test("queued prompt: dispatched on the turn-end edge and shown on both clients",
   }
 });
 
+test("queue editing on a phone holds the real drain and preserves the desktop draft", async ({
+  browser,
+}) => {
+  test.setTimeout(4 * 60_000);
+  const status = readyStatus();
+  let desktop: Client | undefined;
+  let phone: Client | undefined;
+  const running = tag("EDITRUN");
+  const first = tag("EDITFIRST");
+  const original = tag("EDITORIGINAL");
+  const edited = tag("EDITSECOND");
+  const third = tag("EDITTHIRD");
+  const hold = running.toLowerCase();
+  try {
+    desktop = await newClient(browser, "edit-desktop", { status });
+    phone = await newClient(browser, "edit-phone", { status });
+    await openEnvironment(desktop.page, fixture.name, environment.name);
+    await openEnvironment(phone.page, fixture.name, environment.name);
+    await phone.page.setViewportSize({ width: 390, height: 844 });
+    const invoke = invokeThrough(desktop.page, status.browserUrl!);
+    const queueKey = `claude\u0000env-${environment.id}:${TAB_ID}`;
+    const queue = () =>
+      invoke<{ messages: Array<{ id: string; text: string }>; inFlight?: unknown }>(
+        "get_prompt_queue",
+        { queueKey },
+      );
+    expect(environment.worktreePath).toBeTruthy();
+    const filename = "queue-edit-test.png";
+    await fs.writeFile(
+      path.join(environment.worktreePath!, filename),
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    await send(desktop.page, `${running} [hold:${hold}]`);
+    await expect.poll(() => model.callsWith(running).length, { timeout: 60_000 }).toBe(1);
+    for (const marker of [first, original, third]) {
+      await enqueue(invoke, environment.id, marker);
+    }
+    const initial = (await queue()).messages;
+    expect(initial.map((message) => message.text)).toEqual([first, original, third]);
+    await phone.page
+      .getByRole("button", { name: "Edit queued prompt 2 of 3", exact: true })
+      .click();
+    const editor = phone.page.getByTestId("compose-queue-editor");
+
+    model.release(hold);
+    await expect.poll(() => model.callsWith(first).length, { timeout: 60_000 }).toBe(1);
+    await expect
+      .poll(
+        async () => {
+          const current = await queue();
+          return { ids: current.messages.map(({ id }) => id), reserved: Boolean(current.inFlight) };
+        },
+        { timeout: 60_000 },
+      )
+      .toEqual({ ids: initial.slice(1).map(({ id }) => id), reserved: false });
+    await expect(
+      desktop.page.getByRole("button", { name: "Take over editing from the other device 1 of 2" }),
+    ).toBeVisible();
+    expect(model.callsWith(original)).toHaveLength(0);
+    expect(model.callsWith(edited)).toHaveLength(0);
+    expect(model.callsWith(third)).toHaveLength(0);
+
+    // A persisted composer draft also pauses the drain. Enter it after
+    // observing the lease hold by itself, then keep it through the edit.
+    const draftText = "Separate desktop draft";
+    const draftKey = `claude:${environment.id}:${encodeURIComponent(`env-${environment.id}:${TAB_ID}`)}`;
+    const readDraft = () =>
+      invoke<{ value: { text: string } } | null>("get_compose_draft", { draftKey });
+    await composer(desktop.page).fill(draftText);
+    await expect.poll(async () => (await readDraft())?.value.text).toBe(draftText);
+    await editor.getByRole("textbox").fill(edited);
+    await editor.getByRole("button", { name: "Attach file", exact: true }).click();
+    await phone.page.getByRole("textbox", { name: "Search workspace files" }).fill(filename);
+    await phone.page.getByRole("button", { name: filename }).click();
+    await expect(
+      editor.getByRole("button", { name: `Remove attachment ${filename}` }),
+    ).toBeVisible();
+    await editor.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(editor).toHaveCount(0);
+    await expect(composer(desktop.page)).toHaveText(draftText);
+    expect((await readDraft())?.value.text).toBe(draftText);
+    expect((await queue()).messages.map(({ id }) => id)).toEqual(
+      initial.slice(1).map(({ id }) => id),
+    );
+    await composer(desktop.page).fill("");
+    await expect.poll(() => model.callsWith(third).length, { timeout: 60_000 }).toBe(1);
+    expect(model.callsWith(original)).toHaveLength(0);
+    expect(model.callsWith(edited)).toHaveLength(1);
+    const delivered = model.callsWith(edited)[0]!;
+    expect(delivered.images).toBeGreaterThan(0);
+    expect(delivered.index).toBeGreaterThan(model.callsWith(first)[0]!.index);
+    expect(delivered.index).toBeLessThan(model.callsWith(third)[0]!.index);
+    await phone.page.reload({ waitUntil: "domcontentloaded" });
+    await expect.poll(() => rowsWith(phone!.page, edited), { timeout: 60_000 }).toBeGreaterThan(0);
+  } finally {
+    model.release(hold);
+    await closeClient(phone);
+    await closeClient(desktop);
+  }
+});
+
 /**
  * Queues a prompt behind the running turn through the backend's own durable
  * queue, the call the composer makes (`useNativeAgentSession`'s `enqueue`).

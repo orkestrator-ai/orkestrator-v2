@@ -12,6 +12,7 @@ export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 export type { EnvironmentIsolationStorage } from "./storage-environment-isolation.js";
 export type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
+export type { PromptQueueEditsStorage } from "./storage-prompt-queue-edits.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
 export type { LinearStorage } from "./storage-linear.js";
@@ -28,6 +29,7 @@ import type {
 } from "@orkestrator/protocol/environment-attention";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/index.js";
+import type { CredentialRecordStore } from "./credentials/records.js";
 import {
   reconcileRetiredLoopedReviewSessions,
   type RetirementProvider,
@@ -50,6 +52,7 @@ import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { EnvironmentIsolationStorage } from "./storage-environment-isolation.js";
 import type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
+import type { PromptQueueEditsStorage } from "./storage-prompt-queue-edits.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { RemovedProjectSweepResult } from "./storage-kanban-removed-projects.js";
 import type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
@@ -190,6 +193,8 @@ export class StorageService {
   readonly watchedPullRequests: WatchedPullRequestsStorage;
   /** This machine's load history (`machine-load.ts`, #2287). */
   readonly machineLoadHistory: MachineLoadHistoryStorage;
+  /** In-place edits of queued prompts (`@orkestrator/protocol/prompt-queue-edit`). */
+  readonly promptQueueEdits: PromptQueueEditsStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -215,6 +220,7 @@ export class StorageService {
     this.environmentIsolation = this.repos.environmentIsolation;
     this.watchedPullRequests = this.repos.watchedPullRequests;
     this.machineLoadHistory = this.repos.machineLoadHistory;
+    this.promptQueueEdits = this.repos.promptQueueEdits;
   }
 
   async init(): Promise<void> {
@@ -321,6 +327,11 @@ export class StorageService {
   /** Orkestrator's own permission rules (todo 0723 (retired)); per machine. */
   permissionRuleStore(): PermissionRuleStore {
     return this.repos.permissionRules.store();
+  }
+
+  /** Agent credential records (metadata only; values live in the credential vault). */
+  credentialRecordStore(): CredentialRecordStore {
+    return this.repos.credentials.store();
   }
 
   async getResourceSnapshotRevision(
@@ -465,6 +476,11 @@ export class StorageService {
 
   getEnvironmentsByProject(projectId: string): Promise<Environment[]> {
     return this.repos.projects.getEnvironmentsByProject(projectId);
+  }
+
+  /** Current row for synchronous checks inside a credential dispatch transaction. */
+  readEnvironmentRow(environmentId: string): Environment | null {
+    return this.repos.projects.readEnvironmentRow(environmentId);
   }
 
   getEnvironment(environmentId: string): Promise<Environment | null> {
@@ -1074,6 +1090,11 @@ export class StorageService {
     update: (journal: AgentInteractionResolutionJournal) => AgentInteractionResolutionJournal,
   ): Promise<AgentInteractionResolutionJournal> {
     return this.repos.nativeAgentSessions.updateAgentInteractionResolutionJournal(update);
+  }
+
+  /** Current row for synchronous checks inside a credential dispatch transaction. */
+  peekNativeAgentSession(key: string): PersistedNativeAgentSession | undefined {
+    return this.repos.nativeAgentSessions.peekNativeAgentSession(key);
   }
 
   getNativeAgentSession(key: string): Promise<PersistedNativeAgentSession | null> {

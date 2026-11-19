@@ -1726,6 +1726,14 @@ export class NativeAgentService {
           initialPromptPresentation: input.initialPromptPresentation,
           expectedProviderSessionId: input.expectedProviderSessionId,
         });
+        const retired = input.expectedProviderSessionId;
+        if (retired && retired !== session.providerSessionId) {
+          this.options.onConversationRetired?.(
+            input.environmentId,
+            input.logicalSessionKey,
+            retired,
+          );
+        }
         return session;
       },
     );

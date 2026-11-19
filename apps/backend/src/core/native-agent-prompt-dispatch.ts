@@ -67,7 +67,7 @@ import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import { nativeAgentObservationGroupKey } from "./native-agent-observation.js";
 import { deliverMissedSteer } from "./native-agent-missed-steer.js";
 import { randomUUID } from "node:crypto";
-import { PromptRejectedError } from "./agent-provider-contract.js";
+import { PromptRejectedError, type ProviderSendOptions } from "./agent-provider-contract.js";
 import { sessionTakesAgentTools } from "./native-agent-opencode-server.js";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -1284,7 +1284,7 @@ export class NativeAgentPromptDispatch {
        */
       const resolveAgentMcp = async (
         durable: PersistedNativeAgentSession,
-      ): Promise<{ url: string; token: string } | undefined> => {
+      ): Promise<ProviderSendOptions["agentMcp"]> => {
         if (
           !sessionTakesAgentTools(durable.agent) ||
           durable.owner?.kind !== "environment" ||
@@ -1307,7 +1307,7 @@ export class NativeAgentPromptDispatch {
           environment.environmentType === "local" ? "host" : "container",
         );
       };
-      let dispatchAgentMcp: { url: string; token: string } | undefined;
+      let dispatchAgentMcp: ProviderSendOptions["agentMcp"];
       let dispatchAgentMcpResolved = false;
       try {
         dispatchAgentMcp = await resolveAgentMcp(session);

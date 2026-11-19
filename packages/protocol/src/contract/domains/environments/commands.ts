@@ -242,6 +242,8 @@ export const createEnvironmentCommand = defineCommand({
     controlRequestFingerprint: optionalUnknown,
     delegationBaseBranch: optionalUnknown,
     delegationBaseCommit: optionalUnknown,
+    worktreeBaseBranch: optionalUnknown,
+    worktreeBaseCommit: optionalUnknown,
     worktreeBaseDir: optionalUnknown,
   }),
   result: ClientEnvironmentSchema,
@@ -254,6 +256,8 @@ export const createEnvironmentCommand = defineCommand({
     "delegationBaseBranch",
     // delegationBaseCommit: as delegationBaseBranch.
     "delegationBaseCommit",
+    // The dialog showed this exact commit. Ignoring it could launch from a newer tip.
+    "worktreeBaseCommit",
   ],
 });
 

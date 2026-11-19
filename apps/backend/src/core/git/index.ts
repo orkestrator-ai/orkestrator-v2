@@ -82,7 +82,10 @@ export {
   updateGitHubPullRequestState,
   type GitHubPullRequestStateAction,
 } from "./github-pull-request-actions.js";
-export { getGitHubPullRequestFiles } from "./github-pull-request-files.js";
+export {
+  getGitHubPullRequestFilePatch,
+  getGitHubPullRequestFiles,
+} from "./github-pull-request-files.js";
 export { getGitHubPullRequestTimeline } from "./github-pull-request-timeline.js";
 export {
   confirmGitHubPullRequestDeleted,
@@ -110,7 +113,7 @@ export {
   type GitHubIssueStatus,
   type GitHubRepositoryRef,
 } from "./github.js";
-export { runRemoteGit } from "./noninteractive-env.js";
+export { isMissingRemoteRefFailure, runRemoteGit } from "./noninteractive-env.js";
 export { classifyPrDetectionFailure } from "./pr-monitor-policy.js";
 export { type PrDetection, type PrMonitorKanbanTask, type PrMonitorTarget } from "./pr-monitor.js";
 export {

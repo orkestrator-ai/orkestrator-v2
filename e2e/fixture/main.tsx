@@ -15,6 +15,7 @@ import {
   readQueuedAttachmentTranscript,
   recordQueuedAttachmentSteer,
 } from "./queued-attachment-transcript";
+import { CursorPlanCardFixture } from "./CursorPlanCardFixture";
 import { NativeDockNoticeFixture } from "./NativeDockNoticeFixture";
 import { AutoPipelineFixture, installAutoPipelineFixture } from "./AutoPipelineFixture";
 import {
@@ -65,6 +66,7 @@ import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
 import { FeaturesComposeFixture, TerminalComposeFixture } from "./ComposeFramesFixture";
+import { QueuedPromptEditFixture } from "./QueuedPromptEditFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
@@ -179,6 +181,9 @@ import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow"
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
+const PullRequestCodeFixture = lazy(async () => ({
+  default: (await import("./PullRequestCodeFixture")).PullRequestCodeFixture,
+}));
 const MarkdownEditorDiagramFixture = lazy(async () => ({
   default: (await import("./MarkdownEditorDiagramFixture")).MarkdownEditorDiagramFixture,
 }));
@@ -328,6 +333,9 @@ function CreateEnvironmentFixture() {
       <CreateEnvironmentDialog
         open={open}
         onOpenChange={setOpen}
+        projectId={
+          window.location.search.includes("launchBase=") ? "launch-base-fixture" : undefined
+        }
         onCreate={async (options) => {
           window.lastCreateEnvironmentOptions = options;
         }}
@@ -335,6 +343,32 @@ function CreateEnvironmentFixture() {
       />
     </main>
   );
+}
+
+function installLaunchBaseFixture(state: string) {
+  window.orkestrator = {
+    invoke: async <T,>(command: string, args?: { retry?: boolean }) => {
+      if (command !== "get_project_base_branch_tip") throw new Error(`Unknown command: ${command}`);
+      if (state === "resolving") return new Promise<T>(() => {});
+      if (state === "unavailable") {
+        return {
+          branch: "main",
+          commit: null,
+          launchEligible: false,
+          unavailableReason: "The project's origin remote is missing",
+        } as T;
+      }
+      const fresh = state === "fresh" || args?.retry;
+      return {
+        branch: "main",
+        ref: state === "local" ? "main" : "origin/main",
+        commit: (fresh ? "a1" : "c3").repeat(20),
+        launchEligible: true,
+        fetched: fresh === true,
+        ...(state === "stale" && !fresh ? { fetchError: "Remote unavailable" } : {}),
+      } as T;
+    },
+  } as Window["orkestrator"];
 }
 
 /** Installed before the fixture renders. */
@@ -2040,6 +2074,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/queued-prompt-edit") return <QueuedPromptEditFixture />;
   if (window.location.pathname === "/tab-styles") return <TabStylesFixture />;
   if (window.location.pathname === "/html-preview") return <HtmlPreviewFixture />;
   if (window.location.pathname === "/annotation-destination-layout")
@@ -2295,6 +2330,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/review-validation-output") {
     return <ReviewValidationOutputFixture />;
   }
+  if (window.location.pathname === "/cursor-plan-card") return <CursorPlanCardFixture />;
   if (window.location.pathname === "/native-dock-notice") return <NativeDockNoticeFixture />;
   if (window.location.pathname === "/native-refresh-shimmer") {
     return <NativeRefreshShimmerFixture />;
@@ -2413,6 +2449,13 @@ function fixtureForPath() {
         <DataSavingGatewayFixture />
       </Suspense>
     );
+  if (window.location.pathname === "/pull-request-code") {
+    return (
+      <Suspense fallback={null}>
+        <PullRequestCodeFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/diff-base") return <DiffBaseFixture />;
   if (window.location.pathname === "/coordinator-explanations")
     return <CoordinatorExplanationsFixture />;
@@ -2444,6 +2487,8 @@ if (window.location.pathname === "/diff-base") installDiffBaseFixture();
 if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
 if (window.location.pathname === "/status-readability") installStatusReadabilityFixture();
 if (window.location.pathname === "/tab-styles") installTabStylesFixture();
+const launchBaseState = new URLSearchParams(window.location.search).get("launchBase");
+if (window.location.pathname === "/" && launchBaseState) installLaunchBaseFixture(launchBaseState);
 // The app's window scope and command scope, as `App.tsx` mounts them: a
 // per-node store hook outside a provider throws in a development renderer.
 createRoot(document.getElementById("root")!).render(

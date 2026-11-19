@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:7f5d44e8d683ed55d41610922eceac8f324fbb6e5d57ea15f9fdd22d52077cc9",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "attachments": {},
+        "environmentId": {
+          "type": "string"
+        },
+        "leaseId": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": ["commit", "cancel", "release-expired"],
+          "type": "string"
+        },
+        "queueKey": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": ["environmentId", "leaseId", "messageId", "outcome", "queueKey"],
+      "type": "object"
+    }
+  }
+}

@@ -289,6 +289,60 @@ async function showSection(page: Page, name: string) {
   if (await tab.isVisible()) await tab.click();
 }
 
+test("the local base is visible before Create from the Prompt tab and Retry updates it", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/?launchBase=stale");
+  await showSection(page, "Setup");
+  await page.getByRole("button", { name: "Local", exact: true }).click();
+  await showSection(page, "Prompt");
+  const dialog = page.getByRole("dialog");
+  const row = dialog.getByTestId("launch-base-row");
+  const create = dialog.getByRole("button", { name: "Create environment" });
+  await expect(dialog.getByLabel("Initial prompt (optional)")).toBeVisible();
+  await expect(row.getByText("c3".repeat(20))).toBeInViewport();
+  await expect(row.getByText(/last-fetched revision/)).toBeInViewport();
+  await expect(create).toBeInViewport();
+  await expectNoHorizontalOverflow(page);
+  await dialog.screenshot({
+    path: `output/visual-previews/launch-base-review-stale-${testInfo.project.name}.png`,
+  });
+
+  const retry = row.getByRole("button", { name: "Retry" });
+  await retry.focus();
+  await expect(retry).toBeFocused();
+  await retry.press("Enter");
+  await expect(row.getByText("a1".repeat(20))).toBeVisible();
+  await expect(row.getByText(/fetched just now/)).toBeVisible();
+  await expect(retry).toHaveCount(0);
+  await dialog.screenshot({
+    path: `output/visual-previews/launch-base-review-fresh-${testInfo.project.name}.png`,
+  });
+  await create.click();
+  await expect
+    .poll(() => page.evaluate(() => window.lastCreateEnvironmentOptions?.launchBase))
+    .toEqual({ branch: "main", commit: "a1".repeat(20) });
+});
+
+for (const [state, label] of [
+  ["resolving", "Refreshing the base branch…"],
+  ["local", "local branch, no remote"],
+  ["unavailable", "The project's origin remote is missing"],
+] as const) {
+  test(`local base shows its ${state} state before Create`, async ({ page }, testInfo) => {
+    await page.goto(`/?launchBase=${state}`);
+    await showSection(page, "Setup");
+    await page.getByRole("button", { name: "Local", exact: true }).click();
+    await showSection(page, "Prompt");
+    const dialog = page.getByRole("dialog");
+    const row = dialog.getByTestId("launch-base-row");
+    await expect(row.getByText(label)).toBeInViewport();
+    await dialog.screenshot({
+      path: `output/visual-previews/launch-base-review-${state}-${testInfo.project.name}.png`,
+    });
+  });
+}
+
 async function trackCreations(page: Page) {
   await page.evaluate(() => {
     let count = 0;

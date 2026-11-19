@@ -1,5 +1,6 @@
 import { environmentRequests, hydrationRequests } from "@/lib/hydration-request-limiter";
 import { hydrationActivity } from "@/lib/hydration-activity";
+import type { EnvironmentLaunchBase } from "@/lib/launch-base";
 import { systemApi } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
@@ -239,8 +240,13 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
    * Read one persisted environment, as `getEnvironmentSnapshots` lists it; `null`
    * when it no longer exists. Backends before this command reject it as unknown.
    */
-  async function getEnvironmentSnapshot(environmentId: string): Promise<Environment | null> {
-    return environments().getEnvironmentSnapshot({ environmentId });
+  async function getEnvironmentSnapshot(
+    environmentId: string,
+    machine?: AccountMachine,
+  ): Promise<Environment | null> {
+    return hydrationRequests.run(() =>
+      environmentsOn(machine).getEnvironmentSnapshot({ environmentId }),
+    );
   }
 
   async function reorderEnvironments(
@@ -267,6 +273,8 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     buildPipelineId?: string,
     /** Parent folder for a local environment's worktree; omitted uses the default. */
     worktreeBaseDir?: string,
+    /** The dialog's pinned commit or a refresh still in progress. */
+    launchBase?: EnvironmentLaunchBase,
   ): Promise<Environment> {
     return environments().createEnvironment({
       projectId,
@@ -278,6 +286,11 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
       namingPrompt,
       ...(buildPipelineId ? { buildPipelineId } : {}),
       ...(worktreeBaseDir ? { worktreeBaseDir } : {}),
+      ...(launchBase
+        ? "pending" in launchBase
+          ? { worktreeBaseBranch: null }
+          : { worktreeBaseBranch: launchBase.branch, worktreeBaseCommit: launchBase.commit }
+        : {}),
     });
   }
 

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:50dc4f5eff659cb28dc4bf3cbc4796801bc77b42242a7a8bca85fbeae147689b",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "httpHosts": {},
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "projectIds": {},
+        "revision": {
+          "type": "number"
+        }
+      },
+      "required": ["id", "revision"],
+      "type": "object"
+    }
+  }
+}

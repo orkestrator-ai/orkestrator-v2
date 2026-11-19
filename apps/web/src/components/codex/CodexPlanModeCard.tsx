@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 interface CodexPlanModeCardProps {
   className?: string;
   isSubmitting?: boolean;
+  onReviewPlan?: () => void;
   onApproveAndBuild: () => Promise<void> | void;
   onSwitchToBuild: () => Promise<void> | void;
   onDismiss: () => void;
@@ -13,6 +14,7 @@ interface CodexPlanModeCardProps {
 export function CodexPlanModeCard({
   className,
   isSubmitting = false,
+  onReviewPlan,
   onApproveAndBuild,
   onSwitchToBuild,
   onDismiss,
@@ -38,12 +40,13 @@ export function CodexPlanModeCard({
           making changes until you approve the approach.
         </p>
         <p className="text-xs text-muted-foreground">
-          Approving switches the session back to build mode and sends a follow-up prompt telling the
-          agent to implement the approved plan.
+          {onReviewPlan
+            ? "Open the plan card to review its contents and available actions."
+            : "Approving switches the session back to build mode and sends a follow-up prompt telling the agent to implement the approved plan."}
         </p>
       </div>
 
-      <div className="flex items-center justify-between border-t border-border bg-muted/30 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-4 py-3">
         <Button
           variant="ghost"
           size="sm"
@@ -55,7 +58,7 @@ export function CodexPlanModeCard({
           Dismiss
         </Button>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -69,13 +72,19 @@ export function CodexPlanModeCard({
             )}
             Switch to Build
           </Button>
-          <Button size="sm" onClick={() => void onApproveAndBuild()} disabled={isSubmitting}>
+          <Button
+            size="sm"
+            onClick={onReviewPlan ?? (() => void onApproveAndBuild())}
+            disabled={isSubmitting}
+          >
             {isSubmitting ? (
               <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : onReviewPlan ? (
+              <FileText className="mr-1.5 h-3.5 w-3.5" />
             ) : (
               <Check className="mr-1.5 h-3.5 w-3.5" />
             )}
-            Approve plan
+            {onReviewPlan ? "Review plan" : "Approve plan"}
           </Button>
         </div>
       </div>

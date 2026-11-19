@@ -1,3 +1,4 @@
+import { promptQueueEditLease } from "@orkestrator/protocol/prompt-queue-edit";
 import {
   goalContinuationRequestId,
   isGoalContinuationRequestId,
@@ -514,6 +515,11 @@ export class NativeAgentDeliveries {
               );
               const message = queue.messages[index];
               if (!isRecord(message)) return { result: null };
+              if (promptQueueEditLease(queue, messageId)) {
+                throw new Error(
+                  "This queued prompt is being edited; save or cancel the edit first",
+                );
+              }
               const requestId = isNonBlankString(message.requestId) ? message.requestId : messageId;
               if (
                 message.command !== undefined ||

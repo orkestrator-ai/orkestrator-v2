@@ -1313,7 +1313,7 @@ export function PersistentTerminal({
     },
     [isActive, isEnvironmentVisible, resize],
   );
-  // Focus, a click or typing here takes the shared terminal's size for this
+  // A click, tap or user input takes the shared terminal's size for this
   // window; layout changes alone only update a size this window already owns.
   const { claim: claimTerminalSize, claimOnInput: claimTerminalSizeOnInput } = useTerminalSizeClaim(
     {
@@ -1321,7 +1321,7 @@ export function PersistentTerminal({
       fitAddon,
       wrapperRef: terminalRef,
       canClaim: isActive && isEnvironmentVisible && isConnected,
-      opened: terminalIsOpened,
+      sessionId,
       claimSize,
     },
   );
@@ -1536,7 +1536,6 @@ export function PersistentTerminal({
     const dataDisposable = terminal.onData((data) => {
       writeRef.current(data);
       updateActivityThrottledRef.current();
-      claimTerminalSizeOnInputRef.current();
     });
     terminalInputDisposables.set(terminal, dataDisposable);
 
@@ -1555,6 +1554,7 @@ export function PersistentTerminal({
       // binding without submitting the prompt.
       if (key === "enter" && isShift && !isCtrl && !isMeta && !isAlt) {
         event.preventDefault();
+        claimTerminalSizeOnInputRef.current();
         terminal.input("\n");
         return false;
       }
@@ -1608,10 +1608,14 @@ export function PersistentTerminal({
         // Prevent default to stop browser from firing a paste event
         // (which would cause xterm to paste a second time)
         event.preventDefault();
+        claimTerminalSizeOnInputRef.current();
         void handlePaste();
         return false;
       }
 
+      if (!["Alt", "Control", "Meta", "Shift", "Dead", "Process", "CapsLock"].includes(event.key)) {
+        claimTerminalSizeOnInputRef.current();
+      }
       return true;
     });
 
@@ -2032,7 +2036,6 @@ export function PersistentTerminal({
     setActivePane(paneId, environmentId);
     if (isActive) {
       terminal.focus();
-      // An already-focused terminal fires no focus event, so the click claims.
       claimTerminalSize();
     }
   }, [claimTerminalSize, environmentId, isActive, terminal, paneId, setActivePane]);
@@ -2358,6 +2361,8 @@ export function PersistentTerminal({
           <div
             ref={terminalRef}
             onClick={handleTerminalClick}
+            onInputCapture={claimTerminalSizeOnInput}
+            onPasteCapture={claimTerminalSizeOnInput}
             {...cornerHover.terminalHoverProps}
             className={cn(
               "absolute inset-x-0 top-0",
@@ -2371,7 +2376,14 @@ export function PersistentTerminal({
           <ContextMenuItem onClick={() => void handleCopySelection()} disabled={!hasSelection}>
             Copy
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => void handlePaste()}>Paste</ContextMenuItem>
+          <ContextMenuItem
+            onClick={() => {
+              claimTerminalSizeOnInput();
+              void handlePaste();
+            }}
+          >
+            Paste
+          </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onClick={handleSelectAll}>Select all</ContextMenuItem>
         </ContextMenuContent>

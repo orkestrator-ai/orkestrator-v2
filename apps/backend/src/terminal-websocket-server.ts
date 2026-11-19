@@ -519,13 +519,17 @@ export class TerminalWebSocketGateway {
           operationId: frame.operationId,
           operation: "resize",
           bytes: 16,
-          invoke: () =>
-            this.options.backend.invoke("terminal_resize", {
+          invoke: () => {
+            // Input already accepted by the gateway must drain. A queued
+            // geometry update has no meaning once its view has unsubscribed.
+            if (state.channels.get(channel.id) !== channel) return { delivered: false };
+            return this.options.backend.invoke("terminal_resize", {
               sessionId: channel.sessionId,
               cols: frame.cols,
               rows: frame.rows,
               ...(frame.clientId === undefined ? {} : { clientId: frame.clientId }),
-            }),
+            });
+          },
         });
         break;
       }
@@ -682,6 +686,9 @@ export class TerminalWebSocketGateway {
     state.sessions.set(channel.sessionId, channel);
     this.channelCount += 1;
     this.options.metrics?.recordTerminalWebSocketChannelOpened();
+    if (frame.clientId && state.sizeClientIds.size < TERMINAL_WEBSOCKET_MAX_SIZE_CLIENT_IDS) {
+      state.sizeClientIds.add(frame.clientId);
+    }
     try {
       const [statusValue, snapshotValue] = await Promise.all([
         this.options.backend.invoke("get_terminal_session", { sessionId: frame.sessionId }),

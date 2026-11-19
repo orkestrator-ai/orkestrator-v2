@@ -112,14 +112,22 @@ test("the client the user last interacted with sets a shared terminal's size, an
     networkAccessMode: "restricted",
     environmentType: "local",
   });
+  const storageState = await page.context().storageState();
   const phoneContext = await browser.newContext({
-    storageState: await page.context().storageState(),
+    storageState,
     viewport: PHONE,
     hasTouch: true,
     isMobile: true,
   });
+  const observerContext = await browser.newContext({
+    storageState,
+    viewport: { width: 980, height: 900 },
+  });
   try {
-    await fetchModulesOutsideChromium(phoneContext);
+    await Promise.all([
+      fetchModulesOutsideChromium(phoneContext),
+      fetchModulesOutsideChromium(observerContext),
+    ]);
     await invoke("start_environment", { environmentId: environment.id });
     const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
       environmentId: environment.id,
@@ -140,6 +148,8 @@ test("the client the user last interacted with sets a shared terminal's size, an
       },
     });
 
+    const observer = await observerContext.newPage();
+    await continuePastHostNotices(observer);
     const phone = await phoneContext.newPage();
     phone.setDefaultTimeout(20_000);
     await phone.goto(status.browserUrl!);
@@ -151,6 +161,7 @@ test("the client the user last interacted with sets a shared terminal's size, an
     for (const [who, client] of [
       ["desktop", page],
       ["phone", phone],
+      ["observer", observer],
     ] as const) {
       client.on("request", (request) => {
         if (!request.url().endsWith("/__orkestrator/invoke") || request.method() !== "POST") {
@@ -196,31 +207,84 @@ test("the client the user last interacted with sets a shared terminal's size, an
     const [desktopSize] = await sizes();
     expect(desktopSize!.cols).toBeGreaterThan(100);
 
-    // The phone opens the same terminal. Fitting it to the narrow screen is
-    // layout, so the desktop keeps its size.
+    // Read through the command API so measuring geometry cannot claim it.
+    const sendToShell = async (data: string) =>
+      expect(await invoke("local_terminal_write", { sessionId, data })).toMatchObject({
+        delivered: true,
+      });
+    const sizeResponse = (client: Page, command: string) =>
+      client.waitForResponse((response) => {
+        const request = response.request();
+        if (!request.url().endsWith("/__orkestrator/invoke") || request.method() !== "POST") {
+          return false;
+        }
+        const payload = request.postDataJSON() as {
+          command?: string;
+          args?: { sessionId?: string };
+        };
+        return payload.command === command && payload.args?.sessionId === sessionId;
+      });
+    const waitForClaim = (client: Page) => sizeResponse(client, "claim_terminal_size");
+
+    // A same-origin observer starts with copied storage, as a duplicated tab
+    // would. Its first fit and desktop autofocus must leave the owner's PTY alone.
+    const storageKey = "orkestrator:terminal-size-client-id";
+    const desktopId = await page.evaluate((key) => sessionStorage.getItem(key), storageKey);
+    expect(desktopId).toBeTruthy();
+    await observer.addInitScript(({ key, id }) => sessionStorage.setItem(key, id), {
+      key: storageKey,
+      id: desktopId!,
+    });
+    await observer.goto(status.browserUrl!);
+    const observerFit = sizeResponse(observer, "local_terminal_resize");
+    await openEnvironment(observer, fixture.name, environment.name);
+    await expect(observer.locator(".xterm:visible .xterm-rows")).toContainText("DESKTOP-1");
+    expect(await (await observerFit).json()).toMatchObject({ result: { applied: false } });
+    expect(await observer.evaluate((key) => sessionStorage.getItem(key), storageKey)).not.toBe(
+      desktopId,
+    );
+
+    const phoneFit = sizeResponse(phone, "local_terminal_resize");
     await openEnvironment(phone, fixture.name, environment.name);
     await expect(phoneTerminal).toHaveCount(1, { timeout: 60_000 });
-    await expect(phoneTerminal.locator(".xterm-rows")).toContainText("DESKTOP-1", {
-      timeout: 30_000,
-    });
-    await expect
-      .poll(() => sent.some((entry) => entry.who === "phone" && /resize/.test(entry.command)), {
-        timeout: 30_000,
-      })
-      .toBe(true);
-    await page.keyboard.type("echo DESKTOP-2; stty size");
-    await page.keyboard.press("Enter");
-    await expect.poll(async () => (await sizes()).length).toBe(2);
-    expect((await sizes())[1]).toEqual(desktopSize);
-    await expect(phoneTerminal.locator(".xterm-rows")).toContainText("DESKTOP-2");
+    await expect(phoneTerminal.locator(".xterm-rows")).toContainText("DESKTOP-1");
+    expect(await (await phoneFit).json()).toMatchObject({ result: { applied: false } });
 
-    // Tapping and typing on the phone takes the size over.
-    await phoneTerminal.click();
+    // Ask the real xterm parser for device status, and wait for an observer's
+    // reply to pass through the normal renderer input path.
+    await sendToShell("printf '\\033[5n'\r");
     await expect
       .poll(() =>
-        sent.some((entry) => entry.who === "phone" && entry.command === "claim_terminal_size"),
+        sent.some(
+          (entry) =>
+            entry.who === "observer" &&
+            entry.command === "local_terminal_write" &&
+            entry.args.data === "\x1b[0n",
+        ),
       )
       .toBe(true);
+    // Clear the shell's edit buffer of status replies before the next command.
+    await sendToShell("\x15echo DESKTOP-2; stty size\r");
+    await expect.poll(async () => (await sizes()).length).toBe(2);
+    expect((await sizes())[1]).toEqual(desktopSize);
+    expect(
+      sent.filter(({ who, command }) => who !== "desktop" && command === "claim_terminal_size"),
+    ).toEqual([]);
+    await expect(phoneTerminal.locator(".xterm-rows")).toContainText("DESKTOP-2");
+    await observer.close();
+    expect(
+      await invoke("local_terminal_resize", {
+        sessionId,
+        cols: 45,
+        rows: 30,
+        clientId: "ownership-probe",
+      }),
+    ).toMatchObject({ applied: false });
+
+    // Tapping and typing on the phone takes the size over.
+    const phoneClaim = waitForClaim(phone);
+    await phoneTerminal.click();
+    expect(await (await phoneClaim).json()).toMatchObject({ result: { applied: true } });
     await phone.keyboard.type("echo PHONE-1; stty size");
     await phone.keyboard.press("Enter");
     await expect.poll(async () => (await sizes()).length).toBe(3);
@@ -230,13 +294,16 @@ test("the client the user last interacted with sets a shared terminal's size, an
     await expect(desktopTerminal.locator(".xterm-rows")).toContainText("PHONE-1");
 
     // Typing on the desktop takes it back.
+    const desktopClaim = waitForClaim(page);
     await desktopTerminal.click();
+    expect(await (await desktopClaim).json()).toMatchObject({ result: { applied: true } });
     await page.keyboard.type("echo DESKTOP-3; stty size");
     await page.keyboard.press("Enter");
     await expect.poll(async () => (await sizes()).length).toBe(4);
     expect((await sizes())[3]).toEqual(desktopSize);
     await expect(phoneTerminal.locator(".xterm-rows")).toContainText("DESKTOP-3");
   } finally {
+    await observerContext.close().catch(() => undefined);
     await phoneContext.close().catch(() => undefined);
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
     await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);

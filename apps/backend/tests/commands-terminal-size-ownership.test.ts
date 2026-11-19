@@ -84,6 +84,24 @@ describe("terminal size ownership commands", () => {
     expect(pty.resize).toHaveBeenCalledTimes(1);
   });
 
+  test("a failed claim preserves the previous owner and retries the PTY at the same size", async () => {
+    const { pty, run, sessionId, context } = await startLocalTerminal();
+    run("claim_terminal_size", { cols: 200, rows: 50, clientId: "desktop" });
+    pty.resize.mockImplementationOnce(() => {
+      throw new Error("PTY resize failed");
+    });
+
+    const claim = () => run("claim_terminal_size", { cols: 40, rows: 30, clientId: "phone" });
+    expect(claim).toThrow("PTY resize failed");
+    expect(context.runtime.terminals.sizeOwnership.isOwner(sessionId, "desktop")).toBe(true);
+    expect(claim()).toMatchObject({ applied: true, owned: true });
+    expect(pty.resize.mock.calls).toEqual([
+      [200, 50],
+      [40, 30],
+      [40, 30],
+    ]);
+  });
+
   test("releasing hands the size to the next client that resizes", async () => {
     const { pty, run } = await startLocalTerminal();
     run("claim_terminal_size", { cols: 40, rows: 30, clientId: "phone" });

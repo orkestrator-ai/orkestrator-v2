@@ -28,6 +28,7 @@ type Snapshot = { generation: number; revision: number };
 type TerminalCallback = (payload: TerminalSocketPayload) => unknown;
 
 type DesiredChannel = {
+  sizeClientId?: string;
   sessionId: string;
   callbacks: Map<TerminalCallback, number>;
   ready: Promise<void>;
@@ -193,7 +194,7 @@ export class TerminalWebSocketClient {
     document.addEventListener("visibilitychange", this.onVisibilityChange);
   }
 
-  subscribe(sessionId: string, callback: TerminalCallback): () => void {
+  subscribe(sessionId: string, callback: TerminalCallback, sizeClientId?: string): () => void {
     let channel = this.desired.get(sessionId);
     if (!channel) {
       let resolveReady = () => {};
@@ -202,6 +203,7 @@ export class TerminalWebSocketClient {
       });
       channel = {
         sessionId,
+        sizeClientId,
         callbacks: new Map(),
         ready,
         resolveReady,
@@ -884,17 +886,20 @@ export class TerminalWebSocketClient {
     const requestId = this.requestId;
     channel.pendingRequestId = requestId;
     this.pendingRequests.set(requestId, channel);
+    const identity = channel.sizeClientId === undefined ? {} : { clientId: channel.sizeClientId };
     this.send(
       channel.generation === null || channel.revision === null
         ? {
             type: "subscribe",
             requestId,
             sessionId: channel.sessionId,
+            ...identity,
           }
         : {
             type: "subscribe",
             requestId,
             sessionId: channel.sessionId,
+            ...identity,
             knownGeneration: channel.generation,
             knownRevision: channel.revision,
           },

@@ -75,6 +75,7 @@ export type TerminalWebSocketClientControlFrame =
     }
   | ({
       type: "subscribe";
+      clientId?: string;
       requestId: number;
       sessionId: string;
     } & TerminalSubscriptionCursor)
@@ -385,11 +386,14 @@ export function parseTerminalWebSocketClientControlFrame(
       if (hasGeneration !== hasRevision) {
         return malformed("knownGeneration and knownRevision must be supplied together");
       }
-      if (!hasGeneration) return { type, requestId, sessionId };
+      const clientId = parseTerminalSizeClientId(object.clientId);
+      const identity = clientId === null ? {} : { clientId };
+      if (!hasGeneration) return { type, requestId, sessionId, ...identity };
       return {
         type,
         requestId,
         sessionId,
+        ...identity,
         knownGeneration: readGeneration(object, "knownGeneration"),
         knownRevision: readRevision(object, "knownRevision"),
       };

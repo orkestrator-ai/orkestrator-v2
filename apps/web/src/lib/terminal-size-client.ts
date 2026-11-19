@@ -2,10 +2,8 @@
  * This window's identity for shared terminal sizing
  * (`@orkestrator/protocol/terminal-size-ownership`).
  *
- * One id per window, kept in `sessionStorage` so a reload is still the same
- * client: a reloaded window that came back as a stranger would find its own
- * previous self owning the size and have every resize refused until the user
- * clicked the terminal. A new window, or a second tab, gets a new id.
+ * Keep the saved identity on reload. Fresh navigations mint their own id,
+ * including tabs whose opener or duplication copied sessionStorage.
  */
 import {
   parseTerminalSizeClientId,
@@ -43,7 +41,9 @@ function storeClientId(clientId: string): void {
 /** This window's terminal sizing client id. */
 export function terminalSizeClientId(): string {
   if (cachedClientId) return cachedClientId;
-  const clientId = readStoredClientId() ?? newClientId();
+  const navigation = performance.getEntriesByType("navigation")[0] as
+    PerformanceNavigationTiming | undefined;
+  const clientId = (navigation?.type === "reload" ? readStoredClientId() : null) ?? newClientId();
   storeClientId(clientId);
   cachedClientId = clientId;
   return clientId;
@@ -57,7 +57,7 @@ export function resetTerminalSizeClientIdForTests(): void {
 /**
  * Throttles the claims typing makes: true when this keystroke should claim,
  * which is the first one after `TERMINAL_SIZE_INPUT_CLAIM_INTERVAL_MS` without
- * a claim. Any other claim (focus, a click) resets the interval through
+ * a claim. Any other claim (such as a click) resets the interval through
  * `noteClaim`.
  */
 export class TerminalInputClaimThrottle {

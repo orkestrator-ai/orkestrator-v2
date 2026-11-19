@@ -8,7 +8,7 @@
  * (`apps/backend/src/core/terminal-size-ownership.ts`):
  *
  * - A **claim** (`claim_terminal_size`) comes from deliberate interaction
- *   with the terminal: focusing it, clicking or tapping it, typing in it. It
+ *   with the terminal: clicking, tapping, typing or pasting. It
  *   makes the caller the owner and applies its dimensions.
  * - An **update** (`terminal_resize`, `local_terminal_resize`, the terminal
  *   WebSocket's `resize` frame) comes from passive layout: a window resize, a

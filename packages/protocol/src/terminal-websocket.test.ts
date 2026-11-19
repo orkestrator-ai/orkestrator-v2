@@ -75,6 +75,7 @@ describe("terminal WebSocket client control protocol", () => {
           type: "subscribe",
           requestId: Number.MAX_SAFE_INTEGER,
           sessionId: "session-a",
+          clientId: "owner",
           knownGeneration: 0xffff_ffff,
           knownRevision: Number.MAX_SAFE_INTEGER,
         }),
@@ -83,6 +84,7 @@ describe("terminal WebSocket client control protocol", () => {
       type: "subscribe",
       requestId: Number.MAX_SAFE_INTEGER,
       sessionId: "session-a",
+      clientId: "owner",
       knownGeneration: 0xffff_ffff,
       knownRevision: Number.MAX_SAFE_INTEGER,
     });

@@ -1654,6 +1654,10 @@ describe("PersistentTerminal", () => {
     // Fitting the pane on mount is layout, which only updates a size this
     // window already owns: it never claims.
     expect(claimSizeMock).not.toHaveBeenCalled();
+    const deviceStatusReply = "\x1b[0n";
+    act(() => terminalInputHandler?.(deviceStatusReply));
+    expect(writeMock).toHaveBeenCalledWith(deviceStatusReply);
+    expect(claimSizeMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Up arrow" }));
     fireEvent.click(screen.getByRole("button", { name: "Down arrow" }));
     // Two keys inside the claim interval send one claim, not one per key.

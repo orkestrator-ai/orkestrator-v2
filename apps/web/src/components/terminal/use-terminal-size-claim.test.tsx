@@ -11,7 +11,7 @@ function laidOutWrapper(laidOut = true): HTMLElement {
   return element;
 }
 
-function setup(options: { canClaim?: boolean; laidOut?: boolean; opened?: boolean } = {}) {
+function setup(options: { canClaim?: boolean; laidOut?: boolean; sessionId?: string } = {}) {
   let now = 10_000;
   const textarea = document.createElement("textarea");
   const terminal = { cols: 80, rows: 24, textarea };
@@ -24,16 +24,19 @@ function setup(options: { canClaim?: boolean; laidOut?: boolean; opened?: boolea
   };
   const claimSize = mock(async (_cols: number, _rows: number) => undefined);
   const wrapperRef = { current: laidOutWrapper(options.laidOut ?? true) };
-  const hook = renderHook(() =>
-    useTerminalSizeClaim({
-      terminal,
-      fitAddon,
-      wrapperRef,
-      canClaim: options.canClaim ?? true,
-      opened: options.opened ?? true,
-      claimSize,
-      now: () => now,
-    }),
+  const clock = () => now;
+  const hook = renderHook(
+    ({ sessionId }) =>
+      useTerminalSizeClaim({
+        terminal,
+        fitAddon,
+        wrapperRef,
+        canClaim: options.canClaim ?? true,
+        sessionId,
+        claimSize,
+        now: clock,
+      }),
+    { initialProps: { sessionId: (options.sessionId ?? "shell") as string | null } },
   );
   return {
     ...hook,
@@ -46,22 +49,23 @@ function setup(options: { canClaim?: boolean; laidOut?: boolean; opened?: boolea
 }
 
 describe("useTerminalSizeClaim", () => {
-  test("focusing the terminal claims its fitted size", () => {
+  test("focus alone leaves sizing ownership alone", () => {
     const { textarea, claimSize } = setup();
     act(() => {
       textarea.dispatchEvent(new FocusEvent("focus"));
     });
-    expect(claimSize).toHaveBeenCalledTimes(1);
-    expect(claimSize).toHaveBeenCalledWith(132, 43);
+    expect(claimSize).not.toHaveBeenCalled();
   });
 
-  test("a click that also focuses claims once", () => {
+  test("repeat clicks claim the fitted size once per dedupe interval", () => {
     const { result, textarea, claimSize, advance } = setup();
     act(() => {
       textarea.dispatchEvent(new FocusEvent("focus"));
       result.current.claim();
+      result.current.claim();
     });
     expect(claimSize).toHaveBeenCalledTimes(1);
+    expect(claimSize).toHaveBeenCalledWith(132, 43);
     advance(TERMINAL_SIZE_CLAIM_DEDUPE_MS);
     act(() => result.current.claim());
     expect(claimSize).toHaveBeenCalledTimes(2);
@@ -97,10 +101,12 @@ describe("useTerminalSizeClaim", () => {
     expect(unlaid.claimSize).not.toHaveBeenCalled();
   });
 
-  test("stops listening for focus once unmounted", () => {
-    const { textarea, claimSize, unmount } = setup();
-    unmount();
-    textarea.dispatchEvent(new FocusEvent("focus"));
-    expect(claimSize).not.toHaveBeenCalled();
+  test("the first input after the session reattaches claims immediately", () => {
+    const { result, rerender, claimSize } = setup();
+    act(() => result.current.claimOnInput());
+    rerender({ sessionId: null });
+    rerender({ sessionId: "shell" });
+    act(() => result.current.claimOnInput());
+    expect(claimSize).toHaveBeenCalledTimes(2);
   });
 });

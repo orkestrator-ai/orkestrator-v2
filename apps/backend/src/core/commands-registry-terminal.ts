@@ -360,10 +360,10 @@ function resizeTerminalSession(
     parseTerminalSizeClientId(args.clientId),
     claim,
     { cols, rows },
+    () => terminalProcess.resize(cols, rows),
   );
   if (!decision.apply) return { delivered: true, applied: false, owned: false };
   if (!decision.unchanged) {
-    terminalProcess.resize(cols, rows);
     resizeTerminalHistoryBestEffort(runtime.terminals.history, id, cols, rows);
   }
   return { delivered: true, applied: true, owned: decision.owned };

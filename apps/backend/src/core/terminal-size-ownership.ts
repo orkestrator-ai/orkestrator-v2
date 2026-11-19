@@ -3,8 +3,7 @@
  *
  * The rule (claim versus update) is described in
  * `@orkestrator/protocol/terminal-size-ownership`. This module decides each
- * resize; the resize handlers in `commands-registry-terminal.ts` apply the
- * PTY change only when it says so.
+ * resize and records the owner only after the synchronous PTY resize succeeds.
  *
  * An owner holds a lease rather than holding the size forever, because most
  * clients have no connection the backend can watch: a window that crashes, or
@@ -35,7 +34,7 @@ export const TERMINAL_SIZE_DISCONNECT_GRACE_MS = 30_000;
 export const MAX_TRACKED_TERMINAL_SIZE_OWNERS = 4_096;
 
 export type TerminalSizeDecision = {
-  /** Whether the caller's dimensions should be applied to the PTY. */
+  /** Whether the caller's dimensions were accepted. */
   apply: boolean;
   /** Whether the caller owns the size after this decision. */
   owned: boolean;
@@ -72,7 +71,7 @@ export class TerminalSizeOwnership {
   }
 
   /**
-   * Decides one resize of `sessionId` to `size`, and records the decision.
+   * Applies an allowed PTY resize synchronously before recording ownership.
    * `clientId` is null for an older client that sent none: it never owns the
    * size, so its resize applies only while nobody does.
    */
@@ -81,12 +80,18 @@ export class TerminalSizeOwnership {
     clientId: string | null,
     claim: boolean,
     size: TerminalSize,
+    resizePty: () => void,
   ): TerminalSizeDecision {
     const now = this.now();
     const owner = this.liveOwner(sessionId, now);
-    if (clientId === null) return { apply: owner === null, owned: false, unchanged: false };
+    if (clientId === null) {
+      if (owner === null) resizePty();
+      return { apply: owner === null, owned: false, unchanged: false };
+    }
     if (claim || owner === null || owner.clientId === clientId) {
       const sameOwner = owner?.clientId === clientId;
+      const unchanged = sameOwner && owner.size.cols === size.cols && owner.size.rows === size.rows;
+      if (!unchanged) resizePty();
       if (!sameOwner) {
         log.debug("size.owner-changed", () => ({
           sessionId,
@@ -94,7 +99,6 @@ export class TerminalSizeOwnership {
           previous: owner ? "other-client" : "none",
         }));
       }
-      const unchanged = sameOwner && owner.size.cols === size.cols && owner.size.rows === size.rows;
       this.setOwner(sessionId, {
         clientId,
         expiresAt: now + this.leaseMs,

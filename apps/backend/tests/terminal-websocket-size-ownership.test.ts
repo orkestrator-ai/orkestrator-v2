@@ -5,6 +5,10 @@
  */
 import { describe, expect, mock, test } from "bun:test";
 import { TERMINAL_WEBSOCKET_SUBPROTOCOL } from "@orkestrator/protocol/terminal-websocket";
+import {
+  TerminalSizeOwnership,
+  TERMINAL_SIZE_DISCONNECT_GRACE_MS,
+} from "../src/core/terminal-size-ownership.js";
 import type { WebSocket } from "ws";
 import {
   nextTerminalControl,
@@ -16,7 +20,9 @@ import {
 
 type Call = { command: string; args: Record<string, unknown> };
 
-function recordingBackend(options: { resizeGate?: Promise<void> } = {}) {
+function recordingBackend(
+  options: { resizeGate?: Promise<void>; ownership?: TerminalSizeOwnership } = {},
+) {
   const calls: Call[] = [];
   const backend = {
     invoke: mock(async (command: string, args: Record<string, unknown>) => {
@@ -29,15 +35,24 @@ function recordingBackend(options: { resizeGate?: Promise<void> } = {}) {
         await options.resizeGate;
         return { delivered: true, applied: true, owned: true };
       }
-      if (command === "release_terminal_size") return { released: 1 };
+      if (command === "release_terminal_size") {
+        return {
+          released: options.ownership?.release(String(args.clientId), { disconnected: true }) ?? 1,
+        };
+      }
       return undefined;
     }),
   };
   return { backend, calls };
 }
 
-async function subscribe(socket: WebSocket, inbox: WebSocketInbox, sessionId: string) {
-  socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId }));
+async function subscribe(
+  socket: WebSocket,
+  inbox: WebSocketInbox,
+  sessionId: string,
+  clientId?: string,
+) {
+  socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId, clientId }));
   const subscribed = await nextTerminalControl(inbox, "subscribed");
   if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
   await nextTerminalControl(inbox, "lifecycle");
@@ -98,6 +113,45 @@ describe("terminal WebSocket size ownership", () => {
     ]);
   });
 
+  test("a subscriber that claims through the command path gets disconnect grace without a socket resize", async () => {
+    let now = 0;
+    const ownership = new TerminalSizeOwnership({ now: () => now });
+    const { backend, calls } = recordingBackend({ ownership });
+    const { info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info, options);
+    await subscribe(socket, inbox, "session", "phone");
+    const size = { cols: 80, rows: 24 };
+    ownership.decide("session", "phone", true, size, () => {});
+    socket.terminate();
+
+    await waitUntil(
+      () => calls.some((call) => call.command === "release_terminal_size"),
+      "The subscription identity was not released",
+    );
+    expect(ownership.decide("session", "desktop", false, size, () => {}).apply).toBe(false);
+    now += TERMINAL_SIZE_DISCONNECT_GRACE_MS;
+    expect(ownership.decide("session", "desktop", false, size, () => {}).apply).toBe(true);
+  });
+
+  test("bounds the combined subscription and resize identities to eight per socket", async () => {
+    const { backend, calls } = recordingBackend();
+    const { info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info, options);
+    const channel = await subscribe(socket, inbox, "session", "subscriber");
+    for (let index = 1; index <= 9; index += 1) {
+      sendResize(socket, channel, index, { clientId: `resize-${index}` });
+      expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({ ok: true });
+    }
+    socket.terminate();
+
+    const releases = () => calls.filter((call) => call.command === "release_terminal_size");
+    await waitUntil(() => releases().length >= 8, "The socket did not release its tracked ids");
+    expect(releases().map((call) => call.args.clientId)).toEqual([
+      "subscriber",
+      ...Array.from({ length: 7 }, (_, index) => `resize-${index + 1}`),
+    ]);
+  });
+
   test("a socket that never sent a client id releases nothing", async () => {
     const { backend, calls } = recordingBackend();
     const { info } = await startGateway({ backend });
@@ -139,7 +193,7 @@ describe("terminal WebSocket size ownership", () => {
     );
   });
 
-  test("a resize still queued when the socket closes runs before the release", async () => {
+  test("in-flight resize drains and queued resize is dropped when the socket closes", async () => {
     let openGate: () => void = () => undefined;
     const resizeGate = new Promise<void>((resolve) => {
       openGate = resolve;
@@ -153,8 +207,11 @@ describe("terminal WebSocket size ownership", () => {
       () => calls.some((call) => call.command === "terminal_resize"),
       "The resize was not dispatched",
     );
+    sendResize(socket, channel, 2, { clientId: "phone-1" });
+    socket.send(JSON.stringify({ type: "ping", nonce: 2 }));
+    await nextTerminalControl(inbox, "pong");
     socket.terminate();
-    // Nothing is released while the resize that would renew the lease is queued.
+    // Nothing is released while the resize that would renew the lease is in flight.
     const probe = await openTerminalSocket(info, options);
     await subscribe(probe.socket, probe.inbox, "other-session");
     expect(calls.some((call) => call.command === "release_terminal_size")).toBe(false);

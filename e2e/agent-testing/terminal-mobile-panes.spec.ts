@@ -64,7 +64,18 @@ function commandOf(request: Request): { command?: string; args?: Record<string, 
   }
 }
 
-test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
+test.beforeEach(async ({ page }) => {
+  await acknowledgeDockerReachabilityWarning(page);
+  // This scenario uses local worktrees, including on hosts without Docker access.
+  for (const name of [
+    "Continue without Docker",
+    "Continue without Claude",
+    "Continue without GitHub CLI",
+  ]) {
+    const button = page.getByRole("button", { name, exact: true });
+    await page.addLocatorHandler(button, async () => button.click());
+  }
+});
 
 test("a shell in a hidden phone pane keeps working and its size while away, and shows the result on return", async ({
   page,

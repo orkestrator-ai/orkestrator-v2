@@ -1062,7 +1062,7 @@ describe("TerminalWebSocketClient", () => {
 
   test("resubscribes before sending input when a snapshot reports a new generation", async () => {
     const { client, sockets } = createHarness();
-    client.subscribe("session-a", () => undefined);
+    client.subscribe("session-a", () => undefined, "sizing-owner");
     const socket = sockets[0]!;
     openAndReady(socket);
     acceptSubscription(socket, "session-a", 4, 1, 0);
@@ -1076,7 +1076,8 @@ describe("TerminalWebSocketClient", () => {
     expect(sentControls(socket)).toContainEqual({ type: "unsubscribe", channelId: 4 });
     expect(client.enqueueInput("session-a", "x")).toBeNull();
     expect(sentBinaries(socket)).toHaveLength(0);
-    expect(sentControls(socket).filter((frame) => frame.type === "subscribe")).toHaveLength(2);
+    const subscriptions = sentControls(socket).filter((frame) => frame.type === "subscribe");
+    expect(subscriptions.map((frame) => frame.clientId)).toEqual(["sizing-owner", "sizing-owner"]);
   });
 
   test("backs off repeatedly denied subscriptions instead of polling at a fixed interval", async () => {

@@ -1,5 +1,5 @@
 // Hook for managing terminal sessions with Electron backend
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   listen,
   listenOn,
@@ -27,6 +27,16 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
 // Reaches the browser console only: the desktop saves nothing from the renderer
 // but the allowlisted startup markers (docs/architecture/logging.md).
 const log = createLogger("terminal");
+
+type TerminalSizeSession = {
+  views: number;
+  pending: number;
+  drain?: { promise: Promise<void>; resolve: () => void };
+  release?: Promise<void>;
+};
+
+// Portal moves can replace a hook instance while its last resize is in flight.
+const terminalSizeSessions = new WeakMap<NodeScope, Map<string, TerminalSizeSession>>();
 
 const RESUME_ADVICE =
   "Check the terminal before resuming: part of your last input may have reached the shell.";
@@ -414,20 +424,71 @@ export function useTerminal({
     setError(null);
   }, [terminalTargetIdentity, existingSessionId, cleanupEventListener, api]);
 
-  // A view that stops showing a session (unmounted, or moved to another
-  // session) gives up setting its size, so the clients still showing it are
-  // not held to this window's geometry until the lease lapses. The session
-  // itself keeps running: this releases the size, not the terminal.
-  useEffect(() => {
+  const sizeAttachmentRef = useRef<{
+    sessionId: string;
+    scope: NodeScope;
+    state: TerminalSizeSession;
+  } | null>(null);
+  useLayoutEffect(() => {
     if (!sessionId) return;
+    let sessions = terminalSizeSessions.get(scope);
+    if (!sessions) {
+      sessions = new Map();
+      terminalSizeSessions.set(scope, sessions);
+    }
+    let state = sessions.get(sessionId);
+    if (!state) {
+      state = { views: 0, pending: 0 };
+      sessions.set(sessionId, state);
+    }
+    state.views += 1;
+    const attachment = { sessionId, scope, state };
+    sizeAttachmentRef.current = attachment;
+
     return () => {
-      void Promise.resolve()
+      sizeAttachmentRef.current = null;
+      state.views -= 1;
+      if (state.views > 0) return;
+
+      // Drain both input-ordered resizes and independent claims before release.
+      // A replacement view waits for the release before applying its own size.
+      const release = Promise.all([state.release, state.drain?.promise])
         .then(() => api.releaseTerminalSize(sessionId, terminalSizeClientId()))
         .catch((err: unknown) => {
           log.debug("size.release-failed", () => ({ sessionId, error: formatLogError(err) }));
+        })
+        .finally(() => {
+          if (state.release !== release) return;
+          state.release = undefined;
+          if (state.views === 0) sessions.delete(sessionId);
         });
+      state.release = release;
     };
-  }, [api, sessionId]);
+  }, [api, scope, sessionId]);
+
+  const runSizeOperation = useCallback(
+    async (operation: (isAttached: () => boolean) => Promise<void>) => {
+      const attachment = sizeAttachmentRef.current;
+      if (!attachment || attachment.sessionId !== sessionId || attachment.scope !== scope) return;
+      const isAttached = () =>
+        sizeAttachmentRef.current === attachment && sessionIdRef.current === sessionId;
+      const { state } = attachment;
+      if (state.release) await state.release;
+      if (!isAttached()) return;
+      state.drain ??= Promise.withResolvers<void>();
+      state.pending += 1;
+      try {
+        await operation(isAttached);
+      } finally {
+        state.pending -= 1;
+        if (state.pending === 0) {
+          state.drain.resolve();
+          state.drain = undefined;
+        }
+      }
+    },
+    [scope, sessionId],
+  );
 
   // Unmount means "not currently visible", not "stop the terminal". Always
   // release only renderer consumption here; explicit disconnect/tab-close
@@ -1172,7 +1233,7 @@ export function useTerminal({
     reconnectRef.current = onReconnectRequest ?? (() => void reconnect());
   }, [onReconnectRequest, reconnect]);
 
-  const resize = useCallback(
+  const applyResize = useCallback(
     async (newCols: number, newRows: number) => {
       if (!sessionId) return;
 
@@ -1194,6 +1255,11 @@ export function useTerminal({
     [api, sessionId],
   );
 
+  const resize = useCallback(
+    (cols: number, rows: number) => runSizeOperation(() => applyResize(cols, rows)),
+    [applyResize, runSizeOperation],
+  );
+
   // A claim is not ordered against input (it is not a resize lifecycle
   // command), so claiming while typing never holds keystrokes back. A backend
   // that predates size ownership applies every resize anyway, so there the
@@ -1203,28 +1269,28 @@ export function useTerminal({
     unsupported: false,
   });
   const claimSize = useCallback(
-    async (newCols: number, newRows: number) => {
-      if (!sessionId) return;
-      if (claimUnsupportedRef.current.api !== api) {
-        claimUnsupportedRef.current = { api, unsupported: false };
-      }
-      if (!claimUnsupportedRef.current.unsupported) {
-        try {
-          if (await api.claimTerminalSize(sessionId, newCols, newRows, terminalSizeClientId())) {
+    (newCols: number, newRows: number) =>
+      runSizeOperation(async (isAttached) => {
+        if (!sessionId) return;
+        if (claimUnsupportedRef.current.api !== api) {
+          claimUnsupportedRef.current = { api, unsupported: false };
+        }
+        if (!claimUnsupportedRef.current.unsupported) {
+          try {
+            if (await api.claimTerminalSize(sessionId, newCols, newRows, terminalSizeClientId())) {
+              return;
+            }
+            claimUnsupportedRef.current = { api, unsupported: true };
+          } catch (err) {
+            if (!String(err).includes("Session not found")) {
+              log.error("session.resize-failed", { sessionId, error: formatLogError(err) });
+            }
             return;
           }
-          claimUnsupportedRef.current = { api, unsupported: true };
-        } catch (err) {
-          const errMsg = String(err);
-          if (!errMsg.includes("Session not found")) {
-            log.error("session.resize-failed", { sessionId, error: formatLogError(err) });
-          }
-          return;
         }
-      }
-      await resize(newCols, newRows);
-    },
-    [api, resize, sessionId],
+        if (isAttached()) await applyResize(newCols, newRows);
+      }),
+    [api, applyResize, runSizeOperation, sessionId],
   );
 
   // Every way a keystroke can fail to reach a shell reports the same way. The

@@ -372,9 +372,9 @@ the backend keeps one size owner per session
 (`apps/backend/src/core/terminal-size-ownership.ts`; the rule is described in
 `packages/protocol/src/terminal-size-ownership.ts`):
 
-- **Claim.** Deliberate interaction (focusing the terminal, clicking or tapping
-  it, typing in it, at most once per 5 s) sends `claim_terminal_size`, which
-  makes the window the owner and applies its geometry. It is not a resize
+- **Claim.** A click, tap, or keyboard or paste input sends `claim_terminal_size`, which
+  makes the window the owner and applies its geometry. Keyboard and paste
+  input claims are throttled to once per 5 s. It is not a resize
   lifecycle command, so it is never queued behind or ahead of the terminal's
   input and claiming while typing does not delay keystrokes.
 - **Update.** Layout changes (a window resize, a phone rotating, a pane
@@ -386,9 +386,11 @@ the backend keeps one size owner per session
 
 Every client keeps receiving output; only the geometry is owned. The window's
 id is kept in `sessionStorage` (`apps/web/src/lib/terminal-size-client.ts`), so a
-reload is still the same client. Ownership ends when the owning view stops
-showing the session (`release_terminal_size`), 30 s after its terminal socket
-closes (the socket remembers the ids its resizes named), after 10 minutes with
+reload is still the same client. Fresh navigations mint an id even when a
+duplicated tab inherits the original tab’s storage. Ownership ends when the
+last view in the window stops showing the session and pending size requests
+settle (`release_terminal_size`), 30 s after its terminal socket closes (the
+socket remembers ids from subscriptions and resizes), after 10 minutes with
 no resize or claim from the owner, or with the PTY. A resize without a client
 id comes from an older client: it applies only while nobody owns the size and
 never takes ownership, which is what every resize did before. An older backend

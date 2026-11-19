@@ -861,6 +861,72 @@ describe("useTerminal reconnect behavior", () => {
     expect(detachTerminalMock).not.toHaveBeenCalled();
   });
 
+  it("drains a queued resize and an in-flight claim before releasing on teardown", async () => {
+    const resizeGate = Promise.withResolvers<undefined>();
+    const claimGate = Promise.withResolvers<boolean>();
+    resizeTerminalMock.mockImplementationOnce(() => resizeGate.promise);
+    claimTerminalSizeMock.mockImplementationOnce(() => claimGate.promise);
+    const { result, unmount } = renderHookInAppCommandScope(() =>
+      useTerminal({ containerId: "container-1", isLocal: false, persistSession: true }),
+    );
+    await act(async () => result.current.connect());
+    await waitFor(() => expect(result.current.sessionId).toBe("session-new-container"));
+
+    const resize = result.current.resize(132, 43);
+    const claim = result.current.claimSize(80, 24);
+    expect(resizeTerminalMock).toHaveBeenCalledTimes(1);
+    expect(claimTerminalSizeMock).toHaveBeenCalledTimes(1);
+    unmount();
+    claimGate.resolve(false); // A retired view also skips the legacy fallback.
+    await claim;
+    expect(resizeTerminalMock).toHaveBeenCalledTimes(1);
+    expect(releaseTerminalSizeMock).not.toHaveBeenCalled();
+
+    resizeGate.resolve(undefined);
+    await resize;
+    await waitFor(() => expect(releaseTerminalSizeMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("orders a replacement view's claim after the previous view's release", async () => {
+    const releaseGate = Promise.withResolvers<undefined>();
+    releaseTerminalSizeMock.mockImplementationOnce(() => releaseGate.promise);
+    const options = { containerId: "container-1", isLocal: false, persistSession: true };
+    const first = renderHookInAppCommandScope(() => useTerminal(options));
+    await act(async () => first.result.current.connect());
+    await waitFor(() => expect(first.result.current.sessionId).toBe("session-new-container"));
+    first.unmount();
+    await waitFor(() => expect(releaseTerminalSizeMock).toHaveBeenCalledTimes(1));
+
+    const replacement = renderHookInAppCommandScope(() => useTerminal(options));
+    await act(async () => replacement.result.current.connect());
+    await waitFor(() => expect(replacement.result.current.sessionId).toBe("session-new-container"));
+    const claim = replacement.result.current.claimSize(132, 43);
+    expect(claimTerminalSizeMock).not.toHaveBeenCalled();
+    releaseGate.resolve(undefined);
+    await claim;
+    expect(claimTerminalSizeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the old sizing attachment when the current session becomes null", async () => {
+    const { result, rerender } = renderHookInAppCommandScope(
+      ({ containerId }) => useTerminal({ containerId, isLocal: false, persistSession: true }),
+      { initialProps: { containerId: "container-1" } },
+    );
+    await act(async () => result.current.connect());
+    await waitFor(() => expect(result.current.sessionId).toBe("session-new-container"));
+    const oldResize = result.current.resize;
+    rerender({ containerId: "container-2" });
+    await waitFor(() => expect(result.current.sessionId).toBeNull());
+    await oldResize(132, 43);
+    expect(resizeTerminalMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(releaseTerminalSizeMock).toHaveBeenCalledWith(
+        "session-new-container",
+        terminalSizeClientId(),
+      ),
+    );
+  });
+
   it("uses local terminal operations for local resize, write, and disconnect", async () => {
     const { result } = renderHookInAppCommandScope(() =>
       useTerminal({

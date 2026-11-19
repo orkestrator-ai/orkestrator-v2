@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { TERMINAL_SIZE_INPUT_CLAIM_INTERVAL_MS } from "@orkestrator/protocol/terminal-size-ownership";
 import {
   resetTerminalSizeClientIdForTests,
@@ -18,9 +18,24 @@ describe("terminalSizeClientId", () => {
     const first = terminalSizeClientId();
     expect(terminalSizeClientId()).toBe(first);
     expect(sessionStorage.getItem(STORAGE_KEY)).toBe(first);
-    // A reload loses module state but keeps sessionStorage.
+    const entries = spyOn(performance, "getEntriesByType").mockReturnValue([
+      { type: "reload" } as PerformanceNavigationTiming,
+    ]);
+    try {
+      resetTerminalSizeClientIdForTests();
+      expect(terminalSizeClientId()).toBe(first);
+    } finally {
+      entries.mockRestore();
+    }
+  });
+
+  test("a fresh document ignores the identity copied from another live tab", () => {
+    const original = terminalSizeClientId();
     resetTerminalSizeClientIdForTests();
-    expect(terminalSizeClientId()).toBe(first);
+    expect(sessionStorage.getItem(STORAGE_KEY)).toBe(original);
+    const duplicate = terminalSizeClientId();
+    expect(duplicate).not.toBe(original);
+    expect(sessionStorage.getItem(STORAGE_KEY)).toBe(duplicate);
   });
 
   test("replaces a stored value that is not a usable id", () => {

@@ -376,17 +376,28 @@ describe("hunk staging", () => {
       const reviewed = await liveDiff(h, "unstaged");
       git(h.repo, "config", "filter.other.clean", "cat");
       git(h.repo, "config", "filter.review.clean", "touch should-not-run");
-      writeFileSync(
-        join(h.repo, ".gitattributes"),
-        mode === "filter" ? "a.txt filter=review\n" : "a.txt !invalid?\n",
-      );
-      expect(
-        await h.service.hunkStaging.apply({
-          diffIdentityId: reviewed.identity.id,
-          action: "stage",
-          hunk: selector(reviewed.hunks, 0),
-        }),
-      ).toMatchObject({ kind: "error", error: { reasonKey: "changes.staging.git-conversion" } });
+      const worktree = (await h.service.registry.resolve({ kind: "local", worktreePath: h.repo }))!;
+      const executor = h.service.registry.owner(worktree).executor;
+      const fetch = executor.fetch.bind(executor);
+      const changeAttributes = spyOn(executor, "fetch").mockImplementation(async (...args) => {
+        const records = await fetch(...args);
+        writeFileSync(
+          join(h.repo, ".gitattributes"),
+          mode === "filter" ? "a.txt filter=review\n" : "a.txt !invalid?\n",
+        );
+        return records;
+      });
+      try {
+        expect(
+          await h.service.hunkStaging.apply({
+            diffIdentityId: reviewed.identity.id,
+            action: "stage",
+            hunk: selector(reviewed.hunks, 0),
+          }),
+        ).toMatchObject({ kind: "error", error: { reasonKey: "changes.staging.git-conversion" } });
+      } finally {
+        changeAttributes.mockRestore();
+      }
       expect(existsSync(join(h.repo, "should-not-run"))).toBe(false);
       expect(indexText(h)).toBe(fileText(LINES));
     },

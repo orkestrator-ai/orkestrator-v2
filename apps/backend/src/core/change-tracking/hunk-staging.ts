@@ -333,7 +333,6 @@ export class HunkStagingService {
             refuse("precondition-failed", "changes.staging.head-changed");
         }
         if (input.expectedWorktree) {
-          await checkConversion(git, input.path, input.expectedWorktree);
           // Bounded capture reads through a confined descriptor and checks its
           // stamp. Reopen the path at the end to catch a replaced directory
           // entry even when the descriptor itself remained unchanged.
@@ -353,6 +352,7 @@ export class HunkStagingService {
             refuse("precondition-failed", "changes.staging.worktree-changed");
           }
           await input.assertTarget();
+          await checkConversion(git, input.path, input.expectedWorktree);
           const [current] = await input.executor
             .describe([input.pathId], limits, signal)
             .catch(() => []);

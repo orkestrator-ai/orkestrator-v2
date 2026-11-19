@@ -25,6 +25,7 @@ export * from "./backend/scheduled-jobs";
 export * from "./backend/self-improvement";
 export * from "./backend/user-commands";
 export * from "./backend/permission-rules";
+export * from "./backend/credentials";
 export * from "./backend/bug-report";
 export * from "./backend/graph-runs";
 export * from "./backend/graph-templates";

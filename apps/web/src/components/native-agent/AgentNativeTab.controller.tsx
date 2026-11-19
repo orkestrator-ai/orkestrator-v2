@@ -246,6 +246,8 @@ import {
   useNativeAgentActivityAnnouncement,
 } from "./AgentNativeTab.helpers";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
+import { CredentialRequestCard, pendingCredentialRequests } from "./CredentialRequestCard";
+import { useCredentialSnapshot } from "@/hooks/useCredentialSnapshot";
 import {
   commandSubmissionIntent,
   draftCommandBusyTitle,
@@ -3384,6 +3386,10 @@ export function SharedNativeAgentController({
   const pinnedInteractions = allInteractions.filter(
     (interaction) => interaction.kind !== "question" && interaction.kind !== "plan-approval",
   );
+  // An agent's credential requests (docs/architecture/agent-credentials.md),
+  // read from the backend so a hidden or reloaded tab shows them again.
+  const credentials = useCredentialSnapshot(data.environmentId, tabId);
+  const credentialRequests = pendingCredentialRequests(credentials.snapshot);
   // Claude signs in again through the backend's `claude auth login`, which its
   // card drives; the generic banner's routes do not reach it. One card,
   // whichever of the readiness, Claude's own reply or a turn-time auth notice
@@ -4102,6 +4108,15 @@ export function SharedNativeAgentController({
         ...(agentPrompts.length > 0 && !floatingNotices
           ? [<HumanPromptBanner key="human-prompts" prompts={agentPrompts} />]
           : []),
+        ...credentialRequests.map((request) => (
+          <CredentialRequestCard
+            key={`credential-${request.id}`}
+            request={request}
+            connections={credentials.snapshot?.connections ?? []}
+            vault={credentials.snapshot!.vault}
+            onAnswered={credentials.refresh}
+          />
+        )),
         ...pinnedInteractions.map((interaction) => (
           <NativeAgentInteractionCard
             key={interaction.id}

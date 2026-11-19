@@ -21,6 +21,7 @@ import {
   Cable,
   CalendarClock,
   ShieldCheck,
+  KeyRound,
   MessagesSquare,
   Network,
   MonitorPlay,
@@ -47,6 +48,7 @@ import { SoundsSettings } from "./SoundsSettings";
 import { SchedulesSettings } from "./SchedulesSettings";
 import { SelfImprovementSettings } from "./SelfImprovementSettings";
 import { PermissionsSettings } from "./PermissionsSettings";
+import { CredentialsSettings } from "./CredentialsSettings";
 import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
 import {
   AccountMachineProvider,
@@ -115,6 +117,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
     icon: <TrendingUp className="h-4 w-4" />,
   },
   { id: "permissions", label: "Permissions", icon: <ShieldCheck className="h-4 w-4" /> },
+  { id: "credentials", label: "Credentials", icon: <KeyRound className="h-4 w-4" /> },
   { id: "sounds", label: "Sounds", icon: <Volume2 className="h-4 w-4" /> },
   { id: "docker", label: "Docker", icon: <DockerIcon className="h-4 w-4" /> },
   { id: "container", label: "Container", icon: <Container className="h-4 w-4" /> },
@@ -319,6 +322,8 @@ export function SettingsPage({
                 <SelfImprovementSettings />
               ) : activeSection === "permissions" ? (
                 <PermissionsSettings />
+              ) : activeSection === "credentials" ? (
+                <CredentialsSettings />
               ) : activeSection === "docker" ? (
                 <DockerSettings />
               ) : isLoading && !initialLoadDone ? (

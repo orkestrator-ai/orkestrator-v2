@@ -85,6 +85,11 @@ import {
   type TranscriptArtifactToolHost,
 } from "./transcript-artifacts/index.js";
 import {
+  CREDENTIAL_TOOL_INSTRUCTIONS,
+  registerCredentialTools,
+  type CredentialToolHost,
+} from "./credentials/tools.js";
+import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
   ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
 } from "@orkestrator/protocol/transcript-artifacts";
@@ -706,6 +711,7 @@ async function createAgentToolServer(
     suborkTools = null,
     keyInformation = null,
     autoPipelineTools = null,
+    credentialTools = null,
   }: {
     instructions?: boolean;
     graphTools?: GraphActivationToolHost | null;
@@ -713,6 +719,7 @@ async function createAgentToolServer(
     suborkTools?: SuborkToolHost | null;
     keyInformation?: BuildPipelineKeyInformationHost | null;
     autoPipelineTools?: AutoPipelineToolHost | null;
+    credentialTools?: CredentialToolHost | null;
   } = {},
 ): Promise<McpServer> {
   const pipelineScope = { environmentId: scope.environmentId, projectId: scope.projectId };
@@ -937,6 +944,12 @@ async function createAgentToolServer(
   // workflow-result branches above returned without them. Environment-wide
   // credentials must additionally present a per-turn artifact grant.
   const artifactTools = artifacts ?? null;
+  // Credential tools bind every grant to the tab that asked, so only a
+  // tab-scoped credential gets them (not OpenCode's environment-wide one).
+  const credentialCaller =
+    credentialTools && scope.tabId
+      ? { environmentId: scope.environmentId, projectId: scope.projectId, tabId: scope.tabId }
+      : null;
   const server = new McpServer(
     { name: "orkestrator", version: "1.0.0" },
     {
@@ -951,7 +964,8 @@ async function createAgentToolServer(
         (artifactTools
           ? ARTIFACT_TOOL_INSTRUCTIONS +
             artifactAuthoringNotice(artifactTools.authoringAvailability?.())
-          : ""),
+          : "") +
+        (credentialCaller ? CREDENTIAL_TOOL_INSTRUCTIONS : ""),
     },
   );
 
@@ -1008,6 +1022,9 @@ async function createAgentToolServer(
   if (artifactTools) registerTranscriptArtifactTools(server, artifactTools, scope);
 
   if (goalTools) registerGoalTools(server, goalTools, scope);
+
+  if (credentialTools && credentialCaller)
+    registerCredentialTools(server, credentialTools, credentialCaller);
 
   // Tab-scoped credentials only: the draft belongs to the tab that calls it.
   if (autoPipelineTools && scope.tabId) {
@@ -1093,6 +1110,7 @@ export class AgentToolsServer {
   private graphActivationToolHost: GraphActivationToolHost | null = null;
   private keyInformationHost: BuildPipelineKeyInformationHost | null = null;
   private autoPipelineToolHost: AutoPipelineToolHost | null = null;
+  private credentialToolHost: CredentialToolHost | null = null;
   private readonly peerFilter: AgentToolsPeerGate;
   private unfollowNetworkChanges: (() => void) | null = null;
 
@@ -1363,6 +1381,11 @@ export class AgentToolsServer {
   }
 
   /** Where `ask_agents` calls go. The tool is listed only while this is set. */
+  /** Agent credential tools (docs/architecture/agent-credentials.md); tab-scoped connections only. */
+  setCredentialToolHost(host: CredentialToolHost | null): void {
+    this.credentialToolHost = host;
+  }
+
   setSuborkToolHost(host: SuborkToolHost | null): void {
     this.suborkToolHost = host;
   }
@@ -1744,6 +1767,7 @@ export class AgentToolsServer {
                   suborkTools: this.suborkToolHost,
                   keyInformation: this.keyInformationHost,
                   autoPipelineTools: this.autoPipelineToolHost,
+                  credentialTools: this.credentialToolHost,
                 },
               ),
         { legacy: "stateless" },

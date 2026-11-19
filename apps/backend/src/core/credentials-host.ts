@@ -1,0 +1,163 @@
+import { stat } from "node:fs/promises";
+import {
+  coordinatorConversationIdFromRuntimeId,
+  coordinatorIdFromRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import {
+  activeAgentAccountShellEnvironment,
+  stripInheritedAgentCredentials,
+} from "./agent-accounts-active.js";
+import { envWithManagedBinaries } from "./commands-agent-support.js";
+import type { CommandContext } from "./commands-context.js";
+import {
+  assertEnvironmentDeletionNotRequested,
+  resolveLocalShellPath,
+  terminalEnv,
+} from "./commands-terminal.js";
+import type { CredentialHost, CredentialLaunch } from "./credentials/index.js";
+import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
+
+/**
+ * The credential service's view of the backend (credentials/context.ts):
+ * which conversation a tab runs, where its environment's agent runs, and how
+ * to start a command there. Every answer comes from the backend's records,
+ * never from the agent.
+ *
+ * Commands run where the tab's own agent runs, exactly as a `!` command
+ * would (`commands-registry-user-commands.ts`): the worktree with the user's
+ * login shell, managed binaries and isolation variables, or the container as
+ * the `node` user in `/workspace`. A coordinator conversation never runs one.
+ */
+
+class CredentialLaunchError extends Error {}
+
+export function createCredentialHost(context: CommandContext): CredentialHost {
+  return {
+    async session(environmentId, tabId) {
+      const logicalSessionKey = `env-${environmentId}:${tabId}`;
+      const session = (await context.storage.readNativeAgentSessionsSnapshot()).find(
+        (candidate) =>
+          candidate.environmentId === environmentId &&
+          candidate.logicalSessionKey === logicalSessionKey,
+      );
+      if (!session) return null;
+      return {
+        agent: session.agent,
+        logicalSessionKey,
+        providerSessionId: session.providerSessionId || null,
+        policy:
+          session.policy ??
+          (session.executionPolicy === "coordinator-read-only"
+            ? {
+                id: "coordinator-read-only",
+                sandbox: "provider",
+                approvals: "deny",
+                projectResources: false,
+                networkAccess: "restricted",
+              }
+            : null),
+      };
+    },
+
+    async runtime(environmentId) {
+      const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
+      if (coordinatorId) {
+        const workspace =
+          await context.storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
+        const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
+        if (
+          !workspace?.conversations.some((item) => item.id === conversationId && !item.closedAt)
+        ) {
+          return null;
+        }
+        const project = await context.storage.getProject(workspace.projectId);
+        return {
+          runtime: { kind: "coordinator", isolation: "read-only" },
+          identity: `coordinator:${project?.localPath ?? workspace.projectId}`,
+        };
+      }
+      const environment = await context.storage.getEnvironment(environmentId);
+      if (!environment || environment.deletionRequestedAt) return null;
+      if (environment.environmentType === "local") {
+        return environment.worktreePath
+          ? {
+              runtime: { kind: "worktree", isolation: "trusted-local" },
+              identity: `worktree:${environment.worktreePath}`,
+            }
+          : null;
+      }
+      return environment.containerId
+        ? {
+            runtime: { kind: "container", isolation: "shared-container" },
+            identity: `container:${environment.containerId}`,
+          }
+        : null;
+    },
+
+    async launch(environmentId, tabId) {
+      if (coordinatorIdFromRuntimeId(environmentId)) {
+        throw new CredentialLaunchError("A coordinator conversation cannot run commands.");
+      }
+      const release = context.runtime.environments.fence.beginAgentWork(environmentId);
+      try {
+        context.runtime.environments.assertNotDeleting(environmentId);
+        const environment = await context.storage.getEnvironment(environmentId);
+        if (!environment) throw new CredentialLaunchError("That environment no longer exists.");
+        assertEnvironmentDeletionNotRequested(environment, environmentId);
+        if (environment.tabTeardownIntents?.[tabId]) {
+          throw new CredentialLaunchError("This tab is closing.");
+        }
+        if (
+          environment.worktreeMove ||
+          environment.lifecycleOperation ||
+          environment.status === "stopping" ||
+          environment.status === "creating"
+        ) {
+          throw new CredentialLaunchError("This environment has a pending lifecycle operation.");
+        }
+        let launch: CredentialLaunch;
+        if (environment.environmentType === "local") {
+          const cwd = environment.worktreePath;
+          if (!cwd || !(await stat(cwd).catch(() => null))?.isDirectory()) {
+            throw new CredentialLaunchError("The environment has no workspace.");
+          }
+          const accounts = await activeAgentAccountShellEnvironment(context).catch(() => ({}));
+          const env = {
+            ...withEnvironmentIsolation(
+              envWithManagedBinaries(context),
+              await localEnvironmentIsolationEnv(environment, context.storage),
+            ),
+            ...accounts,
+          };
+          if ("CLAUDE_CONFIG_DIR" in accounts || "CODEX_HOME" in accounts) {
+            stripInheritedAgentCredentials(env);
+          }
+          launch = {
+            target: "worktree",
+            cwd,
+            env: terminalEnv(env),
+            shell: resolveLocalShellPath(),
+          };
+        } else {
+          if (!environment.containerId || environment.status !== "running") {
+            throw new CredentialLaunchError("Start the environment's container first.");
+          }
+          launch = {
+            target: "container",
+            cwd: "/workspace",
+            containerId: environment.containerId,
+            env: terminalEnv(withEnvironmentIsolation(process.env)),
+          };
+        }
+        // No await between this check and the caller's spawn but the
+        // credential recheck, which is synchronous.
+        context.runtime.environments.assertNotDeleting(environmentId);
+        context.runtime.environments.fence.assertAcceptsAgentWork(environmentId);
+        return { ...launch, release };
+      } catch (error) {
+        release();
+        throw error;
+      }
+    },
+  };
+}

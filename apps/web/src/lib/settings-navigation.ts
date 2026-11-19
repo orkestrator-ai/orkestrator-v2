@@ -28,6 +28,7 @@ export const GLOBAL_SETTINGS_SECTIONS = [
   "schedules",
   "self-improvement",
   "permissions",
+  "credentials",
   "sounds",
   "docker",
   "container",

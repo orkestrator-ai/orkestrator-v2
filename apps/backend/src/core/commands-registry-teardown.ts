@@ -379,6 +379,8 @@ export function registerTeardownCommands(
     // A replaced-session intent names no tab, so it has no credential to revoke.
     if (!isReplacedSessionCloseKey(intent.tabId)) {
       context.agentTools?.revokeTab?.(environmentId, intent.tabId);
+      // The tab's credential requests are cancelled and its grants end.
+      context.credentials?.tabClosed(environmentId, intent.tabId);
     }
     await context.storage.clearTabTeardownIntent(environmentId, intent.tabId, intent.createdAt);
   };

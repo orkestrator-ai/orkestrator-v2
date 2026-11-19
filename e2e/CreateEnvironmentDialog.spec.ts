@@ -468,3 +468,74 @@ for (const intent of ["Task", "Interactive", "Pipeline"] as const) {
     }
   });
 }
+
+test("explains how deferred terminal prompts are handled", async ({ page }, testInfo) => {
+  await page.goto("/?terminal-agent=codex");
+  const launch = page.getByRole("checkbox", { name: "Launch agent" });
+  if (testInfo.project.name === "mobile-chromium") {
+    await page.getByRole("tab", { name: "Prompt" }).click();
+  }
+  const note = page.getByText(
+    "Prompts entered later in a terminal follow the CLI’s interaction settings.",
+  );
+  await expect(note).toBeVisible();
+  if (process.env.ORKESTRATOR_FINDINGS_SCREENSHOTS === "1") {
+    await page.screenshot({
+      path: `output/visual-previews/deferred-terminal-${testInfo.project.name}.png`,
+    });
+  }
+  await page.getByLabel("Initial prompt (optional)").fill("Fix the build");
+  await expect(note).toBeHidden();
+  if (testInfo.project.name === "mobile-chromium") {
+    await page.getByRole("tab", { name: "Agent" }).click();
+  }
+  await launch.uncheck();
+  await expect(note).toBeVisible();
+  if (process.env.ORKESTRATOR_FINDINGS_SCREENSHOTS === "1") {
+    await page.screenshot({
+      path: `output/visual-previews/deferred-terminal-launch-off-${testInfo.project.name}.png`,
+    });
+  }
+});
+
+for (const attachmentOnly of [false, true]) {
+  test(`requires an explicit switch from Grok Terminal for ${attachmentOnly ? "attachments" : "prompt text"}`, async ({
+    page,
+  }, testInfo) => {
+    await page.goto("/?terminal-agent=grok");
+    if (testInfo.project.name === "mobile-chromium") {
+      await page.getByRole("tab", { name: "Prompt" }).click();
+    }
+    const prompt = page.getByLabel("Initial prompt (optional)");
+    if (attachmentOnly) {
+      await prompt.evaluate((element) => {
+        const data = new DataTransfer();
+        data.items.add(new File(["fixture contents"], "notes.txt", { type: "text/plain" }));
+        element.dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer: data }));
+      });
+    } else {
+      await prompt.fill("Fix the build");
+    }
+    const create = page.getByRole("button", { name: "Create environment" });
+    const useNative = page.getByRole("button", { name: "Use Grok Native" });
+    await expect(useNative).toBeVisible();
+    await expect(create).toBeDisabled();
+    if (process.env.ORKESTRATOR_FINDINGS_SCREENSHOTS === "1") {
+      await page.screenshot({
+        path: `output/visual-previews/grok-terminal-${attachmentOnly ? "attachment" : "prompt"}-${testInfo.project.name}.png`,
+      });
+    }
+    await useNative.focus();
+    await page.keyboard.press("Enter");
+    await expect(create).toBeEnabled();
+    if (process.env.ORKESTRATOR_FINDINGS_SCREENSHOTS === "1" && !attachmentOnly) {
+      await page.screenshot({
+        path: `output/visual-previews/grok-native-selected-${testInfo.project.name}.png`,
+      });
+    }
+    await create.click();
+    await expect
+      .poll(() => page.evaluate(() => window.lastCreateEnvironmentOptions?.grokMode))
+      .toBe("native");
+  });
+}

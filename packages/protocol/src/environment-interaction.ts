@@ -45,6 +45,15 @@ export function environmentInteractionInstruction(mode: EnvironmentInteractionMo
   return mode === "task" ? TASK_INTERACTION_INSTRUCTION : INTERACTIVE_INTERACTION_INSTRUCTION;
 }
 
+/** Test for the exact instruction frame appended by the dispatcher. */
+export function hasEnvironmentInteractionFrame(
+  prompt: string,
+  mode: EnvironmentInteractionMode,
+): boolean {
+  const frame = wrapSystemInstructions(environmentInteractionInstruction(mode));
+  return prompt === frame || prompt.endsWith(`\n\n${frame}`);
+}
+
 /**
  * The opening prompt with the interaction mode's instructions appended as one
  * system-instructions frame. An attachment can be the entire opening request.
@@ -57,6 +66,7 @@ export function withEnvironmentInteraction(
 ): string {
   if (!mode) return prompt;
   if (!prompt.trim() && !hasAttachments) return prompt;
+  if (hasEnvironmentInteractionFrame(prompt, mode)) return prompt;
   const frame = wrapSystemInstructions(environmentInteractionInstruction(mode));
   return prompt.trim() ? `${prompt}\n\n${frame}` : frame;
 }

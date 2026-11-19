@@ -1,9 +1,12 @@
+import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useRemoteMachineView } from "@/components/federation/useMachineViews";
 import { MachineDot } from "@/components/federation/MachineDot";
 import {
   resolveAgentPlatformSettings,
+  effectiveClaudeNativeBackend,
+  isTmuxModeEnabled,
   resolveDefaultAgent,
   type AgentSettingsTiers,
 } from "@orkestrator/protocol/agent-settings";
@@ -1424,11 +1427,37 @@ export function CreateEnvironmentDialog({
     return true;
   }, [portMappings]);
 
+  const selectedAgentMode = resolveAgentModeSettings(agentType, {
+    claudeMode,
+    codexMode,
+    opencodeMode,
+    grokMode,
+    piMode,
+  }).platforms?.[agentType]?.mode;
+  const terminalAgent =
+    selectedAgentMode === "terminal" ||
+    (agentType === "claude" &&
+      effectiveClaudeNativeBackend(
+        resolveAgentPlatformSettings(agentTiers, "claude").claudeNativeBackend,
+        isTmuxModeEnabled(config.global),
+      ) === "tmux");
+  const hasOpeningWork = Boolean(initialPrompt.trim() || initialPromptAttachments.length);
+  const grokTerminalConflict =
+    buildIntent !== "feature" &&
+    agentType === "grok" &&
+    terminalAgent &&
+    launchAgent &&
+    hasOpeningWork;
+  const terminalPromptNotice =
+    "Prompts entered later in a terminal follow the CLI’s interaction settings.";
+  const deferredTerminalPrompt =
+    buildIntent !== "feature" && terminalAgent && (!launchAgent || !hasOpeningWork);
+
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
 
-      if (activeAttachmentOperationIdsRef.current.size > 0) return;
+      if (activeAttachmentOperationIdsRef.current.size > 0 || grokTerminalConflict) return;
 
       if (environmentType === "containerized" && !dockerAvailable) return;
       if (environmentType === "local" && !localEnvironmentAvailable) return;
@@ -1536,6 +1565,7 @@ export function CreateEnvironmentDialog({
     },
     [
       dockerAvailable,
+      grokTerminalConflict,
       environmentType,
       environmentName,
       worktreeBaseDir,
@@ -1571,6 +1601,7 @@ export function CreateEnvironmentDialog({
   );
 
   const submitDisabled =
+    grokTerminalConflict ||
     isLoading ||
     pendingAttachmentOperations > 0 ||
     (environmentType === "containerized" && (!dockerAvailable || !validatePortMappings())) ||
@@ -2017,6 +2048,14 @@ export function CreateEnvironmentDialog({
                   </div>
                 </div>
               </div>
+              {deferredTerminalPrompt && !launchAgent && (
+                <p
+                  className="border-b border-divider px-4 py-2 text-sm text-muted-foreground sm:px-6"
+                  role="status"
+                >
+                  {terminalPromptNotice}
+                </p>
+              )}
             </TabsContent>
 
             {/* Port configuration - only for containerized environments */}
@@ -2159,6 +2198,25 @@ export function CreateEnvironmentDialog({
               data-mobile-transition={mobileTabTransitionDirection ?? undefined}
               className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:!block")}
             >
+              {grokTerminalConflict && (
+                <div className="mb-3 flex flex-wrap items-center gap-2 text-sm" role="status">
+                  <span>Grok Terminal cannot launch with a prompt or attachments.</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setGrokMode("native")}
+                    disabled={isLoading}
+                  >
+                    Use Grok Native
+                  </Button>
+                </div>
+              )}
+              {deferredTerminalPrompt && launchAgent && (
+                <p className="mb-3 text-sm text-muted-foreground" role="status">
+                  {terminalPromptNotice}
+                </p>
+              )}
               <FeatureBuildFields
                 intent={buildIntent}
                 onIntentChange={handleBuildIntentChange}

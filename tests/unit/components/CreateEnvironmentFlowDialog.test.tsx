@@ -24,7 +24,8 @@ import * as realBackend from "@/lib/backend";
 const realBackendSnapshot = { ...realBackend };
 
 const updateEnvironmentAgentSettingsMock = mock(
-  async (environmentId: string, ..._rest: unknown[]) => ({ id: environmentId }) as Environment,
+  async (environmentId: string, ...rest: unknown[]) =>
+    ({ id: environmentId, interactionMode: rest[6] }) as Environment,
 );
 const getContainerGitHubCredentialStatusMock = mock(async (): Promise<GitHubCredentialStatus> => ({
   source: "host-cli",
@@ -1118,6 +1119,36 @@ describe("CreateEnvironmentFlowDialog", () => {
       logs.restore();
     }
   });
+
+  test.each(["Task", "Interactive"])(
+    "stops before launch when the node drops %s",
+    async (intent) => {
+      const startEnvironment = mock(async () => {});
+      const onOpenChange = mock(() => {});
+      updateEnvironmentAgentSettingsMock.mockResolvedValueOnce({ id: "env-older" } as Environment);
+      renderInAppCommandScope(
+        <CreateEnvironmentFlowDialog
+          open
+          onOpenChange={onOpenChange}
+          projectId="project-1"
+          createEnvironment={async () => ({ id: "env-older" }) as Environment}
+          updateEnvironment={() => {}}
+          startEnvironment={startEnvironment}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: intent }));
+      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Could not create environment", {
+          description: expect.stringContaining(
+            "This node could not save the selected interaction mode",
+          ),
+        }),
+      );
+      expect(startEnvironment).not.toHaveBeenCalled();
+      expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    },
+  );
 
   test("surfaces an agent-settings persistence failure and does not start", async () => {
     const createEnvironment = mock(async () => ({ id: "env-settings-failed" }) as Environment);

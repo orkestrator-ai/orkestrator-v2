@@ -133,7 +133,6 @@ export function usesNativeStartupAgentTab(
   config: Pick<AppConfig, "global" | "repositories">,
   projectId: string,
   agentSettings: AgentSettingsTier,
-  hasOpeningWorkWithInteractionMode = false,
 ): boolean {
   const launch = resolveStartupLaunchFromSettings(
     agentSettingsTiers(config, projectId, { agentSettings }),
@@ -142,10 +141,7 @@ export function usesNativeStartupAgentTab(
     launch.claudeNativeBackend,
     isTmuxModeEnabled(config.global),
   );
-  return (
-    (launch.agent === "grok" && hasOpeningWorkWithInteractionMode) ||
-    (launch.mode === "native" && !(launch.agent === "claude" && backend === "tmux"))
-  );
+  return launch.mode === "native" && !(launch.agent === "claude" && backend === "tmux");
 }
 
 /**
@@ -319,16 +315,16 @@ export function CreateEnvironmentFlowDialog({
       );
       updateEnvironment(environment.id, configuredEnvironment);
       if (
+        launchSettings.interactionMode &&
+        configuredEnvironment.interactionMode !== launchSettings.interactionMode
+      ) {
+        throw new Error(
+          "This node could not save the selected interaction mode. The environment was created and left stopped. Update the node before creating a Task or Interactive environment.",
+        );
+      }
+      if (
         launchSettings.pendingAgentLaunch &&
-        usesNativeStartupAgentTab(
-          config,
-          projectId,
-          agentSettings,
-          Boolean(
-            launchSettings.interactionMode &&
-            (request.initialPrompt?.trim() || launchSettings.initialPromptAttachments?.length),
-          ),
-        )
+        usesNativeStartupAgentTab(config, projectId, agentSettings)
       ) {
         armStartupAgentTabActivation(configuredEnvironment.id, scope);
       }

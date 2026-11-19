@@ -33,6 +33,45 @@ const {
 } = await createCommandFixtures();
 
 describe("environment status and settings commands", () => {
+  test("validates and clears the backend-only opening interaction", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment({ id: "opening", interactionMode: "task" });
+      await storage.addEnvironment(environment);
+      const openingInteraction = {
+        mode: "task",
+        requestId: "request",
+        providerSessionId: "private-provider",
+        sessionKey: "private-key",
+      };
+      for (const invalid of [
+        { requestId: " " },
+        { mode: "pipeline" },
+        { providerSessionId: "" },
+        { sessionKey: " " },
+      ]) {
+        await expect(
+          storage.updateEnvironment(environment.id, {
+            openingInteraction: { ...openingInteraction, ...invalid },
+          }),
+        ).rejects.toThrow("Invalid opening interaction");
+      }
+      await storage.updateEnvironment(environment.id, { openingInteraction });
+      const { context } = createContext([], { dataDir });
+      context.storage = storage;
+      const detail = await createCommandRegistry().get("get_environment")?.(
+        { environmentId: environment.id },
+        context,
+      );
+      expect(detail).toMatchObject({ id: environment.id, interactionMode: "task" });
+      expect(detail).not.toHaveProperty("openingInteraction");
+      expect(JSON.stringify(detail)).not.toContain("private-provider");
+      expect(JSON.stringify(detail)).not.toContain("private-key");
+
+      await storage.updateEnvironment(environment.id, { openingInteraction: null });
+      expect((await storage.getEnvironment(environment.id))?.openingInteraction).toBeUndefined();
+    });
+  });
+
   test("refuses prompt interaction modes on a pipeline-owned environment", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const environment = createEnvironment({ id: "owned", buildPipelineId: "pipeline" });

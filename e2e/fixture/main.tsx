@@ -1,3 +1,4 @@
+import { configStore } from "../../apps/web/src/stores/configStore";
 import {
   StatusReadabilityFixture,
   installStatusReadabilityFixture,
@@ -2417,6 +2418,26 @@ function fixtureForPath() {
     return <CoordinatorExplanationsFixture />;
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
+}
+
+const terminalFixtureAgent = new URLSearchParams(window.location.search).get("terminal-agent");
+if (
+  window.location.pathname === "/" &&
+  (terminalFixtureAgent === "grok" || terminalFixtureAgent === "codex")
+) {
+  appCommandStore(configStore).setState(({ config }) => ({
+    config: {
+      ...config,
+      global: {
+        ...config.global,
+        enabledAgentPlatforms: [terminalFixtureAgent],
+        agentSettings: {
+          defaultAgent: terminalFixtureAgent,
+          platforms: { [terminalFixtureAgent]: { mode: "terminal" } },
+        },
+      },
+    },
+  }));
 }
 
 if (window.location.pathname === "/diff-base") installDiffBaseFixture();

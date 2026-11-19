@@ -31,6 +31,13 @@ describe("withEnvironmentInteraction", () => {
     expect(withEnvironmentInteraction("  ", "interactive")).toBe("  ");
   });
 
+  test("does not add a second opening frame to a resent prompt", () => {
+    for (const mode of ["task", "interactive"] as const) {
+      const framed = withEnvironmentInteraction("Fix the build", mode);
+      expect(withEnvironmentInteraction(framed, mode)).toBe(framed);
+    }
+  });
+
   test("shows the user only their own words in a transcript", () => {
     for (const mode of ["task", "interactive"] as const) {
       expect(stripSystemInstructions(withEnvironmentInteraction("Fix it.", mode))).toBe("Fix it.");

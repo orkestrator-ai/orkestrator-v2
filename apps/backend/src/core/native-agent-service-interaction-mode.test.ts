@@ -13,7 +13,8 @@ import {
 } from "@orkestrator/protocol/environment-interaction";
 import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
-import type { ProviderStatus } from "./agent-provider-contract.js";
+import { AmbiguousPromptDispatchError, type ProviderStatus } from "./agent-provider-contract.js";
+import { signInResendRequestId } from "./native-agent-sign-in-resend.js";
 import type { NativeAgentRuntimeProvider } from "./native-agent-provider.js";
 import { NativeAgentService } from "./native-agent-service.js";
 import { StorageService } from "./storage.js";
@@ -212,24 +213,40 @@ describe("startup launch interaction mode", () => {
     },
   );
 
-  test("routes Grok's opening work to a native session when its preference is terminal", async () => {
-    const { provider, send } = providerStub({ agent: "grok" });
-    await withService(
-      {
-        pendingAgentLaunch: true,
-        defaultAgent: "grok",
-        grokMode: "terminal",
-        initialPrompt: "Fix the login bug",
-        interactionMode: "task",
-      },
-      { provider },
-      async ({ storage, service }) => {
-        await service.reconcileInitialLaunch("env-1");
-        expect(send.mock.calls[0]?.[1]).toContain(TASK_INTERACTION_INSTRUCTION);
-        expect((await storage.getEnvironment("env-1"))?.pendingAgentLaunch).toBe(false);
-      },
-    );
-  });
+  test.each([false, true])(
+    "reports incompatible Grok Terminal startup (attachment-only=%s)",
+    async (attachmentOnly) => {
+      const { provider, send } = providerStub({ agent: "grok" });
+      await withService(
+        {
+          pendingAgentLaunch: true,
+          defaultAgent: "grok",
+          grokMode: "terminal",
+          ...(attachmentOnly
+            ? {
+                initialPromptAttachments: [
+                  { id: "image-1", name: "diagram.png", mimeType: "image/png", base64Data: "YQ==" },
+                ],
+              }
+            : { initialPrompt: "Fix the login bug" }),
+          interactionMode: "task",
+        },
+        { provider },
+        async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+          expect(send).not.toHaveBeenCalled();
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: false,
+            startupAgentSession: {
+              style: "terminal",
+              status: "error",
+              error: expect.stringContaining("Open a Native tab"),
+            },
+          });
+        },
+      );
+    },
+  );
 
   test("runs bare Codex /compact and frames the first subsequent model prompt", async () => {
     const performSessionAction = mock(async () => ({ outcome: "applied" as const }));
@@ -259,97 +276,222 @@ describe("startup launch interaction mode", () => {
     );
   });
 
-  test("keeps provider slash-command arguments intact", async () => {
-    const { provider, send } = providerStub({
-      agent: "claude",
-      commandCatalogue: async () => ({
-        status: "ready",
-        enhanced: true,
-        commands: [
-          {
-            name: "/review",
-            source: "project",
-            id: "claude:/review",
-            executionKind: "provider-prompt",
-          },
-        ],
-      }),
-    });
-    await withService(
-      {
-        pendingAgentLaunch: true,
-        defaultAgent: "claude",
-        claudeMode: "native",
-        initialPrompt: "/review src/auth",
-        interactionMode: "task",
-      },
-      { provider },
-      async ({ service }) => {
-        await service.reconcileInitialLaunch("env-1");
-        expect(send.mock.calls[0]?.[1]).toBe("/review src/auth");
-        expect(send.mock.calls[0]?.[2]).toMatchObject({ command: { arguments: "src/auth" } });
-      },
-    );
-  });
+  test.each(["task", "interactive"] as const)(
+    "asks for a regular opening %s prompt before running a provider command",
+    async (interactionMode) => {
+      const { provider, send } = providerStub({
+        agent: "claude",
+        commandCatalogue: async () => ({
+          status: "ready",
+          enhanced: true,
+          commands: [
+            {
+              name: "/review",
+              source: "project",
+              id: "claude:/review",
+              executionKind: "provider-prompt",
+            },
+          ],
+        }),
+      });
+      await withService(
+        {
+          pendingAgentLaunch: true,
+          defaultAgent: "claude",
+          claudeMode: "native",
+          initialPrompt: "/review src/auth",
+          interactionMode,
+        },
+        { provider },
+        async ({ service, storage }) => {
+          await expect(service.reconcileInitialLaunch("env-1")).rejects.toThrow(
+            "Start with a regular prompt",
+          );
+          expect(send).not.toHaveBeenCalled();
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: false,
+            startupAgentSession: { error: expect.stringContaining("Start with a regular prompt") },
+          });
+          const identity = {
+            environmentId: "env-1",
+            agent: "claude" as const,
+            logicalSessionKey: `env-env-1:${STARTUP_AGENT_TAB_ID}`,
+          };
+          await service.dispatchPrompt({
+            ...identity,
+            requestId: "opening",
+            prompt: "Review the build",
+          });
+          expect(send.mock.calls[0]?.[1]).toContain(
+            interactionMode === "task"
+              ? TASK_INTERACTION_INSTRUCTION
+              : INTERACTIVE_INTERACTION_INSTRUCTION,
+          );
+          await service.dispatchPrompt({
+            ...identity,
+            requestId: "command",
+            prompt: "/review src/auth.ts",
+          });
+          expect(send.mock.calls[1]?.[1]).toBe("/review src/auth.ts");
+        },
+      );
+    },
+  );
 
-  test("declines an opening Task question while preserving approvals and follow-up questions", async () => {
-    let status: ProviderStatus = "idle";
-    let requests = [
-      { id: "opening-question", kind: "question" },
-      { id: "opening-approval", kind: "command-approval" },
-    ];
-    const resolveInteraction = mock(async (_sessionId, interactionId, _resolution) => {
-      requests = requests.filter((request) => request.id !== interactionId);
-      return { result: "applied" as const };
-    }) as unknown as NonNullable<NativeAgentRuntimeProvider["interactions"]>["resolveInteraction"];
-    const { provider } = providerStub({
-      status: async () => status,
-      interactions: {
-        listPendingInteractions: async () =>
-          ({ requests }) as Awaited<
-            ReturnType<
-              NonNullable<NativeAgentRuntimeProvider["interactions"]>["listPendingInteractions"]
-            >
-          >,
-        resolveInteraction,
-      },
-    });
-    await withService(
-      {
-        pendingAgentLaunch: true,
-        defaultAgent: "codex",
-        codexMode: "native",
-        initialPrompt: "Fix the login bug",
-        interactionMode: "task",
-      },
-      { provider },
-      async ({ service }) => {
-        await service.reconcileInitialLaunch("env-1");
-        status = "blocked";
-        await service.reconcileAgentActivity();
-        expect(resolveInteraction).toHaveBeenCalledTimes(1);
-        expect(resolveInteraction).toHaveBeenCalledWith(
-          "provider-session",
-          "opening-question",
-          expect.objectContaining({ action: "decline" }),
-        );
-        status = "idle";
-        await service.reconcileAgentActivity();
-
-        await service.dispatchPrompt({
+  test.each(["retired", "discarded", "refused"] as const)(
+    "gives a fresh prompt the opening mode after a %s dispatch",
+    async (settlement) => {
+      let journal: "unknown" | "lost" = "unknown";
+      const { provider, send } = providerStub({ dispatchStatus: async () => journal });
+      send.mockRejectedValueOnce(
+        settlement === "refused"
+          ? new Error("Provider refused")
+          : new AmbiguousPromptDispatchError("Acknowledgement was lost"),
+      );
+      await withService({ interactionMode: "task" }, { provider }, async ({ service, storage }) => {
+        const identity = {
           environmentId: "env-1",
-          agent: "codex",
-          logicalSessionKey: `env-env-1:${STARTUP_AGENT_TAB_ID}`,
-          requestId: "follow-up",
-          prompt: "Follow up",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:manual",
+        };
+        const first = await service.dispatchIntent({
+          ...identity,
+          requestId: "first",
+          prompt: "Start work",
         });
-        requests = [{ id: "follow-up-question", kind: "question" }];
-        status = "blocked";
-        await service.reconcileAgentActivity();
-        expect(resolveInteraction).toHaveBeenCalledTimes(1);
-      },
-    );
-  });
+        if (settlement === "refused") {
+          expect(first.outcome).toBe("rejected");
+          expect((await storage.getEnvironment("env-1"))?.openingInteraction).toBeUndefined();
+        } else {
+          expect(first.outcome).toBe("unknown");
+          expect((await storage.getEnvironment("env-1"))?.openingInteraction?.requestId).toBe(
+            "first",
+          );
+          if (settlement === "retired") journal = "lost";
+          else
+            expect(
+              await service.discardRecoverableDispatch({ ...identity, requestId: "first" }),
+            ).toEqual({ discarded: true });
+        }
+        const fresh = await service.dispatchIntent({
+          ...identity,
+          requestId: "fresh",
+          prompt: "Start fresh",
+        });
+        expect(fresh.outcome).toBe("accepted");
+        expect(send.mock.calls[1]?.[1]).toContain(TASK_INTERACTION_INSTRUCTION);
+        expect((await storage.getEnvironment("env-1"))?.openingInteraction?.requestId).toBe(
+          "fresh",
+        );
+      });
+    },
+  );
+
+  test.each(["task", "steered", "signed-in", "interactive", "follow-up during read"] as const)(
+    "applies question handling only to the opening Task turn (%s)",
+    async (scenario) => {
+      const agent: "claude" | "codex" = scenario === "signed-in" ? "claude" : "codex";
+      const identity = { environmentId: "env-1", agent, logicalSessionKey: "env-env-1:manual" };
+      let beforeList = async () => {};
+      let status: ProviderStatus = "idle";
+      let requests = [
+        { id: "opening-question", kind: "question" },
+        { id: "opening-approval", kind: "command-approval" },
+      ];
+      const resolveInteraction = mock(async (_sessionId, interactionId, _resolution) => {
+        requests = requests.filter((request) => request.id !== interactionId);
+        return { result: "applied" as const };
+      }) as unknown as NonNullable<
+        NativeAgentRuntimeProvider["interactions"]
+      >["resolveInteraction"];
+      const { provider } = providerStub({
+        agent,
+        status: async () => status,
+        messages: async () =>
+          scenario === "signed-in"
+            ? [
+                { id: "user", role: "user", content: "Fix the login bug" },
+                { id: "refusal", role: "assistant", content: "Not logged in · Please run /login" },
+              ]
+            : [],
+        interactions: {
+          listPendingInteractions: async () => {
+            await beforeList();
+            return { requests } as Awaited<
+              ReturnType<
+                NonNullable<NativeAgentRuntimeProvider["interactions"]>["listPendingInteractions"]
+              >
+            >;
+          },
+          resolveInteraction,
+        },
+      });
+      await withService(
+        { interactionMode: scenario === "interactive" ? "interactive" : "task" },
+        { provider },
+        async ({ service, storage }) => {
+          const opening = await service.dispatchPrompt({
+            ...identity,
+            requestId: "opening",
+            prompt: "Fix the login bug",
+          });
+          if (scenario === "steered") {
+            await storage.dispatchNativeAgentSteerOnce(
+              opening.key,
+              {
+                requestId: "steer",
+                text: "Keep going",
+                inputDigest: "a".repeat(64),
+                expectedRunId: "provider-turn",
+                state: "prepared",
+                createdAt: new Date().toISOString(),
+              },
+              async () => ({ outcome: "applied" }),
+            );
+          }
+          if (scenario === "signed-in") {
+            expect(await service.signInResends.status(identity)).toEqual({ pending: true });
+            expect(await service.signInResends.resendHeldPrompts()).toBe(1);
+            expect((await storage.getEnvironment("env-1"))?.openingInteraction?.requestId).toBe(
+              signInResendRequestId("opening"),
+            );
+          }
+          if (scenario === "follow-up during read") {
+            beforeList = async () => {
+              beforeList = async () => {};
+              status = "idle";
+              await service.dispatchPrompt({ ...identity, requestId: "raced", prompt: "New turn" });
+              status = "blocked";
+            };
+          }
+          status = "blocked";
+          await service.reconcileAgentActivity();
+          const expectedDeclines =
+            scenario === "interactive" || scenario === "follow-up during read" ? 0 : 1;
+          expect(resolveInteraction).toHaveBeenCalledTimes(expectedDeclines);
+          if (expectedDeclines) {
+            expect(resolveInteraction).toHaveBeenCalledWith(
+              "provider-session",
+              "opening-question",
+              expect.objectContaining({ action: "decline" }),
+            );
+          }
+          status = "idle";
+          await service.reconcileAgentActivity();
+
+          await service.dispatchPrompt({
+            ...identity,
+            requestId: "follow-up",
+            prompt: "Follow up",
+          });
+          requests = [{ id: "follow-up-question", kind: "question" }];
+          status = "blocked";
+          await service.reconcileAgentActivity();
+          expect(resolveInteraction).toHaveBeenCalledTimes(expectedDeclines);
+        },
+      );
+    },
+  );
 
   test("an environment without a mode sends the prompt unchanged", async () => {
     const { provider, send } = providerStub();

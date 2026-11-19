@@ -50,11 +50,13 @@ tab. The old PIPELINE stage list (`PipelineStageRail`) is gone.
   may ask questions from the start. The backend adds a system-instructions
   frame to the first native prompt, including one sent manually after setup,
   and to prompts supplied to terminal launches. Native transcripts strip the
-  frame. Provider slash commands receive their original arguments. During the
-  opening native Task turn the backend declines input requests and leaves
-  authorization requests to the normal approval policy. Grok uses its native
-  provider for an opening prompt because its terminal launcher cannot pass one.
-  Prompts typed directly into a terminal CLI use that CLI's own controls.
+  frame. An opening provider slash command is refused with guidance to send a
+  regular prompt first. Later commands receive their original arguments. During
+  the opening native Task turn the backend declines input requests and uses the
+  normal authorization policy. Codex displays async questions from that turn as
+  ordinary text. Grok Terminal requires an explicit switch to Native to start
+  with a prompt or attachments. The dialog explains that prompts typed later
+  into a terminal follow that CLI's interaction settings.
   Environments created without a mode receive no frame.
 
 The New environment dialog offers "Pipeline", "Task" and "Interactive" and

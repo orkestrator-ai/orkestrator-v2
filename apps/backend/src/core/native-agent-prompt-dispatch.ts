@@ -1397,13 +1397,16 @@ export class NativeAgentPromptDispatch {
                 home?.interactionMode && !mailInject
                   ? await this.claimOpeningInteraction(input, durable)
                   : undefined;
-              // A resolved provider command owns its arguments and may parse
-              // the original prompt. Give its turn the Task input policy,
-              // while leaving its text and binding intact.
-              const providerPrompt =
-                commandPlan.commandName && commandPlan.allowProviderCommands
-                  ? outgoing.prompt
-                  : withEnvironmentInteraction(outgoing.prompt, opening?.mode, hasAttachments);
+              if (opening && commandPlan.commandName && commandPlan.allowProviderCommands) {
+                throw new PromptRejectedError(
+                  "Start with a regular prompt to apply the environment’s interaction mode, then run the provider command.",
+                );
+              }
+              const providerPrompt = withEnvironmentInteraction(
+                outgoing.prompt,
+                opening?.mode,
+                hasAttachments,
+              );
               await provider.send(durable.providerSessionId, providerPrompt, {
                 requestId: input.requestId,
                 // Only a person typing into the composer can mean "run this
@@ -1483,7 +1486,11 @@ export class NativeAgentPromptDispatch {
                   await this.host.storage
                     .updateEnvironment(
                       durable.environmentId,
-                      { openingInteraction: undefined },
+                      {
+                        openingInteraction: input.signInResendOf
+                          ? { ...opening, requestId: input.signInResendOf }
+                          : null,
+                      },
                       (environment) =>
                         environment.openingInteraction?.sessionKey === durable.key &&
                         environment.openingInteraction.requestId === input.requestId,
@@ -1518,6 +1525,12 @@ export class NativeAgentPromptDispatch {
               durable.providerSessionId !== input.requireProviderSessionId
             ) {
               throw new PromptRejectedError(REQUIRED_CONVERSATION_CHANGED);
+            }
+            if (
+              input.signInResendOf &&
+              durable.dispatchedRequestIds?.at(-1) !== input.signInResendOf
+            ) {
+              throw new PromptRejectedError("The conversation moved on before sign-in completed.");
             }
             if (failureRetry) {
               if (
@@ -1650,12 +1663,25 @@ export class NativeAgentPromptDispatch {
     const matches = (opening: Environment["openingInteraction"]) =>
       opening?.sessionKey === session.key && opening.requestId === input.requestId;
     const live = await this.host.storage.getEnvironment(input.environmentId);
-    if (live?.openingInteraction) {
-      return matches(live.openingInteraction) ? live.openingInteraction : undefined;
-    }
-    if (!live?.interactionMode || session.lastDispatchedTurn || session.turnOutcomes?.length) {
+    if (!live?.interactionMode) return undefined;
+    const previous = live.openingInteraction;
+    if (matches(previous)) return previous;
+    const resend =
+      previous?.sessionKey === session.key &&
+      previous.providerSessionId === session.providerSessionId &&
+      previous.requestId === input.signInResendOf &&
+      session.dispatchedRequestIds?.at(-1) === input.signInResendOf;
+    // This session lease rules out a concurrent send. A receipt can have
+    // been retired or discarded before the opening claim was cleared.
+    const abandoned =
+      previous?.sessionKey === session.key &&
+      session.pendingDispatch?.requestId !== previous.requestId &&
+      !session.dispatchedRequestIds?.includes(previous.requestId);
+    if (
+      (previous && !resend && !abandoned) ||
+      (!resend && (session.lastDispatchedTurn || session.turnOutcomes?.length))
+    )
       return undefined;
-    }
     const claimed = await this.host.storage.updateEnvironment(
       live.id,
       {
@@ -1667,9 +1693,11 @@ export class NativeAgentPromptDispatch {
         },
       },
       (environment) =>
-        !environment.openingInteraction &&
+        environment.openingInteraction?.requestId === previous?.requestId &&
+        environment.openingInteraction?.sessionKey === previous?.sessionKey &&
         environment.interactionMode === live.interactionMode &&
-        (!environment.pendingAgentLaunch ||
+        (resend ||
+          !environment.pendingAgentLaunch ||
           input.requestId === tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID)),
     );
     return matches(claimed.openingInteraction) ? claimed.openingInteraction : undefined;

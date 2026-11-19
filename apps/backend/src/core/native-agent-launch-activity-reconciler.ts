@@ -1725,10 +1725,10 @@ export class NativeAgentLaunchActivityReconciler {
       opening?.mode !== "task" ||
       opening.sessionKey !== session.key ||
       opening.providerSessionId !== session.providerSessionId ||
-      opening.requestId !== latestRequestId(session) ||
+      opening.requestId !== latestModelRequestId(session) ||
       latestTurnStopped(session) ||
       activityTurnSettled(session) ||
-      session.turnOutcomes?.some((outcome) => outcome.requestId === opening.requestId)
+      openingTurnHasOutcome(session, opening.requestId)
     )
       return false;
 
@@ -1747,9 +1747,10 @@ export class NativeAgentLaunchActivityReconciler {
       if (
         !current ||
         current.providerSessionId !== session.providerSessionId ||
-        latestRequestId(current) !== opening.requestId ||
+        latestModelRequestId(current) !== opening.requestId ||
         latestTurnStopped(current) ||
-        activityTurnSettled(current)
+        activityTurnSettled(current) ||
+        openingTurnHasOutcome(current, opening.requestId)
       )
         return false;
       const result = await interactions.resolveInteraction(session.providerSessionId, request.id, {
@@ -1793,13 +1794,6 @@ export class NativeAgentLaunchActivityReconciler {
     // belonging to one platform's catalogue could be sent to another; a model
     // now travels only down its own platform column.
     const resolved = resolveAgentPlatformSettings(tiers, agent);
-    // Grok's terminal launcher cannot pass an opening prompt. Use its native
-    // provider for this launch when there is work to deliver.
-    const grokOpeningWork =
-      agent === "grok" &&
-      environment.interactionMode !== undefined &&
-      Boolean(environment.initialPrompt?.trim() || environment.initialPromptAttachments?.length);
-    const mode = grokOpeningWork ? "native" : resolved.mode;
     // Tmux mode is experimental: a stored `tmux` launches on the Agent SDK
     // unless `global.experimentalTmux` is on.
     const claudeNativeBackend = effectiveClaudeNativeBackend(
@@ -1822,7 +1816,27 @@ export class NativeAgentLaunchActivityReconciler {
     const conversationMode = environment.initialConversationMode;
     const parameterValues = agent === "claude" ? claudeNativeParameterValues(resolved) : undefined;
     const nativeProviderLaunch =
-      mode === "native" && !(agent === "claude" && claudeNativeBackend === "tmux");
+      resolved.mode === "native" && !(agent === "claude" && claudeNativeBackend === "tmux");
+
+    if (
+      agent === "grok" &&
+      resolved.mode === "terminal" &&
+      environment.interactionMode &&
+      (environment.initialPrompt?.trim() || environment.initialPromptAttachments?.length)
+    ) {
+      await this.storage.updateEnvironment(environment.id, {
+        pendingAgentLaunch: false,
+        startupAgentSession: {
+          tabId: STARTUP_AGENT_TAB_ID,
+          agent,
+          style: "terminal",
+          status: "error",
+          error:
+            "Grok Terminal cannot start with a prompt or attachments. Open a Native tab to send the opening prompt.",
+        },
+      });
+      return;
+    }
 
     if (!nativeProviderLaunch) {
       try {
@@ -2229,6 +2243,21 @@ async function readTurnLost(
 
 function latestRequestId(session: PersistedNativeAgentSession): string | undefined {
   return session.pendingDispatch?.requestId ?? session.dispatchedRequestIds?.at(-1);
+}
+
+function latestModelRequestId(session: PersistedNativeAgentSession): string | undefined {
+  return (
+    session.pendingDispatch?.requestId ??
+    session.lastDispatchedTurn?.modelRequestId ??
+    latestRequestId(session)
+  );
+}
+
+function openingTurnHasOutcome(session: PersistedNativeAgentSession, openingRequestId: string) {
+  const latest = latestRequestId(session);
+  return session.turnOutcomes?.some(
+    ({ requestId }) => requestId === openingRequestId || requestId === latest,
+  );
 }
 
 /** The user asked to stop the session's latest turn. */

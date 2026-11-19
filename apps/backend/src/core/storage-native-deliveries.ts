@@ -423,10 +423,27 @@ export class NativeAgentDeliveries {
         updatedAt: nowIso(),
       };
       await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
+      await this.releaseOpeningInteraction(session, requestId);
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
       this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
       return true;
     });
+  }
+
+  private async releaseOpeningInteraction(
+    session: PersistedNativeAgentSession,
+    requestId: string,
+  ): Promise<void> {
+    const environment = await this.repos.projects.getEnvironment(session.environmentId);
+    const opening = environment?.openingInteraction;
+    if (opening?.sessionKey !== session.key || opening.requestId !== requestId) return;
+    await this.repos.projects.updateEnvironment(
+      session.environmentId,
+      { openingInteraction: null },
+      (current) =>
+        current.openingInteraction?.sessionKey === session.key &&
+        current.openingInteraction.requestId === requestId,
+    );
   }
 
   /**
@@ -457,6 +474,7 @@ export class NativeAgentDeliveries {
         updatedAt: nowIso(),
       };
       await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
+      await this.releaseOpeningInteraction(session, requestId);
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
       this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
       return true;
@@ -630,6 +648,10 @@ export class NativeAgentDeliveries {
         ? {
             lastDispatchedTurn: {
               requestId,
+              modelRequestId:
+                session.lastDispatchedTurn?.modelRequestId ??
+                session.lastDispatchedTurn?.requestId ??
+                session.dispatchedRequestIds?.at(-1),
               mode: session.lastDispatchedTurn
                 ? session.lastDispatchedTurn.mode
                 : session.controls?.mode,

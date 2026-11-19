@@ -88,7 +88,12 @@ const forkEnvironmentMock = mock(async () => ({
   delegationBaseCommit: "a".repeat(40),
   delegationBaseBranch: "main",
 }));
-const updateEnvironmentAgentSettingsMock = mock(async () => createdEnvironment);
+const updateEnvironmentAgentSettingsMock = mock(
+  async (...args: Parameters<typeof realBackend.updateEnvironmentAgentSettings>) => ({
+    ...createdEnvironment,
+    interactionMode: args[7],
+  }),
+);
 const getContainerGitHubCredentialStatusMock = mock(async () => ({
   source: "host-cli" as const,
   available: true,

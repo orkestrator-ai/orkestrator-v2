@@ -183,6 +183,8 @@ export interface EnsureNativeAgentSessionInput {
 }
 
 export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSessionInput {
+  /** Internal only. The initial Claude request refused before sign-in. */
+  signInResendOf?: string;
   /** Retry must still be targeting this provider session at admission. */
   failureSessionId?: string;
   prompt: string;

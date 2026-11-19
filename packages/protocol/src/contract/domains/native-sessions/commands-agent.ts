@@ -276,6 +276,7 @@ export const getNativeAgentTranscriptUpdateCommand = defineCommand({
   args: Schema.Struct({
     ...sessionKey,
     ...progressive,
+    freshSource: Schema.optionalKey(Schema.Boolean),
     liveWindow: optionalUnknown,
     patchVersion: optionalUnknown,
   }),
@@ -291,7 +292,11 @@ export const getNativeAgentSessionStateUpdateCommand = defineCommand({
   since: 1,
   access: "workspace",
   read: true,
-  args: Schema.Struct({ ...sessionKey, ...progressive }),
+  args: Schema.Struct({
+    ...sessionKey,
+    ...progressive,
+    freshSource: Schema.optionalKey(Schema.Boolean),
+  }),
   result: ViewUpdateSchema,
   critical: [],
 });

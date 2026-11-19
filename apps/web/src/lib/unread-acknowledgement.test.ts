@@ -1,9 +1,29 @@
 import { describe, expect, test } from "bun:test";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
-import { unreadAcknowledgement } from "./unread-acknowledgement";
+import { unreadAcknowledgement as decide } from "./unread-acknowledgement";
 
 const key = (tabId: string) => `env-env-1:${tabId}`;
+
+function unreadAcknowledgement(
+  environment: Parameters<typeof decide>[0],
+  layout: Parameters<typeof decide>[1],
+  hydration: Parameters<typeof decide>[2],
+  mobile = false,
+) {
+  return decide(
+    environment,
+    layout,
+    hydration,
+    mobile,
+    new Map(
+      (environment.unreadSessionKeys ?? []).map((key) => [
+        key,
+        { activityAt: new Date(0).toISOString(), sessionId: key },
+      ]),
+    ),
+  );
+}
 
 function tab(id: string, extra: Partial<TabInfo> = {}): TabInfo {
   return { id, type: "agent-native", ...extra } as TabInfo;
@@ -51,7 +71,6 @@ describe("unreadAcknowledgement", () => {
     expect(unreadAcknowledgement(environment, selected, "done")).toEqual({
       kind: "sessions",
       sessionKeys: [key("a")],
-      remaining: [],
     });
   });
 
@@ -64,17 +83,32 @@ describe("unreadAcknowledgement", () => {
     expect(unreadAcknowledgement(environment, split, "done")).toEqual({
       kind: "sessions",
       sessionKeys: [key("a"), key("c")],
-      remaining: [key("d")],
     });
   });
 
-  test("a session no tab can show is acknowledged by seeing the environment", () => {
+  test("an attributed result stays unread after a layout restore without its tab", () => {
     const environment = { id: "env-1", unreadSessionKeys: [key("closed"), key("a")] };
-    const known = layout([{ tabs: [tab("a"), tab("b")], activeTabId: "b" }]);
-    expect(unreadAcknowledgement(environment, known, "done")).toEqual({
+    const fallback = layout([{ tabs: [tab("a"), tab("b")], activeTabId: "b" }]);
+    expect(unreadAcknowledgement(environment, fallback, "done")).toEqual({ kind: "none" });
+    const placeholder = layout([{ tabs: [], activeTabId: null }]);
+    expect(unreadAcknowledgement(environment, placeholder, undefined)).toEqual({ kind: "pending" });
+  });
+
+  test("only the selected mobile pane can acknowledge even when both views have read updates", () => {
+    const environment = { id: "env-1", unreadSessionKeys: [key("a"), key("b")] };
+    const split = layout([
+      { tabs: [tab("a")], activeTabId: "a" },
+      { tabs: [tab("b")], activeTabId: "b" },
+    ]);
+    expect(unreadAcknowledgement(environment, split, "done", true)).toEqual({
       kind: "sessions",
-      sessionKeys: [key("closed")],
-      remaining: [key("a")],
+      sessionKeys: [key("a")],
+    });
+    expect(
+      unreadAcknowledgement(environment, { ...split, activePaneId: "pane-1" }, "done", true),
+    ).toEqual({
+      kind: "sessions",
+      sessionKeys: [key("b")],
     });
   });
 

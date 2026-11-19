@@ -476,18 +476,26 @@ export const clientEnvironmentFields = {
    * work has now been seen.
    */
   hasUnreadWork: optionalBoolean,
-  /** What most recently lit `hasUnreadWork`; cleared with it. */
+  /** The reason for the highest-priority unread entry. */
   unreadReason: Schema.optional(EnvironmentUnreadReasonSchema),
-  /**
-   * The agent sessions (logical session keys) whose results lit
-   * `hasUnreadWork` and have not been viewed yet. Absent or empty while the
-   * badge is set means the unread work belongs to the environment as a whole
-   * (a terminal, a pipeline, a client marking it unread), so viewing the
-   * environment acknowledges it. When present, a client acknowledges the
-   * badge only by showing one of these sessions; the badge clears once every
-   * key has been acknowledged. Bounded; cleared with the badge.
-   */
+  /** Logical sessions with unread work, also read by older clients. */
   unreadSessionKeys: Schema.optional(mutableArray(Schema.String)),
+  /** Environment-wide work can remain unread alongside individual sessions. */
+  unreadEnvironmentReason: Schema.optional(EnvironmentUnreadReasonSchema),
+  /** Bounded per-session reasons and the activity each session view must cover. */
+  unreadSessionEntries: Schema.optional(
+    mutableArray(
+      Schema.Struct({
+        sessionKey: Schema.String,
+        reason: EnvironmentUnreadReasonSchema,
+        activityAt: Schema.String,
+      }),
+    ),
+  ),
+  /** The attribution bound was reached. An explicit full clear dismisses overflow. */
+  unreadSessionOverflow: optionalBoolean,
+  /** Orders unread writes, including partial clears at the same activity timestamp. */
+  unreadRevision: Schema.optional(Schema.Number),
   /** Bounded content-free dedupe keys for agent events that requested attention. */
   agentAttentionKeys: Schema.optional(mutableArray(Schema.String)),
   /** Durable intent to open the configured agent once setup is ready. */

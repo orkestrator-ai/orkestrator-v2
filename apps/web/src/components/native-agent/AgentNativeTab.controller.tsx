@@ -1,3 +1,4 @@
+import { useRenderedUnreadResult } from "@/lib/unread-result-view";
 import { useCoordinatorActionHistory } from "@/components/projects/useCoordinatorActionHistory";
 import { useCoordinatorActionMarking } from "@/components/projects/useCoordinatorActionMarking";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -550,6 +551,7 @@ export function SharedNativeAgentController({
     transcriptAvailability,
     transcriptRefreshing,
     transcriptError,
+    unreadRead,
     sessionStateAvailability,
     sessionStateRefreshing,
     sessionStateError,
@@ -4038,6 +4040,17 @@ export function SharedNativeAgentController({
     projection?.suggestedPrompt && !isGoalCarrierContent(projection.suggestedPrompt)
       ? projection.suggestedPrompt
       : undefined;
+  useRenderedUnreadResult(
+    sessionKey,
+    isActive &&
+      !hiddenByLayout &&
+      !transcriptError &&
+      sessionStateAvailability === "current" &&
+      (transcriptAvailability === "current" || transcriptAvailability === "empty") &&
+      unreadRead?.sessionId === projection?.sessionId
+      ? unreadRead
+      : undefined,
+  );
   const chatShell = (
     <NativeChatShell
       agentExpansionScope={data.environmentId}

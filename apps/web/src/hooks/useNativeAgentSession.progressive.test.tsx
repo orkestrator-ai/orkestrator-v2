@@ -1,3 +1,5 @@
+import { environmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 /**
  * Progressive-view coverage for the native-agent session hook.
  *
@@ -360,7 +362,54 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  appCommandStore(environmentStore).setState({ environments: [] });
   appCommandStore(nativeAgentProjectionStore).getState().reset();
+});
+
+test("an unread result is confirmed only after a successful post-event transcript and state read", async () => {
+  const activityAt = "2026-11-19T09:00:00.000Z";
+  appCommandStore(environmentStore).setState({
+    environments: [
+      {
+        id: identity.environmentId,
+        hasUnreadWork: true,
+        unreadSessionKeys: [identity.logicalSessionKey],
+        lastActivityAt: activityAt,
+      } as Environment,
+    ],
+  });
+  let deliver!: (value: NativeAgentTranscriptUpdate<TestMessage>) => void;
+  transcriptUpdates.push(
+    () =>
+      new Promise((resolve) => {
+        deliver = resolve;
+      }),
+  );
+  stateUpdates.push(() => stateSnapshot("state-1"));
+  const { result } = renderSession();
+  await waitFor(() => expect(transcriptCalls[0]?.forceSnapshot).toBe(true));
+  expect(result.current.unreadRead).toBeUndefined();
+  await act(async () => {
+    deliver({ viewVersion: 1, status: "unavailable", retryable: true, error: "Read delayed" });
+  });
+  expect(result.current.unreadRead).toBeUndefined();
+
+  transcriptUpdates.push(() =>
+    transcriptSnapshot("cached", [{ id: "old", text: "old" }], { freshness: "cached" }),
+  );
+  stateUpdates.push(() => stateSnapshot("state-2"));
+  await act(async () => {
+    await result.current.refresh();
+  });
+  expect(result.current.unreadRead).toBeUndefined();
+
+  transcriptUpdates.push(() => transcriptSnapshot("current", [{ id: "new", text: "new" }]));
+  stateUpdates.push(() => stateSnapshot("state-3"));
+  await act(async () => {
+    await result.current.refresh();
+  });
+  expect(result.current.projection?.messages).toEqual([{ id: "new", text: "new" }]);
+  expect(result.current.unreadRead).toEqual({ activityAt, sessionId: identity.providerSessionId });
 });
 
 describe("a backend without progressive views", () => {

@@ -239,6 +239,7 @@ export class NativeAgentProgressiveReads {
   /**
    * Join equivalent work, then run at most one trailing read when the session
    * epoch moved. A forced refresh never settles from an older joined read.
+   * An unread confirmation also waits for work started in the same epoch.
    */
   async progressiveReadCovering<T>(
     key: string,
@@ -246,10 +247,14 @@ export class NativeAgentProgressiveReads {
     requestedEpoch: number,
     force: boolean,
     read: () => Promise<T>,
+    freshSource = false,
   ): Promise<T> {
     const pending = this.progressiveReads.get(key) as Promise<T> | undefined;
     const startedEpoch = this.progressiveReadEpochs.get(key);
-    if (pending && force && startedEpoch !== undefined && startedEpoch < requestedEpoch) {
+    if (
+      pending &&
+      (freshSource || (force && startedEpoch !== undefined && startedEpoch < requestedEpoch))
+    ) {
       await pending.catch(() => undefined);
     }
     const value = await this.progressiveRead(key, read, sessionKey);
@@ -298,6 +303,7 @@ export class NativeAgentProgressiveReads {
     if (!provider.interactiveSnapshot) {
       return Promise.reject(new ProviderUnavailableError("Provider snapshot is unavailable"));
     }
+    if (input.freshSource) return provider.interactiveSnapshot(sessionId);
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,

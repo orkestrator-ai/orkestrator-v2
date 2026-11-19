@@ -581,6 +581,7 @@ describe("NativeAgentService", () => {
           agentActivityState: "working",
           hasUnreadWork: true,
           unreadReason: "agent_question",
+          unreadSessionKeys: ["tab-1"],
         });
 
         await storage.setEnvironmentUnread("env-1", false);

@@ -1,31 +1,22 @@
 import { createSessionKey } from "@/lib/utils";
+import { unreadResultActivityAt, type UnreadResultRead } from "@/lib/unread-result-view";
+import { selectMobilePaneId } from "@/components/pane-layout/MobilePaneSwitcher";
 import type { EnvironmentPaneState, PaneLayoutHydrationStatus } from "@/stores/paneLayoutStore";
 import { getAllLeaves } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 
-/**
- * What showing an environment acknowledges of its unread work.
- *
- * - `environment`: the badge belongs to the environment as a whole (no
- *   attributed sessions), so seeing the environment acknowledges all of it.
- * - `sessions`: these attributed sessions are on screen (or have no tab
- *   that could show them); `remaining` are the ones still unseen.
- * - `none`: every attributed session has a tab here and none is on screen.
- * - `pending`: the environment's tabs are not known yet.
- */
 export type UnreadAcknowledgement =
   | { kind: "environment" }
-  | { kind: "sessions"; sessionKeys: string[]; remaining: string[] }
+  | { kind: "sessions"; sessionKeys: string[] }
   | { kind: "none" }
   | { kind: "pending" };
 
-/**
- * Tabs currently rendered in an environment: each pane's selected tab, and
- * an agent tab embedded in a selected design canvas whose agent panel shows.
- */
-function onScreenTabIds(layout: EnvironmentPaneState): Set<string> {
+function onScreenTabIds(layout: EnvironmentPaneState, mobile: boolean): Set<string> {
   const visible = new Set<string>();
-  for (const leaf of getAllLeaves(layout.root)) {
+  const leaves = getAllLeaves(layout.root);
+  const mobilePaneId = mobile ? selectMobilePaneId(leaves, layout.activePaneId) : undefined;
+  for (const leaf of leaves) {
+    if (mobilePaneId && leaf.id !== mobilePaneId) continue;
     const active = leaf.tabs.find((tab) => tab.id === leaf.activeTabId);
     if (!active) continue;
     visible.add(active.id);
@@ -37,41 +28,37 @@ function onScreenTabIds(layout: EnvironmentPaneState): Set<string> {
   return visible;
 }
 
-/**
- * Decides which unread results an environment on screen has shown.
- *
- * An attributed session is acknowledged when one of its tabs is on screen.
- * A session with no tab in this layout at all (a closed tab, a pipeline
- * worker, a session another surface owns) cannot be shown by any tab, so
- * seeing the environment acknowledges it, as for an unattributed badge.
- */
+/** Match actual render receipts to the events still pending in the visible layout. */
 export function unreadAcknowledgement(
-  environment: Pick<Environment, "id" | "unreadSessionKeys">,
+  environment: Pick<
+    Environment,
+    | "id"
+    | "unreadSessionKeys"
+    | "unreadSessionEntries"
+    | "unreadEnvironmentReason"
+    | "unreadSessionOverflow"
+    | "lastActivityAt"
+  >,
   layout: EnvironmentPaneState | undefined,
   hydration: PaneLayoutHydrationStatus | undefined,
+  mobile: boolean,
+  rendered: ReadonlyMap<string, UnreadResultRead>,
 ): UnreadAcknowledgement {
-  const keys = (environment.unreadSessionKeys ?? []).filter(
-    (key): key is string => typeof key === "string" && key.length > 0,
-  );
-  if (keys.length === 0) return { kind: "environment" };
-  if (!layout || hydration === "pending") return { kind: "pending" };
-
-  const visibleTabIds = onScreenTabIds(layout);
-  const tabSessionKeys = new Set<string>();
-  const visibleSessionKeys = new Set<string>();
-  for (const leaf of getAllLeaves(layout.root)) {
-    for (const tab of leaf.tabs) {
-      const key = createSessionKey(environment.id, tab.id);
-      tabSessionKeys.add(key);
-      if (visibleTabIds.has(tab.id)) visibleSessionKeys.add(key);
-    }
+  const keys = environment.unreadSessionKeys ?? [];
+  if (keys.length === 0 && !environment.unreadSessionOverflow) return { kind: "environment" };
+  if (keys.length > 0 && layout && hydration === "done") {
+    const visible = new Set(
+      Array.from(onScreenTabIds(layout, mobile), (id) => createSessionKey(environment.id, id)),
+    );
+    const sessionKeys = keys.filter((key) => {
+      const read = rendered.get(key);
+      return (
+        read && visible.has(key) && read.activityAt === unreadResultActivityAt(environment, key)
+      );
+    });
+    if (sessionKeys.length > 0) return { kind: "sessions", sessionKeys };
   }
-  const sessionKeys = keys.filter((key) => visibleSessionKeys.has(key) || !tabSessionKeys.has(key));
-  if (sessionKeys.length === 0) return { kind: "none" };
-  const acknowledged = new Set(sessionKeys);
-  return {
-    kind: "sessions",
-    sessionKeys,
-    remaining: keys.filter((key) => !acknowledged.has(key)),
-  };
+  if (environment.unreadEnvironmentReason) return { kind: "environment" };
+  if (keys.length > 0 && (!layout || hydration !== "done")) return { kind: "pending" };
+  return { kind: "none" };
 }

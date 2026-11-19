@@ -1,6 +1,11 @@
+import { preferredUnreadReason } from "@orkestrator/protocol/environment-attention";
 import { useEffect, useRef } from "react";
 import { showEnvironmentUnreadToast } from "@/components/environments/environmentUnreadToast";
-import { useNodeScope } from "@/lib/node-scope/providers";
+import { useNodeScope, useSignal } from "@/lib/node-scope/providers";
+import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
+import { scopeSnapshotSync } from "@/lib/node-scope/snapshot-sync";
+import { renderedUnreadResults } from "@/lib/unread-result-view";
+import { useMediaQuery } from "./useMediaQuery";
 import { unreadAcknowledgement } from "@/lib/unread-acknowledgement";
 import { useWindowForeground } from "@/lib/window-foreground";
 import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
@@ -33,7 +38,7 @@ function persistedIsCurrent(current: Environment, persisted: Environment): boole
  * user got there — sidebar click, keyboard, or a selection restored on startup.
  * Selection alone is not viewing: the window must be in the foreground (visible
  * and focused), and when the backend attributes the badge to agent sessions
- * (`unreadSessionKeys`), one of those sessions' tabs must be on screen. Opening
+ * (`unreadSessionKeys`), its visible view must have rendered the result. Opening
  * a different tab in the environment leaves the badge alone. The activity
  * token sent with the clear stops a view of an older result from clearing a
  * newer one. The store is updated optimistically and the backend write is what
@@ -46,6 +51,11 @@ export function useUnreadEnvironmentSync(): void {
   const scope = useNodeScope();
   const environments = useEnvironmentStore((state) => state.environments);
   const foreground = useWindowForeground();
+  const mobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
+  const sync = useSignal(scopeSnapshotSync(scope));
+  const rendered = useSignal(renderedUnreadResults(scope));
+  // Track the last optimistic write per row, without retaining settled requests.
+  const pendingWrites = useRef(new Map<string, object>());
   // Narrow selections: the per-environment record has a stable reference, so
   // layout changes in other environments do not re-run the effect.
   const layout = usePaneLayoutStore((state) =>
@@ -68,7 +78,7 @@ export function useUnreadEnvironmentSync(): void {
     if (!selectedEnvironmentId) return;
     // A selection left in a background window has not been seen. The
     // activation stays pending so the toast shows when the user returns.
-    if (!foreground) return;
+    if (!foreground || sync.state !== "live") return;
     const environment = environments.find((candidate) => candidate.id === selectedEnvironmentId);
     if (!environment) return;
     const activated = pendingActivationRef.current === selectedEnvironmentId;
@@ -77,7 +87,7 @@ export function useUnreadEnvironmentSync(): void {
       return;
     }
 
-    const acknowledgement = unreadAcknowledgement(environment, layout, hydration);
+    const acknowledgement = unreadAcknowledgement(environment, layout, hydration, mobile, rendered);
     // The tabs are not known yet; decide once the layout has been restored.
     if (acknowledgement.kind === "pending") return;
     pendingActivationRef.current = null;
@@ -87,17 +97,36 @@ export function useUnreadEnvironmentSync(): void {
     const observedActivityAt = environment.lastActivityAt ?? null;
     const store = scope.store(environmentStore);
     const sessionKeys =
-      acknowledgement.kind === "sessions" ? acknowledgement.sessionKeys : undefined;
-    const remaining = acknowledgement.kind === "sessions" ? acknowledgement.remaining : [];
-    store
-      .getState()
-      .updateEnvironment(
-        selectedEnvironmentId,
-        remaining.length > 0
-          ? { unreadSessionKeys: remaining }
-          : { hasUnreadWork: false, unreadReason: undefined, unreadSessionKeys: undefined },
-      );
-    // An environment-wide badge sends no session keys, as older clients do.
+      acknowledgement.kind === "sessions"
+        ? acknowledgement.sessionKeys
+        : environment.unreadSessionKeys?.length || environment.unreadEnvironmentReason
+          ? []
+          : undefined;
+    const remaining = environment.unreadSessionKeys?.filter((key) => !sessionKeys?.includes(key));
+    const entries = environment.unreadSessionEntries?.filter(
+      ({ sessionKey }) => !sessionKeys?.includes(sessionKey),
+    );
+    const environmentReason =
+      acknowledgement.kind === "environment" ? undefined : environment.unreadEnvironmentReason;
+    const hasUnreadWork = Boolean(
+      remaining?.length || environmentReason || environment.unreadSessionOverflow,
+    );
+    const pending = {};
+    const pendingByEnvironment = pendingWrites.current;
+    pendingByEnvironment.set(selectedEnvironmentId, pending);
+    store.getState().updateEnvironment(selectedEnvironmentId, {
+      hasUnreadWork,
+      unreadReason: hasUnreadWork
+        ? (preferredUnreadReason(
+            environmentReason,
+            entries ?? [],
+            environment.unreadSessionOverflow,
+          ) ?? environment.unreadReason)
+        : undefined,
+      unreadSessionKeys: remaining?.length ? remaining : undefined,
+      unreadSessionEntries: entries?.length ? entries : undefined,
+      unreadEnvironmentReason: environmentReason,
+    });
     const clear = sessionKeys
       ? nodeBackend.setEnvironmentUnread(
           selectedEnvironmentId,
@@ -109,12 +138,28 @@ export function useUnreadEnvironmentSync(): void {
     void clear
       .then((persistedEnvironment) => {
         const currentEnvironment = store.getState().getEnvironmentById(selectedEnvironmentId);
-        if (!currentEnvironment) return;
-        if (persistedIsCurrent(currentEnvironment, persistedEnvironment)) {
+        if (!currentEnvironment || !persistedIsCurrent(currentEnvironment, persistedEnvironment))
+          return;
+        const responseRevision = persistedEnvironment.unreadRevision;
+        const currentRevision = currentEnvironment.unreadRevision;
+        const latest = pendingByEnvironment.get(selectedEnvironmentId);
+        // New backends order even clears of the same activity. For older
+        // backends, only the latest local request may reconcile the row.
+        if (
+          (responseRevision ?? 0) >= (currentRevision ?? 0) &&
+          (latest === pending ||
+            (!latest &&
+              responseRevision !== undefined &&
+              responseRevision > (currentRevision ?? 0)))
+        ) {
           store.getState().updateEnvironment(selectedEnvironmentId, {
             hasUnreadWork: persistedEnvironment.hasUnreadWork === true,
             unreadReason: persistedEnvironment.unreadReason,
             unreadSessionKeys: persistedEnvironment.unreadSessionKeys,
+            unreadSessionEntries: persistedEnvironment.unreadSessionEntries,
+            unreadEnvironmentReason: persistedEnvironment.unreadEnvironmentReason,
+            unreadSessionOverflow: persistedEnvironment.unreadSessionOverflow,
+            unreadRevision: persistedEnvironment.unreadRevision,
           });
         }
       })
@@ -126,6 +171,22 @@ export function useUnreadEnvironmentSync(): void {
           environmentId: selectedEnvironmentId,
           error: formatLogError(error),
         });
+      })
+      .finally(() => {
+        if (pendingByEnvironment.get(selectedEnvironmentId) === pending) {
+          pendingByEnvironment.delete(selectedEnvironmentId);
+        }
       });
-  }, [scope, selectedEnvironmentId, environments, nodeBackend, foreground, layout, hydration]);
+  }, [
+    scope,
+    selectedEnvironmentId,
+    environments,
+    nodeBackend,
+    foreground,
+    layout,
+    hydration,
+    mobile,
+    rendered,
+    sync,
+  ]);
 }

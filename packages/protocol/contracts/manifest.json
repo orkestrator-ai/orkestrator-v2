@@ -179,7 +179,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:13b505854c13b8ea36caf530d0ca10c20f84ce3b7e962bef05fed2f0d076d676",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "add_github_issue_comment": {
       "domain": "pull-requests",
@@ -440,7 +440,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:d452c8b699a94a6d62ab80a143b4db9aacc86afaf6f67cbd959dabae81662723",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "approve_native_agent_interaction_and_remember": {
       "domain": "config",
@@ -1588,7 +1588,7 @@
         "delegationBaseCommit"
       ],
       "argsDigest": "sha256:bee6bbcf452d3750491fb0fcd6e458ecf6ab094a8a65fed30ee334d09c914017",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "create_feature_build": {
       "domain": "pipelines",
@@ -2524,7 +2524,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
-      "resultDigest": "sha256:1fe2dbf130bf3248d45d1f1e2c113419631ad13ee25c8a67c18990bf7bb6c5f0"
+      "resultDigest": "sha256:ca8be0e465d970bbe2599b3dfbc0c39dfe93ea867a276c58c6f8a41f844aea66"
     },
     "ensure_host_pi_model_catalog": {
       "domain": "agent-servers",
@@ -2560,7 +2560,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "export_linear_connection": {
       "domain": "ticket-sync",
@@ -2641,7 +2641,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:90f451dcf4d1e367aee589a140729726159b5bdfe446ddfa26415b2d97bf0524",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "fork_native_agent_session": {
       "domain": "native-sessions",
@@ -3226,7 +3226,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:1ad6150828a7c4a44fe35814ac78ca5f80c7c9ccb19a27fa22631d0422f4a87e",
-      "resultDigest": "sha256:27abd544f6313131170b2c36d497bb74799d40af88a43d15b4144b087020c8d3"
+      "resultDigest": "sha256:276fd72fedf5a2395417aa1094ac922433489fd0d730ac16ee1df17698de32df"
     },
     "get_environment_commit_ancestry": {
       "domain": "git",
@@ -3334,7 +3334,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
-      "resultDigest": "sha256:95029c06e668f8fbd135ebeb0b567c94e466f218be3a83c10cc31ed1d8914808"
+      "resultDigest": "sha256:6ace611387d0535dddbdc933a5e6d349a5ba72cc0328c551100535f72fbdae4e"
     },
     "get_environment_snapshots": {
       "domain": "environments",
@@ -3343,7 +3343,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:45bf7fed68034907c8a12fe893cf997ff2cb5002d22e11ea6952da5b7bb33578",
-      "resultDigest": "sha256:fb6a55ef89551dff2658bf649908cbcc208eda90e99d957c42f62aaf70c967a7"
+      "resultDigest": "sha256:7a1f0b9d8d10d09378024f991697e2eff788988d5d5694b57498826379dde441"
     },
     "get_environment_status": {
       "domain": "environments",
@@ -3370,7 +3370,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
-      "resultDigest": "sha256:222f4595b9f98e05072285b0d445053e2e10429b720bd7f86cc4d831edf42b8a"
+      "resultDigest": "sha256:886b4bb272544365f2b602383a068c0d586abb227ab209f142fad377fd009a1a"
     },
     "get_feature_plans": {
       "domain": "kanban",
@@ -3936,7 +3936,7 @@
       "access": "workspace",
       "read": true,
       "critical": [],
-      "argsDigest": "sha256:ce54228b3e867aa2a391ba4bff4ed8bd359ba5982930be73059b12f0fe2dc1b3",
+      "argsDigest": "sha256:a71295126bd51b29958dacb8d567d2a7c2ac3af51e245a2ef45cba53f1342347",
       "resultDigest": "sha256:c77141b5221ccedacfd7df5c4938853e6eeff7ab74e9b0a984b0611cffe1d1c8"
     },
     "get_native_agent_sign_in_resend": {
@@ -3972,7 +3972,7 @@
       "access": "workspace",
       "read": true,
       "critical": [],
-      "argsDigest": "sha256:037b1c7ac11d8243adaabc52bcbf81cca721d0038859d8939e8e5f6eb8f94a9a",
+      "argsDigest": "sha256:ae8d2e8d4df7a808715394368362efa7144d1f7df9e9e03f7089c0abf9e85e01",
       "resultDigest": "sha256:c77141b5221ccedacfd7df5c4938853e6eeff7ab74e9b0a984b0611cffe1d1c8"
     },
     "get_node_project_coordinator": {
@@ -5582,7 +5582,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:23c5786232d7494ec42234ee1fcddd373c357df6fb7cc6107bdce2d3655d7b55",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "move_local_file": {
       "domain": "files",
@@ -5771,7 +5771,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "patch_global_config": {
       "domain": "config",
@@ -6257,7 +6257,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:b72f7b34c8d0796f2b87ec9da82c417b80016042853d099bf2b47502a1218f03",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "reauthenticate_agent_account": {
       "domain": "accounts",
@@ -6392,7 +6392,7 @@
       "read": false,
       "critical": ["expectedContainerId", "expectedRevision", "keepRecoveryCopy", "operationId"],
       "argsDigest": "sha256:cac0e9d25111f53afb60b84295c961937f0c05fc91fa6e23aeac95fe72d3733d",
-      "resultDigest": "sha256:c75dc63c16b023a67a153bbff367a99ff815b5f36e23426ad6b35567d791dec1"
+      "resultDigest": "sha256:a92e525640474ce49a634e79acd262be3aa27b3727d18469b1327afeb3d4b97c"
     },
     "refresh_host_agent_model_catalog": {
       "domain": "agent-servers",
@@ -6536,7 +6536,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:d8a8a29c2ff9ad94fd73232c83ef5acf5deb76890f273ebae0a63328588ced6b",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "rename_environment_from_prompt": {
       "domain": "environments",
@@ -6599,7 +6599,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:36cfd797af18c768a69b89c1e011d433eabf458eac2163429ac2f50bd90555a7",
-      "resultDigest": "sha256:222f4595b9f98e05072285b0d445053e2e10429b720bd7f86cc4d831edf42b8a"
+      "resultDigest": "sha256:886b4bb272544365f2b602383a068c0d586abb227ab209f142fad377fd009a1a"
     },
     "reorder_projects": {
       "domain": "projects",
@@ -6680,7 +6680,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:2fd2cb88b090dd7e9d9835d43eb890327b0e1b2e9086c55df8deff76a5e6770d",
-      "resultDigest": "sha256:95029c06e668f8fbd135ebeb0b567c94e466f218be3a83c10cc31ed1d8914808"
+      "resultDigest": "sha256:6ace611387d0535dddbdc933a5e6d349a5ba72cc0328c551100535f72fbdae4e"
     },
     "resolve_controller_conflicts": {
       "domain": "coordinator",
@@ -6815,7 +6815,7 @@
       "read": false,
       "critical": ["expectedContainerId", "expectedRevision", "operationId"],
       "argsDigest": "sha256:ff759f4765ddb88913c9d4437552c1b13dce42c757229dbb64a20e7aaf4f8117",
-      "resultDigest": "sha256:c75dc63c16b023a67a153bbff367a99ff815b5f36e23426ad6b35567d791dec1"
+      "resultDigest": "sha256:a92e525640474ce49a634e79acd262be3aa27b3727d18469b1327afeb3d4b97c"
     },
     "resume_agent_account_auto_switch": {
       "domain": "accounts",
@@ -7103,7 +7103,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "run_granted_agent_account_switch": {
       "domain": "nodes",
@@ -7418,7 +7418,7 @@
       "read": false,
       "critical": ["expectedBaseRef", "expectedPrUrl", "expectedTargetBranch"],
       "argsDigest": "sha256:26da6766f1722055a225132ee83dc3aa022fbb8080228494c72f3a272ac2f44d",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "set_environment_diff_base": {
       "domain": "git",
@@ -7427,7 +7427,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:ef1775c2fbc8e8835e15e3480da4bf8b2dd08b9aa22b0224764d47048b56b242",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "set_environment_pr": {
       "domain": "environments",
@@ -7436,7 +7436,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:db4d50ea051f2c51d71fb7c3beacfe5bc0f045481e74415d8af04644080b5bba",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "set_environment_unread": {
       "domain": "pipelines",
@@ -7445,7 +7445,7 @@
       "read": false,
       "critical": ["expectedLastActivityAt"],
       "argsDigest": "sha256:367c5fdc0adc07d2f27346a3537667966f05da4bc11d7b734acf6dcce2cea8d3",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "set_fleet_update_policy": {
       "domain": "system",
@@ -7742,7 +7742,7 @@
       "read": false,
       "critical": ["expectedRevision", "operationId"],
       "argsDigest": "sha256:55676456993e82097e4036a7470123d770bffb7c625d50e6c5f772bba404dcd9",
-      "resultDigest": "sha256:1fe2dbf130bf3248d45d1f1e2c113419631ad13ee25c8a67c18990bf7bb6c5f0"
+      "resultDigest": "sha256:ca8be0e465d970bbe2599b3dfbc0c39dfe93ea867a276c58c6f8a41f844aea66"
     },
     "start_environment_background": {
       "domain": "environments",
@@ -8246,7 +8246,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "sync_node_tickets": {
       "domain": "ticket-sync",
@@ -8543,7 +8543,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:b25ea5ec6f99407a81468dea51b95d301e2c133c8130a1ea84dcd213102bb519",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "update_environment_allowed_domains": {
       "domain": "environments",
@@ -8552,7 +8552,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:4dab0ec70a34d22f586073493d4f555ccc4736438424c4da668bdcd612eb33de",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "update_environment_resources": {
       "domain": "environments",
@@ -8678,7 +8678,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:b48af2564b9f6228e3907d6a0327f89d6216d96e18fc02b4d43b5c89a10e4d01",
-      "resultDigest": "sha256:0f958df6028f34979320d7b19e78eed0c11a3fa1547f82f89b4a6d3c4237afb2"
+      "resultDigest": "sha256:889d36e53a55fa06301e1492f9d7baad67f8b471b8cb745e06bd395e7aab7207"
     },
     "update_portal_layout": {
       "domain": "nodes",

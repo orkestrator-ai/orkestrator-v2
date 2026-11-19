@@ -888,6 +888,7 @@ export class NativeAgentLaunchActivityReconciler {
             pendingInteraction?: boolean;
             contentRevision?: string;
             readTurnFailed?: () => Promise<boolean>;
+            providerObserved?: boolean;
           } = {},
         ): Promise<void> => {
           if (!runtimeStillCurrent() || !this.observations.accepts(ticket, session.key)) {
@@ -910,6 +911,7 @@ export class NativeAgentLaunchActivityReconciler {
             details.contentRevision,
             details.readTurnFailed,
             unwatchedWorking,
+            details.providerObserved === true,
           );
           if (recorded.completed) completionCandidates.add(session.environmentId);
           if (recorded.attentionRecorded) attentionRecordedEnvironments.add(session.environmentId);
@@ -1064,6 +1066,7 @@ export class NativeAgentLaunchActivityReconciler {
                 }
               }
               await applyObservation(session, observedActivity, {
+                providerObserved: true,
                 ...(observation?.readyForInput !== undefined
                   ? { readyForInput: observation.readyForInput }
                   : {}),
@@ -1364,10 +1367,11 @@ export class NativeAgentLaunchActivityReconciler {
      * the activity observation's `turnFailed`, or for a provider that keeps a
      * failure off its lifecycle, a read of the turn's outcome. Also asked for
      * a session first answering idle where `unwatchedWorking` holds; there a
-     * "no" stays quiet and the aggregate's restart fallback announces the end.
+     * successful end also belongs to the session the sweep identified.
      */
     readTurnFailed?: () => Promise<boolean>,
     unwatchedWorking = false,
+    providerObserved = false,
   ): Promise<{ completed: boolean; attentionRecorded: boolean }> {
     const observed = this.observedSessionActivity.get(session.key);
     const currentObservation =
@@ -1433,7 +1437,11 @@ export class NativeAgentLaunchActivityReconciler {
         // The goal owns attention for this edge, including the aggregate's
         // restart fallback when no earlier sweep observed the turn.
         attentionRecorded = true;
-      } else if (durableAttentionEdge || reason === "agent_failed") {
+      } else if (
+        durableAttentionEdge ||
+        reason === "agent_failed" ||
+        (providerObserved && hasUnsettledTurn(session))
+      ) {
         await this.storage.recordEnvironmentSessionCompletion(
           session.environmentId,
           new Date(this.host.now()).toISOString(),

@@ -490,8 +490,8 @@ export const setEnvironmentUnreadCommand = defineCommand({
   read: false,
   // `unread` is read leniently (anything but `true` clears the badge);
   // `expectedLastActivityAt` may be `null`. `sessionKeys` acknowledges only
-  // those sessions' results (`unreadSessionKeys` on the environment); a
-  // client sends it only to a backend that reported `unreadSessionKeys`.
+  // those sessions' results. A clear with an empty list or just an activity
+  // token acknowledges environment-wide work. Omit both for explicit dismissal.
   args: Schema.Struct({
     environmentId: Schema.String,
     unread: checked,

@@ -1,3 +1,5 @@
+import type { EnvironmentUnreadReason } from "./contract/domains/environments/models";
+
 /**
  * Backend -> client "an environment needs attention" notifications.
  *
@@ -45,6 +47,26 @@ export function isInputNeededAttentionReason(
   value: unknown,
 ): value is (typeof INPUT_NEEDED_ATTENTION_REASONS)[number] {
   return (INPUT_NEEDED_ATTENTION_REASONS as readonly unknown[]).includes(value);
+}
+
+function unreadReasonPriority(reason: EnvironmentUnreadReason): number {
+  if (isInputNeededAttentionReason(reason)) return 2;
+  return reason === "agent_failed" ? 1 : 0;
+}
+
+/** Choose the displayed reason from the entries that are still unread. */
+export function preferredUnreadReason(
+  environmentReason: EnvironmentUnreadReason | undefined,
+  sessions: readonly { reason: EnvironmentUnreadReason }[],
+  overflow = false,
+): EnvironmentUnreadReason | undefined {
+  let reason = environmentReason;
+  for (const entry of sessions) {
+    if (!reason || unreadReasonPriority(entry.reason) >= unreadReasonPriority(reason)) {
+      reason = entry.reason;
+    }
+  }
+  return reason ?? (overflow ? "agent_finished" : undefined);
 }
 
 export interface EnvironmentAttentionEvent {

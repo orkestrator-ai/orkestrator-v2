@@ -1,6 +1,7 @@
 import { PromptRejectedError } from "../agent-provider-contract.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { MultiReviewActionResult } from "@orkestrator/protocol/multi-review";
+import type { PublicSettingsSnapshot } from "@orkestrator/protocol/public-api-resources";
 import { cleanupSessionHarnesses, setup } from "./test-provider.js";
 
 /**
@@ -73,12 +74,23 @@ describe("pr.create and pr.resolve", () => {
     );
   });
 
-  test("pr.resolve merges the project's default branch when no PR base branch is set", async () => {
+  test("pr.resolve follows the project default after the public settings action clears its PR base", async () => {
     const { harness, stub, projectId } = await setup();
-    await harness.storage.updateRepositoryConfig(projectId, {
-      defaultBranch: "dev",
-      prBaseBranch: "",
-    });
+    const settings = await harness.call<{ settings: PublicSettingsSnapshot }>(
+      "project.config.set",
+      { projectId, set: { defaultBranch: "dev" }, unset: ["prBaseBranch"] },
+      { requestId: "clear-pr-base" },
+    );
+    if (!settings.ok) throw new Error(settings.error.message);
+    expect(settings.result.settings.settings).toContainEqual(
+      expect.objectContaining({
+        key: "prBaseBranch",
+        value: "",
+        effective: "dev",
+        source: "repository",
+      }),
+    );
+    expect((await harness.storage.getRepositoryConfig(projectId)).prBaseBranch).toBe("");
     const started = await harness.call(
       "pr.resolve",
       { environmentId: "env-1" },

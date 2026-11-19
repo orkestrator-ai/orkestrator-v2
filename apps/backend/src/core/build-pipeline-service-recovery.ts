@@ -518,6 +518,7 @@ export class BuildPipelineRecovery {
       prUrl: detection.url,
       prState: detection.state,
       hasMergeConflicts: detection.hasMergeConflicts,
+      prBaseBranch: detection.baseBranch ?? null,
     });
     // Re-detected after a merge (a conflict resolution or a Ship retry that
     // finishes once the pull request merged): the merge closes the ticket,

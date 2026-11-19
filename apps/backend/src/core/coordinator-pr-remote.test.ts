@@ -31,8 +31,8 @@ test("a reviewed remote worker gets one PR tab with its node's defaults, includi
       agentSettings: { defaultAgent: "codex" },
     });
     await leaf.updateRepositoryConfig(project.id, {
-      defaultBranch: "main",
-      prBaseBranch: "develop",
+      defaultBranch: "develop",
+      prBaseBranch: "",
     });
     const worker = createEnvironment(project.id, { name: "reviewed", environmentType: "local" });
     Object.assign(worker, { status: "running", setupPhase: "ready", worktreePath: world.root });
@@ -194,7 +194,7 @@ test("a reviewed remote worker gets one PR tab with its node's defaults, includi
 // The remote Resolve Conflicts button, then the follow it records read back
 // through the real node-link reads (`NodeCoordinatorRemote`): one wake when
 // the Resolve tab finishes, one when the PR merges.
-test("a remote worker's conflicts get one Resolve tab, and its PR is followed through the node link", async () => {
+async function checkRemoteResolve(observedBase: string | null) {
   const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
   let mcp: ControlMcpServer | undefined;
   try {
@@ -207,11 +207,14 @@ test("a remote worker's conflicts get one Resolve tab, and its PR is followed th
       createProject("https://github.com/acme/site.git", world.root),
     );
     await leaf.updateRepositoryConfig(project.id, {
-      defaultBranch: "main",
-      prBaseBranch: "develop",
+      defaultBranch: "develop",
+      prBaseBranch: "",
     });
     const prUrl = "https://github.com/acme/site/pull/9";
-    const worker = createEnvironment(project.id, { name: "conflicted", environmentType: "local" });
+    const worker = createEnvironment(project.id, {
+      name: "conflicted",
+      environmentType: "local",
+    });
     Object.assign(worker, {
       status: "running",
       setupPhase: "ready",
@@ -220,7 +223,7 @@ test("a remote worker's conflicts get one Resolve tab, and its PR is followed th
       prState: "open",
       hasMergeConflicts: true,
       prMergeability: "dirty",
-      prBaseBranch: "release/2",
+      prBaseBranch: observedBase,
     });
     await leaf.addEnvironment(worker);
     const dispatched: Array<Record<string, unknown>> = [];
@@ -312,11 +315,11 @@ test("a remote worker's conflicts get one Resolve tab, and its PR is followed th
     expect(result.structuredContent).toMatchObject({
       nodeId: "bk_leaf",
       status: "launched",
-      targetBranch: "release/2",
+      targetBranch: observedBase ?? "develop",
       prUrl,
     });
     expect(dispatched).toHaveLength(1);
-    expect(dispatched[0]!.prompt).toContain("git merge origin/release/2");
+    expect(dispatched[0]!.prompt).toContain(`git merge origin/${observedBase ?? "develop"}`);
     // The button's completion action: the leaf's monitor rechecks when it ends.
     expect(
       (await leaf.getEnvironment(worker.id))?.prRecheckAfterAgentCompletionArmedAt,
@@ -400,4 +403,9 @@ test("a remote worker's conflicts get one Resolve tab, and its PR is followed th
     await mcp?.stop();
     await world.close();
   }
-});
+}
+
+test("a remote Resolve uses the project default and follows the PR", () =>
+  checkRemoteResolve(null));
+test("a remote Resolve uses the observed base and follows the PR", () =>
+  checkRemoteResolve("release/2"));

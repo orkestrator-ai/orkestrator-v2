@@ -4280,6 +4280,45 @@ describe("ActionBar workflow tabs", () => {
     expect(input.prompt).not.toContain("git diff origin/...HEAD");
   });
 
+  test.each(["direct", "configured", "edited", "unavailable"] as const)(
+    "uses the owning node's PR target for a %s Create PR launch",
+    async (launch) => {
+      currentRepositoryConfig = {};
+      getRepositoryConfigMock.mockImplementation(async () => {
+        if (launch === "unavailable") throw new Error("Node settings unavailable");
+        return { prBaseBranch: "", defaultBranch: "dev" };
+      });
+      currentEnvironment = { ...selectedEnvironment, prUrl: null, prState: null };
+      renderInAppCommandScope(<ActionBar />);
+      const button = screen.getByRole("button", { name: "Create PR" });
+
+      if (launch === "configured" || launch === "edited") {
+        fireEvent.contextMenu(button);
+        await screen.findByRole("dialog", { name: "Configure pull request" });
+        const branch = screen.getByRole("combobox", { name: "Target branch" });
+        expect((branch as HTMLInputElement).value).toBe("dev");
+        if (launch === "edited") fireEvent.change(branch, { target: { value: "release" } });
+        fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+      } else {
+        fireEvent.click(button);
+      }
+      await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+      expect(getRepositoryConfigMock).toHaveBeenCalledWith("project-1");
+      const expected = launch === "unavailable" ? "main" : launch === "edited" ? "release" : "dev";
+      expect(launchNativeAgentJobMock.mock.calls[0]?.[0]).toMatchObject({
+        prompt: expect.stringContaining(`gh pr create --base ${expected} --fill`),
+      });
+      if (launch === "unavailable") {
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            event: "pr-target.repository-config-unavailable",
+            level: "warn",
+          }),
+        );
+      }
+    },
+  );
+
   test("launches against the base branch pinned when the modal opened", async () => {
     currentRepositoryConfig = { "project-1": { prBaseBranch: "release" } };
     currentEnvironment = {
@@ -4559,6 +4598,42 @@ describe("ActionBar workflow tabs", () => {
     const [options] = launchNativeAgentJobMock.mock.calls[0] as [{ prompt: string }];
     expect(options.prompt).toContain("git merge origin/dev");
     expect(options.prompt).not.toContain("origin/main");
+  });
+
+  test("shows and confirms the owning node's default branch in the Resolve dialog", async () => {
+    currentRepositoryConfig = {};
+    getRepositoryConfigMock.mockResolvedValue({ prBaseBranch: "", defaultBranch: "dev" });
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+      prBaseBranch: undefined,
+    };
+    renderInAppCommandScope(<ActionBar />);
+    fireEvent.contextMenu(mergePrButton());
+    await screen.findByRole("dialog", { name: "Configure conflict resolution" });
+    expect(screen.getByText(/against dev/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ prompt: expect.stringContaining("git merge origin/dev") }),
+      ),
+    );
+    expect(getRepositoryConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("reviews against the owning node's default branch when settings are missing", async () => {
+    currentRepositoryConfig = {};
+    getRepositoryConfigMock.mockResolvedValue({ prBaseBranch: "", defaultBranch: "dev" });
+    renderInAppCommandScope(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+    await waitFor(() =>
+      expect(createTabMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ initialPrompt: expect.stringContaining("origin/dev") }),
+      ),
+    );
+    expect(getRepositoryConfigMock).toHaveBeenCalledWith("project-1");
   });
 
   test("disables a pinned Resolve launch when the conflicts are already gone", () => {

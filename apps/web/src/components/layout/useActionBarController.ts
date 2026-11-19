@@ -278,6 +278,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [prLaunchError, setPrLaunchError] = useState<string | null>(null);
   const [prBranchSuggestions, setPrBranchSuggestions] = useState<string[]>([]);
   const prBranchRequestRef = useRef(0);
+  const resolveBranchRequestRef = useRef(0);
   const prDialogOpen = prDialogTarget !== null;
   const createPrButtonRef = useRef<HTMLButtonElement>(null);
   const createPrLaunchClaimsRef = useRef(new Map<string, CreatePrLaunchClaim>());
@@ -785,9 +786,22 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [enabledAgents, launchDialogDefaultsFor, settingsTiers],
   );
 
+  // On a scope cache miss, read settings from the environment's owning node.
+  const readPrTargetRepositorySettings = useCallback(
+    async (projectId: string): Promise<PrTargetRepositorySettings | undefined> => {
+      try {
+        return await backendForScope(actionBarScope).getRepositoryConfig(projectId);
+      } catch (error) {
+        log.warn("pr-target.repository-config-unavailable", { error: formatLogError(error) });
+        return undefined;
+      }
+    },
+    [actionBarScope],
+  );
+
   // Handler for code review
   const handleReview = useCallback(
-    (
+    async (
       agentOverride?: AgentPlatform,
       launchOptions?: {
         agentLaunchMode?: AgentLaunchModeOverride;
@@ -805,7 +819,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       if (!releaseLaunch) return;
 
       // The same target-branch rule the backend's `review.start` action applies.
-      const targetBranch = defaultPrTargetBranch(config.repositories[selectedProjectId]);
+      const repository =
+        config.repositories[selectedProjectId] ??
+        (await readPrTargetRepositorySettings(selectedProjectId));
+      if (selectedEnvironmentIdRef.current !== selectedEnvironmentId) {
+        releaseLaunch({ retryable: true });
+        return;
+      }
+      const targetBranch = defaultPrTargetBranch(repository);
       const reviewPrompt = createReviewPrompt(targetBranch, config.global.reviewInstruction);
 
       // A plain click has no dialog to configure the run, so the Defaults tab is
@@ -905,6 +926,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       config.global.reviewInstruction,
       config.repositories,
       createTab,
+      readPrTargetRepositorySettings,
       selectedEnvironmentId,
       selectedProjectId,
     ],
@@ -1556,24 +1578,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     enabledAgents,
   ]);
 
-  // The project settings a launched PR or Resolve prompt takes its target
-  // branch from, read from the node that owns the environment. Used only when
-  // the scope's config store does not hold them (not loaded yet), so the
-  // prompt does not fall back to `main` for a project developed on another
-  // branch. A cached copy is read synchronously, keeping the launch
-  // synchronous up to its backend call.
-  const readPrTargetRepositorySettings = useCallback(
-    async (projectId: string): Promise<PrTargetRepositorySettings | undefined> => {
-      try {
-        return await backendForScope(actionBarScope).getRepositoryConfig(projectId);
-      } catch (error) {
-        log.warn("pr-target.repository-config-unavailable", { error: formatLogError(error) });
-        return undefined;
-      }
-    },
-    [actionBarScope],
-  );
-
   // Handler for PR creation - launches agent tab with PR workflow prompt
   const handleCreatePR = useCallback(
     async (
@@ -1740,10 +1744,18 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     selectedProjectId,
   );
 
-  const openPrDialog = useCallback(() => {
+  const openPrDialog = useCallback(async () => {
     if (!canConfigurePR || !selectedEnvironmentId || !selectedProjectId) return;
     const projectId = selectedProjectId;
-    const targetBranch = defaultPrTargetBranch(config.repositories[projectId]);
+    const request = ++prBranchRequestRef.current;
+    const repository =
+      config.repositories[projectId] ?? (await readPrTargetRepositorySettings(projectId));
+    if (
+      prBranchRequestRef.current !== request ||
+      selectedEnvironmentIdRef.current !== selectedEnvironmentId
+    )
+      return;
+    const targetBranch = defaultPrTargetBranch(repository);
     setPrLaunchError(null);
     setPrDialogTarget({
       environmentId: selectedEnvironmentId,
@@ -1752,7 +1764,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     });
     // Suggestions are a convenience: the field still accepts any branch name,
     // so a project without a readable local checkout simply offers only the default.
-    const request = ++prBranchRequestRef.current;
     setPrBranchSuggestions([targetBranch]);
     void Promise.resolve()
       .then(() => backendForScope(actionBarScope).getProjectGitStatus(projectId))
@@ -1765,6 +1776,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     actionBarScope,
     canConfigurePR,
     config.repositories,
+    readPrTargetRepositorySettings,
     selectedEnvironmentId,
     selectedProjectId,
   ]);
@@ -2048,20 +2060,32 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     !resolveLaunchInFlight,
   );
 
-  const openResolveDialog = useCallback(() => {
+  const openResolveDialog = useCallback(async () => {
     if (!canConfigureResolve || !selectedEnvironmentId || !selectedProjectId) return;
+    const request = ++resolveBranchRequestRef.current;
+    const environmentBase = selectedEnvironment?.prBaseBranch;
+    const repository = environmentBase?.trim()
+      ? undefined
+      : (config.repositories[selectedProjectId] ??
+        (await readPrTargetRepositorySettings(selectedProjectId)));
+    if (
+      resolveBranchRequestRef.current !== request ||
+      selectedEnvironmentIdRef.current !== selectedEnvironmentId
+    )
+      return;
     setResolveLaunchError(null);
     setResolveDialogTarget({
       environmentId: selectedEnvironmentId,
       projectId: selectedProjectId,
       targetBranch: resolvePrTargetBranch({
-        environmentBase: selectedEnvironment?.prBaseBranch,
-        repository: config.repositories[selectedProjectId],
+        environmentBase,
+        repository,
       }),
     });
   }, [
     canConfigureResolve,
     config.repositories,
+    readPrTargetRepositorySettings,
     selectedEnvironment?.prBaseBranch,
     selectedEnvironmentId,
     selectedProjectId,

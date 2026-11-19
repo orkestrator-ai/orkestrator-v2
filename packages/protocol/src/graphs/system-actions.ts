@@ -120,7 +120,8 @@ const TARGET_BRANCH: GraphSystemParamSpec = {
   type: "string",
   maxChars: GRAPH_SYSTEM_PARAM_BOUNDS.idChars,
   format: "branch",
-  description: "The branch to compare against; default the project's pull request base branch.",
+  description:
+    "The branch to compare against. Defaults to the project's pull request base, its default branch, then main.",
 };
 
 /** The type `open-pull-request` reports a pull request's merge state as (item 108). */
@@ -223,7 +224,8 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
       params: {
         targetBranch: {
           ...TARGET_BRANCH,
-          description: "The base branch; default the project's pull request base branch.",
+          description:
+            "The base branch. Defaults to the project's pull request base, its default branch, then main.",
         },
         draft: {
           type: "boolean",

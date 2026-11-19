@@ -231,6 +231,7 @@ export function registerPullRequestCommands(
       state: detection.state,
       hasMergeConflicts: detection.hasMergeConflicts,
       checkSummary: detection.checkSummary,
+      ...(detection.baseBranch === undefined ? {} : { baseBranch: detection.baseBranch }),
     };
   });
   registerDefined(detectPrCommand, async ({ containerId, branch }) => {
@@ -251,6 +252,7 @@ export function registerPullRequestCommands(
       state: detection.state,
       hasMergeConflicts: detection.hasMergeConflicts,
       checkSummary: detection.checkSummary,
+      ...(detection.baseBranch === undefined ? {} : { baseBranch: detection.baseBranch }),
     };
   });
   registerDefined(mergePrCommand, async ({ containerId, method, deleteBranch }, context) => {

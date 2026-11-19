@@ -359,10 +359,10 @@ test("stop-command stops one command through the backend runner and rejects fore
   process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = path.join(root, ".orkestrator", "test-scheduler");
   try {
     await expect(
-      controlReviewValidation("env", initial, "stop-command", context, "../slow"),
+      controlReviewValidation("env", initial, "stop-command", context, { resultId: "../slow" }),
     ).rejects.toThrow("Invalid review validation result ID");
     await expect(
-      controlReviewValidation("env", initial, "stop-command", context, "other"),
+      controlReviewValidation("env", initial, "stop-command", context, { resultId: "other" }),
     ).rejects.toThrow("Review validation command is unavailable");
     let run = await controlReviewValidation("env", initial, "start", context);
     const deadline = Date.now() + 10000;
@@ -370,7 +370,7 @@ test("stop-command stops one command through the backend runner and rejects fore
       await Bun.sleep(50);
       run = await controlReviewValidation("env", run, "status", context);
     }
-    run = await controlReviewValidation("env", run, "stop-command", context, "slow");
+    run = await controlReviewValidation("env", run, "stop-command", context, { resultId: "slow" });
     expect(run.results[0]).toMatchObject({ status: "incomplete" });
     while (["planned", "running"].includes(run.status) && Date.now() < deadline) {
       await Bun.sleep(50);
@@ -436,7 +436,9 @@ test("stop-command uses Docker exec and accepts the matching container snapshot"
   const previousPath = process.env.PATH;
   process.env.PATH = `${bin}:${previousPath}`;
   try {
-    const next = await controlReviewValidation("env", initial, "stop-command", context, "check");
+    const next = await controlReviewValidation("env", initial, "stop-command", context, {
+      resultId: "check",
+    });
     expect(next.results[0]).toMatchObject({ status: "incomplete" });
     const dockerArgs = await readFile(argsPath, "utf8");
     const args = dockerArgs.trim().split("\n");

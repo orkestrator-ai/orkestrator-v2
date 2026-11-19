@@ -60,8 +60,10 @@ interface ValidationInputs {
   digest: string;
 }
 
-function digestOf(plan: ReviewValidationPlan): string {
-  return createHash("sha256").update(canonicalJson(plan, 64)).digest("hex").slice(0, 16);
+function digestOf(plan: ReviewValidationPlan, targetBranch?: string): string {
+  const hash = createHash("sha256").update(canonicalJson(plan, 64));
+  if (targetBranch !== undefined) hash.update("\0").update(targetBranch);
+  return hash.digest("hex").slice(0, 16);
 }
 
 /** The worker's run id: `graph-validation-<hash>`, within `[A-Za-z0-9_-]{1,200}`. */
@@ -149,6 +151,7 @@ function isSettled(run: ReviewValidationRun): boolean {
 async function validate(
   ctx: GraphSystemActionContext,
   inputs: ValidationInputs,
+  targetBranch?: string,
 ): Promise<ReviewValidationRun> {
   const key = ctx.slotKey(`validation:${inputs.digest}`);
   const prior = await ctx.effectRecord(key);
@@ -167,6 +170,7 @@ async function validate(
     ctx.deps.invoke<ReviewValidationRun>(`${command}_review_validation`, {
       environmentId: inputs.environment.id,
       run: planned,
+      ...(command === "start" && targetBranch !== undefined ? { targetBranch } : {}),
     });
 
   let final: ReviewValidationRun | null = null;
@@ -318,11 +322,13 @@ export const runValidationAndSealAction: GraphSystemActionHandler = {
   action: "run-validation-and-seal",
   async run(ctx) {
     const inputs = await validationInputs(ctx, { acceptAncestorPlan: false });
-    const run = await validate(ctx, inputs);
-    const configured = (await ctx.deps.storage.getRepositoryConfig(ctx.run.projectId)).prBaseBranch;
-    const targetBranch =
-      (typeof ctx.params.targetBranch === "string" ? ctx.params.targetBranch : undefined) ??
-      (configured?.trim() || "main");
+    const { targetBranch } = await ctx.effect(ctx.slotKey(`target:${inputs.digest}`), async () => ({
+      targetBranch: await ctx.prTargetBranch(),
+    }));
+    // The branch identifies the diff the worker uses for on-demand checks.
+    // A legacy run without a pinned target cannot supply this round's evidence.
+    inputs.digest = digestOf(inputs.plan, targetBranch);
+    const run = await validate(ctx, inputs, targetBranch);
     const round = ctx.activation.iteration;
     const reference = await ctx.effect<{ reference: ReviewPackageReference }>(
       ctx.slotKey(`seal:${inputs.digest}`),

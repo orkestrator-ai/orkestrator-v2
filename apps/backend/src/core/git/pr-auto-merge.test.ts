@@ -2,6 +2,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { CommandFailedError } from "../shell.js";
 import { describe, expect, spyOn, test } from "bun:test";
 import type { PrMonitorEnvironmentState, PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
+import type { PrTargetRepositorySettings } from "@orkestrator/protocol/git-workflow-prompts";
 import {
   decideAutoMerge,
   PR_AUTO_MERGE_RESOLVE_SETTLE_MS,
@@ -152,6 +153,7 @@ function harness(
   let nextStatus: string | null = null;
   let onInvoke: ((command: string) => void) | null = null;
   let requireChecks: boolean | undefined;
+  let repository: PrTargetRepositorySettings = { prBaseBranch: "develop" };
   const warnings: string[] = [];
   const storage = {
     getEnvironment: async (id: string) => (id === stored.id ? stored : null),
@@ -172,7 +174,7 @@ function harness(
         },
         repositories: {},
       }) as never,
-    getRepositoryConfig: async () => ({ prBaseBranch: "develop" }) as never,
+    getRepositoryConfig: async () => repository as never,
   };
   const controller = new PrAutoMergeController({
     storage,
@@ -229,6 +231,9 @@ function harness(
     requireChecks(value: boolean | undefined) {
       requireChecks = value;
     },
+    setRepository(value: PrTargetRepositorySettings) {
+      repository = value;
+    },
     failNextInvoke(error: Error) {
       failNext = error;
     },
@@ -245,6 +250,36 @@ function harness(
 }
 
 describe("PrAutoMergeController", () => {
+  test.each([null, "main"])(
+    "holds a resumed intent with target pin %s until dev is approved",
+    async (pin) => {
+      const h = harness(
+        environment({
+          prBaseBranch: "dev",
+          autoMergeBaseRef: pin,
+          autoMergeTargetBranch: pin,
+        }),
+      );
+      try {
+        h.setRepository({ defaultBranch: "dev", prBaseBranch: "" });
+        await h.controller.resume();
+        expect(h.stored.autoMergeError).toContain("destination changed");
+        expect(h.invocations).toEqual([]);
+
+        h.set({ ...h.stored, autoMergeBaseRef: "dev", autoMergeTargetBranch: "dev" });
+        await h.controller.evaluate("env-1");
+        expect(h.invocations).toEqual([
+          {
+            command: "merge_environment_pr",
+            args: expect.objectContaining({ expectedBaseRef: "dev", expectedTargetBranch: "dev" }),
+          },
+        ]);
+      } finally {
+        h.controller.dispose();
+      }
+    },
+  );
+
   test("holds a retargeted PR even though its head is ready and unchanged", async () => {
     const h = harness(
       environment({

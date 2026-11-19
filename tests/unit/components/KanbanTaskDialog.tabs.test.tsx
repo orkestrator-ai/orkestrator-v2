@@ -52,13 +52,20 @@ const { KanbanTaskDialog } = await import("@/components/kanban/KanbanTaskDialog"
 const { kanbanStore } = await import("@/stores/kanbanStore");
 const { environmentStore } = await import("@/stores/environmentStore");
 const { buildPipelineStore } = await import("@/stores/buildPipelineStore");
+const { configStore } = await import("@/stores/configStore");
 const { prMonitorStore } = await import("@/stores/prMonitorStore");
 const { buildPipelineFixture } = await import("@/test/build-pipeline-fixture");
 const { keyInformation } = await import("@/components/build-pipeline/key-information-test-fixture");
 
 const initialEnvironmentState = appCommandStore(environmentStore).getState();
 const initialKanbanState = appCommandStore(kanbanStore).getState();
+const initialConfig = appCommandStore(configStore).getState().config;
 const PR_URL = "https://github.com/o/r/pull/42";
+const PR_DESTINATION = {
+  expectedPrUrl: PR_URL,
+  expectedBaseRef: "dev",
+  expectedTargetBranch: "dev",
+};
 
 function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
   return kanbanTask({
@@ -93,6 +100,19 @@ function withNotes() {
 
 /** env-1's pull request, open, as GitHub reports it; `ready` makes it mergeable now. */
 function withPullRequest(ready: boolean) {
+  appCommandStore(configStore).setState({
+    config: {
+      ...initialConfig,
+      repositories: {
+        ...initialConfig.repositories,
+        "project-1": {
+          ...initialConfig.repositories["project-1"],
+          defaultBranch: "dev",
+          prBaseBranch: "",
+        },
+      },
+    },
+  });
   appCommandStore(environmentStore).setState({
     environments: [
       {
@@ -104,6 +124,7 @@ function withPullRequest(ready: boolean) {
         environmentType: "local",
         prUrl: PR_URL,
         prState: "open",
+        prBaseBranch: "dev",
         hasMergeConflicts: false,
         prMergeability: ready ? "clean" : "unavailable",
       } as never,
@@ -163,6 +184,7 @@ describe("the ticket view's tabs", () => {
       buildEnvironmentIds: new Set(),
     });
     appCommandStore(prMonitorStore).setState({ states: new Map(), syncStatus: "idle" });
+    appCommandStore(configStore).setState({ config: initialConfig });
   });
 
   afterEach(() => {
@@ -383,7 +405,7 @@ describe("the ticket view's tabs", () => {
     });
     expect(screen.queryByRole("alertdialog", { name: "Merge pull request" }) === null).toBe(true);
     await waitFor(() =>
-      expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith("env-1", true, true),
+      expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith("env-1", true, true, PR_DESTINATION),
     );
     expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
     // A draft needs someone to act, so the toast warns what it waits for.
@@ -417,7 +439,13 @@ describe("the ticket view's tabs", () => {
       fireEvent.click(options.getByRole("button", { name: "Merge PR" }));
     });
     await waitFor(() =>
-      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+        "env-1",
+        "squash",
+        true,
+        false,
+        PR_DESTINATION,
+      ),
     );
   });
 

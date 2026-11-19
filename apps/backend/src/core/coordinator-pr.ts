@@ -119,8 +119,8 @@ export async function launchWorkerPr(
  * `canConfigureResolve`): the worker has a pull request that is neither
  * merged nor closed, and GitHub has not reported it free of conflicts (an
  * unknown mergeability still allows a resolve). The target is the PR's own
- * base branch, then the repository's PR base branch, then `main`, as
- * `pr.resolve` does.
+ * base branch, then the repository's PR base branch, its default branch, and
+ * finally `main`, as `pr.resolve` does.
  */
 export async function launchWorkerResolve(
   context: CommandContext,

@@ -533,6 +533,7 @@ export type PullRequestDetection = {
   url: string;
   state: (typeof PULL_REQUEST_DETECTION_STATES)[number];
   hasMergeConflicts: boolean | null;
+  baseBranch?: string;
 };
 
 /**

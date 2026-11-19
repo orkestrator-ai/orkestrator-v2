@@ -572,6 +572,10 @@ edits conflict. Launch intent (initial prompt, attachments, pending selection)
 is never touched. Editing environment agent defaults never reconfigures a live
 conversation — `session config set` does that.
 
+For project settings, `--unset prBaseBranch` clears the explicit PR base. The
+effective value then follows the project's default branch, with `main` as the
+final fallback.
+
 ## Sessions and runs
 
 A public session ID (`ses_…`) is derived from the environment and tab, so it

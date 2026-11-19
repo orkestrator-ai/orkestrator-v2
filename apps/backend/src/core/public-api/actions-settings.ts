@@ -5,6 +5,7 @@ import {
   type AgentPlatformSettings,
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
+import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import {
   publicSettingDescriptor,
@@ -239,6 +240,16 @@ function projectSnapshot(projectId: string, config: AppConfig): PublicSettingsSn
     }
     const field = descriptor.key as (typeof REPOSITORY_FIELDS)[number];
     const value = stored?.[field];
+    if (field === "prBaseBranch") {
+      return {
+        key: descriptor.key,
+        value: value ?? null,
+        effective: defaultPrTargetBranch(stored ?? defaults),
+        source:
+          stored?.prBaseBranch?.trim() || stored?.defaultBranch?.trim() ? "repository" : "default",
+        application: descriptor.application,
+      };
+    }
     const fallback = (defaults as unknown as Record<string, unknown>)[field];
     return {
       key: descriptor.key,
@@ -323,6 +334,10 @@ const projectConfigSet: MutationActionHandler<SettingsPatch & { projectId: strin
               }
               const field = key as (typeof REPOSITORY_FIELDS)[number];
               if (value === undefined) {
+                if (field === "prBaseBranch") {
+                  next.prBaseBranch = "";
+                  continue;
+                }
                 const fallback = (defaultRepositoryConfig() as unknown as Record<string, unknown>)[
                   field
                 ];

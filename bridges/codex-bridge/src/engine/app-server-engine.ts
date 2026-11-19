@@ -1,3 +1,4 @@
+import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
 /**
  * `CodexEngine` over a persistent `codex app-server --stdio` child.
  *
@@ -933,6 +934,7 @@ export class AppServerEngine implements CodexEngine {
       codexHome: options.codexHome,
       clientInfo: options.clientInfo,
       configOverrides: options.configOverrides,
+      experimentalApi: Boolean(process.env[BUG_REPORT_WORKSPACE_ENV]),
       now: options.now,
       ...options.supervisorOverrides,
       // Listed after the overrides so they can never be replaced: losing these

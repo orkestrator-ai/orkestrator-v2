@@ -237,12 +237,15 @@ test("journal-blocked prompts leave the restored policy pending", async () => {
 
 test("a report upgrades its existing session and forwards a sandboxed Auto review turn", async () => {
   const oldWorkspace = process.env[BUG_REPORT_WORKSPACE_ENV];
-  const h = await harness();
   const workspace = "/tmp/ws";
   process.env[BUG_REPORT_WORKSPACE_ENV] = workspace;
   try {
+    const h = await harness();
     const policy = { ...askPolicy, id: "interactive-host" as const };
     const sessionId = await attachedSession(h, policy);
+    expect(
+      h.child().requests.find((request) => request.method === "initialize")?.params,
+    ).toMatchObject({ capabilities: { experimentalApi: true } });
     expect(
       await h.runtime.updateConfig(sessionId, {
         policy: { ...policy, approvals: "auto-approve" },

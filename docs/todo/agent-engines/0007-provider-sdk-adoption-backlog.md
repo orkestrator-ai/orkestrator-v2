@@ -186,9 +186,10 @@ Codex dynamic tools, checked 2026-11-18 against the `0.169.0` pin:
   generated `ThreadStartParams`. Running `codex app-server generate-ts
   --experimental` on the pinned binary shows `dynamicTools?:
   Array<DynamicToolSpec>` on `ThreadStartParams` only, not on
-  `ThreadResumeParams`, `ThreadForkParams` or `TurnStartParams`. The bridge
-  initializes with `experimentalApi: false` (`process-supervisor.ts`), so it
-  registers none and an `item/tool/call` is not expected at all.
+  `ThreadResumeParams`, `ThreadForkParams` or `TurnStartParams`. Only
+  dedicated report bridges enable `experimentalApi` for granular approvals
+  (`process-supervisor.ts`). No bridge registers a dynamic tool, so
+  `item/tool/call` is unexpected.
 - The concrete consumer is the workflow-result submit tool: the one
   host-provided tool a pipeline or graph result turn must call to finish
   (`workflowResultTool` and the graph slot tools, admitted in
@@ -226,7 +227,7 @@ Codex dynamic tools, checked 2026-11-18 against the `0.169.0` pin:
 
 - **Codex dynamic tools: adopt one for the workflow-result submit tool, or defer?**
   - **Defer, answer every call with an explicit failure, and record what would justify adoption (recommended).**
-    - Pros: no experimental opt-in; one tool path for every platform; the
+    - Pros: no experimental opt-in for dynamic tools; one tool path for every platform; the
       shared MCP path already serves the workflow-result submit tool; any
       unexpected call still gets one answer that tells the model and the
       user why it failed.

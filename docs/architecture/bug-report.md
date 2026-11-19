@@ -96,6 +96,8 @@ Claude configures its SDK to confine Write, Edit and NotebookEdit to the
 report workspace in every mode and disables unsandboxed Bash. Codex keeps
 workspace-write in Full access and removes ambient temporary write roots.
 Auto review cannot approve a sandbox escape or grant extra permissions.
+The dedicated reporter bridge opts into app-server's granular approval
+capability during its handshake.
 Codex's asking modes can still present a sandbox escalation to the user.
 The briefing tells the agent to leave filing to the sheet's button.
 

@@ -45,6 +45,7 @@ import {
 } from "./provider-adapters/codex-plugins.js";
 import { providerCli } from "./provider-adapters/provider-cli.js";
 import { treeDigest, validatePackageFiles } from "./security.js";
+import { sessionPluginsRoot, stageSessionPlugin } from "./session-delivery.js";
 
 const LIVE = process.env.RUN_LIVE_CAPABILITY_CONFORMANCE === "1";
 const TIMEOUT_MS = 180_000;
@@ -182,12 +183,22 @@ async function deliverFile(
 async function claudeInit(
   binary: string,
   box: Sandbox,
+  extraArgs: string[] = [],
 ): Promise<{ skills: string[]; plugins: string[]; version: string }> {
   const result = await cliFor(
     binary,
     box,
     "Claude Code",
-  )(["-p", "conformance", "--output-format", "stream-json", "--verbose", "--max-turns", "1"]);
+  )([
+    "-p",
+    "conformance",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--max-turns",
+    "1",
+    ...extraArgs,
+  ]);
   for (const line of result.stdout.split(/\r?\n/)) {
     try {
       const event = JSON.parse(line) as Record<string, unknown>;
@@ -251,6 +262,47 @@ describe.skipIf(!claude)(`Claude Code ${PINNED_TOOLCHAIN_VERSIONS.claude}`, () =
       expect((await claudeInit(claude!, box)).skills).toContain("ork-conformance-skill");
       expect((await delivery.remove())?.status).toBe("ready");
       expect((await claudeInit(claude!, box)).skills).not.toContain("ork-conformance-skill");
+    },
+    TIMEOUT_MS,
+  );
+
+  test(
+    "a session plugin reaches only the session that passes it, namespaced, and nothing lands in the shared home",
+    async () => {
+      const box = await sandbox();
+      const { artifacts, storage } = await executorFor(box);
+      const digest = await artifacts.put(
+        validatePackageFiles(
+          SKILL("ork-session-skill").map((file) => ({
+            path: `ork-session-skill/${file.path}`,
+            content: Buffer.from(file.content),
+          })),
+        ),
+      );
+      const root = sessionPluginsRoot(path.join(box.root, "orkestrator-data"));
+      const staged = await stageSessionPlugin({
+        root,
+        artifacts,
+        items: [
+          {
+            packageId: "managed:ork-session-skill",
+            packageDigest: digest,
+            componentId: "managed:ork-session-skill#skill:ork-session-skill",
+            kind: "skill",
+            name: "ork-session-skill",
+            pathOrKey: "ork-session-skill",
+          },
+        ],
+      });
+      storage.close?.();
+      // The SDK hands an inline plugin to the CLI as --plugin-dir.
+      const withPlugin = await claudeInit(claude!, box, ["--plugin-dir", staged.directory]);
+      expect(withPlugin.skills).toContain("orkestrator-session:ork-session-skill");
+      const without = await claudeInit(claude!, box);
+      expect(without.skills.some((name) => name.includes("ork-session-skill"))).toBe(false);
+      expect(await fs.readdir(path.join(box.homes.claudeConfigDir)).catch(() => [])).not.toContain(
+        "skills",
+      );
     },
     TIMEOUT_MS,
   );

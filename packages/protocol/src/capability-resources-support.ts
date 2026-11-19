@@ -99,7 +99,9 @@ export const CAPABILITY_LOCATIONS: readonly CapabilityLocation[] = Object.freeze
     id: "claude-user-skills",
     kind: "skill",
     owner: "claude",
-    readBy: ["claude", "cursor", "grok", "opencode", "pi"],
+    // Not Pi: the pinned Pi SDK never reads ~/.claude/skills
+    // (bridges/pi-bridge/src/capability-delivery-conformance.test.ts).
+    readBy: ["claude", "cursor", "grok", "opencode"],
     layout: "directory",
     label: "~/.claude/skills",
   },
@@ -310,9 +312,6 @@ const S: CapabilitySupportEntry = { level: "supported" };
 const unq = (reason: string): CapabilitySupportEntry => ({ level: "unqualified", reason });
 const no = (reason: string): CapabilitySupportEntry => ({ level: "unsupported", reason });
 
-const SHARED_ROOT_ISOLATION = no(
-  "Other providers read this provider's skill directory, and it has no per-skill disable switch, so exclusion cannot be enforced without an isolated home.",
-);
 const NO_LIVE_SKILL_INVENTORY = no(
   "The bridge reports no live skill inventory, so a loaded skill can only be seen when it is used.",
 );
@@ -423,8 +422,13 @@ export const BASELINE_CAPABILITY_SUPPORT: Readonly<
   Record<AgentPlatform, Record<ComponentKind, CapabilityKindSupport>>
 > = Object.freeze({
   claude: {
+    // Machine-wide copies are shared. A selection made for one session, graph
+    // node or template is delivered to that session alone instead, through
+    // Orkestrator's session plugin (`privateDelivery` in capabilityLiveSemantics).
     skill: skillSupport(
-      SHARED_ROOT_ISOLATION,
+      no(
+        "Other providers read Claude's skill directory, so a machine-wide copy cannot be limited to Claude. A selection made for one session, graph node or template is delivered to that Claude session alone, through Orkestrator's session plugin.",
+      ),
       S,
       no("Claude has no per-skill enable switch outside plugins; remove the skill to disable it."),
     ),
@@ -536,7 +540,9 @@ export const BASELINE_CAPABILITY_SUPPORT: Readonly<
   },
   pi: {
     skill: skillSupport(
-      no("Pi reads shared and Claude-compatible skill directories as well as its own."),
+      no(
+        "Pi reads ~/.agents/skills, which Codex, Cursor, Grok and OpenCode also read, as well as its own ~/.pi/agent/skills.",
+      ),
       NO_LIVE_SKILL_INVENTORY,
       no("Pi has no per-skill enable switch."),
     ),
@@ -625,9 +631,15 @@ export function capabilityLiveSemantics(input: {
   sessionRunning: boolean;
   exclusive: boolean;
   blocked: boolean;
+  /**
+   * Delivered to this session alone (Claude's session plugin): isolated by
+   * construction, and frozen when the session starts.
+   */
+  privateDelivery?: boolean;
 }): CapabilityLiveSemantics {
   if (input.blocked) return "blocked-by-policy";
   const support = input.matrix.kinds[input.kind];
+  if (input.privateDelivery) return "new-session-required";
   if (input.exclusive && support.isolate.level !== "supported") {
     return "cannot-enforce-without-isolated-home";
   }

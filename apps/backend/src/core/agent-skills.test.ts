@@ -253,7 +253,7 @@ describe("scanAgentSkills", () => {
     expect(scan.roots.some((root) => root.label === "~/.grok/skills")).toBe(true);
   });
 
-  test("Pi reads its agent-directory skills plus the shared roots", async () => {
+  test("Pi reads its agent-directory skills plus ~/.agents/skills, never ~/.claude/skills", async () => {
     await writeSkill(join(home, ".pi", "agent", "skills"), "from-pi");
     await writeSkill(join(home, ".pi", "skills"), "wrong-pi-root");
     await writeSkill(join(home, ".agents", "skills"), "from-agents");
@@ -263,7 +263,6 @@ describe("scanAgentSkills", () => {
 
     expect(scan.skills.map((skill) => [skill.name, skill.scope])).toEqual([
       ["from-agents", "shared"],
-      ["from-claude", "shared"],
       ["from-pi", "user"],
     ]);
     expect(scan.roots.some((root) => root.label === "~/.pi/agent/skills")).toBe(true);

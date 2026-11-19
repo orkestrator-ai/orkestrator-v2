@@ -556,6 +556,12 @@ export interface NativeAgentServiceOptions {
     logicalSessionKey: string;
     policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   }) => Promise<void>;
+  /**
+   * The plugin directories a Claude session's turns pass: what its launch
+   * delivered to it alone (Agent Capabilities). Throws when the session's
+   * recorded plugin can no longer be produced.
+   */
+  capabilitySessionPlugins?: (logicalSessionKey: string) => Promise<string[]>;
   resolveAgentToolConnection?: (
     environmentId: string,
     projectId: string,

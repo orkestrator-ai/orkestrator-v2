@@ -26,6 +26,16 @@ import {
 
 import { verifyLaunchDeliveries, withBlockers } from "./launch-authority.js";
 import { sha256 } from "./planning.js";
+import { revisionComponent } from "./scoped-delivery.js";
+import {
+  pruneSessionPlugins,
+  sessionPluginForTurn,
+  sessionPluginsRoot,
+  stageSessionPlugin,
+  withoutPrivateItems,
+  type SessionPrivateItem,
+  type SessionPrivatePluginRecord,
+} from "./session-delivery.js";
 import { effectiveReceiptStatus } from "./runtime-evidence.js";
 import { CapabilityError } from "./security.js";
 import { parseTarget, stringList } from "./service-args.js";
@@ -38,7 +48,14 @@ export class CapabilityPreflight {
   /** The observed deliveries behind a launch's effective resources, for its record. */
   private readonly launchEvidence = new WeakMap<
     EffectiveAgentResources,
-    { deliveries: CapabilityLaunchDelivery[]; resolvedBy?: string }
+    {
+      deliveries: CapabilityLaunchDelivery[];
+      resolvedBy?: string;
+      /** Components to deliver to this session alone (`session-delivery.ts`). */
+      privateItems?: SessionPrivateItem[];
+      /** Package ids the session's setups mark required. */
+      required?: ReadonlySet<string>;
+    }
   >();
 
   constructor(private readonly ctx: CapabilityServiceContext) {}
@@ -128,6 +145,12 @@ export class CapabilityPreflight {
       this.launchEvidence.set(answer.effective, {
         deliveries: answer.deliveries,
         ...(answer.resolvedBy ? { resolvedBy: answer.resolvedBy } : {}),
+        ...(answer.privateItems && answer.privateItems.length > 0
+          ? {
+              privateItems: answer.privateItems,
+              required: new Set(answer.privateRequired ?? []),
+            }
+          : {}),
       });
       return answer.effective;
     }
@@ -149,11 +172,22 @@ export class CapabilityPreflight {
       .catch(() => undefined);
     const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
     let required: ReadonlySet<string> = new Set();
+    // Only this machine's own launches: the plugin is staged from this node's artifacts.
+    const privateItems: SessionPrivateItem[] = [];
+    const local = input.target.nodeId === (await this.ctx.deps.selfId());
     const resolved = this.ctx.resolveFor(state, {
       ...resolveInput,
       captureRequired: (ids) => {
         required = ids;
       },
+      ...(local
+        ? {
+            privateDelivery: {
+              deliverable: () => true,
+              capture: (item: SessionPrivateItem) => privateItems.push(item),
+            },
+          }
+        : {}),
       forLaunch: true,
       ...(launchInventory ? { launchInventory } : {}),
       ...(scopedEvidence ? { scopedEvidence } : {}),
@@ -167,8 +201,99 @@ export class CapabilityPreflight {
       ...(scopedEvidence ? { scopedEvidence } : {}),
     });
     const effective = withBlockers(resolved, checked.blockers);
-    this.launchEvidence.set(effective, { deliveries: checked.deliveries });
+    this.launchEvidence.set(effective, {
+      deliveries: checked.deliveries,
+      ...(privateItems.length > 0 ? { privateItems, required } : {}),
+    });
     return effective;
+  }
+
+  /**
+   * Stages the components a launch delivers to its session alone. A required
+   * one that cannot be staged stops the launch; an optional one is dropped
+   * from the manifest with a warning, never reported delivered.
+   */
+  private async stagePrivateDelivery(effective: EffectiveAgentResources): Promise<{
+    effective: EffectiveAgentResources;
+    record?: SessionPrivatePluginRecord;
+  }> {
+    const evidence = this.launchEvidence.get(effective);
+    const delivered = new Set(
+      effective.resolvedPackages.flatMap((pkg) =>
+        pkg.components.map((componentId) => `${pkg.id}|${componentId}|${pkg.artifactDigest}`),
+      ),
+    );
+    const seen = new Set<string>();
+    const items = (evidence?.privateItems ?? []).filter((item) => {
+      const key = `${item.packageId}|${item.componentId}|${item.packageDigest}`;
+      if (!delivered.has(key) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (items.length === 0) return { effective };
+    try {
+      const staged = await stageSessionPlugin({
+        root: sessionPluginsRoot(this.ctx.deps.dataDir),
+        items,
+        artifacts: this.ctx.artifacts,
+      });
+      return { effective, record: staged.record };
+    } catch (error) {
+      const reason =
+        error instanceof CapabilityError
+          ? error.message
+          : "The session's capability files could not be prepared.";
+      log.warn("service.private-delivery-failed", {
+        error: formatLogError(error, { message: false }),
+      });
+      const required = evidence?.required ?? new Set<string>();
+      const requiredItem = items.find((item) => required.has(item.packageId));
+      if (requiredItem) {
+        throw new CapabilityError(
+          "approval-required",
+          `This session's setups require a capability it cannot have: ${requiredItem.name}: ${reason} Change the session's setups in Capabilities, or mark the component optional.`,
+        );
+      }
+      const narrowed = withoutPrivateItems(effective, items, reason, required);
+      if (evidence) this.launchEvidence.set(narrowed, { ...evidence, privateItems: [] });
+      return { effective: narrowed };
+    }
+  }
+
+  /**
+   * The plugin directories a session's turns pass: its private plugin from
+   * the launch record, re-staged when it went missing. Empty for a session
+   * launched without one.
+   */
+  async sessionPlugins(sessionKey: string): Promise<string[]> {
+    const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
+    const record = state.launches[sessionKey]?.privatePlugin;
+    if (!record) return [];
+    const directory = await sessionPluginForTurn({
+      root: sessionPluginsRoot(this.ctx.deps.dataDir),
+      record,
+      state,
+      artifacts: this.ctx.artifacts,
+      resolveItem: (entry) => {
+        const component = revisionComponent(
+          state,
+          entry.packageId,
+          entry.componentId,
+          entry.packageDigest,
+        );
+        return component
+          ? {
+              packageId: entry.packageId,
+              packageDigest: entry.packageDigest,
+              componentId: entry.componentId,
+              kind: component.kind,
+              name: component.name,
+              pathOrKey: component.pathOrKey,
+            }
+          : undefined;
+      },
+    });
+    return [directory];
   }
 
   /**
@@ -231,6 +356,9 @@ export class CapabilityPreflight {
         `This session's setups require a capability it cannot have: ${first.reason} Change the session's setups in Capabilities, or mark the component optional.`,
       );
     }
+    const staged = await this.stagePrivateDelivery(effective);
+    effective = staged.effective;
+    let referenced: Set<string> | undefined;
     try {
       this.ctx.deps.storage.capabilities.mutateCapabilityState((state) => {
         state.launches[input.sessionKey] = {
@@ -242,9 +370,15 @@ export class CapabilityPreflight {
             id: entry.id,
             artifactDigest: entry.artifactDigest,
           })),
-          ...this.launchEvidence.get(effective),
+          ...launchRecordEvidence(this.launchEvidence.get(effective)),
+          ...(staged.record ? { privatePlugin: staged.record } : {}),
           launchedAt: this.ctx.now(),
         };
+        referenced = new Set(
+          Object.values(state.launches).flatMap((launch) =>
+            launch.privatePlugin ? [launch.privatePlugin.digest] : [],
+          ),
+        );
         return { result: undefined, changed: true };
       });
     } catch (error) {
@@ -252,6 +386,20 @@ export class CapabilityPreflight {
         error: formatLogError(error, { message: false }),
       });
     }
+    if (referenced) {
+      void pruneSessionPlugins(sessionPluginsRoot(this.ctx.deps.dataDir), referenced);
+    }
     return effective;
   }
+}
+
+/** The fields of a launch's evidence its record keeps. */
+function launchRecordEvidence(
+  evidence: { deliveries: CapabilityLaunchDelivery[]; resolvedBy?: string } | undefined,
+): { deliveries?: CapabilityLaunchDelivery[]; resolvedBy?: string } {
+  if (!evidence) return {};
+  return {
+    deliveries: evidence.deliveries,
+    ...(evidence.resolvedBy ? { resolvedBy: evidence.resolvedBy } : {}),
+  };
 }

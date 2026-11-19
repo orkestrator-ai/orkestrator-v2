@@ -144,8 +144,8 @@ describe("Pi project extensions and the approval gate", () => {
     for (const approvals of ["auto-approve", "deny", undefined] as const) {
       expect(projectResourceDiscoveryOptions(true, false, approvals).noExtensions).toBe(true);
     }
-    // Off and read-only stay as they were: nothing from the project loads.
-    expect(projectResourceDiscoveryOptions(false, false, "ask").noSkills).toBe(true);
+    // Off: the user's skills load, the project's stay untrusted. Read-only: none.
+    expect(projectResourceDiscoveryOptions(false, false, "ask").noSkills).toBe(false);
     expect(projectResourceDiscoveryOptions(true, true, "ask").noSkills).toBe(true);
   });
 

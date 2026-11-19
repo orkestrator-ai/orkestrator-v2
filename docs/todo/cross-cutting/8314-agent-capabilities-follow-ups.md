@@ -6,12 +6,12 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 
 ### Tasks
 
-1. **Live provider conformance for capability installs**: done for Claude Code 2.1.326, Codex 0.169.0 and OpenCode 2.3.1 (2026-11-19); Grok Build, Pi and the Cursor SDK remain open (no pinned binary outside Orkestrator's toolchain, no credential-free listing). See [Assumptions and decisions](#assumptions-and-decisions).
-2. **Isolated provider homes for exclusive session selections**: open (depends on 1).
+1. **Live provider conformance for capability installs**: done for Claude Code 2.1.326, Codex 0.169.0, OpenCode 2.3.1 and the Pi SDK 1.5.2 (2026-11-19); Grok Build and the Cursor SDK remain open (no pinned binary outside Orkestrator's toolchain, no credential-free listing). See [Assumptions and decisions](#assumptions-and-decisions).
+2. **Isolated provider homes for exclusive session selections**: done for Claude through session-private delivery (2026-11-19); Codex, Cursor, Grok, OpenCode and Pi remain open (their pinned bridges have no per-session plugin channel). See [Assumptions and decisions](#assumptions-and-decisions).
 3. **Merge for local changes**: done (2026-11-19; see [Assumptions and decisions](#assumptions-and-decisions)).
 4. **Package registries and signed team manifests**: done (2026-11-19; with lockfile format 2 for mixed revisions; see [Assumptions and decisions](#assumptions-and-decisions)).
 5. **Command-node handover of capability state**: done (2026-11-19; with leaf launch authority; see [Assumptions and decisions](#assumptions-and-decisions)).
-6. **Native plugin lifecycle beyond Claude**: Codex enablement done (2026-11-19), and Claude managed installs restored from immutable artifacts; Grok, OpenCode and Pi remain open. See [Assumptions and decisions](#assumptions-and-decisions).
+6. **Native plugin lifecycle beyond Claude**: Codex enablement done (2026-11-19), and Claude managed installs restored from immutable artifacts; Grok, OpenCode and Pi remain open by decision (structured unsupported reasons; see [Assumptions and decisions](#assumptions-and-decisions)).
 7. **Container delivery through portable inputs**: done (2026-11-19; with project delivery into local worktrees and added-account verification; see [Assumptions and decisions](#assumptions-and-decisions)).
 
 ### 1. Live provider conformance for capability installs
@@ -431,6 +431,35 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 - **Validation.** One browser-safe parser (`capability-admin-policy.ts`) used by the form and the command: Git addresses canonicalised like package ids, `registry:<id>` gains its slash, component entries are a kind (`kind:hook`), a component id or a package id. `kind:` entries are new; the resolver checks them through the same `capabilityPolicyDenial`.
 - **Effect.** Activity (`admin-policy`) and `reconcileAll("admin-policy")`, so forbidden copies are removed on the next pass.
 - **Proof.** `admin-policy.test.ts` (normalisation, refusals, CAS conflict, Activity, a forbidden source and a forbidden kind blocking on a machine's plan), `AdminPolicySection.test.tsx`, and the policy check in `e2e/CapabilitiesAccessibility.spec.ts`.
+
+### Task 2: how a selection reaches one session alone
+
+- **Options.**
+  - **Per-session overlay homes (a temporary `CLAUDE_CONFIG_DIR` or `CODEX_HOME` with only the selected skills linked).**
+    - Pros: one mechanism shape for Claude and Codex.
+    - Cons: the bridge is one process per environment, so a home is per process, not per session; an overlay home also moves the login, `.claude.json` and the OAuth refresh safeguards (`agent-accounts-homes.ts`) for every session in that environment.
+  - **An Orkestrator-owned inline plugin per session, passed on that session's turns (chosen, Claude).**
+    - Pros: the SDK already takes inline plugins per query (the coordinator skill mirrors use the same channel); no home, login or account rule changes; skills are namespaced (`orkestrator-session:<name>`), so nothing shadows them; content-addressed and recorded at launch, so a running session's set never changes; the pinned binary lists it only when passed (live conformance).
+    - Cons: Claude only; a skill appears under the plugin's namespace rather than its bare name; read-only turns do not load it.
+- **Scope.** Only kinds a Claude plugin carries (skills, commands, prompts, subagents), only when no copy of the component exists for the target (a drifted or older shared copy keeps blocking), never hooks, MCP servers, native plugins or a native plugin's parts, never a container.
+- **Leaves.** The command node sends each selected artifact over the node link before answering a leaf's launch, and the leaf stages the plugin itself; a failed transfer drops an optional item and blocks a required one.
+- **Other providers.** Codex, Cursor, Grok, OpenCode and Pi keep reporting launch-only selections as unsupported: their pinned bridges take no per-session skill set. Codex app-server reads skills from its home and the repository; Pi's SDK takes `additionalSkillPaths`, which is the likely next step (a Pi bridge change, with its own conformance test).
+
+### Task 1: qualifying Pi without a binary
+
+- **Options.**
+  - **Download the pinned `pi` bundle into a temporary directory for the live suite.**
+    - Pros: the binary itself.
+    - Cons: a network fetch in a test; Pi's CLI still has no credential-free listing.
+  - **The pinned Pi SDK's own resource loader, the one a session's attach and the bridge catalogue use (chosen).**
+    - Pros: the SDK and the binary are the same version (`version-drift.test.ts`); no credential, network or model; runs in the default tier (`bridges/pi-bridge/src/capability-delivery-conformance.test.ts`).
+    - Cons: proves the bridge's loading path, not the CLI's (which Orkestrator does not use for sessions).
+- **Findings, fixed in the same change.** The Pi bridge disabled every skill and template, user ones included, unless the session enabled project resources, so a delivered Pi skill never loaded in a default host session; it now loads user-level ones and keeps the project's behind project trust. The location table and the skill browser said Pi reads `~/.claude/skills`; the SDK never does, so both were corrected.
+
+### Task 6: Grok, OpenCode and Pi plugins
+
+- **Decision.** Report discovery and a structured reason for each other operation, rather than load them: Grok manages its own plugins and needs a restart Orkestrator does not trigger; the OpenCode 2 mirror strips user plugins; Pi extensions and packages would run inside the shared bridge process, where they could answer another session's approvals (`bridges/pi-bridge/AGENTS.md`). The plan allows a structured reason where no safe path exists; a plugin's portable parts still reach these providers as separate components.
+- **Next step, if wanted.** A per-session OpenCode plugin path in the configuration mirror, and Pi extensions in a separate process, each needing a security review first.
 
 ## Related
 

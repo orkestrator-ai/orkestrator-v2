@@ -615,6 +615,16 @@ export class CapabilityService {
     return this.preflight.preflightSession(input);
   }
 
+  /**
+   * The plugin directories a session's turns pass to its provider: the
+   * components its launch delivered to it alone (`session-delivery.ts`).
+   * Throws when a recorded plugin can no longer be produced, so a turn never
+   * runs without what the session launched with.
+   */
+  sessionPlugins(sessionKey: string): Promise<string[]> {
+    return this.preflight.sessionPlugins(sessionKey);
+  }
+
   // --- Environment copies (`scoped-delivery.ts`, `container-staging.ts`) ---------
 
   private environmentDeliveryContext(): EnvironmentDeliveryContext {
@@ -701,6 +711,12 @@ export class CapabilityService {
         isAuthority: () => this.deps.isAuthority(),
         link: this.deps.link,
         resolve: (state, input) => this.resolveFor(state, input),
+        stageArtifact: (target, epoch, digest) =>
+          remoteTransport({
+            selfId: this.deps.selfId,
+            link: this.deps.link,
+            artifacts: this.artifacts,
+          }).stage(target, epoch, digest),
         now: () => this.now(),
       },
       nodeId,

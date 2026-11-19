@@ -22,11 +22,12 @@ describe("shared locations", () => {
     ]);
   });
 
-  test("a Claude-only skill cannot be isolated: four other providers read its directory", () => {
+  test("a Claude-only skill cannot be isolated: three other providers read its directory", () => {
     const plan = planCapabilityLocations("skill", ["claude"]);
     expect(plan.locations.map((entry) => entry.id)).toEqual(["claude-user-skills"]);
     expect(plan.isolated).toBe(false);
-    expect(plan.alsoVisibleTo).toEqual(["cursor", "grok", "opencode", "pi"]);
+    // Not Pi: its pinned SDK never reads ~/.claude/skills.
+    expect(plan.alsoVisibleTo).toEqual(["cursor", "grok", "opencode"]);
   });
 
   test("a provider with a private directory is isolated", () => {
@@ -140,6 +141,17 @@ describe("support matrix", () => {
         blocked: false,
       }),
     ).toBe("cannot-enforce-without-isolated-home");
+    // Delivered to the session alone: isolated, and frozen until a new session.
+    expect(
+      capabilityLiveSemantics({
+        matrix,
+        kind: "skill",
+        sessionRunning: true,
+        exclusive: true,
+        blocked: false,
+        privateDelivery: true,
+      }),
+    ).toBe("new-session-required");
     expect(
       capabilityLiveSemantics({
         matrix,

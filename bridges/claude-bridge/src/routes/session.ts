@@ -105,6 +105,7 @@ import { readSessionActivityObservation } from "./session-activity.js";
 import { registerSessionTranscriptRoutes } from "./session-transcript.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
+import { parseCapabilityPlugins } from "../services/capability-session-plugins.js";
 
 const log = createLogger("bridge.claude");
 
@@ -828,6 +829,7 @@ session.post("/:id/prompt", async (c) => {
             ...(artifactsToken ? { artifacts: { token: artifactsToken } } : {}),
           }
         : undefined;
+    const capabilityPlugins = parseCapabilityPlugins(body.capabilityPlugins);
     // Every prompt is deduplicated on this id, not just structured ones: a plain
     // prompt retried after a lost HTTP response would otherwise run its shell
     // commands and file edits twice. Clients always send one; the fallback keeps
@@ -975,6 +977,7 @@ session.post("/:id/prompt", async (c) => {
       promptSuggestions,
       parameterValues,
       ...(agentMcp ? { agentMcp } : {}),
+      ...(capabilityPlugins ? { capabilityPlugins } : {}),
       ...(workflowResultTurn ? { workflowResultTurn } : {}),
     };
     // Refused before anything is journaled: a prompt the session's running CLI

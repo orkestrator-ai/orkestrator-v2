@@ -66,6 +66,9 @@ export function bridgePromptBody(
           includeLocalSettings: options.includeLocalSettings,
           promptSuggestions: options.promptSuggestions,
           agentMcp: options.agentMcp,
+          ...(options.capabilityPlugins && options.capabilityPlugins.length > 0
+            ? { capabilityPlugins: options.capabilityPlugins }
+            : {}),
           permissionMode: options.readOnly
             ? "dontAsk"
             : options.mode === "plan"

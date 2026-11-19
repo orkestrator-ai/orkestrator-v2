@@ -1439,6 +1439,11 @@ export interface PromptOptions {
   requestId?: string;
   agentMcp?: { url: string; token: string; design?: boolean; artifacts?: { token: string } };
   /**
+   * Agent Capabilities: plugin directories the backend staged for this
+   * session alone (`capability-session-plugins.ts`), frozen at launch.
+   */
+  capabilityPlugins?: string[];
+  /**
    * The workflow-result attempt this turn runs for (`workflowResultTool`,
    * `workflowResultKey` and a graph activation's slots and extra tools). Its
    * own tools run under any policy, and only with the key each answers for.

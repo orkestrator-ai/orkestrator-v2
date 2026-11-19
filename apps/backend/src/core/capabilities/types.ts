@@ -27,6 +27,7 @@ import type {
 } from "@orkestrator/protocol/capability-resources";
 import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
 import type { CapabilityRegistry } from "@orkestrator/protocol/capability-registry";
+import type { SessionPrivatePluginRecord } from "./session-delivery.js";
 
 export const CAPABILITY_STATE_FORMAT_VERSION = 1;
 
@@ -218,6 +219,11 @@ export interface CapabilityLaunchRecord {
   deliveries?: CapabilityLaunchDelivery[];
   /** The command node that resolved a leaf's launch; absent when resolved locally. */
   resolvedBy?: string;
+  /**
+   * Components delivered to this session alone, as an Orkestrator-owned
+   * plugin passed on its own turns (`session-delivery.ts`).
+   */
+  privatePlugin?: SessionPrivatePluginRecord;
   launchedAt: string;
 }
 
@@ -276,6 +282,9 @@ export interface LeafLaunchAnswerRecord {
   effective: EffectiveAgentResources;
   deliveries: CapabilityLaunchDelivery[];
   required: string[];
+  /** Components the answer delivers to the session alone (`session-delivery.ts`). */
+  privateItems?: import("./session-delivery.js").SessionPrivateItem[];
+  privateRequired?: string[];
 }
 
 export interface CapabilityState {

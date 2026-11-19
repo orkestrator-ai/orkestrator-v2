@@ -294,6 +294,17 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   whichever minified vendor file threw, with no indication of which request
   produced it.
 
+## Agent Capabilities session plugins
+
+A prompt's `capabilityPlugins` are inline plugins the backend staged for that
+session alone (`capability-session-plugins.ts`; "Session-private delivery" in
+`docs/architecture/agent-capabilities-management.md`). Accept a path only as a
+direct, non-link, content-addressed child of the root the backend names in
+`ORKESTRATOR_CAPABILITY_SESSION_PLUGINS_DIR` that holds a plugin manifest, and
+never on a read-only turn: unlike a coordinator mirror, these skills keep their
+frontmatter. They are part of the launch's plugin set, so they go through
+`resolveClaudeTurnPlugins` like every other plugin.
+
 ## Coordinator skills
 
 A coordinator gets the user's and the project's skills only as the mirrored

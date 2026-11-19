@@ -295,7 +295,12 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   Every policy excludes discovered extensions and configured packages (`src/project-extensions.ts`): they
   run inside the bridge process, where persistent hooks could answer another session’s approvals.
   Its skills and prompt templates still load, and the reported policy's
-  note says why the extensions did not.
+  note says why the extensions did not. With project resources off, the
+  user's own skills and templates (`~/.pi/agent/skills`, `~/.agents/skills`,
+  `~/.pi/agent/prompts`) still load and the project's stay out through
+  project trust (`projectTrusted`); a read-only turn loads none. Agent
+  Capabilities delivers into exactly those user directories, and
+  `src/capability-delivery-conformance.test.ts` pins this against the SDK.
 - Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
   extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline
   `orkestrator-mcp` extension: Orkestrator from env / per-tab `agentMcp`,

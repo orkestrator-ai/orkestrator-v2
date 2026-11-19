@@ -57,6 +57,11 @@ import {
 } from "./scoped-delivery.js";
 import { projectCapabilityLocation, projectMcpLocation } from "./scoped-locations.js";
 import { CapabilityError } from "./security.js";
+import {
+  parseSessionPrivateItems,
+  withoutPrivateItems,
+  type SessionPrivateItem,
+} from "./session-delivery.js";
 import type {
   CapabilityExecutorState,
   CapabilityLaunchDelivery,
@@ -585,7 +590,19 @@ function parseAnswer(value: unknown, target: CapabilityTarget): LeafAnswer | nul
   const required = Array.isArray(record.required)
     ? record.required.filter((id): id is string => typeof id === "string").slice(0, 2_000)
     : [];
-  return { effective, deliveries, required, requiredOnNode: record.requiredOnNode === true };
+  const privateItems = parseSessionPrivateItems(record.privateItems);
+  const privateRequired = Array.isArray(record.privateRequired)
+    ? record.privateRequired
+        .filter((id): id is string => typeof id === "string" && id.length <= 512)
+        .slice(0, 2_000)
+    : [];
+  return {
+    effective,
+    deliveries,
+    required,
+    requiredOnNode: record.requiredOnNode === true,
+    ...(privateItems.length > 0 ? { privateItems, privateRequired } : {}),
+  };
 }
 
 interface LeafAnswer {
@@ -593,6 +610,13 @@ interface LeafAnswer {
   deliveries: CapabilityLaunchDelivery[];
   required: string[];
   requiredOnNode: boolean;
+  /**
+   * Components to deliver to this session alone (`session-delivery.ts`).
+   * The command node staged their artifacts on this machine before answering.
+   */
+  privateItems?: SessionPrivateItem[];
+  /** Package ids among them the session's setups mark required. */
+  privateRequired?: string[];
 }
 
 // --- Leaf side -------------------------------------------------------------------
@@ -623,6 +647,8 @@ export interface LeafLaunchResult {
   effective: EffectiveAgentResources;
   deliveries: CapabilityLaunchDelivery[];
   resolvedBy?: string;
+  privateItems?: SessionPrivateItem[];
+  privateRequired?: string[];
 }
 
 export class LeafLaunchAuthority {
@@ -655,6 +681,7 @@ export class LeafLaunchAuthority {
         ),
         deliveries: answered.answer.deliveries,
         resolvedBy: answered.controllerId,
+        ...privateFields(answered.answer),
       };
     }
     return this.fromCache(request, key, inventory, report);
@@ -742,6 +769,7 @@ export class LeafLaunchAuthority {
         effective: answer.effective,
         deliveries: answer.deliveries,
         required: answer.required,
+        ...privateFields(answer),
       };
       cache.requiredOnNode = { value: answer.requiredOnNode, at: now, controllerId };
       const entries = Object.values(cache.answers).sort((a, b) =>
@@ -841,6 +869,7 @@ export class LeafLaunchAuthority {
         effective: withBlockers(effective, local.blockers),
         deliveries: cached.deliveries,
         resolvedBy: cached.controllerId,
+        ...privateFields(cached),
       };
     }
     const requiredKnown =
@@ -898,8 +927,14 @@ export interface LeafLaunchAnswerDeps {
       scopedEvidence?: ScopedEvidence;
       forLaunch: true;
       captureRequired?: (ids: ReadonlySet<string>) => void;
+      privateDelivery?: {
+        deliverable: () => boolean;
+        capture: (item: SessionPrivateItem) => void;
+      };
     },
   ): EffectiveAgentResources;
+  /** Sends one artifact to the leaf (`CapabilityNodeTransport.stage`). */
+  stageArtifact?(nodeId: string, epoch: number, digest: string): Promise<void>;
   now(): string;
 }
 
@@ -962,10 +997,19 @@ export async function answerLeafLaunch(
     parseLeafScopedReport(request.scoped),
   );
   let required: ReadonlySet<string> = new Set();
+  const privateItems: SessionPrivateItem[] = [];
   const resolved = deps.resolve(state, {
     captureRequired: (ids) => {
       required = ids;
     },
+    ...(deps.stageArtifact
+      ? {
+          privateDelivery: {
+            deliverable: () => true,
+            capture: (item: SessionPrivateItem) => privateItems.push(item),
+          },
+        }
+      : {}),
     target,
     sessionKey,
     ceiling,
@@ -982,7 +1026,35 @@ export async function answerLeafLaunch(
     required,
     ...(scopedEvidence ? { scopedEvidence } : {}),
   });
-  const effective = withBlockers(resolved, checked.blockers);
+  let effective = withBlockers(resolved, checked.blockers);
+  // The leaf stages the session's private plugin from its own artifact cache.
+  const sent: SessionPrivateItem[] = [];
+  if (effective.launchBlockers.length === 0 && privateItems.length > 0) {
+    const failed: SessionPrivateItem[] = [];
+    const digests = new Map<string, boolean>();
+    for (const item of privateItems) {
+      let ok = digests.get(item.packageDigest);
+      if (ok === undefined) {
+        ok = await deps.stageArtifact!(nodeId, state.epoch, item.packageDigest).then(
+          () => true,
+          (error: unknown) => {
+            log.warn("launch.private-stage-failed", {
+              error: formatLogError(error, { message: false }),
+            });
+            return false;
+          },
+        );
+        digests.set(item.packageDigest, ok);
+      }
+      (ok ? sent : failed).push(item);
+    }
+    effective = withoutPrivateItems(
+      effective,
+      failed,
+      "Its files could not be sent to this machine for the session.",
+      required,
+    );
+  }
   const requiredComponents = effective.resolvedPackages
     .filter((pkg) => required.has(pkg.id))
     .flatMap((pkg) => pkg.components);
@@ -1014,6 +1086,14 @@ export async function answerLeafLaunch(
         deliveries: checked.deliveries,
         required: requiredComponents,
         requiredOnNode: stateHasRequired(state),
+        ...(sent.length > 0 && effective.launchBlockers.length === 0
+          ? {
+              privateItems: sent,
+              privateRequired: [...required].filter((id) =>
+                sent.some((item) => item.packageId === id),
+              ),
+            }
+          : {}),
       } as never,
     });
   } catch (error) {
@@ -1021,4 +1101,12 @@ export async function answerLeafLaunch(
     return { answered: false };
   }
   return { answered: true };
+}
+
+function privateFields(
+  answer: Pick<LeafAnswer, "privateItems" | "privateRequired">,
+): Pick<LeafAnswer, "privateItems" | "privateRequired"> {
+  return answer.privateItems && answer.privateItems.length > 0
+    ? { privateItems: answer.privateItems, privateRequired: answer.privateRequired ?? [] }
+    : {};
 }

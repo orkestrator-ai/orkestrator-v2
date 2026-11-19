@@ -30,6 +30,7 @@ import {
   capabilityRevisionComponents,
 } from "@orkestrator/protocol/capability-resources-resolve";
 import { capabilityLiveSemantics } from "@orkestrator/protocol/capability-resources-support";
+import { sessionPrivateDeliverable } from "./session-delivery.js";
 
 import { operationSnapshot, type CapabilityOperationRecord } from "./operations.js";
 import { supportFor } from "./planning.js";
@@ -222,7 +223,20 @@ export class CapabilityLibraryReads {
             entry.packageDigest === pkg.artifactDigest &&
             entry.providers.includes(target.provider),
         );
-        const status = receipt ? effectiveReceiptStatus(receipt).status : "pending";
+        // Delivered to this session alone (`session-delivery.ts`): at launch, or already.
+        const launched = state.launches[sessionKey]?.privatePlugin?.items.some(
+          (entry) =>
+            entry.packageId === pkg.id &&
+            entry.componentId === componentId &&
+            entry.packageDigest === pkg.artifactDigest,
+        );
+        const privately =
+          !receipt && (launched || sessionPrivateDeliverable(state, target, component));
+        const status = receipt
+          ? effectiveReceiptStatus(receipt).status
+          : privately
+            ? "installed-next-session"
+            : "pending";
         components.push({
           componentId,
           name: component.name,
@@ -234,8 +248,17 @@ export class CapabilityLibraryReads {
             sessionRunning,
             exclusive: false,
             blocked: false,
+            privateDelivery: privately,
           }),
-          ...(receipt?.reason ? { reason: receipt.reason } : {}),
+          ...(receipt?.reason
+            ? { reason: receipt.reason }
+            : privately
+              ? {
+                  reason: launched
+                    ? "Delivered to this session only, in Orkestrator's session plugin; not runtime-verified."
+                    : "Delivered to this session only, in Orkestrator's session plugin, when it starts.",
+                }
+              : {}),
         });
       }
     }

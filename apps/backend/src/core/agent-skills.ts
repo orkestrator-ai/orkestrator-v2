@@ -464,12 +464,12 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
   if (provider === "pi") {
     // Pi resolves its resources from the agent directory rather than the config
     // directory above it: `~/.pi` holds `agent/`, and everything Pi loads —
-    // skills, prompts, extensions, themes — sits inside that. The shared roots
-    // follow the other platforms so a skill written once is offered everywhere.
+    // skills, prompts, extensions, themes — sits inside that. It also reads
+    // the shared `~/.agents/skills`, but not `~/.claude/skills`: the pinned SDK
+    // never lists a skill there (bridges/pi-bridge/src/capability-delivery-conformance.test.ts).
     return [
       { path: path.join(home, ".pi", "agent", "skills"), scope: "user", recursive: true },
       { path: agentsSkills, scope: "shared", recursive: true },
-      { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
     ];
   }
 

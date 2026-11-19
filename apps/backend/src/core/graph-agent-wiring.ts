@@ -40,6 +40,7 @@ const GRAPH_GUARD_PROBE_ATTEMPTS = 3;
 
 export interface GraphAgentWiringInput {
   capabilityPreflight?: GraphAgentExecutorDependencies["capabilityPreflight"];
+  capabilitySessionPlugins?: GraphAgentExecutorDependencies["capabilitySessionPlugins"];
   graphRuns: GraphRunService;
   artifacts: GraphArtifactStore;
   storage: {
@@ -126,6 +127,9 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
     storage: input.storage,
     providers,
     ...(input.capabilityPreflight ? { capabilityPreflight: input.capabilityPreflight } : {}),
+    ...(input.capabilitySessionPlugins
+      ? { capabilitySessionPlugins: input.capabilitySessionPlugins }
+      : {}),
     questions,
     progress,
     ...(input.workflowResults ? { workflowResults: input.workflowResults } : {}),

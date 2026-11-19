@@ -7,6 +7,7 @@
 import { capabilityPolicyDenial } from "@orkestrator/protocol/capability-admin-policy";
 import {
   MY_SETUP_ID,
+  type CapabilityComponent,
   type CapabilityPackageSelection,
   type CapabilityTarget,
   type EffectiveAgentResources,
@@ -22,6 +23,7 @@ import {
 
 import { capabilityOsDenial, machineWideSetupIds, sha256, supportFor } from "./planning.js";
 import { scopedRequiredDelivery, type ScopedEvidence } from "./scoped-delivery.js";
+import { sessionPrivateDeliverable, type SessionPrivateItem } from "./session-delivery.js";
 import type { CapabilityState } from "./types.js";
 
 export interface CapabilityResolveInput {
@@ -38,6 +40,15 @@ export interface CapabilityResolveInput {
   captureRequired?: (ids: ReadonlySet<string>) => void;
   /** A worktree's, account's or container's own copies (`scoped-delivery.ts`). */
   scopedEvidence?: ScopedEvidence;
+  /**
+   * Launch only: components with no verified copy this target reads may be
+   * delivered to the session alone (`session-delivery.ts`). `deliverable`
+   * says whether this one can be; `capture` collects the ones that will be.
+   */
+  privateDelivery?: {
+    deliverable: (component: CapabilityComponent, digest: string) => boolean;
+    capture: (item: SessionPrivateItem) => void;
+  };
 }
 
 /** The setups one scope is assigned (`project:<id>`, `session:<key>`, ...). */
@@ -152,9 +163,42 @@ export function resolveCapabilityTarget(
                 ) === true
               );
             });
-            return matching
-              ? undefined
-              : `The required revision of ${component.name} is not verified on this machine.`;
+            if (matching) return undefined;
+            // No copy of it exists for this target at all (a drifted or older
+            // copy the provider still reads must block instead): deliver it
+            // to this session alone.
+            const packageId = component.packageId;
+            const anyCopy =
+              Object.values(state.receipts).some(
+                (receipt) =>
+                  receipt.nodeId === input.target.nodeId &&
+                  deliveredBy.has(receipt.componentId) &&
+                  receipt.providers.includes(input.target.provider) &&
+                  (receipt.environmentId === undefined ||
+                    receipt.environmentId === input.target.environmentId) &&
+                  (receipt.accountHomeId === undefined ||
+                    receipt.accountHomeId === input.target.accountHomeId),
+              ) ||
+              input.launchInventory?.items.some(
+                (item) => item.componentId !== undefined && deliveredBy.has(item.componentId),
+              ) === true;
+            if (
+              !anyCopy &&
+              input.privateDelivery &&
+              sessionPrivateDeliverable(state, input.target, component) &&
+              input.privateDelivery.deliverable(component, digest)
+            ) {
+              input.privateDelivery.capture({
+                packageId,
+                packageDigest: digest,
+                componentId: component.id,
+                kind: component.kind,
+                name: component.name,
+                pathOrKey: component.pathOrKey,
+              });
+              return undefined;
+            }
+            return `The required revision of ${component.name} is not verified on this machine.`;
           },
         }
       : {}),

@@ -516,6 +516,8 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     if (toolTransport && host.prepareResult) {
       await host.prepareResult(branch, requestId, host.resultSchema(branch));
     }
+    const capabilityPlugins =
+      branch.agent === "claude" ? ((await host.capabilityPlugins?.(branch)) ?? []) : [];
     let reviewShellPolicy: NativeAgentExecutionPolicy | undefined;
     if (host.mode === "plan" && branch.agent === "opencode") {
       try {
@@ -574,6 +576,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
           effort: branch.reasoningEffort,
           ...(typeof branch.fastMode === "boolean" ? { fastMode: branch.fastMode } : {}),
           ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
+          ...(capabilityPlugins.length > 0 ? { capabilityPlugins } : {}),
           ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
           ...(workerTurn?.workerMail ? { workerMail: workerTurn.workerMail } : {}),
           ...(agentMcp ? resultTurn.send : {}),

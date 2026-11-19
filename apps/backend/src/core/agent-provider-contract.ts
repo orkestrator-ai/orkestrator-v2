@@ -591,6 +591,12 @@ export interface ProviderSendOptions {
      */
     artifacts?: { token: string };
   };
+  /**
+   * Claude only: plugin directories Orkestrator staged for this session
+   * alone (Agent Capabilities session-private delivery). Frozen at launch;
+   * every turn of the session passes the same directories.
+   */
+  capabilityPlugins?: string[];
 }
 
 export type ProviderPrepareDispatchOptions = {

@@ -1316,6 +1316,23 @@ export class NativeAgentPromptDispatch {
           log.warn("dispatch.attach-failed", { agent: input.agent, error: formatLogError(error) });
         });
       await this.prepareEnvironmentFirstPrompt(input, session, provider);
+      // What the session's launch delivered to it alone, before the at-most-once window.
+      let capabilityPlugins: string[] = [];
+      if (session.agent === "claude" && this.host.options.capabilitySessionPlugins) {
+        try {
+          capabilityPlugins = await this.host.options.capabilitySessionPlugins(
+            session.logicalSessionKey,
+          );
+        } catch (error) {
+          log.warn("dispatch.capability-plugins-failed", {
+            agent: input.agent,
+            error: formatLogError(error, { message: false }),
+          });
+          throw new PromptRejectedError(
+            "This session's capabilities could not be prepared for this turn. Start a new session, or check the package in Capabilities.",
+          );
+        }
+      }
       const commandContextBlock = userCommands?.block || leadingUserCommandContext(input.prompt);
       if (commandContextBlock) {
         input = { ...input, prompt: insertUserCommandContext(input.prompt, commandContextBlock) };
@@ -1428,6 +1445,7 @@ export class NativeAgentPromptDispatch {
                   durable.controls?.approvalMode,
                 ),
                 agentMcp,
+                ...(capabilityPlugins.length > 0 ? { capabilityPlugins } : {}),
                 ...(artifactGrant ? { artifactGrant } : {}),
                 ...(tabMail ? { tabMail } : {}),
               });

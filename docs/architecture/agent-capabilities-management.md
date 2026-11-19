@@ -258,7 +258,7 @@ Several providers read the same directory (mirrors `rootSpecsFor` in
 
 | Location | Read by |
 | --- | --- |
-| `~/.claude/skills` | Claude, Cursor, Grok, OpenCode, Pi |
+| `~/.claude/skills` | Claude, Cursor, Grok, OpenCode (not Pi: its pinned SDK never reads it) |
 | `~/.agents/skills` | Codex, Cursor, Grok, OpenCode, Pi |
 | `$CODEX_HOME/skills` (deprecated) | Codex, Cursor |
 | `~/.cursor/skills`, `~/.grok/skills`, `~/.pi/agent/skills`, `~/.config/opencode/skills` | their own provider |
@@ -269,9 +269,56 @@ Several providers read the same directory (mirrors `rootSpecsFor` in
 `planCapabilityLocations` picks the fewest locations covering the requested
 providers, preferring locations nobody else reads, and names every provider
 that also sees the copy (`alsoVisibleTo`). All six providers need two copies
-(Claude's and the shared one). A Claude-only skill cannot be isolated: four
-other providers read `~/.claude/skills`, and Claude has no per-skill switch, so
-the UI says "Exclusion cannot be enforced" instead of promising it.
+(Claude's and the shared one). A machine-wide Claude-only skill cannot be
+isolated: three other providers read `~/.claude/skills`, and Claude has no
+per-skill switch, so the UI says "Exclusion cannot be enforced" instead of
+promising it. A selection made for one Claude session, graph node or template
+is isolated instead, by session-private delivery (below).
+
+### Session-private delivery
+
+A component a launch selects that no copy on the target already holds is not
+written into a shared provider home. For Claude on a host (any account), the
+kinds a Claude plugin carries (skills, commands, prompts, subagents) are staged
+by `session-delivery.ts` into a content-addressed plugin directory the backend
+owns, `<dataDir>/capability-session-plugins/<digest>/` (`.claude-plugin/plugin.json`,
+`skills/`, `commands/`, `agents/`), from verified artifacts only, and read back
+before the launch is recorded. The launch record keeps its digest and items
+(`privatePlugin`). Every turn of that session, ordinary native turns
+(`native-agent-prompt-dispatch.ts`) and graph activations
+(`agent-branch-runner.ts`, `GraphAgentBranchHost.capabilityPlugins`) alike,
+sends the directory as the prompt's `capabilityPlugins`; the Claude bridge
+passes it to the SDK as an inline plugin (`--plugin-dir`,
+`capability-session-plugins.ts`), only from inside the root the backend names in
+`ORKESTRATOR_CAPABILITY_SESSION_PLUGINS_DIR`, only as that root's own
+content-addressed children, and never on a read-only turn (a coordinator or a
+review), whose boundary admits no skill frontmatter hooks or tool grants.
+
+- **Isolated by construction.** No other session, provider or account home
+  sees the directory, and its skills are namespaced
+  (`orkestrator-session:<name>`), so a personal copy cannot shadow them. The
+  live conformance run proves the pinned Claude binary lists the namespaced
+  skill only when the directory is passed.
+- **Frozen at launch.** The directory is named by its content and recorded at
+  launch; a setup change later never alters what a running session loads. A
+  turn re-stages a pruned directory from the artifact cache and refuses to run
+  when the recorded bytes cannot be reproduced. Unreferenced directories are
+  pruned after an hour.
+- **Never a substitute for a copy the provider already reads.** When any
+  receipt or observed item for the component exists on the target (a drifted
+  or older shared copy, a worktree copy), the launch is judged on that copy as
+  before: the drift is reported and a required component blocks.
+- **Leaves.** The command node resolves a leaf's launch with the same rule,
+  sends each selected artifact to the leaf over the node link before
+  answering, and lists the items in its answer; the leaf stages the plugin
+  from its own artifact cache. A transfer that fails drops an optional item
+  (reported unsupported) and blocks a required one.
+- **Not delivered this way:** hooks and MCP servers (their own approval and
+  lifecycle), native plugins, and any part a native plugin carries (the plugin
+  delivers it whole). Other providers have no per-session plugin channel in
+  their pinned bridges, so a launch-only selection for Codex, Cursor, Grok,
+  OpenCode or Pi, or for a container, is still reported as unsupported and a
+  required one stops the launch.
 
 **Added accounts.** Added Claude and Codex accounts link their `skills`,
 `commands`, `agents` (Claude) and `skills`, `prompts` (Codex) directories to
@@ -372,7 +419,7 @@ observed context: a provider that is not installed, or a container.
 | Cursor | install, no live inventory | unsupported (SDK has no plugin API) | through MCP management | commands (unqualified) | unsupported |
 | Grok | install, no live inventory | discovery only | through MCP management | unsupported | unsupported |
 | OpenCode | install, no live inventory | **unsupported**: the OpenCode 2 mirror strips user plugins | through MCP management | commands and agents (unqualified) | unsupported |
-| Pi | install, no live inventory | **unsupported**: the Pi bridge excludes discovered extensions and packages | through MCP management | prompts | unsupported |
+| Pi | install (`~/.pi/agent/skills`, `~/.agents/skills`), no live inventory | **unsupported**: the Pi bridge excludes discovered extensions and packages | through MCP management | prompts | unsupported |
 
 A plugin's portable parts (its skills and commands) are separate components:
 on a provider without that plugin format they are delivered on their own, and
@@ -465,15 +512,30 @@ credential-free listing. Run 2026-11-19 on Linux x64:
 | Codex 0.169.0 | Executor skill in `~/.agents/skills` is listed, and gone after removal | `codex debug prompt-input` | pass |
 | Codex 0.169.0 | A discovered plugin switched off and on through `config.toml`; comments kept | `codex plugin list --json`, `codex debug prompt-input` | pass |
 | OpenCode 2.3.1 | Executor subagent in `~/.config/opencode/agent` is listed by the binary | `opencode debug agents --standalone` | pass (binary only) |
-| Grok Build 1.0.88, Pi 1.5.2 | Not run: no pinned binary on the host outside Orkestrator's toolchain, and no credential-free listing qualified | | skipped |
+| Claude Code 2.1.326 | A session plugin staged by `session-delivery.ts` is listed as `orkestrator-session:<skill>` only when passed with `--plugin-dir`; nothing lands in `CLAUDE_CONFIG_DIR` | `init` event with and without `--plugin-dir` | pass |
+| Pi SDK 1.5.2 (same version as the pinned `pi` binary) | Skills in `~/.pi/agent/skills` and `~/.agents/skills` and templates in `~/.pi/agent/prompts` are listed, also with project resources off; the repository's `.pi/` resources are not; `~/.claude/skills` is never read | the bridge's resource-only loader (`readResourceCommands`), `bridges/pi-bridge/src/capability-delivery-conformance.test.ts`, default tier | pass |
+| Grok Build 1.0.88 | Not run: no pinned binary on the host outside Orkestrator's toolchain, and no credential-free listing qualified | | skipped |
 | Cursor SDK | Not run: no CLI | | skipped |
 
 Matrix levels follow the evidence: Claude native-plugin install, update and
 remove are `supported`. OpenCode subagents and commands stay `unqualified`:
 the binary lists the agent, but Orkestrator's OpenCode 2 session configuration
 mirror is not covered, and OpenCode 2.3.1 has no credential-free command
-listing. Codex prompts, Cursor commands and Grok, Pi and Cursor skill loading
-stay as they were.
+listing. Codex prompts, Cursor commands and Grok and Cursor skill loading stay
+as they were. The Pi run found two defects, both fixed: the Pi bridge loaded
+no skill or template at all unless the session enabled project resources
+(user-level ones now load; the project's stay behind project trust), and the
+location table claimed Pi reads `~/.claude/skills`, so a Pi-only skill could
+have been placed where Pi never looks.
+
+**Native plugins beyond Claude and Codex.** Grok, OpenCode and Pi report
+plugin discovery and a structured reason for every other operation, by
+decision rather than omission: Grok's plugins are managed by Grok and need a
+restart Orkestrator does not trigger; Orkestrator's OpenCode 2 configuration
+mirror strips user plugins; and Pi extensions and packages would run inside
+the shared bridge process, where they could answer another session's approval
+(`bridges/pi-bridge/AGENTS.md`). A plugin's portable parts still reach those
+providers as separate components.
 
 ## Reconciliation and remote safety
 
@@ -589,10 +651,13 @@ Catalogue names are insufficient to identify the installed revision.
     not checked (a leaf sends its container's record and label). Container
     native MCP definitions have no capability receipt and are reported as
     unsupported for managed delivery.
-  A session-only selection without a verified scoped copy is reported as
-  unsupported. A required selection in that state stops the launch.
+  A session-only selection without a verified scoped copy is delivered to a
+  Claude host session alone ("Session-private delivery" above); for any
+  other provider or a container it is reported as unsupported, and a
+  required selection in that state stops the launch.
   The launch manifest records the selected revisions for diagnostics.
-  Provider homes are shared and existing sessions can still see changes there.
+  Shared provider homes stay shared: an existing session can still see a
+  machine-wide change there, but never a change to its private plugin.
 - **Containers**: a container never receives a write from outside. At
   creation and rebuild, `container-staging.ts` resolves every staged provider
   for the container target (My setup, toolkits, project and environment
@@ -777,11 +842,13 @@ previewed again.
 
 ## Not yet qualified
 
-Live conformance against Grok Build, Pi and the Cursor SDK (no pinned binary
+Live conformance against Grok Build and the Cursor SDK (no pinned binary
 outside Orkestrator's toolchain and no credential-free listing), a live
 Orkestrator OpenCode 2 session loading delivered agents and commands, switching
-another machine's Codex plugins from this window, isolated provider
-homes per session (exclusive claims are reported as not enforceable instead),
+another machine's Codex plugins from this window, per-session delivery for
+providers other than Claude (Codex, Cursor, Grok, OpenCode and Pi bridges have
+no per-session plugin channel, so exclusive claims for them are reported as
+not enforceable), a session-private plugin on a read-only turn,
 writing into a running container (a
 container takes a changed setup on its next rebuild, which the environment
 card offers) and adopting a worktree copy's local changes as a new revision

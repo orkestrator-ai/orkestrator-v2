@@ -3602,7 +3602,7 @@
     },
     "get_global_setting_sources": {
       "domain": "config",
-      "since": 1,
+      "since": 2,
       "access": "workspace",
       "read": true,
       "critical": [],
@@ -6822,7 +6822,7 @@
     },
     "reset_global_settings": {
       "domain": "config",
-      "since": 1,
+      "since": 2,
       "access": "admin",
       "read": false,
       "critical": [],

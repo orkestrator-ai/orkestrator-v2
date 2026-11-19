@@ -107,7 +107,7 @@ export const patchGlobalConfigCommand = defineCommand({
 export const getGlobalSettingSourcesCommand = defineCommand({
   domain: configDomain,
   name: "get_global_setting_sources",
-  since: 1,
+  since: 2,
   access: "workspace",
   read: true,
   args: Schema.Struct({}),
@@ -124,7 +124,7 @@ export const getGlobalSettingSourcesCommand = defineCommand({
 export const resetGlobalSettingsCommand = defineCommand({
   domain: configDomain,
   name: "reset_global_settings",
-  since: 1,
+  since: 2,
   access: "admin",
   read: false,
   args: Schema.Struct({ keys: optionalUnknown, expect: optionalUnknown }),

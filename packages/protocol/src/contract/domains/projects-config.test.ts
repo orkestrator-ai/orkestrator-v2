@@ -38,6 +38,7 @@ import {
 const CONFIG_ADMIN = new Set([
   "update_global_config",
   "patch_global_config",
+  "reset_global_settings",
   "update_notification_sound_settings",
   "save_desktop_connections",
   "set_github_token",
@@ -68,6 +69,9 @@ const ADDED_IN_VERSION_2 = new Set([
   "update_credential_connection",
   "replace_credential_connection_value",
   "delete_credential_connection",
+  // Settings search (docs/architecture/settings-search.md).
+  "get_global_setting_sources",
+  "reset_global_settings",
 ]);
 
 const PROJECT = {
@@ -110,7 +114,7 @@ describe("projects and config definitions", () => {
     expect(projectsDomain).toMatchObject({ name: "projects", version: 2, min: 1 });
     expect(configDomain).toMatchObject({ name: "config", version: 2, min: 1 });
     expect(PROJECTS_COMMANDS).toHaveLength(27);
-    expect(CONFIG_COMMANDS).toHaveLength(38);
+    expect(CONFIG_COMMANDS).toHaveLength(40);
     for (const [domain, commands] of [
       [projectsDomain, PROJECTS_COMMANDS],
       [configDomain, CONFIG_COMMANDS],

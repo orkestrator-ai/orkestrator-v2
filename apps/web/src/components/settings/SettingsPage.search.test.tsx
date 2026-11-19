@@ -81,6 +81,11 @@ function install(global: Partial<GlobalConfig>, storedKeys: string[]): Backend {
           config: backend.config,
         };
       }
+      // Valid answers, so no node poller retries past the end of a test.
+      case "get_node_status":
+        return { nodeId: "bk_desk" };
+      case "get_node_summaries":
+        return { selfId: "bk_desk", nodes: [] };
       default:
         return undefined;
     }

@@ -396,6 +396,17 @@ export interface SettingSourcesLayers {
   readonly node: SettingSourcesRead | null;
 }
 
+/**
+ * Whether `error` says the node is too old for `command`: it answered
+ * `unknown-command`, or it speaks a `config` version older than the command,
+ * so the client refused to send it. Either way nothing ran.
+ */
+export function isSettingsCommandUnsupported(error: unknown, command: string): boolean {
+  if (incompatibility(error, command)?.code === "unknown-command") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(`${command} arrived in version`);
+}
+
 function isStringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
@@ -416,7 +427,7 @@ async function readSources(invoke: ConfigInvoke): Promise<SettingSourcesRead> {
       ? { status: "ok", sources }
       : { status: "failed", message: "The machine answered with an unreadable list of settings." };
   } catch (error) {
-    if (incompatibility(error, GET_GLOBAL_SETTING_SOURCES)?.code === "unknown-command") {
+    if (isSettingsCommandUnsupported(error, GET_GLOBAL_SETTING_SOURCES)) {
       return { status: "unsupported" };
     }
     return { status: "failed", message: error instanceof Error ? error.message : String(error) };

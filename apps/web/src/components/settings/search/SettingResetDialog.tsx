@@ -20,6 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
+import { isSettingsCommandUnsupported } from "@/lib/portal/command-node-config";
 import { SETTINGS_CATALOG } from "@/lib/settings-catalog/catalog";
 import { formatSettingValue, settingsSharingKey } from "@/lib/settings-catalog/provenance";
 import { SETTING_TIMING_LABELS, isInheritedSettingKey } from "@/lib/settings-catalog/scope";
@@ -42,7 +43,13 @@ type Phase =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly preview: Preview; readonly changed: boolean }
   | { readonly kind: "resetting"; readonly preview: Preview }
-  | { readonly kind: "failed"; readonly message: string; readonly preview: Preview | null };
+  | {
+      readonly kind: "failed";
+      readonly message: string;
+      readonly preview: Preview | null;
+      /** The machine cannot reset at all; nothing was sent or nothing ran. */
+      readonly unsupported?: boolean;
+    };
 
 const RUNNING_WORK_NOTE: Record<SettingDescriptor["appliesWhen"], string> = {
   immediately: "The change applies at once, including to work that is already running.",
@@ -165,11 +172,20 @@ export function SettingResetDialog({
       });
       onClose();
     } catch (error) {
-      log.warn("reset.finished", { outcome: "failed", error: formatLogError(error) });
+      const unsupported = isSettingsCommandUnsupported(error, "reset_global_settings");
+      log.warn("reset.finished", {
+        outcome: unsupported ? "unsupported" : "failed",
+        error: formatLogError(error),
+      });
       setPhase({
         kind: "failed",
-        message: error instanceof Error ? error.message : String(error),
+        message: unsupported
+          ? `${owner} runs an older Orkestrator that cannot reset settings from here; nothing was changed. Update it, or set the value in the field`
+          : error instanceof Error
+            ? error.message
+            : String(error),
         preview: phase.preview,
+        unsupported,
       });
     }
   };
@@ -226,8 +242,9 @@ export function SettingResetDialog({
         ) : null}
         {phase.kind === "failed" ? (
           <p role="alert" className="text-xs text-failure">
-            Could not confirm the reset: {phase.message}. It was not retried. Check again to read
-            the current value before deciding.
+            {phase.unsupported
+              ? `${phase.message}.`
+              : `Could not confirm the reset: ${phase.message}. It was not retried. Check again to read the current value before deciding.`}
           </p>
         ) : null}
 

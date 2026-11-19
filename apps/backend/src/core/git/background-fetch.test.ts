@@ -171,7 +171,7 @@ describe("background fetches leave FETCH_HEAD alone", () => {
     expect(await fetchHead(checkout)).toBe(before);
   });
 
-  test("project checkout refreshes move remote refs only", async () => {
+  test("forced background refreshes of the project checkout preserve FETCH_HEAD", async () => {
     const storage = new StorageService(path.join(root, "data"));
     await storage.init();
     try {
@@ -192,6 +192,85 @@ describe("background fetches leave FETCH_HEAD alone", () => {
         fetched: true,
       });
       expect(await fetchHead(checkout)).toBe(before);
+    } finally {
+      storage.close();
+    }
+  });
+
+  test("project refresh fetches and prunes each eligible remote without an upstream", async () => {
+    const backup = path.join(root, "backup.git");
+    await git(root, "clone", "-q", "--bare", remote, backup);
+    await git(checkout, "remote", "add", "Backup.remote", backup);
+    await git(checkout, "remote", "add", "skip-modern", path.join(root, "missing-modern.git"));
+    await git(checkout, "remote", "add", "skip-legacy", path.join(root, "missing-legacy.git"));
+    await git(checkout, "config", "remote.skip-modern.skipFetchAll", "true");
+    await git(checkout, "config", "remote.skip-legacy.skipDefaultUpdate", "true");
+    await git(checkout, "config", "remote.Backup.remote.skipFetchAll", "true");
+    await git(checkout, "config", "remote.Backup.remote.skipDefaultUpdate", "false");
+    await git(checkout, "config", "fetch.all", "true");
+    await git(checkout, "branch", "--unset-upstream");
+    await git(checkout, "update-ref", "refs/remotes/Backup.remote/deleted", "HEAD");
+    const before = await fetchHead(checkout);
+    const tip = await publish("multiple-remotes.txt");
+    await git(publisher, "push", "-q", backup, "main");
+
+    const storage = new StorageService(path.join(root, "data"));
+    await storage.init();
+    try {
+      const project = await storage.addProject(createProject(remote, checkout));
+      const status = await new ProjectGitService(storage).fetch(project.id);
+      expect(status).toMatchObject({ upstream: null, remoteState: "fresh", lastError: null });
+      expect(await git(checkout, "rev-parse", "refs/remotes/origin/main")).toBe(tip);
+      expect(await git(checkout, "rev-parse", "refs/remotes/Backup.remote/main")).toBe(tip);
+      expect(await git(checkout, "for-each-ref", "refs/remotes/Backup.remote/deleted")).toBe("");
+      expect(await fetchHead(checkout)).toBe(before);
+    } finally {
+      storage.close();
+    }
+  });
+
+  test.each([40, 64])("launch resolves a branch with a %i-character hex name", async (length) => {
+    const branch = "a".repeat(length);
+    const oldTip = await publish("old-hex-branch.txt", branch);
+    await git(checkout, "fetch", "-q", "--no-write-fetch-head", "origin", `refs/heads/${branch}`);
+    expect(await git(checkout, "rev-parse", `refs/remotes/origin/${branch}`)).toBe(oldTip);
+    const before = await fetchHead(checkout);
+    const tip = await publish("new-hex-branch.txt", branch);
+
+    const storage = new StorageService(path.join(root, "data"));
+    await storage.init();
+    try {
+      const project = await storage.addProject(createProject(remote, checkout));
+      expect(await new ProjectGitService(storage).baseBranchTip(project.id, branch)).toMatchObject({
+        commit: tip,
+        ref: `origin/${branch}`,
+        fetched: true,
+      });
+      expect(await fetchHead(checkout)).toBe(before);
+    } finally {
+      storage.close();
+    }
+  });
+
+  test("an explicit project Fetch writes FETCH_HEAD even during a background refresh", async () => {
+    const storage = new StorageService(path.join(root, "data"));
+    await storage.init();
+    try {
+      const project = await storage.addProject(createProject(remote, checkout));
+      const service = new ProjectGitService(storage);
+      const before = await fetchHead(checkout);
+      const tip = await publish("manual-fetch.txt");
+
+      const [background, manual] = await Promise.all([
+        service.fetch(project.id),
+        service.fetch(project.id, true, "manual"),
+      ]);
+
+      expect(background).toMatchObject({ upstreamCommit: tip, lastError: null });
+      expect(manual).toMatchObject({ upstreamCommit: tip, lastError: null });
+      const after = await fetchHead(checkout);
+      expect(after).not.toBe(before);
+      expect(after).toContain(`${tip}\t\tbranch 'main'`);
     } finally {
       storage.close();
     }

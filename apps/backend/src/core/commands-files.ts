@@ -613,7 +613,8 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
  * It is a background fetch (`git/background-fetch.ts`): an explicit refspec
  * updates `origin/<ref>` whatever the clone's configured refspec (a commit SHA
  * fetches just that commit), and `FETCH_HEAD` in the agent's checkout is left
- * as the agent last wrote it.
+ * as the agent last wrote it. Disable recursion to preserve submodule
+ * FETCH_HEAD files on Git versions that omit the no-write flag in child fetches.
  */
 export function buildContainerFetchScript(ref: string, timeoutMs: number): string {
   const branch = quoteShell(ref);
@@ -631,9 +632,9 @@ export function buildContainerFetchScript(ref: string, timeoutMs: number): strin
       before="$(git rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" 2>/dev/null)"
       err_file="$(mktemp 2>/dev/null)" || err_file=""
       if command -v timeout >/dev/null 2>&1; then
-        timeout -k 5 ${seconds} git fetch ${NO_WRITE_FETCH_HEAD} origin "$refspec" >/dev/null 2>"\${err_file:-/dev/null}"
+        timeout -k 5 ${seconds} git fetch --no-recurse-submodules ${NO_WRITE_FETCH_HEAD} origin "$refspec" >/dev/null 2>"\${err_file:-/dev/null}"
       else
-        git fetch ${NO_WRITE_FETCH_HEAD} origin "$refspec" >/dev/null 2>"\${err_file:-/dev/null}"
+        git fetch --no-recurse-submodules ${NO_WRITE_FETCH_HEAD} origin "$refspec" >/dev/null 2>"\${err_file:-/dev/null}"
       fi
       status=$?
       after="$(git rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" 2>/dev/null)"

@@ -418,9 +418,10 @@ describe("container status and fetch scripts against a local remote", () => {
   test("the status script performs no fetch of its own", () => {
     const script = buildContainerGitStatusScript("main", true);
     expect(script).not.toContain("git fetch");
-    expect(buildContainerFetchScript("main", 30_000)).toContain(
-      'git fetch --no-write-fetch-head origin "$refspec"',
-    );
+    const fetchScript = buildContainerFetchScript("main", 30_000);
+    expect(
+      fetchScript.match(/git fetch --no-recurse-submodules --no-write-fetch-head origin/g),
+    ).toHaveLength(2);
   }, 30_000);
 
   // The agent works in this clone: a background refresh must move origin/<ref>
@@ -448,6 +449,53 @@ describe("container status and fetch scripts against a local remote", () => {
     expect(box.changes.at(-1)).toMatchObject({ ref: "main", baselineMoved: true });
     expect(git(workspace, "rev-parse", "refs/remotes/origin/main")).toBe(tip);
     expect(await fs.readFile(fetchHeadFile, "utf8")).toBe(before);
+  }, 30_000);
+
+  test("a policy fetch leaves an initialized submodule's FETCH_HEAD alone", async () => {
+    const submoduleRemote = path.join(root, "submodule.git");
+    git(root, "clone", "-q", "--bare", remote, submoduleRemote);
+    git(submoduleRemote, "branch", "submodule-side");
+    git(
+      workspace,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      submoduleRemote,
+      "vendor",
+    );
+    git(workspace, "commit", "-qm", "add submodule");
+    git(workspace, "config", "fetch.recurseSubmodules", "true");
+    const vendor = path.join(workspace, "vendor");
+    git(vendor, "fetch", "-q", "origin", "submodule-side");
+    git(workspace, "fetch", "-q", "--no-recurse-submodules", "origin", "main");
+    const superFetchHead = git(
+      workspace,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-path",
+      "FETCH_HEAD",
+    );
+    const submoduleFetchHead = git(
+      vendor,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-path",
+      "FETCH_HEAD",
+    );
+    const before = await fs.readFile(superFetchHead, "utf8");
+    const submoduleBefore = await fs.readFile(submoduleFetchHead, "utf8");
+    expect(submoduleBefore).toContain("'submodule-side'");
+    const tip = await pushToRemote("superproject-refresh.txt", "superproject\n");
+
+    const box = container();
+    await box.read("main");
+    await box.policy.idle();
+
+    expect(box.changes.at(-1)).toMatchObject({ ref: "main", baselineMoved: true });
+    expect(git(workspace, "rev-parse", "refs/remotes/origin/main")).toBe(tip);
+    expect(await fs.readFile(superFetchHead, "utf8")).toBe(before);
+    expect(await fs.readFile(submoduleFetchHead, "utf8")).toBe(submoduleBefore);
   }, 30_000);
 });
 

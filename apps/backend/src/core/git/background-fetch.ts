@@ -27,6 +27,11 @@ export const NO_WRITE_FETCH_HEAD = "--no-write-fetch-head";
 /** A full SHA-1 or SHA-256 object name rather than a branch. */
 const FULL_OBJECT_NAME = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 
+/** The forced tracking refspec for a validated branch name, even a hex-shaped one. */
+export function backgroundBranchFetchRefspec(branch: string): string {
+  return `+refs/heads/${branch}:refs/remotes/origin/${branch}`;
+}
+
 /**
  * The refspec a background fetch of `ref` uses: a force refspec onto
  * `refs/remotes/origin/<ref>` for a branch, or the object name alone for a
@@ -37,7 +42,7 @@ const FULL_OBJECT_NAME = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
  * the refspec, and neither form can begin with `-`.
  */
 export function backgroundFetchRefspec(ref: string): string {
-  return FULL_OBJECT_NAME.test(ref) ? ref : `+refs/heads/${ref}:refs/remotes/origin/${ref}`;
+  return FULL_OBJECT_NAME.test(ref) ? ref : backgroundBranchFetchRefspec(ref);
 }
 
 /**

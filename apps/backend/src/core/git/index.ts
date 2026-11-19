@@ -25,6 +25,7 @@
 // - `pr-required-checks.ts` (imports `commands-review.ts`), for
 //   `commands-pr-monitor.ts`.
 export {
+  backgroundBranchFetchRefspec,
   backgroundFetchArgs,
   backgroundFetchRefspec,
   NO_WRITE_FETCH_HEAD,

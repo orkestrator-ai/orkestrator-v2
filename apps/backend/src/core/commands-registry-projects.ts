@@ -56,6 +56,8 @@ import {
   getDesktopConnectionsCommand,
   getRepositoryConfigCommand,
   patchGlobalConfigCommand,
+  getGlobalSettingSourcesCommand,
+  resetGlobalSettingsCommand,
   patchRepositorySettingsCommand,
   saveDesktopConnectionsCommand,
   setAnthropicApiKeyCommand,
@@ -69,6 +71,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/config";
 import type { CommandContext } from "./commands-context.js";
 import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
+import { parseResetSettingsRequest } from "@orkestrator/protocol/setting-sources";
 import { parseUpdateObject } from "./storage.js";
 import { runCommand } from "./shell.js";
 import {
@@ -1083,6 +1086,29 @@ export function registerProjectCommands(
       context.storage.patchGlobalConfig(patch, { unset, preserveCredentials: true }),
     );
     return afterGlobalConfigSaved(updated, context);
+  });
+  register(getGlobalSettingSourcesCommand, async (_args, { storage }) =>
+    storage.globalSettingSources(),
+  );
+  // Removes stored settings so the machine follows their defaults, only while
+  // each still holds the value the user previewed. Credentials never qualify.
+  register(resetGlobalSettingsCommand, async (args, context) => {
+    const request = parseResetSettingsRequest(args.keys, args.expect);
+    const result = await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
+      context.storage.resetGlobalSettings(request.keys, request.expect),
+    );
+    if (result.status === "conflict") {
+      return {
+        status: "conflict" as const,
+        conflicts: result.conflicts,
+        config: redactAppConfig(result.config),
+      };
+    }
+    return {
+      status: "reset" as const,
+      conflicts: [],
+      config: await afterGlobalConfigSaved(result.config, context),
+    };
   });
   register(updateNotificationSoundSettingsCommand, async ({ settings }, { storage }) =>
     redactAppConfig(await storage.updateNotificationSoundSettings(settings)),

@@ -6,6 +6,8 @@ import { DiagnosticsExportCard } from "./DiagnosticsExportCard";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { AutoSteerSetting } from "./AutoSteerSetting";
+import { SettingField, SettingExplanation } from "./search/SettingField";
+import { isLocalDesktopWindow } from "@/lib/native/window";
 import { DataSavingSetting } from "./DataSavingSetting";
 import { DebugButtonSetting } from "./DebugButtonSetting";
 import { PreviewSettings } from "./PreviewSettings";
@@ -483,30 +485,36 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderReview = () => (
     <SettingsPageLayout title="Review">
-      <MultiReviewDefaultsEditor
-        tier={agentSettings}
-        onChange={setAgentSettings}
-        tiers={{ global: agentSettings }}
-        canInherit={false}
-        enabledPlatforms={enabledAgentPlatforms}
-        catalog={catalog}
-        lensPresets={reviewLensPresets}
-        disabled={isSaving}
-      />
+      <SettingField setting="review.multi-review-defaults">
+        <MultiReviewDefaultsEditor
+          tier={agentSettings}
+          onChange={setAgentSettings}
+          tiers={{ global: agentSettings }}
+          canInherit={false}
+          enabledPlatforms={enabledAgentPlatforms}
+          catalog={catalog}
+          lensPresets={reviewLensPresets}
+          disabled={isSaving}
+        />
+      </SettingField>
 
-      <ReviewLensPresetsEditor
-        presets={reviewLensPresets}
-        onChange={setReviewLensPresets}
-        disabled={isSaving}
-      />
+      <SettingField setting="review.lens-presets">
+        <ReviewLensPresetsEditor
+          presets={reviewLensPresets}
+          onChange={setReviewLensPresets}
+          disabled={isSaving}
+        />
+      </SettingField>
 
-      <MultiReviewEngineSetting
-        value={multiReviewEngine}
-        onChange={setMultiReviewEngine}
-        disabled={isSaving}
-      />
+      <SettingField setting="review.engine">
+        <MultiReviewEngineSetting
+          value={multiReviewEngine}
+          onChange={setMultiReviewEngine}
+          disabled={isSaving}
+        />
+      </SettingField>
 
-      <div className="space-y-3">
+      <SettingField setting="review.instruction" className="space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <SettingsSectionHeader icon={<Eye className="h-4 w-4" />} title="Code review instruction">
             Applied to normal, Multi Review, and build-pipeline native reviews. Orkestrator adds the
@@ -603,7 +611,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           The instruction cannot remove or override the fixed safety rules, review workflow, or JSON
           schema. Changes apply to newly started review sessions.
         </p>
-      </div>
+      </SettingField>
     </SettingsPageLayout>
   );
 
@@ -648,18 +656,20 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderDefaults = () => (
     <SettingsPageLayout title="Defaults" width="wide">
-      <AgentDefaultsPane
-        tier={agentSettings}
-        onChange={setAgentSettings}
-        tiers={agentTiers}
-        // The application tier has nothing above it, so it shows concrete
-        // choices and the shipped defaults rather than an Inherit option.
-        canInherit={false}
-        enabledPlatforms={enabledAgentPlatforms}
-        catalog={catalog}
-        disabled={isSaving}
-        scopeLabel="the app"
-      />
+      <SettingField setting="defaults.agent-defaults">
+        <AgentDefaultsPane
+          tier={agentSettings}
+          onChange={setAgentSettings}
+          tiers={agentTiers}
+          // The application tier has nothing above it, so it shows concrete
+          // choices and the shipped defaults rather than an Inherit option.
+          canInherit={false}
+          enabledPlatforms={enabledAgentPlatforms}
+          catalog={catalog}
+          disabled={isSaving}
+          scopeLabel="the app"
+        />
+      </SettingField>
     </SettingsPageLayout>
   );
 
@@ -672,7 +682,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     signInControls?: React.ReactNode,
   ) => (
     <SettingsPageLayout title={AGENT_PLATFORM_LABELS[platform]}>
-      <>
+      <SettingField setting={`${platform}.sign-in`} className="space-y-8">
         {/* Read without a session, so it is there before any environment runs it. */}
         {enabledAgentPlatforms.includes(platform) ? (
           <AgentSignInCard
@@ -701,7 +711,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           />
         ) : null}
         {platform === "opencode" ? <OpenCodeProvidersSection /> : null}
-      </>
+      </SettingField>
       <AgentPlatformPane
         platform={platform}
         tier={agentSettings}
@@ -718,6 +728,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           platform === "opencode" ? openCodeCatalogScopeDescription : undefined
         }
         showMcpServersLink
+        renderSettingExplanation={(setting) => <SettingExplanation setting={setting} />}
       >
         {extras}
       </AgentPlatformPane>
@@ -791,117 +802,121 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           Used by Orkestrator itself for GitHub issues and pull requests. Containers have their own
           setting below.
         </SettingsSectionHeader>
-        <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
-          <div className="flex items-center justify-between gap-6 p-4">
-            <div className="min-w-0 space-y-1">
-              <Label
-                htmlFor="use-host-github-credentials"
-                className="flex items-center gap-2 text-sm font-medium"
-              >
-                <Terminal className="h-3.5 w-3.5 text-success" />
-                Use host GitHub CLI credentials
-              </Label>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                Reuses the account signed in with{" "}
-                <code className="font-mono text-zinc-300">gh auth login</code> on this computer.
-              </p>
-            </div>
-            <Switch
-              id="use-host-github-credentials"
-              aria-label="Use host GitHub CLI credentials"
-              checked={useHostGitHubCredentials}
-              disabled={isSaving}
-              onCheckedChange={setUseHostGitHubCredentials}
-            />
-          </div>
-
-          {useHostGitHubCredentials ? (
-            <div className="space-y-3 border-t border-zinc-800 bg-success/[0.04] px-4 py-3">
-              <p className="text-xs text-muted-foreground">
-                Host CLI authentication is selected.
-                {global.githubTokenConfigured
-                  ? " Your stored PAT remains available if you turn this off."
-                  : ""}
-              </p>
-              <GitHubCliSetup />
-            </div>
-          ) : (
-            githubTokenField
-          )}
-        </div>
-
-        <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
-          <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-            <div className="min-w-0 space-y-1">
-              <Label htmlFor="container-github-credential" className="text-sm font-medium">
-                GitHub access for containers
-              </Label>
-              <p
-                id="container-github-credential-description"
-                className="text-xs leading-relaxed text-muted-foreground"
-              >
-                What agents in containers use to clone private repositories, push and open pull
-                requests. Without a credential they can only reach public repositories.
-              </p>
-            </div>
-            <Select
-              value={containerGitHubCredential}
-              disabled={isSaving}
-              onValueChange={(value) => {
-                if (value === "none" || value === "host-cli" || value === "pat") {
-                  setContainerGitHubCredential(value);
-                }
-              }}
-            >
-              <SelectTrigger
-                id="container-github-credential"
-                aria-describedby="container-github-credential-description"
-                className="w-full shrink-0 sm:w-64"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No GitHub access</SelectItem>
-                <SelectItem value="pat">Personal access token</SelectItem>
-                <SelectItem value="host-cli">Share host GitHub CLI token</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {containerGitHubCredential === "host-cli" ? (
-            <div
-              role="note"
-              className="flex items-start gap-2 border-t border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs leading-relaxed text-muted-foreground"
-            >
-              <AlertTriangle
-                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500"
-                aria-hidden="true"
+        <SettingField setting="version-control.host-github-credentials">
+          <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
+            <div className="flex items-center justify-between gap-6 p-4">
+              <div className="min-w-0 space-y-1">
+                <Label
+                  htmlFor="use-host-github-credentials"
+                  className="flex items-center gap-2 text-sm font-medium"
+                >
+                  <Terminal className="h-3.5 w-3.5 text-success" />
+                  Use host GitHub CLI credentials
+                </Label>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Reuses the account signed in with{" "}
+                  <code className="font-mono text-zinc-300">gh auth login</code> on this computer.
+                </p>
+              </div>
+              <Switch
+                id="use-host-github-credentials"
+                aria-label="Use host GitHub CLI credentials"
+                checked={useHostGitHubCredentials}
+                disabled={isSaving}
+                onCheckedChange={setUseHostGitHubCredentials}
               />
-              <p>
-                Every agent, and any repository code it runs, can read this token in every
-                container. A <code className="font-mono text-zinc-300">gh auth login</code> token
-                usually has the <code className="font-mono text-zinc-300">repo</code>,{" "}
-                <code className="font-mono text-zinc-300">workflow</code> and{" "}
-                <code className="font-mono text-zinc-300">gist</code> scopes across all your
-                repositories, so a compromised agent could read private code or push workflows that
-                expose CI secrets. GitHub stays reachable from restricted containers. A fine-grained
-                personal access token limited to the repositories you need is safer.
-              </p>
             </div>
-          ) : null}
 
-          {containerGitHubCredential === "pat" && useHostGitHubCredentials
-            ? githubTokenField
-            : null}
-          {containerGitHubCredential === "pat" && !useHostGitHubCredentials ? (
-            <p className="border-t border-zinc-800 px-4 py-3 text-xs text-muted-foreground">
-              Containers use the personal access token above.
-            </p>
-          ) : null}
-        </div>
+            {useHostGitHubCredentials ? (
+              <div className="space-y-3 border-t border-zinc-800 bg-success/[0.04] px-4 py-3">
+                <p className="text-xs text-muted-foreground">
+                  Host CLI authentication is selected.
+                  {global.githubTokenConfigured
+                    ? " Your stored PAT remains available if you turn this off."
+                    : ""}
+                </p>
+                <GitHubCliSetup />
+              </div>
+            ) : (
+              githubTokenField
+            )}
+          </div>
+        </SettingField>
+
+        <SettingField setting="version-control.container-github-credential">
+          <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
+            <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+              <div className="min-w-0 space-y-1">
+                <Label htmlFor="container-github-credential" className="text-sm font-medium">
+                  GitHub access for containers
+                </Label>
+                <p
+                  id="container-github-credential-description"
+                  className="text-xs leading-relaxed text-muted-foreground"
+                >
+                  What agents in containers use to clone private repositories, push and open pull
+                  requests. Without a credential they can only reach public repositories.
+                </p>
+              </div>
+              <Select
+                value={containerGitHubCredential}
+                disabled={isSaving}
+                onValueChange={(value) => {
+                  if (value === "none" || value === "host-cli" || value === "pat") {
+                    setContainerGitHubCredential(value);
+                  }
+                }}
+              >
+                <SelectTrigger
+                  id="container-github-credential"
+                  aria-describedby="container-github-credential-description"
+                  className="w-full shrink-0 sm:w-64"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No GitHub access</SelectItem>
+                  <SelectItem value="pat">Personal access token</SelectItem>
+                  <SelectItem value="host-cli">Share host GitHub CLI token</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {containerGitHubCredential === "host-cli" ? (
+              <div
+                role="note"
+                className="flex items-start gap-2 border-t border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs leading-relaxed text-muted-foreground"
+              >
+                <AlertTriangle
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500"
+                  aria-hidden="true"
+                />
+                <p>
+                  Every agent, and any repository code it runs, can read this token in every
+                  container. A <code className="font-mono text-zinc-300">gh auth login</code> token
+                  usually has the <code className="font-mono text-zinc-300">repo</code>,{" "}
+                  <code className="font-mono text-zinc-300">workflow</code> and{" "}
+                  <code className="font-mono text-zinc-300">gist</code> scopes across all your
+                  repositories, so a compromised agent could read private code or push workflows
+                  that expose CI secrets. GitHub stays reachable from restricted containers. A
+                  fine-grained personal access token limited to the repositories you need is safer.
+                </p>
+              </div>
+            ) : null}
+
+            {containerGitHubCredential === "pat" && useHostGitHubCredentials
+              ? githubTokenField
+              : null}
+            {containerGitHubCredential === "pat" && !useHostGitHubCredentials ? (
+              <p className="border-t border-zinc-800 px-4 py-3 text-xs text-muted-foreground">
+                Containers use the personal access token above.
+              </p>
+            ) : null}
+          </div>
+        </SettingField>
       </div>
 
-      <div className="space-y-3">
+      <SettingField setting="version-control.ssh-agent-socket" className="space-y-3">
         <div className="space-y-1">
           <Label htmlFor="ssh-agent-socket" className="text-sm font-medium">
             SSH agent socket
@@ -949,7 +964,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           Leave blank to discover the agent from the current desktop session. Set an absolute socket
           path only when auto-detection is unavailable. Changes apply after restarting Orkestrator.
         </p>
-      </div>
+      </SettingField>
 
       <div className="space-y-3">
         <SettingsSectionHeader icon={<GitMerge className="h-4 w-4" />} title="Auto-merge">
@@ -957,19 +972,24 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           Applies to environments on this machine.
         </SettingsSectionHeader>
         <div className={SETTINGS_CARD_CLASS}>
-          <SettingsRow
-            label="Require checks to pass"
-            htmlFor="auto-merge-require-checks"
-            description="When on, auto-merge waits until every check on the pull request has passed. When off, it merges as soon as GitHub allows it, even while checks GitHub does not require are failing or still running. Checks required by branch protection always have to pass. An environment's name shimmers green by the same rule."
+          <SettingField
+            setting="version-control.auto-merge-require-checks"
+            explanationClassName="px-4 pb-3 -mt-1"
           >
-            <Switch
-              id="auto-merge-require-checks"
-              aria-label="Require checks to pass before auto-merge"
-              checked={autoMergeRequireChecks}
-              disabled={isSaving}
-              onCheckedChange={setAutoMergeRequireChecks}
-            />
-          </SettingsRow>
+            <SettingsRow
+              label="Require checks to pass"
+              htmlFor="auto-merge-require-checks"
+              description="When on, auto-merge waits until every check on the pull request has passed. When off, it merges as soon as GitHub allows it, even while checks GitHub does not require are failing or still running. Checks required by branch protection always have to pass. An environment's name shimmers green by the same rule."
+            >
+              <Switch
+                id="auto-merge-require-checks"
+                aria-label="Require checks to pass before auto-merge"
+                checked={autoMergeRequireChecks}
+                disabled={isSaving}
+                onCheckedChange={setAutoMergeRequireChecks}
+              />
+            </SettingsRow>
+          </SettingField>
         </div>
       </div>
     </SettingsPageLayout>
@@ -977,11 +997,15 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderGeneral = () => (
     <SettingsPageLayout title="General">
-      <DataSavingSetting />
-      <AutoSteerSetting checked={autoSteer} onCheckedChange={setAutoSteer} />
+      <SettingField setting="general.data-saving">
+        <DataSavingSetting />
+      </SettingField>
+      <SettingField setting="general.auto-steer">
+        <AutoSteerSetting checked={autoSteer} onCheckedChange={setAutoSteer} />
+      </SettingField>
 
       {/* Preferred editor */}
-      <div className="space-y-3">
+      <SettingField setting="general.preferred-editor" className="space-y-3">
         <SettingsSectionHeader icon={<Code2 className="h-4 w-4" />} title="Preferred editor">
           Editor for "Open in Editor" (Cmd+O)
         </SettingsSectionHeader>
@@ -1020,9 +1044,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         <span className="block text-xs text-muted-foreground">
           *Requires the Dev Containers extension
         </span>
-      </div>
+      </SettingField>
 
-      <div className="space-y-3">
+      <SettingField setting="general.default-projects-folder" className="space-y-3">
         <div className="space-y-1">
           <Label htmlFor="default-projects-directory" className="text-sm font-medium">
             Default projects folder
@@ -1070,10 +1094,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             {defaultProjectsDirectoryValidationError}
           </p>
         )}
-      </div>
+      </SettingField>
 
       {/* Claude Code credentials */}
-      <div className="space-y-3">
+      <SettingField setting="general.host-claude-credentials" className="space-y-3">
         <SettingsSectionHeader title="Claude Code credentials">
           Controls whether containerized environments start signed in to Claude Code.
         </SettingsSectionHeader>
@@ -1118,10 +1142,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </div>
           )}
         </div>
-      </div>
+      </SettingField>
 
       {/* Environment files */}
-      <div className="space-y-3">
+      <SettingField setting="general.env-files" className="space-y-3">
         <SettingsSectionHeader title="Environment files">
           Project files to copy into each new container and local worktree (comma-separated)
         </SettingsSectionHeader>
@@ -1141,7 +1165,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           Only regular files inside the project are copied, never links: up to 32 files of at most 1
           MiB each and 4 MiB in total, or none. Skipped files are listed in the setup terminal.
         </p>
-      </div>
+      </SettingField>
     </SettingsPageLayout>
   );
 
@@ -1150,7 +1174,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       title="Agent platforms"
       description="Enabled systems appear in the toolbar, review picker, and build workflow. Newly enabled binaries are downloaded on the next app launch."
     >
-      <div className="space-y-3">
+      <SettingField setting="platforms.enabled" className="space-y-3">
         <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
           {AGENT_PLATFORMS.map((platform, index) => {
             const checked = enabledAgentPlatforms.includes(platform);
@@ -1212,8 +1236,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         <p className="text-xs text-muted-foreground/70">
           Disabling a platform hides new launch choices; existing sessions and files are kept.
         </p>
-      </div>
-      <div className="space-y-3">
+      </SettingField>
+      <SettingField setting="platforms.session-titles" className="space-y-3">
         <div>
           <Label htmlFor="session-title-generation">Session titles</Label>
           <p
@@ -1246,7 +1270,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             <SelectItem value="off">Off: use the first message</SelectItem>
           </SelectContent>
         </Select>
-      </div>
+      </SettingField>
       <p className="text-xs leading-relaxed text-muted-foreground">
         Coordinator safety level and web research are in{" "}
         <button
@@ -1266,7 +1290,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       title="Coordinator"
       description="How this machine's project Coordinators are held to read-only and what they may look up."
     >
-      <div>
+      <SettingField setting="coordinator.safety-level">
         <h3 className="text-sm font-medium text-foreground">Coordinator safety level</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           Coordinator runs read-only against your real checkout. This chooses how strongly that
@@ -1303,13 +1327,15 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </label>
           ))}
         </div>
-      </div>
-      <CoordinatorWebResearchSettings
-        mode={coordinatorWebResearch}
-        setMode={setCoordinatorWebResearch}
-        servers={coordinatorResearchMcpServers}
-        setServers={setCoordinatorResearchMcpServers}
-      />
+      </SettingField>
+      <SettingField setting="coordinator.web-research">
+        <CoordinatorWebResearchSettings
+          mode={coordinatorWebResearch}
+          setMode={setCoordinatorWebResearch}
+          servers={coordinatorResearchMcpServers}
+          setServers={setCoordinatorResearchMcpServers}
+        />
+      </SettingField>
       <div>
         <h3 className="text-sm font-medium text-foreground">Messaging</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -1334,7 +1360,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       "claude",
       <>
         {/* Anthropic API key */}
-        <div className="space-y-3">
+        <SettingField setting="claude.api-key" className="space-y-3">
           <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Anthropic API key">
             Optional API-key override for Claude Code in containers
           </SettingsSectionHeader>
@@ -1388,9 +1414,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               console.anthropic.com
             </a>
           </p>
-        </div>
+        </SettingField>
 
-        <div className="space-y-3 border-t border-border/60 pt-5">
+        <SettingField
+          setting="claude.background-limit"
+          className="space-y-3 border-t border-border/60 pt-5"
+        >
           <div>
             <Label htmlFor="claude-background-command-limit">Background task time limit</Label>
             <p
@@ -1428,7 +1457,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             Applies when an environment&apos;s Claude bridge next starts, for example after the
             environment restarts. Interactive Claude terminals have no limit.
           </p>
-        </div>
+        </SettingField>
       </>,
     );
 
@@ -1454,7 +1483,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     renderPlatform(
       "opencode",
       <>
-        <div className="space-y-3">
+        <SettingField setting="opencode.zen-api-key" className="space-y-3">
           <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="OpenCode Zen API key">
             Used to read your OpenCode Zen (Go) plan usage. Stored by Orkestrator and never sent to
             an agent environment.
@@ -1501,9 +1530,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               overrides it.
             </p>
           )}
-        </div>
+        </SettingField>
 
-        <div className="space-y-3 border-t border-border/60 pt-5">
+        <SettingField
+          setting="opencode.model-providers"
+          className="space-y-3 border-t border-border/60 pt-5"
+        >
           <SettingsSectionHeader icon={<Boxes className="h-4 w-4" />} title="Model providers">
             Only models from these OpenCode providers appear in model pickers. Filtering happens
             before the catalog reaches the app, so excluded providers are never loaded.
@@ -1600,7 +1632,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               Reset to defaults
             </Button>
           )}
-        </div>
+        </SettingField>
       </>,
     );
 
@@ -1608,7 +1640,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     renderPlatform(
       "cursor",
       <>
-        <div className="space-y-3">
+        <SettingField setting="cursor.api-key" className="space-y-3">
           <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Cursor API key">
             Required for Cursor Agent inside Linux containers. A macOS Cursor login is stored in
             Keychain and cannot be mounted into a container.
@@ -1661,7 +1693,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             Applied to newly created or recreated containers. Docker receives the key by environment
             name, and its value is redacted from creation errors.
           </p>
-        </div>
+        </SettingField>
       </>,
       // Cursor's own sign-in is that platform's card body.
       <CursorSdkSignIn
@@ -1674,7 +1706,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     renderPlatform(
       "codex",
       <>
-        <div className="space-y-3">
+        <SettingField setting="codex.concurrent-threads" className="space-y-3">
           <div>
             <Label htmlFor="codex-max-concurrent-threads">Concurrent subagent limit</Label>
             <p
@@ -1708,7 +1740,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           <p id="codex-max-concurrent-threads-restart" className="text-xs text-muted-foreground">
             Applies when a native Codex bridge next starts.
           </p>
-        </div>
+        </SettingField>
       </>,
     );
 
@@ -1717,7 +1749,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     return (
       <SettingsPageLayout title="Terminal">
         {/* Font family */}
-        <div className="space-y-3">
+        <SettingField setting="terminal.font-family" className="space-y-3">
           <Label>Font family</Label>
           <Select value={terminalFontFamily} onValueChange={setTerminalFontFamily}>
             <SelectTrigger className="w-full max-w-xs">
@@ -1735,10 +1767,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             FiraCode Nerd Font is bundled with the app. Other fonts must be installed on your
             system.
           </p>
-        </div>
+        </SettingField>
 
         {/* Font size */}
-        <div className="space-y-3">
+        <SettingField setting="terminal.font-size" className="space-y-3">
           <div className="flex justify-between max-w-xs">
             <Label>Font size</Label>
             <span className="text-sm font-medium">{terminalFontSize}px</span>
@@ -1751,10 +1783,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             step={1}
             className="max-w-xs"
           />
-        </div>
+        </SettingField>
 
         {/* Scrollback buffer */}
-        <div className="space-y-3">
+        <SettingField setting="terminal.scrollback" className="space-y-3">
           <div className="flex justify-between max-w-xs">
             <Label>Scrollback buffer</Label>
             <span className="text-sm font-medium">{terminalScrollback.toLocaleString()} lines</span>
@@ -1770,9 +1802,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           <p className="text-xs text-muted-foreground">
             More lines keep more history but use more memory.
           </p>
-        </div>
+        </SettingField>
 
-        <div className="space-y-3">
+        <SettingField setting="terminal.history-retention" className="space-y-3">
           <div className="flex items-start justify-between gap-4">
             <div>
               <Label htmlFor="terminal-history-enabled">Backend history retention</Label>
@@ -1795,7 +1827,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 scrollback above.
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                <div className="space-y-1.5">
+                <SettingField
+                  setting="terminal.history-session-mb"
+                  explain={false}
+                  className="space-y-1.5"
+                >
                   <Label htmlFor="terminal-history-session-mb">Per terminal (MiB)</Label>
                   <Input
                     id="terminal-history-session-mb"
@@ -1806,8 +1842,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                     value={terminalHistoryRetentionMb}
                     onChange={(event) => setTerminalHistoryRetentionMb(Number(event.target.value))}
                   />
-                </div>
-                <div className="space-y-1.5">
+                </SettingField>
+                <SettingField
+                  setting="terminal.history-global-mb"
+                  explain={false}
+                  className="space-y-1.5"
+                >
                   <Label htmlFor="terminal-history-global-mb">All terminals (MiB)</Label>
                   <Input
                     id="terminal-history-global-mb"
@@ -1820,8 +1860,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                       setTerminalHistoryGlobalRetentionMb(Number(event.target.value))
                     }
                   />
-                </div>
-                <div className="space-y-1.5">
+                </SettingField>
+                <SettingField
+                  setting="terminal.history-days"
+                  explain={false}
+                  className="space-y-1.5"
+                >
                   <Label htmlFor="terminal-history-days">Completed history (days)</Label>
                   <Input
                     id="terminal-history-days"
@@ -1834,14 +1878,14 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                       setTerminalHistoryRetentionDays(Number(event.target.value))
                     }
                   />
-                </div>
+                </SettingField>
               </div>
             </div>
           )}
-        </div>
+        </SettingField>
 
         {/* Background color */}
-        <div className="space-y-3">
+        <SettingField setting="terminal.background-color" className="space-y-3">
           <Label>Background color</Label>
           <div className="flex gap-3 items-center">
             <Input
@@ -1878,7 +1922,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               {colorError}
             </div>
           )}
-        </div>
+        </SettingField>
 
         {/* Preview */}
         <div className="space-y-3">
@@ -1910,11 +1954,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       title="Network whitelist"
       description={<>Domains allowed in "Restricted" mode. {ALLOWLIST_ENTRY_HINT}</>}
     >
-      <div className="space-y-4">
+      <SettingField setting="network.allowed-domains" className="space-y-4">
         <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
           {ALLOWLIST_RESIDUAL_RISK}
         </p>
         <Textarea
+          aria-label="Allowed domains"
           value={allowedDomains}
           onChange={handleDomainsChange}
           placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"}
@@ -1969,13 +2014,15 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             ))}
           </div>
         )}
-      </div>
+      </SettingField>
     </SettingsPageLayout>
   );
 
   const renderContainer = () => (
     <SettingsPageLayout title="Container">
-      <ContainerResourceLimitsSettings initial={global.containerResourceLimits} />
+      <SettingField setting="container.resource-limits">
+        <ContainerResourceLimitsSettings initial={global.containerResourceLimits} />
+      </SettingField>
     </SettingsPageLayout>
   );
 
@@ -2045,30 +2092,35 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         description="Connect from orkestrator.dev through a private Tailscale HTTPS address."
       >
         <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
-          <div className="flex items-center justify-between gap-6 p-4">
-            <div className="min-w-0 space-y-1">
-              <Label htmlFor="web-client-enabled" className="text-sm font-medium">
-                Allow web access
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                {isRemoteClient
-                  ? "This setting can only be changed in the Electron app."
-                  : "Publishes this backend to your tailnet with Tailscale Serve."}
-              </p>
+          <SettingField setting="web-client.enabled" explanationClassName="px-4 pb-3 -mt-1">
+            <div className="flex items-center justify-between gap-6 p-4">
+              <div className="min-w-0 space-y-1">
+                <Label htmlFor="web-client-enabled" className="text-sm font-medium">
+                  Allow web access
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  {isRemoteClient
+                    ? "This setting can only be changed in the Electron app."
+                    : "Publishes this backend to your tailnet with Tailscale Serve."}
+                </p>
+              </div>
+              <Switch
+                id="web-client-enabled"
+                aria-label="Allow web access"
+                checked={webClientEnabled}
+                disabled={isRemoteClient || isSaving}
+                onCheckedChange={(enabled) => {
+                  setWebClientEnabled(enabled);
+                  setWebClientApplyError(null);
+                }}
+              />
             </div>
-            <Switch
-              id="web-client-enabled"
-              aria-label="Allow web access"
-              checked={webClientEnabled}
-              disabled={isRemoteClient || isSaving}
-              onCheckedChange={(enabled) => {
-                setWebClientEnabled(enabled);
-                setWebClientApplyError(null);
-              }}
-            />
-          </div>
+          </SettingField>
 
-          <div className="space-y-2 border-t border-zinc-800 p-4">
+          <SettingField
+            setting="web-client.gateway-token"
+            className="space-y-2 border-t border-zinc-800 p-4"
+          >
             <div className="space-y-1">
               <Label
                 htmlFor="gateway-token"
@@ -2151,7 +2203,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                   This token is saved when you leave the field.
                 </p>
               )}
-          </div>
+          </SettingField>
 
           <div aria-live="polite" className="border-t border-zinc-800 bg-zinc-900/60 px-4 py-3">
             <div className="flex items-center justify-between gap-4">
@@ -2281,7 +2333,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderDebug = () => (
     <SettingsPageLayout title="Debug">
-      <DebugButtonSetting />
+      <SettingField setting="debug.debug-button">
+        <DebugButtonSetting />
+      </SettingField>
       <div>
         <SettingsSectionHeader title="App version">
           The Orkestrator client on this machine and the backend it is connected to
@@ -2317,12 +2371,15 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           <p className="mt-2 text-xs text-amber-500">{versionReminder.description}</p>
         ) : null}
       </div>
-      <div className="space-y-3">
+      <SettingField setting="debug.save-logs" className="space-y-3">
         <SettingsSectionHeader title="Save logs to disk">
           Write application logs to disk for troubleshooting
         </SettingsSectionHeader>
         <button
           type="button"
+          role="switch"
+          aria-label="Save logs to disk"
+          aria-checked={debugLogging}
           onClick={() => setDebugLogging(!debugLogging)}
           className={cn(
             "max-w-xs w-full p-3 rounded-lg border text-left transition-colors",
@@ -2352,7 +2409,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           A small event log of errors and key lifecycle events is always kept, even with this off.
           It holds no prompts, paths or file contents, and has a fixed 4 MiB size limit.
         </p>
-        <div className="max-w-xs space-y-2">
+        <SettingField setting="debug.log-retention" className="max-w-xs space-y-2">
           <Label htmlFor="debug-log-retention" className="text-sm">
             Keep logs for
           </Label>
@@ -2381,7 +2438,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             over to a new file once one grows large, and the oldest are dropped if the directory as
             a whole gets too big.
           </p>
-        </div>
+        </SettingField>
 
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
           <div className="flex items-start justify-between gap-4">
@@ -2467,112 +2524,132 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         <p className="text-xs text-muted-foreground">
           Changes apply straight away, with no restart and without interrupting running agents.
         </p>
-      </div>
-      <LogDetailSettings
-        value={logDetail}
-        onChange={setLogDetail}
-        stored={resolveLogDetail(global)}
-        expirySupported={!!global.logDetailExpiresAt || global.logDetailKeepRaised === true}
-        expiresAt={global.logDetailExpiresAt}
-        keepRaised={logDetailKeepRaised}
-        onKeepRaisedChange={setLogDetailKeepRaised}
-      />
-      <RendererDebugSettings />
+      </SettingField>
+      <SettingField setting="debug.log-detail">
+        <LogDetailSettings
+          value={logDetail}
+          onChange={setLogDetail}
+          stored={resolveLogDetail(global)}
+          expirySupported={!!global.logDetailExpiresAt || global.logDetailKeepRaised === true}
+          expiresAt={global.logDetailExpiresAt}
+          keepRaised={logDetailKeepRaised}
+          onKeepRaisedChange={setLogDetailKeepRaised}
+        />
+      </SettingField>
+      <SettingField setting="debug.renderer-logging">
+        <RendererDebugSettings />
+      </SettingField>
     </SettingsPageLayout>
   );
 
   // Electron reads this setting from its own data directory, so a window on
   // another machine would be editing a config nothing reads it from.
-  const isLocalDesktopWindow =
-    window.orkestrator?.isolatedViewState === true && !window.orkestratorGateway?.enabled;
+  const showDirectTransport = isLocalDesktopWindow();
 
   const renderExperimental = () => (
     <SettingsPageLayout title="Experimental">
       {isWindowMachine(machine) ? (
         <div className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
-          <SettingsRow
-            label="Graphs"
-            htmlFor="experimental-graphs"
-            description="Graphs chain agents, reviews and checks into a reusable flow. Turning this on adds the action bar's Graphs and Run graph… buttons and Run graph… on a ticket."
-          >
-            <Switch
-              id="experimental-graphs"
-              checked={experimentalGraphs}
-              onCheckedChange={setExperimentalGraphs}
-              aria-label="Enable graphs"
-            />
-          </SettingsRow>
-          <SettingsRow
-            label="Scheduling"
-            htmlFor="experimental-scheduling"
-            description={
-              <>
-                Schedules run an action, a prompt to an agent tab or an environment launch at a set
-                time, once or on a cron or interval. Turning this on adds Settings → Schedules, the{" "}
-                <code>orkestrator schedule</code> commands and the agents&apos; and
-                Coordinators&apos; schedule tools. While it is off, saved schedules are kept but do
-                not fire.
-              </>
-            }
-          >
-            <Switch
-              id="experimental-scheduling"
-              checked={experimentalScheduling}
-              onCheckedChange={setExperimentalScheduling}
-              aria-label="Enable scheduling"
-            />
-          </SettingsRow>
-          <SettingsRow
-            label="Self-improvement"
-            htmlFor="experimental-self-improvement"
-            description={
-              <>
-                Reads this machine&apos;s own diagnostics and, if you allow it, your conversations
-                with agents, then files what it finds as tickets on a project&apos;s board and
-                checks each fix on later app versions. Turning this on adds Settings →
-                Self-improvement. Nothing runs until you start a run or turn on the daily run there.
-              </>
-            }
-          >
-            <Switch
-              id="experimental-self-improvement"
-              checked={experimentalSelfImprovement}
-              onCheckedChange={setExperimentalSelfImprovement}
-              aria-label="Enable self-improvement"
-            />
-          </SettingsRow>
-          <SettingsRow
-            label="Tmux mode"
-            htmlFor="experimental-tmux"
-            description={
-              <>
-                Runs Claude&apos;s native chat by driving the Claude CLI under tmux instead of the
-                Agent SDK. Turning this on adds the Native backend choice to Settings → Claude and
-                Claude Tmux tab to the new-agent-tab menu. While it is off every new Claude session
-                uses the Agent SDK; tmux tabs that are already open keep running.
-              </>
-            }
-          >
-            <Switch
-              id="experimental-tmux"
-              checked={experimentalTmux}
-              onCheckedChange={setExperimentalTmux}
-              aria-label="Enable tmux mode"
-            />
-          </SettingsRow>
-          {isLocalDesktopWindow && (
+          <SettingField setting="experimental.graphs" explanationClassName="px-4 pb-3 -mt-1">
             <SettingsRow
-              label="Direct transport for new windows"
-              htmlFor="local-window-gateway-transport"
-              description="On by default. A new window sends commands and receives events and terminal output directly from this computer's backend, not through the app's main process. Windows already open keep their transport, so a window that misbehaves can be replaced by turning this off and opening a new one, which then goes through the main process."
+              label="Graphs"
+              htmlFor="experimental-graphs"
+              description="Graphs chain agents, reviews and checks into a reusable flow. Turning this on adds the action bar's Graphs and Run graph… buttons and Run graph… on a ticket."
             >
               <Switch
-                id="local-window-gateway-transport"
-                checked={localWindowGatewayTransport}
-                onCheckedChange={setLocalWindowGatewayTransport}
-                aria-label="Use the direct transport for new windows"
+                id="experimental-graphs"
+                checked={experimentalGraphs}
+                onCheckedChange={setExperimentalGraphs}
+                aria-label="Enable graphs"
               />
             </SettingsRow>
+          </SettingField>
+          <SettingField setting="experimental.scheduling" explanationClassName="px-4 pb-3 -mt-1">
+            <SettingsRow
+              label="Scheduling"
+              htmlFor="experimental-scheduling"
+              description={
+                <>
+                  Schedules run an action, a prompt to an agent tab or an environment launch at a
+                  set time, once or on a cron or interval. Turning this on adds Settings →
+                  Schedules, the <code>orkestrator schedule</code> commands and the agents&apos; and
+                  Coordinators&apos; schedule tools. While it is off, saved schedules are kept but
+                  do not fire.
+                </>
+              }
+            >
+              <Switch
+                id="experimental-scheduling"
+                checked={experimentalScheduling}
+                onCheckedChange={setExperimentalScheduling}
+                aria-label="Enable scheduling"
+              />
+            </SettingsRow>
+          </SettingField>
+          <SettingField
+            setting="experimental.self-improvement"
+            explanationClassName="px-4 pb-3 -mt-1"
+          >
+            <SettingsRow
+              label="Self-improvement"
+              htmlFor="experimental-self-improvement"
+              description={
+                <>
+                  Reads this machine&apos;s own diagnostics and, if you allow it, your conversations
+                  with agents, then files what it finds as tickets on a project&apos;s board and
+                  checks each fix on later app versions. Turning this on adds Settings →
+                  Self-improvement. Nothing runs until you start a run or turn on the daily run
+                  there.
+                </>
+              }
+            >
+              <Switch
+                id="experimental-self-improvement"
+                checked={experimentalSelfImprovement}
+                onCheckedChange={setExperimentalSelfImprovement}
+                aria-label="Enable self-improvement"
+              />
+            </SettingsRow>
+          </SettingField>
+          <SettingField setting="experimental.tmux" explanationClassName="px-4 pb-3 -mt-1">
+            <SettingsRow
+              label="Tmux mode"
+              htmlFor="experimental-tmux"
+              description={
+                <>
+                  Runs Claude&apos;s native chat by driving the Claude CLI under tmux instead of the
+                  Agent SDK. Turning this on adds the Native backend choice to Settings → Claude and
+                  Claude Tmux tab to the new-agent-tab menu. While it is off every new Claude
+                  session uses the Agent SDK; tmux tabs that are already open keep running.
+                </>
+              }
+            >
+              <Switch
+                id="experimental-tmux"
+                checked={experimentalTmux}
+                onCheckedChange={setExperimentalTmux}
+                aria-label="Enable tmux mode"
+              />
+            </SettingsRow>
+          </SettingField>
+          {showDirectTransport && (
+            <SettingField
+              setting="experimental.direct-transport"
+              explanationClassName="px-4 pb-3 -mt-1"
+            >
+              <SettingsRow
+                label="Direct transport for new windows"
+                htmlFor="local-window-gateway-transport"
+                description="On by default. A new window sends commands and receives events and terminal output directly from this computer's backend, not through the app's main process. Windows already open keep their transport, so a window that misbehaves can be replaced by turning this off and opening a new one, which then goes through the main process."
+              >
+                <Switch
+                  id="local-window-gateway-transport"
+                  checked={localWindowGatewayTransport}
+                  onCheckedChange={setLocalWindowGatewayTransport}
+                  aria-label="Use the direct transport for new windows"
+                />
+              </SettingsRow>
+            </SettingField>
           )}
         </div>
       ) : (
@@ -2600,12 +2677,16 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     terminal: renderTerminal,
     previews: () => (
       <SettingsPageLayout title="Browser previews">
-        <TerminalLinkTargetSetting
-          value={terminalLinkDefaultTarget}
-          onChange={setTerminalLinkDefaultTarget}
-        />
+        <SettingField setting="terminal.link-target">
+          <TerminalLinkTargetSetting
+            value={terminalLinkDefaultTarget}
+            onChange={setTerminalLinkDefaultTarget}
+          />
+        </SettingField>
         <PreviewSettings />
-        <WebAnnotationSettings />
+        <SettingField setting="previews.web-annotations">
+          <WebAnnotationSettings />
+        </SettingField>
       </SettingsPageLayout>
     ),
     network: renderNetwork,

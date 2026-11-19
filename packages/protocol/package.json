@@ -130,6 +130,7 @@
     "./bridge-readiness": "./src/bridge-readiness.ts",
     "./claude-background-commands": "./src/claude-background-commands.ts",
     "./session-title-generation": "./src/session-title-generation.ts",
+    "./setting-sources": "./src/setting-sources.ts",
     "./claude-model-catalog": "./src/claude-model-catalog.ts",
     "./codex-model-catalog": "./src/codex-model-catalog.ts",
     "./app-config-defaults": "./src/app-config-defaults.ts",

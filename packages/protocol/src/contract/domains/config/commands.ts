@@ -38,9 +38,11 @@ import {
   DeclinedUpstreamMergeSchema,
   DesktopConnectionsSchema,
   ExternalPermissionRulesSnapshotSchema,
+  GlobalSettingSourcesSchema,
   NoticeDismissalSnapshotSchema,
   PermissionRulesSnapshotSchema,
   RepositoryConfigSchema,
+  ResetGlobalSettingsResultSchema,
 } from "./models.js";
 
 const optionalUnknown = Schema.optionalKey(Schema.Unknown);
@@ -94,6 +96,40 @@ export const patchGlobalConfigCommand = defineCommand({
   args: Schema.Struct({ patch: optionalUnknown, unset: optionalUnknown }),
   result: AppConfigSchema,
   critical: ["unset"],
+});
+
+/**
+ * Which global settings this machine stores, and which it takes from a
+ * command node (`setting-sources.ts`). Key names only: Settings reads it to
+ * say where each field's value comes from. A node without the command
+ * answers `unknown-command`, and Settings then says the source is unknown.
+ */
+export const getGlobalSettingSourcesCommand = defineCommand({
+  domain: configDomain,
+  name: "get_global_setting_sources",
+  since: 2,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({}),
+  result: GlobalSettingSourcesSchema,
+  critical: [],
+});
+
+/**
+ * Removes stored global settings so the machine follows their defaults, under
+ * the config lock and only while each still holds the value the client
+ * previewed (`expect`); otherwise nothing is removed and the answer is a
+ * `conflict` with the current settings. Only `RESETTABLE_GLOBAL_SETTING_KEYS`.
+ */
+export const resetGlobalSettingsCommand = defineCommand({
+  domain: configDomain,
+  name: "reset_global_settings",
+  since: 2,
+  access: "admin",
+  read: false,
+  args: Schema.Struct({ keys: optionalUnknown, expect: optionalUnknown }),
+  result: ResetGlobalSettingsResultSchema,
+  critical: [],
 });
 
 export const updateNotificationSoundSettingsCommand = defineCommand({
@@ -448,6 +484,8 @@ export const CONFIG_COMMANDS = [
   getConfigCommand,
   updateGlobalConfigCommand,
   patchGlobalConfigCommand,
+  getGlobalSettingSourcesCommand,
+  resetGlobalSettingsCommand,
   updateNotificationSoundSettingsCommand,
   setGitHubCliReminderDismissedCommand,
   setGitHubTokenCommand,

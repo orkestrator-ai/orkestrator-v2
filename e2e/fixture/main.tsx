@@ -74,6 +74,7 @@ import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
 import { SelfImprovementSettingsFixture } from "./SelfImprovementSettingsFixture";
 import { SettingsMachineFixture } from "./SettingsMachineFixture";
 import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
+import { SettingsSearchFixture } from "./SettingsSearchFixture";
 import { GitHubCliSetupFixture } from "./GitHubCliSetupFixture";
 import { AgentsMdApprovalFixture } from "./AgentsMdApprovalFixture";
 import { GraphRunFlowFixture } from "./GraphRunFlowFixture";
@@ -2188,6 +2189,7 @@ function fixtureForPath() {
       </>
     );
   if (window.location.pathname === "/settings-machines") return <SettingsMachineFixture />;
+  if (window.location.pathname === "/settings-search") return <SettingsSearchFixture />;
   if (window.location.pathname === "/self-improvement-settings")
     return <SelfImprovementSettingsFixture />;
   if (window.location.pathname === "/scheduler-status") return <SchedulerStatusFixture />;

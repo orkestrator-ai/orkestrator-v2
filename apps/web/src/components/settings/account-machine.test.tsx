@@ -139,8 +139,10 @@ test("unknown choices fall back to command; offline choices stay scoped and cann
   await waitFor(() => expect(target().machine).toBeNull());
   expect(chip(/^Offline/).disabled).toBe(true);
   act(() => useAccountMachineStore.getState().choose("offline"));
-  await waitFor(() => expect(target()).toEqual({ machine: "offline", name: "Offline" }));
+  await screen.findByText(/This machine is disconnected/);
+  expect(chip(/^Offline/).getAttribute("aria-pressed")).toBe("true");
   expect(chip(/^Offline/).disabled).toBe(false);
+  expect(screen.queryByTestId("target") === null).toBe(true);
 });
 
 test("a command-node section keeps the command node and leaves the choice for the next section", async () => {

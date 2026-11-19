@@ -47,6 +47,8 @@ export const WEB_APP_LOG_AREAS = defineLogAreas({
       "merge.started": "A user-requested PR merge started.",
       "merge.completed": "A user-requested PR merge command returned.",
       "merge.failed": "A user-requested PR merge failed.",
+      "pr-target.repository-config-unavailable":
+        "The project settings a PR or Resolve prompt takes its target branch from could not be read; the prompt falls back to main.",
     },
   },
 });

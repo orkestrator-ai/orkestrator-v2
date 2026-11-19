@@ -220,6 +220,10 @@ const toggleFilesPanelMock = mock(() => {});
 const openFilesPanelOnAllFilesMock = mock(() => {});
 const selectProjectAndEnvironmentMock = mock((_projectId: string, _environmentId: string) => {});
 const addEnvironmentStoreMock = mock((_environment: Environment) => {});
+const getRepositoryConfigMock = mock(async (_projectId: string) => ({
+  defaultBranch: "main",
+  prBaseBranch: "main",
+}));
 const getProjectGitStatusMock = mock(async (_projectId: string) => ({
   branches: [
     { ref: "refs/remotes/origin/main", name: "origin/main", kind: "remote", remote: "origin" },
@@ -824,6 +828,7 @@ mock.module("@/lib/backend", () => ({
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
   ensureProjectHomeEnvironment: ensureProjectHomeEnvironmentMock,
   getProjectGitStatus: getProjectGitStatusMock,
+  getRepositoryConfig: getRepositoryConfigMock,
 }));
 
 mock.module("@/lib/pane-layout-authoritative", () => ({
@@ -1005,6 +1010,11 @@ beforeEach(() => {
   addEnvironmentStoreMock.mockReset();
   ensureProjectHomeEnvironmentMock.mockClear();
   getProjectGitStatusMock.mockClear();
+  getRepositoryConfigMock.mockReset();
+  getRepositoryConfigMock.mockImplementation(async () => ({
+    defaultBranch: "main",
+    prBaseBranch: "main",
+  }));
   toggleSidebarMock.mockReset();
   addCommentMock.mockReset();
   updateTaskMock.mockReset();
@@ -4252,7 +4262,7 @@ describe("ActionBar workflow tabs", () => {
   test("falls back to main when the repository stores an empty PR base branch", async () => {
     // Repository settings persist a cleared "PR base branch" field verbatim,
     // so an empty string has to be treated as unset rather than as a branch.
-    currentRepositoryConfig = { "project-1": { prBaseBranch: "" } };
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "", defaultBranch: "" } };
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -4486,6 +4496,69 @@ describe("ActionBar workflow tabs", () => {
     const [options] = launchNativeAgentJobMock.mock.calls[0] as [Record<string, unknown>];
     expect(options.prompt).toContain("git merge origin/release");
     expect(options.prompt).not.toContain("develop");
+  });
+
+  test("resolves against the project's default branch when no PR base branch is set", async () => {
+    // A project developed on dev with the PR base field cleared: the Resolve
+    // prompt must name dev, not a hard-coded main.
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "", defaultBranch: "dev" } };
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+      prBaseBranch: undefined,
+    };
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(resolveOption());
+
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+    const [options] = launchNativeAgentJobMock.mock.calls[0] as [{ prompt: string }];
+    expect(options.prompt).toContain("target remote branch (dev)");
+    expect(options.prompt).toContain("git merge origin/dev");
+    expect(options.prompt).not.toContain("origin/main");
+    expect(getRepositoryConfigMock).not.toHaveBeenCalled();
+  });
+
+  test("reads the project's settings from its node when the scope has not loaded them", async () => {
+    currentRepositoryConfig = {};
+    getRepositoryConfigMock.mockImplementation(async () => ({
+      defaultBranch: "dev",
+      prBaseBranch: "dev",
+    }));
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+      prBaseBranch: undefined,
+    };
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(resolveOption());
+
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+    expect(getRepositoryConfigMock).toHaveBeenCalledWith("project-1");
+    const [options] = launchNativeAgentJobMock.mock.calls[0] as [{ prompt: string }];
+    expect(options.prompt).toContain("git merge origin/dev");
+    expect(options.prompt).not.toContain("origin/main");
+  });
+
+  test("the PR's observed base wins over the project settings for a Resolve", async () => {
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "main", defaultBranch: "main" } };
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+      prBaseBranch: "dev",
+    };
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(resolveOption());
+
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+    const [options] = launchNativeAgentJobMock.mock.calls[0] as [{ prompt: string }];
+    expect(options.prompt).toContain("git merge origin/dev");
+    expect(options.prompt).not.toContain("origin/main");
   });
 
   test("disables a pinned Resolve launch when the conflicts are already gone", () => {
@@ -7171,19 +7244,19 @@ describe("ActionBar successful cleanup and merge actions", () => {
         ...selectedEnvironment,
         prState: "open",
         hasMergeConflicts: false,
-        prBaseBranch: "main",
+        prBaseBranch: "develop",
       };
       renderInAppCommandScope(<ActionBar />);
+      // A blank PR base falls back to the default branch, the branch the work
+      // is developed on, so a PR into it is not flagged.
       expect(screen.queryByTestId("pr-target-mismatch") === null).toBe(true);
       confirmMerge();
       await waitFor(() =>
-        expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
-          "env-1",
-          "squash",
-          true,
-          false,
-          mainDestination,
-        ),
+        expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false, {
+          ...mainDestination,
+          expectedBaseRef: "develop",
+          expectedTargetBranch: "develop",
+        }),
       );
     });
 

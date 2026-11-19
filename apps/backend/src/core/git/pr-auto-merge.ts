@@ -1,4 +1,7 @@
-import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
+import {
+  defaultPrTargetBranch,
+  resolvePrTargetBranch,
+} from "@orkestrator/protocol/git-workflow-prompts";
 import { randomUUID } from "node:crypto";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import {
@@ -477,7 +480,7 @@ export class PrAutoMergeController {
 
   private async authorizedTarget(environment: Environment): Promise<string | null> {
     const repository = await this.options.storage.getRepositoryConfig(environment.projectId);
-    const configured = defaultPrTargetBranch(repository.prBaseBranch);
+    const configured = defaultPrTargetBranch(repository);
     const accepted = environment.autoMergeBaseRef ?? configured;
     if (
       (environment.autoMergeTargetBranch && environment.autoMergeTargetBranch !== configured) ||
@@ -543,7 +546,10 @@ export class PrAutoMergeController {
     if (!current || !(await this.authorizedTarget(current)) || this.closed) return false;
     // Read before the launch: by the time it returns, the Resolve may have pushed.
     const headSha = this.options.monitorState(environment.id)?.headSha;
-    const targetBranch = environment.prBaseBranch || repository.prBaseBranch?.trim() || "main";
+    const targetBranch = resolvePrTargetBranch({
+      environmentBase: environment.prBaseBranch,
+      repository,
+    });
     const result = await this.options.invoke<{ status?: unknown; error?: unknown }>(
       "launch_native_agent_job",
       {

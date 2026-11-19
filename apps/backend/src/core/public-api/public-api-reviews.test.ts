@@ -73,6 +73,24 @@ describe("pr.create and pr.resolve", () => {
     );
   });
 
+  test("pr.resolve merges the project's default branch when no PR base branch is set", async () => {
+    const { harness, stub, projectId } = await setup();
+    await harness.storage.updateRepositoryConfig(projectId, {
+      defaultBranch: "dev",
+      prBaseBranch: "",
+    });
+    const started = await harness.call(
+      "pr.resolve",
+      { environmentId: "env-1" },
+      { requestId: "r-dev" },
+    );
+    if (!started.ok) throw new Error(`${started.error.code}: ${started.error.message}`);
+    const prompt = stub.sends.at(-1)!.prompt;
+    expect(prompt).toContain("Resolve any merge conflicts with the target remote branch (dev)");
+    expect(prompt).toContain("git merge origin/dev");
+    expect(prompt).not.toContain("origin/main");
+  });
+
   test("model and reasoning need an agent", async () => {
     const { harness } = await setup();
     const refused = await harness.call(

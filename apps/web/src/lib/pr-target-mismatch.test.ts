@@ -10,7 +10,9 @@ describe("configuredPrTargetBranch", () => {
     expect(configuredPrTargetBranch({ prBaseBranch: "develop", defaultBranch: "main" })).toBe(
       "develop",
     );
-    expect(configuredPrTargetBranch({ prBaseBranch: "  ", defaultBranch: "master" })).toBe("main");
+    expect(configuredPrTargetBranch({ prBaseBranch: "  ", defaultBranch: "master" })).toBe(
+      "master",
+    );
     expect(configuredPrTargetBranch({ prBaseBranch: "", defaultBranch: "" })).toBe("main");
   });
 

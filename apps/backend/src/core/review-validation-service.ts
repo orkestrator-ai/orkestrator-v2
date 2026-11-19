@@ -1,3 +1,4 @@
+import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
 import {
   isReviewValidationRun,
@@ -378,7 +379,7 @@ async function validationTargetRef(
 ): Promise<string | undefined> {
   try {
     const repository = await context.storage.getRepositoryConfig(environment.projectId);
-    return `origin/${validateGitRefName(repository.prBaseBranch || "main", "target branch")}`;
+    return `origin/${validateGitRefName(defaultPrTargetBranch(repository), "target branch")}`;
   } catch {
     return undefined;
   }

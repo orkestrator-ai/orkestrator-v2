@@ -1,4 +1,4 @@
-import { defaultPrTargetBranch } from "./git-workflow-prompts.js";
+import { defaultPrTargetBranch, type PrTargetRepositorySettings } from "./git-workflow-prompts.js";
 export type GitHubRepositoryRef = {
   owner: string;
   name: string;
@@ -79,7 +79,7 @@ type PrTargetProject = { id: string; gitUrl: string };
 export function configuredPrTargetForPullRequest(
   ref: { owner: string; repo: string },
   projects: readonly PrTargetProject[],
-  repositories: Readonly<Record<string, { prBaseBranch?: string | null } | undefined>>,
+  repositories: Readonly<Record<string, PrTargetRepositorySettings | undefined>>,
   projectId?: string,
 ): string | null {
   const owner = ref.owner.toLowerCase();
@@ -95,7 +95,7 @@ export function configuredPrTargetForPullRequest(
       continue;
     }
     const repository = repositories[project.id];
-    const target = repository ? defaultPrTargetBranch(repository.prBaseBranch) : null;
+    const target = repository ? defaultPrTargetBranch(repository) : null;
     if (project.id === projectId) return target;
     if (target) targets.add(target);
   }

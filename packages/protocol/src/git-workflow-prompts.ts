@@ -58,30 +58,44 @@ export const PUSH_CHANGES_TAB_TITLE = "Git Push";
  */
 export const ADDRESS_ALL_REVIEW_PROMPT = `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${wrapSystemInstructions(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION)}`;
 
+/** The two repository settings a project's PR target is read from. */
+export interface PrTargetRepositorySettings {
+  prBaseBranch?: string | null;
+  defaultBranch?: string | null;
+}
+
 /**
  * The base branch a PR-relative action works against when the caller named
- * none: the repository's configured PR base branch, else `main`. Falsy rather
- * than nullish, because repository settings persist a cleared base as `""`,
- * and an empty base would reach the agent as `gh pr create --base `.
+ * none: the repository's configured PR base branch, else the branch its
+ * environments are created from, else `main`. The default branch comes before
+ * `main` because a project developed on `dev` with no PR base set would
+ * otherwise have its PR, review and conflict-resolution prompts name a branch
+ * the work is not destined for; the diff baseline
+ * (`resolveComparisonRef` in `diff-stats.ts`) uses the same order. Falsy
+ * rather than nullish, because repository settings persist a cleared base as
+ * `""`, and an empty base would reach the agent as `gh pr create --base `.
  */
-export function defaultPrTargetBranch(repositoryPrBaseBranch: string | null | undefined): string {
-  return repositoryPrBaseBranch?.trim() || "main";
+export function defaultPrTargetBranch(
+  repository: PrTargetRepositorySettings | null | undefined,
+): string {
+  return repository?.prBaseBranch?.trim() || repository?.defaultBranch?.trim() || "main";
 }
 
 /**
  * The branch a PR action targets: the caller's choice, then the environment's
- * recorded base where the action uses one, then the repository default. Blank
- * values count as unset, because settings persist a cleared base as "".
+ * recorded base where the action uses one, then the repository default
+ * ({@link defaultPrTargetBranch}). Blank values count as unset, because
+ * settings persist a cleared base as "".
  */
 export function resolvePrTargetBranch(input: {
   override?: string | null;
   environmentBase?: string | null;
-  repositoryBase?: string | null;
+  repository?: PrTargetRepositorySettings | null;
 }): string {
   return (
     input.override?.trim() ||
     input.environmentBase?.trim() ||
-    defaultPrTargetBranch(input.repositoryBase)
+    defaultPrTargetBranch(input.repository)
   );
 }
 

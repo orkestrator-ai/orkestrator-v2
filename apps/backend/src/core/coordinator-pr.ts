@@ -1,3 +1,7 @@
+import {
+  defaultPrTargetBranch,
+  resolvePrTargetBranch,
+} from "@orkestrator/protocol/git-workflow-prompts";
 import { withWorkerActionReceipt } from "./worker-action-receipts.js";
 import type { CommandContext } from "./commands-context.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
@@ -83,7 +87,7 @@ export async function launchWorkerPr(
       );
       const config = await context.storage.loadConfig();
       const base =
-        input.targetBranch ?? (config.repositories[input.projectId]?.prBaseBranch || "main");
+        input.targetBranch ?? defaultPrTargetBranch(config.repositories[input.projectId]);
       const outcome = await launchPrAgent(commandInvoker(context, dependencies), context.storage, {
         ...input,
         targetBranch: base,
@@ -151,7 +155,10 @@ export async function launchWorkerResolve(
       const config = await context.storage.loadConfig();
       const base =
         input.targetBranch ??
-        (environment.prBaseBranch || config.repositories[input.projectId]?.prBaseBranch || "main");
+        resolvePrTargetBranch({
+          environmentBase: environment.prBaseBranch,
+          repository: config.repositories[input.projectId],
+        });
       const outcome = await launchResolveConflictsAgent(
         commandInvoker(context, dependencies),
         context.storage,

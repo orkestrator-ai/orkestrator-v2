@@ -6,6 +6,7 @@
  * the review handoff, the Address report, the pull request a restart updates)
  * and appends the user's per-step instructions after the contract.
  */
+import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
 import { pipelineFollowUps } from "@orkestrator/protocol/build-pipeline-notes";
 import {
   type BuildPipeline,
@@ -105,7 +106,7 @@ export class BuildPipelineStagePrompts {
     const notes = (await this.ctx.storage.kanban.getProjectNotes(pipeline.projectId)).content;
     const config = await this.ctx.storage.loadConfig();
     const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
-    const target = repository.prBaseBranch || "main";
+    const target = defaultPrTargetBranch(repository);
     if (phase === "build") {
       return {
         prompt: buildPrompt(pipeline, notes, target),

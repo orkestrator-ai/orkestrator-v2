@@ -43,14 +43,18 @@ const ENCODED = new Set([
 ]);
 
 describe("native-sessions definitions", () => {
-  it("defines the domain's 85 commands once each, since version 1", () => {
+  it("defines the domain's 86 commands once each, since version 1 unless added later", () => {
     const names = NATIVE_SESSIONS_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(85);
-    expect(new Set(names).size).toBe(85);
+    expect(names).toHaveLength(86);
+    expect(new Set(names).size).toBe(86);
     expect(nativeSessionsDomain).toMatchObject({ name: "native-sessions", version: 5, min: 1 });
+    const addedSince: Record<string, number> = { get_native_agent_tool_output: 5 };
     for (const def of NATIVE_SESSIONS_COMMANDS) {
       expect(def.domain).toBe(nativeSessionsDomain);
-      expect(def.since).toBe(1);
+      expect({ name: def.name, since: def.since }).toEqual({
+        name: def.name,
+        since: addedSince[def.name] ?? 1,
+      });
     }
   });
 

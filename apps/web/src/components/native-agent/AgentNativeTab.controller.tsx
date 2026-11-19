@@ -75,6 +75,7 @@ import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { ToolOutputTailContext } from "@/lib/chat/tool-output-tail";
 import { SelectionPricingBadge } from "@/components/chat/SelectionPricingBadge";
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import { useRichTranscriptScopeValue } from "@/hooks/useTranscriptArtifactCapabilities";
@@ -596,6 +597,7 @@ export function SharedNativeAgentController({
     refreshModels,
     refreshCommands,
     loadToolDetails,
+    toolOutputTail,
     loadEarlierMessages,
     canLoadEarlierAutomatically,
   } = useNativeAgentSession<NativeMessage>({
@@ -4924,7 +4926,9 @@ export function SharedNativeAgentController({
                   />
                   <div className="min-h-0 flex-1">
                     <PlanCardScopeContext.Provider value={planCards.scope}>
-                      {chatShell}
+                      <ToolOutputTailContext.Provider value={toolOutputTail}>
+                        {chatShell}
+                      </ToolOutputTailContext.Provider>
                     </PlanCardScopeContext.Provider>
                   </div>
                   {floatingNotices && agentPrompts.length > 0 ? (

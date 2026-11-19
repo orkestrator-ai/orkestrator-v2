@@ -2,6 +2,8 @@ import { Bot } from "lucide-react";
 import * as backend from "@/lib/backend";
 import { subscribeNativeObservationInvalidations } from "@/lib/native-observation-events";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import {
   describeAgentRegistrySummary,
   type AgentRegistrySnapshot,
@@ -18,6 +20,13 @@ export interface AgentSummarySource {
   resyncOnSubscribe?: boolean;
   /** Requests a refresh on changes; subscription readiness/resync may bypass debounce. */
   subscribe(environmentId: string, refresh: (immediate?: boolean) => void): () => void;
+  /**
+   * The node whose `environment` push topic announces this source's changes
+   * (docs/architecture/push-events.md). While that subscription is healthy a
+   * reader reads on its frames instead of on `subscribe`'s events, and slows
+   * its own refresh to the recovery poll. Absent: events and polls only.
+   */
+  pushScope?: () => NodeScope;
 }
 
 /** This window's own backend. */
@@ -47,6 +56,7 @@ export const LOCAL_AGENT_SUMMARY_SOURCE: AgentSummarySource = {
       for (const stop of stops) stop();
     };
   },
+  pushScope: appCommandScope,
 };
 
 /**

@@ -4,7 +4,15 @@ import {
   validateWorkflowSnapshot,
   type WorkflowSnapshotV1,
 } from "@orkestrator/protocol/workflow-snapshot";
+import {
+  PUSH_RECOVERY_POLL_MS,
+  WORKFLOW_PUSH_TOPIC,
+  formatWorkflowPushKey,
+  isWorkflowPushKind,
+} from "@orkestrator/protocol/push-events";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
+import { usePushSubscription } from "@/lib/push/push-subscriptions";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import {
   WorkflowNodeDetails,
@@ -23,6 +31,14 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
  * Authoritative snapshots are polled and also refetched on resource change
  * events and resync requests (reconnect, revision gaps). A response from an
  * older request never replaces a newer one.
+ *
+ * A snapshot's `workflowId` is the run's kind (`multi-review`,
+ * `build-pipeline`) and its `runId` the record id. While the inspector's
+ * `workflow` push subscription for that run is healthy
+ * (docs/architecture/push-events.md) it reads when a frame names the run and
+ * otherwise every {@link PUSH_RECOVERY_POLL_MS}; while it is not, it keeps the
+ * 4 s poll. Whether the run finished comes only from the read (`terminal`),
+ * never from a frame or a closed stream.
  */
 
 export type WorkflowLivePhase = "connecting" | "live" | "stale" | "terminal" | "unavailable";
@@ -82,10 +98,26 @@ export function useWorkflowLiveSnapshot({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disposed = useRef(false);
   const fetchRef = useRef<() => void>(() => {});
+  const { scope } = useScopesWithCommandFallback();
+  const pushKey = isWorkflowPushKind(workflowId)
+    ? formatWorkflowPushKey({ kind: workflowId, id: runId })
+    : null;
+  const pushState = usePushSubscription(
+    scope,
+    WORKFLOW_PUSH_TOPIC,
+    pushKey ?? "",
+    enabled && pushKey !== null,
+    () => fetchRef.current(),
+  );
+  const pushHealthy = pushState === "healthy";
+  const pushHealthyRef = useRef(pushHealthy);
 
   const schedule = useCallback((delay: number) => {
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => fetchRef.current(), delay);
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      fetchRef.current();
+    }, delay);
   }, []);
 
   const fetchNow = useCallback(() => {
@@ -124,7 +156,9 @@ export function useWorkflowLiveSnapshot({
           message: null,
           changedIds: changedNodeIds(previous.snapshot, checked.value),
         }));
-        if (!response.terminal) schedule(pollIntervalMs);
+        if (!response.terminal) {
+          schedule(pushHealthyRef.current ? PUSH_RECOVERY_POLL_MS : pollIntervalMs);
+        }
       })
       .catch(() => {
         if (disposed.current || seq < appliedSeq.current) return;
@@ -144,24 +178,37 @@ export function useWorkflowLiveSnapshot({
   }, [environmentId, pollIntervalMs, runId, schedule, workflowId, nodeBackend]);
   useLayoutEffect(() => {
     fetchRef.current = fetchNow;
+    pushHealthyRef.current = pushHealthy;
   });
+  // Losing the subscription returns a waiting recovery poll to the old
+  // cadence at once; gaining it lets the next read schedule the slow one.
+  useEffect(() => {
+    if (!enabled || pushHealthy || !timer.current) return;
+    schedule(pollIntervalMs);
+  }, [enabled, pollIntervalMs, pushHealthy, schedule]);
 
   useEffect(() => {
     if (!enabled) return;
     disposed.current = false;
     fetchNow();
-    const unsubscribes = WORKFLOW_RESOURCE_KINDS.map((kind) =>
+    // The change names the record id (`runId`); `workflowId` is its kind.
+    // While push is healthy the run's frame announces the same save, so the
+    // event does not read a second time.
+    const unsubscribes = WORKFLOW_RESOURCE_KINDS.filter(
+      (kind) => !isWorkflowPushKind(workflowId) || kind === workflowId,
+    ).map((kind) =>
       onResourceChanged(kind, (change) => {
-        if (change.id === workflowId) fetchRef.current();
+        if (change.id === runId && !pushHealthyRef.current) fetchRef.current();
       }),
     );
     unsubscribes.push(onResourceResync(() => fetchRef.current()));
     return () => {
       disposed.current = true;
       if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
       for (const unsubscribe of unsubscribes) unsubscribe();
     };
-  }, [enabled, fetchNow, workflowId]);
+  }, [enabled, fetchNow, runId, workflowId]);
 
   return { ...state, refresh: fetchNow };
 }

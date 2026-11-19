@@ -128,6 +128,33 @@ describe("observed settled reads", () => {
     stop();
   });
 
+  test("a bridge hint keeps the observer's answer for the viewers but gives the observer fresh work", async () => {
+    const r = reads();
+    const stop = r.instance.observeSession(SESSION);
+    const observe = (read: () => Promise<{ value: number }> = r.read) =>
+      r.instance.progressiveReadCovering(KEY, SESSION, 0, false, read, false, true);
+    // The observer's hint-driven read announces a frame...
+    expect(await observe()).toEqual({ value: 1 });
+    // ...and more hints arrive while the turn streams.
+    r.instance.noteObservationHint(SESSION);
+    // The viewer reading after that frame takes the observer's answer: no provider read.
+    expect(await r.instance.progressiveReadCovering(KEY, SESSION, 0, false, r.read)).toEqual({
+      value: 1,
+    });
+    expect(r.providerReads()).toBe(1);
+
+    // Work that started before a hint is not what the observer's next read joins.
+    const old = Promise.withResolvers<{ value: number }>();
+    const viewer = r.instance.progressiveReadCovering(KEY, SESSION, 0, true, () => old.promise);
+    r.instance.noteObservationHint(SESSION);
+    const observer = observe();
+    old.resolve({ value: 99 });
+    expect(await viewer).toEqual({ value: 99 });
+    expect(await observer).toEqual({ value: 2 });
+    expect(r.providerReads()).toBe(2);
+    stop();
+  });
+
   test("queues ten sessions fairly while reserving source slots for foreground work", async () => {
     const r = reads();
     const gate = Promise.withResolvers<void>();

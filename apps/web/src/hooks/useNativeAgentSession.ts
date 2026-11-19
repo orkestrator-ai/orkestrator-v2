@@ -96,6 +96,7 @@ import {
   formatNativeSessionPushKey,
 } from "@orkestrator/protocol/push-events";
 import type { StoreApi } from "zustand/vanilla";
+import type { ToolOutputTailSource } from "@/lib/chat/tool-output-tail";
 
 /** Mirrors the backend ceiling, so the button stops offering what it would clamp. */
 const MAX_MESSAGE_WINDOW = 4_096;
@@ -2867,12 +2868,20 @@ export function useNativeAgentSession<TMessage = unknown>({
      * is what lets a qualified idle view read less often — it is told when it
      * must read. A missed announcement (stamp gap) or a new observer lifetime
      * re-reads every view.
+     *
+     * While this view's push subscription is healthy, a session announcement
+     * does not read on its own: the same announcement wakes the backend's
+     * observer of this session, and the frame it sends if anything moved is
+     * the read. Reading here too cost every announced change two reads per
+     * view (docs/architecture/push-events.md, "Measured result"). A stamp gap
+     * or reset still re-reads, and an unhealthy view keeps this read.
      */
     const unsubscribeObservation = subscribeNativeObservationInvalidations((invalidation) => {
       if (invalidation.kind === "all") discoverySchedule.markDue();
       if (
         enabled &&
         isActive &&
+        !(invalidation.kind === "session" && pushHealthyRef.current) &&
         nativeObservationInvalidationMatches(invalidation, {
           environmentId,
           agent: platform,
@@ -3307,6 +3316,15 @@ export function useNativeAgentSession<TMessage = unknown>({
       backendForScope(scope).getNativeAgentToolDetails({ ...identity, detailRef }),
     [scope, identity],
   );
+  /** What an expanded running tool row reads its bounded output tail through. */
+  const toolOutputTail = useMemo<ToolOutputTailSource>(
+    () => ({
+      scope,
+      ...identity,
+      read: (input) => backendForScope(scope).getNativeAgentToolOutput(input),
+    }),
+    [scope, identity],
+  );
   /**
    * Page older rows in behind the cursor this tab holds, then reconcile.
    *
@@ -3728,6 +3746,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     refreshModels,
     refreshCommands,
     loadToolDetails,
+    toolOutputTail,
     loadEarlierMessages,
     canLoadEarlierAutomatically,
     initialLaunchOptionsRef,

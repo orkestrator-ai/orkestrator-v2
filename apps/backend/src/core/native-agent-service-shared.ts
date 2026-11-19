@@ -441,6 +441,7 @@ export interface NativeAgentServiceOptions {
     environmentId: string,
     agent: BuildPipelineAgent,
     providerSessionId?: string,
+    parts?: readonly ("state" | "transcript")[],
   ) => void;
   onConversationRetired?: (
     environmentId: string,

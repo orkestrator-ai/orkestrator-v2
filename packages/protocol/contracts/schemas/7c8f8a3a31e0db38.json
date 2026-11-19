@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:7c8f8a3a31e0db38de79b224b487d3cc6eee31275f99532aacfe343e93c13a3e",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "anchor": {
+          "type": "string"
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "enum": ["Infinity", "-Infinity", "NaN"],
+              "type": "string"
+            }
+          ]
+        },
+        "detailRef": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "enum": ["Infinity", "-Infinity", "NaN"],
+              "type": "string"
+            }
+          ]
+        },
+        "logicalSessionKey": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "toolUseId": {
+          "type": "string"
+        }
+      },
+      "required": ["agent", "environmentId", "logicalSessionKey", "toolUseId"],
+      "type": "object"
+    }
+  }
+}

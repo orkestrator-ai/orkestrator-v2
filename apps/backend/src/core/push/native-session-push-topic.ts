@@ -16,6 +16,7 @@ import {
 } from "@orkestrator/protocol/native-agent-observation";
 import {
   NATIVE_SESSION_PUSH_TOPIC,
+  PUSH_KEY_THROTTLE_MS,
   formatNativeSessionPushKey,
   parseNativeSessionPushKey,
   type NativeSessionPushKey,
@@ -46,8 +47,29 @@ export const NATIVE_SESSION_OBSERVE_PENDING_MS = 250;
 /** After a failed read. */
 export const NATIVE_SESSION_OBSERVE_ERROR_MS = 2_000;
 
-/** Reconcile independently of wake delivery while an idle bridge is known observable. */
-const NATIVE_SESSION_BRIDGE_BACKSTOP_MS = 30_000;
+/**
+ * The backstop read of a session whose bridge announces its changes: the
+ * observer reads on the bridge's hints and otherwise only this often
+ * (to-do 8102 task 2). Also reconciles a hint that was lost.
+ */
+export const NATIVE_SESSION_BRIDGE_BACKSTOP_MS = 30_000;
+/**
+ * The shortest gap between two reads a bridge hint may cause. It is the
+ * hub's per-key throttle ({@link PUSH_KEY_THROTTLE_MS}), so a streaming turn
+ * (a hint per delta) is read once per frame it may send: about six reads a
+ * second at 150 ms, each two bridge requests where a poll used to be five.
+ */
+export const NATIVE_SESSION_BRIDGE_WAKE_FLOOR_MS = PUSH_KEY_THROTTLE_MS;
+
+/**
+ * How a session's bridge may wake its observer (to-do 8102 task 2):
+ * `revisions`: the observe stream is live and announces every change of the
+ * state and transcript reads, so a running or idle session is read on its
+ * hints plus the backstop; `hints`: a live stream without revisions (an older
+ * Claude or Codex bridge), which qualifies only a quiet idle session; `none`:
+ * the cadence.
+ */
+export type NativeSessionBridgeWake = "revisions" | "hints" | "none";
 
 const RESPONSIVE_PHASES = new Set(["running", "blocked", "cancelling", "recovering"]);
 
@@ -71,10 +93,19 @@ export interface NativeSessionPushTopicOptions {
    * reads of it must not answer the next read.
    */
   onWake?(key: NativeSessionPushKey): void;
-  canWakeFromBridge?(key: NativeSessionPushKey): boolean;
+  /**
+   * A bridge hint woke the observer. Its next read must start fresh provider
+   * work, but the settled answer it last announced stays shared with the
+   * viewers reading after that frame.
+   */
+  onBridgeWake?(key: NativeSessionPushKey): void;
+  /** See {@link NativeSessionBridgeWake}; `true` reads as `hints`. */
+  canWakeFromBridge?(key: NativeSessionPushKey): NativeSessionBridgeWake | boolean;
   /** The session is observed from now until the returned stop is called. */
   observeSession?(key: NativeSessionPushKey): () => void;
   timers?: PushHubTimers;
+  /** Clock for the bridge wake floor; a manual clock's `now` in tests. */
+  now?: () => number;
 }
 
 type PartStatus = "ok" | "missing" | "unavailable" | "pending" | "unknown";
@@ -96,9 +127,22 @@ interface Observer {
   timer: unknown;
   reading: boolean;
   wakeAgain: boolean;
+  /** A bridge hint arrived during a read: read again, but not before the floor. */
+  bridgeWakeAgain: boolean;
+  /** When the last read started, for the bridge wake floor. */
+  lastReadAt: number;
+  /** When the scheduled read is due. */
+  dueAt: number;
   stopped: boolean;
   stopObserving: (() => void) | null;
+  /** A connection subscribes to the key (the hub retained it). */
+  hubRetained: boolean;
+  /** In-process holders (another topic watching this session), each told of every change. */
+  listeners: Set<NativeSessionChangeListener>;
 }
+
+/** Told the parts that moved each time an observed session's revision moves. */
+export type NativeSessionChangeListener = (parts: readonly NativeSessionPushPart[]) => void;
 
 export interface NativeSessionPushTopicMetrics {
   observers: number;
@@ -106,6 +150,10 @@ export interface NativeSessionPushTopicMetrics {
   readFailures: number;
   changes: number;
   wakes: number;
+  /** Bridge hints that woke an observer reading on hints (to-do 8102 task 2). */
+  bridgeWakes: number;
+  /** Observers currently reading on bridge hints plus the backstop. */
+  bridgeObservers: number;
 }
 
 const defaultTimers: PushHubTimers = {
@@ -140,10 +188,12 @@ export class NativeSessionPushTopic implements PushTopicProvider {
   private readonly timers: PushHubTimers;
   private readonly processGeneration = randomBytes(6).toString("base64url");
   private generationCounter = 0;
-  private readonly counters = { reads: 0, readFailures: 0, changes: 0, wakes: 0 };
+  private readonly counters = { reads: 0, readFailures: 0, changes: 0, wakes: 0, bridgeWakes: 0 };
+  private readonly now: () => number;
 
   constructor(private readonly options: NativeSessionPushTopicOptions) {
     this.timers = options.timers ?? defaultTimers;
+    this.now = options.now ?? (() => performance.now());
   }
 
   validKey(key: string): boolean {
@@ -163,8 +213,44 @@ export class NativeSessionPushTopic implements PushTopicProvider {
   }
 
   retain(key: string): void {
+    const existing = this.observers.get(key);
+    if (existing) {
+      existing.hubRetained = true;
+      return;
+    }
+    this.start(key, true);
+  }
+
+  release(key: string): void {
+    const observer = this.observers.get(key);
+    if (!observer) return;
+    observer.hubRetained = false;
+    if (observer.listeners.size === 0) this.stop(observer);
+  }
+
+  /**
+   * Observe a session for another topic (`tool-output`): the session's
+   * observer runs while a connection subscribes to it or a hold is kept, and
+   * `listener` hears each change it announces. Nothing is read for the
+   * holder: it shares the observer's reads. Returns the release.
+   */
+  hold(key: NativeSessionPushKey, listener: NativeSessionChangeListener): () => void {
+    const formatted = formatNativeSessionPushKey(key);
+    const observer = this.observers.get(formatted) ?? this.start(formatted, false);
+    if (!observer) return () => undefined;
+    observer.listeners.add(listener);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      observer.listeners.delete(listener);
+      if (!observer.hubRetained && observer.listeners.size === 0) this.stop(observer);
+    };
+  }
+
+  private start(key: string, hubRetained: boolean): Observer | null {
     const parsed = parseNativeSessionPushKey(key);
-    if (!parsed || this.observers.has(key)) return;
+    if (!parsed) return null;
     this.generationCounter += 1;
     const observer: Observer = {
       key,
@@ -182,8 +268,13 @@ export class NativeSessionPushTopic implements PushTopicProvider {
       timer: null,
       reading: false,
       wakeAgain: false,
+      bridgeWakeAgain: false,
+      lastReadAt: Number.NEGATIVE_INFINITY,
+      dueAt: 0,
       stopped: false,
       stopObserving: null,
+      hubRetained,
+      listeners: new Set(),
     };
     try {
       observer.stopObserving = this.options.observeSession?.(parsed) ?? null;
@@ -192,14 +283,15 @@ export class NativeSessionPushTopic implements PushTopicProvider {
     }
     this.observers.set(key, observer);
     this.schedule(observer, 0);
+    return observer;
   }
 
-  release(key: string): void {
-    const observer = this.observers.get(key);
-    if (!observer) return;
+  private stop(observer: Observer): void {
+    if (observer.stopped) return;
     observer.stopped = true;
     this.cancel(observer);
-    this.observers.delete(key);
+    if (this.observers.get(observer.key) === observer) this.observers.delete(observer.key);
+    observer.listeners.clear();
     observer.stopObserving?.();
     observer.stopObserving = null;
   }
@@ -245,24 +337,43 @@ export class NativeSessionPushTopic implements PushTopicProvider {
     if (observer) this.wakeObserver(observer);
   }
 
-  /** A bridge frame is a wake hint. Activity and projections still come from reads. */
-  wakeProvider(environmentId: string, agent: string, providerSessionId?: string): void {
+  /**
+   * A bridge frame is a wake hint (to-do 8102 task 2). It wakes only an
+   * observer reading on hints (`bridgeBackoff`); one on its cadence reads
+   * soon anyway. `providerSessionId` undefined means the stream lost or
+   * regained continuity: every such observer of the provider reads, and falls
+   * back to its cadence if the stream is no longer live. `parts` (what moved)
+   * is informational: the read is conditional on both parts, so a part that
+   * did not move answers `unchanged`. A hint never reads sooner than
+   * {@link NATIVE_SESSION_BRIDGE_WAKE_FLOOR_MS} after the previous read.
+   * Activity and projections still come from reads.
+   */
+  wakeProvider(
+    environmentId: string,
+    agent: string,
+    providerSessionId?: string,
+    _parts?: readonly ("state" | "transcript")[],
+  ): void {
     for (const observer of this.observers.values()) {
       if (!observer.bridgeBackoff) continue;
       if (observer.parsed.environmentId !== environmentId || observer.parsed.agent !== agent)
         continue;
       if (providerSessionId !== undefined && observer.providerSessionId !== providerSessionId)
         continue;
-      this.wakeObserver(observer);
+      // A continuity hint (connect, gap, loss) is one event: read at once.
+      this.wakeFromBridge(observer, providerSessionId === undefined);
     }
   }
 
   metrics(): NativeSessionPushTopicMetrics {
-    return { observers: this.observers.size, ...this.counters };
+    let bridgeObservers = 0;
+    for (const observer of this.observers.values())
+      if (observer.bridgeBackoff) bridgeObservers += 1;
+    return { observers: this.observers.size, ...this.counters, bridgeObservers };
   }
 
   dispose(): void {
-    for (const key of Array.from(this.observers.keys())) this.release(key);
+    for (const observer of Array.from(this.observers.values())) this.stop(observer);
   }
 
   // -------------------------------------------------------------------------
@@ -296,6 +407,41 @@ export class NativeSessionPushTopic implements PushTopicProvider {
     this.schedule(observer, 0);
   }
 
+  private wakeFromBridge(observer: Observer, immediate: boolean): void {
+    if (observer.stopped) return;
+    this.counters.bridgeWakes += 1;
+    observer.quietIndex = 0;
+    try {
+      this.options.onBridgeWake?.(observer.parsed);
+    } catch (error) {
+      log.warn("native-session.wake-hook-failed", { error: formatLogError(error) });
+    }
+    if (observer.reading) {
+      if (immediate) observer.wakeAgain = true;
+      else observer.bridgeWakeAgain = true;
+      return;
+    }
+    const delay = immediate ? 0 : this.bridgeWakeDelay(observer);
+    // A read already due sooner covers this hint.
+    if (observer.timer !== null && observer.dueAt <= this.now() + delay) return;
+    this.schedule(observer, delay);
+  }
+
+  private bridgeWakeDelay(observer: Observer): number {
+    return Math.max(0, observer.lastReadAt + NATIVE_SESSION_BRIDGE_WAKE_FLOOR_MS - this.now());
+  }
+
+  private bridgeWake(observer: Observer): NativeSessionBridgeWake {
+    let mode: NativeSessionBridgeWake | boolean | undefined;
+    try {
+      mode = this.options.canWakeFromBridge?.(observer.parsed);
+    } catch {
+      mode = undefined;
+    }
+    if (mode === true) return "hints";
+    return mode === "revisions" || mode === "hints" ? mode : "none";
+  }
+
   private cancel(observer: Observer): void {
     if (observer.timer !== null) this.timers.clearTimeout(observer.timer);
     observer.timer = null;
@@ -304,6 +450,7 @@ export class NativeSessionPushTopic implements PushTopicProvider {
   private schedule(observer: Observer, delayMs: number): void {
     if (observer.stopped) return;
     this.cancel(observer);
+    observer.dueAt = this.now() + delayMs;
     observer.timer = this.timers.setTimeout(() => {
       observer.timer = null;
       void this.read(observer);
@@ -318,6 +465,8 @@ export class NativeSessionPushTopic implements PushTopicProvider {
     }
     observer.reading = true;
     observer.wakeAgain = false;
+    observer.bridgeWakeAgain = false;
+    observer.lastReadAt = this.now();
     this.counters.reads += 1;
     let update: NativeAgentLiveUpdate | null = null;
     try {
@@ -334,6 +483,7 @@ export class NativeSessionPushTopic implements PushTopicProvider {
     if (observer.stopped) return;
     if (!update) {
       observer.bridgeBackoff = false;
+      observer.bridgeWakeAgain = false;
       this.schedule(observer, observer.wakeAgain ? 0 : NATIVE_SESSION_OBSERVE_ERROR_MS);
       return;
     }
@@ -347,10 +497,26 @@ export class NativeSessionPushTopic implements PushTopicProvider {
         { generation: observer.generation, revision: observer.revision },
         parts,
       );
+      for (const listener of Array.from(observer.listeners)) {
+        try {
+          listener(parts);
+        } catch (error) {
+          log.warn("native-session.listener-failed", { error: formatLogError(error) });
+        }
+      }
     }
     const delay = this.nextDelay(observer, update, parts.length > 0);
     observer.bridgeBackoff = delay === NATIVE_SESSION_BRIDGE_BACKSTOP_MS;
-    this.schedule(observer, observer.wakeAgain ? 0 : delay);
+    const bridgeAgain = observer.bridgeWakeAgain && observer.bridgeBackoff;
+    observer.bridgeWakeAgain = false;
+    this.schedule(
+      observer,
+      observer.wakeAgain
+        ? 0
+        : bridgeAgain
+          ? Math.min(delay, this.bridgeWakeDelay(observer))
+          : delay,
+    );
   }
 
   /** Applies one answer to the observer and returns the parts that moved. */
@@ -401,6 +567,12 @@ export class NativeSessionPushTopic implements PushTopicProvider {
     if (update.transcript.status === "pending" || update.state.status === "pending") {
       return NATIVE_SESSION_OBSERVE_PENDING_MS;
     }
+    const bridge = this.bridgeWake(observer);
+    // A bridge that announces every state and transcript change: read on its
+    // hints, running or idle, with the backstop (to-do 8102 task 2).
+    if (bridge === "revisions" && observer.providerSessionId !== undefined) {
+      return NATIVE_SESSION_BRIDGE_BACKSTOP_MS;
+    }
     if (observer.phase !== undefined && RESPONSIVE_PHASES.has(observer.phase)) {
       return NATIVE_SESSION_OBSERVE_RESPONSIVE_MS;
     }
@@ -413,7 +585,7 @@ export class NativeSessionPushTopic implements PushTopicProvider {
       observer.phase === "idle" &&
       observer.quietObservation &&
       observer.providerSessionId !== undefined &&
-      this.options.canWakeFromBridge?.(observer.parsed)
+      bridge === "hints"
     )
       return NATIVE_SESSION_BRIDGE_BACKSTOP_MS;
     if (!qualified || changed) return NATIVE_SESSION_OBSERVE_IDLE_MS;

@@ -1,3 +1,4 @@
+import { parseToolOutputReadInput } from "@orkestrator/protocol/native-agent-tool-output";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import {
@@ -21,6 +22,7 @@ import {
   getNativeAgentSignInResendCommand,
   getNativeAgentSyncCapabilitiesCommand,
   getNativeAgentToolDetailsCommand,
+  getNativeAgentToolOutputCommand,
   getNativeAgentTranscriptUpdateCommand,
   holdNativeAgentInteractionCommand,
   listNativeAgentBranchesCommand,
@@ -439,6 +441,27 @@ export function registerNativeAgentCommands(
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       detailRef: asNonBlankString(args.detailRef, "detailRef"),
+    });
+  });
+
+  register(getNativeAgentToolOutputCommand, async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    const input = parseToolOutputReadInput({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent"),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      toolUseId: asString(args.toolUseId, "toolUseId"),
+      ...(args.detailRef === undefined ? {} : { detailRef: args.detailRef }),
+      ...(args.mode === undefined ? {} : { mode: args.mode }),
+      ...(args.cursor === undefined ? {} : { cursor: args.cursor }),
+      ...(args.anchor === undefined ? {} : { anchor: args.anchor }),
+      ...(args.limit === undefined ? {} : { limit: args.limit }),
+    });
+    return context.nativeAgents.readToolOutput({
+      ...input,
+      agent: input.agent as import("./models.js").NativeAgentProvider,
     });
   });
 

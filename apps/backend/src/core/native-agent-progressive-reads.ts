@@ -100,11 +100,15 @@ export class NativeAgentProgressiveReads {
    * next equivalent read of the same epoch instead of a second provider read,
    * so N viewers cost one provider read per change. Forced and fresh-source
    * reads never take it, a running read is joined in preference to it, and an
-   * epoch change or a wake (activity announcement, invalidation) drops it.
+   * epoch change or a wake (activity announcement, invalidation) drops it. A
+   * bridge hint does not ({@link noteObservationHint}).
    * Returns the stop.
    */
   observeSession(sessionKey: string): () => void {
-    if (!this.observedSessions.has(sessionKey)) this.observationGenerations.set(sessionKey, {});
+    if (!this.observedSessions.has(sessionKey)) {
+      this.observationGenerations.set(sessionKey, {});
+      this.hintGenerations.set(sessionKey, {});
+    }
     this.observedSessions.set(sessionKey, (this.observedSessions.get(sessionKey) ?? 0) + 1);
     let stopped = false;
     return () => {
@@ -117,6 +121,7 @@ export class NativeAgentProgressiveReads {
       }
       this.observedSessions.delete(sessionKey);
       this.observationGenerations.delete(sessionKey);
+      this.hintGenerations.delete(sessionKey);
       this.forgetObservedSettled(sessionKey);
       for (const [key, queued] of Array.from(this.observerQueue)) {
         if (queued.sessionKey !== sessionKey) continue;
@@ -135,9 +140,24 @@ export class NativeAgentProgressiveReads {
     }
   }
 
+  /**
+   * A bridge hint says the session moved (to-do 8102 task 2). The observer's
+   * next read must not join provider work that started before the hint, but
+   * the settled answer stays shared: viewers read only after the frame the
+   * observer's own read announces, so the share they take is that answer.
+   * Dropping it on every hint sent each viewer's post-frame read to the
+   * provider while a turn streamed.
+   */
+  noteObservationHint(sessionKey: string): void {
+    if (this.observedSessions.has(sessionKey)) this.hintGenerations.set(sessionKey, {});
+  }
+
   private observedShareNow: () => number = () => monotonicMs();
   private readonly observationGenerations = new Map<string, object>();
   private readonly sourceObservationGenerations = new Map<string, object>();
+  /** Bumped by {@link noteObservationHint}; only the observer's join consults it. */
+  private readonly hintGenerations = new Map<string, object>();
+  private readonly sourceHintGenerations = new Map<string, object>();
   private readonly observerQueue = new Map<
     string,
     {
@@ -233,6 +253,8 @@ export class NativeAgentProgressiveReads {
     this.observedSettled.clear();
     this.observationGenerations.clear();
     this.sourceObservationGenerations.clear();
+    this.hintGenerations.clear();
+    this.sourceHintGenerations.clear();
     for (const queued of this.observerQueue.values()) queued.cancel();
     this.observerQueue.clear();
     this.observedSessions.clear();
@@ -381,6 +403,8 @@ export class NativeAgentProgressiveReads {
     const observed =
       sessionKey === undefined ? undefined : this.observationGenerations.get(sessionKey);
     if (observed) this.sourceObservationGenerations.set(key, observed);
+    const hinted = sessionKey === undefined ? undefined : this.hintGenerations.get(sessionKey);
+    if (hinted) this.sourceHintGenerations.set(key, hinted);
     const operation = read();
     const tracked = operation.finally(() => {
       if (this.progressiveReads.get(key) !== tracked) return;
@@ -391,6 +415,7 @@ export class NativeAgentProgressiveReads {
       // 7100 task 3).
       this.progressiveReadEpochs.delete(key);
       this.sourceObservationGenerations.delete(key);
+      this.sourceHintGenerations.delete(key);
       if (sessionKey) this.releaseSettledSnapshotShares(sessionKey);
       this.drainObserverQueue();
     });
@@ -450,10 +475,13 @@ export class NativeAgentProgressiveReads {
     const pending = this.progressiveReads.get(key) as Promise<T> | undefined;
     const startedEpoch = this.progressiveReadEpochs.get(key);
     const startedObservation = this.sourceObservationGenerations.get(key);
+    const startedHint = this.sourceHintGenerations.get(key);
     if (
       pending &&
       (freshSource ||
-        (pushObservation && startedObservation !== this.observationGenerations.get(sessionKey)) ||
+        (pushObservation &&
+          (startedObservation !== this.observationGenerations.get(sessionKey) ||
+            startedHint !== this.hintGenerations.get(sessionKey))) ||
         (force && startedEpoch !== undefined && startedEpoch < requestedEpoch))
     ) {
       await pending.catch(() => undefined);

@@ -4,6 +4,8 @@ import { NATIVE_AGENT_ACTIVITY_EVENT } from "@orkestrator/protocol/native-agent-
 import { formatNativeSessionPushKey, type PushStamp } from "@orkestrator/protocol/push-events";
 import { ManualClock, flushMicrotasks } from "@orkestrator/protocol/testing/manual-clock";
 import {
+  NATIVE_SESSION_BRIDGE_BACKSTOP_MS,
+  NATIVE_SESSION_BRIDGE_WAKE_FLOOR_MS,
   NATIVE_SESSION_OBSERVE_IDLE_MS,
   NATIVE_SESSION_OBSERVE_PENDING_MS,
   NATIVE_SESSION_OBSERVE_RESPONSIVE_MS,
@@ -166,6 +168,7 @@ describe("NativeSessionPushTopic", () => {
     const reads: string[] = [];
     const topic = new NativeSessionPushTopic({
       timers: clock,
+      now: () => clock.now(),
       sessionExists: async () => true,
       canWakeFromBridge: () => connected,
       publish: () => undefined,
@@ -196,6 +199,115 @@ describe("NativeSessionPushTopic", () => {
     await clock.advanceAsync(0);
     await clock.advanceAsync(3_000);
     expect(reads).toHaveLength(7);
+    topic.dispose();
+  });
+
+  test("a running session on a revision-carrying bridge is read on its hints, not on a timer", async () => {
+    const clock = new ManualClock();
+    let mode: "revisions" | "hints" | "none" = "revisions";
+    const model = { transcript: 1, state: 1, phase: "running" };
+    const reads: number[] = [];
+    const published: string[][] = [];
+    const wakes: string[] = [];
+    const topic = new NativeSessionPushTopic({
+      timers: clock,
+      now: () => clock.now(),
+      sessionExists: async () => true,
+      canWakeFromBridge: () => mode,
+      // A hint marks fresh source work; only a backend wake drops the share.
+      onWake: () => wakes.push("wake"),
+      onBridgeWake: () => wakes.push("hint"),
+      publish: (_key, _stamp, parts) => published.push([...parts]),
+      readLiveUpdate: async (input) => {
+        reads.push(clock.now());
+        const update = liveUpdate(model, input);
+        if (update.state.status === "snapshot") {
+          Object.assign(update.state.value, {
+            identity: { providerSessionId: "provider-1" },
+            turn: { phase: model.phase },
+          });
+        }
+        return update;
+      },
+    });
+    const advance = async (ms: number) => {
+      await clock.advanceAsync(ms);
+      await flushMicrotasks();
+    };
+    topic.retain(PUSH_KEY);
+    await advance(0);
+    expect(reads).toEqual([0]);
+    // A quiet running turn: no timer reads (the old cadence read every 500 ms).
+    await advance(10_000);
+    expect(reads).toEqual([0]);
+    expect(topic.metrics().bridgeObservers).toBe(1);
+
+    // The bridge says the transcript moved: one read, at once.
+    model.transcript = 2;
+    topic.wakeProvider(KEY.environmentId, KEY.agent, "provider-1", ["transcript"]);
+    await advance(0);
+    expect(reads).toEqual([0, 10_000]);
+    expect(published.at(-1)).toEqual(["transcript"]);
+
+    // A streaming burst: hints inside the floor share one read at the floor.
+    model.transcript = 3;
+    for (let index = 0; index < 5; index += 1) {
+      topic.wakeProvider(KEY.environmentId, KEY.agent, "provider-1", ["transcript"]);
+    }
+    await advance(NATIVE_SESSION_BRIDGE_WAKE_FLOOR_MS - 1);
+    expect(reads).toHaveLength(2);
+    await advance(1);
+    expect(reads).toEqual([0, 10_000, 10_000 + NATIVE_SESSION_BRIDGE_WAKE_FLOOR_MS]);
+
+    expect(new Set(wakes)).toEqual(new Set(["hint"]));
+
+    // Another session's hint wakes nothing here.
+    topic.wakeProvider(KEY.environmentId, KEY.agent, "provider-2", ["state"]);
+    await advance(NATIVE_SESSION_BRIDGE_WAKE_FLOOR_MS);
+    expect(reads).toHaveLength(3);
+
+    // The backstop still reads a session nothing announced.
+    await advance(NATIVE_SESSION_BRIDGE_BACKSTOP_MS);
+    expect(reads).toHaveLength(4);
+
+    // The stream goes down: the provider-wide hint reads once, then the
+    // running cadence is back.
+    mode = "none";
+    topic.wakeProvider(KEY.environmentId, KEY.agent);
+    await advance(0);
+    const afterLoss = reads.length;
+    expect(afterLoss).toBe(5);
+    await advance(NATIVE_SESSION_OBSERVE_RESPONSIVE_MS);
+    expect(reads.length).toBe(afterLoss + 1);
+    expect(topic.metrics().bridgeObservers).toBe(0);
+    topic.dispose();
+  });
+
+  test("an older bridge's live stream (hints) does not stop a running session's cadence", async () => {
+    const clock = new ManualClock();
+    const reads: number[] = [];
+    const topic = new NativeSessionPushTopic({
+      timers: clock,
+      now: () => clock.now(),
+      sessionExists: async () => true,
+      canWakeFromBridge: () => "hints",
+      publish: () => undefined,
+      readLiveUpdate: async (input) => {
+        reads.push(clock.now());
+        const update = liveUpdate({ transcript: 1, state: 1, phase: "running" }, input);
+        if (update.state.status === "snapshot") {
+          Object.assign(update.state.value, {
+            identity: { providerSessionId: "provider-1" },
+            turn: { phase: "running" },
+          });
+        }
+        return update;
+      },
+    });
+    topic.retain(PUSH_KEY);
+    await clock.advanceAsync(0);
+    await clock.advanceAsync(NATIVE_SESSION_OBSERVE_RESPONSIVE_MS * 4);
+    expect(reads).toHaveLength(5);
     topic.dispose();
   });
 

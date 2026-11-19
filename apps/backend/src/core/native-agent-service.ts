@@ -580,9 +580,14 @@ export class NativeAgentService {
         this.observeBridgeConnection(agent, environment),
       createProvider: (connection, environmentId, cacheKey) =>
         createNativeAgentProvider(connection, {
-          onObservationHint: (providerSessionId) => {
+          onObservationHint: (providerSessionId, parts) => {
             this.observations.wakeGroup(cacheKey, "provider-event");
-            options.onPushObservationHint?.(environmentId, connection.agent, providerSessionId);
+            options.onPushObservationHint?.(
+              environmentId,
+              connection.agent,
+              providerSessionId,
+              parts,
+            );
           },
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
@@ -2680,18 +2685,58 @@ export class NativeAgentService {
     );
   }
 
-  canWakePushObserverFromBridge(environmentId: string, agent: string): boolean {
-    return (
-      this.providerRegistry
-        .cached(providerCacheKey(environmentId, agent as BuildPipelineAgent))
-        ?.observationStreamLive?.() === true
+  /**
+   * How the push layer's observer of a session of this provider may be woken
+   * by the bridge's observe stream (to-do 8102 task 2): `revisions` when the
+   * stream is live and announces every state and transcript change, so the
+   * observer reads on its hints with a backstop, running or idle; `hints`
+   * when it is live without revisions (an older Claude or Codex bridge), which
+   * qualifies only a quiet idle session; `none` keeps the cadence.
+   */
+  canWakePushObserverFromBridge(
+    environmentId: string,
+    agent: string,
+  ): "revisions" | "hints" | "none" {
+    const provider = this.providerRegistry.cached(
+      providerCacheKey(environmentId, agent as BuildPipelineAgent),
     );
+    if (!provider) return "none";
+    if (provider.observationStreamRevisions?.() === true) return "revisions";
+    return provider.observationStreamLive?.() === true ? "hints" : "none";
   }
 
   forgetPushSettled(environmentId: string, agent: string, logicalSessionKey: string): void {
     this.projections.forgetPushSettled(
       nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
     );
+  }
+
+  /** A bridge hint woke the push observer: its next read starts fresh work, shares stay. */
+  notePushHint(environmentId: string, agent: string, logicalSessionKey: string): void {
+    this.projections.notePushHint(
+      nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
+    );
+  }
+
+  /**
+   * What the session's cached live view says about one tool call, for the
+   * `tool-output` push topic. In memory only: never reads a provider.
+   */
+  toolOutputSource(
+    environmentId: string,
+    agent: string,
+    logicalSessionKey: string,
+    toolUseId: string,
+  ) {
+    return this.projections.toolOutputSource(
+      { environmentId, agent: agent as BuildPipelineAgent, logicalSessionKey },
+      toolUseId,
+    );
+  }
+
+  /** One bounded slice of a tool call's output (`get_native_agent_tool_output`). */
+  readToolOutput(input: Parameters<NativeAgentTranscriptProjection["readToolOutput"]>[0]) {
+    return this.projections.readToolOutput(input);
   }
 
   progressiveReadSamples() {

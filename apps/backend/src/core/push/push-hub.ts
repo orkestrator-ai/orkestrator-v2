@@ -8,6 +8,7 @@ import {
   NATIVE_SESSION_PUSH_TOPIC,
   formatPushFrame,
   PUSH_RESYNC_EVENT,
+  isPushNodeId,
   pushSubscriptionId,
   pushUtf8Bytes,
   type PushChange,
@@ -18,6 +19,7 @@ import {
   type PushSetSubscriptionsResult,
   type PushStamp,
   type PushSubscriptionAnswer,
+  type PushSubscriptionRequest,
 } from "@orkestrator/protocol/push-events";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -44,7 +46,8 @@ const log = createLogger("push");
  *
  * Throttle: the first change of a key after a quiet period is sent within
  * {@link PUSH_COALESCE_MS}; later changes of the same key wait until
- * {@link PUSH_KEY_THROTTLE_MS} after its previous frame. A connection whose
+ * {@link PUSH_KEY_THROTTLE_MS} after its previous frame, and go out at that
+ * deadline (no coalescing window on top). A connection whose
  * socket is over its soft write limit holds changes in the map (which only
  * coalesces) and retries.
  *
@@ -72,6 +75,53 @@ export interface PushTopicProvider {
   retain(key: string): void;
   /** The last connection let go of `key`: stop observing it. */
   release(key: string): void;
+  /**
+   * Parts that can carry a decision the user must see (an approval, a
+   * question): a change naming one goes out within the coalescing window even
+   * while the key's throttle runs, and a change naming only these does not
+   * spend the throttle. Absent: every change of the topic is throttled.
+   * (`native-session` keeps its own rule: `state` is urgent, `transcript`
+   * spends the throttle.)
+   */
+  readonly urgentParts?: readonly string[];
+}
+
+/**
+ * The command node's subscription controller for the nodes it relays
+ * (design D10, `core/nodes/node-push-subscriptions.ts`). The hub keeps each
+ * connection's per-node `setRevision` order, numbering and coalescing; the
+ * controller owns which leaf keys a connection holds and the leaf's answers.
+ */
+export interface PushNodeSubscriptions {
+  /**
+   * Replace `streamId`'s set for `nodeId` with `subscriptions` (already
+   * deduplicated and syntactically valid). The registration happens before
+   * this returns, so a leaf change after it is published to the connection;
+   * the promise answers each key once the leaf answered the union, or `null`
+   * when the node cannot take push subscriptions now (not connected, no
+   * offer on its stream, the call failed).
+   */
+  apply(
+    streamId: string,
+    nodeId: string,
+    subscriptions: readonly PushSubscriptionRequest[],
+  ): Promise<PushSubscriptionAnswer[] | null>;
+  /** The connection closed: drop every node set it held. */
+  connectionClosed(streamId: string): void;
+  /** Content-free counters for the push metrics block (no keys, ids or revisions). */
+  metrics?(): Record<string, number>;
+}
+
+/** A connection holds sets for at most this many nodes (invariant 11). */
+export const PUSH_MAX_NODE_NAMESPACES = 64;
+
+/** A node key's map id; the leading U+0001 keeps it apart from every local id. */
+function nodeSubscriptionId(nodeId: string, topic: string, key: string): string {
+  return `\u0001${nodeId}\u0000${pushSubscriptionId(topic, key)}`;
+}
+
+function nodeNamespacePrefix(nodeId: string): string {
+  return `\u0001${nodeId}\u0000`;
 }
 
 export interface PushHubTimers {
@@ -100,6 +150,8 @@ interface PendingChange {
   revision: number;
   parts: Set<string> | null;
   bytes: number;
+  /** A relayed node's key (design D10); absent for this backend's own. */
+  nodeId?: string;
 }
 
 interface Connection {
@@ -112,6 +164,10 @@ interface Connection {
   pending: Map<string, PendingChange>;
   pendingBytes: number;
   pendingResync: { reason: PushResyncPayload["reason"]; topics: Set<string> } | null;
+  /** Per relayed node: the newest applied `setRevision` (design D10). */
+  nodeRevisions: Map<string, number>;
+  /** Relayed nodes owed a `node-reset` resync, written before any change. */
+  pendingNodeResyncs: Set<string>;
   /** When each subscription last went out in a frame; bounded by the set. */
   lastSentAt: Map<string, number>;
   flushTimer: unknown;
@@ -137,6 +193,8 @@ export interface PushMetricsSnapshot {
   setSuperseded: number;
   pendingEntries: number;
   pendingBytes: number;
+  /** Relayed-node sets held across connections (design D10). */
+  nodeSets: number;
 }
 
 const defaultTimers: PushHubTimers = {
@@ -174,6 +232,7 @@ export class PushHub {
   private readonly coalesceMs: number;
   private readonly keyThrottleMs: number;
   private disposed = false;
+  private nodeSubscriptions: PushNodeSubscriptions | null = null;
   private readonly counters = {
     framesSent: 0,
     changesSent: 0,
@@ -194,6 +253,20 @@ export class PushHub {
     this.limits = { ...PUSH_LIMITS, ...options.limits };
     this.coalesceMs = options.coalesceMs ?? PUSH_COALESCE_MS;
     this.keyThrottleMs = options.keyThrottleMs ?? PUSH_KEY_THROTTLE_MS;
+  }
+
+  /**
+   * The command node's controller for relayed nodes (design D10). While one
+   * is attached, connections accept `nodeId` sets and their offer says
+   * `nodes: true`.
+   */
+  attachNodeSubscriptions(nodes: PushNodeSubscriptions | null): void {
+    this.nodeSubscriptions = nodes;
+  }
+
+  /** Whether `nodeId` sets are accepted (the offer's `nodes`). */
+  get acceptsNodeSets(): boolean {
+    return this.nodeSubscriptions !== null;
   }
 
   registerTopic(provider: PushTopicProvider): void {
@@ -220,6 +293,8 @@ export class PushHub {
       pending: new Map(),
       pendingBytes: 0,
       pendingResync: null,
+      nodeRevisions: new Map(),
+      pendingNodeResyncs: new Set(),
       lastSentAt: new Map(),
       flushTimer: null,
       flushAt: null,
@@ -241,8 +316,17 @@ export class PushHub {
     connection.subscriptions.clear();
     connection.pending.clear();
     connection.pendingResync = null;
+    connection.pendingNodeResyncs.clear();
     connection.pendingBytes = 0;
     connection.lastSentAt.clear();
+    if (connection.nodeRevisions.size > 0) {
+      connection.nodeRevisions.clear();
+      try {
+        this.nodeSubscriptions?.connectionClosed(streamId);
+      } catch (error) {
+        log.warn("node-subscriptions.close-failed", { error: formatLogError(error) });
+      }
+    }
   }
 
   async setSubscriptions(
@@ -258,6 +342,7 @@ export class PushHub {
     if (!Number.isSafeInteger(args.setRevision) || args.setRevision < 0) {
       throw new Error("setRevision must be a non-negative integer");
     }
+    if (args.nodeId !== undefined) return this.setNodeSubscriptions(connection, args);
     if (args.setRevision <= connection.setRevision) {
       this.counters.setSuperseded += 1;
       return { status: "superseded", setRevision: connection.setRevision };
@@ -404,7 +489,9 @@ export class PushHub {
     let connectionsWithSubscriptions = 0;
     let pendingEntries = 0;
     let pendingBytes = 0;
+    let nodeSets = 0;
     for (const connection of this.connections.values()) {
+      nodeSets += connection.nodeRevisions.size;
       if (connection.subscriptions.size > 0) connectionsWithSubscriptions += 1;
       for (const subscription of connection.subscriptions.values()) {
         subscriptionsByTopic[subscription.topic] =
@@ -428,7 +515,150 @@ export class PushHub {
       deniedByReason: Object.fromEntries(this.deniedByReason),
       pendingEntries,
       pendingBytes,
+      nodeSets,
     };
+  }
+
+  /**
+   * A relayed node's key moved (design D10): the controller names the one
+   * connection subscribed to it for that node. Coalesced, throttled and
+   * numbered like a local change; the change carries `nodeId`.
+   */
+  publishToNode(
+    streamId: string,
+    nodeId: string,
+    topic: string,
+    key: string,
+    stamp: PushStamp,
+    parts: readonly string[] | null,
+  ): void {
+    const connection = this.connections.get(streamId);
+    if (!connection || !connection.nodeRevisions.has(nodeId)) return;
+    if (connection.pendingNodeResyncs.has(nodeId)) return;
+    this.counters.changesPublished += 1;
+    this.enqueue(
+      connection,
+      nodeSubscriptionId(nodeId, topic, key),
+      topic,
+      key,
+      stamp,
+      parts,
+      nodeId,
+    );
+  }
+
+  /**
+   * Everything the connection holds for `nodeId` must be re-read: the
+   * controller lost frames from that node. One `push.resync` with `nodeId`
+   * replaces the node's pending changes; other namespaces are untouched.
+   */
+  resyncNode(streamId: string, nodeId: string): void {
+    const connection = this.connections.get(streamId);
+    if (!connection || connection.closed || !connection.nodeRevisions.has(nodeId)) return;
+    this.dropNodePending(connection, nodeId, null);
+    connection.pendingNodeResyncs.add(nodeId);
+    this.scheduleFlush(connection, 0);
+  }
+
+  /** A `nodeId` set: per-node `setRevision` order, the controller answers the keys. */
+  private async setNodeSubscriptions(
+    connection: Connection,
+    args: PushSetSubscriptionsArgs,
+  ): Promise<PushSetSubscriptionsResult> {
+    const nodes = this.nodeSubscriptions;
+    const nodeId = args.nodeId;
+    const held = nodeId === undefined ? undefined : connection.nodeRevisions.get(nodeId);
+    if (
+      !nodes ||
+      !isPushNodeId(nodeId) ||
+      (held === undefined && connection.nodeRevisions.size >= PUSH_MAX_NODE_NAMESPACES)
+    ) {
+      this.counters.setRefusals += 1;
+      return { status: "refused", reason: "unavailable" };
+    }
+    if (held !== undefined && args.setRevision <= held) {
+      this.counters.setSuperseded += 1;
+      return { status: "superseded", setRevision: held };
+    }
+    connection.nodeRevisions.set(nodeId, args.setRevision);
+
+    const answers: PushSubscriptionAnswer[] = [];
+    const accepted = new Map<string, PushSubscriptionRequest>();
+    const topics = new Set<string>();
+    const deny = (topic: string, key: string, reason: "limit" | "invalid-key") => {
+      this.deniedByReason.set(reason, (this.deniedByReason.get(reason) ?? 0) + 1);
+      answers.push({ topic, key, status: "denied", reason });
+    };
+    // The leaf validates its own topics and keys; here only the bounds this
+    // connection would hold are checked.
+    for (const request of args.subscriptions) {
+      const topic = typeof request?.topic === "string" ? request.topic : "";
+      const key = typeof request?.key === "string" ? request.key : "";
+      const id = pushSubscriptionId(topic, key);
+      if (accepted.has(id)) continue;
+      if (
+        topic.length === 0 ||
+        topic.length > 64 ||
+        key.length === 0 ||
+        pushUtf8Bytes(key) > this.limits.maxKeyBytes
+      ) {
+        deny(topic, key, "invalid-key");
+        continue;
+      }
+      if (
+        accepted.size >= this.limits.maxSubscriptions ||
+        (!topics.has(topic) && topics.size >= this.limits.maxTopics)
+      ) {
+        deny(topic, key, "limit");
+        continue;
+      }
+      topics.add(topic);
+      accepted.set(id, { topic, key });
+    }
+    const kept = new Set(
+      Array.from(accepted.values(), ({ topic, key }) => nodeSubscriptionId(nodeId, topic, key)),
+    );
+    this.dropNodePending(connection, nodeId, kept);
+
+    // The controller registers before it asks the leaf (invariant 7): a leaf
+    // change after this point is pending here and goes out with `seq > seqBase`.
+    let answered: Promise<PushSubscriptionAnswer[] | null>;
+    try {
+      answered = nodes.apply(connection.streamId, nodeId, Array.from(accepted.values()));
+    } catch (error) {
+      log.warn("node-subscriptions.apply-failed", { error: formatLogError(error) });
+      answered = Promise.resolve(null);
+    }
+    const seqBase = connection.seq;
+    const leafAnswers = await answered.catch(() => null);
+    if (connection.closed) return { status: "refused", reason: "stream-unknown" };
+    const current = connection.nodeRevisions.get(nodeId) ?? -1;
+    if (current !== args.setRevision) {
+      this.counters.setSuperseded += 1;
+      return { status: "superseded", setRevision: current };
+    }
+    if (leafAnswers === null) {
+      this.counters.setRefusals += 1;
+      return { status: "refused", reason: "unavailable" };
+    }
+    for (const answer of leafAnswers) {
+      if (answer.status === "denied") {
+        this.deniedByReason.set(answer.reason, (this.deniedByReason.get(answer.reason) ?? 0) + 1);
+      }
+      answers.push(answer);
+    }
+    return { status: "applied", setRevision: args.setRevision, seqBase, subscriptions: answers };
+  }
+
+  /** Drops `nodeId`'s pending changes and throttle marks, except the ids in `keep`. */
+  private dropNodePending(connection: Connection, nodeId: string, keep: Set<string> | null): void {
+    const prefix = nodeNamespacePrefix(nodeId);
+    for (const id of Array.from(connection.pending.keys())) {
+      if (id.startsWith(prefix) && !keep?.has(id)) this.dropPending(connection, id);
+    }
+    for (const id of Array.from(connection.lastSentAt.keys())) {
+      if (id.startsWith(prefix) && !keep?.has(id)) connection.lastSentAt.delete(id);
+    }
   }
 
   /** Whether any connection is subscribed to the key. */
@@ -489,9 +719,12 @@ export class PushHub {
     key: string,
     stamp: PushStamp,
     parts: readonly string[] | null,
+    nodeId?: string,
   ): void {
     if (connection.closed) return;
     if (connection.pendingResync?.topics.has(topic)) return;
+    // `"nodeId":"…",` on the wire.
+    const nodeBytes = nodeId === undefined ? 0 : pushUtf8Bytes(nodeId) + 12;
     const boundedParts =
       parts === null || parts.length === 0
         ? null
@@ -510,12 +743,12 @@ export class PushHub {
         else for (const part of boundedParts) existing.parts.add(part);
         if (existing.parts && existing.parts.size > this.limits.maxParts) existing.parts = null;
       }
-      const bytes = changeBytes(topic, key, existing.generation, existing.parts);
+      const bytes = changeBytes(topic, key, existing.generation, existing.parts) + nodeBytes;
       connection.pendingBytes += bytes - existing.bytes;
       existing.bytes = bytes;
     } else {
       const partSet = boundedParts === null ? null : new Set(boundedParts);
-      const bytes = changeBytes(topic, key, stamp.generation, partSet);
+      const bytes = changeBytes(topic, key, stamp.generation, partSet) + nodeBytes;
       connection.pending.set(id, {
         topic,
         key,
@@ -523,6 +756,7 @@ export class PushHub {
         revision: stamp.revision,
         parts: partSet,
         bytes,
+        ...(nodeId === undefined ? {} : { nodeId }),
       });
       connection.pendingBytes += bytes;
     }
@@ -545,21 +779,54 @@ export class PushHub {
     // A state invalidation can carry an approval or completion. Only transcript
     // traffic spends this key's transcript throttle.
     const urgent =
-      change.topic === NATIVE_SESSION_PUSH_TOPIC &&
-      (change.parts === null || change.parts.has("state"));
+      change.topic === NATIVE_SESSION_PUSH_TOPIC
+        ? change.parts === null || change.parts.has("state")
+        : this.namesUrgentPart(change.topic, change.parts);
     const last = connection.lastSentAt.get(id);
     return urgent || last === undefined ? now : Math.max(now, last + this.keyThrottleMs);
   }
 
-  private scheduleFlush(connection: Connection, minDelayMs = this.coalesceMs): void {
+  /** A change of a topic with `urgentParts` that names one (or everything). */
+  private namesUrgentPart(topic: string, parts: Iterable<string> | null): boolean {
+    const urgentParts = this.providers.get(topic)?.urgentParts;
+    if (!urgentParts || urgentParts.length === 0) return false;
+    if (parts === null) return true;
+    for (const part of parts) if (urgentParts.includes(part)) return true;
+    return false;
+  }
+
+  /** Whether a sent change starts its key's throttle window. */
+  private spendsThrottle(change: PushChange): boolean {
+    if (change.parts.length === 0) return true;
+    if (change.topic === NATIVE_SESSION_PUSH_TOPIC) return change.parts.includes("transcript");
+    const urgentParts = this.providers.get(change.topic)?.urgentParts;
+    return !urgentParts || change.parts.some((part) => !urgentParts.includes(part));
+  }
+
+  /**
+   * Arms the connection's flush. `minDelayMs` is the coalescing window on a
+   * leading edge (a change ready now, or a resync); a change waiting for its
+   * key's throttle goes out at that deadline, with no window added on top, so
+   * a streaming key is announced once per throttle and no later. Under
+   * back-pressure (`deadlinesWait` false) every change waits at least the
+   * retry interval.
+   */
+  private scheduleFlush(
+    connection: Connection,
+    minDelayMs = this.coalesceMs,
+    deadlinesWait = true,
+  ): void {
     if (connection.closed) return;
     const now = this.now();
-    let due = connection.pendingResync ? now : Number.POSITIVE_INFINITY;
+    let at =
+      connection.pendingResync || connection.pendingNodeResyncs.size > 0
+        ? now + minDelayMs
+        : Number.POSITIVE_INFINITY;
     for (const [id, change] of connection.pending) {
-      due = Math.min(due, this.readyAt(connection, id, change, now));
+      const ready = this.readyAt(connection, id, change, now);
+      at = Math.min(at, deadlinesWait && ready > now ? ready : Math.max(now + minDelayMs, ready));
     }
-    if (!Number.isFinite(due)) return;
-    const at = Math.max(now + minDelayMs, due);
+    if (!Number.isFinite(at)) return;
     if (connection.flushTimer !== null && connection.flushAt !== null && connection.flushAt <= at) {
       return;
     }
@@ -584,7 +851,7 @@ export class PushHub {
   private holdFrames(connection: Connection): boolean {
     if (!connection.sink.backpressured()) return false;
     this.counters.backpressureHolds += 1;
-    this.scheduleFlush(connection, PUSH_BACKPRESSURE_RETRY_MS);
+    this.scheduleFlush(connection, PUSH_BACKPRESSURE_RETRY_MS, false);
     return true;
   }
 
@@ -605,6 +872,19 @@ export class PushHub {
       );
       if (connection.pending.size > 0 && this.holdFrames(connection)) return;
     }
+    // A relayed node's resync (design D10): only that node's namespace re-reads.
+    for (const nodeId of Array.from(connection.pendingNodeResyncs)) {
+      connection.pendingNodeResyncs.delete(nodeId);
+      const written = this.writeFrame(connection, PUSH_RESYNC_EVENT, (seq): PushResyncPayload => ({
+        seq,
+        reason: "node-reset",
+        topics: "all",
+        nodeId,
+      }));
+      if (!written) return;
+      this.resyncsByReason.set("node-reset", (this.resyncsByReason.get("node-reset") ?? 0) + 1);
+      if (this.holdFrames(connection)) return;
+    }
     const now = this.now();
     let batch: Array<{ id: string; change: PushChange }> = [];
     const emptyFrameBytes = () =>
@@ -620,12 +900,7 @@ export class PushHub {
       if (!ok) return false;
       for (const { id, change } of batch) {
         this.dropPending(connection, id);
-        if (
-          change.parts.length === 0 ||
-          change.parts.includes("transcript") ||
-          change.topic !== NATIVE_SESSION_PUSH_TOPIC
-        )
-          connection.lastSentAt.set(id, now);
+        if (this.spendsThrottle(change)) connection.lastSentAt.set(id, now);
       }
       this.counters.changesSent += batch.length;
       batch = [];
@@ -640,6 +915,7 @@ export class PushHub {
         generation: pending.generation,
         revision: pending.revision,
         parts: pending.parts === null ? [] : Array.from(pending.parts),
+        ...(pending.nodeId === undefined ? {} : { nodeId: pending.nodeId }),
       };
       const changeSize = pushUtf8Bytes(JSON.stringify(change));
       if (

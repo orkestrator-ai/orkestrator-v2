@@ -10,6 +10,7 @@ import {
   PushHub,
   type PushConnectionSink,
   type PushHubOptions,
+  type PushNodeSubscriptions,
   type PushMetricsSnapshot,
 } from "./push-hub.js";
 import {
@@ -18,13 +19,47 @@ import {
   nativeSessionLiveReadInput,
   type NativeSessionPushTopicMetrics,
 } from "./native-session-push-topic.js";
+import {
+  TOOL_OUTPUT_PUSH_TOPIC,
+  ToolOutputPushTopic,
+  type ToolOutputPushTopicMetrics,
+  type ToolOutputSourceAnswer,
+} from "./tool-output-push-topic.js";
+import {
+  ENVIRONMENT_PUSH_TOPIC,
+  EnvironmentPushTopic,
+  type EnvironmentPushTopicMetrics,
+  type EnvironmentPushTopicOptions,
+} from "./environment-push-topic.js";
+import {
+  WORKFLOW_PUSH_TOPIC,
+  WorkflowPushTopic,
+  type WorkflowPushTopicMetrics,
+  type WorkflowPushTopicOptions,
+} from "./workflow-push-topic.js";
 
-export { PushHub, type PushConnectionSink, type PushTopicProvider } from "./push-hub.js";
+export {
+  PushHub,
+  type PushConnectionSink,
+  type PushNodeSubscriptions,
+  type PushTopicProvider,
+} from "./push-hub.js";
 export { NativeSessionPushTopic, NATIVE_SESSION_PUSH_TOPIC } from "./native-session-push-topic.js";
+export { ToolOutputPushTopic, TOOL_OUTPUT_PUSH_TOPIC } from "./tool-output-push-topic.js";
+export { EnvironmentPushTopic, ENVIRONMENT_PUSH_TOPIC } from "./environment-push-topic.js";
+export { WorkflowPushTopic, WORKFLOW_PUSH_TOPIC } from "./workflow-push-topic.js";
+export { createWorkflowSummaryReader } from "./workflow-push-summary.js";
 
 export interface PushLayerMetrics extends PushMetricsSnapshot {
   versions: readonly number[];
-  topics: { "native-session": NativeSessionPushTopicMetrics };
+  /** The relayed-node subscription controller's counters (design D10), when attached. */
+  relayedNodes?: Record<string, number>;
+  topics: {
+    "native-session": NativeSessionPushTopicMetrics;
+    environment?: EnvironmentPushTopicMetrics;
+    workflow?: WorkflowPushTopicMetrics;
+    "tool-output"?: ToolOutputPushTopicMetrics;
+  };
 }
 
 /**
@@ -34,6 +69,8 @@ export interface PushLayerMetrics extends PushMetricsSnapshot {
  */
 export interface PushGatewayPort {
   readonly versions: readonly number[];
+  /** `nodeId` sets are accepted (design D10); the offer says `nodes: true`. */
+  readonly acceptsNodeSets?: boolean;
   openConnection(owner: string, sink: PushConnectionSink): string;
   closeConnection(streamId: string): void;
   setSubscriptions(
@@ -49,13 +86,36 @@ export interface PushNativeAgents {
     input: ReturnType<typeof nativeSessionLiveReadInput>,
   ): Promise<NativeAgentLiveUpdate>;
   observePushSession(environmentId: string, agent: string, logicalSessionKey: string): () => void;
-  canWakePushObserverFromBridge?(environmentId: string, agent: string): boolean;
+  canWakePushObserverFromBridge?(
+    environmentId: string,
+    agent: string,
+  ): "revisions" | "hints" | "none" | boolean;
   forgetPushSettled(environmentId: string, agent: string, logicalSessionKey: string): void;
+  /** A bridge hint woke the session's observer (see `NativeSessionPushTopicOptions.onBridgeWake`). */
+  notePushHint?(environmentId: string, agent: string, logicalSessionKey: string): void;
+  /** The `tool-output` topic's in-memory lookup of a call; without it that topic is not offered. */
+  toolOutputSource?(
+    environmentId: string,
+    agent: string,
+    logicalSessionKey: string,
+    toolUseId: string,
+  ): ToolOutputSourceAnswer;
 }
 
 export interface BackendPushOptions {
   nativeAgents(): PushNativeAgents | undefined;
   sessionExists(environmentId: string, agent: string, logicalSessionKey: string): Promise<boolean>;
+  /**
+   * The reads the `environment` topic compares: the environment record and
+   * its agent registry. Without them the topic is not offered, and a client
+   * subscribing to it is answered `unknown-topic` and keeps polling.
+   */
+  environments?: Pick<EnvironmentPushTopicOptions, "readEnvironment" | "readRegistry">;
+  /**
+   * The run summaries the `workflow` topic compares (build pipelines, Multi
+   * Reviews, graph runs). Without it the topic is not offered.
+   */
+  workflows?: Pick<WorkflowPushTopicOptions, "readSummary">;
   hub?: PushHubOptions;
 }
 
@@ -63,7 +123,10 @@ export interface BackendPushOptions {
 class PushArgumentError extends Error {}
 
 function parseArgs(args: Record<string, unknown>): PushSetSubscriptionsArgs {
-  const { streamId, setRevision, subscriptions } = args;
+  const { streamId, setRevision, subscriptions, nodeId } = args;
+  if (nodeId !== undefined && (typeof nodeId !== "string" || nodeId.length > 200)) {
+    throw new PushArgumentError("nodeId must be a bounded string");
+  }
   if (typeof streamId !== "string" || streamId.length > 128) {
     throw new PushArgumentError("streamId must be a bounded string");
   }
@@ -77,6 +140,7 @@ function parseArgs(args: Record<string, unknown>): PushSetSubscriptionsArgs {
   return {
     streamId,
     setRevision,
+    ...(nodeId === undefined ? {} : { nodeId }),
     subscriptions: subscriptions.map((entry) => {
       const record = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
       const topic = typeof record.topic === "string" ? record.topic : "";
@@ -101,6 +165,9 @@ export class BackendPush implements PushGatewayPort {
   readonly versions = PUSH_PROTOCOL_VERSIONS;
   readonly hub: PushHub;
   readonly nativeSessions: NativeSessionPushTopic;
+  readonly toolOutputs: ToolOutputPushTopic;
+  readonly environments: EnvironmentPushTopic | null;
+  readonly workflows: WorkflowPushTopic | null;
 
   constructor(options: BackendPushOptions) {
     this.hub = new PushHub(options.hub);
@@ -118,18 +185,77 @@ export class BackendPush implements PushGatewayPort {
         options
           .nativeAgents()
           ?.forgetPushSettled(key.environmentId, key.agent, key.logicalSessionKey),
-      canWakeFromBridge: (key) =>
-        options.nativeAgents()?.canWakePushObserverFromBridge?.(key.environmentId, key.agent) ===
-        true,
+      onBridgeWake: (key) =>
+        options.nativeAgents()?.notePushHint?.(key.environmentId, key.agent, key.logicalSessionKey),
+      canWakeFromBridge: (key) => {
+        const mode = options
+          .nativeAgents()
+          ?.canWakePushObserverFromBridge?.(key.environmentId, key.agent);
+        return mode === true ? "hints" : mode === "revisions" || mode === "hints" ? mode : "none";
+      },
       observeSession: (key) =>
         options
           .nativeAgents()
           ?.observePushSession(key.environmentId, key.agent, key.logicalSessionKey) ??
         (() => undefined),
       timers: options.hub?.timers,
+      now: options.hub?.now,
     });
     this.hub.registerTopic(this.nativeSessions);
+    this.toolOutputs = new ToolOutputPushTopic({
+      holdSession: (key, listener) => this.nativeSessions.hold(key, listener),
+      source: (key) =>
+        options
+          .nativeAgents()
+          ?.toolOutputSource?.(
+            key.environmentId,
+            key.agent,
+            key.logicalSessionKey,
+            key.toolUseId,
+          ) ?? null,
+      sessionExists: (key) =>
+        options.sessionExists(key.environmentId, key.agent, key.logicalSessionKey),
+      publish: (key, stamp, parts) => this.hub.publish(TOOL_OUTPUT_PUSH_TOPIC, key, stamp, parts),
+    });
+    this.hub.registerTopic(this.toolOutputs);
+    const environmentReads = options.environments;
+    this.environments = environmentReads
+      ? new EnvironmentPushTopic({
+          readEnvironment: (environmentId) => environmentReads.readEnvironment(environmentId),
+          readRegistry: (environmentId) => environmentReads.readRegistry(environmentId),
+          publish: (key, stamp, parts) =>
+            this.hub.publish(ENVIRONMENT_PUSH_TOPIC, key, stamp, parts),
+          timers: options.hub?.timers,
+          now: options.hub?.now,
+        })
+      : null;
+    if (this.environments) this.hub.registerTopic(this.environments);
+    const workflowReads = options.workflows;
+    this.workflows = workflowReads
+      ? new WorkflowPushTopic({
+          readSummary: (key) => workflowReads.readSummary(key),
+          publish: (key, stamp, parts) => this.hub.publish(WORKFLOW_PUSH_TOPIC, key, stamp, parts),
+          timers: options.hub?.timers,
+        })
+      : null;
+    if (this.workflows) this.hub.registerTopic(this.workflows);
   }
+
+  /** Whether a node subscription controller is attached (design D10). */
+  get acceptsNodeSets(): boolean {
+    return this.hub.acceptsNodeSets;
+  }
+
+  /**
+   * The command node's controller for the nodes it relays (design D10).
+   * Attached once both exist; `null` detaches it (a stopping backend).
+   */
+  attachNodeSubscriptions(nodes: PushNodeSubscriptions | null): void {
+    this.hub.attachNodeSubscriptions(nodes);
+    this.nodeSubscriptions = nodes;
+  }
+
+  private nodeSubscriptions: PushNodeSubscriptions | null = null;
 
   openConnection(owner: string, sink: PushConnectionSink): string {
     return this.hub.openConnection(owner, sink);
@@ -149,18 +275,32 @@ export class BackendPush implements PushGatewayPort {
   /** Every backend event, so topics can wake on the ones that name their keys. */
   observeEvent(event: string, payload: unknown): void {
     this.nativeSessions.observeEvent(event, payload);
+    this.environments?.observeEvent(event, payload);
+    this.workflows?.observeEvent(event, payload);
   }
 
   metrics(): PushLayerMetrics {
+    const relayedNodes = this.nodeSubscriptions?.metrics?.();
     return {
       versions: this.versions,
       ...this.hub.metrics(),
-      topics: { [NATIVE_SESSION_PUSH_TOPIC]: this.nativeSessions.metrics() },
+      ...(relayedNodes ? { relayedNodes } : {}),
+      topics: {
+        [NATIVE_SESSION_PUSH_TOPIC]: this.nativeSessions.metrics(),
+        [TOOL_OUTPUT_PUSH_TOPIC]: this.toolOutputs.metrics(),
+        ...(this.environments ? { [ENVIRONMENT_PUSH_TOPIC]: this.environments.metrics() } : {}),
+        ...(this.workflows ? { [WORKFLOW_PUSH_TOPIC]: this.workflows.metrics() } : {}),
+      },
     };
   }
 
   dispose(): void {
+    // Closing connections must not send relayed nodes smaller unions.
+    this.hub.attachNodeSubscriptions(null);
+    this.toolOutputs.dispose();
     this.nativeSessions.dispose();
+    this.environments?.dispose();
+    this.workflows?.dispose();
     this.hub.dispose();
   }
 }

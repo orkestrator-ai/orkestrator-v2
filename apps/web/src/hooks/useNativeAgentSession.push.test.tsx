@@ -22,6 +22,7 @@ import {
   type PushSetSubscriptionsArgs,
   type PushSetSubscriptionsResult,
 } from "@orkestrator/protocol/push-events";
+import { NATIVE_AGENT_ACTIVITY_EVENT } from "@orkestrator/protocol/native-agent-observation";
 import * as realBackend from "@/lib/backend";
 import * as events from "@/lib/native/events";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -176,6 +177,14 @@ async function connectPush(): Promise<void> {
   await waitFor(() => expect(pushClientFor().isHealthy("native-session", PUSH_KEY)).toBe(true));
 }
 
+/** An activity announcement for this view's session (a question parking the turn). */
+const announcement = () => ({
+  environment_id: "env-1",
+  agent: "claude",
+  logical_session_key: SESSION_KEY,
+  state: "waiting",
+});
+
 beforeEach(() => {
   handlers.clear();
   listenMock.mockImplementation((event, handler) => {
@@ -272,6 +281,54 @@ describe("useNativeAgentSession over push", () => {
     await act(() => clock.advance(PUSH_RECOVERY_POLL_MS));
     await waitFor(() => expect(stateReads()).toBeGreaterThanOrEqual(afterSubscribe + 2));
     expect(stateReads()).toBeLessThanOrEqual(afterSubscribe + 3);
+  });
+
+  test("while healthy an activity announcement reads once, through its push frame", async () => {
+    const { clock } = installFakeReadCoordinator();
+    await settledSession();
+    await connectPush();
+    await act(() => clock.advance(10));
+    const before = stateReads();
+
+    // The announcement alone reads nothing: the backend's observer wakes on it.
+    await act(async () => emit(NATIVE_AGENT_ACTIVITY_EVENT, announcement()));
+    await act(() => clock.advance(100));
+    expect(stateReads()).toBe(before);
+
+    // The frame the observer sends for the change is the one read.
+    await act(async () => {
+      emit(PUSH_CHANGED_EVENT, {
+        seq: 1,
+        changes: [
+          {
+            topic: "native-session",
+            key: PUSH_KEY,
+            generation: "g1",
+            revision: 1,
+            parts: ["state"],
+          },
+        ],
+      });
+    });
+    await act(() => clock.advance(1));
+    await waitFor(() => expect(stateReads()).toBe(before + 1));
+    await act(() => clock.advance(100));
+    expect(stateReads()).toBe(before + 1);
+  });
+
+  test("without a healthy subscription an activity announcement still reads at once", async () => {
+    const { clock } = installFakeReadCoordinator();
+    await settledSession();
+    await waitFor(() => expect(handlers.has(PUSH_STREAM_STATE_EVENT)).toBe(true));
+    await act(async () => emit(PUSH_STREAM_STATE_EVENT, { state: "connected", offer: null }));
+    // Align with the old 500 ms cadence, so the next poll is a whole interval away.
+    const polled = stateReads();
+    await act(() => clock.advance(500));
+    await waitFor(() => expect(stateReads()).toBeGreaterThan(polled));
+    const before = stateReads();
+    await act(async () => emit(NATIVE_AGENT_ACTIVITY_EVENT, announcement()));
+    await act(() => clock.advance(1));
+    await waitFor(() => expect(stateReads()).toBe(before + 1));
   });
 
   test("a stale discovery section retries during quiet healthy push", async () => {

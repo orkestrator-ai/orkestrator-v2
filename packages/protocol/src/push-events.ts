@@ -17,6 +17,10 @@
  *   re-sends its set, and the answer's stamps say what moved.
  * - `push.resync` replaces frames the backend could not hold (its pending
  *   bound) and consumes a `seq` like any frame.
+ * - Relayed nodes (design D10): a set with `nodeId` is for that node's keys,
+ *   held by the command node's subscription controller, in its own
+ *   namespace with its own `setRevision` order. Its changes carry `nodeId`,
+ *   its resyncs name it, and the offer says `nodes: true` when it is taken.
  *
  * Browser-safe: no Node or Bun imports.
  */
@@ -43,13 +47,36 @@ export type PushStreamState =
 export const PUSH_SET_SUBSCRIPTIONS_COMMAND = "push_set_subscriptions";
 
 /** Topics this protocol version defines. A later surface adds one. */
-export const PUSH_TOPICS = ["native-session"] as const;
+export const PUSH_TOPICS = ["native-session", "environment", "tool-output", "workflow"] as const;
 export type PushTopic = (typeof PUSH_TOPICS)[number];
 export const NATIVE_SESSION_PUSH_TOPIC = "native-session" satisfies PushTopic;
 
 /** Parts of a `native-session` key a frame can name. */
 export const NATIVE_SESSION_PUSH_PARTS = ["transcript", "state", "discovery"] as const;
 export type NativeSessionPushPart = (typeof NATIVE_SESSION_PUSH_PARTS)[number];
+
+/**
+ * One environment's lifecycle and attention summary; the key is the
+ * environment id (docs/architecture/push-events.md, "The `environment` topic").
+ */
+export const ENVIRONMENT_PUSH_TOPIC = "environment" satisfies PushTopic;
+
+/**
+ * Parts of an `environment` key a frame can name:
+ *
+ * - `lifecycle`: the environment record's lifecycle (status, container,
+ *   setup, deletion) or its container lifecycle snapshot's revision;
+ * - `attention`: what waits on the user there (the agent registry's waiting
+ *   tabs and their pending requests, the record's activity and unread fields);
+ * - `sessions`: the agent registry's per-environment tab counts.
+ */
+export const ENVIRONMENT_PUSH_PARTS = ["lifecycle", "attention", "sessions"] as const;
+export type EnvironmentPushPart = (typeof ENVIRONMENT_PUSH_PARTS)[number];
+
+/** An environment id as an `environment` key: the id itself, at most 128 characters. */
+export function isEnvironmentPushKey(key: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(key);
+}
 
 export interface PushLimits {
   maxSubscriptions: number;
@@ -86,8 +113,16 @@ export function formatPushFrame(event: string, payload: unknown): string {
 
 /** Changes arriving together within this window share one frame. */
 export const PUSH_COALESCE_MS = 50;
-/** A key that keeps changing is announced at most this often (leading edge). */
-export const PUSH_KEY_THROTTLE_MS = 500;
+/**
+ * A key that keeps changing is announced at most this often (leading edge).
+ * The same spacing bounds how often a bridge hint may make the backend read
+ * a session (`NATIVE_SESSION_BRIDGE_WAKE_FLOOR_MS`). The 250 ms p95 target for
+ * a streamed delta (to-do 8102 task 7) set it: a delta waits up to one
+ * spacing for the next read and frame, plus the frames' 50 ms offset from the
+ * leading edge's coalescing window. 200 ms measured a p95 of 250.6 ms; 150 ms
+ * keeps it near 200.
+ */
+export const PUSH_KEY_THROTTLE_MS = 150;
 /** While its write buffer is over the soft limit a connection is retried this often. */
 export const PUSH_BACKPRESSURE_RETRY_MS = 250;
 /**
@@ -107,6 +142,14 @@ export interface PushSetSubscriptionsArgs {
   /** Orders the client's set replacements; an older one is ignored. */
   setRevision: number;
   subscriptions: PushSubscriptionRequest[];
+  /**
+   * The node whose keys these are, reached through this command node's
+   * subscription controller (design D10). Absent means this backend's own
+   * keys. Each node id is its own namespace on the connection, with its own
+   * `setRevision` order, so a window's local set and its per-node sets never
+   * replace each other. Only sent to a stream whose offer says `nodes: true`.
+   */
+  nodeId?: string;
 }
 
 export type PushSubscriptionDenial = "limit" | "unknown-topic" | "invalid-key";
@@ -144,6 +187,11 @@ export interface PushChange extends PushStamp {
   key: string;
   /** Which reads moved. Unknown or empty parts mean "read everything". */
   parts: string[];
+  /**
+   * The node the key belongs to, for a key subscribed with that `nodeId`
+   * (design D10). Absent for the backend's own keys.
+   */
+  nodeId?: string;
 }
 
 export interface PushChangedPayload {
@@ -151,19 +199,29 @@ export interface PushChangedPayload {
   changes: PushChange[];
 }
 
-export type PushResyncReason = "pending-bound" | "topic-reset";
+export type PushResyncReason = "pending-bound" | "topic-reset" | "node-reset";
 
 export interface PushResyncPayload {
   seq: number;
   reason: PushResyncReason;
   /** The topics whose keys must all be re-read, or every subscribed key. */
   topics: string[] | "all";
+  /**
+   * Only that node's namespace must re-read (`node-reset`: the command node
+   * lost frames from it). Absent: every namespace of the connection.
+   */
+  nodeId?: string;
 }
 
 /** What `gateway.connected` carries when the backend offers push on the stream. */
 export interface PushStreamOffer {
   versions: number[];
   streamId: string;
+  /**
+   * The backend accepts `nodeId` sets for nodes it relays (design D10). A
+   * client never sends one to a stream that does not say so.
+   */
+  nodes?: boolean;
 }
 
 const STREAM_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/u;
@@ -212,12 +270,20 @@ export function parsePushStreamOffer(connectedPayload: unknown): PushStreamOffer
   }
   const versions = push.versions.filter(isNonNegativeInteger);
   if (!versions.includes(PUSH_PROTOCOL_VERSION)) return null;
-  return { versions, streamId: push.streamId };
+  return { versions, streamId: push.streamId, ...(push.nodes === true ? { nodes: true } : {}) };
+}
+
+/** A node id on a push frame or set: the shape of a backend identity (`federation.ts`). */
+const PUSH_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/u;
+
+export function isPushNodeId(value: unknown): value is string {
+  return typeof value === "string" && PUSH_NODE_ID_PATTERN.test(value);
 }
 
 function parseChange(value: unknown): PushChange | null {
   if (!isRecord(value)) return null;
-  const { topic, key, generation, revision, parts } = value;
+  const { topic, key, generation, revision, parts, nodeId } = value;
+  if (nodeId !== undefined && !isPushNodeId(nodeId)) return null;
   if (typeof topic !== "string" || typeof key !== "string" || typeof generation !== "string") {
     return null;
   }
@@ -227,7 +293,14 @@ function parseChange(value: unknown): PushChange | null {
         .filter((part): part is string => typeof part === "string")
         .slice(0, PUSH_LIMITS.maxParts)
     : [];
-  return { topic, key, generation, revision, parts: partList };
+  return {
+    topic,
+    key,
+    generation,
+    revision,
+    parts: partList,
+    ...(nodeId === undefined ? {} : { nodeId }),
+  };
 }
 
 export function parsePushChangedPayload(value: unknown): PushChangedPayload | null {
@@ -243,12 +316,18 @@ export function parsePushChangedPayload(value: unknown): PushChangedPayload | nu
 
 export function parsePushResyncPayload(value: unknown): PushResyncPayload | null {
   if (!isRecord(value) || !isNonNegativeInteger(value.seq) || value.seq < 1) return null;
-  const reason: PushResyncReason = value.reason === "topic-reset" ? "topic-reset" : "pending-bound";
+  const reason: PushResyncReason =
+    value.reason === "topic-reset" || value.reason === "node-reset"
+      ? value.reason
+      : "pending-bound";
   const topics =
     value.topics === "all" || !Array.isArray(value.topics)
       ? ("all" as const)
       : value.topics.filter((topic): topic is string => typeof topic === "string");
-  return { seq: value.seq, reason, topics };
+  // A resync naming a node this client cannot read applies to every
+  // namespace: re-reading too much is safe, missing one is not.
+  const nodeId = isPushNodeId(value.nodeId) ? value.nodeId : undefined;
+  return { seq: value.seq, reason, topics, ...(nodeId === undefined ? {} : { nodeId }) };
 }
 
 /** The compound map key of a subscription. Topic names contain no NUL. */
@@ -287,4 +366,102 @@ export function parseNativeSessionPushKey(key: string): NativeSessionPushKey | n
   if (!/^[a-z][a-z0-9-]{0,31}$/u.test(agent)) return null;
   if (environmentId.trim() !== environmentId || logicalSessionKey.trim().length === 0) return null;
   return { environmentId, agent, logicalSessionKey };
+}
+
+// ---------------------------------------------------------------------------
+// The `tool-output` topic
+// ---------------------------------------------------------------------------
+
+/**
+ * One tool call's output in a native session; an expanded, running row
+ * subscribes to it (docs/architecture/push-events.md, "The `tool-output`
+ * topic"). The frame says the output moved; the row reads it with the bounded
+ * `get_native_agent_tool_output`.
+ */
+export const TOOL_OUTPUT_PUSH_TOPIC = "tool-output" satisfies PushTopic;
+/** The only part a `tool-output` frame names. */
+export const TOOL_OUTPUT_PUSH_PARTS = ["output"] as const;
+export type ToolOutputPushPart = (typeof TOOL_OUTPUT_PUSH_PARTS)[number];
+/** A tool call id longer than this (UTF-8) makes no key. */
+export const TOOL_OUTPUT_PUSH_TOOL_ID_MAX_BYTES = 256;
+
+export interface ToolOutputPushKey extends NativeSessionPushKey {
+  toolUseId: string;
+}
+
+/**
+ * `<environmentId>/<agent>/<logicalSessionKey>/<encoded toolUseId>`. The tool
+ * call id is percent-encoded, so it holds no `/` and the last one splits it
+ * from the session key (which may itself contain `/`).
+ */
+export function formatToolOutputPushKey(key: ToolOutputPushKey): string {
+  return `${formatNativeSessionPushKey(key)}/${encodeURIComponent(key.toolUseId)}`;
+}
+
+export function parseToolOutputPushKey(key: string): ToolOutputPushKey | null {
+  if (pushUtf8Bytes(key) > PUSH_LIMITS.maxKeyBytes) return null;
+  const last = key.lastIndexOf("/");
+  if (last <= 0 || last === key.length - 1) return null;
+  const encoded = key.slice(last + 1);
+  let toolUseId: string;
+  try {
+    toolUseId = decodeURIComponent(encoded);
+  } catch {
+    return null;
+  }
+  // One spelling per call, so two keys never name the same output.
+  if (encodeURIComponent(toolUseId) !== encoded || toolUseId.trim().length === 0) return null;
+  if (pushUtf8Bytes(toolUseId) > TOOL_OUTPUT_PUSH_TOOL_ID_MAX_BYTES) return null;
+  const session = parseNativeSessionPushKey(key.slice(0, last));
+  return session ? { ...session, toolUseId } : null;
+}
+
+// ---------------------------------------------------------------------------
+// The `workflow` topic
+// ---------------------------------------------------------------------------
+
+/**
+ * One workflow run's status summary: a build pipeline, a Multi Review or a
+ * graph run (docs/architecture/push-events.md, "The `workflow` topic"). The
+ * frame says the run's record moved; the view reads it with the read it
+ * already has. Completion is whatever that read says, never the frame.
+ */
+export const WORKFLOW_PUSH_TOPIC = "workflow" satisfies PushTopic;
+/** The workflow kinds a key can name; each is also its `resource-changed` kind. */
+export const WORKFLOW_PUSH_KINDS = ["build-pipeline", "multi-review", "graph-run"] as const;
+export type WorkflowPushKind = (typeof WORKFLOW_PUSH_KINDS)[number];
+/**
+ * `progress`: the run's record moved (every change names it). `status`: its
+ * phase or status changed. `result`: it entered or left a terminal phase.
+ */
+export const WORKFLOW_PUSH_PARTS = ["status", "progress", "result"] as const;
+export type WorkflowPushPart = (typeof WORKFLOW_PUSH_PARTS)[number];
+/** A run id longer than this (UTF-8) makes no key. */
+export const WORKFLOW_PUSH_ID_MAX_BYTES = 256;
+
+export interface WorkflowPushKey {
+  kind: WorkflowPushKind;
+  id: string;
+}
+
+/** `<kind>/<id>`, e.g. `build-pipeline/<pipelineId>`. */
+export function formatWorkflowPushKey(key: WorkflowPushKey): string {
+  return `${key.kind}/${key.id}`;
+}
+
+export function isWorkflowPushKind(value: unknown): value is WorkflowPushKind {
+  return (WORKFLOW_PUSH_KINDS as readonly unknown[]).includes(value);
+}
+
+export function parseWorkflowPushKey(key: string): WorkflowPushKey | null {
+  const slash = key.indexOf("/");
+  if (slash <= 0) return null;
+  const kind = key.slice(0, slash);
+  const id = key.slice(slash + 1);
+  if (!isWorkflowPushKind(kind)) return null;
+  // One spelling per run: no separator, whitespace or control characters.
+  // oxlint-disable-next-line no-control-regex -- refusing control characters is the point
+  if (id.length === 0 || !/^[^\s/\u0000-\u001f\u007f]+$/u.test(id)) return null;
+  if (pushUtf8Bytes(id) > WORKFLOW_PUSH_ID_MAX_BYTES) return null;
+  return { kind, id };
 }

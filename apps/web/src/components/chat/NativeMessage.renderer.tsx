@@ -42,6 +42,11 @@ import { NativeAsyncQuestionCard } from "./NativeAsyncQuestionCard";
 import { ArtifactPart } from "./rich/ArtifactPart";
 import { UserCommandCard } from "./UserCommandCard";
 import { ToolGroupPart } from "./NativeMessage.tool-group";
+import {
+  ToolOutputTailContext,
+  useToolOutputTail,
+  type ToolOutputTailView,
+} from "@/lib/chat/tool-output-tail";
 
 export function DeferredToolMessagePart({
   part,
@@ -71,10 +76,26 @@ export function DeferredToolMessagePart({
   const isPlan = isPlanTool(part.toolName);
   const eagerDetails = isPlan || agentMailToolCall(part) !== null;
   const wanted = isOpen || eagerDetails;
-  const { details, error: loadError } = useToolDetails(part.detailRef, wanted);
+  /*
+   * A call expanded while it runs shows a bounded tail of its output that
+   * follows the call (`tool-output`), instead of re-reading the whole body
+   * each time it grows. It keeps the tail until it is collapsed; a settled
+   * call expanded later reads its details as before.
+   */
+  const tailSource = useContext(ToolOutputTailContext) ?? null;
+  const tailEligible =
+    tailSource !== null &&
+    part.toolUseId !== undefined &&
+    !eagerDetails &&
+    !hasRenderableDiff(part.toolDiff);
+  const [tailLatched, setTailLatched] = useState(false);
+  if (isOpen && tailEligible && part.toolState === "pending" && !tailLatched) setTailLatched(true);
+  if (!isOpen && tailLatched) setTailLatched(false);
+  const tail = useToolOutputTail(part.toolUseId, part.detailRef, isOpen && tailLatched);
+  const { details, error: loadError } = useToolDetails(part.detailRef, wanted && tail === null);
   // The whole input, when the projection sent large values as previews.
   const { details: argsDetails, error: argsError } = useToolDetails(part.toolArgsDetailRef, wanted);
-  const outputPending = part.detailRef !== undefined && !details;
+  const outputPending = tail ? tail.loading : part.detailRef !== undefined && !details;
   const planArgsPending = isPlan && part.toolArgsDetailRef !== undefined && !argsDetails;
 
   /*
@@ -92,6 +113,8 @@ export function DeferredToolMessagePart({
     ...(argsDetails?.toolArgs ? { toolArgs: argsDetails.toolArgs } : {}),
     ...(details?.toolOutput !== undefined ? { toolOutput: details.toolOutput } : {}),
     ...(details?.toolError !== undefined ? { toolError: details.toolError } : {}),
+    ...(tail && !tail.loading ? { toolOutput: tail.text } : {}),
+    ...(tail?.toolError !== undefined ? { toolError: tail.toolError } : {}),
     ...(outputPending && loadError ? { toolError: loadError } : {}),
     ...(planArgsPending && argsError ? { toolError: argsError } : {}),
     ...(outputPending && !loadError && isOpen && !isPlan
@@ -114,6 +137,8 @@ export function DeferredToolMessagePart({
       part={materialized}
       deferredDetails={outputPending || planArgsPending}
       planSourcePart={isPlan ? part : undefined}
+      outputTail={tail && !tail.loading ? tail : undefined}
+      detailsResolved
       partKey={partKey}
       showTextCopy={showTextCopy}
       truncateUserPrompt={truncateUserPrompt}
@@ -218,6 +243,8 @@ function MessagePartContent({
   planSourcePart,
   embedded = false,
   suppressImageReadPreview = false,
+  outputTail,
+  detailsResolved = false,
 }: {
   part: NativeMessagePart;
   showTextCopy?: boolean;
@@ -239,8 +266,13 @@ function MessagePartContent({
   planSourcePart?: Extract<NativeMessagePart, { type: "tool-invocation" }>;
   /** Drop individual card chrome when this row already sits in a shared group. */
   embedded?: boolean;
+  /** The bounded output tail of an expanded running call (`useToolOutputTail`). */
+  outputTail?: ToolOutputTailView;
+  /** Set by `DeferredToolMessagePart` on the part it materialized: never route it there again. */
+  detailsResolved?: boolean;
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
+  const tailSource = useContext(ToolOutputTailContext) ?? null;
   const expansionScope = useContext(MessageExpansionScopeContext);
   const transcriptScope = useContext(AgentExpansionScopeContext);
   // The backend's tool kind for this call, once its presentation is known.
@@ -250,8 +282,13 @@ function MessagePartContent({
   );
   if (
     part.type === "tool-invocation" &&
-    (part.detailRef || part.toolArgsDetailRef) &&
-    loadToolDetails
+    // A running call in a live tab goes through here before it has output,
+    // so expanding it starts its output tail.
+    (part.detailRef ||
+      part.toolArgsDetailRef ||
+      (tailSource && part.toolState === "pending" && part.toolUseId)) &&
+    loadToolDetails &&
+    !detailsResolved
   ) {
     return (
       <DeferredToolMessagePart
@@ -380,6 +417,7 @@ function MessagePartContent({
           durationMs={part.toolDurationMs}
           leftRunning={part.toolLeftRunning === true}
           deferredDetails={deferredDetails}
+          outputTail={outputTail}
         />
       );
       if (!imageRead || !canLoadImagePreview(imageRead.path, imageRead.fileUrl, containerId)) {

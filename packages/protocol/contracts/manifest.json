@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1025,
-    "defined": 1025,
+    "commands": 1026,
+    "defined": 1026,
     "untyped": 0,
     "events": 45
   },
@@ -4068,6 +4068,15 @@
       "argsDigest": "sha256:e2d9f98d03525b884c8d4102fc37a7fb6bfda9582995a1f5cc05a885a13a3624",
       "resultDigest": "sha256:9df81e33f17bb4f7502c16bfcf016b5f08b32e15accce5605ef8f551bda5cb17"
     },
+    "get_native_agent_tool_output": {
+      "domain": "native-sessions",
+      "since": 5,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:7c8f8a3a31e0db38de79b224b487d3cc6eee31275f99532aacfe343e93c13a3e",
+      "resultDigest": "sha256:1c5e5b26d06b7a050b3117a55424ad8b94d3b430c5804f449ed6b4a742883dfc"
+    },
     "get_native_agent_transcript_update": {
       "domain": "native-sessions",
       "since": 1,
@@ -6205,7 +6214,7 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:586d72f4a8475bd21e4654db3eecbfd0dddcfe47d9450276d0da2588edce1a0e",
+      "argsDigest": "sha256:ff707d3ea1651e1727eb680fd39752245a60f0d413dd3b7de92ab00c36c87866",
       "resultDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
     },
     "put_ticket_image": {

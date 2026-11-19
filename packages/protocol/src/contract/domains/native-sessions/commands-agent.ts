@@ -39,6 +39,7 @@ import {
   SuborkTranscriptSchema,
   SyncCapabilitiesSchema,
   ToolDetailsSchema,
+  ToolOutputReadSchema,
   ViewUpdateSchema,
 } from "./schemas.js";
 
@@ -387,6 +388,31 @@ export const getNativeAgentToolDetailsCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * One bounded slice of a tool call's output (`native-agent-tool-output.ts`):
+ * the tail, forward from a held end, or before a held start. An expanded
+ * running row reads it on each `tool-output` change. A peer without it
+ * answers `unknown-command` and the row reads its details instead.
+ */
+export const getNativeAgentToolOutputCommand = defineCommand({
+  domain: nativeSessionsDomain,
+  name: "get_native_agent_tool_output",
+  since: 5,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({
+    ...sessionKey,
+    toolUseId: Schema.String,
+    detailRef: optionalString,
+    mode: optionalString,
+    cursor: Schema.optionalKey(Schema.Number),
+    anchor: optionalString,
+    limit: Schema.optionalKey(Schema.Number),
+  }),
+  result: ToolOutputReadSchema,
+  critical: [],
+});
+
 /** Re-reads the provider's model list. */
 export const refreshNativeAgentModelsCommand = defineCommand({
   domain: nativeSessionsDomain,
@@ -717,6 +743,7 @@ export const NATIVE_AGENT_COMMANDS = [
   getNativeAgentDiscoveryUpdateCommand,
   getNativeAgentMessagePageCommand,
   getNativeAgentToolDetailsCommand,
+  getNativeAgentToolOutputCommand,
   refreshNativeAgentModelsCommand,
   refreshNativeAgentCommandsCommand,
   nativeAgentGoalCommand,

@@ -72,7 +72,7 @@ import {
   nativeAgentSessionActivityEvent,
 } from "@orkestrator/protocol/contract/domains/events";
 import { createBackendEmit, type BackendEventSink } from "./backend-emit.js";
-import { BackendPush } from "./push/index.js";
+import { BackendPush, createWorkflowSummaryReader } from "./push/index.js";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
@@ -619,6 +619,21 @@ export class OrkestratorBackend {
           session.logicalSessionKey === logicalSessionKey
         );
       },
+      // The `environment` topic compares what `get_environment` and the
+      // sidebar's `get_agent_registry` read; the registry is built later, so
+      // it is looked up at read time.
+      environments: {
+        readEnvironment: async (environmentId) =>
+          ((await storage.getEnvironment(environmentId)) as Record<string, unknown> | null) ?? null,
+        readRegistry: async (environmentId) => {
+          const registry = this.context?.agentRegistry;
+          if (!registry) throw new Error("Agent registry is unavailable");
+          return registry.snapshot({ environmentId }, { includePending: true });
+        },
+      },
+      // The `workflow` topic compares each subscribed run's record revision
+      // and phase; the record's own `resource-changed` wakes it.
+      workflows: { readSummary: createWorkflowSummaryReader(storage) },
     });
     // History survives a restart through one database row (#2287).
     this.machineLoad = new MachineLoadSampler({
@@ -1007,6 +1022,9 @@ export class OrkestratorBackend {
       ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
     });
     context.nodePortal = this.nodePortal;
+    // Windows subscribe to relayed nodes' keys through this node (design D10).
+    this.nodePortal.pushSubscriptions.attachDownstream(this.push.hub);
+    this.push.attachNodeSubscriptions(this.nodePortal.pushSubscriptions);
     this.nodeCoordination = new NodeCoordination({
       storage,
       nodes: this.nodes,
@@ -1160,8 +1178,8 @@ export class OrkestratorBackend {
       },
       {
         changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
-        onPushObservationHint: (environmentId, agent, providerSessionId) =>
-          this.push.nativeSessions.wakeProvider(environmentId, agent, providerSessionId),
+        onPushObservationHint: (environmentId, agent, providerSessionId, parts) =>
+          this.push.nativeSessions.wakeProvider(environmentId, agent, providerSessionId, parts),
         // Never under `bun test`: a title run would use this machine's real
         // agent login. `ORKESTRATOR_SESSION_TITLE_GENERATION=0` turns it off.
         ...(sessionTitleGenerationEnabled(process.env)

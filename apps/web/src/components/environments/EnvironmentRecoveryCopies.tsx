@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import type { PushKeyChange } from "@orkestrator/protocol/push-client";
+import { ENVIRONMENT_PUSH_TOPIC, PUSH_RECOVERY_POLL_MS } from "@orkestrator/protocol/push-events";
 import type {
   RecoveryCopy,
   RecoveryCopyList,
@@ -23,6 +25,8 @@ import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import type { Environment } from "@/types";
 import { formatBytes } from "@/components/docker/docker-stats-format";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { usePushSubscription } from "@/lib/push/push-subscriptions";
 
 const REASONS: Record<RecoveryCopyReason, string> = {
   "migrate-source": "Container before moving to persistent storage",
@@ -45,8 +49,11 @@ function describePresence(copy: RecoveryCopy): string | null {
   }
 }
 
-/** How often an open list checks whether the lifecycle record changed. */
-const RECORD_CHECK_MS = 3_000;
+/**
+ * How often an open list checks whether the lifecycle record changed, unless
+ * the node's `environment` push key announces it (then the recovery poll).
+ */
+export const RECORD_CHECK_MS = 3_000;
 
 type PendingAction = { kind: "restore" | "discard"; copy: RecoveryCopy } | null;
 
@@ -69,6 +76,7 @@ export function EnvironmentRecoveryCopies({
   onClose,
 }: EnvironmentRecoveryCopiesProps) {
   const nodeBackend = useScopeBackend();
+  const { scope } = useScopesWithCommandFallback();
   const [list, setList] = useState<RecoveryCopyList | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<PendingAction>(null);
@@ -101,8 +109,20 @@ export function EnvironmentRecoveryCopies({
 
   // A rebuild, restore or reset finishing while this is open (started here,
   // from another window or from the CLI) changes the lifecycle record's
-  // revision; only then is the list, which asks Docker, read again.
+  // revision; only then is the list, which asks Docker, read again. The
+  // record is checked when the node announces the environment's lifecycle
+  // moved (push), and otherwise on a timer: 3 s, or the 30 s recovery poll
+  // while that announcement is healthy.
   const seenRevision = useRef<number | null>(null);
+  const checkRef = useRef<(() => Promise<void>) | null>(null);
+  const onPushChange = useCallback((change: PushKeyChange) => {
+    if (change.parts === null || change.parts.length === 0 || change.parts.includes("lifecycle")) {
+      void checkRef.current?.();
+    }
+  }, []);
+  const pushHealthy =
+    usePushSubscription(scope, ENVIRONMENT_PUSH_TOPIC, environment.id, true, onPushChange) ===
+    "healthy";
   useEffect(() => {
     let cancelled = false;
     const check = async () => {
@@ -117,18 +137,20 @@ export function EnvironmentRecoveryCopies({
         // The next check tries again.
       }
     };
+    checkRef.current = check;
     void check();
     const stopPolling = startCoordinatedPoll({
       resource: "environment-recovery-copies",
       target: environment.id,
-      intervalMs: RECORD_CHECK_MS,
+      intervalMs: pushHealthy ? PUSH_RECOVERY_POLL_MS : RECORD_CHECK_MS,
       read: check,
     });
     return () => {
       cancelled = true;
+      if (checkRef.current === check) checkRef.current = null;
       stopPolling();
     };
-  }, [environment.id, load, nodeBackend]);
+  }, [environment.id, load, nodeBackend, pushHealthy]);
 
   if (!list || list.copies.length === 0) {
     return loading ? (

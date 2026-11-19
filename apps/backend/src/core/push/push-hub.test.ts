@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   PUSH_CHANGED_EVENT,
+  PUSH_KEY_THROTTLE_MS,
   formatPushFrame,
   PUSH_RESYNC_EVENT,
   type PushChangedPayload,
@@ -258,11 +259,14 @@ describe("PushHub frames", () => {
     ]);
     // A transcript burst during the throttle collapses into one invalidation.
     for (let revision = 2; revision <= 10; revision += 1) {
-      h.clock.advance(20);
+      h.clock.advance(10);
       h.hub.publish(TOPIC, "k1", { generation: "g", revision }, ["transcript"]);
     }
-    // Now at 230 ms; the key's last frame went at 50 ms, so the next is due at 550 ms.
-    h.clock.advance(549 - 230);
+    // Now at 140 ms; the key's last frame went at 50 ms, so the next is due
+    // one throttle later, at that deadline exactly (no coalescing window on top).
+    const due = 50 + PUSH_KEY_THROTTLE_MS;
+    expect(due).toBeGreaterThan(140);
+    h.clock.advance(due - 1 - 140);
     expect(c.written).toHaveLength(1);
     h.clock.advance(1);
     expect(c.written).toHaveLength(2);
@@ -270,7 +274,14 @@ describe("PushHub frames", () => {
     expect(second.revision).toBe(10);
     expect(second.parts).toEqual(["transcript"]);
     expect(h.hub.metrics().changesCoalesced).toBe(8);
-    expect(c.written.map((w) => (w.payload as PushChangedPayload).seq)).toEqual([1, 2]);
+    // A change published 10 ms before the next deadline goes at the deadline.
+    h.clock.advance(PUSH_KEY_THROTTLE_MS - 10);
+    h.hub.publish(TOPIC, "k1", { generation: "g", revision: 11 }, ["transcript"]);
+    h.clock.advance(9);
+    expect(c.written).toHaveLength(2);
+    h.clock.advance(1);
+    expect(c.written).toHaveLength(3);
+    expect(c.written.map((w) => (w.payload as PushChangedPayload).seq)).toEqual([1, 2, 3]);
   });
 
   test("changes of different keys share a frame; a frame holds at most maxFrameChanges", async () => {
@@ -479,7 +490,7 @@ describe("PushHub budgets", () => {
     }
     // The build was announced at most once per throttle window.
     const builds = h.changes(c.written).filter((change) => change.key === "build");
-    expect(builds.length).toBeLessThanOrEqual(Math.ceil(h.clock.now() / 500) + 1);
+    expect(builds.length).toBeLessThanOrEqual(Math.ceil(h.clock.now() / PUSH_KEY_THROTTLE_MS) + 1);
   });
 
   test("thirty minutes of noisy output with views coming and going keeps every queue bounded", async () => {

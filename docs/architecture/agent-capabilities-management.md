@@ -577,13 +577,20 @@ Catalogue names are insufficient to identify the installed revision.
     command node), and a project receipt whose bytes match on disk qualifies
     and is recorded; a host copy the provider also reads must still match. On
     a leaf, the leaf reports its worktree's managed copies with the launch;
+  - an isolated graph worktree: a local command node stages supported files
+    in the activation's own branch. A leaf reports the branch's files rather
+    than the parent checkout's;
   - an added account: the host receipt when the account links that directory
     (or will link it at launch), its own receipt and matching bytes when the
     directory is private;
   - a container: the record staged into its inputs revision, whose digest must
     equal the container's `orkestrator-capabilities-digest` label and whose
     entry for the component must be the required revision; host copies are
-    not checked (a leaf sends its container's record and label).
+    not checked (a leaf sends its container's record and label). Container
+    native MCP definitions have no capability receipt and are reported as
+    unsupported for managed delivery.
+  A session-only selection without a verified scoped copy is reported as
+  unsupported. A required selection in that state stops the launch.
   The launch manifest records the selected revisions for diagnostics.
   Provider homes are shared and existing sessions can still see changes there.
 - **Containers**: a container never receives a write from outside. At

@@ -401,9 +401,9 @@ describe("remote safety", () => {
     const { applied } = await addSkill(command, "operation-status", "Take notes.");
     const snapshot = await command.service.getOperation({ operationId: applied.operation.id });
     for (const status of ["needs-auth", "needs-approval", "unsupported"] as const) {
-      const copy = {
+      const copy: typeof snapshot = {
         ...snapshot,
-        state: "applying" as const,
+        state: "applying",
         targets: snapshot.targets
           .filter((target) => target.action === "install")
           .map((target) => ({ ...target, status })),

@@ -667,7 +667,6 @@ export class LeafLaunchAuthority {
           request: {
             target: request.target,
             sessionKey: request.sessionKey,
-            relativeWorktree: request.relativeWorktree ?? null,
             ceiling: request.ceiling,
             ...(request.templateId ? { templateId: request.templateId } : {}),
             ...(request.graphNode ? { graphNode: request.graphNode } : {}),

@@ -60,6 +60,7 @@ export default defineConfig({
     "container-real-engines-live.spec.ts",
     "terminal-input-resume.spec.ts",
     "terminal-mobile-panes.spec.ts",
+    "terminal-size-ownership.spec.ts",
     "sidebar-width-consumers.spec.ts",
     "opencode-live.spec.ts",
     "close-retention-live.spec.ts",

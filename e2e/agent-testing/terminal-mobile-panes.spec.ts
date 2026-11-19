@@ -194,11 +194,15 @@ test("a shell in a hidden phone pane keeps working and its size while away, and 
         rows: Number(rows),
         cols: Number(cols),
       }));
+    // A click or typing claims the size (`claim_terminal_size`) as well as
+    // layout updating it, so both set the PTY's size.
     const workResizes = () =>
       sent
         .filter(
           (entry) =>
-            entry.command === "local_terminal_resize" && entry.args.sessionId === sessionId,
+            (entry.command === "local_terminal_resize" ||
+              entry.command === "claim_terminal_size") &&
+            entry.args.sessionId === sessionId,
         )
         .map(({ args }) => ({ rows: Number(args.rows), cols: Number(args.cols) }));
     await expect.poll(async () => (await sizes()).length).toBe(1);

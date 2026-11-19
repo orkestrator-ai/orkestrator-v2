@@ -706,7 +706,9 @@ export function CreateEnvironmentDialog({
   const attachmentProcessingGenerationRef = useRef(0);
   const nextAttachmentOperationIdRef = useRef(0);
   const activeAttachmentOperationIdsRef = useRef(new Set<number>());
-  const promptPasteOperationRef = useRef<AttachmentOperation | null>(null);
+  const promptPasteOperationRef = useRef<
+    (AttachmentOperation & { switchedPromptMode?: boolean }) | null
+  >(null);
   const agentSelectionTouchedRef = useRef(false);
 
   useEffect(() => {
@@ -863,13 +865,17 @@ export function CreateEnvironmentDialog({
 
   const handleBuildIntentChange = useCallback((intent: BuildIntent) => {
     if (intent === buildIntentRef.current) return;
-    promptPasteRequestIdRef.current += 1;
-    attachmentProcessingGenerationRef.current += 1;
-    activeAttachmentOperationIdsRef.current.clear();
-    promptPasteOperationRef.current = null;
-    setPendingAttachmentOperations(0);
-    attachmentDragDepthRef.current = 0;
-    setIsDraggingAttachments(false);
+    if ((intent === "feature") !== (buildIntentRef.current === "feature")) {
+      promptPasteRequestIdRef.current += 1;
+      attachmentProcessingGenerationRef.current += 1;
+      activeAttachmentOperationIdsRef.current.clear();
+      promptPasteOperationRef.current = null;
+      setPendingAttachmentOperations(0);
+      attachmentDragDepthRef.current = 0;
+      setIsDraggingAttachments(false);
+    } else if (promptPasteOperationRef.current) {
+      promptPasteOperationRef.current.switchedPromptMode = true;
+    }
     buildIntentRef.current = intent;
     setBuildIntent(intent);
     if (intent === "feature") setWorktreeBaseDir(null);
@@ -977,7 +983,6 @@ export function CreateEnvironmentDialog({
         (launchAgent && document.activeElement === promptRef.current);
       if (!open || !isPasteTarget()) return;
 
-      const pasteIntent = buildIntentRef.current;
       const pastedBlob = getPastedImageBlob(event);
       // A native paste event already exposes its complete readable payload.
       // If that payload contains no image, leave text paste alone without
@@ -992,8 +997,9 @@ export function CreateEnvironmentDialog({
       const isCurrentRequest = () =>
         requestId === promptPasteRequestIdRef.current &&
         operation.generation === attachmentProcessingGenerationRef.current &&
-        pasteIntent === buildIntentRef.current &&
-        isPasteTarget();
+        (isPasteTarget() ||
+          (promptPasteOperationRef.current?.switchedPromptMode === true &&
+            Boolean(document.activeElement?.closest('[role="group"][aria-label="Build intent"]'))));
 
       try {
         if (pastedBlob) {
@@ -1076,8 +1082,7 @@ export function CreateEnvironmentDialog({
       }
       const operation = beginAttachmentOperation();
       const isCurrentOperation = () =>
-        operation.generation === attachmentProcessingGenerationRef.current &&
-        dropIntent === buildIntentRef.current;
+        operation.generation === attachmentProcessingGenerationRef.current;
       try {
         const attachments: InitialPromptImageAttachment[] = [];
         for (const file of files) {

@@ -18,9 +18,8 @@
  *   questions and check decisions with them while it works.
  *
  * The mode reaches the agent as a system-instructions frame on the
- * environment's opening prompt, so it applies to every provider and to both
- * native and terminal launches. Transcripts strip the frame
- * (`stripSystemInstructions`), so the user sees only what they typed.
+ * environment's first native prompt or a prompt supplied at terminal launch.
+ * Native transcripts strip the frame (`stripSystemInstructions`).
  */
 import { wrapSystemInstructions } from "./review-evidence-frames.js";
 
@@ -48,13 +47,16 @@ export function environmentInteractionInstruction(mode: EnvironmentInteractionMo
 
 /**
  * The opening prompt with the interaction mode's instructions appended as one
- * system-instructions frame. No mode, or a blank prompt, returns the prompt
- * unchanged: a prompt-less launch waits for the user's own first message.
+ * system-instructions frame. An attachment can be the entire opening request.
+ * A launch with neither text nor attachments waits for the first user turn.
  */
 export function withEnvironmentInteraction(
   prompt: string,
   mode: EnvironmentInteractionMode | undefined,
+  hasAttachments = false,
 ): string {
-  if (!mode || prompt.trim().length === 0) return prompt;
-  return `${prompt}\n\n${wrapSystemInstructions(environmentInteractionInstruction(mode))}`;
+  if (!mode) return prompt;
+  if (!prompt.trim() && !hasAttachments) return prompt;
+  const frame = wrapSystemInstructions(environmentInteractionInstruction(mode));
+  return prompt.trim() ? `${prompt}\n\n${frame}` : frame;
 }

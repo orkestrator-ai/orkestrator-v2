@@ -46,13 +46,16 @@ tab. The old PIPELINE stage list (`PipelineStageRail`) is gone.
 - **Interaction mode**: whether a prompt environment's agent may talk with the
   user (`interactionMode`, `@orkestrator/protocol/environment-interaction`).
   `task` (the dialog's "Task") runs the opening prompt without asking
-  questions, then stops and waits; it is not interactive until that turn is
-  finished. `interactive` (the dialog's "Interactive") may ask the user
-  questions from the start. The mode is saved on the environment and reaches
-  the agent as a system-instructions frame appended to the opening prompt, on
-  native and terminal launches alike; transcripts strip the frame. An
-  environment without a mode (a coordinator worker, the CLI, one created
-  before the setting) gets no frame.
+  questions, then stops and waits. `interactive` (the dialog's "Interactive")
+  may ask questions from the start. The backend adds a system-instructions
+  frame to the first native prompt, including one sent manually after setup,
+  and to prompts supplied to terminal launches. Native transcripts strip the
+  frame. Provider slash commands receive their original arguments. During the
+  opening native Task turn the backend declines input requests and leaves
+  authorization requests to the normal approval policy. Grok uses its native
+  provider for an opening prompt because its terminal launcher cannot pass one.
+  Prompts typed directly into a terminal CLI use that CLI's own controls.
+  Environments created without a mode receive no frame.
 
 The New environment dialog offers "Pipeline", "Task" and "Interactive" and
 says under them which kind of environment each creates and whether it is

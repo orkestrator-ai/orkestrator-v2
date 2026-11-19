@@ -33,6 +33,11 @@ import {
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  agentInteractionPolicyAction,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "@orkestrator/protocol/agent-interactions";
 import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
 import { coordinatorRuntimeEnvironment } from "./coordinator-runtime.js";
 import { runtimeStillLive } from "./native-agent-runtime-liveness.js";
@@ -1037,7 +1042,14 @@ export class NativeAgentLaunchActivityReconciler {
                 settledIdle = false;
                 return;
               }
-              if (session.agent === "codex" && observation?.asyncQuestionItemIds?.length) {
+              const taskInputDeclined =
+                (activity === "waiting" || Boolean(observation?.asyncQuestionItemIds?.length)) &&
+                (await this.declineOpeningTaskInput(session, groupProvider).catch(() => false));
+              if (
+                session.agent === "codex" &&
+                observation?.asyncQuestionItemIds?.length &&
+                !taskInputDeclined
+              ) {
                 try {
                   await this.host.recordAsyncQuestionAttention(
                     session.environmentId,
@@ -1057,7 +1069,7 @@ export class NativeAgentLaunchActivityReconciler {
               // A rule that answered every parked request leaves the turn
               // running: no waiting edge, no attention badge for a card
               // nobody needs to see. Anything left still waits on the user.
-              let observedActivity = activity;
+              let observedActivity = taskInputDeclined ? "working" : activity;
               const ruleProvider = provider;
               if (activity === "waiting" && ruleProvider && this.host.applyPermissionRules) {
                 const ruled = await this.host
@@ -1080,7 +1092,7 @@ export class NativeAgentLaunchActivityReconciler {
                   : {}),
                 pendingInteraction:
                   observedActivity === "waiting" ||
-                  (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
+                  (!taskInputDeclined && (observation?.asyncQuestionItemIds?.length ?? 0) > 0),
                 readTurnFailed: async () => {
                   const outcome = session.turnOutcomes?.find(
                     (entry) => entry.requestId === latestRequestId(session),
@@ -1701,6 +1713,57 @@ export class NativeAgentLaunchActivityReconciler {
     );
   }
 
+  private async declineOpeningTaskInput(
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<boolean> {
+    const interactions = provider.interactions;
+    if (!interactions || session.origin !== "interactive-native") return false;
+    const environment = await this.storage.getEnvironment(session.environmentId);
+    const opening = environment?.openingInteraction;
+    if (
+      opening?.mode !== "task" ||
+      opening.sessionKey !== session.key ||
+      opening.providerSessionId !== session.providerSessionId ||
+      opening.requestId !== latestRequestId(session) ||
+      latestTurnStopped(session) ||
+      activityTurnSettled(session) ||
+      session.turnOutcomes?.some((outcome) => outcome.requestId === opening.requestId)
+    )
+      return false;
+
+    const { requests } = await interactions.listPendingInteractions(session.providerSessionId);
+    let allDeclined = requests.length > 0;
+    for (const request of requests) {
+      if (
+        agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, request.kind) !==
+        "decline-and-continue"
+      ) {
+        allDeclined = false;
+        continue;
+      }
+      // The interaction read can race a turn ending and a follow-up starting.
+      const current = await this.storage.getNativeAgentSession(session.key);
+      if (
+        !current ||
+        current.providerSessionId !== session.providerSessionId ||
+        latestRequestId(current) !== opening.requestId ||
+        latestTurnStopped(current) ||
+        activityTurnSettled(current)
+      )
+        return false;
+      const result = await interactions.resolveInteraction(session.providerSessionId, request.id, {
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        sessionId: session.providerSessionId,
+        interactionId: request.id,
+        action: "decline",
+        resolvedAt: this.host.now(),
+      });
+      allDeclined &&= result.result === "applied" || result.result === "already-resolved";
+    }
+    return allDeclined;
+  }
+
   private async reconcileInitialLaunchOnce(environmentId: string): Promise<void> {
     if (this.host.isStopped()) return;
     const environment = await this.storage.getEnvironment(environmentId);
@@ -1730,7 +1793,13 @@ export class NativeAgentLaunchActivityReconciler {
     // belonging to one platform's catalogue could be sent to another; a model
     // now travels only down its own platform column.
     const resolved = resolveAgentPlatformSettings(tiers, agent);
-    const mode = resolved.mode;
+    // Grok's terminal launcher cannot pass an opening prompt. Use its native
+    // provider for this launch when there is work to deliver.
+    const grokOpeningWork =
+      agent === "grok" &&
+      environment.interactionMode !== undefined &&
+      Boolean(environment.initialPrompt?.trim() || environment.initialPromptAttachments?.length);
+    const mode = grokOpeningWork ? "native" : resolved.mode;
     // Tmux mode is experimental: a stored `tmux` launches on the Agent SDK
     // unless `global.experimentalTmux` is on.
     const claudeNativeBackend = effectiveClaudeNativeBackend(
@@ -1847,6 +1916,14 @@ export class NativeAgentLaunchActivityReconciler {
         }
 
         await this.storage.updateEnvironment(environment.id, {
+          ...(prompt && environment.interactionMode && !environment.openingInteraction
+            ? {
+                openingInteraction: {
+                  requestId: tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID),
+                  mode: environment.interactionMode,
+                },
+              }
+            : {}),
           pendingAgentLaunch: false,
           initialAgentPlatform: undefined,
           initialAgentModel: undefined,
@@ -1989,10 +2066,7 @@ export class NativeAgentLaunchActivityReconciler {
         ...(parameterValues ? { parameterValues } : {}),
         // A file-only turn needs non-blank text before its final workspace paths
         // can be resolved inside the dispatch lock below.
-        prompt: withEnvironmentInteraction(
-          prompt || (files.length > 0 ? "Use the attached file." : ""),
-          environment.interactionMode,
-        ),
+        prompt: prompt || (files.length > 0 ? "Use the attached file." : ""),
         requestId: tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID),
         images,
         ...(environment.initialPromptPresentation
@@ -2015,10 +2089,7 @@ export class NativeAgentLaunchActivityReconciler {
               );
               return {
                 dispatch: true,
-                prompt: withEnvironmentInteraction(
-                  buildInitialPromptWithAttachmentReferences(prompt ?? "", saved),
-                  environment.interactionMode,
-                ),
+                prompt: buildInitialPromptWithAttachmentReferences(prompt ?? "", saved),
               };
             })
           : await this.host.dispatchPrompt(dispatchInput);

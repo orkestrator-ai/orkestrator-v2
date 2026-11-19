@@ -1384,6 +1384,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       initialReasoningEffort: undefined,
       initialFastMode: undefined,
       initialPromptAttachments: attachments,
+      interactionMode: undefined,
     });
     expect(
       resolveEnvironmentAgentLaunchSettings({
@@ -1397,6 +1398,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       initialReasoningEffort: undefined,
       initialFastMode: undefined,
       initialPromptAttachments: undefined,
+      interactionMode: undefined,
     });
   });
 

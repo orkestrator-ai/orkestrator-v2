@@ -3207,6 +3207,32 @@ describe("resolveAgentDefaults", () => {
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
+  test("keeps a paste when switching prompt modes moves focus to the selector", async () => {
+    const pendingImage = deferred<{
+      rgba: () => Promise<Uint8Array>;
+      size: () => Promise<{ width: number; height: number }>;
+    }>();
+    mockReadImage.mockImplementation(() => pendingImage.promise);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+    screen.getByLabelText(/Initial prompt/i).focus();
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    const interactive = screen.getByRole("button", { name: /^Interactive$/ });
+    interactive.focus();
+    fireEvent.click(interactive);
+    await act(async () =>
+      pendingImage.resolve({
+        rgba: async () => new Uint8Array([255, 0, 0, 255]),
+        size: async () => ({ width: 1, height: 1 }),
+      }),
+    );
+
+    expect(await screen.findByAltText(/initial-prompt-/)).toBeTruthy();
+  });
+
   test("lets a second paste supersede an earlier in-flight clipboard read", async () => {
     const firstImage = deferred<{
       rgba: () => Promise<Uint8Array>;
@@ -3417,6 +3443,44 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => expect(create.disabled).toBe(false));
     fireEvent.click(create);
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  });
+
+  test("keeps a pending drop and the prompt when switching to Interactive", async () => {
+    const pendingBuffer = deferred<ArrayBuffer>();
+    const file = new File(["pending"], "pending.txt", { type: "text/plain" });
+    Object.defineProperty(file, "arrayBuffer", { value: () => pendingBuffer.promise });
+    const onCreate = mock(async (_options: unknown) => {});
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
+      target: { value: "Inspect the attachment" },
+    });
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([file]),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Interactive$/ }));
+    const create = screen.getByRole("button", {
+      name: "Create environment",
+    }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    fireEvent.click(create);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", ctrlKey: true });
+    expect(onCreate).not.toHaveBeenCalled();
+
+    await act(async () => pendingBuffer.resolve(new TextEncoder().encode("pending").buffer));
+    expect(await screen.findByText("pending.txt")).toBeTruthy();
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]).toContainEqual(
+      expect.objectContaining({
+        initialPrompt: "Inspect the attachment",
+        interactionMode: "interactive",
+        initialPromptAttachments: [expect.objectContaining({ name: "pending.txt" })],
+      }),
+    );
   });
 
   test("discards a pending drop when the dialog resets", async () => {

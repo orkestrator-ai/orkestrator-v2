@@ -33,6 +33,31 @@ const {
 } = await createCommandFixtures();
 
 describe("environment status and settings commands", () => {
+  test("refuses prompt interaction modes on a pipeline-owned environment", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment({ id: "owned", buildPipelineId: "pipeline" });
+      await storage.addEnvironment(environment);
+      await storage.saveBuildPipeline("pipeline", environment.projectId, environment.id, 1, {
+        environmentId: environment.id,
+      });
+      const { context } = createContext([], { dataDir });
+      context.storage = storage;
+      const commands = createCommandRegistry();
+
+      await expect(
+        commands.get("update_environment_agent_settings")?.(
+          {
+            environmentId: environment.id,
+            interactionMode: "interactive",
+          },
+          context,
+        ),
+      ).rejects.toThrow("Pipeline environments use the pipeline interaction policy");
+      const saved = await storage.getEnvironment(environment.id);
+      expect(saved?.interactionMode).toBeUndefined();
+    });
+  });
+
   test("lists and snapshots only the requested project's persisted environments", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const projectId = "project-1";

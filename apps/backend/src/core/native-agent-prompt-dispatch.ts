@@ -8,6 +8,11 @@ import {
 } from "@orkestrator/protocol/native-terminal-rows";
 import { nativeTerminalMessages } from "./native-terminal-messages.js";
 import { asRecord } from "./agent-provider-runtime.js";
+import { withEnvironmentInteraction } from "@orkestrator/protocol/environment-interaction";
+import {
+  tabInitialPromptRequestId,
+  STARTUP_AGENT_TAB_ID,
+} from "@orkestrator/protocol/tab-initial-prompt";
 import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import type {
   NativeAgentControlUpdate,
@@ -1386,8 +1391,20 @@ export class NativeAgentPromptDispatch {
               pendingHandoff,
               durable,
             );
+            let opening: Environment["openingInteraction"];
             try {
-              await provider.send(durable.providerSessionId, outgoing.prompt, {
+              opening =
+                home?.interactionMode && !mailInject
+                  ? await this.claimOpeningInteraction(input, durable)
+                  : undefined;
+              // A resolved provider command owns its arguments and may parse
+              // the original prompt. Give its turn the Task input policy,
+              // while leaving its text and binding intact.
+              const providerPrompt =
+                commandPlan.commandName && commandPlan.allowProviderCommands
+                  ? outgoing.prompt
+                  : withEnvironmentInteraction(outgoing.prompt, opening?.mode, hasAttachments);
+              await provider.send(durable.providerSessionId, providerPrompt, {
                 requestId: input.requestId,
                 // Only a person typing into the composer can mean "run this
                 // command"; workflow-authored prompts are literal text. The plan
@@ -1446,7 +1463,7 @@ export class NativeAgentPromptDispatch {
                 providerSessionId: durable.providerSessionId,
               });
               settleChangeTurn("accepted");
-              this.host.signInResends.remember(durable, input, outgoing.prompt, {
+              this.host.signInResends.remember(durable, input, providerPrompt, {
                 literalPrompt: commandPlan.command === undefined && !mailInject && !recovery,
               });
               return {
@@ -1462,6 +1479,17 @@ export class NativeAgentPromptDispatch {
               // settlement and the artifact grant until the outcome is known.
               if (!(error instanceof AmbiguousPromptDispatchError)) {
                 this.host.settleArtifactTurn(durable, input.requestId);
+                if (opening) {
+                  await this.host.storage
+                    .updateEnvironment(
+                      durable.environmentId,
+                      { openingInteraction: undefined },
+                      (environment) =>
+                        environment.openingInteraction?.sessionKey === durable.key &&
+                        environment.openingInteraction.requestId === input.requestId,
+                    )
+                    .catch(() => undefined);
+                }
               }
               if (
                 mailInject &&
@@ -1609,6 +1637,42 @@ export class NativeAgentPromptDispatch {
     } finally {
       releaseCoordinatorTurn?.();
     }
+  }
+
+  /** Claim the environment's opening model turn before writing to the provider. */
+  private async claimOpeningInteraction(
+    input: DispatchNativeAgentPromptInput,
+    session: PersistedNativeAgentSession,
+  ): Promise<Environment["openingInteraction"]> {
+    if (session.owner?.kind !== "environment" || session.origin !== "interactive-native") {
+      return undefined;
+    }
+    const matches = (opening: Environment["openingInteraction"]) =>
+      opening?.sessionKey === session.key && opening.requestId === input.requestId;
+    const live = await this.host.storage.getEnvironment(input.environmentId);
+    if (live?.openingInteraction) {
+      return matches(live.openingInteraction) ? live.openingInteraction : undefined;
+    }
+    if (!live?.interactionMode || session.lastDispatchedTurn || session.turnOutcomes?.length) {
+      return undefined;
+    }
+    const claimed = await this.host.storage.updateEnvironment(
+      live.id,
+      {
+        openingInteraction: {
+          requestId: input.requestId,
+          sessionKey: session.key,
+          providerSessionId: session.providerSessionId,
+          mode: live.interactionMode,
+        },
+      },
+      (environment) =>
+        !environment.openingInteraction &&
+        environment.interactionMode === live.interactionMode &&
+        (!environment.pendingAgentLaunch ||
+          input.requestId === tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID)),
+    );
+    return matches(claimed.openingInteraction) ? claimed.openingInteraction : undefined;
   }
 
   /**

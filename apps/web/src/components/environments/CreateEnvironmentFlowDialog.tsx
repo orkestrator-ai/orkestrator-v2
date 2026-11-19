@@ -124,8 +124,7 @@ export function resolveEnvironmentAgentLaunchSettings(options: ClaudeOptions) {
     initialReasoningEffort: options.launchAgent ? options.reasoningEffort : undefined,
     initialFastMode: options.launchAgent ? options.fastMode : undefined,
     initialPromptAttachments: options.launchAgent ? options.initialPromptAttachments : undefined,
-    // Durable, so it is saved whether or not the agent launches now: a prompt
-    // started later from the environment is told the same thing.
+    // A deferred native turn reads the mode when it sends its first request.
     interactionMode: options.interactionMode,
   };
 }
@@ -134,6 +133,7 @@ export function usesNativeStartupAgentTab(
   config: Pick<AppConfig, "global" | "repositories">,
   projectId: string,
   agentSettings: AgentSettingsTier,
+  hasOpeningWorkWithInteractionMode = false,
 ): boolean {
   const launch = resolveStartupLaunchFromSettings(
     agentSettingsTiers(config, projectId, { agentSettings }),
@@ -142,7 +142,10 @@ export function usesNativeStartupAgentTab(
     launch.claudeNativeBackend,
     isTmuxModeEnabled(config.global),
   );
-  return launch.mode === "native" && !(launch.agent === "claude" && backend === "tmux");
+  return (
+    (launch.agent === "grok" && hasOpeningWorkWithInteractionMode) ||
+    (launch.mode === "native" && !(launch.agent === "claude" && backend === "tmux"))
+  );
 }
 
 /**
@@ -317,7 +320,15 @@ export function CreateEnvironmentFlowDialog({
       updateEnvironment(environment.id, configuredEnvironment);
       if (
         launchSettings.pendingAgentLaunch &&
-        usesNativeStartupAgentTab(config, projectId, agentSettings)
+        usesNativeStartupAgentTab(
+          config,
+          projectId,
+          agentSettings,
+          Boolean(
+            launchSettings.interactionMode &&
+            (request.initialPrompt?.trim() || launchSettings.initialPromptAttachments?.length),
+          ),
+        )
       ) {
         armStartupAgentTabActivation(configuredEnvironment.id, scope);
       }

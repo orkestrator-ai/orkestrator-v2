@@ -160,6 +160,13 @@ export interface Environment extends Omit<
   containerLifecycle?: EnvironmentContainerLifecycle;
   /** Backend-owned generation that prevents a later rename from reusing branch history. */
   branchRevision?: number;
+  /** The request that claimed the opening prompt's interaction guidance. */
+  openingInteraction?: {
+    requestId: string;
+    mode: NonNullable<ClientEnvironment["interactionMode"]>;
+    providerSessionId?: string;
+    sessionKey?: string;
+  };
   /**
    * Durable backend intent armed by the Resolve action.
    *

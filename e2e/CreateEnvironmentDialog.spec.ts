@@ -410,19 +410,17 @@ async function dropImages(page: Page, images: { name: string; color: string }[])
   }, images);
 }
 
-for (const intent of ["prompt", "feature"] as const) {
+for (const intent of ["Task", "Interactive", "Pipeline"] as const) {
   test(`${intent} attached images open in a preview modal over the dialog`, async ({
     page,
   }, testInfo) => {
     await page.goto("/");
-    if (intent === "feature") {
-      await page
-        .getByRole("group", { name: "Build intent" })
-        .getByRole("button", { name: "Pipeline", exact: true })
-        .click();
-    }
+    await page
+      .getByRole("group", { name: "Build intent" })
+      .getByRole("button", { name: intent, exact: true })
+      .click();
     const prompt =
-      intent === "feature"
+      intent === "Pipeline"
         ? page.getByLabel("Description", { exact: true })
         : page.getByLabel("Initial prompt (optional)");
     await prompt.fill("Keep this staged brief");
@@ -463,5 +461,10 @@ for (const intent of ["prompt", "feature"] as const) {
     await expectNoHorizontalOverflow(page);
     await expect(page.getByRole("button", { name: "Preview first.png" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Preview second.png" })).toBeVisible();
+    if (intent === "Interactive") {
+      await page.screenshot({
+        path: `output/visual-previews/interaction-review-attachments-${testInfo.project.name}.png`,
+      });
+    }
   });
 }

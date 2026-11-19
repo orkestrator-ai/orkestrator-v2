@@ -382,7 +382,12 @@ export class ConfigRepository {
       if (isMissingFileError(error)) return null;
       throw error;
     }
-    return this.context.loadJsonCached<PersistedConfig>(this.files.configFile(), defaultConfig);
+    const stored = await this.context.loadJsonCached<PersistedConfig | null>(
+      this.files.configFile(),
+      defaultConfig,
+    );
+    if (stored === null) throw new Error("Invalid saved configuration");
+    return stored;
   }
 
   /** Every config writer holds the same lock. The patch also names edits equal to a default. */

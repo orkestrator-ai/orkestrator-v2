@@ -481,3 +481,24 @@ env -u NODE_ENV mise run test:logged -- --name merge-browser-ToolGroupFold -- \
 ```
 
 The owning file passed across both Chromium viewports with one worker in 104.2 seconds. The recurrence check confirmed case 1012 is open on the target base.
+
+
+## Settings review recurrence (2026-11-19)
+
+On the Settings review branch based on `5e9835d0a6981a8d2c217d8941e2e065abbe3008`,
+`mise run test:logged -- --name browser -- mise run test:browser` measured
+a 57 px mobile gap against the 2 px limit at line 195. Three workers started
+1,031 of 2,130 component cases before the 1,800 s deadline. The browser run
+emitted no sealed totals. See `orkestrator-test-run.Md64ZR/browser.log.gz`.
+
+The first owner rerun shared a fixture port with the broader check and was
+interrupted when that server stopped. The complete mobile owner passed in
+76.5 s on a private port (exit 0, one worker):
+
+```sh
+ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name tool-group-fold-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --project mobile-chromium --workers=1 --retries=0 --output output/agent-testing/qa-settings-review-640e/tool-group-fold-isolated
+```
+
+`mise run flaky:recurrence -- 1012 --base 5e9835d0a6981a8d2c217d8941e2e065abbe3008`
+reported the case open. The Settings branch leaves the fold implementation and
+test unchanged.

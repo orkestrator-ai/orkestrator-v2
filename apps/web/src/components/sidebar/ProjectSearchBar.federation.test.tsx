@@ -244,6 +244,22 @@ describe("ProjectSearchBar across machines", () => {
     });
   });
 
+  test("search opens a paired checkout on its machine without a Coordinator hint", async () => {
+    const store = appCommandStore(projectStore);
+    const initial = store.getState();
+    try {
+      store.getState().setProjects([localProject]);
+      renderSearch();
+      await openAndType("orkestrator");
+      fireEvent.click(await option("orkestrator-v2, project on mbp3"));
+      expect(useRemoteWorkspaceStore.getState().requests.bk_mbp3?.request).toEqual({
+        projectId: "ork-3",
+      });
+    } finally {
+      act(() => store.setState(initial, true));
+    }
+  });
+
   test("lists a project once per machine, each labelled, offline rows greyed with the note", async () => {
     renderSearch();
     await openAndType("orkestrator");

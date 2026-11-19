@@ -10,10 +10,19 @@ import {
 import type { MachineView } from "@/lib/federation/aggregate";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { FederationProvider } from "./FederationProvider";
+import type { BoundEnvironmentRendering } from "./RepositoryEnvironmentList";
 
 export function renderWithFederation(node: ReactNode) {
   return renderInAppCommandScope(<FederationProvider>{node}</FederationProvider>);
 }
+
+/** This window's own machine draws nothing: the suites list other machines' rows. */
+export const NO_BOUND_ROWS: BoundEnvironmentRendering = {
+  renderEnvironment: () => null,
+  selectedEnvironmentId: null,
+  onDragEnd: () => undefined,
+  onCreate: () => undefined,
+};
 
 export function machineView(overrides: Partial<MachineView> = {}): MachineView {
   const backendId = "bk_a" as BackendId;

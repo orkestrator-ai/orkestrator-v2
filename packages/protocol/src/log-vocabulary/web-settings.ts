@@ -26,6 +26,13 @@ export const WEB_SETTINGS_LOG_AREAS = defineLogAreas({
       "file-picker.failed": "The repository file picker could not open.",
       "repository.save-failed": "Repository settings could not be saved.",
       "model-catalogues.read-failed": "Reading the model catalogues for settings failed.",
+      "search.result-opened":
+        "A settings search result was opened: its section, rank, match field and time since the search began. Never the query or a value.",
+      "search.field-missing":
+        "A search result's section opened but its field was not on screen (hidden or unavailable).",
+      "sources.read-failed": "Reading where the settings on screen come from failed.",
+      "reset.finished":
+        "A setting reset finished: reset, conflict (its value changed since the preview) or failed. Never the value.",
     },
   },
 });

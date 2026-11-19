@@ -1,5 +1,5 @@
 /**
- * The `nodes` domain (plan item 7009): its 51 definitions classify reads as
+ * The `nodes` domain (plan item 7009): its 52 definitions classify reads as
  * the routing classifier does and access as recorded, decode arguments
  * tolerantly (the handlers were strict), keep model records open, and its
  * client sends typed, enveloped calls to a node with the domain while a
@@ -58,10 +58,10 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("nodes definitions", () => {
-  it("defines the domain's 51 commands once each, at version 1", () => {
+  it("defines the domain's 52 commands once each, at version 1", () => {
     const names = NODES_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(51);
-    expect(new Set(names).size).toBe(51);
+    expect(names).toHaveLength(52);
+    expect(new Set(names).size).toBe(52);
     expect(nodesDomain).toMatchObject({ name: "nodes", version: 1, min: 1 });
     for (const def of NODES_COMMANDS) {
       expect(def.domain).toBe(nodesDomain);

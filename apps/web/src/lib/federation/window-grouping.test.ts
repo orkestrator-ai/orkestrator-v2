@@ -6,21 +6,17 @@ import {
   windowGroupingFor,
 } from "./window-grouping";
 
-test("another node's coordinator defers to the command node only when grouped by repository", () => {
+test("another node's coordinator defers to the command node only in the repository list", () => {
   expect(coordinatorDefersToCommandNode("repository")).toBe(true);
-  expect(coordinatorDefersToCommandNode("machine")).toBe(false);
-  expect(coordinatorDefersToCommandNode("project")).toBe(false);
   expect(coordinatorDefersToCommandNode("activity")).toBe(false);
 });
 
-test("a sidebar project entry lands on Home only for another node's project grouped by repository", () => {
+test("a sidebar project entry lands on Home only for another node's project in the repository list", () => {
   const expected = {
     repository: { command: "coordinator", leaf: "home" },
-    machine: { command: "coordinator", leaf: "coordinator" },
-    project: { command: "coordinator", leaf: "coordinator" },
     activity: { command: "coordinator", leaf: "coordinator" },
   } as const;
-  for (const grouping of ["repository", "machine", "project", "activity"] as const) {
+  for (const grouping of ["repository", "activity"] as const) {
     for (const node of ["command", "leaf"] as const) {
       const onCommandNode = node === "command";
       const tab = expected[grouping][node];
@@ -37,11 +33,11 @@ test("a sidebar project entry lands on Home only for another node's project grou
   }
 });
 
-test("compact counts as repository grouping", () => {
+test("the full list and compact count as the repository list", () => {
   expect(windowGroupingFor("project", "compact")).toBe("repository");
   // Compact lists no environments, so sorting them changes nothing about it.
   expect(windowGroupingFor("activity", "compact")).toBe("repository");
-  expect(windowGroupingFor("project", "machine")).toBe("machine");
+  expect(windowGroupingFor("project", "repository")).toBe("repository");
   expect(windowGroupingFor("activity", "repository")).toBe("activity");
 });
 

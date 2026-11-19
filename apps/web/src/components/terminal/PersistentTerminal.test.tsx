@@ -705,6 +705,30 @@ describe("PersistentTerminal", () => {
     delete window.orkestrator;
   });
 
+  it("applies scrollback changes to the terminal that is already mounted", async () => {
+    const terminalData = createTerminalData();
+    const terminal = terminalData.terminal as unknown as MockTerminal;
+    renderInAppCommandScope(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+    expect(terminal.options.scrollback).toBe(5000);
+    act(() =>
+      appCommandStore(configStore).getState().updateGlobalConfig({ terminalScrollback: 7000 }),
+    );
+    await waitFor(() => expect(terminal.options.scrollback).toBe(7000));
+  });
+
   it("publishes geometry for a visible non-focused split pane in the focused window", async () => {
     const originalHasFocus = document.hasFocus;
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });

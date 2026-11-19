@@ -37,10 +37,10 @@ import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
 import { EnvironmentAttentionFixture } from "./EnvironmentAttentionFixture";
-import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
+import { RepositoryEnvironmentListFixture } from "../../apps/web/src/test/RepositoryEnvironmentListFixture";
 import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
 import { CommandPaletteHistoryFixture } from "./CommandPaletteHistoryFixture";
-import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
+import { RemoteEnvironmentRowsFixture } from "../../apps/web/src/test/RemoteEnvironmentRowsFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { CursorScreenRecordingFixture } from "./CursorScreenRecordingFixture";
 import { NativeMessageSpacingFixture } from "./NativeMessageSpacingFixture";
@@ -75,6 +75,7 @@ import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
 import { SelfImprovementSettingsFixture } from "./SelfImprovementSettingsFixture";
 import { SettingsMachineFixture } from "./SettingsMachineFixture";
 import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
+import { SettingsSearchFixture } from "./SettingsSearchFixture";
 import { GitHubCliSetupFixture } from "./GitHubCliSetupFixture";
 import { AgentsMdApprovalFixture } from "./AgentsMdApprovalFixture";
 import { GraphRunFlowFixture } from "./GraphRunFlowFixture";
@@ -2170,7 +2171,8 @@ function fixtureForPath() {
       </Suspense>
     );
   }
-  if (window.location.pathname === "/merged-project-list") return <MergedProjectListFixture />;
+  if (window.location.pathname === "/repository-environment-list")
+    return <RepositoryEnvironmentListFixture />;
   if (window.location.pathname === "/project-search-machines")
     return <ProjectSearchMachinesFixture />;
   if (window.location.pathname === "/command-palette-history")
@@ -2178,7 +2180,8 @@ function fixtureForPath() {
   if (window.location.pathname === "/environment-status-marker")
     return <EnvironmentStatusMarkerFixture />;
   if (window.location.pathname === "/environment-attention") return <EnvironmentAttentionFixture />;
-  if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
+  if (window.location.pathname === "/remote-environment-rows")
+    return <RemoteEnvironmentRowsFixture />;
   if (window.location.pathname === "/agent-account-status") return <AgentAccountStatusFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings")
@@ -2189,6 +2192,7 @@ function fixtureForPath() {
       </>
     );
   if (window.location.pathname === "/settings-machines") return <SettingsMachineFixture />;
+  if (window.location.pathname === "/settings-search") return <SettingsSearchFixture />;
   if (window.location.pathname === "/self-improvement-settings")
     return <SelfImprovementSettingsFixture />;
   if (window.location.pathname === "/scheduler-status") return <SchedulerStatusFixture />;

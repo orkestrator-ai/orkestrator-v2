@@ -1,4 +1,6 @@
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
+import { COMMAND_NODE_SECTIONS } from "./settings-catalog/scope";
+import { SETTINGS_SECTION_LABELS } from "./settings-catalog/sections";
 
 /**
  * One catalogue of the Settings destinations a user can name: the section
@@ -21,66 +23,111 @@ export const GLOBAL_SETTINGS_CATALOG: Readonly<
   Record<GlobalSettingsSection, GlobalSettingsCatalogEntry>
 > = {
   general: {
-    label: "General",
+    label: SETTINGS_SECTION_LABELS["general"],
     aliases: ["preferences", "preferred editor", "editor", "environment files", "options"],
   },
   "version-control": {
-    label: "Version control",
+    label: SETTINGS_SECTION_LABELS["version-control"],
     aliases: ["git", "github", "github token", "auto-merge", "pull requests"],
   },
   machines: {
-    label: "Machines",
+    label: SETTINGS_SECTION_LABELS["machines"],
     aliases: ["federation", "nodes", "remote machines", "updates", "connections"],
   },
-  "disk-usage": { label: "Disk usage", aliases: ["storage", "space", "cleanup"] },
-  usage: { label: "Usage", aliases: ["cost", "tokens", "spend", "billing"] },
+  "disk-usage": {
+    label: SETTINGS_SECTION_LABELS["disk-usage"],
+    aliases: ["storage", "space", "cleanup"],
+  },
+  usage: {
+    label: SETTINGS_SECTION_LABELS["usage"],
+    aliases: ["cost", "tokens", "spend", "billing"],
+  },
   defaults: {
-    label: "Defaults",
+    label: SETTINGS_SECTION_LABELS["defaults"],
     aliases: ["default agent", "default model", "new environment defaults"],
   },
-  platforms: { label: "Platforms", aliases: ["agents", "agent platforms", "providers"] },
-  coordinator: { label: "Coordinator", aliases: ["safety level", "orchestration"] },
-  review: { label: "Review", aliases: ["code review", "multi review", "reviewers"] },
-  claude: { label: "Claude", aliases: ["anthropic", "claude code", "api key"] },
-  codex: { label: "Codex", aliases: ["openai", "chatgpt"] },
-  cursor: { label: "Cursor", aliases: ["cursor api key"] },
-  grok: { label: "Grok", aliases: ["xai"] },
-  opencode: { label: "OpenCode", aliases: ["zen", "model providers"] },
-  pi: { label: "Pi", aliases: ["pi agent", "thinking level"] },
-  skills: { label: "Skills and plugins", aliases: ["plugins", "skills", "extensions"] },
-  terminal: { label: "Terminal", aliases: ["shell", "font", "xterm"] },
+  platforms: {
+    label: SETTINGS_SECTION_LABELS["platforms"],
+    aliases: ["agents", "agent platforms", "providers"],
+  },
+  coordinator: {
+    label: SETTINGS_SECTION_LABELS["coordinator"],
+    aliases: ["safety level", "orchestration"],
+  },
+  review: {
+    label: SETTINGS_SECTION_LABELS["review"],
+    aliases: ["code review", "multi review", "reviewers"],
+  },
+  claude: {
+    label: SETTINGS_SECTION_LABELS["claude"],
+    aliases: ["anthropic", "claude code", "api key"],
+  },
+  codex: { label: SETTINGS_SECTION_LABELS["codex"], aliases: ["openai", "chatgpt"] },
+  cursor: { label: SETTINGS_SECTION_LABELS["cursor"], aliases: ["cursor api key"] },
+  grok: { label: SETTINGS_SECTION_LABELS["grok"], aliases: ["xai"] },
+  opencode: { label: SETTINGS_SECTION_LABELS["opencode"], aliases: ["zen", "model providers"] },
+  pi: { label: SETTINGS_SECTION_LABELS["pi"], aliases: ["pi agent", "thinking level"] },
+  skills: {
+    label: SETTINGS_SECTION_LABELS["skills"],
+    aliases: ["plugins", "skills", "extensions"],
+  },
+  terminal: { label: SETTINGS_SECTION_LABELS["terminal"], aliases: ["shell", "font", "xterm"] },
   network: {
-    label: "Network",
+    label: SETTINGS_SECTION_LABELS["network"],
     aliases: ["whitelist", "allowlist", "firewall", "allowed domains", "egress"],
   },
-  "web-client": { label: "Web client", aliases: ["browser access", "gateway", "remote access"] },
+  "web-client": {
+    label: SETTINGS_SECTION_LABELS["web-client"],
+    aliases: ["browser access", "gateway", "remote access"],
+  },
   previews: {
-    label: "Browser previews",
+    label: SETTINGS_SECTION_LABELS["previews"],
     aliases: ["preview", "preview services", "web service", "dev server", "ports"],
   },
-  "mcp-servers": { label: "MCP servers", aliases: ["mcp", "tools", "servers"] },
-  mcp: { label: "Control MCP", aliases: ["mcp control", "orkestrator mcp"] },
-  messaging: { label: "Messaging", aliases: ["agent mail", "mailbox", "mail"] },
+  "mcp-servers": {
+    label: SETTINGS_SECTION_LABELS["mcp-servers"],
+    aliases: ["mcp", "tools", "servers"],
+  },
+  mcp: { label: SETTINGS_SECTION_LABELS["mcp"], aliases: ["mcp control", "orkestrator mcp"] },
+  messaging: {
+    label: SETTINGS_SECTION_LABELS["messaging"],
+    aliases: ["agent mail", "mailbox", "mail"],
+  },
   schedules: {
-    label: "Schedules",
+    label: SETTINGS_SECTION_LABELS["schedules"],
     aliases: ["scheduled jobs", "cron", "timers"],
     gate: "experimentalScheduling",
   },
   "self-improvement": {
-    label: "Self-improvement",
+    label: SETTINGS_SECTION_LABELS["self-improvement"],
     aliases: ["learning", "improvement"],
     gate: "experimentalSelfImprovement",
   },
-  permissions: { label: "Permissions", aliases: ["approvals", "permission rules", "allow"] },
-  credentials: { label: "Credentials", aliases: ["secrets", "api keys", "tokens", "grants"] },
-  sounds: { label: "Sounds", aliases: ["notifications", "audio", "alerts"] },
-  docker: { label: "Docker", aliases: ["containers", "images"] },
+  permissions: {
+    label: SETTINGS_SECTION_LABELS["permissions"],
+    aliases: ["approvals", "permission rules", "allow"],
+  },
+  credentials: {
+    label: SETTINGS_SECTION_LABELS["credentials"],
+    aliases: ["secrets", "api keys", "tokens", "grants"],
+  },
+  sounds: {
+    label: SETTINGS_SECTION_LABELS["sounds"],
+    aliases: ["notifications", "audio", "alerts"],
+  },
+  docker: { label: SETTINGS_SECTION_LABELS["docker"], aliases: ["containers", "images"] },
   container: {
-    label: "Container",
+    label: SETTINGS_SECTION_LABELS["container"],
     aliases: ["container resources", "memory", "cpu", "image"],
   },
-  experimental: { label: "Experimental", aliases: ["labs", "beta", "feature flags"] },
-  debug: { label: "Debug", aliases: ["logs", "log detail", "diagnostics", "app version"] },
+  experimental: {
+    label: SETTINGS_SECTION_LABELS["experimental"],
+    aliases: ["labs", "beta", "feature flags"],
+  },
+  debug: {
+    label: SETTINGS_SECTION_LABELS["debug"],
+    aliases: ["logs", "log detail", "diagnostics", "app version"],
+  },
 };
 
 /** The section's label in Settings' own menu. */
@@ -96,20 +143,6 @@ export function isGlobalSettingsSectionEnabled(
   const gate = GLOBAL_SETTINGS_CATALOG[section].gate;
   return gate === undefined || flags[gate] === true;
 }
-
-/**
- * Sections only the command node has: its machines, the preferences every
- * machine inherits from it, this client's own web server, and the Control
- * MCP server, whose credentials never cross to another node.
- */
-const COMMAND_NODE_SECTIONS: ReadonlySet<GlobalSettingsSection | ""> = new Set([
-  "machines",
-  "review",
-  "messaging",
-  "schedules",
-  "web-client",
-  "mcp",
-]);
 
 export function isCommandNodeSettingsSection(section: GlobalSettingsSection | ""): boolean {
   return COMMAND_NODE_SECTIONS.has(section);

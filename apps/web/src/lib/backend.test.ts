@@ -1799,6 +1799,9 @@ describe("backend command wrapper coverage", () => {
       // Validate the machine profile they return; covered below.
       "getBackendProfile",
       "updateBackendProfile",
+      // Its last argument is a launch-base object, which a string cannot stand
+      // in for; covered by the create-environment tests above.
+      "createEnvironment",
     ]);
     // `createXApi(client)` factories (plan item 3002) are covered per client in
     // `backend/factories.test.ts`; their named exports are the wrappers swept here.

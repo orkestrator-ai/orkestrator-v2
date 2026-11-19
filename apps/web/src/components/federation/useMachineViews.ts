@@ -167,6 +167,10 @@ export function useBoundMachineView(): MachineView | null {
   );
   const projects = useProjectStore((state) => state.projects);
   const environments = useEnvironmentStore((state) => state.environments);
+  const projectsLoaded = useProjectStore((state) => state.hasLoaded && !state.isLoading);
+  const authoritativeProjectIds = useEnvironmentStore((state) => state.authoritativeProjectIds);
+  const boundEnvironmentsComplete =
+    projectsLoaded && projects.every((project) => authoritativeProjectIds.has(project.id));
   const activeBuildEnvironmentIds = useBuildPipelineStore(
     (state) => state.activeBuildEnvironmentIds,
   );
@@ -187,11 +191,19 @@ export function useBoundMachineView(): MachineView | null {
         activeBuildEnvironmentIds,
       ),
       truncated: false,
+      boundEnvironmentsComplete,
       // This window's own stores are its machine's live state.
       loadedAt: BOUND_MACHINE_LOADED,
       ...(release ? { release } : {}),
     };
-  }, [bound, environments, projects, activeBuildEnvironmentIds, release]);
+  }, [
+    bound,
+    environments,
+    projects,
+    activeBuildEnvironmentIds,
+    boundEnvironmentsComplete,
+    release,
+  ]);
 }
 
 /** The window's warm and live node scopes' own rows, by node (plan item 5007). */

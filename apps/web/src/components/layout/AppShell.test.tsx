@@ -278,7 +278,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useMachineViewStore.setState({ grouping: "machine" });
+  useMachineViewStore.setState({ grouping: "repository" });
   useActiveCoordinatorConversationStore.setState({ active: null });
   uiStore().setState({ projectBoardTab: INITIAL_PROJECT_BOARD_TAB });
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
@@ -684,7 +684,7 @@ describe("AppShell", () => {
     useMachineViewStore.setState({ grouping: "compact" });
     renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.getByTestId("resize-handle").dataset.disabled).toBe("true");
-    act(() => useMachineViewStore.setState({ grouping: "machine" }));
+    act(() => useMachineViewStore.setState({ grouping: "repository" }));
     expect(screen.getByTestId("resize-handle").dataset.disabled).toBe("false");
   });
 
@@ -698,7 +698,7 @@ describe("AppShell", () => {
     expect(useUIChromeStore.getState().sidebarOpen).toBe(false);
 
     act(() => {
-      useMachineViewStore.setState({ grouping: "machine" });
+      useMachineViewStore.setState({ grouping: "repository" });
       useUIChromeStore.setState({ sidebarOpen: true });
     });
     await waitFor(() => expect(screen.getByText("Sidebar")).toBeTruthy());

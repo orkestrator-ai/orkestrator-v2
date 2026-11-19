@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { announceFakeBridgeReady } from "../../tests/fake-bridge-startup.js";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { promises as fs } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -114,7 +115,10 @@ function stubBridgeSpawn(respond: (spawned: ProbeSpawn) => unknown): void {
     spawns.push(spawned);
     const child = createFakeChild();
     children.push(child);
-    void Promise.resolve(respond(spawned));
+    // A real bridge announces its bind once it listens; startup waits for it.
+    void Promise.resolve(respond(spawned)).then(() =>
+      announceFakeBridgeReady(child.stdout, spawned.env.PORT ?? ""),
+    );
     return child;
   }) as never;
 }

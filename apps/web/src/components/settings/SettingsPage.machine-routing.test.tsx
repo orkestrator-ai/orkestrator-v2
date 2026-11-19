@@ -134,6 +134,13 @@ test("a removed explicit Settings owner requires choosing the command machine", 
   act(() => portalStore.store.setState({ nodes: [] }));
 
   await screen.findByText("The selected machine is no longer available.");
+  fireEvent.change(screen.getAllByRole("searchbox", { name: "Search settings" })[0]!, {
+    target: { value: "scrollback" },
+  });
+  const result = await screen.findByRole("button", { name: /^Scrollback buffer/ });
+  expect(result.closest("li")?.textContent).toContain("Current value unavailable");
+  fireEvent.click(result);
+  await screen.findByText("The selected machine is no longer available.");
   expect(writes).toEqual([]);
   fireEvent.click(screen.getByRole("button", { name: "Use the command machine" }));
   await waitFor(() => expect(useAccountMachineStore.getState().chosen).toBeNull());

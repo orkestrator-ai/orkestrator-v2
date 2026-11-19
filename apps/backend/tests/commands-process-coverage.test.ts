@@ -1175,7 +1175,15 @@ describe("process and platform command behavior", () => {
         });
       }
       expect(agentTools.connection).toHaveBeenCalledTimes(2);
-      expect(agentTools.connection).toHaveBeenCalledWith("environment-1", "project-1", "container");
+      // The bridge-wide connection never carries credential tools; per-tab
+      // connections do.
+      expect(agentTools.connection).toHaveBeenCalledWith(
+        "environment-1",
+        "project-1",
+        "container",
+        undefined,
+        { credentialsDisabled: true },
+      );
       expect(checkEnvironmentContainer.mock.calls).toEqual([
         ["container-existing", { reason: "bridge-start", environmentName: "feature-environment" }],
         ["container-existing", { reason: "bridge-start", environmentName: "feature-environment" }],

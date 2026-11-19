@@ -17,3 +17,14 @@ function bridgeAuthStatus(authorization) {
     ? 200 : 401;
 }
 `;
+
+/**
+ * Prints a bridge's bind announcement on an in-process fake child's stdout, as
+ * a real bridge does once its server listens. Startup is not healthy without it.
+ */
+export function announceFakeBridgeReady(
+  stdout: { emit(event: "data", chunk: Buffer): boolean },
+  port: number | string,
+): void {
+  stdout.emit("data", Buffer.from(`${LOCAL_BRIDGE_READY_PREFIX}${port}\n`));
+}

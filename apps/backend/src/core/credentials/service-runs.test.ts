@@ -122,8 +122,10 @@ describe("real command runs", () => {
     });
     const result = await h.service.runCommand(h.caller, {
       grantId: grant.id,
+      // GNU syntax first: GNU `stat -f` reports the file system, printing to
+      // stdout before it fails, while BSD `stat -c` prints nothing.
       command:
-        'stat -f "%Lp" "$KEY_FILE" 2>/dev/null || stat -c "%a" "$KEY_FILE"; cat "$KEY_FILE"; echo; echo "$KEY_FILE"',
+        'stat -c "%a" "$KEY_FILE" 2>/dev/null || stat -f "%Lp" "$KEY_FILE"; cat "$KEY_FILE"; echo; echo "$KEY_FILE"',
       waitMs: 20_000,
     });
     const [mode, content, file] = (result.stdout?.text ?? "").trim().split("\n");

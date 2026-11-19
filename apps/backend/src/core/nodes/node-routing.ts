@@ -144,6 +144,7 @@ export const NODE_ROUTING_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "unwatch_node_events",
   "get_portal_layout",
   "update_portal_layout",
+  "update_repository_environment_order",
   // The command node's own policy for its leaves (plan item 5006).
   "get_fleet_update_policy",
   "set_fleet_update_policy",

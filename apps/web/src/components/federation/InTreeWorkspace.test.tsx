@@ -89,7 +89,7 @@ function workStoppingCalls(commands: string[]): string[] {
 beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project" });
-  useMachineViewStore.setState({ grouping: "machine" });
+  useMachineViewStore.setState({ grouping: "repository" });
   sessionStorage.clear();
   leafClients = [];
   restoreScopes = configureInTreeScopes({

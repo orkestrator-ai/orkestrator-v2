@@ -30,7 +30,8 @@ import {
 } from "@/stores/remoteWorkspaceStore";
 import type { Environment, Project } from "@/types";
 import { NodeWorkspaceHost } from "./NodeWorkspaceHost";
-import { RemoteProjectGroup } from "./RemoteMachineTree";
+import { NO_BOUND_ROWS } from "./federation-ui-test-fixture";
+import { RepositoryEnvironmentList } from "./RepositoryEnvironmentList";
 import { appCommandStore } from "@/test/app-command-store";
 
 /** Outside a node scope provider, components act for the app's command node. */
@@ -383,15 +384,9 @@ test("a leaf project confirmed to have no checkout falls back to Coordinator aft
   ).toBe(false);
 });
 
-for (const [grouping, board] of [
-  ["repository", false],
-  ["repository", true],
-  ["machine", false],
-  ["machine", true],
-  ["project", false],
-] as const) {
-  const coordinator = board || grouping !== "repository";
-  test(`grouped by ${grouping}, remote project ${board ? "Open board" : "name"} opens ${coordinator ? "Coordinator" : "Home"} on the leaf`, async () => {
+for (const action of ["heading", "Open board", "Open Coordinator"] as const) {
+  const tab = action === "Open board" ? "kanban" : "coordinator";
+  test(`a remote repository's ${action === "heading" ? "heading" : action} opens ${tab === "kanban" ? "Kanban" : "Coordinator"} on the leaf`, async () => {
     const summary = toNodeProjectSummary(leafId, { ...project }, 0)!;
     const machine = {
       connectionId: leafId,
@@ -407,36 +402,34 @@ for (const [grouping, board] of [
       loadedAt: 1,
     } satisfies MachineView;
     const tree = renderInAppCommandScope(
-      <RemoteProjectGroup
-        machine={machine}
-        project={summary}
-        environments={[]}
-        isCollapsed
-        onToggleCollapse={() => {}}
-        sortable={false}
-        grouping={grouping}
+      <RepositoryEnvironmentList
+        machines={[machine]}
+        shownIds={new Set([leafId])}
+        ordering="machine"
+        bound={NO_BOUND_ROWS}
       />,
     );
-    const row = screen.getByRole("button", { name: `Open ${project.name} on Leaf` });
-    if (board) {
-      fireEvent.contextMenu(row);
-      fireEvent.click(screen.getByText("Open board"));
-    } else fireEvent.click(row);
+    const heading = screen.getByRole("button", { name: `Open ${project.name} on Leaf` });
+    if (action === "heading") fireEvent.click(heading);
+    else {
+      fireEvent.contextMenu(heading);
+      fireEvent.click(await screen.findByText(action));
+    }
     const request = useRemoteWorkspaceStore.getState().requests[leafId]!.request;
+    // The heading asks for the coordinator only where the project has no last
+    // tab; the menu always asks for its tab.
     expect(request).toEqual({
       projectId: project.id,
-      ...(board ? { boardTab: "coordinator" } : coordinator ? { landingTab: "coordinator" } : {}),
+      ...(action === "heading" ? { landingTab: "coordinator" } : { boardTab: tab }),
     });
     tree.unmount();
     asLeaf();
     open(request);
     await act(async () => resolveProjects([project]));
     await waitFor(() =>
-      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(home.id),
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(project.id),
     );
-    expect(screen.getByLabelText("Visible workspace").textContent).toBe(
-      coordinator ? "coordinator" : home.name,
-    );
+    await waitFor(() => expect(screen.getByLabelText("Visible workspace").textContent).toBe(tab));
   });
 }
 

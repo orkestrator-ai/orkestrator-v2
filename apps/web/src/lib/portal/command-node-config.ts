@@ -23,6 +23,11 @@ import {
 } from "@orkestrator/protocol/agent-platforms";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { CONFIG_COMMANDS } from "@orkestrator/protocol/contract/domains/config";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import type {
+  GlobalSettingSources,
+  ResetSettingExpectation,
+} from "@orkestrator/protocol/setting-sources";
 import { config as configDomain } from "@/lib/node-scope/domains/config";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { deepEqualJson } from "@/lib/chat/message-identity";
@@ -351,17 +356,7 @@ export async function invokeGlobalConfigCommand(
   args?: Record<string, unknown>,
   machine?: string | null,
 ): Promise<AppConfig> {
-  if (machine === null || machine === portalStore.getState().selfId) {
-    return runConfigCommand({ commandNode: commandScopeBackendClient, node: null }, command, args);
-  }
-  if (machine !== undefined) {
-    return runConfigCommand(
-      { commandNode: commandScopeBackendClient, node: routedNodeClient(machine as BackendId) },
-      command,
-      args,
-    );
-  }
-  return runConfigCommand(configTargetsFor(appCommandScope()), command, args);
+  return runConfigCommand(machineTargets(machine), command, args);
 }
 
 export async function invokeRepositoryConfigCommand(
@@ -377,4 +372,174 @@ export function invokeCommandNodeSetting<T>(
   args?: Record<string, unknown>,
 ): Promise<T> {
   return runCommandNodeSetting<T>(configTargetsFor(appCommandScope()), command, args);
+}
+
+// ── Setting sources and guarded resets (Settings search, field explanations) ─
+
+const GET_GLOBAL_SETTING_SOURCES = "get_global_setting_sources";
+const RESET_GLOBAL_SETTINGS = "reset_global_settings";
+
+/** One node's answer to the sources read. */
+export type SettingSourcesRead =
+  | { readonly status: "ok"; readonly sources: GlobalSettingSources }
+  /** The node predates the command: where a value comes from is unknown. */
+  | { readonly status: "unsupported" }
+  | { readonly status: "failed"; readonly message: string };
+
+/**
+ * The sources of both nodes a settings view involves: the command node, whose
+ * stored preferences every machine inherits, and the machine itself (`null`
+ * when the machine is the command node).
+ */
+export interface SettingSourcesLayers {
+  readonly commandNode: SettingSourcesRead;
+  readonly node: SettingSourcesRead | null;
+}
+
+/**
+ * Whether `error` says the node is too old for `command`: it answered
+ * `unknown-command`, or it speaks a `config` version older than the command,
+ * so the client refused to send it. Either way nothing ran.
+ */
+export function isSettingsCommandUnsupported(error: unknown, command: string): boolean {
+  if (incompatibility(error, command)?.code === "unknown-command") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(`${command} arrived in version`);
+}
+
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isGlobalSettingSources(value: unknown): value is GlobalSettingSources {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    isStringList(record.storedKeys) &&
+    (record.unknownKeys === undefined || isStringList(record.unknownKeys)) &&
+    (record.storedFields === undefined || isStringList(record.storedFields)) &&
+    (record.inheritedKeys === null || isStringList(record.inheritedKeys))
+  );
+}
+
+async function readSources(invoke: ConfigInvoke): Promise<SettingSourcesRead> {
+  try {
+    const sources = await invoke<unknown>(GET_GLOBAL_SETTING_SOURCES, {});
+    return isGlobalSettingSources(sources)
+      ? { status: "ok", sources }
+      : { status: "failed", message: "The machine answered with an unreadable list of settings." };
+  } catch (error) {
+    if (isSettingsCommandUnsupported(error, GET_GLOBAL_SETTING_SOURCES)) {
+      return { status: "unsupported" };
+    }
+    return { status: "failed", message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function readSettingSourcesLayers(
+  targets: ConfigTargets,
+): Promise<SettingSourcesLayers> {
+  const [commandNode, node] = await Promise.all([
+    readSources(sender(targets.commandNode)),
+    targets.node ? readSources(sender(targets.node)) : Promise.resolve(null),
+  ]);
+  return { commandNode, node };
+}
+
+/** A guarded reset's outcome; `config` is the effective view after it. */
+export interface ResetSettingsOutcome {
+  readonly status: "reset" | "conflict";
+  /** Keys whose stored value moved since the preview; nothing was removed. */
+  readonly conflicts: string[];
+  readonly config: AppConfig;
+}
+
+interface ResetAnswer {
+  status: "reset" | "conflict";
+  conflicts: string[];
+  config: AppConfig;
+}
+
+/**
+ * Remove stored settings on the node that owns each: inherited preferences on
+ * the command node, everything else on the machine. Each request has one
+ * owner so a conflict always means the whole mutation was refused.
+ */
+export async function runResetGlobalSettings(
+  targets: ConfigTargets,
+  keys: readonly string[],
+  expectations: readonly ResetSettingExpectation[],
+): Promise<ResetSettingsOutcome> {
+  const inherited = new Set<string>(INHERITED_GLOBAL_SETTING_KEYS);
+  if (
+    targets.node &&
+    keys.some((key) => key.startsWith("experimental") || key === "localWindowGatewayTransport")
+  ) {
+    throw new Error("Change Experimental settings from a window connected to that machine.");
+  }
+  const commandInvoke = sender(targets.commandNode);
+  const groups: Array<{ invoke: ConfigInvoke; keys: string[] }> = targets.node
+    ? [
+        { invoke: commandInvoke, keys: keys.filter((key) => inherited.has(key)) },
+        { invoke: sender(targets.node), keys: keys.filter((key) => !inherited.has(key)) },
+      ]
+    : [{ invoke: commandInvoke, keys: [...keys] }];
+  const owners = groups.filter((group) => group.keys.length > 0);
+  if (owners.length !== 1) {
+    throw new Error("Choose settings belonging to one machine to reset together.");
+  }
+  const owner = owners[0]!;
+  const answer = await owner.invoke<ResetAnswer>(RESET_GLOBAL_SETTINGS, {
+    keys: owner.keys,
+    expect: expectations,
+  });
+  const onCommand = owner === groups[0];
+  return {
+    status: answer.status,
+    conflicts: answer.conflicts,
+    config: await effectiveAfter(
+      targets,
+      onCommand ? answer.config : null,
+      onCommand ? null : answer.config,
+    ),
+  };
+}
+
+async function effectiveAfter(
+  targets: ConfigTargets,
+  commandConfig: AppConfig | null,
+  nodeConfig: AppConfig | null,
+): Promise<AppConfig> {
+  if (!targets.node)
+    return commandConfig ?? (await sender(targets.commandNode)<AppConfig>("get_config"));
+  const [commandNode, node] = await Promise.all([
+    commandConfig ?? sender(targets.commandNode)<AppConfig>("get_config"),
+    nodeConfig ?? sender(targets.node)<AppConfig>("get_config"),
+  ]);
+  return layerConfig(commandNode, node);
+}
+
+/** `invokeGlobalConfigCommand`'s targets for `machine`. */
+function machineTargets(machine?: string | null): ConfigTargets {
+  if (machine === null || machine === portalStore.getState().selfId) {
+    return { commandNode: commandScopeBackendClient, node: null };
+  }
+  if (machine !== undefined) {
+    return { commandNode: commandScopeBackendClient, node: routedNodeClient(machine as BackendId) };
+  }
+  return configTargetsFor(appCommandScope());
+}
+
+/** Where `machine`'s settings come from, as Settings shows it. */
+export function invokeSettingSources(machine?: string | null): Promise<SettingSourcesLayers> {
+  return readSettingSourcesLayers(machineTargets(machine));
+}
+
+/** Reset settings for `machine`, each on the node that owns it. */
+export function invokeResetGlobalSettings(
+  keys: readonly string[],
+  expectations: readonly ResetSettingExpectation[],
+  machine?: string | null,
+): Promise<ResetSettingsOutcome> {
+  return runResetGlobalSettings(machineTargets(machine), keys, expectations);
 }

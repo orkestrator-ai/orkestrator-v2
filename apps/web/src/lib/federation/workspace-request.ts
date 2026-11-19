@@ -66,6 +66,8 @@ export interface WorkspaceRequest {
    * tab the project was last left on.
    */
   landingTab?: WorkspaceBoardTab;
+  /** Open a file view in the selected environment. */
+  filesPanelTab?: "changes" | "all-files";
   /** Work in the selected environment. */
   workTarget?: WorkspaceWorkTarget;
   /** Open the node's Add Project dialog. */

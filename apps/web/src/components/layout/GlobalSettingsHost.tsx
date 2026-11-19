@@ -33,7 +33,7 @@ export function GlobalSettingsHost() {
   useEffect(
     () =>
       onGlobalSettingsRequest((next, machine) => {
-        if (machine !== undefined) useAccountMachineStore.getState().choose(machine);
+        if (machine !== undefined) useAccountMachineStore.getState().choose(machine, true);
         useGlobalSettingsStore.getState().openSection(next);
       }),
     [],

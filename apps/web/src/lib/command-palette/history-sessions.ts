@@ -3,7 +3,7 @@
  * environment's agents can resume, read through the same backend list the
  * agent tab's "Resume session" picker reads (`list_native_agent_resumable_sessions`).
  * Opening one resumes it in a new agent tab through that tab's own resume
- * path (`sessionResumeRequestStore`).
+ * path (`native-agent-resume-requests.ts`).
  *
  * The list is read once per palette session and platform, then filtered
  * locally as the user types, so typing never issues a request. Only
@@ -104,6 +104,12 @@ function activityTime(entry: PastSessionEntry): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+/** OpenCode 2.x prefixes resume-list IDs; live tab IDs carry the underlying session ID. */
+export function historySessionIdentity(platform: AgentPlatform, sessionId: string): string {
+  const providerId = platform === "opencode" ? sessionId.replace(/^opencode2:/, "") : sessionId;
+  return `${platform}:${providerId}`;
+}
+
 export function sessionHistoryRowId(
   machine: PaletteMachine | null,
   environmentId: string,
@@ -141,7 +147,12 @@ export function createSessionHistoryProvider({
       const rows: Array<{ row: SessionHistoryResult; activity: number }> = [];
       for (const { platform, entry } of listing.entries) {
         const sessionId = entry.sessionId;
-        if (!sessionId || entry.archived || openSessionIds.has(sessionId)) continue;
+        if (
+          !sessionId ||
+          entry.archived ||
+          openSessionIds.has(historySessionIdentity(platform, sessionId))
+        )
+          continue;
         const title = entry.title?.trim() || "Untitled conversation";
         const label = platformLabel(platform);
         const score = scoreHaystacks([title, label, "session"], tokens);

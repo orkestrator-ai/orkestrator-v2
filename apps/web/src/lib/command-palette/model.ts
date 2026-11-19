@@ -210,7 +210,7 @@ export interface CommandRuntime {
   ) => void;
   openGlobalSettings: (section: GlobalSettingsSection, machine?: PaletteMachine | null) => void;
   requestAppShortcut: (id: AppShortcutId) => void;
-  /** Start, stop or restart the target environment through its row's own handler. */
+  /** Start or stop the target environment through its row's own handler. */
   environmentPower: (action: "start" | "stop", target: CommandTarget) => Promise<void>;
   addProject: () => void;
   copyText: (text: string, successMessage: string) => void;
@@ -357,19 +357,15 @@ export function commandAvailability(
 }
 
 /**
- * Why the sidebar menu disables an environment's Start/Stop or Restart,
+ * Why the sidebar menu disables an environment's Start or Stop,
  * read from the same facts (`environmentRowModel` decides; this names the
  * first prerequisite that fails, in the model's order).
  */
 export function environmentPowerAvailability(
   environment: PaletteEnvironment,
-  action: "start" | "stop" | "restart",
+  action: "start" | "stop",
 ): CommandAvailability {
-  const disabled =
-    action === "restart"
-      ? environment.model.menu.restartDisabled
-      : environment.model.menu.powerDisabled;
-  if (!disabled) {
+  if (!environment.model.menu.powerDisabled) {
     if (action === "start" && environment.model.isRunning) {
       return {
         available: false,

@@ -251,15 +251,6 @@ describe("palette context", () => {
       nextStep: { kind: "command", commandId: "settings.docker" },
     });
 
-    const stopped = localContext({
-      localEnvironments: [{ ...runningContainer, status: "stopped" }],
-    });
-    expect(commandAvailability(command("environment.restart"), stopped)).toMatchObject({
-      available: false,
-      code: "not-running",
-      nextStep: { kind: "command", commandId: "environment.start" },
-    });
-
     const creating = localContext({
       localEnvironments: [{ ...runningContainer, status: "creating" }],
     });
@@ -273,12 +264,7 @@ describe("palette context", () => {
     const context = localContext({
       selection: { nodeId: "bk_self", projectId: "p-ork", environmentId: localWorktree.id },
     });
-    for (const id of [
-      "environment.start",
-      "environment.stop",
-      "environment.restart",
-      "environment.rebuild",
-    ]) {
+    for (const id of ["environment.start", "environment.stop", "environment.rebuild"]) {
       expect(command(id).hidden?.(context)).toBe(true);
     }
   });

@@ -99,6 +99,7 @@ export function AppShell({ children }: AppShellProps) {
   const inTreeShown = shownInTree !== null;
   const [centralColumn, setCentralColumn] = useState<HTMLDivElement | null>(null);
   const [mobileContent, setMobileContent] = useState<HTMLDivElement | null>(null);
+  const [mobileRemoteFiles, setMobileRemoteFiles] = useState<HTMLDivElement | null>(null);
   // The desktop and mobile layouts are different trees, so rendering `children`
   // in each would remount every pane at the 768px breakpoint, closing dialogs
   // and dropping pane state when a window narrows or a phone rotates. The
@@ -208,7 +209,7 @@ export function AppShell({ children }: AppShellProps) {
           titleNameSignal={
             remoteNames ? (remoteNames.readyToMerge ? "merge-ready" : null) : localNameSignal
           }
-          filesPanelOpen={filesPanelOpen && !remoteShown}
+          filesPanelOpen={filesPanelOpen && (!remoteShown || Boolean(shownInTree?.scope))}
           centralPanelStyle={centralPanelThemeVars}
           actionBar={<ActionBar presentation="grid" />}
           agentInfoButton={
@@ -221,7 +222,9 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           }
           sidebar={<Sidebar />}
-          filesPanel={<FilesPanel />}
+          filesPanel={
+            remoteShown ? <div ref={setMobileRemoteFiles} className="h-full" /> : <FilesPanel />
+          }
           initialSidebarOpen={!desktopShown}
           onTitleBarMouseDown={handleTitleBarMouseDown}
         >
@@ -374,7 +377,10 @@ export function AppShell({ children }: AppShellProps) {
         </>
       )}
       {/* Outside both layouts, so another node's workspace keeps its state across them. */}
-      <RemoteWorkspaceRegion anchor={isMobile ? mobileContent : centralColumn} />
+      <RemoteWorkspaceRegion
+        anchor={isMobile ? mobileContent : centralColumn}
+        mobileFilesHost={isMobile ? mobileRemoteFiles : null}
+      />
       {/* After the layouts, so a slot holds the host before content effects run. */}
       {createPortal(children, contentHost)}
     </div>

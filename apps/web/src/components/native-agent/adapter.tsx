@@ -1,3 +1,4 @@
+import type { NativeAgentResumeIntent } from "@/lib/native-agent-resume-requests";
 import type { ReactNode } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -99,10 +100,10 @@ export interface AgentNativeTabProps {
   initialResumeOpen?: boolean;
   /**
    * A conversation the tab was opened to resume (`native-agent-resume-requests`):
-   * the tab resumes it through the picker's own handler once `ready` reports
-   * the tab saved, and opens the picker instead when it does not.
+   * the tab resumes it through the picker's own handler after a successful
+   * layout save. A failed save offers a retry for the same conversation.
    */
-  initialResume?: { sessionId: string; ready: Promise<boolean> };
+  initialResume?: NativeAgentResumeIntent;
 }
 
 /** Provider metadata consumed by the one shared native-agent controller. */

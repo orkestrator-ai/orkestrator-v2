@@ -6,10 +6,13 @@ import type {
   WorkspaceBoardTab,
   WorkspaceDialog,
   WorkspaceWorkTarget,
+  WorkspaceRequest,
 } from "@/lib/federation/workspace-request";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { uiStore } from "@/stores/uiStore";
 
 export interface MachineWorkspaceSpec {
@@ -23,6 +26,7 @@ export interface MachineWorkspaceSpec {
   /** The tab for a project with no last tab of its own (`WorkspaceRequest.landingTab`). */
   landingTab?: WorkspaceBoardTab;
   workTarget?: WorkspaceWorkTarget;
+  filesPanelTab?: WorkspaceRequest["filesPanelTab"];
   /** Open the New Environment dialog for `projectId` instead of selecting it. */
   createEnvironment?: boolean;
   createEnvironmentHandoff?: CreateEnvironmentHandoff;
@@ -69,6 +73,10 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
       ui.selectProject(spec.projectId, { landingTab: spec.landingTab });
       if (spec.boardTab) ui.setProjectBoardTab(spec.boardTab);
     }
+    if (spec.environmentId && spec.filesPanelTab) {
+      scope.store(filesPanelStore).getState().setActiveTab(spec.filesPanelTab);
+      useFilesPanelChromeStore.getState().openPanel();
+    }
     if (spec.dialog) openDialog(spec.dialog, spec.projectId, spec.environmentId);
     return;
   }
@@ -89,6 +97,7 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
             ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
             ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
             ...(spec.landingTab ? { landingTab: spec.landingTab } : {}),
+            ...(spec.filesPanelTab ? { filesPanelTab: spec.filesPanelTab } : {}),
             ...(spec.workTarget ? { workTarget: spec.workTarget } : {}),
             ...(spec.dialog ? { dialog: spec.dialog } : {}),
           },

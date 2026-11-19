@@ -3,7 +3,7 @@
  * delegates to (through `CommandRuntime`) and the menu or shortcut that owns
  * that action, so a palette entry cannot drift from the surface it mirrors:
  *
- * - Environment power (Start/Stop/Restart): the sidebar row's menu
+ * - Environment power (Start/Stop): the sidebar row's menu
  *   (`environmentRowMenuItems`), same handlers, same disabled rule.
  * - Environment settings and Rebuild: the row's Settings item and the
  *   container section of the same dialog (`openMachineWorkspace` dialogs).
@@ -131,27 +131,6 @@ const ENVIRONMENT_COMMANDS: readonly CommandDescriptor[] = [
           ? environmentPowerAvailability(context.environment, "stop")
           : AVAILABLE,
     run: (target, runtime) => runtime.environmentPower("stop", target),
-  },
-  {
-    id: "environment.restart",
-    label: "Restart environment",
-    aliases: ["restart container", "reboot", "reload"],
-    group: "actions",
-    effect: "read",
-    requires: "environment",
-    hidden: isLocalEnvironment,
-    availability: (context) => {
-      const power =
-        context.environment && environmentPowerAvailability(context.environment, "restart");
-      return power && !power.available
-        ? power
-        : {
-            available: false,
-            reason: "Restart requires a durable operation on the environment’s machine",
-            code: "handler-missing",
-          };
-    },
-    run: () => undefined,
   },
   {
     id: "environment.rebuild",

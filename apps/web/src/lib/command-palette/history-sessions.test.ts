@@ -3,6 +3,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   createPastSessionLoader,
   createSessionHistoryProvider,
+  historySessionIdentity,
   type PastSessionEntry,
 } from "./history-sessions";
 
@@ -70,12 +71,27 @@ describe("past-session History source", () => {
       {
         claude: Array.from({ length: 5 }, (_, index) => ({ sessionId: `c${index}`, title: "t" })),
       },
-      { openSessionIds: new Set(["c0"]), resultLimit: 2 },
+      { openSessionIds: new Set([historySessionIdentity("claude", "c0")]), resultLimit: 2 },
     );
     const answer = await sessions.search("", new AbortController().signal);
     expect(answer.rows).toHaveLength(2);
     expect(answer.rows.some((row) => row.sessionId === "c0")).toBe(false);
     expect(answer.partial).toBe(true);
+  });
+
+  test("matches OpenCode resumable IDs to live tabs without excluding another platform", async () => {
+    const { provider: sessions } = provider(
+      {
+        opencode: [
+          { sessionId: "opencode2:ses_open", title: "Already open" },
+          { sessionId: "opencode2:ses_closed", title: "Closed" },
+        ],
+        codex: [{ sessionId: "ses_open", title: "Same ID on Codex" }],
+      },
+      { openSessionIds: new Set([historySessionIdentity("opencode", "ses_open")]) },
+    );
+    const answer = await sessions.search("", new AbortController().signal);
+    expect(answer.rows.map((row) => row.sessionId)).toEqual(["opencode2:ses_closed", "ses_open"]);
   });
 
   test("one unreadable platform is partial; every platform unreadable fails", async () => {

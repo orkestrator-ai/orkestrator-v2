@@ -10,9 +10,11 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import {
   clearNativeAgentResumeRequest,
+  clearNativeAgentResumeRequestsForNode,
   parkNativeAgentResumeRequest,
 } from "@/lib/native-agent-resume-requests";
 import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
+import { defineScopedSlot } from "@/lib/node-scope-slots";
 import { createUuid } from "@/lib/uuid";
 import { useConversationScrollTargetStore } from "@/stores/conversationScrollTargetStore";
 import { environmentStore } from "@/stores/environmentStore";
@@ -20,6 +22,13 @@ import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { TabInfo } from "@/types/paneLayout";
 import type { MessageHistoryResult, SessionHistoryResult } from "./history";
+
+const resumeLifetime = defineScopedSlot("palette-resume-lifetime", (scope) => {
+  scope.onDispose("palette-resume-requests", () =>
+    clearNativeAgentResumeRequestsForNode(scope.nodeId),
+  );
+  return true;
+});
 
 /**
  * Asks the message's chat to scroll to it once it is shown. The caller then
@@ -62,10 +71,14 @@ export function openPastSessionTab(
   const ready = new Promise<boolean>((resolve) => {
     settle = resolve;
   });
-  parkNativeAgentResumeRequest(
-    { nodeId: scope.nodeId, environmentId, tabId },
-    { platform: result.platform, sessionId: result.sessionId, ready },
-  );
+  resumeLifetime(scope);
+  if (
+    !parkNativeAgentResumeRequest(
+      { nodeId: scope.nodeId, environmentId, tabId },
+      { platform: result.platform, sessionId: result.sessionId, ready },
+    )
+  )
+    return null;
   const tab: TabInfo = {
     id: tabId,
     type: "agent-native",

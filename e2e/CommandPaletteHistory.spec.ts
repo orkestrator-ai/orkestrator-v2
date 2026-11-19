@@ -51,3 +51,32 @@ test("an unreadable past-session list is reported in its own group", async ({ pa
     "Past sessions could not be listed.",
   );
 });
+
+test("a History message opens its tab and scrolls the transcript to that message", async ({
+  page,
+}) => {
+  const input = await openPalette(page);
+  await input.fill("arm64 link step");
+  await page.getByTestId("command-palette-message-m-2").click();
+  const message = page.locator("#fixture-message-m-2");
+  await expect(message).toHaveAttribute("data-highlighted", "true");
+  await expect(message).toBeInViewport({ ratio: 0.5 });
+  await expect(page.locator("#fixture-message-m-1")).not.toBeInViewport({ ratio: 0.5 });
+});
+
+test("a held Enter cannot confirm Stop until it is pressed again", async ({ page }, testInfo) => {
+  const input = await openPalette(page, "?power");
+  await input.fill("stop environment");
+  await page.keyboard.down("Enter");
+  const confirm = page.getByTestId("command-palette-confirm-run");
+  await expect(confirm).toBeFocused();
+  await page.keyboard.down("Enter");
+  await expect(confirm).toBeFocused();
+  await page.keyboard.up("Enter");
+  await expect(page.getByLabel("Stop requests")).toHaveText("0");
+  await page.getByTestId("command-palette-confirm").screenshot({
+    path: `output/visual-previews/palette-confirm-held-enter-${testInfo.project.name}.png`,
+  });
+  await page.keyboard.press("Enter");
+  await expect(page.getByLabel("Stop requests")).toHaveText("1");
+});

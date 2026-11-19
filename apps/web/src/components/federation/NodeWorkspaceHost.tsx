@@ -1,3 +1,5 @@
+import { filesPanelStore } from "@/stores/filesPanelStore";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
@@ -266,6 +268,10 @@ export function NodeWorkspaceHost() {
     });
     // A project home opens on its Home tab, as its own sidebar opens it.
     if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
+    if (request.filesPanelTab) {
+      scope.store(filesPanelStore).getState().setActiveTab(request.filesPanelTab);
+      useFilesPanelChromeStore.getState().openPanel();
+    }
     if (request.workTarget) openCoordinatorWorkTarget(request.workTarget, undefined, scope);
     if (request.dialog) {
       // Opening its settings is not a request to start it.

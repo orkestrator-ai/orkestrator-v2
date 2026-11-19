@@ -165,6 +165,7 @@ describe("palette selection", () => {
     // Only a vanished row moves the highlight, to the first row.
     expect(resolveActiveRow(["late", "b"], null, "a")).toBe("late");
     expect(resolveActiveRow([], "a", "a")).toBeNull();
+    expect(resolveActiveRow(["a", "late"], "b", "a", true)).toBeNull();
   });
 
   test("moves by identity and clamps at both ends", () => {

@@ -340,7 +340,9 @@ export function ProjectSearchBar({
   const [machineFilterChoice, setMachineFilter] =
     useState<ProjectSearchMachineFilter>(ALL_MACHINES);
   /** The row the user chose with the keyboard or pointer. */
-  const [chosenRowId, setChosenRowId] = useState<string | null>(null);
+  const [chosenRow, setChosenRow] = useState<{ id: string; retainWhenMissing: boolean } | null>(
+    null,
+  );
   /** The row highlighted when the current query's results appeared. */
   const [pinnedRowId, setPinnedRowId] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
@@ -536,10 +538,15 @@ export function ProjectSearchBar({
     [commandResults, historyRows, results],
   );
   const rowIds = useMemo(() => rows.map((row) => row.id), [rows]);
-  const activeRowId = resolveActiveRow(rowIds, chosenRowId, pinnedRowId);
+  const activeRowId = resolveActiveRow(
+    rowIds,
+    chosenRow?.id ?? null,
+    pinnedRowId,
+    chosenRow?.retainWhenMissing,
+  );
   // The highlight holds its row while later answers arrive; it is pinned the
   // first time this query shows a row, and re-pinned only if that row goes.
-  if (open && chosenRowId === null && activeRowId !== pinnedRowId) setPinnedRowId(activeRowId);
+  if (open && chosenRow === null && activeRowId !== pinnedRowId) setPinnedRowId(activeRowId);
   const activeRow = rows.find((row) => row.id === activeRowId);
 
   // Relative times are measured from when the search opens.
@@ -610,7 +617,7 @@ export function ProjectSearchBar({
     searchScope.machineFilter !== machineFilter
   ) {
     setSearchScope({ open, query, filter, machineFilter });
-    setChosenRowId(null);
+    setChosenRow(null);
     setPinnedRowId(null);
     setConfirmation(null);
     if (!open) {
@@ -802,13 +809,18 @@ export function ProjectSearchBar({
         return;
       }
       const next = moveActiveRow(rowIds, activeRowId, event.key === "ArrowDown" ? 1 : -1);
-      if (next !== null) setChosenRowId(next);
+      if (next !== null) {
+        setChosenRow({
+          id: next,
+          retainWhenMissing: rows.find((row) => row.id === next)?.kind === "history",
+        });
+      }
       return;
     }
 
     if (event.key === "Enter") {
       // Composing an IME character: Enter commits the text, not a result.
-      if (event.nativeEvent.isComposing) return;
+      if (event.nativeEvent.isComposing || event.repeat) return;
       if (!activeRow) return;
       event.preventDefault();
       activateRow(activeRow);
@@ -865,7 +877,7 @@ export function ProjectSearchBar({
       hit={hit}
       isActive={hit.id === activeRowId}
       now={now}
-      onHighlight={() => setChosenRowId(hit.id)}
+      onHighlight={() => setChosenRow({ id: hit.id, retainWhenMissing: false })}
       onSelect={handleSelect}
       rowRef={rowRef(hit.id)}
     />
@@ -876,7 +888,7 @@ export function ProjectSearchBar({
       result={result}
       context={context}
       isActive={result.rowId === activeRowId}
-      onHighlight={() => setChosenRowId(result.rowId)}
+      onHighlight={() => setChosenRow({ id: result.rowId, retainWhenMissing: false })}
       onSelect={handleCommand}
       rowRef={rowRef(result.rowId)}
     />
@@ -1097,7 +1109,7 @@ export function ProjectSearchBar({
                   ? historyGroups.map((group) =>
                       group.rows.length > 0 ||
                       (group.view.status !== "ready" && group.view.status !== "idle") ||
-                      (group.view.note && filter === "history") ? (
+                      (group.view.note && (filter === "history" || group.view.unavailable)) ? (
                         <section
                           key={group.key}
                           data-testid={`command-palette-history-${group.key}`}
@@ -1119,7 +1131,9 @@ export function ProjectSearchBar({
                                 result={result}
                                 multiMachine={context.multiMachine}
                                 isActive={result.rowId === activeRowId}
-                                onHighlight={() => setChosenRowId(result.rowId)}
+                                onHighlight={() =>
+                                  setChosenRow({ id: result.rowId, retainWhenMissing: true })
+                                }
                                 onSelect={handleHistory}
                                 rowRef={rowRef(result.rowId)}
                                 now={now}

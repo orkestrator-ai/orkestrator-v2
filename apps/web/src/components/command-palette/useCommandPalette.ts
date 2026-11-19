@@ -41,6 +41,7 @@ import {
 import {
   createPastSessionLoader,
   createSessionHistoryProvider,
+  historySessionIdentity,
 } from "@/lib/command-palette/history-sessions";
 import type {
   CommandRuntime,
@@ -63,13 +64,12 @@ import { noteDrawerNavigation } from "@/lib/mobile-shell";
 import { writeText } from "@/lib/native/clipboard";
 import { useScopesWithCommandFallback, useSignal } from "@/lib/node-scope/providers";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { constantSignal } from "@/lib/node-scope/signal";
 import type { WindowScope } from "@/lib/node-scope/window-scope";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
 import { useCommandPaletteStore } from "@/stores/commandPaletteStore";
 import { useConfigStore } from "@/stores/configStore";
-import { filesPanelStore } from "@/stores/filesPanelStore";
-import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { getAllLeaves, paneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
@@ -83,6 +83,7 @@ import type { Environment, Project } from "@/types";
 import type { PaneNode, TabInfo } from "@/types/paneLayout";
 
 const log = createLogger("web.command-palette");
+const NO_HISTORY_CONNECTION = constantSignal(null);
 
 /**
  * The logical session key the palette lists past sessions under. It names no
@@ -261,7 +262,6 @@ export function useCommandRuntime({
   handlers: CommandPaletteHandlers;
   machines: readonly MachineView[];
 }): CommandRuntime {
-  const { windowScope } = useScopesWithCommandFallback();
   const { portal } = useFederation();
   const latest = useRef({ handlers, machines });
   useEffect(() => {
@@ -281,15 +281,9 @@ export function useCommandRuntime({
           projectId: environment.projectId,
           environmentId: environment.id,
           ...(options.dialog ? { dialog: options.dialog } : {}),
+          ...(options.filesPanelTab ? { filesPanelTab: options.filesPanelTab } : {}),
           title: environment.name,
         });
-        if (options.filesPanelTab) {
-          machineScope(windowScope, target)
-            ?.store(filesPanelStore)
-            .getState()
-            .setActiveTab(options.filesPanelTab);
-          useFilesPanelChromeStore.getState().openPanel();
-        }
       },
       openProject: (target, options = {}) => {
         const project = target.project;
@@ -357,7 +351,7 @@ export function useCommandRuntime({
       clearRecentCommands: clearRecent,
       setRememberRecentCommands: setRememberRecent,
     }),
-    [clearRecent, portal, setRememberRecent, windowScope],
+    [clearRecent, portal, setRememberRecent],
   );
 }
 
@@ -461,7 +455,7 @@ function pastSessionPlatforms(layout: EnvironmentPaneState | undefined): {
     for (const tab of historyTabs(layout.root)) {
       const data = tab.type === "agent-native" ? tab.nativeAgentData : undefined;
       if (!data?.platform) continue;
-      if (data.sessionId) openSessionIds.add(data.sessionId);
+      if (data.sessionId) openSessionIds.add(historySessionIdentity(data.platform, data.sessionId));
       if (nativeAgentCapabilities(data.platform).resume) platforms.add(data.platform);
     }
   }
@@ -473,6 +467,7 @@ export interface HistoryGroupView<Row> {
   rows: Row[];
   /** Why the group has nothing to search, when it says so. */
   note?: string;
+  unavailable?: boolean;
 }
 
 /**
@@ -603,6 +598,8 @@ export function useHistorySearch({
 
   // Past sessions: the palette's own environment, while it is running.
   const environment = context.environment;
+  const connection = useSignal(scope?.client.connection ?? NO_HISTORY_CONNECTION);
+  const sessionsWritable = !machine || machine.bound || (machine.writable && connection === "live");
   const sessionsRunnable =
     environment !== null && context.agentTabBlock !== "unavailable" && !context.targetUnknown;
   const { platforms, openSessionIds } = useMemo(
@@ -617,7 +614,7 @@ export function useHistorySearch({
   const environmentProjectId = environment?.projectId ?? "";
   const loader = useMemo(
     () =>
-      open && backendScope && environmentId && sessionsRunnable && platformsKey
+      open && backendScope && environmentId && sessionsWritable && sessionsRunnable && platformsKey
         ? createPastSessionLoader({
             platforms: platformsKey.split(",") as AgentPlatform[],
             list: (platform) =>
@@ -628,7 +625,7 @@ export function useHistorySearch({
               }),
           })
         : null,
-    [open, backendScope, environmentId, sessionsRunnable, platformsKey],
+    [open, backendScope, environmentId, sessionsWritable, sessionsRunnable, platformsKey],
   );
   const projectName = environmentId
     ? (projects.find((project) => project.id === environmentProjectId)?.name ??
@@ -673,19 +670,26 @@ export function useHistorySearch({
   const sessions: HistoryGroupView<SessionHistoryResult> =
     !enabled || !environment
       ? IDLE_GROUP
-      : !sessionsRunnable
+      : !sessionsWritable
         ? {
             ...IDLE_GROUP,
             status: "ready",
-            note: `Start ${environment.name} to list its past sessions.`,
+            unavailable: true,
+            note: `${machine?.name} is offline.`,
           }
-        : !platformsKey
+        : !sessionsRunnable
           ? {
               ...IDLE_GROUP,
               status: "ready",
-              note: `Open an agent tab in ${environment.name} to list that agent's past sessions.`,
+              note: `Start ${environment.name} to list its past sessions.`,
             }
-          : sessionsAnswer;
+          : !platformsKey
+            ? {
+                ...IDLE_GROUP,
+                status: "ready",
+                note: `Open an agent tab in ${environment.name} to list that agent's past sessions.`,
+              }
+            : sessionsAnswer;
 
   const unreachable = enabled && !scope;
   const groups = {
@@ -726,7 +730,7 @@ export function useHistorySearch({
     status,
     ...groups,
     openResult: (result) => {
-      if (!scope || !ownerStillListed(result)) return false;
+      if (!scope || scope.disposed || !ownerStillListed(result)) return false;
       if (result.source === "tab") {
         if (!groups.tabs.rows.includes(result) || !tabStillOpen(result.environmentId, result.tabId))
           return false;
@@ -744,7 +748,12 @@ export function useHistorySearch({
         return true;
       }
       // A past session opens a new tab in the palette's own environment only.
-      if (!groups.sessions.rows.includes(result) || result.environmentId !== environment?.id)
+      if (
+        !sessionsWritable ||
+        (!machine?.bound && machine && scope.client.connection.get() !== "live") ||
+        !groups.sessions.rows.includes(result) ||
+        result.environmentId !== environment?.id
+      )
         return false;
       const block = context.agentTabBlock;
       if (block) {

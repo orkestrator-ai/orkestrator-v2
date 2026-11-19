@@ -17,7 +17,6 @@ import {
 import { portalStore } from "@/lib/portal/portal-store";
 import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
-import { filesPanelStore } from "@/stores/filesPanelStore";
 import { configStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -722,7 +721,79 @@ describe("ProjectSearchBar across machines", () => {
       });
       await openAndType("open changes");
       fireEvent.click(await screen.findByTestId("command-palette-item-environment.open-changes"));
-      expect(scope.store(filesPanelStore).getState().activeTab).toBe("changes");
+      expect(useRemoteWorkspaceStore.getState().requests["bk_mbp3"]?.request).toMatchObject({
+        environmentId: "run",
+        filesPanelTab: "changes",
+      });
+    } finally {
+      scope.dispose();
+    }
+  });
+
+  test("a disconnected past-session owner refuses activation and relists on reconnect", async () => {
+    renderSearch();
+    await waitFor(() =>
+      expect(portalStore.getState().nodes.some((node) => node.nodeId === "bk_mbp3")).toBe(true),
+    );
+    const list = mock(async () => [
+      { sessionId: "remote-past", title: "Unique past conversation" },
+    ]);
+    const client = new FakeNodeClient({
+      nodeId: "bk_mbp3" as BackendId,
+      invoke: {
+        list_native_agent_resumable_sessions: list,
+        get_pane_layout: null,
+        save_pane_layout: { revision: 1 },
+      },
+    });
+    const scope = getWindowScope().open({ role: "leaf", client, tier: "warm" });
+    const layouts = scope.store(paneLayoutStore).getState();
+    const setTransport = (state: "connected" | "unavailable") =>
+      act(() =>
+        portalStore.store.setState((current) => ({
+          nodes: current.nodes.map((node) =>
+            node.nodeId === "bk_mbp3"
+              ? { ...node, view: { ...node.view, connection: { ...node.view.connection, state } } }
+              : node,
+          ),
+        })),
+      );
+    try {
+      act(() => {
+        scope.store(environmentStore).setState({
+          environments: [{ ...localEnvironment, id: "run", projectId: "ork-3" }],
+        });
+        layouts.initialize(null, "run");
+        layouts.addTab(
+          layouts.getActivePaneId("run")!,
+          {
+            id: "remote-chat",
+            type: "agent-native",
+            nativeAgentData: { platform: "codex", environmentId: "run", isLocal: true },
+          },
+          "run",
+        );
+        useRemoteWorkspaceStore
+          .getState()
+          .open("bk_mbp3", { projectId: "ork-3", environmentId: "run" });
+      });
+      const query = await openAndType("unique past");
+      const row = await screen.findByTestId("command-palette-session-remote-past");
+      fireEvent.keyDown(query, { key: "ArrowDown" });
+      expect(query.getAttribute("aria-activedescendant")).toBe(row.id);
+
+      setTransport("unavailable");
+      expect(await screen.findByText("mbp3 is offline.")).toBeTruthy();
+      fireEvent.keyDown(query, { key: "Enter" });
+      expect(layouts.getAllTabs("run").map((tab) => tab.id)).toEqual(["remote-chat"]);
+      expect(client.invocations.some(({ command }) => command === "save_pane_layout")).toBe(false);
+
+      setTransport("connected");
+      fireEvent.click(await screen.findByTestId("command-palette-session-remote-past"));
+      await waitFor(() =>
+        expect(client.invocations.some(({ command }) => command === "save_pane_layout")).toBe(true),
+      );
+      expect(list).toHaveBeenCalledTimes(2);
     } finally {
       scope.dispose();
     }

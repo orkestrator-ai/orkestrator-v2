@@ -400,6 +400,9 @@ export function CommandConfirmPanel({
           size="sm"
           autoFocus
           disabled={!availability.available}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && event.repeat) event.preventDefault();
+          }}
           onClick={onConfirm}
           data-testid="command-palette-confirm-run"
         >

@@ -125,6 +125,22 @@ function mount(section: "general" | "version-control" | "review" | "experimental
   );
 }
 
+test("a removed explicit Settings owner requires choosing the command machine", async () => {
+  useAccountMachineStore.getState().choose("leaf", true);
+  mount("version-control");
+  await waitFor(() =>
+    expect(screen.getByTestId("settings-scope").textContent).toContain("Machine settings for Leaf"),
+  );
+  act(() => portalStore.store.setState({ nodes: [] }));
+
+  await screen.findByText("The selected machine is no longer available.");
+  expect(writes).toEqual([]);
+  fireEvent.click(screen.getByRole("button", { name: "Use the command machine" }));
+  await waitFor(() => expect(useAccountMachineStore.getState().chosen).toBeNull());
+  expect(screen.queryByText("The selected machine is no longer available.") === null).toBe(true);
+  expect(writes).toEqual([]);
+});
+
 test("a command window with a leaf selected only offers scheduling on the window machine", async () => {
   mount("experimental");
   await screen.findByText(/Experimental settings belong to the machine this window runs on/);

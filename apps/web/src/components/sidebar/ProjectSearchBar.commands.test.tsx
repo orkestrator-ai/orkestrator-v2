@@ -254,19 +254,18 @@ describe("ProjectSearchBar commands", () => {
     expect(stopEnvironment).toHaveBeenCalledTimes(1);
   });
 
-  test("Restart recovery asks for explicit confirmation of Start", async () => {
-    const { handlers } = renderPalette({ ...container, status: "stopped" });
+  test("omits Restart from search until it has a durable owner-side handler", async () => {
+    const { handlers } = renderPalette();
     select(container.id);
     const input = await openPalette();
     fireEvent.change(input, { target: { value: "restart" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    expect(await screen.findByRole("heading", { name: "Start this environment?" })).toBeTruthy();
-    expect(handlers.startEnvironment).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("command-palette-confirm-run"));
-    await waitFor(() => expect(handlers.startEnvironment).toHaveBeenCalledWith(container.id));
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByTestId("project-search-trigger")),
+    expectDomAbsent(
+      screen.queryByTestId("command-palette-item-environment.restart"),
+      "Restart result",
     );
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(handlers.startEnvironment).not.toHaveBeenCalled();
+    expect(handlers.stopEnvironment).not.toHaveBeenCalled();
   });
 
   test("New agent tab explains why it is unavailable during setup", async () => {
@@ -418,6 +417,39 @@ describe("ProjectSearchBar commands", () => {
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onSelectEnvironment).toHaveBeenCalledWith("env-container");
+  });
+
+  test("Enter cannot fall back while the selected History row is refreshing", async () => {
+    const { onSelectEnvironment } = renderPalette();
+    select(container.id);
+    const layouts = appCommandStore(paneLayoutStore).getState();
+    const addTab = (id: string, displayTitle: string) =>
+      layouts.addTab(
+        layouts.getActivePaneId(container.id)!,
+        { id, type: "plain", displayTitle },
+        container.id,
+      );
+    act(() => {
+      layouts.initialize("container-1", container.id);
+      addTab("tab-build-history", "build history");
+    });
+    const input = await openPalette();
+    fireEvent.change(input, { target: { value: "build" } });
+    const chosen = await screen.findByTestId("command-palette-history-tab-build-history");
+    for (let index = 0; index < screen.getAllByRole("option").length; index++) {
+      if (activeOptionId(input) === chosen.id) break;
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+    }
+    expect(activeOptionId(input)).toBe(chosen.id);
+
+    act(() => addTab("tab-background", "background console"));
+    expect(activeOptionId(input)).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSelectEnvironment).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    await screen.findByTestId("command-palette-history-tab-build-history");
+    expect(activeOptionId(input)).toBe(chosen.id);
   });
 
   test("History matches a non-context project and drops closed tabs on the same query", async () => {

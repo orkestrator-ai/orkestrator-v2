@@ -186,19 +186,20 @@ picker's own list, on the context environment's machine, once per palette
 session and platform; typing filters that answer locally. It lists only the
 platforms the environment already has an agent tab for, because listing
 resolves the platform's bridge and a search must not start one. It needs a
-running environment (otherwise the group says so) and leaves out archived
+running environment on a writable machine (otherwise the group says so) and leaves out archived
 conversations and ones already open in a tab. One platform failing marks the
 group `partial`; all failing marks it `failed`. Titles are the provider's;
-no message content is read.
+no message content is read. Reconnecting the machine reloads its lists.
 
 Opening a past session adds an agent tab for that platform to the context
 environment (refused, with a reason, while setup runs, at the tab limit or
 when the environment is not running), parks a resume request for it
 (`native-agent-resume-requests.ts`: keyed by node, environment and tab,
-bounded, expiring after a minute), and saves the layout. The new tab reads
+bounded, expiring after a minute if the tab never reads it), and saves the layout. The new tab reads
 the request on mount, starts no conversation of its own while it waits, and
 once the save succeeds runs the picker's own resume handler with the chosen
-conversation. If the save fails it opens the picker instead. A resume that
+conversation. A failed layout save offers to retry the same tab and conversation.
+Closing the tab cancels its parked resume. A resume that
 fails reports through the picker's existing error path. The tab is created
 on the frozen target only, so a window switch cannot move it.
 
@@ -249,6 +250,5 @@ targets are set yet: they wait for a baseline from these entries.
 - Delete environment: the row's delete dialog carries notices (pull request,
   design) the palette does not reproduce.
 
-Palette Restart stays unavailable until the owning backend can record the full
-operation before stopping the container. On stopped containers its recovery
-opens Start confirmation when Start is available.
+- Restart environment: the palette can offer it once the owning backend can
+  record the full operation before stopping the container.

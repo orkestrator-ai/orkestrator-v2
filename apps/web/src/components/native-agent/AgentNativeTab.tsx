@@ -1,5 +1,5 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
@@ -21,10 +21,7 @@ import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { environmentStore } from "@/stores/environmentStore";
 import { createSessionKey } from "@/lib/utils";
-import {
-  clearNativeAgentResumeRequest,
-  peekNativeAgentResumeRequest,
-} from "@/lib/native-agent-resume-requests";
+import { peekNativeAgentResumeRequest } from "@/lib/native-agent-resume-requests";
 import {
   nativeComposeDraftPersistValue,
   nativeComposeStore,
@@ -117,8 +114,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
   const composeDrafts = scope.store(nativeComposeStore);
   const paneLayouts = scope.store(paneLayoutStore);
   // A conversation this tab was opened to resume (the palette's past
-  // sessions). Read once, on mount; consumed in an effect so a double render
-  // reads the same request.
+  // sessions). The controller claims it after the layout save succeeds.
   const [initialResume] = useState(() => {
     // Only a platform that can resume reads one (the picker's own gate).
     if (props.data.sessionId || !props.data.platform || !adapter?.capabilities.resume) return null;
@@ -130,9 +126,6 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
     const request = peekNativeAgentResumeRequest(ref);
     return request && request.platform === props.data.platform ? { ref, request } : null;
   });
-  useEffect(() => {
-    if (initialResume) clearNativeAgentResumeRequest(initialResume.ref, initialResume.request);
-  }, [initialResume]);
   const persistLockedPane = useCallback(
     async (operation: "send" | "resume") => {
       setAwaitingDurability(true);
@@ -564,14 +557,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
     <SharedNativeAgentController
       {...props}
       initialResumeOpen={resumeRequestedPlatform === props.data.platform || initialResume !== null}
-      {...(initialResume
-        ? {
-            initialResume: {
-              sessionId: initialResume.request.sessionId,
-              ready: initialResume.request.ready,
-            },
-          }
-        : {})}
+      initialResume={initialResume ?? undefined}
     />
   );
   // A coordinator or bug report has no environment to resolve its loopback links in.

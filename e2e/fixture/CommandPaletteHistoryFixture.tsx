@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { useConversationScrollTarget } from "../../apps/web/src/components/native-agent/useConversationScrollTarget";
 import { ProjectSearchBar } from "../../apps/web/src/components/sidebar/ProjectSearchBar";
+import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
 import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 import { createSessionKey } from "../../apps/web/src/lib/utils";
 import { environmentStore } from "../../apps/web/src/stores/environmentStore";
@@ -41,7 +43,49 @@ const environment: Environment = {
 
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
 
-function install() {
+const container: Environment = {
+  ...environment,
+  environmentType: "containerized",
+  containerId: "fixture-container",
+};
+const messageIds = [{ id: "m-1" }, { id: "m-2" }];
+
+function HistoryTranscript() {
+  const isActive = usePaneLayoutStore(
+    (state) => state.findPaneWithTab("tab-chat", environment.id)?.activeTabId === "tab-chat",
+  );
+  const highlight = useConversationScrollTarget({
+    environmentId: environment.id,
+    tabId: "tab-chat",
+    isActive,
+    messages: messageIds,
+    transcriptSettled: true,
+    scrollToIndex: (index) => {
+      const row = document.getElementById(`fixture-message-${messageIds[index]?.id}`);
+      if (!row) return false;
+      row.scrollIntoView({ block: "center" });
+      return true;
+    },
+  });
+  return (
+    <section className="mt-2 h-40 overflow-auto" aria-label="Fixture transcript" hidden={!isActive}>
+      <div className="h-64" />
+      {messageIds.map(({ id }) => (
+        <p
+          className="h-40"
+          id={`fixture-message-${id}`}
+          key={id}
+          data-highlighted={highlight?.messageId === id}
+        >
+          Transcript message {id}
+        </p>
+      ))}
+      <div className="h-64" />
+    </section>
+  );
+}
+
+function install(target: Environment) {
   const failed = new URLSearchParams(window.location.search).get("sessions") === "failed";
   window.orkestrator = {
     listen: () => () => {},
@@ -58,7 +102,7 @@ function install() {
     },
   } as unknown as Window["orkestrator"];
 
-  appCommandStore(environmentStore).setState({ environments: [environment] });
+  appCommandStore(environmentStore).setState({ environments: [target] });
   const layouts = appCommandStore(paneLayoutStore).getState();
   layouts.initialize(null, environment.id);
   const paneId = layouts.getActivePaneId(environment.id);
@@ -82,6 +126,7 @@ function install() {
     { id: "tab-shell", type: "plain", displayTitle: "dev server" },
     environment.id,
   );
+  layouts.finishHydration(environment.id, undefined);
   appCommandStore(nativeAgentProjectionStore)
     .getState()
     .setProjection(createSessionKey(environment.id, "tab-chat"), {
@@ -111,15 +156,26 @@ function install() {
 }
 
 export function CommandPaletteHistoryFixture() {
-  useState(install);
+  const [stops, setStops] = useState(0);
+  const target = new URLSearchParams(window.location.search).has("power") ? container : environment;
+  useState(() => install(target));
   return (
     <main className="max-w-sm">
       <ProjectSearchBar
         projects={[project]}
-        environments={[environment]}
+        environments={[target]}
         onSelectProject={() => {}}
         onSelectEnvironment={() => {}}
+        commandHandlers={{
+          startEnvironment: async () => {},
+          stopEnvironment: async () => setStops((count) => count + 1),
+        }}
       />
+      {target === container ? (
+        <output aria-label="Stop requests">{stops}</output>
+      ) : (
+        <HistoryTranscript />
+      )}
     </main>
   );
 }

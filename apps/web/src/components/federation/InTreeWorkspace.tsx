@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import { FilesPanel } from "@/components/files-panel";
 import { NodeWorkspaceLayout } from "@/components/layout/NodeWorkspaceLayout";
 import { OpenFileDialog } from "@/components/layout/OpenFileDialog";
 import {
@@ -37,7 +39,13 @@ import { pinnedScroll } from "@/lib/pinned-scroll";
  * layout draws the node's toolbar, content and files panel under the
  * window's title bar.
  */
-function InTreeNodeWorkspace({ shown }: { shown: boolean }) {
+function InTreeNodeWorkspace({
+  shown,
+  mobileFilesHost,
+}: {
+  shown: boolean;
+  mobileFilesHost?: HTMLElement | null;
+}) {
   const scope = useNodeScope();
   useNodeWorkspaceServices();
   useNodeBootHydration(scope);
@@ -52,6 +60,9 @@ function InTreeNodeWorkspace({ shown }: { shown: boolean }) {
         ready={dockerAvailable !== null}
       >
         <NodeWorkspaceHost />
+        {shown && phone && filesPanelOpen && mobileFilesHost
+          ? createPortal(<FilesPanel />, mobileFilesHost)
+          : null}
         {/* The window's ⌘⇧P steps aside while this node is shown (`AppShell`). */}
         <OpenFileDialog enabled={shown} />
         <NodeWorkspaceLayout
@@ -99,7 +110,15 @@ interface OpenedWorkspace {
   readonly generation: number;
 }
 
-export function InTreeWorkspace({ nodeId, shown }: { nodeId: string; shown: boolean }) {
+export function InTreeWorkspace({
+  nodeId,
+  shown,
+  mobileFilesHost,
+}: {
+  nodeId: string;
+  shown: boolean;
+  mobileFilesHost?: HTMLElement | null;
+}) {
   const { portalState } = useFederation();
   const machine = nodeName(portalState.nodes, nodeId);
   const [attempt, setAttempt] = useState(0);
@@ -216,7 +235,7 @@ export function InTreeWorkspace({ nodeId, shown }: { nodeId: string; shown: bool
       ) : (
         <NodeScopeProvider key={workspace.generation} scope={workspace.scope}>
           <NodeErrorBoundary nodeId={nodeId} machine={machine} onRetry={reopenDocument}>
-            <InTreeNodeWorkspace shown={shown} />
+            <InTreeNodeWorkspace shown={shown} mobileFilesHost={mobileFilesHost} />
           </NodeErrorBoundary>
         </NodeScopeProvider>
       )}

@@ -4,6 +4,7 @@ import { useCoordinatorActionMarking } from "@/components/projects/useCoordinato
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
+import { usePaletteResume } from "./usePaletteResume";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { isGoalCarrierContent } from "@orkestrator/protocol/native-agent-goal";
 import { GoalDetailLoaderContext } from "@/components/chat/goal-detail-context";
@@ -3719,7 +3720,7 @@ export function SharedNativeAgentController({
     }
     // A tab still waiting on its resume choice has no composer of its
     // own; the resumed conversation keeps its settings.
-    void resume(
+    return resume(
       providerSessionId,
       composer
         ? {
@@ -3746,31 +3747,15 @@ export function SharedNativeAgentController({
         toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`);
       });
   };
-  const resumeChosenSessionRef = useRef(resumeChosenSession);
-  useEffect(() => {
-    resumeChosenSessionRef.current = resumeChosenSession;
+  const { resumeSaveFailed, retryResumeSave } = usePaletteResume({
+    scope: composeScope,
+    environmentId: data.environmentId,
+    tabId,
+    platform,
+    initialResume,
+    resumeChosenSession,
+    setAwaitingResumeChoice,
   });
-  // Resume the conversation this tab was opened for, once the caller has
-  // saved the tab, as the picker resumes only after its lock is saved. A tab
-  // that could not be saved offers the picker instead.
-  const initialResumeStarted = useRef(false);
-  useEffect(() => {
-    if (!initialResume || initialResumeStarted.current) return;
-    initialResumeStarted.current = true;
-    void initialResume.ready.then(
-      (saved) => {
-        if (saved) {
-          resumeChosenSessionRef.current(initialResume.sessionId);
-          return;
-        }
-        toast.error("The new tab could not be saved", {
-          description: "Choose the conversation to resume again.",
-        });
-        setResumeDialogOpen(true);
-      },
-      () => setResumeDialogOpen(true),
-    );
-  }, [initialResume]);
 
   if (setupPending) {
     return (
@@ -4930,11 +4915,27 @@ export function SharedNativeAgentController({
           <AgentPlatformIcon platform={platform} className="h-16 w-16" />
         </span>
         <p className="text-sm">
-          {resumeDialogOpen
-            ? `Choose a ${label} session to resume.`
-            : `Resuming the ${label} session...`}
+          {resumeSaveFailed
+            ? `Ready to resume the ${label} session when the tab is saved.`
+            : resumeDialogOpen
+              ? `Choose a ${label} session to resume.`
+              : `Resuming the ${label} session...`}
         </p>
-        {resumeDialog}
+        {resumeSaveFailed ? (
+          <>
+            <p className="text-sm">The new tab could not be saved.</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void retryResumeSave()}
+            >
+              Retry saving tab and resume
+            </Button>
+          </>
+        ) : (
+          resumeDialog
+        )}
       </div>
     );
   }

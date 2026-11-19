@@ -3,9 +3,11 @@ import {
   clearNativeAgentResumeRequest,
   MAX_NATIVE_AGENT_RESUME_REQUESTS,
   NATIVE_AGENT_RESUME_REQUEST_TTL_MS,
+  observeNativeAgentResumeRequest,
   parkNativeAgentResumeRequest,
   peekNativeAgentResumeRequest,
   resetNativeAgentResumeRequests,
+  runNativeAgentResumeRequest,
 } from "./native-agent-resume-requests";
 
 const ref = { nodeId: "node-a", environmentId: "e-1", tabId: "t-1" };
@@ -33,6 +35,25 @@ describe("native agent resume requests", () => {
     clearNativeAgentResumeRequest(ref, first);
     expect(peekNativeAgentResumeRequest(ref)?.sessionId).toBe("s-2");
     clearNativeAgentResumeRequest(ref);
+    expect(peekNativeAgentResumeRequest(ref)).toBeNull();
+  });
+
+  test("an observed tab keeps its intent and shares an in-flight resume across mounts", async () => {
+    parkNativeAgentResumeRequest(ref, { platform: "claude", sessionId: "s-1", ready }, 1_000);
+    const request = peekNativeAgentResumeRequest(ref, 1_001)!;
+    expect(observeNativeAgentResumeRequest(ref, request)).toBe(true);
+    expect(peekNativeAgentResumeRequest(ref, 1_000 + NATIVE_AGENT_RESUME_REQUEST_TTL_MS)).toBe(
+      request,
+    );
+
+    const released = Promise.withResolvers<void>();
+    const first = runNativeAgentResumeRequest(ref, request, () => released.promise);
+    const second = runNativeAgentResumeRequest(ref, request, () => {
+      throw new Error("Resume ran twice");
+    });
+    expect(second).toBe(first);
+    released.resolve();
+    await second;
     expect(peekNativeAgentResumeRequest(ref)).toBeNull();
   });
 

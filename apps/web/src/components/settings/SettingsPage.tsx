@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { useEffect, useMemo, useState } from "react";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { MachineDot } from "@/components/federation/MachineDot";
@@ -346,9 +347,14 @@ export function SettingsPage({
         const option = resolved.options.find((candidate) => candidate.nodeId === machine);
         if (machine && !option) {
           return (
-            <p className="p-5 text-sm text-muted-foreground" role="status">
-              The selected machine is no longer available.
-            </p>
+            <div className="space-y-3 p-5">
+              <p className="text-sm text-muted-foreground" role="status">
+                The selected machine is no longer available.
+              </p>
+              <Button type="button" variant="outline" size="sm" onClick={() => choose(null)}>
+                Use the command machine
+              </Button>
+            </div>
           );
         }
         return (

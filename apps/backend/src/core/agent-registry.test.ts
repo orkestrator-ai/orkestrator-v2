@@ -14,10 +14,11 @@ import { describeAgentRegistrySummary } from "@orkestrator/protocol/agent-regist
 import { goalStatusSummary } from "@orkestrator/protocol/native-agent-goal";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { AgentRegistry } from "./agent-registry.js";
 import { StorageService } from "./storage.js";
 
-async function fixture() {
+async function fixture(extraNativeTabs = 0) {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-agent-registry-"));
   const storage = new StorageService(dataDir);
   await storage.init();
@@ -59,6 +60,11 @@ async function fixture() {
           id: "pane",
           tabs: [
             { id: "native", type: "agent-native", nativeAgentData: { platform: "claude" } },
+            ...Array.from({ length: extraNativeTabs }, (_, index) => ({
+              id: `native-${index}`,
+              type: "agent-native",
+              nativeAgentData: { platform: "codex" },
+            })),
             { id: "tmux", type: "claude-tmux" },
             { id: "terminal", type: "codex" },
             { id: "shell", type: "plain" },
@@ -230,6 +236,135 @@ describe("AgentRegistry", () => {
         expect.objectContaining({ environmentId: "stopped-env", tabs: 3, stopped: 3 }),
       ]);
     } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("names what a waiting native tab waits on only when asked, and only for that tab", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const asked: string[] = [];
+      const pending = {
+        interactionId: "approval-1",
+        kind: "command-approval" as const,
+        label: "Needs approval",
+        detail: "Run bun install",
+        since: 1_000,
+        count: 1,
+      };
+      const registry = new AgentRegistry(storage, {
+        native: (environmentId) => (environmentId === "running-env" ? "waiting" : "idle"),
+        tmux: () => "waiting",
+        pending: async (environmentId, _agent, logicalSessionKey) => {
+          asked.push(`${environmentId}/${logicalSessionKey}`);
+          return pending;
+        },
+      });
+      // A plain snapshot never reaches a provider.
+      const plain = await registry.snapshot({ projectId: "p1" });
+      expect(asked).toEqual([]);
+      expect(plain.entries.some((entry) => entry.pending)).toBe(false);
+
+      const withPending = await registry.snapshot({ projectId: "p1" }, { includePending: true });
+      // Only the waiting native tab is read: not tmux, not a stopped environment.
+      expect(asked).toEqual(["running-env/env-running-env:native"]);
+      expect(
+        withPending.entries
+          .filter((entry) => entry.pending)
+          .map((entry) => [entry.environmentId, entry.tabId, entry.pending]),
+      ).toEqual([["running-env", "native", pending]]);
+
+      // The command passes the flag through, and only a literal `true` counts.
+      const commands = new Map<string, CommandHandler>();
+      registerAgentMailCommands(
+        registrarFrom((name, handler) => {
+          commands.set(name, handler);
+        }),
+      );
+      const command = commands.get("get_agent_registry")!;
+      const context = { agentRegistry: registry } as CommandContext;
+      asked.length = 0;
+      await command({ environmentId: "running-env", includePending: "yes" }, context);
+      expect(asked).toEqual([]);
+      const viaCommand = (await command(
+        { environmentId: "running-env", includePending: true },
+        context,
+      )) as Awaited<ReturnType<AgentRegistry["snapshot"]>>;
+      expect(viaCommand.entries.find((entry) => entry.tabId === "native")?.pending).toEqual(
+        pending,
+      );
+    } finally {
+      storage.close();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("one deadline bounds stalled tabs without dropping faster siblings", async () => {
+    const { storage, dataDir } = await fixture(2);
+    const clock = new ManualClock();
+    const slow = Promise.withResolvers<undefined>();
+    const started = Promise.withResolvers<void>();
+    try {
+      const registry = new AgentRegistry(
+        storage,
+        {
+          native: () => "waiting",
+          pending: async (_environmentId, _agent, key) => {
+            if (key.endsWith(":native-1")) started.resolve();
+            if (key.endsWith(":native") || key.endsWith(":native-1")) return slow.promise;
+            return {
+              interactionId: "request",
+              kind: "question",
+              label: "Question",
+              since: 1,
+              count: 1,
+            };
+          },
+        },
+        clock,
+      );
+      let returned = false;
+      const reading = registry
+        .snapshot({ environmentId: "running-env" }, { includePending: true })
+        .then((result) => {
+          returned = true;
+          return result;
+        });
+      await started.promise;
+      await clock.advanceAsync(1_999);
+      expect(returned).toBe(false);
+      await clock.advanceAsync(1);
+      const result = await reading;
+      expect(result.entries.filter((entry) => entry.pending).map((entry) => entry.tabId)).toEqual([
+        "native-0",
+      ]);
+      expect(clock.pendingCount()).toBe(0);
+    } finally {
+      slow.resolve(undefined);
+      storage.close();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a pending read that fails leaves the tab without a summary", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const registry = new AgentRegistry(storage, {
+        native: () => "waiting",
+        pending: async () => {
+          throw new Error("bridge unreachable");
+        },
+      });
+      const snapshot = await registry.snapshot(
+        { environmentId: "running-env" },
+        { includePending: true },
+      );
+      expect(snapshot.entries.find((entry) => entry.tabId === "native")).toMatchObject({
+        state: "waiting",
+      });
+      expect(snapshot.entries.some((entry) => entry.pending)).toBe(false);
+    } finally {
+      storage.close();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });

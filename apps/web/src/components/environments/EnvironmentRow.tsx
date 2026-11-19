@@ -53,6 +53,8 @@ import { useSidebarActionStore } from "@/stores/sidebarActionStore";
 import { cn } from "@/lib/utils";
 import type { FreshnessNotice } from "@/lib/view-freshness";
 import type { EnvironmentType } from "@/types";
+import type { AgentSummarySource } from "./EnvironmentAgentSummary";
+import { EnvironmentAttentionLine } from "./EnvironmentAttentionLine";
 import { EnvironmentDeleteDialog } from "./EnvironmentDeleteDialog";
 import { EnvironmentNameIcons } from "./EnvironmentNameIcons";
 import { EnvironmentNameShimmer, EnvironmentNameSignalMarker } from "./EnvironmentNameShimmer";
@@ -462,6 +464,16 @@ export interface EnvironmentRowProps {
   tooltipDetails: EnvironmentTooltipDetails;
   onDeleteOpenChange?: (open: boolean) => void;
   agentSummary: ReactNode;
+  /**
+   * Where the attention line reads what a waiting agent waits on: the owning
+   * machine's agent registry, or `null` while that machine is unreachable.
+   */
+  attentionSource: AgentSummarySource | null;
+  /**
+   * Opens the tab holding the request the attention line names (`null`: no tab
+   * is known, so the environment itself).
+   */
+  onOpenAttention: (tabId: string | null, interactionId?: string) => void;
   /** Extra notes for the delete confirmation, rendered while it is open. */
   deleteNotice?: (open: boolean) => ReactNode;
 }
@@ -484,6 +496,8 @@ export function EnvironmentRow({
   tooltipDetails,
   onDeleteOpenChange,
   agentSummary,
+  attentionSource,
+  onOpenAttention,
   deleteNotice,
 }: EnvironmentRowProps) {
   const pending = useSidebarActionStore((state) =>
@@ -731,6 +745,17 @@ export function EnvironmentRow({
               </DropdownMenu>
             )}
           </div>
+          {/* A sibling of the row, not inside its button: a control nested in
+              `role="button"` would be hidden from assistive tech. */}
+          {model.attention && !multiSelectActive && (
+            <EnvironmentAttentionLine
+              environmentId={model.environmentId}
+              attention={model.attention}
+              source={facts.live ? attentionSource : null}
+              onOpen={onOpenAttention}
+              describedBy={nameId}
+            />
+          )}
         </ContextMenuTrigger>
         <HoverTooltipContent
           anchorRef={tooltipAnchorRef}

@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import type { BackendId, EnvironmentRef } from "@orkestrator/protocol/federation";
 import { RELAYED_NODE_EVENT } from "@orkestrator/protocol/node-events";
 import { NATIVE_AGENT_ACTIVITY_EVENT } from "@orkestrator/protocol/native-agent-observation";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
+import { EnvironmentAttentionLine } from "@/components/environments/EnvironmentAttentionLine";
 import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
 import { invoke } from "@/lib/native/backend";
 import { listen } from "@/lib/native/events";
 import { nodeAgentSummarySource, useNodeEnvironment } from "./node-environment-reads";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { resetNodeEventsForTests } from "./node-events";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -179,4 +181,61 @@ test("remote agent summary filters matching activity and resource events, coales
   pending.at(-1)!.resolve(registry(3));
   await settle();
   expect(screen.queryByText(/agent tabs/) === null).toBe(true);
+});
+
+test("remote pending detail refreshes without an activity edge and reconciles on reconnect", async () => {
+  const pendingRegistry = (interactionId: string, label: string, count: number) => ({
+    ...registry(1),
+    entries: [
+      {
+        environmentId: "env-1",
+        tabId: "tab",
+        tabOrdinal: 1,
+        ownerKind: "environment",
+        kind: "native",
+        state: "waiting",
+        pending: { interactionId, kind: "question", label, since: 1, count },
+      },
+    ],
+  });
+  const onOpen = mock(() => {});
+  render(
+    <EnvironmentAttentionLine
+      environmentId="env-1"
+      source={nodeAgentSummarySource(LEAF)}
+      attention={{ text: "Waiting for you", tone: "waiting", readsPending: true, since: null }}
+      onOpen={onOpen}
+    />,
+  );
+  await settle();
+  pending.at(-1)!.resolve(pendingRegistry("first", "First question", 2));
+  await settle();
+  expect(screen.getByRole("button", { name: /First question.*2 waiting/ })).toBeTruthy();
+
+  const debounce = installControlledTimeout(250, { label: "remote pending refresh" });
+  try {
+    event(RESOURCE_CHANGED_EVENT, {
+      resource: "native-agent-session",
+      id: "env-1",
+      cause: "pending-interactions",
+    });
+    await act(async () => {
+      debounce.advance();
+    });
+  } finally {
+    debounce.restore();
+  }
+  expect(pending).toHaveLength(2);
+  const invalidated = pending[1]!;
+  resync();
+  await settle();
+  expect(pending).toHaveLength(3);
+  invalidated.resolve(pendingRegistry("first", "Obsolete question", 2));
+  pending[2]!.resolve(pendingRegistry("second", "Second question", 1));
+  await settle();
+  expect(
+    screen.queryByRole("button", { name: /First question|Obsolete question|2 waiting/ }) === null,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: /Second question/ }));
+  expect(onOpen).toHaveBeenCalledWith("tab", "second");
 });

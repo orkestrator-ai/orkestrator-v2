@@ -1,3 +1,4 @@
+import { clearNativeAgentResumeRequest } from "@/lib/native-agent-resume-requests";
 import { createSessionKey } from "@/lib/utils";
 import type {
   BrowserAnnotationPanelState,
@@ -487,6 +488,7 @@ function cleanupTabResources(
   }
 
   if (tab.type === "agent-native") {
+    clearNativeAgentResumeRequest({ nodeId: scope.nodeId, environmentId: envId, tabId: tab.id });
     scope.store(nativeComposeStore).getState().clearSession(createSessionKey(envId, tab.id));
     const platform = getNativeAgentData(tab)?.platform;
     if (platform === "claude")
@@ -540,7 +542,10 @@ function cleanupLocalTabResources(
   if (tab.type === "agent-native") {
     const store = scope.store(nativeComposeStore).getState();
     const key = createSessionKey(envId, tab.id);
-    if (permanent) store.clearSession(key);
+    if (permanent) {
+      clearNativeAgentResumeRequest({ nodeId: scope.nodeId, environmentId: envId, tabId: tab.id });
+      store.clearSession(key);
+    }
   }
   if (tab.type === "claude-tmux") {
     const store = scope.store(claudeTmuxStore).getState();

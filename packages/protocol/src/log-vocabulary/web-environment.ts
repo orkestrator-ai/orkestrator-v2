@@ -67,6 +67,18 @@ export const WEB_ENVIRONMENT_LOG_AREAS = defineLogAreas({
       "folder.sort-failed": "A project folder could not be sorted.",
     },
   },
+  "web.command-palette": {
+    description:
+      "The Cmd/Ctrl-K command palette: content-free activation, unavailable-command and no-result counts.",
+    events: {
+      "session.closed":
+        "The palette closed: what was activated (a static command ID or result kind), the time from opening, and how many queries found nothing.",
+      "command.unavailable":
+        "An unavailable command was chosen: its static ID and the category of the missing prerequisite.",
+      "command.revalidation-failed":
+        "A confirmed command's frozen target no longer allowed it, so it was not run.",
+    },
+  },
   "web.docker": {
     description: "The Docker settings view.",
     events: {

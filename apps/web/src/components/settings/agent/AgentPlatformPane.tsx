@@ -70,6 +70,7 @@ export interface AgentPlatformPaneProps {
   modelCatalogScopeDescription?: string;
   /** Show the entry point into this platform's saved MCP servers. */
   showMcpServersLink?: boolean;
+  renderSettingExplanation?: (setting: string) => React.ReactNode;
   /**
    * Whether this machine's experimental Tmux mode is on. While it is off the
    * Claude "Native backend" choice is hidden (a stored Tmux at this tier stays
@@ -133,6 +134,7 @@ export function AgentPlatformPane({
   refreshModelsDisabled = false,
   modelCatalogScopeDescription,
   showMcpServersLink = false,
+  renderSettingExplanation,
   tmuxModeEnabled = false,
   children,
 }: AgentPlatformPaneProps) {
@@ -220,7 +222,7 @@ export function AgentPlatformPane({
           Cursor always runs in Native mode through its TypeScript SDK.
         </SettingsSectionHeader>
       ) : (
-        <div className="space-y-3">
+        <div data-setting-anchor={`${platform}.mode`} className="space-y-3">
           <SettingsSectionHeader title="Mode">
             How {label} runs in environments. Native opens a chat interface instead of a terminal.
           </SettingsSectionHeader>
@@ -246,11 +248,12 @@ export function AgentPlatformPane({
               {SHIPPED_PLATFORM_MODES[platform] === "native" ? "Native" : "Terminal"}.
             </p>
           )}
+          {renderSettingExplanation?.(`${platform}.mode`)}
         </div>
       )}
 
       {platform === "claude" && (tmuxModeEnabled || stored?.claudeNativeBackend === "tmux") && (
-        <div className="space-y-3">
+        <div data-setting-anchor="claude.native-backend" className="space-y-3">
           <SettingsSectionHeader title="Native backend">
             The implementation behind Native mode. Only applies when the resolved mode is Native.
           </SettingsSectionHeader>
@@ -283,10 +286,11 @@ export function AgentPlatformPane({
             <code className="px-1 font-mono">.claude/settings.local.json</code> while a session
             runs, and restores the original when it stops.
           </p>
+          {renderSettingExplanation?.("claude.native-backend")}
         </div>
       )}
 
-      <div className="space-y-3">
+      <div data-setting-anchor={`${platform}.model`} className="space-y-3">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-sm font-medium text-foreground">Default model</h3>
@@ -405,6 +409,9 @@ export function AgentPlatformPane({
             pick another model to replace it.
           </p>
         )}
+        {renderSettingExplanation?.(`${platform}.reasoning-effort`)}
+        {speedCapable ? renderSettingExplanation?.(`${platform}.fast-mode`) : null}
+        {renderSettingExplanation?.(`${platform}.model`)}
       </div>
 
       {platform === "claude" && (
@@ -414,7 +421,7 @@ export function AgentPlatformPane({
             keep the values they started with.
           </SettingsSectionHeader>
 
-          <div className="space-y-2">
+          <div data-setting-anchor="claude.thinking-mode" className="space-y-2">
             <label className="text-sm font-medium text-foreground" htmlFor="claude-thinking-mode">
               Thinking
             </label>
@@ -450,9 +457,10 @@ export function AgentPlatformPane({
               Adaptive lets Claude choose its thinking budget. Fixed budgets cap extended thinking
               per response.
             </p>
+            {renderSettingExplanation?.("claude.thinking-mode")}
           </div>
 
-          <div className="space-y-2">
+          <div data-setting-anchor="claude.context1m" className="space-y-2">
             <div>
               <h4 className="text-sm font-medium text-foreground">1M context beta</h4>
               <p className="mt-1 text-xs text-muted-foreground/80">
@@ -485,9 +493,10 @@ export function AgentPlatformPane({
                 { value: "on", label: "On" },
               ]}
             />
+            {renderSettingExplanation?.("claude.context1m")}
           </div>
 
-          <div className="space-y-2">
+          <div data-setting-anchor="claude.chrome" className="space-y-2">
             <div>
               <h4 className="text-sm font-medium text-foreground">Claude in Chrome</h4>
               <p className="mt-1 text-xs text-muted-foreground/80">
@@ -517,6 +526,7 @@ export function AgentPlatformPane({
                 { value: "on", label: "On" },
               ]}
             />
+            {renderSettingExplanation?.("claude.chrome")}
           </div>
         </div>
       )}

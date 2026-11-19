@@ -892,6 +892,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
                   attemptRevisions.get(environment.id),
                 ).environment,
             ),
+            true,
           );
           reconcileNodeLifecycleErrors(node);
         }

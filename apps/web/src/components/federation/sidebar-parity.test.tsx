@@ -1,6 +1,6 @@
 /**
  * The sidebar's empty states and drag card look the same on this window's
- * tree, another machine's section and the merged lists (to-do 2190 (retired), task 7),
+ * tree and the repository list (to-do 2190 (retired), task 7),
  * and another machine's rows look the same from its summary and from its
  * warm or live scope (plan item 5007).
  */
@@ -11,7 +11,9 @@ import {
   toNodeProjectSummary,
 } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { FederatedActivityList, MergedProjectList } from "./FederatedSidebarSections";
+import { FederatedActivityList } from "./FederatedSidebarSections";
+import { NO_BOUND_ROWS } from "./federation-ui-test-fixture";
+import { RepositoryEnvironmentList } from "./RepositoryEnvironmentList";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { HierarchicalSidebar } from "@/components/sidebar/HierarchicalSidebar";
@@ -42,7 +44,7 @@ const initialProjects = appCommandStore(projectStore).getState();
 const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 
-function renderSidebar(grouping: "machine" | "project", dataset: MachineDataset) {
+function renderSidebar(dataset: MachineDataset) {
   installDesktopFake({
     list: connectionList([remoteConnection("a", "Machine A", "teal")]),
     datasets: { a: dataset },
@@ -56,8 +58,8 @@ function renderSidebar(grouping: "machine" | "project", dataset: MachineDataset)
   appCommandStore(projectStore).getState().setProjects([]);
   appCommandStore(environmentStore).getState().setEnvironments([]);
   useMachineViewStore.setState({
-    grouping,
-    machineFilter: "all",
+    grouping: "repository",
+    machineFilter: [],
     collapsedMachines: [],
     collapsedProjectKeys: [],
     collapsedFolderKeys: [],
@@ -108,91 +110,82 @@ afterEach(() => {
   useRemoteWorkspaceStore.setState(initialRemote, true);
 });
 
-test("an empty merged list offers this window's Add Project, as this window's own tree does", async () => {
-  renderSidebar("project", { projects: [], environments: {} });
-  const list = await screen.findByTestId("federated-project-list");
-  expect(within(list).getByText("No projects yet")).toBeTruthy();
+test("an empty repository list offers this window's Add Project, as this window's own tree does", async () => {
+  renderSidebar({ projects: [], environments: {} });
+  const list = await screen.findByTestId("federated-repository-list");
+  await waitFor(() => expect(within(list).getByText("No projects yet")).toBeTruthy());
   fireEvent.click(within(list).getByRole("button", { name: "Add your first project" }));
   expect(await screen.findByRole("dialog", { name: "Add project" })).toBeTruthy();
 });
 
-test("another machine's empty section offers to add a project on that machine", async () => {
-  renderSidebar("machine", { projects: [], environments: {} });
-  // This window's tree and Machine A's section: one empty state each.
-  await waitFor(() =>
-    expect(screen.getAllByRole("button", { name: "Add your first project" })).toHaveLength(2),
-  );
-  expect(screen.getAllByText("No projects yet")).toHaveLength(2);
-  fireEvent.click(screen.getAllByRole("button", { name: "Add your first project" })[1]!);
-  await waitFor(() => expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_a"));
+test("dragging another machine's environment shows the drag card in the repository list", async () => {
+  renderSidebar({
+    projects: [{ id: "remote-1", name: "Remote one", order: 0 }],
+    environments: {
+      "remote-1": [
+        { id: "env-1", projectId: "remote-1", name: "first", status: "running", order: 0 },
+        { id: "env-2", projectId: "remote-1", name: "second", status: "running", order: 1 },
+      ],
+    },
+  });
+  const handle = await screen.findByRole("button", { name: "Reorder first" });
+  expect(screen.queryByTestId("sidebar-drag-overlay") === null).toBe(true);
+  await startKeyboardDrag(handle);
+  const overlay = await screen.findByTestId("sidebar-drag-overlay");
+  expect(overlay.textContent).toBe("first");
+  // The card outlives the drop for its animation; it must not take the next press.
+  expect(overlay.closest(".pointer-events-none") === null).toBe(false);
+  fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+  await waitFor(() => expect(screen.queryByTestId("sidebar-drag-overlay") === null).toBe(true));
 });
 
-for (const grouping of ["project", "machine"] as const) {
-  test(`dragging another machine's project shows the drag card ${grouping === "project" ? "in a merged list" : "in its machine section"}`, async () => {
-    renderSidebar(grouping, {
-      projects: [
-        { id: "remote-1", name: "Remote one", order: 0 },
-        { id: "remote-2", name: "Remote two", order: 1 },
-      ],
-      environments: {},
-    });
-    const heading = await screen.findByRole("button", { name: "Open Remote one on Machine A" });
-    expect(screen.queryByTestId("sidebar-drag-overlay") === null).toBe(true);
-    await startKeyboardDrag(heading);
-    const overlay = await screen.findByTestId("sidebar-drag-overlay");
-    expect(overlay.textContent).toBe("Remote one");
-    // The card outlives the drop for its animation; it must not take the next press.
-    expect(overlay.closest(".pointer-events-none") === null).toBe(false);
-    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
-    await waitFor(() => expect(screen.queryByTestId("sidebar-drag-overlay") === null).toBe(true));
-  });
-}
-
-for (const mode of ["project", "repository"] as const) {
-  for (const source of ["bound", "remote"] as const) {
-    test(`${mode} empty list waits for ${source} projects before offering Add Project`, async () => {
-      installDesktopFake({ list: connectionList([]), datasets: {} });
-      const machine: MachineView = {
-        connectionId: "a",
-        backendId: "bk_a" as BackendId,
-        name: "Machine A",
-        colorToken: "teal",
-        bound: false,
-        freshness: "current",
-        transport: "connected",
-        projects: [],
-        environmentsByProject: new Map(),
-        truncated: false,
-        loadedAt: null,
-      };
-      function List({ loading, shown = true }: { loading: boolean; shown?: boolean }) {
-        return (
-          <FederationProvider>
-            <MergedProjectList
-              mode={mode}
-              machines={source === "remote" ? [{ ...machine, loadedAt: loading ? null : 1 }] : []}
-              shownIds={new Set(shown ? ["a"] : [])}
-              boundLoading={source === "bound" && loading}
-              renderBoundProject={() => null}
-              onBoundEnvironmentDragEnd={() => {}}
-              onAddProject={() => {}}
-            />
-          </FederationProvider>
-        );
-      }
-      const view = renderInAppCommandScope(<List loading />);
-      expect(screen.getByText("Loading projects...")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Add your first project" }) === null).toBe(true);
-      view.rerender(<List loading={false} />);
-      expect(screen.getByText("No projects yet")).toBeTruthy();
+for (const source of ["bound", "remote"] as const) {
+  test(`the empty repository list waits for ${source} projects before offering Add Project`, async () => {
+    installDesktopFake({ list: connectionList([]), datasets: {} });
+    const machine: MachineView = {
+      connectionId: "a",
+      backendId: "bk_a" as BackendId,
+      name: "Machine A",
+      colorToken: "teal",
+      bound: false,
+      freshness: "current",
+      transport: "connected",
+      projects: [],
+      environmentsByProject: new Map(),
+      truncated: false,
+      loadedAt: null,
+    };
+    const boundMachine = { ...machine, connectionId: "bound", bound: true, loadedAt: 1 };
+    function List({ loading, shown = true }: { loading: boolean; shown?: boolean }) {
+      return (
+        <FederationProvider>
+          <RepositoryEnvironmentList
+            machines={
+              source === "remote"
+                ? [boundMachine, { ...machine, loadedAt: loading ? null : 1 }]
+                : [boundMachine]
+            }
+            shownIds={new Set(source === "remote" && shown ? ["bound", "a"] : ["bound"])}
+            ordering="machine"
+            bound={NO_BOUND_ROWS}
+            boundLoading={source === "bound" && loading}
+            onAddProject={() => {}}
+          />
+        </FederationProvider>
+      );
+    }
+    const view = renderInAppCommandScope(<List loading />);
+    expect(screen.getByText("Loading projects...")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add your first project" }) === null).toBe(true);
+    view.rerender(<List loading={false} />);
+    expect(screen.getByText("No projects yet")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add your first project" })).toBeTruthy();
+    if (source === "remote") {
+      view.rerender(<List loading shown={false} />);
+      expect(screen.queryByText("Loading projects...") === null).toBe(true);
       expect(screen.getByRole("button", { name: "Add your first project" })).toBeTruthy();
-      if (source === "remote") {
-        view.rerender(<List loading shown={false} />);
-        expect(screen.queryByText("Loading projects...") === null).toBe(true);
-        expect(screen.getByRole("button", { name: "Add your first project" })).toBeTruthy();
-      }
-    });
-  }
+    }
+  });
 }
 
 // Exercise the actual home list and its private activitySortKey adapter, including
@@ -326,16 +319,16 @@ function machineARows(): string[] {
 }
 
 function machineASection(): string {
-  return screen
-    .getAllByTestId("federated-project")
-    .map((group) => group.outerHTML)
+  return Array.from(document.querySelectorAll("[data-project-folder]"))
+    .map((entry) => entry.outerHTML)
     .join("");
 }
 
 test("another machine's rows are the same from its summary and from its warm scope, and a tier change keeps them", async () => {
-  renderSidebar("machine", overlayDataset());
+  renderSidebar(overlayDataset());
   await screen.findByRole("button", { name: /^alpha, on Machine A/ });
   const fromSummary = machineASection();
+  expect(fromSummary).toContain("alpha");
   const rowElement = screen.getByRole("button", { name: /^beta, on Machine A/ });
 
   const scope = openLeafScope(overlayDataset());
@@ -354,7 +347,7 @@ test("another machine's rows are the same from its summary and from its warm sco
 
 test("a rename in the warm scope shows before the next summary, and the summary takes over when it suspends", async () => {
   const dataset = overlayDataset();
-  renderSidebar("machine", dataset);
+  renderSidebar(dataset);
   await screen.findByRole("button", { name: /^alpha, on Machine A/ });
   const scope = openLeafScope(overlayDataset());
   const before = portalStore.getState().nodes;

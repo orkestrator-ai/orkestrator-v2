@@ -17,12 +17,14 @@ import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 interface AccountMachineState {
   /** A node chosen for this Settings visit; `undefined` follows the machine on screen. */
   chosen: string | null | undefined;
-  choose: (nodeId: string | null | undefined) => void;
+  explicitTarget: boolean;
+  choose: (nodeId: string | null | undefined, explicitTarget?: boolean) => void;
 }
 
 export const useAccountMachineStore = create<AccountMachineState>()((set) => ({
   chosen: undefined,
-  choose: (chosen) => set({ chosen }),
+  explicitTarget: false,
+  choose: (chosen, explicitTarget = false) => set({ chosen, explicitTarget }),
 }));
 
 export interface AccountMachineValue {
@@ -69,6 +71,7 @@ export function useResolvedAccountMachine(): {
   const { enabled, portalState } = useFederation();
   const machines = useMachineViews();
   const chosen = useAccountMachineStore((state) => state.chosen);
+  const explicitTarget = useAccountMachineStore((state) => state.explicitTarget);
   const onScreen = useRemoteWorkspaceStore((state) => state.active?.nodeId ?? null);
   return useMemo(() => {
     const selfId = portalState.selfId;
@@ -80,14 +83,15 @@ export function useResolvedAccountMachine(): {
     }));
     // The command node leads; the others keep the sidebar's order.
     options.sort((a, b) => Number(a.nodeId !== null) - Number(b.nodeId !== null));
-    if (!enabled || options.length < 2) return { machine: null, name: null, options: [] };
+    if (!enabled || options.length < 2) {
+      return { machine: explicitTarget ? (chosen ?? null) : null, name: null, options: [] };
+    }
     const wanted = chosen !== undefined ? chosen : onScreen === selfId ? null : onScreen;
-    const selected =
-      options.find((option) => option.nodeId === wanted) ?? options.find((o) => !o.nodeId);
+    const selected = options.find((option) => option.nodeId === wanted);
     return {
-      machine: selected?.nodeId ?? null,
+      machine: explicitTarget && chosen !== undefined ? chosen : (selected?.nodeId ?? null),
       name: selected?.name ?? null,
       options,
     };
-  }, [chosen, enabled, machines, onScreen, portalState.selfId]);
+  }, [chosen, enabled, explicitTarget, machines, onScreen, portalState.selfId]);
 }

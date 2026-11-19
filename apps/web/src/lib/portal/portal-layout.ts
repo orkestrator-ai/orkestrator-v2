@@ -16,6 +16,7 @@ import {
   PORTAL_LAYOUT_CHANGED_EVENT,
   type PortalLayout,
   type PortalLayoutUpdate,
+  type RepositoryEnvironmentOrderUpdate,
 } from "@orkestrator/protocol/portal-layout";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { NO_ARGS, portalNodesApi } from "@/lib/node-scope/domains/nodes";
@@ -40,10 +41,12 @@ let generation = 0;
 let readRevision = 0;
 let unlisteners: Array<() => void> = [];
 
-function apply(next: PortalLayout): void {
+function apply(next: PortalLayout, fromRead = false): void {
   if (writing > 0) return;
   store.setState((state) =>
-    state.loaded && state.layout.revision > next.revision
+    state.loaded &&
+    state.layout.revision > next.revision &&
+    !(fromRead && state.layout.manualOrderSupported !== next.manualOrderSupported)
       ? state
       : { layout: next, loaded: true, error: null },
   );
@@ -60,11 +63,15 @@ async function read(): Promise<void> {
   const request = ++readRevision;
   try {
     const layout = parsePortalLayout(await portalNodesApi().get_portal_layout(NO_ARGS));
-    if (request === readRevision) apply(layout);
+    if (request === readRevision) apply(layout, true);
   } catch (error) {
     if (request !== readRevision || writing > 0) return;
     if (unsupportedCommand(error, "get_portal_layout"))
-      store.setState({ loaded: true, error: null });
+      store.setState((state) => ({
+        layout: { ...state.layout, manualOrderSupported: undefined },
+        loaded: true,
+        error: null,
+      }));
     else
       store.setState({
         loaded: false,
@@ -118,26 +125,69 @@ export function startPortalLayout(): () => void {
 
 /** Shows `update` at once and writes it to the command node. */
 export async function updatePortalLayout(update: PortalLayoutUpdate): Promise<void> {
+  await writeLayout(
+    (layout) => ({ ...layout, ...update }),
+    () => portalNodesApi().update_portal_layout(update),
+    true,
+  );
+}
+
+export async function updateRepositoryEnvironmentOrder(
+  update: RepositoryEnvironmentOrderUpdate,
+): Promise<void> {
+  const command = "update_repository_environment_order";
+  if (!getPortalLayout().manualOrderSupported) throw manualOrderUnavailable();
+  await writeLayout(
+    (layout) => ({
+      ...layout,
+      environmentOrder: { ...layout.environmentOrder, [update.repositoryKey]: update.order },
+    }),
+    async () => {
+      try {
+        const saved = await portalNodesApi().update_repository_environment_order(update);
+        if (saved?.manualOrderSupported !== true) throw manualOrderUnavailable();
+      } catch (error) {
+        if (unsupportedCommand(error, command)) throw manualOrderUnavailable();
+        throw error;
+      }
+    },
+    false,
+  );
+}
+
+function manualOrderUnavailable(): Error {
+  return new Error("Update the command node to save a Manual environment order.");
+}
+
+async function writeLayout(
+  optimistic: (layout: PortalLayout) => PortalLayout,
+  write: () => Promise<unknown>,
+  allowPageFallback: boolean,
+): Promise<void> {
   if (!store.getState().loaded)
     throw new Error("The sidebar order has not loaded. Reconnect to retry.");
+  const next = optimistic(getPortalLayout());
   readRevision += 1;
-  store.setState((state) => ({ layout: { ...state.layout, ...update }, loaded: true }));
+  store.setState({ layout: next });
   writing += 1;
-  let unsupported = false;
+  let fallback = false;
   try {
-    await portalNodesApi().update_portal_layout({ ...update });
+    await write();
   } catch (error) {
-    unsupported = unsupportedCommand(error, "update_portal_layout");
-    if (!unsupported) throw error;
+    fallback = allowPageFallback && unsupportedCommand(error, "update_portal_layout");
+    if (!fallback) throw error;
   } finally {
     writing -= 1;
-    // Answers can arrive out of order; the stored layout is the one to show.
-    if (writing === 0 && !unsupported) await read();
+    if (writing === 0 && !fallback) await read();
   }
 }
 
 export function getPortalLayout(): PortalLayout {
   return store.getState().layout;
+}
+
+export function useManualOrderSupported(): boolean {
+  return useStore(store, (state) => state.loaded && state.layout.manualOrderSupported === true);
 }
 
 export function usePortalLayout(): PortalLayout {

@@ -3,8 +3,10 @@
  *
  * The command node stores where machines and their projects sit
  * (`@orkestrator/protocol/portal-layout`); this module turns that stored
- * order and the machines' own orders into what the sidebar shows, and a drag
- * back into the next stored order. Everything here is pure.
+ * order and the machines' own orders into what the sidebar shows (the
+ * machine tiles, the repository list, compact), and a drag back into the next
+ * stored order. The repository list's environment order is in
+ * `environment-list.ts`. Everything here is pure.
  *
  * - Anything the stored order does not name yet (a new machine, a new
  *   project) goes after whatever precedes it in the default order, so the
@@ -21,8 +23,6 @@ import {
   buildProjectTree,
   flattenProjectTree,
   normalizeProjectFolderName,
-  parseProjectFolderDragId,
-  PROJECT_ROOT_DROP_ID,
   type ProjectTreeEntry,
   type ProjectArrangement,
 } from "@/lib/project-folders";
@@ -156,7 +156,7 @@ export function orderMachines<M extends MachineView>(
   );
 }
 
-/** The next stored machine order after dragging one shown machine onto another. */
+/** The next stored machine order after dragging one shown machine (a tile, or a Settings row) onto another. */
 export function arrangeMachines(
   machines: readonly Pick<MachineView, "connectionId">[],
   shown: readonly Pick<MachineView, "connectionId">[],
@@ -219,11 +219,12 @@ export interface MergedList {
 }
 
 /**
- * "By project": every machine's projects in one list. `machines` are all
- * known machines in machine order; `shownIds` are those whose projects are
- * shown (connected and not filtered out). Until the user arranges the list,
- * the command node's projects come first and the others follow in machine
- * order.
+ * Every machine's projects in one list (`projectOrder`, last arranged by the
+ * retired "by project" list), which the repository order defaults to.
+ * `machines` are all known machines in machine order; `shownIds` are those
+ * whose projects are shown (connected and not filtered out). Until the user
+ * arranges the list, the command node's projects come first and the others
+ * follow in machine order.
  */
 export function mergedProjectList(
   machines: readonly MachineView[],
@@ -252,8 +253,8 @@ export function mergedProjectList(
 }
 
 /**
- * "By repository": the same projects, grouped by the repository their own
- * machine reports, in the "by project" order until the user arranges them.
+ * The repository list: the same projects, grouped by the repository their own
+ * machine reports, in the default project order until the user arranges them.
  */
 export function repositoryProjectList(
   machines: readonly MachineView[],
@@ -267,7 +268,7 @@ export function repositoryProjectList(
     layout,
     commandNodeId,
   );
-  // The order "by project" shows: a folder's members sit together.
+  // The default project order: a folder's members sit together.
   const defaults = flattenProjectTree(buildProjectTree(everything.shown)).map(
     (project) => project.id,
   );
@@ -300,44 +301,8 @@ function bounded(ids: string[]): string[] {
   return ids.length > MAX_PORTAL_LAYOUT_ENTRIES ? ids.slice(0, MAX_PORTAL_LAYOUT_ENTRIES) : ids;
 }
 
-function sameFolder(left: string | null | undefined, right: string | null | undefined): boolean {
-  const a = normalizeProjectFolderName(left);
-  const b = normalizeProjectFolderName(right);
-  return a === b;
-}
-
 /**
- * The next stored "by project" order and folders after an arrangement of the
- * shown projects (a drag, or a folder action), or null for none. Folders
- * behave as on a machine's own sidebar; moving a project into or out of one
- * is recorded here, never on the project's machine.
- */
-export function mergedArrangementUpdate(
-  list: MergedList,
-  machines: readonly MachineView[],
-  layout: Pick<PortalLayout, "projectFolders">,
-  arrangement: ProjectArrangement | null,
-): Pick<PortalLayout, "projectOrder" | "projectFolders"> | null {
-  if (!arrangement) return null;
-  const owners = projectsByKey(machines);
-  const projectFolders: Record<string, string | null> = {};
-  const existing = new Set(prune(Object.keys(layout.projectFolders), machines));
-  for (const [id, folder] of Object.entries(layout.projectFolders)) {
-    if (existing.has(id)) projectFolders[id] = folder;
-  }
-  for (const [id, folder] of Object.entries(arrangement.folders)) {
-    const owner = owners.get(id);
-    if (owner && sameFolder(owner.project.folder, folder)) delete projectFolders[id];
-    else projectFolders[id] = normalizeProjectFolderName(folder);
-  }
-  return {
-    projectOrder: bounded(prune(placeShown(list.full, arrangement.projectIds), machines)),
-    projectFolders,
-  };
-}
-
-/**
- * The next stored "by repository" order after a drag, or null for a no-op.
+ * The next stored repository order after a drag, or null for a no-op.
  * A project's group is its repository, so a drop that would move it into
  * another group is a no-op.
  */
@@ -382,8 +347,8 @@ export function buildRepositoryTree(
 }
 
 /**
- * "By project" or "by repository" as `MergedProjectList` draws it: the list
- * and the tree of folders (or repository groups) it is drawn as.
+ * The default project list or the repository list, with the tree of folders
+ * (or repository groups) it is drawn as; compact draws the repository tree.
  */
 export function mergedProjectView(
   machines: readonly MachineView[],
@@ -400,54 +365,6 @@ export function mergedProjectView(
     list,
     tree: mode === "repository" ? buildRepositoryTree(list.shown) : buildProjectTree(list.shown),
   };
-}
-
-/** Repository drags reorder whole groups or members within their own group. */
-export function resolveRepositoryArrangement(
-  activeId: string,
-  overId: string,
-  projects: readonly MergedProject[],
-): ProjectArrangement | null {
-  const tree = buildRepositoryTree(projects);
-  const folderKey = parseProjectFolderDragId(activeId);
-  const overKey = parseProjectFolderDragId(overId);
-  if (folderKey !== null) {
-    const ids = tree.map((entry) =>
-      entry.kind === "folder" ? `project-folder:${entry.key}` : entry.project.id,
-    );
-    const next = moveEntry(ids, activeId, overId === PROJECT_ROOT_DROP_ID ? ids.at(-1)! : overId);
-    if (!next) return null;
-    const byId = new Map(ids.map((id, index) => [id, tree[index]!]));
-    return {
-      projectIds: flattenProjectTree(next.map((id) => byId.get(id)!)).map((p) => p.id),
-      folders: {},
-    };
-  }
-  if (overKey !== null) return null;
-  const active = projects.find((p) => p.id === activeId);
-  const over = projects.find((p) => p.id === overId);
-  if (!active || !over || active.folder !== over.folder) return null;
-  const next = moveEntry(
-    flattenProjectTree(tree).map((p) => p.id),
-    activeId,
-    overId,
-  );
-  return next ? { projectIds: next, folders: {} } : null;
-}
-
-/**
- * A member's label in its repository group: its machine, since the group
- * already names the repository. A machine with several projects in the group
- * adds the project name to tell them apart.
- */
-export function repositoryMemberLabel(
-  member: MergedProject,
-  group: readonly MergedProject[],
-): string {
-  const shared = group.some(
-    (other) => other !== member && other.machine.connectionId === member.machine.connectionId,
-  );
-  return shared ? `${member.machine.name} · ${member.name}` : member.machine.name;
 }
 
 /** What a repository group's heading opens: the command node's project, else the first shown. */

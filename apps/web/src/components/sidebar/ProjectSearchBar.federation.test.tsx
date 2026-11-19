@@ -7,12 +7,16 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import type { MachineView } from "@/lib/federation/aggregate";
 import {
   SELF_NODE_ID,
+  OUTCOME_UNKNOWN,
+  type InvokeCall,
   connectionList,
   installDesktopFake,
   remoteConnection,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import { portalStore } from "@/lib/portal/portal-store";
+import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { configStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -59,9 +63,10 @@ const localEnvironment: Environment = {
 const MBP3 = remoteConnection("mbp3", "mbp3", "teal");
 const MINI = remoteConnection("mini", "mini", "rose", { transport: "unreachable" });
 
-function install() {
+function install(respond?: (call: InvokeCall) => unknown) {
   return installDesktopFake({
     list: connectionList([MBP3, MINI]),
+    respond,
     datasets: {
       mbp3: {
         projects: [
@@ -87,6 +92,7 @@ function install() {
               name: "run-desktop-app",
               branch: "develop",
               status: "stopped",
+              environmentType: "local",
               worktreePath: "/Users/someone/worktrees/run-desktop-wt",
             },
           ],
@@ -238,6 +244,22 @@ describe("ProjectSearchBar across machines", () => {
     });
   });
 
+  test("search opens a paired checkout on its machine without a Coordinator hint", async () => {
+    const store = appCommandStore(projectStore);
+    const initial = store.getState();
+    try {
+      store.getState().setProjects([localProject]);
+      renderSearch();
+      await openAndType("orkestrator");
+      fireEvent.click(await option("orkestrator-v2, project on mbp3"));
+      expect(useRemoteWorkspaceStore.getState().requests.bk_mbp3?.request).toEqual({
+        projectId: "ork-3",
+      });
+    } finally {
+      act(() => store.setState(initial, true));
+    }
+  });
+
   test("lists a project once per machine, each labelled, offline rows greyed with the note", async () => {
     renderSearch();
     await openAndType("orkestrator");
@@ -266,24 +288,29 @@ describe("ProjectSearchBar across machines", () => {
     expect(within(row).getByText("primary")).toBeTruthy();
   });
 
-  test("Tab and the machine filter apply to other machines' rows", async () => {
+  test("Alt+Down and the machine filter apply to other machines' rows", async () => {
     renderSearch();
     const input = await openAndType("orkestrator");
     await option("run-desktop-app, environment of orkestrator-v2 on mbp3");
 
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     expect(await screen.findByLabelText("Filter results: Projects")).toBeTruthy();
     expectDomAbsent(
       screen.queryByRole("option", { name: /run-desktop-app/ }),
       "remote environment under the projects filter",
     );
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     expect(await screen.findByLabelText("Filter results: Environments")).toBeTruthy();
     expectDomAbsent(
       screen.queryByRole("option", { name: "orkestrator-v2, project on mbp3" }),
       "remote project under the environments filter",
     );
-    fireEvent.keyDown(input, { key: "Tab" });
+    // Actions, Settings and History, then back to All.
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    expect(await screen.findByLabelText("Filter results: All")).toBeTruthy();
 
     fireEvent.pointerDown(screen.getByTestId("project-search-filter"));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /mbp3/ }));
@@ -387,8 +414,8 @@ describe("ProjectSearchBar across machines", () => {
     const { onSelectProject, onSelectEnvironment, onSelectMachineProject } = renderSearch();
     const input = await openAndType("orkestrator");
     await option("run-desktop-app, environment of orkestrator-v2 on mbp3");
-    fireEvent.keyDown(input, { key: "Tab" });
-    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
     const local = await option("main, environment of orkestrator-v2 on This computer");
     const remote = await option("run-desktop-app, environment of orkestrator-v2 on mbp3");
 
@@ -561,6 +588,232 @@ describe("ProjectSearchBar across machines", () => {
       );
     });
   }
+
+  test("a forgotten frozen owner leaves History unavailable until explicitly refreshed", async () => {
+    renderSearch();
+    await waitFor(() =>
+      expect(portalStore.getState().nodes.some((node) => node.nodeId === "bk_mbp3")).toBe(true),
+    );
+    const layouts = appCommandStore(paneLayoutStore).getState();
+    act(() => {
+      layouts.initialize(null, localEnvironment.id);
+      layouts.addTab(
+        layouts.getActivePaneId(localEnvironment.id)!,
+        {
+          id: "local-history",
+          type: "agent-native",
+          displayTitle: "unique-history",
+        },
+        localEnvironment.id,
+      );
+      useRemoteWorkspaceStore
+        .getState()
+        .open("bk_mbp3", { projectId: "ork-3", environmentId: "run" });
+    });
+    await openAndType("unique-history");
+    act(() => {
+      portalStore.store.setState((state) => ({
+        nodes: state.nodes.filter((node) => node.nodeId !== "bk_mbp3"),
+      }));
+      useRemoteWorkspaceStore.getState().closeNode("bk_mbp3");
+    });
+    await screen.findByText("Open tabs could not be searched.");
+    expectDomAbsent(
+      screen.queryByTestId("command-palette-history-local-history"),
+      "local fallback",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use what is shown" }));
+    await screen.findByTestId("command-palette-history-local-history");
+    act(() =>
+      layouts.removeTab(
+        layouts.getActivePaneId(localEnvironment.id)!,
+        "local-history",
+        localEnvironment.id,
+      ),
+    );
+  });
+
+  for (const dockerAvailable of [true, false]) {
+    test(
+      dockerAvailable
+        ? "sends remote Stop once after the shown workspace changes"
+        : "Docker recovery targets the failed check's machine",
+      async () => {
+        const fake = install((call) =>
+          call.command === "stop_environment" ? OUTCOME_UNKNOWN : undefined,
+        );
+        renderSearch([localProject], [{ ...localEnvironment, id: "run" }]);
+        await waitFor(() =>
+          expect(portalStore.getState().nodes.some((node) => node.nodeId === "bk_mbp3")).toBe(true),
+        );
+        act(() => {
+          portalStore.store.setState((state) => ({
+            nodes: state.nodes.map((node) =>
+              node.nodeId !== "bk_mbp3"
+                ? node
+                : {
+                    ...node,
+                    environments: node.environments.map((environment) => ({
+                      ...environment,
+                      environmentType: "containerized",
+                      status: "running",
+                      dockerAvailable,
+                    })),
+                  },
+            ),
+          }));
+          useRemoteWorkspaceStore
+            .getState()
+            .open("bk_mbp3", { projectId: "ork-3", environmentId: "run" });
+        });
+        const input = await openAndType(dockerAvailable ? "stop" : "start environment");
+        const row = await screen.findByTestId(
+          `command-palette-item-environment.${dockerAvailable ? "stop" : "start"}`,
+        );
+        const requested = mock((_section, _machine) => undefined);
+        const unsubscribe = onGlobalSettingsRequest(requested);
+        try {
+          if (dockerAvailable) fireEvent.click(row);
+          act(() => useRemoteWorkspaceStore.getState().closeNode("bk_mbp3"));
+          if (dockerAvailable) {
+            fireEvent.click(await screen.findByTestId("command-palette-confirm-run"));
+            await waitFor(() =>
+              expect(fake.callsTo("mbp3", "stop_environment")).toEqual([
+                {
+                  connectionId: "mbp3",
+                  command: "stop_environment",
+                  args: { environmentId: "run" },
+                },
+              ]),
+            );
+            expect(fake.outcomes).toHaveLength(1);
+            expect(fake.calls.filter((call) => call.command === "stop_environment")).toHaveLength(
+              1,
+            );
+          } else {
+            expect(row.textContent).toContain("Open Docker settings");
+            fireEvent.keyDown(input, { key: "Enter" });
+            expect(requested).toHaveBeenCalledWith("docker", "bk_mbp3");
+          }
+        } finally {
+          unsubscribe();
+        }
+      },
+    );
+  }
+
+  test("a remote History row and the Changes panel route to the frozen remote scope", async () => {
+    renderSearch();
+    await waitFor(() =>
+      expect(portalStore.getState().nodes.some((node) => node.nodeId === "bk_mbp3")).toBe(true),
+    );
+    const scope = getWindowScope().open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: "bk_mbp3" as BackendId }),
+      tier: "warm",
+    });
+    try {
+      const layouts = scope.store(paneLayoutStore).getState();
+      act(() => {
+        layouts.initialize(null, "run");
+        layouts.addTab(
+          layouts.getActivePaneId("run")!,
+          { id: "remote-tab", type: "agent-native", displayTitle: "unique-history" },
+          "run",
+        );
+        useRemoteWorkspaceStore
+          .getState()
+          .open("bk_mbp3", { projectId: "ork-3", environmentId: "run" });
+      });
+      await openAndType("unique-history");
+      fireEvent.click(await screen.findByTestId("command-palette-history-remote-tab"));
+      const remote = useRemoteWorkspaceStore.getState();
+      expect(remote.active?.nodeId).toBe("bk_mbp3");
+      expect(remote.requests["bk_mbp3"]?.request.workTarget).toMatchObject({
+        type: "worker-tab",
+        projectId: "ork-3",
+        environmentId: "run",
+        tabId: "remote-tab",
+      });
+      await openAndType("open changes");
+      fireEvent.click(await screen.findByTestId("command-palette-item-environment.open-changes"));
+      expect(useRemoteWorkspaceStore.getState().requests["bk_mbp3"]?.request).toMatchObject({
+        environmentId: "run",
+        filesPanelTab: "changes",
+      });
+    } finally {
+      scope.dispose();
+    }
+  });
+
+  test("a disconnected past-session owner refuses activation and relists on reconnect", async () => {
+    renderSearch();
+    await waitFor(() =>
+      expect(portalStore.getState().nodes.some((node) => node.nodeId === "bk_mbp3")).toBe(true),
+    );
+    const list = mock(async () => [
+      { sessionId: "remote-past", title: "Unique past conversation" },
+    ]);
+    const client = new FakeNodeClient({
+      nodeId: "bk_mbp3" as BackendId,
+      invoke: {
+        list_native_agent_resumable_sessions: list,
+        get_pane_layout: null,
+        save_pane_layout: { revision: 1 },
+      },
+    });
+    const scope = getWindowScope().open({ role: "leaf", client, tier: "warm" });
+    const layouts = scope.store(paneLayoutStore).getState();
+    const setTransport = (state: "connected" | "unavailable") =>
+      act(() =>
+        portalStore.store.setState((current) => ({
+          nodes: current.nodes.map((node) =>
+            node.nodeId === "bk_mbp3"
+              ? { ...node, view: { ...node.view, connection: { ...node.view.connection, state } } }
+              : node,
+          ),
+        })),
+      );
+    try {
+      act(() => {
+        scope.store(environmentStore).setState({
+          environments: [{ ...localEnvironment, id: "run", projectId: "ork-3" }],
+        });
+        layouts.initialize(null, "run");
+        layouts.addTab(
+          layouts.getActivePaneId("run")!,
+          {
+            id: "remote-chat",
+            type: "agent-native",
+            nativeAgentData: { platform: "codex", environmentId: "run", isLocal: true },
+          },
+          "run",
+        );
+        useRemoteWorkspaceStore
+          .getState()
+          .open("bk_mbp3", { projectId: "ork-3", environmentId: "run" });
+      });
+      const query = await openAndType("unique past");
+      const row = await screen.findByTestId("command-palette-session-remote-past");
+      fireEvent.keyDown(query, { key: "ArrowDown" });
+      expect(query.getAttribute("aria-activedescendant")).toBe(row.id);
+
+      setTransport("unavailable");
+      expect(await screen.findByText("mbp3 is offline.")).toBeTruthy();
+      fireEvent.keyDown(query, { key: "Enter" });
+      expect(layouts.getAllTabs("run").map((tab) => tab.id)).toEqual(["remote-chat"]);
+      expect(client.invocations.some(({ command }) => command === "save_pane_layout")).toBe(false);
+
+      setTransport("connected");
+      fireEvent.click(await screen.findByTestId("command-palette-session-remote-past"));
+      await waitFor(() =>
+        expect(client.invocations.some(({ command }) => command === "save_pane_layout")).toBe(true),
+      );
+      expect(list).toHaveBeenCalledTimes(2);
+    } finally {
+      scope.dispose();
+    }
+  });
 
   test("a forgotten machine filter falls back to all machines", async () => {
     renderSearch();

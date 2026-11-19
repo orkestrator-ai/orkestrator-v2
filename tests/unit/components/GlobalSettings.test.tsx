@@ -665,7 +665,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => expect(input.value).toBe("11"));
   });
 
-  test("retains a Codex subagent limit edit after a failed save so it can be retried", async () => {
+  test("keeps a Codex subagent limit draft after an unconfirmed save", async () => {
     setSavedCodexMaxConcurrentThreads(6);
     mockPatchGlobalConfig.mockRejectedValueOnce(new Error("disk full"));
     renderInAppCommandScope(<GlobalSettings activeSection="codex" />);
@@ -681,18 +681,11 @@ describe("GlobalSettings", () => {
     });
     expect(input.value).toBe("10");
 
-    // A rejected value is not retried on its own; a further edit makes the form
-    // dirty again and the new value persists.
-    fireEvent.change(input, { target: { value: "6" } });
-    await flushAutoSave();
+    // A later edit remains local while the previous mutation's outcome is unknown.
     fireEvent.change(input, { target: { value: "11" } });
     await flushAutoSave();
-
-    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(2));
-    expect(mockPatchGlobalConfig).toHaveBeenLastCalledWith(
-      expect.objectContaining({ codexMaxConcurrentThreads: 11 }),
-      SAVE_OPTIONS,
-    );
+    expect(input.value).toBe("11");
+    expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1);
   });
 
   test("shows the shared backend status and credentials in Electron", async () => {
@@ -2354,7 +2347,7 @@ describe("GlobalSettings", () => {
     renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Disabled" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Save logs to disk", checked: false }));
     fireEvent.change(screen.getByLabelText("Log retention days"), { target: { value: "30" } });
     const logDirectory = await screen.findByRole("button", { name: "/tmp/orkestrator-logs" });
     fireEvent.click(logDirectory);
@@ -3288,7 +3281,7 @@ describe("GlobalSettings", () => {
       await waitFor(() =>
         expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(attempt),
       );
-      await screen.findByText(attempt < 3 ? "Unsaved changes" : "All changes saved");
+      await screen.findByText(attempt < 3 ? "Unsaved changes" : "All changes saved.");
     }
 
     // The final save left nothing to retry: no debounce is armed, so no later

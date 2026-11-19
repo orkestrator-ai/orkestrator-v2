@@ -22,6 +22,7 @@ export const WINDOW_STORES: readonly WindowStore[] = [
   { store: "app-dialog", module: "stores/appDialogStore" },
   { store: "artifact-live-host", module: "stores/artifactLiveHostStore" },
   { store: "bug-report", module: "stores/bugReportStore" },
+  { store: "command-palette", module: "stores/commandPaletteStore" },
   { store: "conversation-scroll-target", module: "stores/conversationScrollTargetStore" },
   { store: "debug-build", module: "stores/debugBuildStore" },
   { store: "error-dialog", module: "stores/errorDialogStore" },

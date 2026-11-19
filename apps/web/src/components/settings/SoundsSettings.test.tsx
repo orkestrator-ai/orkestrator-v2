@@ -359,9 +359,13 @@ for (const machine of ["other"]) {
         agentQuestion: true,
         questionDesktopNotification: true,
       });
+      // The scope can also read once after its resource watcher attaches.
+      const readsBeforeRecovery = read.mock.calls.filter(([target]) => target === machine).length;
       await act(async () => fail(new Error("write failed")));
       await waitFor(() => expect(toggle.getAttribute("data-state")).toBe("checked"));
-      expect(read.mock.calls.filter(([target]) => target === machine).length).toBe(2);
+      expect(read.mock.calls.filter(([target]) => target === machine).length).toBeGreaterThan(
+        readsBeforeRecovery,
+      );
       expect(appCommandStore(configStore).getState().config.global.notificationSounds).toEqual({
         agentStopped: true,
         prMerged: true,

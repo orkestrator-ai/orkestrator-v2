@@ -284,3 +284,9 @@ that exit go unobserved:
 Neither reproduced a lost exit, so no code changed. The next recurrence should
 still record whether the child was alive and whether `exit` fired without
 `close`.
+
+## EL01 sidebar review rerun — 2026-11-19
+
+- **Base:** `5e9835d0a6981a8d2c217d8941e2e065abbe3008`. The recurrence check confirmed case 0093 was open on this base.
+- **Aggregate:** `mise run test:logged -- --name review-default-tests -- mise run test`, with six workspace, one root, two bridge and one protocol-lockfile worker slots. The Codex test timed out at 60,000.01 ms. Codex reported 2,544 passed, 70 skipped and one failed across 127 files.
+- **Focused rerun:** `mise run test:logged -- --name el01-codex-runtime -- bun --cwd=bridges/codex-bridge test src/runtime-env.test.ts --parallel=2 --only-failures` passed in 0.2 s. The bridge group’s log is in the host’s `orkestrator-test-run.4kGq9J` directory. No bridge source or test changed.

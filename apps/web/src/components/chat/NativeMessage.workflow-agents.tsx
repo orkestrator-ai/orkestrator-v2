@@ -6,6 +6,7 @@ import {
   MinusCircle,
   SkipForward,
   Square,
+  Timer,
   Wrench,
   X,
   type LucideIcon,
@@ -182,7 +183,12 @@ function WorkflowAgentUsage({ agent }: { agent: NativeAgentWorkflowAgent }) {
           {tokens}
         </span>
       ) : null}
-      {duration ? <span>{duration}</span> : null}
+      {duration ? (
+        <span className="flex items-center gap-1">
+          <Timer className="size-3" aria-hidden />
+          {duration}
+        </span>
+      ) : null}
     </div>
   );
 }

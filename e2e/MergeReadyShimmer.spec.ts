@@ -96,7 +96,7 @@ test("the conflict sweep, static name, marker and tooltip use the failure palett
 
 test("another machine's clean PR stays plain without leaf monitor health", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await page.goto("/remote-machine-tree?merge-ready=1");
+  await page.goto("/remote-environment-rows?merge-ready=1");
 
   // Even a current clean persisted snapshot cannot establish that the leaf's
   // monitor checked GitHub successfully during its current lifetime.
@@ -121,7 +121,7 @@ test("another machine's rows shimmer once its own monitor vouches for the readin
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await page.goto("/remote-machine-tree?merge-ready=confirmed");
+  await page.goto("/remote-environment-rows?merge-ready=confirmed");
 
   const ready = page.getByText("b", { exact: true });
   await expect(ready).toHaveAttribute("data-merge-ready", "true");
@@ -140,7 +140,7 @@ test("another machine's rows shimmer once its own monitor vouches for the readin
 test("remote waiting follows live activity, transport, container and deletion changes", async ({
   page,
 }) => {
-  await page.goto("/remote-machine-tree");
+  await page.goto("/remote-environment-rows");
   const row = page.getByRole("button", { name: /^b, on Remote/ });
   const name = row.locator("span.truncate").first();
   const change = async (state: string) =>
@@ -165,8 +165,9 @@ test("remote waiting follows live activity, transport, container and deletion ch
   await plain();
   await change("waiting");
   await waiting();
+  // An unavailable machine's environments leave the list until it is back.
   await change("disconnect");
-  await plain();
+  await expect(row).toHaveCount(0);
   await change("connect");
   await waiting();
   await change("stopped");

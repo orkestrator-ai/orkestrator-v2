@@ -40,6 +40,19 @@ interface FullscreenSettingsLayoutProps<TSection extends string = string> {
    * under the header.
    */
   headerStart?: (activeSection: TSection | "") => React.ReactNode;
+  /**
+   * A search field: under the title in the sidebar, and in its own row under
+   * the header on a narrow screen, where the sidebar is hidden. Only one of
+   * the two is displayed at a time.
+   */
+  search?: (placement: "sidebar" | "header") => React.ReactNode;
+  /**
+   * Opens `section` whenever `seq` changes, e.g. a search result; the page
+   * then finds the field itself.
+   */
+  navigation?: { section: TSection; seq: number } | null;
+  /** The user picked a section from the menu or the narrow-screen selector. */
+  onSectionSelect?: (section: TSection) => void;
 }
 
 /**
@@ -71,6 +84,9 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
   footer,
   headerActions,
   headerStart,
+  search,
+  navigation,
+  onSectionSelect,
 }: FullscreenSettingsLayoutProps<TSection>) {
   const defaultId: TSection | "" = menuItems.some((item) => item.id === defaultSection)
     ? (defaultSection ?? "")
@@ -97,6 +113,21 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
     prevDefaultRef.current = defaultId;
     prevRequestRef.current = sectionRequest;
   }, [open, defaultId, sectionRequest]);
+
+  // A page-driven request (a search result) opens its section. Adjusted while
+  // rendering, like any state derived from a prop change.
+  const [seenNavigationSeq, setSeenNavigationSeq] = useState(navigation?.seq);
+  if (open && navigation && navigation.seq !== seenNavigationSeq) {
+    setSeenNavigationSeq(navigation.seq);
+    if (menuItems.some((item) => item.id === navigation.section)) {
+      setActiveSection(navigation.section);
+    }
+  }
+
+  const selectSection = (section: TSection) => {
+    setActiveSection(section);
+    onSectionSelect?.(section);
+  };
 
   // A modal takes focus when it opens, so the keyboard starts inside it rather
   // than on the control underneath that opened it, and hands it back to that
@@ -160,6 +191,7 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
               <div className="hidden h-12 shrink-0 items-center px-4 bg-zinc-900/80 md:flex">
                 <span className="text-sm font-medium text-foreground">{title}</span>
               </div>
+              {search ? <div className="shrink-0 px-3 pb-2 pt-1">{search("sidebar")}</div> : null}
 
               {/* Menu items scroll independently so short windows can reach every section. */}
               <nav
@@ -172,7 +204,7 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
                     key={item.id}
                     ref={activeSection === item.id ? scrollActiveItemIntoView : undefined}
                     aria-current={activeSection === item.id ? "page" : undefined}
-                    onClick={() => setActiveSection(item.id)}
+                    onClick={() => selectSection(item.id)}
                     className={cn(
                       "flex min-h-10 w-full shrink-0 items-center gap-3 rounded-none border-l-2 px-4 py-2 text-sm transition-colors",
                       activeSection === item.id
@@ -193,7 +225,7 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
               <div className="flex h-12 shrink-0 items-center justify-between gap-4 bg-zinc-900/80 px-4 md:px-8">
                 <Select
                   value={activeSection}
-                  onValueChange={(value) => setActiveSection(value as TSection)}
+                  onValueChange={(value) => selectSection(value as TSection)}
                 >
                   <SelectTrigger
                     aria-label="Settings section"
@@ -254,6 +286,11 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
               {headerStartContent ? (
                 <div className="flex shrink-0 border-b border-white/5 px-4 py-2 md:hidden">
                   {headerStartContent}
+                </div>
+              ) : null}
+              {search ? (
+                <div className="shrink-0 border-b border-white/5 px-4 py-2 md:hidden">
+                  {search("header")}
                 </div>
               ) : null}
 

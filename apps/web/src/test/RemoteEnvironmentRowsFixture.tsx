@@ -1,7 +1,3 @@
-import {
-  resolveProjectArrangementIntent,
-  type ProjectArrangementIntent,
-} from "@orkestrator/protocol/project-arrangement";
 import { useState } from "react";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
@@ -12,11 +8,18 @@ import {
   type NodeSummary,
 } from "@orkestrator/protocol/node-summaries";
 import { FederationProvider } from "@/components/federation/FederationProvider";
-import { RemoteMachineTree } from "@/components/federation/RemoteMachineTree";
-import { UnknownOutcomesNotice } from "@/components/federation/UnknownOutcomesNotice";
+import { RepositoryEnvironmentList } from "@/components/federation/RepositoryEnvironmentList";
 import { useRemoteMachineViews } from "@/components/federation/useMachineViews";
 import { portalStore, type NodeOutcomeRecord } from "@/lib/portal/portal-store";
 import { remoteOrdersFor } from "@/lib/federation/remote-order-writes";
+
+/**
+ * Another machine's environment rows in the repository list (design EL01):
+ * Remote has projects p (rows a, b, c around a project home) and q (row d),
+ * neither with a repository, so each is a heading of its own. Writes routed
+ * to Remote are deferred until a control answers them, so the optimistic
+ * order, its rollback and the unknown-outcome notice can be observed.
+ */
 
 const nodeId = "bk_remote" as BackendId;
 
@@ -100,8 +103,7 @@ function install() {
     calls: string[][];
     pending: Array<(outcome: "ok" | "reject" | "unknown") => void>;
     owner: string[];
-    arrangements: unknown[];
-  }>(() => ({ calls: [], pending: [], owner: ["a", "home", "b", "c"], arrangements: [] }));
+  }>(() => ({ calls: [], pending: [], owner: ["a", "home", "b", "c"] }));
   const outcomes: NodeOutcomeRecord[] = [];
   window.orkestrator = {
     ...window.orkestrator!,
@@ -119,21 +121,6 @@ function install() {
         } as T;
       }
       if (command === "list_node_outcomes") return [...outcomes] as T;
-      if (command === "invoke_on_node" && args?.command === "arrange_projects_by_intent") {
-        // The owner resolves the gesture against its own order and publishes it.
-        const ordered = [...node.projects]
-          .sort((left, right) => left.order - right.order)
-          .map((project) => ({ id: project.ref.projectId, name: project.name }));
-        const intent = (args.args as { intent: ProjectArrangementIntent }).intent;
-        const arrangement = resolveProjectArrangementIntent(intent, ordered)!;
-        state.setState((current) => ({ arrangements: [...current.arrangements, arrangement] }));
-        node.projects = node.projects.map((project) => ({
-          ...project,
-          order: arrangement.projectIds.indexOf(project.ref.projectId),
-        }));
-        void portalStore.refresh();
-        return { outcome: "ok", result: {} } as T;
-      }
       if (command === "invoke_on_node" && args?.command === "reorder_environments") {
         const ids = (args.args as { environmentIds: string[] }).environmentIds;
         state.setState((current) => ({ calls: [...current.calls, ids] }));
@@ -226,14 +213,32 @@ function install() {
   };
 }
 
+const NO_BOUND_ROWS = {
+  renderEnvironment: () => null,
+  selectedEnvironmentId: null,
+  onDragEnd: () => {},
+  onCreate: () => {},
+};
+
+/** The list over Remote alone; it also shows Remote's unknown-outcome notice. */
 function Tree({ visible }: { visible: boolean }) {
   const machines = useRemoteMachineViews();
-  return (
-    <>
-      {visible && machines[0] && <RemoteMachineTree machine={machines[0]} />}
-      <UnknownOutcomesNotice connectionId={nodeId} />
-    </>
+  const shownIds = new Set(
+    machines
+      .filter((machine) => machine.transport === "connected")
+      .map((machine) => machine.connectionId),
   );
+  const listedIds = new Set(machines.map((machine) => machine.connectionId));
+  return visible ? (
+    <RepositoryEnvironmentList
+      machines={machines}
+      shownIds={shownIds}
+      listedIds={listedIds}
+      ordering="machine"
+      bound={NO_BOUND_ROWS}
+      showEmptyState={false}
+    />
+  ) : null;
 }
 
 // StrictMode may call a state initializer twice; both invocations must use
@@ -244,7 +249,7 @@ function fixtureForWindow() {
   return fixtureInstance;
 }
 
-export function RemoteMachineTreeFixture() {
+export function RemoteEnvironmentRowsFixture() {
   const [fixture] = useState(fixtureForWindow);
   const [visible, setVisible] = useState(true);
   const state = useStore(fixture.state);
@@ -276,7 +281,6 @@ export function RemoteMachineTreeFixture() {
       <output data-testid="pending">{state.pending.length}</output>
       <output data-testid="owner">{JSON.stringify(state.owner)}</output>
       <output data-testid="overlay">{overlay.size}</output>
-      <output data-testid="arrangements">{JSON.stringify(state.arrangements)}</output>
       <FederationProvider>
         <Tree visible={visible} />
       </FederationProvider>

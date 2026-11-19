@@ -129,6 +129,8 @@ export function resolveEnvironmentAgentLaunchSettings(options: ClaudeOptions) {
     initialReasoningEffort: options.launchAgent ? options.reasoningEffort : undefined,
     initialFastMode: options.launchAgent ? options.fastMode : undefined,
     initialPromptAttachments: options.launchAgent ? options.initialPromptAttachments : undefined,
+    // A deferred native turn reads the mode when it sends its first request.
+    interactionMode: options.interactionMode,
   };
 }
 
@@ -327,8 +329,17 @@ export function CreateEnvironmentFlowDialog({
         launchSettings.initialReasoningEffort,
         launchSettings.initialPromptAttachments,
         launchSettings.initialFastMode,
+        launchSettings.interactionMode,
       );
       updateEnvironment(environment.id, configuredEnvironment);
+      if (
+        launchSettings.interactionMode &&
+        configuredEnvironment.interactionMode !== launchSettings.interactionMode
+      ) {
+        throw new Error(
+          "This node could not save the selected interaction mode. The environment was created and left stopped. Update the node before creating a Task or Interactive environment.",
+        );
+      }
       if (
         launchSettings.pendingAgentLaunch &&
         usesNativeStartupAgentTab(config, projectId, agentSettings)

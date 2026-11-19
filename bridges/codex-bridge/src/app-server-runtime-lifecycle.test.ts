@@ -1,3 +1,4 @@
+import { withEnvironmentInteraction } from "@orkestrator/protocol/environment-interaction";
 import { describe, expect, spyOn, test } from "bun:test";
 import {
   AppServerRuntime,
@@ -4718,6 +4719,41 @@ describe("activity polling", () => {
     expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
     expect(h.runtime.getActivity(sessionId)).toBe("working");
   });
+
+  test.each(["task", "interactive"] as const)(
+    "publishes async question cards and activity only when the opening turn allows them (%s)",
+    async (mode) => {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, {
+        prompt: withEnvironmentInteraction("Choose a target", mode),
+        requestId: "opening",
+        attachments: [],
+      });
+      h.child().notify("item/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "ask-target",
+          type: "agentMessage",
+          text: "Which target?",
+          delivery: "async",
+          questions: [{ title: "Which target?", options: ["Staging"] }],
+        },
+      });
+      await h.drain();
+
+      const transcript = h.runtime.getRegistry().getThread("thread-1")!.messages;
+      expect(JSON.stringify(transcript)).toContain("Which target?");
+      const cards = transcript
+        .flatMap((row) => row.parts)
+        .filter((part) => part.type === "async-question");
+      expect(cards).toHaveLength(mode === "task" ? 0 : 1);
+      expect(h.runtime.getActivitySnapshot(sessionId).asyncQuestionItemIds).toEqual(
+        mode === "task" ? undefined : ["ask-target"],
+      );
+    },
+  );
 
   test("activity snapshots expose only bounded async-question item ids", async () => {
     const { h, sessionId } = await workingSession();

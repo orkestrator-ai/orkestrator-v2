@@ -31,6 +31,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     frontendAgentActivityObservers: _frontendObservers,
     initialPromptAttachments: _attachments,
     initialPromptPresentation: _initialPromptPresentation,
+    openingInteraction: _openingInteraction,
     initialConversationMode: _initialConversationMode,
     claudeModelCatalog: _modelCatalog,
     opencodePid: _opencodePid,

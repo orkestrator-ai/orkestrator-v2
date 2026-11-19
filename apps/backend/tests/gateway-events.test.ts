@@ -1077,7 +1077,9 @@ describe("gateway terminal WebSocket", () => {
       () => wireGauges(gateway).terminalOperations === 0,
       "Plain disconnect left terminal operations queued",
     );
-    expect(operations).toEqual(["terminal_write", "terminal_write", "terminal_resize"]);
+    // Accepted input drains; the queued resize is skipped because its view
+    // unsubscribed when the socket closed.
+    expect(operations).toEqual(["terminal_write", "terminal_write"]);
     expect(wireGauges(gateway)).toEqual(ZERO_WIRE_GAUGES);
   });
 

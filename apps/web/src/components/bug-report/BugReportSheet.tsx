@@ -511,7 +511,7 @@ export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {
             </div>
           </div>
         ) : draft ? (
-          <div className="shrink-0 border-b border-border/70 bg-amber-500/5 px-4 py-3">
+          <div className="shrink-0 border-b border-border/70 bg-elevated/40 px-4 py-3">
             <div className="flex items-start gap-2">
               <div className="min-w-0 flex-1">
                 <p className="text-[11px] uppercase tracking-wide text-muted-foreground">

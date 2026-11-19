@@ -553,7 +553,12 @@ const nativeAgentSessionFields = {
   dispatchedRequestIds: Schema.optional(mutableArray(Schema.String)),
   /** The mode the newest accepted turn was sent in. */
   lastDispatchedTurn: Schema.optional(
-    openRecord({ requestId: Schema.String, mode: Schema.optional(ConversationModeSchema) }),
+    openRecord({
+      requestId: Schema.String,
+      mode: Schema.optional(ConversationModeSchema),
+      // A steer has its own receipt but belongs to the current model turn.
+      modelRequestId: optionalString,
+    }),
   ),
   /** Retained only while the provider outcome is ambiguous. */
   pendingDispatch: Schema.optional(PendingDispatchSchema),

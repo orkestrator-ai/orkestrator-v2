@@ -1,4 +1,5 @@
 import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
+import { hasEnvironmentInteractionFrame } from "@orkestrator/protocol/environment-interaction";
 import { stat } from "node:fs/promises";
 import {
   DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
@@ -615,6 +616,7 @@ export class CodexRuntimePrompt {
     // An engine-observed thread model or a later reroute still supersedes it.
     const modelForTurn = context.modelId ?? session.config.model;
 
+    const suppressAsyncQuestions = hasEnvironmentInteractionFrame(input.prompt, "task");
     const userMessage = this.appendUserMessage(context, input.prompt, input.attachments);
     const assistantMessage: NormalizedMessage = {
       id: createMessageId(),
@@ -981,6 +983,7 @@ export class CodexRuntimePrompt {
         assistantMessageId: assistantMessage.id,
         configurationRevision: session.configurationRevision,
         expectsStructuredOutput: input.outputSchema !== undefined,
+        suppressAsyncQuestions,
         startedAt: context.turnStartedAt,
       });
       accumulator.markRunning();
@@ -1051,6 +1054,7 @@ export class CodexRuntimePrompt {
           context,
           requestId,
           assistantMessage.id,
+          { suppressAsyncQuestions },
         );
         // `absent` is a *proven* non-dispatch, exactly like an explicit
         // rejection: `thread/read` is the one authority that can say the write
@@ -1179,7 +1183,7 @@ export class CodexRuntimePrompt {
     context: ThreadContext,
     requestId: string,
     assistantMessageId: string,
-    options: { forgetIfAbsent?: boolean } = {},
+    options: { forgetIfAbsent?: boolean; suppressAsyncQuestions?: boolean } = {},
   ): Promise<AmbiguousDispatchResolution> {
     this.ctx.registry.setPhase(context, "recovering");
     let accumulator = context.activeTurn;
@@ -1187,6 +1191,7 @@ export class CodexRuntimePrompt {
       accumulator = new TurnAccumulator({
         threadId: context.threadId,
         turnId: unconfirmedTurnId(requestId),
+        suppressAsyncQuestions: options.suppressAsyncQuestions,
         requestId,
         engineGeneration: this.ctx.options.engine.info().generation,
         assistantMessageId,

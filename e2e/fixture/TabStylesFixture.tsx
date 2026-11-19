@@ -1,16 +1,27 @@
+import { useState } from "react";
+import { DndContext } from "@dnd-kit/core";
 import { DesignWorkspaceDialog } from "@/components/design/DesignWorkspaceDialog";
 import { EnvironmentSettingsDialog } from "@/components/environments/EnvironmentSettingsDialog";
 import { FilesPanelHeader } from "@/components/files-panel/FilesPanelHeader";
 import { FeaturesView } from "@/components/kanban/FeaturesView";
+import { DraggableTabBar } from "@/components/pane-layout/DraggableTabBar";
 import { SkillsSettings } from "@/components/settings/SkillsSettings";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FeaturePlan } from "@/stores/featurePlanStore";
+import { agentActivityStore } from "@/stores/agentActivityStore";
+import { claudeTmuxStore, createClaudeTmuxStateKey } from "@/stores/claudeTmuxStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 import { appCommandStore } from "@/test/app-command-store";
+import type { TabInfo } from "@/types/paneLayout";
 
 const projectId = "tabs-project";
 const environmentId = "tabs-environment";
 const now = "2026-01-01T00:00:00.000Z";
+const activityTabs: TabInfo[] = [
+  { id: "shell", type: "plain" },
+  { id: "terminal", type: "codex" },
+  { id: "chat", type: "claude-tmux", claudeTmuxData: { environmentId } },
+];
 const feature: FeaturePlan = {
   id: "tabs-feature",
   projectId,
@@ -107,12 +118,43 @@ export function installTabStylesFixture() {
   });
 }
 
+function WorkingTabsFixture() {
+  const [activeTabId, setActiveTabId] = useState("shell");
+  const setWorking = (working: boolean) => {
+    const terminal = appCommandStore(agentActivityStore).getState();
+    terminal.setTabState("shell", working ? "working" : "idle");
+    terminal.setTabState("terminal", working ? "working" : "idle");
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .setBusy(createClaudeTmuxStateKey(environmentId, "chat"), working);
+  };
+  return (
+    <>
+      <DndContext>
+        <DraggableTabBar
+          pane={{ kind: "leaf", id: "working-tabs", activeTabId, tabs: activityTabs }}
+          environmentId={environmentId}
+          isPaneFocused
+          onTabSelect={setActiveTabId}
+        />
+      </DndContext>
+      <button type="button" onClick={() => setWorking(true)}>
+        Start turn
+      </button>
+      <button type="button" onClick={() => setWorking(false)}>
+        End turn
+      </button>
+    </>
+  );
+}
+
 export function TabStylesFixture() {
   const view = new URLSearchParams(window.location.search).get("view");
   return (
     <TooltipProvider>
       <div className="h-screen bg-background text-foreground">
         {view === "features" && <FeaturesView projectId={projectId} />}
+        {view === "working" && <WorkingTabsFixture />}
         {view === "design" && (
           <DesignWorkspaceDialog
             open

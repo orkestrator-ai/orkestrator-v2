@@ -14,6 +14,7 @@ import {
 import { isEmptyAgentSettings, normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
+import { isEnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import { normalizeProjectIcon } from "@orkestrator/protocol/project-icon";
 import {
@@ -1539,6 +1540,39 @@ export class ProjectsRepository {
         if (value == null) environment.initialAgentPlatform = undefined;
         else if (isAgentPlatform(value)) environment.initialAgentPlatform = value;
         else throw new Error("Invalid initial agent platform");
+      }
+      if ("interactionMode" in updates) {
+        const value = updates.interactionMode;
+        if (value == null) environment.interactionMode = undefined;
+        else if (isEnvironmentInteractionMode(value)) {
+          const pipelineId = environment.buildPipelineId;
+          if (
+            pipelineId &&
+            (await this.repos.buildPipelines.getBuildPipelineEnvironmentId(pipelineId)) ===
+              environment.id
+          ) {
+            throw new Error("Pipeline environments use the pipeline interaction policy");
+          }
+          environment.interactionMode = value;
+        } else throw new Error("Invalid interaction mode");
+      }
+      if ("openingInteraction" in updates) {
+        const value = updates.openingInteraction;
+        if (value == null) environment.openingInteraction = undefined;
+        else if (
+          isRecord(value) &&
+          isNonBlankString(value.requestId) &&
+          isEnvironmentInteractionMode(value.mode) &&
+          (value.providerSessionId === undefined || isNonBlankString(value.providerSessionId)) &&
+          (value.sessionKey === undefined || isNonBlankString(value.sessionKey))
+        ) {
+          environment.openingInteraction = {
+            requestId: value.requestId,
+            mode: value.mode,
+            providerSessionId: value.providerSessionId,
+            sessionKey: value.sessionKey,
+          };
+        } else throw new Error("Invalid opening interaction");
       }
       if ("initialConversationMode" in updates) {
         const value = updates.initialConversationMode;

@@ -2498,10 +2498,10 @@ can start only from a commit published to a remote branch; unpublished commits
 remain available to local workers.
 
 Workers come in two kinds. A **prompt environment** runs one prompt
-(`launch_environment`, or "With a prompt" in the New environment dialog); its
+(`launch_environment`, or "Task" or "Interactive" in the New environment dialog); its
 review and PR are started by hand or by the coordinator. A **pipeline
 environment** is one a build pipeline created and runs in
-(`start_build_pipeline`, a ticket's Build button, or "A feature" in the New
+(`start_build_pipeline`, a ticket's Build button, or "Pipeline" in the New
 Environment dialog); the pipeline runs build, review, fix, verify, PR and
 conflict resolution itself.
 

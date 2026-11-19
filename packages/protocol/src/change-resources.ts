@@ -42,6 +42,11 @@ export interface ChangeTrackingCapabilities {
   gitScopes: boolean;
   operationVolume: boolean;
   strictCheckpoints: boolean;
+  /**
+   * `changes_stage_hunk` exists and live details resolve for the `staged`
+   * and `unstaged` scopes. Absent on older backends, which offer neither.
+   */
+  hunkStaging?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +486,35 @@ export type ChangesApplyRestoreResult =
       failedPathIds: string[];
       resultMeasurementId: string | null;
     }
+  | { kind: "error"; error: ChangeError };
+
+/**
+ * One hunk of a reviewed live file diff, as the client displayed it. The
+ * backend re-renders the identity's own immutable endpoints and refuses the
+ * request unless the hunk at `index` has exactly these line ranges.
+ */
+export interface ChangeHunkSelector {
+  index: number;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+}
+
+/**
+ * `changes_stage_hunk`: stage one hunk of a reviewed index-to-worktree diff,
+ * or unstage one hunk of a reviewed HEAD-to-index diff. The backend verifies
+ * that the index (and, for staging, the working file) still holds exactly the
+ * bytes the identity compared; anything else is refused, never merged.
+ */
+export interface ChangesStageHunkRequest {
+  diffIdentityId: string;
+  action: "stage" | "unstage";
+  hunk: ChangeHunkSelector;
+}
+
+export type ChangesStageHunkResult =
+  | { kind: "applied"; action: "stage" | "unstage"; pathId: string }
   | { kind: "error"; error: ChangeError };
 
 /** Event payload for {@link CHANGE_PROJECTION_CHANGED_EVENT}. */

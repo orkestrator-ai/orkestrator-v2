@@ -661,8 +661,9 @@ for (const ensured of [false, true]) {
   });
 }
 
-test("remote worker selection activates its delegated tab after delayed layout hydration", async () => {
+test("remote worker selection carries the named request through delayed layout hydration", async () => {
   const { paneLayoutStore } = await import("@/stores/paneLayoutStore");
+  const { interactionFocusStore } = await import("@/lib/native-interaction-navigation");
   const original = appCommandStore(paneLayoutStore).getState();
   try {
     appCommandStore(paneLayoutStore).setState({ environments: new Map(), hydration: new Map() });
@@ -674,6 +675,7 @@ test("remote worker selection activates its delegated tab after delayed layout h
         projectId: project.id,
         environmentId: home.id,
         tabId: "delegated",
+        interactionId: "requested-question",
       },
     });
     await act(async () => resolveProjects([project]));
@@ -719,7 +721,13 @@ test("remote worker selection activates its delegated tab after delayed layout h
     );
     const layout = appCommandStore(paneLayoutStore).getState().environments.get(home.id)!;
     expect(layout.root).toHaveProperty("activeTabId", "delegated");
+    expect(appCommandStore(interactionFocusStore).getState().target).toMatchObject({
+      environmentId: home.id,
+      tabId: "delegated",
+      interactionId: "requested-question",
+    });
   } finally {
+    appCommandStore(interactionFocusStore).setState({ target: null });
     appCommandStore(paneLayoutStore).setState(original, true);
   }
 });

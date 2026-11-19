@@ -2,7 +2,7 @@
  * `git` commands of the changes ledger (plan item 7006;
  * docs/architecture/change-tracking.md#client-contract): change projections,
  * file pages, tool and turn presentations, diff bodies, refresh fences,
- * handoff text and restore.
+ * handoff text, restore and hunk staging.
  *
  * Argument schemas declare every key the handler reads and decode tolerantly
  * (§11.4). The handlers bound every identifier with their own text
@@ -27,6 +27,7 @@ import {
   ChangesPrepareRestoreResultSchema,
   ChangesRefreshResultSchema,
   ChangesResolveLiveDetailResultSchema,
+  ChangesStageHunkResultSchema,
   ChangeThreadResourceSchema,
   ChangeTrackingCapabilitiesSchema,
   ChangeTrackingDiagnosticsSchema,
@@ -201,6 +202,26 @@ export const changesApplyRestoreCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * Stages (or unstages) one hunk of a reviewed live file diff. `hunk` and
+ * `action` are read and bounded by the handler; the backend refuses a hunk
+ * whose index or working file no longer matches the reviewed identity.
+ */
+export const changesStageHunkCommand = defineCommand({
+  domain: gitDomain,
+  name: "changes_stage_hunk",
+  since: 2,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({
+    diffIdentityId: text("diffIdentityId"),
+    action: text("action"),
+    hunk: optionalUnknown,
+  }),
+  result: ChangesStageHunkResultSchema,
+  critical: ["hunk"],
+});
+
 export const changesGetDiagnosticsCommand = defineCommand({
   domain: gitDomain,
   name: "changes_get_diagnostics",
@@ -263,6 +284,7 @@ export const CHANGES_COMMANDS = [
   changesGetHandoffCommand,
   changesPrepareRestoreCommand,
   changesApplyRestoreCommand,
+  changesStageHunkCommand,
   changesGetDiagnosticsCommand,
   changesGetCapabilitiesCommand,
   changesMeasureLegacyPayloadCommand,

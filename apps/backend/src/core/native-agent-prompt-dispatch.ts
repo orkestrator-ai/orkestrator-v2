@@ -1,3 +1,12 @@
+import {
+  PROVIDER_FAILURE_RETRY_ID_PREFIX,
+  providerFailureRetryRequestId,
+} from "@orkestrator/protocol/provider-failures";
+import {
+  rowReportsProviderFailure,
+  withNativeTerminalMessages,
+} from "@orkestrator/protocol/native-terminal-rows";
+import { nativeTerminalMessages } from "./native-terminal-messages.js";
 import { asRecord } from "./agent-provider-runtime.js";
 import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import type {
@@ -1130,6 +1139,10 @@ export class NativeAgentPromptDispatch {
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
         throw new Error("Native agent prompt or attachment and request ID must not be blank");
       }
+      const failureRetry =
+        input.failureSessionId !== undefined ||
+        input.requestId.startsWith(PROVIDER_FAILURE_RETRY_ID_PREFIX);
+      if (failureRetry) input = { ...input, allowProviderCommands: false };
       const session: EnsuredNativeAgentSession = await this.host.ensureSession(input);
       // Freeze the effective inherited choice before preparing and journaling
       // dispatch. Retries replay this concrete model, never a stale default.
@@ -1471,6 +1484,17 @@ export class NativeAgentPromptDispatch {
               }
             : undefined,
           async (durable) => {
+            if (failureRetry) {
+              if (
+                (input.failureSessionId !== undefined &&
+                  input.failureSessionId !== durable.providerSessionId) ||
+                !(await this.isCurrentProviderFailure(durable, provider, input.requestId))
+              ) {
+                throw new PromptRejectedError(
+                  "That failure is no longer current. No retry was sent.",
+                );
+              }
+            }
             preparation = prepare ? await prepare(durable, provider) : { dispatch: true };
             if (!preparation.dispatch) return undefined;
             // The storage session lease also serializes durable control updates.
@@ -1615,6 +1639,39 @@ export class NativeAgentPromptDispatch {
         error: formatLogError(error, { message: false }),
       });
     }
+  }
+
+  private async isCurrentProviderFailure(
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+    requestId: string,
+  ): Promise<boolean> {
+    const id = session.providerSessionId;
+    const state = provider.sessionStateSnapshot
+      ? await provider.sessionStateSnapshot(id)
+      : await provider.interactiveSnapshot?.(id);
+    if (!state || (state.status !== "idle" && state.status !== "error")) return false;
+    const transcript = await provider.transcriptSnapshot?.(id, {
+      limit: 8,
+      targetBytes: 256 * 1024,
+    });
+    if (transcript && ("unchanged" in transcript || transcript.freshness === "cached"))
+      return false;
+    const messages = transcript?.messages ?? (await provider.messages(id, { limit: 8 }));
+    const last = withNativeTerminalMessages(
+      messages,
+      nativeTerminalMessages({
+        ...state,
+        failureRequestId: session.dispatchedRequestIds?.at(-1),
+      }),
+    ).at(-1);
+    const row = asRecord(last);
+    return (
+      rowReportsProviderFailure(last) &&
+      typeof row?.id === "string" &&
+      typeof row.createdAt === "string" &&
+      providerFailureRetryRequestId(row.id, row.createdAt) === requestId
+    );
   }
 
   private persistedPendingDispatch(

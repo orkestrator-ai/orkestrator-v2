@@ -34,6 +34,7 @@ import type {
   ChangesPrepareRestoreResult,
   ChangesRefreshResult,
   ChangesResolveLiveDetailResult,
+  ChangesStageHunkResult,
   ChangeTrackingCapabilities,
   ChangeViewResult,
 } from "../../../change-resources.js";
@@ -295,7 +296,16 @@ export const ChangeTrackingCapabilitiesSchema = modelRecord<ChangeTrackingCapabi
   gitScopes: Schema.Boolean,
   operationVolume: Schema.Boolean,
   strictCheckpoints: Schema.Boolean,
+  hunkStaging: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "ChangeTrackingCapabilities" });
+
+/** `changes_stage_hunk`: the hunk was written to the index, or a coded refusal. */
+export const ChangesStageHunkResultSchema = variantRecord<ChangesStageHunkResult>()({
+  kind: Schema.String,
+  action: optionalString,
+  pathId: optionalString,
+  error: Schema.optional(ChangeErrorSchema),
+}).annotate({ identifier: "ChangesStageHunkResult" });
 
 /** `changes_get_diagnostics`: content-free counters for operators. */
 export const ChangeTrackingDiagnosticsSchema = openRecord({

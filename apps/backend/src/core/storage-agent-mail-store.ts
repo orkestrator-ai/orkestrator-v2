@@ -17,7 +17,14 @@ import {
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { STORAGE_COLLECTION_MARKER } from "@orkestrator/protocol/node/storage-database";
 import { COORDINATOR_DELEGATION_HOLD_REASON } from "@orkestrator/protocol/coordinator";
+import {
+  AgentMailKeyedRows,
+  mailRowId,
+  type AgentMailRowCollection,
+  type ParsedMailRow,
+} from "./storage-agent-mail-keyed-rows.js";
 import type { StorageContext } from "./storage-context.js";
+import type { RowSelection } from "./storage-database-queries.js";
 import { StoreTooLargeError, type StorageDatabase } from "./storage-database.js";
 import type { StorageFiles } from "./storage-files.js";
 
@@ -190,9 +197,6 @@ export function routedMessageWakes(
   return agentMailRouteWakes(message.route, mailbox.injectOverride, settings);
 }
 
-/** A parsed row of the read model and the serialized value it came from. */
-type ParsedRow = { value: string; parsed: unknown };
-
 function checkedStore(value: unknown): PersistedAgentMailStore {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Agent mail store is malformed");
@@ -213,6 +217,14 @@ function normalizeMailbox(mailbox: PersistedMailbox): PersistedMailbox {
   return mailbox;
 }
 
+/** Whether a message belongs on the inject queue (`pendingInject`). */
+export function isQueuedForInject(message: AgentMailMessage | AgentMailMessageSummary): boolean {
+  return (
+    message.placement === "pending-inject" ||
+    (message.placement === "inject-held" && message.placementReason === "submitting")
+  );
+}
+
 /**
  * Store-level defaults, and the inject queue rebuilt from the messages that
  * are awaiting injection (keeping each entry's stored retry state). Reads the
@@ -227,10 +239,7 @@ function normalizeStore(store: PersistedAgentMailStore): PersistedAgentMailStore
   store.counterparts ??= {};
   for (const mailbox of Object.values(store.mailboxes)) {
     for (const message of mailbox.messages) {
-      if (
-        message.placement === "pending-inject" ||
-        (message.placement === "inject-held" && message.placementReason === "submitting")
-      ) {
+      if (isQueuedForInject(message)) {
         store.pendingInject.push({
           mailboxId: mailbox.mailboxId,
           messageId: message.id,
@@ -243,7 +252,7 @@ function normalizeStore(store: PersistedAgentMailStore): PersistedAgentMailStore
 }
 
 /** Mail is JSON data only. Copy without structuredClone's serialization pass. */
-function cloneMailValue<T>(value: T): T {
+export function cloneMailValue<T>(value: T): T {
   if (Array.isArray(value)) return value.map(cloneMailValue) as T;
   if (value && typeof value === "object") {
     const copy: Record<string, unknown> = {};
@@ -274,13 +283,35 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+/** One stored row, parsed (a mailbox normalized) and deeply frozen. */
+function parseMailRow(collection: string, value: string): unknown {
+  return deepFreeze(
+    collection === "mailboxes"
+      ? normalizeMailbox(JSON.parse(value) as PersistedMailbox)
+      : (JSON.parse(value) as unknown),
+  );
+}
+
+/**
+ * Whether an envelope document is one {@link checkedStore} would accept, so
+ * a keyed read answers only where the whole-store read would. Collections
+ * appear as markers (or are absent) in a row-held envelope.
+ */
+function envelopeMailRevision(document: string): number | null {
+  const envelope = JSON.parse(document) as unknown;
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return null;
+  const record = envelope as Record<string, unknown>;
+  if (record.version !== 1 || !record.mailboxes || !record.idempotency) return null;
+  return Number.isSafeInteger(record.revision) ? (record.revision as number) : 0;
+}
+
 export function findMessage(
   store: PersistedAgentMailStore,
   messageId: string,
-): { mailbox: PersistedMailbox; message: AgentMailMessage } | null {
-  for (const mailbox of Object.values(store.mailboxes)) {
+): { key: string; mailbox: PersistedMailbox; message: AgentMailMessage } | null {
+  for (const [key, mailbox] of Object.entries(store.mailboxes)) {
     const message = mailbox.messages.find((candidate) => candidate.id === messageId);
-    if (message) return { mailbox, message };
+    if (message) return { key, mailbox, message };
   }
   return null;
 }
@@ -350,7 +381,16 @@ export class AgentMailStore {
     database: StorageDatabase;
     revision: number;
     store: PersistedAgentMailStore;
-    rows: Map<string, ParsedRow>;
+    rows: Map<string, ParsedMailRow>;
+  } | null = null;
+
+  /** Parsed rows of keyed reads and where messages were last seen. */
+  private readonly keyed = new AgentMailKeyedRows();
+  /** The last committed revision at which a keyed read found the envelope supported. */
+  private supportedEnvelope: {
+    database: StorageDatabase;
+    revision: number;
+    mailRevision: number;
   } | null = null;
 
   constructor(
@@ -413,7 +453,7 @@ export class AgentMailStore {
     // Reusing a parsed row needs only its serialized value to match, whatever
     // the revision or connection it was read under.
     const previous = this.readModel?.rows;
-    const rows = new Map<string, ParsedRow>();
+    const rows = new Map<string, ParsedMailRow>();
     let store: PersistedAgentMailStore;
     try {
       const envelope =
@@ -429,14 +469,13 @@ export class AgentMailStore {
       for (const row of ordered) {
         const id = `${row.collection}\u0000${row.key}`;
         const known = previous?.get(id);
-        const parsed =
-          known && known.value === row.value
-            ? known.parsed
-            : deepFreeze(
-                row.collection === "mailboxes"
-                  ? normalizeMailbox(JSON.parse(row.value) as PersistedMailbox)
-                  : (JSON.parse(row.value) as unknown),
-              );
+        let parsed: unknown;
+        if (known && known.value === row.value) {
+          parsed = known.parsed;
+        } else {
+          parsed = this.keyed.cached(id, row.value) ?? parseMailRow(row.collection, row.value);
+          this.keyed.index(row.collection as AgentMailRowCollection, row.key, parsed);
+        }
         rows.set(id, { value: row.value, parsed });
         const target = envelope[row.collection];
         const records =
@@ -458,11 +497,149 @@ export class AgentMailStore {
   }
 
   /**
+   * One committed mailbox by id, as {@link snapshot} would hold it (normalized
+   * and deeply frozen), reading and parsing only that mailbox's row: what a
+   * mailbox's own reads cost no longer grows with everyone else's retained
+   * mail or with how recently someone wrote. Falls back to the whole
+   * {@link snapshot} where the store has no rows to select (held whole,
+   * buffered by an atomic scope, unreadable or of an unsupported version).
+   */
+  async mailbox(mailboxId: string): Promise<PersistedMailbox | undefined> {
+    const selected = this.selectRows("mailboxes", { keys: [mailboxId] });
+    if (!selected) return (await this.snapshot()).mailboxes[mailboxId];
+    return selected.rows[0]?.parsed as PersistedMailbox | undefined;
+  }
+
+  /**
+   * The committed mailboxes of one environment, keyed like {@link mailbox}:
+   * every mailbox id is `agentMailboxId(environmentId, tabId)`, so they are
+   * one key range. In stored order.
+   */
+  async environmentMailboxes(environmentId: string): Promise<PersistedMailbox[]> {
+    if (!environmentId || environmentId.includes("\0")) return [];
+    const selected = this.selectRows("mailboxes", { keyPrefix: `${environmentId}\0` });
+    const mailboxes = selected
+      ? selected.rows.map((row) => row.parsed as PersistedMailbox)
+      : Object.values((await this.snapshot()).mailboxes);
+    return mailboxes.filter((mailbox) => mailbox.environmentId === environmentId);
+  }
+
+  /** Requested mailboxes in caller order, with the mail revision from the same snapshot. */
+  async mailboxesById(
+    keys: string[],
+  ): Promise<{ revision: number; mailboxes: PersistedMailbox[] }> {
+    const selected = this.selectRows("mailboxes", { keys });
+    if (!selected) {
+      const store = await this.snapshot();
+      return {
+        revision: store.revision,
+        mailboxes: keys.flatMap((key) => store.mailboxes[key] ?? []),
+      };
+    }
+    const byKey = new Map(selected.rows.map((row) => [row.key, row.parsed as PersistedMailbox]));
+    return {
+      revision: selected.mailRevision,
+      mailboxes: keys.flatMap((key) => byKey.get(key) ?? []),
+    };
+  }
+
+  /**
+   * A message's committed status by id. Verify the last known location, then
+   * try its counterpart row. A successful whole-store search relearns the key
+   * even if the matching row's parse was already cached.
+   */
+  async messageStatus(messageId: string): Promise<AgentMailMessageSummary | undefined> {
+    const location = this.keyed.locate(messageId);
+    if (location) {
+      const row = this.selectRows(location.collection, { keys: [location.key] })?.rows[0];
+      const message =
+        location.collection === "mailboxes"
+          ? (row?.parsed as PersistedMailbox | undefined)?.messages.find(
+              (candidate) => candidate.id === messageId,
+            )
+          : (row?.parsed as IdempotencyRecord | undefined)?.bounce;
+      if (message?.id === messageId) {
+        this.keyed.rememberLocation(messageId, location);
+        return metadataMessage(message);
+      }
+    }
+    const counterpart = this.selectRows("counterparts", { keys: [messageId] })?.rows[0];
+    if (counterpart?.parsed) return counterpart.parsed as AgentMailMessageSummary;
+
+    const store = await this.snapshot();
+    const located = findMessage(store, messageId);
+    if (located) {
+      this.keyed.rememberLocation(messageId, { collection: "mailboxes", key: located.key });
+      return metadataMessage(located.message);
+    }
+    if (store.counterparts[messageId]) return store.counterparts[messageId];
+    for (const [key, row] of Object.entries(store.idempotency)) {
+      if (row.bounce?.id === messageId) {
+        this.keyed.rememberLocation(messageId, { collection: "idempotency", key });
+        return metadataMessage(row.bounce);
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Committed rows of one collection, parsed and frozen, reusing the read
+   * model's or an earlier keyed read's parse of an unchanged value. `null`
+   * when the caller must read the whole {@link snapshot} instead.
+   */
+  private selectRows(
+    collection: AgentMailRowCollection,
+    selection: RowSelection,
+  ): { mailRevision: number; rows: Array<{ key: string; parsed: unknown }> } | null {
+    const database = this.context.database;
+    const selected = this.context.loadStoreRowsSerialized(
+      this.files.agentMailFile(),
+      collection,
+      selection,
+      this.supportedEnvelope?.database === database
+        ? { documentKnownAt: this.supportedEnvelope.revision }
+        : {},
+    );
+    if (selected === null) return { mailRevision: 0, rows: [] };
+    if (selected === undefined || selected.mode === "document") return null;
+    try {
+      // Checked once per committed revision: a revision is never reused.
+      let envelope = this.supportedEnvelope;
+      if (selected.document !== undefined) {
+        const mailRevision =
+          selected.document === null ? null : envelopeMailRevision(selected.document);
+        if (mailRevision === null) return null;
+        envelope = { database, revision: selected.revision, mailRevision };
+        this.supportedEnvelope = envelope;
+      }
+      if (!envelope) return null;
+      const rows = selected.rows.map(({ key, value }) => {
+        const id = mailRowId(collection, key);
+        const modelled = this.readModel?.rows.get(id);
+        if (modelled?.value === value) return { key, parsed: modelled.parsed };
+        const cached = this.keyed.cached(id, value);
+        if (cached !== undefined) return { key, parsed: cached };
+        const parsed = parseMailRow(collection, value);
+        this.keyed.remember(id, { value, parsed });
+        this.keyed.index(collection, key, parsed);
+        return { key, parsed };
+      });
+      return { mailRevision: envelope.mailRevision, rows };
+    } catch (error) {
+      // An unreadable row or envelope reads as the whole-store read reads it.
+      if (error instanceof SyntaxError) return null;
+      throw error;
+    }
+  }
+
+  /**
    * Commits a change to a few rows without loading or reserializing the rest
-   * of the store, for a mutation computed from {@link snapshot} under
-   * {@link enqueue}: `mailboxes`, `idempotency` and `counterparts` rows to
-   * write (`undefined` deletes one), and the store's next `revision` and
-   * `pendingInject`, which live in the envelope document. Bounded as
+   * of the store, for a mutation computed from {@link snapshot} or keyed reads
+   * under {@link enqueue}: `mailboxes`, `idempotency` and `counterparts` rows
+   * to write (`undefined` deletes one), and the store's next `revision` and
+   * `pendingInject`, which live in the envelope document. `revision: "next"`
+   * bumps the committed revision, and a function derives the queue from the
+   * committed one, for a writer that did not read the envelope. Bounded as
    * {@link save} is, except that a change that shrinks the store always
    * commits. `false`, writing nothing, when the store must be saved whole
    * instead (see `StorageContext.updateStoreRows`): take a copy with
@@ -470,21 +647,49 @@ export class AgentMailStore {
    */
   saveRows(change: {
     rows: ReadonlyArray<{
-      collection: "mailboxes" | "idempotency" | "counterparts";
+      collection: AgentMailRowCollection;
       key: string;
       value: unknown;
     }>;
-    revision: number;
-    pendingInject: PersistedAgentMailStore["pendingInject"];
+    revision: number | "next";
+    pendingInject:
+      | PersistedAgentMailStore["pendingInject"]
+      | ((
+          committed: PersistedAgentMailStore["pendingInject"],
+        ) => PersistedAgentMailStore["pendingInject"]);
   }): boolean {
-    if (change.pendingInject.length > AGENT_MAIL_MAX_PENDING_INJECTS) {
-      throw new AgentMailError("mailbox-backlog-full", "Too many messages are awaiting injection");
+    const assertQueueBound = (queue: PersistedAgentMailStore["pendingInject"]) => {
+      if (queue.length > AGENT_MAIL_MAX_PENDING_INJECTS) {
+        throw new AgentMailError(
+          "mailbox-backlog-full",
+          "Too many messages are awaiting injection",
+        );
+      }
+    };
+    if (typeof change.pendingInject !== "function") assertQueueBound(change.pendingInject);
+    // Locations are hints a reader verifies, so recording them before the
+    // commit is safe even when it fails.
+    for (const row of change.rows) {
+      if (row.value !== undefined) this.keyed.index(row.collection, row.key, row.value);
     }
     try {
       return this.context.updateStoreRows(this.files.agentMailFile(), change.rows, {
         document: (envelope) => {
-          envelope.revision = change.revision;
-          envelope.pendingInject = change.pendingInject;
+          envelope.revision =
+            change.revision === "next"
+              ? (Number.isSafeInteger(envelope.revision) ? (envelope.revision as number) : 0) + 1
+              : change.revision;
+          if (typeof change.pendingInject === "function") {
+            const queue = change.pendingInject(
+              Array.isArray(envelope.pendingInject)
+                ? (envelope.pendingInject as PersistedAgentMailStore["pendingInject"])
+                : [],
+            );
+            assertQueueBound(queue);
+            envelope.pendingInject = queue;
+          } else {
+            envelope.pendingInject = change.pendingInject;
+          }
         },
         maxBytes: AGENT_MAIL_MAX_STORE_BYTES,
       });
@@ -507,6 +712,24 @@ export class AgentMailStore {
     } catch (error) {
       if (!(error instanceof StoreTooLargeError)) throw error;
       throw new AgentMailError("store-full", "Agent mail store has reached its size limit");
+    }
+    this.indexSaved(store);
+  }
+
+  /**
+   * Learns where the messages a whole save added or moved live, so a status
+   * read right after a send finds them by key. Only mailboxes whose revision
+   * differs from the read model's copy (every change to a mailbox's messages
+   * bumps it) and idempotency records the read model lacks are visited.
+   */
+  private indexSaved(store: PersistedAgentMailStore): void {
+    const model = this.readModel?.store;
+    for (const [key, mailbox] of Object.entries(store.mailboxes)) {
+      if (model?.mailboxes[key]?.revision === mailbox.revision) continue;
+      this.keyed.index("mailboxes", key, mailbox);
+    }
+    for (const [key, record] of Object.entries(store.idempotency)) {
+      if (record.bounce && !model?.idempotency[key]) this.keyed.index("idempotency", key, record);
     }
   }
 }

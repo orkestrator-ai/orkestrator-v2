@@ -7,7 +7,6 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
-import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const log = createLogger("web.chat");
@@ -238,48 +237,6 @@ export function MessageShell({
               ) : null}
             </div>
           ) : null}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface MessageErrorAlertProps {
-  content: string;
-  timestampLabel: string;
-  details?: string;
-  action?: ReactNode;
-}
-
-export function MessageErrorAlert({
-  content,
-  timestampLabel,
-  details,
-  action,
-}: MessageErrorAlertProps) {
-  return (
-    <div className="px-2 @sm:px-4 py-3">
-      <div className="max-w-3xl mx-auto min-w-0">
-        <div
-          data-transcript-item="error"
-          className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/25"
-        >
-          <AlertCircle className="w-4 h-4 text-failure shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <div
-              data-agent-chat-search-content="true"
-              className="text-sm text-failure whitespace-pre-wrap break-words"
-            >
-              {content}
-            </div>
-            {details ? (
-              <div className="text-xs text-failure/85 whitespace-pre-wrap break-words mt-2">
-                {details}
-              </div>
-            ) : null}
-            {action ? <div className="mt-3">{action}</div> : null}
-            <div className="text-[11px] text-muted-foreground mt-1">{timestampLabel}</div>
-          </div>
         </div>
       </div>
     </div>

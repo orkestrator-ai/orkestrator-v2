@@ -1031,9 +1031,28 @@ export class CodexRuntimeLifecycle {
       }
       case "thread.usage.updated": {
         const previous = this.ctx.usageByThread.get(threadId);
+        const activeTurn = context.activeTurn;
+        const isActiveTurn = activeTurn?.turnId === event.turnId;
+        // Late reports from an earlier turn cannot describe the rewritten prefix.
+        if (
+          previous?.contextCompacted &&
+          !isActiveTurn &&
+          previous.turns?.some((turn) => turn.turnId === event.turnId)
+        ) {
+          return;
+        }
+        const cacheAccessNotBefore = isActiveTurn ? context.turnStartedAt : undefined;
+        const modelId =
+          context.confirmedModelsByTurn.get(event.turnId) ??
+          (isActiveTurn ? context.modelId : undefined);
+        const turns = event.usage.turns?.map((turn) => ({
+          ...turn,
+          ...(cacheAccessNotBefore ? { cacheAccessNotBefore } : {}),
+          ...(modelId ? { modelId } : {}),
+        }));
         const usage = {
           ...event.usage,
-          turns: mergeTurnUsage(previous?.turns, event.usage.turns),
+          turns: mergeTurnUsage(previous?.turns, turns),
           ...(this.ctx.accountRateLimits.length > 0
             ? { rateLimits: this.ctx.accountRateLimits }
             : {}),

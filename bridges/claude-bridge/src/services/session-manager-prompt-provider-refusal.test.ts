@@ -87,6 +87,8 @@ describe("provider refusal log level", () => {
       expect(session.status).toBe("error");
       expect(session.error).toBe("Claude ended the turn on an API error.");
       expect(session.errorCode).toBeUndefined();
+      // The error text says nothing; the SDK's code is what names the reason.
+      expect(session.failureReason).toBe("provider-unavailable");
       // The route reads this marker to keep its own completion log a non-error.
       expect((rejection as { providerRefused?: unknown }).providerRefused).toBe(true);
       expect((rejection as { usageLimited?: unknown }).usageLimited).toBeUndefined();
@@ -106,6 +108,33 @@ describe("provider refusal log level", () => {
     } finally {
       logs.restore();
     }
+  });
+
+  test("an exhausted weekly window records its own reset on the failed turn", async () => {
+    const weekly = "2027-01-10T00:00:00.000Z";
+    const fiveHour = "2027-01-08T13:00:00.000Z";
+    const { session, rejection } = await runFailedTurn("provider-refusal-weekly", [
+      {
+        type: "rate_limit_event",
+        rate_limit_info: {
+          rateLimitType: "seven_day",
+          status: "rejected",
+          utilization: 1,
+          resetsAt: Date.parse(weekly) / 1000,
+          unifiedWindows: { five_hour: { utilization: 1, resetsAt: Date.parse(fiveHour) / 1000 } },
+        },
+      },
+      apiErrorReply("rate_limit", "You've hit your limit"),
+      { type: "result", subtype: "success", is_error: true, api_error_status: 429 },
+    ]);
+    expect(rejection).toBeInstanceOf(Error);
+    expect(session.failureReason).toBe("usage-limit");
+    expect(session.rateLimits).toContainEqual({
+      label: "5-hour limit",
+      usedPercent: 100,
+      resetsAt: fiveHour,
+    });
+    expect(session.failedTurn?.resetsAt).toBe(weekly);
   });
 
   test("a refused login (the Cloudflare 403) is a warning, not query.failed", async () => {
@@ -128,6 +157,7 @@ describe("provider refusal log level", () => {
       expect(session.status).toBe("error");
       expect(session.error).toBe("Claude ended the turn on an API error.");
       expect(session.errorCode).toBeUndefined();
+      expect(session.failureReason).toBe("authentication");
       expect((rejection as { providerRefused?: unknown }).providerRefused).toBe(true);
       expect(logs.bridgeErrorLines()).toEqual([]);
       expect(logs.warnLines()).toContain(

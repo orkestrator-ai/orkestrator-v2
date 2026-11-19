@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { SDKAssistantMessageError } from "@anthropic-ai/claude-agent-sdk";
 import { projectEssentialRecord } from "@orkestrator/protocol/log-essential";
-import { claudeApiErrorCode, providerStateApiError } from "./claude-api-errors.js";
+import { providerFailureReason } from "@orkestrator/protocol/provider-failures";
+import {
+  claudeApiErrorCode,
+  claudeFailureReason,
+  providerStateApiError,
+} from "./claude-api-errors.js";
 
 /** Every code the pinned SDK names: `satisfies` fails the typecheck on one missing. */
 const SDK_CODES = Object.keys({
@@ -86,5 +91,27 @@ describe("Claude API error fates", () => {
         startupFailure: false,
       });
     }
+  });
+});
+
+describe("Claude failure reasons", () => {
+  test("each SDK code maps to a provider-neutral reason or leaves it to the text", () => {
+    for (const code of SDK_CODES as SDKAssistantMessageError[]) {
+      const reason = claudeFailureReason(code, false);
+      if (reason !== undefined) expect(providerFailureReason(reason)).toBe(reason);
+    }
+    expect(claudeFailureReason("authentication_failed", false)).toBe("authentication");
+    expect(claudeFailureReason("billing_error", false)).toBe("billing");
+    expect(claudeFailureReason("rate_limit", false)).toBe("rate-limit");
+    expect(claudeFailureReason("overloaded", false)).toBe("provider-unavailable");
+    expect(claudeFailureReason("model_not_found", false)).toBe("model-unavailable");
+    // An invalid request may be a prompt too long for the window: the text decides.
+    expect(claudeFailureReason("invalid_request", false)).toBeUndefined();
+    expect(claudeFailureReason(undefined, false)).toBeUndefined();
+  });
+
+  test("a rejected rate-limit event is a usage limit whatever the code", () => {
+    expect(claudeFailureReason("rate_limit", true)).toBe("usage-limit");
+    expect(claudeFailureReason(undefined, true)).toBe("usage-limit");
   });
 });

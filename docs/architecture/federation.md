@@ -1169,15 +1169,17 @@ environments..." field open the same dialog, so they behave identically.
   every machine. The Filter menu adds a **Machine** group (shown when other
   machines exist): All machines (default), This machine, or one machine, each
   marked offline/stale/loading when it is. Both reset when the dialog closes.
-- **Choosing a row.** This machine's rows select as before. Another machine's
-  project is selected in the sidebar, not opened (`useRevealMachineProject`):
-  it is recorded as recent, its repository is expanded, a sidebar machine
-  filter that hides its machine is cleared, and its repository heading is
-  highlighted (`machineViewStore.revealedProject`) and scrolled into view until
-  something else is selected. Sorted by activity, the sidebar returns to the
-  repository list first. A disconnected machine's projects are not in the
-  list, so nothing is highlighted for them. Another machine's environment
-  opens on that machine (`openMachineWorkspace`), as its sidebar row does.
+- **Choosing a row.** Selecting a local environment opens it and expands its
+  repository when the repository list is active. Search clears a machine
+  filter that hides the selected row. A project on another machine opens in
+  that machine's workspace. With no remembered tab, a leaf-only repository
+  opens on Coordinator, and a leaf checkout paired with the command node
+  opens on Home in the repository view. The sidebar expands the repository,
+  highlights and scrolls to the heading, and records the project as recent
+  (`useRevealMachineProject`). Sorted by activity, the sidebar returns to the
+  repository list first. A disconnected machine's project has no heading to
+  highlight. Environment results open on their machines
+  (`openMachineWorkspace`).
 - **Offline, stale and loading machines** keep their last-known rows, greyed
   (`opacity-60`) with an offline/stale/loading label, and can still be
   chosen: a project is revealed in the repository list where it can be; an

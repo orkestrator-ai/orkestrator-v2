@@ -272,6 +272,7 @@ export const PrDetectionSchema = Schema.NullOr(
     state: PrStateSchema,
     hasMergeConflicts: Schema.NullOr(Schema.Boolean),
     checkSummary: Schema.optional(Schema.NullOr(PrCheckSummarySchema)),
+    baseBranch: Schema.optionalKey(Schema.String),
   }),
 ).annotate({ identifier: "PrDetection" });
 export type PrDetection = typeof PrDetectionSchema.Type;

@@ -222,6 +222,7 @@ async function withService(
         url: string;
         state: "open" | "merged" | "closed";
         hasMergeConflicts: boolean | null;
+        baseBranch?: string;
       } | null;
       failCommands: Set<string>;
       failCommandsOnce: Map<string, number>;
@@ -287,6 +288,7 @@ async function withService(
       url: string;
       state: "open" | "merged" | "closed";
       hasMergeConflicts: boolean | null;
+      baseBranch?: string;
     } | null,
     failCommands: new Set<string>(),
     // Counts down a command's remaining transient failures, so a test can make
@@ -850,6 +852,31 @@ describe("BuildPipelineService", () => {
     });
   }
 
+  test("Address Findings and Verify use the sealed branch after the project target changes", async () => {
+    await withService(async (service, storage, provider) => {
+      provider.reviewReport = {
+        ...cleanReview,
+        testCoverageGaps: [{ file: "src/app.ts", untestedBehavior: "Missing regression" }],
+        verdict: { ready: "with-fixes", reasoning: "Add coverage" },
+      };
+      const started = await service.start(startInput());
+      for (let pass = 0; pass < 10; pass++) {
+        if ((await pipeline(storage, started.id)).phase === "reviewing") break;
+        await service.advanceNow(started.id);
+      }
+      expect((await pipeline(storage, started.id)).reviewPackage?.targetBranch).toBe("main");
+      await storage.updateRepositoryConfig("project-1", { defaultBranch: "dev", prBaseBranch: "" });
+      for (let pass = 0; pass < 10; pass++) {
+        if ((await pipeline(storage, started.id)).phase === "verifying") break;
+        await service.advanceNow(started.id);
+      }
+      const prompt = (phase: string) =>
+        provider.sent.find((call) => provider.phases.get(call.sessionId) === phase)?.prompt;
+      expect(prompt("address-findings")).toContain("git diff origin/main...HEAD");
+      expect(prompt("verify")).toContain("Compare against origin/main");
+    });
+  });
+
   test("a false address reproduction claim cannot override failed verification", async () => {
     await withService(async (service, storage, provider, invocations) => {
       provider.preparationResult = {
@@ -1138,6 +1165,46 @@ describe("BuildPipelineService", () => {
       expect(invocations.some(({ command }) => command === "detect_pr_local")).toBe(false);
     });
   });
+
+  test.each(["local", "containerized"] as const)(
+    "resolves the detected PR base after the project target changes on a %s build",
+    async (environmentType) => {
+      await withService(async (service, storage, provider, invocations, controls) => {
+        if (environmentType === "containerized") {
+          await storage.updateEnvironment("env-1", { environmentType, containerId: "container-1" });
+        }
+        const started = await service.start(startInput({ environmentType }));
+        for (let pass = 0; pass < 10; pass++) {
+          if ((await pipeline(storage, started.id)).phase === "creating-pr") break;
+          await service.advanceNow(started.id);
+        }
+        expect((await pipeline(storage, started.id)).phase).toBe("creating-pr");
+        await storage.updateRepositoryConfig("project-1", {
+          defaultBranch: "dev",
+          prBaseBranch: "",
+        });
+        controls.detection = {
+          url: "https://github.com/acme/repo/pull/42",
+          state: "open",
+          hasMergeConflicts: true,
+          baseBranch: "main",
+        };
+        await service.advanceNow(started.id);
+        expect((await pipeline(storage, started.id)).phase).toBe("resolving-conflicts");
+        expect(await storage.getEnvironment("env-1")).toMatchObject({ prBaseBranch: "main" });
+        const resolved = provider.sent.find(
+          (call) => provider.phases.get(call.sessionId) === "resolve-conflicts",
+        );
+        expect(resolved?.prompt).toContain("merge origin/main");
+        expect(
+          invocations.some(
+            ({ command }) =>
+              command === (environmentType === "local" ? "detect_pr_local" : "detect_pr"),
+          ),
+        ).toBe(true);
+      });
+    },
+  );
 
   test("fails when a containerized build has no container for PR detection", async () => {
     await withService(async (service, storage) => {

@@ -64,8 +64,18 @@ export function registerReviewWorkflowCommands(
   dependencies: RegistryDependencies,
 ): void {
   const { conditionalManifestSnapshot } = dependencies;
+  register(startReviewValidationCommand, ({ environmentId, run, targetBranch }, context) =>
+    controlReviewValidation(
+      asNonBlankString(environmentId, "environmentId"),
+      run,
+      "start",
+      context,
+      {
+        targetBranch,
+      },
+    ),
+  );
   for (const [def, action] of [
-    [startReviewValidationCommand, "start"],
     [statusReviewValidationCommand, "status"],
     [cancelReviewValidationCommand, "cancel"],
   ] as const) {
@@ -84,7 +94,7 @@ export function registerReviewWorkflowCommands(
       run,
       "stop-command",
       context,
-      asNonBlankString(resultId, "resultId"),
+      { resultId: asNonBlankString(resultId, "resultId") },
     ),
   );
   register(getReviewValidationOutputCommand, ({ environmentId, runId, resultId, known }, context) =>

@@ -310,7 +310,7 @@ async function buttonSelection(
     ...(model ? { model } : {}),
     ...(model && reasoning ? { reasoning } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
-    repositoryBase: config.repositories?.[environment.projectId]?.prBaseBranch || undefined,
+    repository: config.repositories?.[environment.projectId],
     reviewInstruction: config.global.reviewInstruction,
   };
 }
@@ -394,7 +394,7 @@ function buttonHandler(action: ButtonAction): MutationActionHandler<ButtonInput>
           { details: { prUrl: environment.prUrl ?? null, prState: environment.prState ?? null } },
         );
       }
-      const { repositoryBase, reviewInstruction, ...selection } = await buttonSelection(
+      const { repository, reviewInstruction, ...selection } = await buttonSelection(
         context,
         environment,
         button.defaultKey,
@@ -404,7 +404,7 @@ function buttonHandler(action: ButtonAction): MutationActionHandler<ButtonInput>
         ? resolvePrTargetBranch({
             override: input.targetBranch,
             environmentBase: action === "pr.resolve" ? environment.prBaseBranch : undefined,
-            repositoryBase,
+            repository,
           })
         : undefined;
       const start: StartInput = {

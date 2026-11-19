@@ -231,6 +231,7 @@ export function registerPullRequestCommands(
       state: detection.state,
       hasMergeConflicts: detection.hasMergeConflicts,
       checkSummary: detection.checkSummary,
+      ...(detection.baseBranch === undefined ? {} : { baseBranch: detection.baseBranch }),
     };
   });
   registerDefined(detectPrCommand, async ({ containerId, branch }) => {
@@ -251,6 +252,7 @@ export function registerPullRequestCommands(
       state: detection.state,
       hasMergeConflicts: detection.hasMergeConflicts,
       checkSummary: detection.checkSummary,
+      ...(detection.baseBranch === undefined ? {} : { baseBranch: detection.baseBranch }),
     };
   });
   registerDefined(mergePrCommand, async ({ containerId, method, deleteBranch }, context) => {
@@ -340,10 +342,7 @@ export function registerPullRequestCommands(
           const current = await context.storage.getEnvironment(id);
           if (current?.prUrl !== expectedPrUrl) throw new PrDestinationChangedError();
           const repository = await context.storage.getRepositoryConfig(environment.projectId);
-          if (
-            defaultPrTargetBranch(repository.prBaseBranch) !==
-            (expectedTargetBranch ?? expectedBaseRef)
-          ) {
+          if (defaultPrTargetBranch(repository) !== (expectedTargetBranch ?? expectedBaseRef)) {
             throw new PrDestinationChangedError();
           }
         }
@@ -521,9 +520,7 @@ export function registerPullRequestCommands(
       throw new Error("A project's home checkout cannot be deleted after merging");
     }
     const target = enabled
-      ? defaultPrTargetBranch(
-          (await context.storage.getRepositoryConfig(current.projectId)).prBaseBranch,
-        )
+      ? defaultPrTargetBranch(await context.storage.getRepositoryConfig(current.projectId))
       : null;
     const updated = await context.storage.updateEnvironment(
       id,

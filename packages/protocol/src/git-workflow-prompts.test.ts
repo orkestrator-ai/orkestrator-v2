@@ -15,16 +15,27 @@ import {
 
 describe("resolvePrTargetBranch", () => {
   test("prefers the override, then the environment, then the repository", () => {
-    const all = { override: "o", environmentBase: "e", repositoryBase: "r" };
+    const all = {
+      override: "o",
+      environmentBase: "e",
+      repository: { prBaseBranch: "r", defaultBranch: "d" },
+    };
     expect(resolvePrTargetBranch(all)).toBe("o");
     expect(resolvePrTargetBranch({ ...all, override: undefined })).toBe("e");
-    expect(resolvePrTargetBranch({ repositoryBase: "r" })).toBe("r");
+    expect(resolvePrTargetBranch({ repository: { prBaseBranch: "r" } })).toBe("r");
+    expect(resolvePrTargetBranch({ repository: { prBaseBranch: "", defaultBranch: "dev" } })).toBe(
+      "dev",
+    );
     expect(resolvePrTargetBranch({})).toBe("main");
   });
 
   test("treats blank values as unset and trims the one it uses", () => {
     expect(
-      resolvePrTargetBranch({ override: "  ", environmentBase: "", repositoryBase: "r" }),
+      resolvePrTargetBranch({
+        override: "  ",
+        environmentBase: "",
+        repository: { prBaseBranch: "r" },
+      }),
     ).toBe("r");
     expect(resolvePrTargetBranch({ override: " release " })).toBe("release");
   });
@@ -32,15 +43,24 @@ describe("resolvePrTargetBranch", () => {
 
 describe("defaultPrTargetBranch", () => {
   test("uses the repository's PR base branch", () => {
-    expect(defaultPrTargetBranch("develop")).toBe("develop");
+    expect(defaultPrTargetBranch({ prBaseBranch: "develop", defaultBranch: "dev" })).toBe(
+      "develop",
+    );
   });
 
-  test("falls back to main for a missing or cleared base", () => {
+  test("falls back to the repository's default branch for a missing or cleared PR base", () => {
+    expect(defaultPrTargetBranch({ defaultBranch: "dev" })).toBe("dev");
+    expect(defaultPrTargetBranch({ prBaseBranch: null, defaultBranch: " dev " })).toBe("dev");
+    // Repository settings persist a cleared base as "".
+    expect(defaultPrTargetBranch({ prBaseBranch: "", defaultBranch: "dev" })).toBe("dev");
+    expect(defaultPrTargetBranch({ prBaseBranch: "   ", defaultBranch: "dev" })).toBe("dev");
+  });
+
+  test("falls back to main when neither branch is configured", () => {
     expect(defaultPrTargetBranch(undefined)).toBe("main");
     expect(defaultPrTargetBranch(null)).toBe("main");
-    // Repository settings persist a cleared base as "".
-    expect(defaultPrTargetBranch("")).toBe("main");
-    expect(defaultPrTargetBranch("   ")).toBe("main");
+    expect(defaultPrTargetBranch({})).toBe("main");
+    expect(defaultPrTargetBranch({ prBaseBranch: "", defaultBranch: "  " })).toBe("main");
   });
 });
 

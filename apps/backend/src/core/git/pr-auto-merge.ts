@@ -237,10 +237,15 @@ export class PrAutoMergeController {
       if (environment.autoMerge && !environment.autoMergePrUrl) {
         await this.options.storage.updateEnvironment(
           environment.id,
-          { autoMerge: true },
+          {
+            autoMerge: true,
+            autoMergeBaseRef: environment.autoMergeBaseRef,
+            autoMergeTargetBranch: environment.autoMergeTargetBranch,
+          },
           (current) =>
             current.autoMerge === true &&
             !current.autoMergePrUrl &&
+            current.autoMergeEnabledAt === environment.autoMergeEnabledAt &&
             current.prUrl === environment.prUrl,
         );
       }
@@ -477,10 +482,13 @@ export class PrAutoMergeController {
 
   private async authorizedTarget(environment: Environment): Promise<string | null> {
     const repository = await this.options.storage.getRepositoryConfig(environment.projectId);
-    const configured = defaultPrTargetBranch(repository.prBaseBranch);
-    const accepted = environment.autoMergeBaseRef ?? configured;
+    const configured = defaultPrTargetBranch(repository);
+    // Older intents without pins used the configured PR base or main.
+    const legacyTarget = defaultPrTargetBranch({ prBaseBranch: repository.prBaseBranch });
+    const accepted =
+      environment.autoMergeBaseRef ?? environment.autoMergeTargetBranch ?? legacyTarget;
     if (
-      (environment.autoMergeTargetBranch && environment.autoMergeTargetBranch !== configured) ||
+      (environment.autoMergeTargetBranch ?? legacyTarget) !== configured ||
       (environment.prBaseBranch && environment.prBaseBranch !== accepted)
     )
       return null;
@@ -538,12 +546,13 @@ export class PrAutoMergeController {
       environment,
       "resolve",
     );
-    const repository = await this.options.storage.getRepositoryConfig(environment.projectId);
     const current = await this.authorized(environment, "resolve");
-    if (!current || !(await this.authorizedTarget(current)) || this.closed) return false;
+    if (!current) return false;
+    const configured = await this.authorizedTarget(current);
+    if (!configured || this.closed) return false;
     // Read before the launch: by the time it returns, the Resolve may have pushed.
     const headSha = this.options.monitorState(environment.id)?.headSha;
-    const targetBranch = environment.prBaseBranch || repository.prBaseBranch?.trim() || "main";
+    const targetBranch = current.prBaseBranch?.trim() || current.autoMergeBaseRef || configured;
     const result = await this.options.invoke<{ status?: unknown; error?: unknown }>(
       "launch_native_agent_job",
       {

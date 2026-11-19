@@ -41,6 +41,7 @@ import {
   createReviewPrompt,
   defaultPrTargetBranch,
   resolvePrTargetBranch,
+  type PrTargetRepositorySettings,
   PUSH_CHANGES_TAB_TITLE,
   REVIEW_TAB_TITLE,
 } from "@orkestrator/protocol/git-workflow-prompts";
@@ -277,6 +278,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [prLaunchError, setPrLaunchError] = useState<string | null>(null);
   const [prBranchSuggestions, setPrBranchSuggestions] = useState<string[]>([]);
   const prBranchRequestRef = useRef(0);
+  const resolveBranchRequestRef = useRef(0);
   const prDialogOpen = prDialogTarget !== null;
   const createPrButtonRef = useRef<HTMLButtonElement>(null);
   const createPrLaunchClaimsRef = useRef(new Map<string, CreatePrLaunchClaim>());
@@ -784,9 +786,22 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [enabledAgents, launchDialogDefaultsFor, settingsTiers],
   );
 
+  // On a scope cache miss, read settings from the environment's owning node.
+  const readPrTargetRepositorySettings = useCallback(
+    async (projectId: string): Promise<PrTargetRepositorySettings | undefined> => {
+      try {
+        return await backendForScope(actionBarScope).getRepositoryConfig(projectId);
+      } catch (error) {
+        log.warn("pr-target.repository-config-unavailable", { error: formatLogError(error) });
+        return undefined;
+      }
+    },
+    [actionBarScope],
+  );
+
   // Handler for code review
   const handleReview = useCallback(
-    (
+    async (
       agentOverride?: AgentPlatform,
       launchOptions?: {
         agentLaunchMode?: AgentLaunchModeOverride;
@@ -804,9 +819,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       if (!releaseLaunch) return;
 
       // The same target-branch rule the backend's `review.start` action applies.
-      const targetBranch = defaultPrTargetBranch(
-        config.repositories[selectedProjectId]?.prBaseBranch,
-      );
+      const repository =
+        config.repositories[selectedProjectId] ??
+        (await readPrTargetRepositorySettings(selectedProjectId));
+      if (selectedEnvironmentIdRef.current !== selectedEnvironmentId) {
+        releaseLaunch({ retryable: true });
+        return;
+      }
+      const targetBranch = defaultPrTargetBranch(repository);
       const reviewPrompt = createReviewPrompt(targetBranch, config.global.reviewInstruction);
 
       // A plain click has no dialog to configure the run, so the Defaults tab is
@@ -906,6 +926,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       config.global.reviewInstruction,
       config.repositories,
       createTab,
+      readPrTargetRepositorySettings,
       selectedEnvironmentId,
       selectedProjectId,
     ],
@@ -1590,10 +1611,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
       let launch: TabLaunchHandle | null = null;
       try {
-        const repoConfig = config.repositories[selectedProjectId];
         const targetBranch = resolvePrTargetBranch({
           override: targetBranchOverride,
-          repositoryBase: repoConfig?.prBaseBranch,
+          repository: targetBranchOverride?.trim()
+            ? undefined
+            : (config.repositories[selectedProjectId] ??
+              (await readPrTargetRepositorySettings(selectedProjectId))),
         });
         const prPrompt = createPRPrompt(targetBranch);
         const actionDefault = actionDefaultFor("pr");
@@ -1659,6 +1682,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       actionDefaultFor,
       bindCreatePrLaunchTab,
       config.repositories,
+      readPrTargetRepositorySettings,
       hasPR,
       isRunning,
       preferredFastModesByPlatform,
@@ -1720,10 +1744,18 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     selectedProjectId,
   );
 
-  const openPrDialog = useCallback(() => {
+  const openPrDialog = useCallback(async () => {
     if (!canConfigurePR || !selectedEnvironmentId || !selectedProjectId) return;
     const projectId = selectedProjectId;
-    const targetBranch = defaultPrTargetBranch(config.repositories[projectId]?.prBaseBranch);
+    const request = ++prBranchRequestRef.current;
+    const repository =
+      config.repositories[projectId] ?? (await readPrTargetRepositorySettings(projectId));
+    if (
+      prBranchRequestRef.current !== request ||
+      selectedEnvironmentIdRef.current !== selectedEnvironmentId
+    )
+      return;
+    const targetBranch = defaultPrTargetBranch(repository);
     setPrLaunchError(null);
     setPrDialogTarget({
       environmentId: selectedEnvironmentId,
@@ -1732,7 +1764,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     });
     // Suggestions are a convenience: the field still accepts any branch name,
     // so a project without a readable local checkout simply offers only the default.
-    const request = ++prBranchRequestRef.current;
     setPrBranchSuggestions([targetBranch]);
     void Promise.resolve()
       .then(() => backendForScope(actionBarScope).getProjectGitStatus(projectId))
@@ -1745,6 +1776,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     actionBarScope,
     canConfigurePR,
     config.repositories,
+    readPrTargetRepositorySettings,
     selectedEnvironmentId,
     selectedProjectId,
   ]);
@@ -1899,13 +1931,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       resolveLaunchEnvironmentIdRef.current = operationEnvironmentId;
       setResolveLaunchEnvironmentId(operationEnvironmentId);
 
-      const repoConfig = config.repositories[selectedProjectId];
-      const targetBranch = resolvePrTargetBranch({
-        override: targetBranchOverride,
-        environmentBase: selectedEnvironment?.prBaseBranch,
-        repositoryBase: repoConfig?.prBaseBranch,
-      });
-      const resolvePrompt = createResolveConflictsPrompt(targetBranch);
       const fail = (message: string): ResolveLaunchResult => {
         if (reportFailure === "toast") {
           toast.error("Could not open conflict resolution", { description: message });
@@ -1915,6 +1940,19 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
       let launch: TabLaunchHandle | null = null;
       try {
+        // The PR's observed base wins, so a Resolve merges the branch the PR
+        // really targets; the project settings are needed only without one.
+        const environmentBase = selectedEnvironment?.prBaseBranch;
+        const targetBranch = resolvePrTargetBranch({
+          override: targetBranchOverride,
+          environmentBase,
+          repository:
+            targetBranchOverride?.trim() || environmentBase?.trim()
+              ? undefined
+              : (config.repositories[selectedProjectId] ??
+                (await readPrTargetRepositorySettings(selectedProjectId))),
+        });
+        const resolvePrompt = createResolveConflictsPrompt(targetBranch);
         const actionDefault = actionDefaultFor("resolve");
         const agent = agentOverride || actionDefault.agent;
         const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
@@ -1999,6 +2037,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       config.repositories,
       preferredFastModesByPlatform,
       preferredModelsByPlatform,
+      readPrTargetRepositorySettings,
       reviewModelCatalog,
       selectedEnvironment?.prBaseBranch,
       selectedEnvironmentId,
@@ -2021,20 +2060,32 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     !resolveLaunchInFlight,
   );
 
-  const openResolveDialog = useCallback(() => {
+  const openResolveDialog = useCallback(async () => {
     if (!canConfigureResolve || !selectedEnvironmentId || !selectedProjectId) return;
+    const request = ++resolveBranchRequestRef.current;
+    const environmentBase = selectedEnvironment?.prBaseBranch;
+    const repository = environmentBase?.trim()
+      ? undefined
+      : (config.repositories[selectedProjectId] ??
+        (await readPrTargetRepositorySettings(selectedProjectId)));
+    if (
+      resolveBranchRequestRef.current !== request ||
+      selectedEnvironmentIdRef.current !== selectedEnvironmentId
+    )
+      return;
     setResolveLaunchError(null);
     setResolveDialogTarget({
       environmentId: selectedEnvironmentId,
       projectId: selectedProjectId,
       targetBranch: resolvePrTargetBranch({
-        environmentBase: selectedEnvironment?.prBaseBranch,
-        repositoryBase: config.repositories[selectedProjectId]?.prBaseBranch,
+        environmentBase,
+        repository,
       }),
     });
   }, [
     canConfigureResolve,
     config.repositories,
+    readPrTargetRepositorySettings,
     selectedEnvironment?.prBaseBranch,
     selectedEnvironmentId,
     selectedProjectId,
@@ -2305,7 +2356,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   // Get target branch for PR dialog
   const targetBranch = selectedProjectId
-    ? defaultPrTargetBranch(config.repositories[selectedProjectId]?.prBaseBranch)
+    ? defaultPrTargetBranch(config.repositories[selectedProjectId])
     : "main";
   const sourceBranch = selectedEnvironment?.branch || "current branch";
   // The branch the open PR really merges into, as the PR monitor last read it,

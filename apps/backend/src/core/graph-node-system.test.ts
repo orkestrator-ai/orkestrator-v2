@@ -6,6 +6,7 @@ import { graphPushEffectKey } from "./graph-system-push.js";
 import {
   SYSTEM_BRANCH,
   SYSTEM_REPO,
+  systemTemplate,
   systemWorld,
   type SystemWorld,
 } from "./graph-system-test-support.js";
@@ -15,8 +16,8 @@ afterEach(async () => {
   for (const world of worlds.splice(0)) await world.cleanup();
 });
 
-async function world(): Promise<SystemWorld> {
-  const created = await systemWorld();
+async function world(options?: Parameters<typeof systemWorld>[0]): Promise<SystemWorld> {
+  const created = await systemWorld(options);
   worlds.push(created);
   return created;
 }
@@ -219,6 +220,26 @@ describe("push-branch", () => {
 });
 
 describe("open-pull-request", () => {
+  test.each([undefined, "release/2"])(
+    "publishes to the project default or explicit target %s",
+    async (override) => {
+      const template = systemTemplate();
+      const pr = template.nodes.find((node) => node.id === "pr");
+      if (pr?.kind !== "system") throw new Error("Missing PR action");
+      if (override) pr.params = { targetBranch: override };
+      const w = await world({ template });
+      await w.storage.updateRepositoryConfig(w.run.projectId, {
+        defaultBranch: "dev",
+        prBaseBranch: "",
+      });
+      const outputs = outputsOf(await w.executor().start(w.context(w.activation("pr"))));
+      expect(w.shell.pulls[0]?.base).toBe(override ?? "dev");
+      expect(await valueOf(w, outputs.pr!)).toMatchObject({
+        summary: `Opened the pull request against ${override ?? "dev"}.`,
+      });
+    },
+  );
+
   test("pushes, opens the pull request and reports its merge state", async () => {
     const w = await world();
     w.shell.unknownMergeabilityReads = 2;

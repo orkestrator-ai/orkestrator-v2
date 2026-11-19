@@ -17,6 +17,10 @@
  *   Within one backend, effects with the same key run one at a time
  *   ({@link GraphSystemActionMemory}).
  */
+import {
+  defaultPrTargetBranch,
+  type PrTargetRepositorySettings,
+} from "@orkestrator/protocol/git-workflow-prompts";
 import type { GraphPlanSystemNode } from "@orkestrator/protocol/graphs/compile";
 import {
   graphActivationSlot,
@@ -77,7 +81,7 @@ export interface GraphPrMonitorPort {
 export interface GraphSystemStorage {
   getEnvironment(environmentId: string): Promise<Environment | null>;
   getProject(projectId: string): Promise<Project | null>;
-  getRepositoryConfig(projectId: string): Promise<{ prBaseBranch?: string | null }>;
+  getRepositoryConfig(projectId: string): Promise<PrTargetRepositorySettings>;
   updateEnvironment: StorageService["updateEnvironment"];
   graphEffects: GraphEffectsStorage;
   kanban: Pick<
@@ -309,6 +313,15 @@ export class GraphSystemActionContext {
   /** The effect journal row of `key`, if any. */
   effectRecord(key: string): Promise<GraphEffectRecord | null> {
     return this.deps.storage.graphEffects.getGraphEffect(this.run.id, key);
+  }
+
+  async prTargetBranch(): Promise<string> {
+    const override =
+      typeof this.params.targetBranch === "string" && this.params.targetBranch.trim();
+    return (
+      override ||
+      defaultPrTargetBranch(await this.deps.storage.getRepositoryConfig(this.run.projectId))
+    );
   }
 
   /**

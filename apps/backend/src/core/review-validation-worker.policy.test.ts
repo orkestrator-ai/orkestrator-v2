@@ -12,7 +12,9 @@ import {
 } from "@orkestrator/protocol/review-workflow";
 import { REVIEW_VALIDATION_WORKER } from "./review-validation-worker.js";
 import { createHostTestScheduler } from "@orkestrator/protocol/node/host-test-scheduler";
-import { validationPreparation } from "./review-validation-service.js";
+import { controlReviewValidation, validationPreparation } from "./review-validation-service.js";
+import { BackendRuntime } from "./backend-runtime.js";
+import type { CommandContext } from "./commands-context.js";
 import {
   gitOnPath,
   fixture,
@@ -622,6 +624,60 @@ describe("repository-declared on-demand suites", () => {
     const final = await run(root, validation, "origin/nonexistent");
     expect(final.results.map((result) => result.status)).toEqual(["passed", "passed", "passed"]);
     expect(await output(root, final.results[0]!)).toBe("full");
+  }, 20000);
+
+  test("a divergent target branch changes which on-demand suite runs", async () => {
+    const context = await onDemandFixture();
+    // dev contains the trigger file already, while main's merge base predates it.
+    context.git("checkout", "--detach", context.run.plan.headRef);
+    context.git("commit", "--allow-empty", "-m", "diverge dev");
+    context.git("update-ref", "refs/remotes/origin/dev", "HEAD");
+    context.git("checkout", "--detach", context.run.plan.headRef);
+    context.git("commit", "--allow-empty", "-m", "diverge feature");
+    context.run.plan.headRef = context.git("rev-parse", "HEAD");
+    const commandContext = {
+      storage: {
+        getEnvironment: async () => ({
+          id: "env",
+          projectId: "project",
+          status: "running",
+          environmentType: "local",
+          worktreePath: context.root,
+        }),
+        getRepositoryConfig: async () => ({ defaultBranch: "dev", prBaseBranch: "" }),
+        environmentIsolation: { assignEnvironmentPortBase: async () => 21_000 },
+      },
+      appRoot: context.root,
+      resourceRoot: context.root,
+      toolchainBinDir: path.dirname(process.execPath),
+      runtime: new BackendRuntime({ emit: () => undefined }),
+    } as unknown as CommandContext;
+    const validate = async (id: string, targetBranch?: string) => {
+      const validation = { ...context.run, id };
+      const previous = process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
+      process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = path.join(
+        context.root,
+        ".orkestrator",
+        "scheduler",
+      );
+      try {
+        await controlReviewValidation("env", validation, "start", commandContext, { targetBranch });
+        return await observeUntil(
+          context.root,
+          validation,
+          (next) => next.status === "completed",
+          12_000,
+        );
+      } finally {
+        if (previous === undefined) delete process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
+        else process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = previous;
+        await control(context.root, validation, "cancel").catch(() => undefined);
+      }
+    };
+    const main = await validate("against-main", "main");
+    const dev = await validate("against-dev");
+    expect(main.results.find((result) => result.id === "browser")?.status).toBe("passed");
+    expect(dev.results.find((result) => result.id === "browser")?.status).toBe("skipped");
   }, 20000);
 
   for (const succeeds of [true, false]) {

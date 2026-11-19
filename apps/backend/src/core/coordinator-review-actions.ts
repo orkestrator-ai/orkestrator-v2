@@ -1,3 +1,4 @@
+import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
 import { coordinatorMultiReviewLaunchHash } from "./coordinator-action-scope.js";
 import {
   addressCoordinatorMultiReviewActionCommand,
@@ -95,7 +96,7 @@ export async function multiReviewButtonStart(
   return {
     environmentId: input.environmentId,
     projectId,
-    targetBranch: input.targetBranch ?? (config.repositories[projectId]?.prBaseBranch || "main"),
+    targetBranch: input.targetBranch ?? defaultPrTargetBranch(config.repositories[projectId]),
     reviewInstruction: instructionWasProvided
       ? input.reviewInstruction?.trim()
         ? input.reviewInstruction

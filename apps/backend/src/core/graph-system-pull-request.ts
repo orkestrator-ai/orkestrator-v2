@@ -259,14 +259,11 @@ export const openPullRequestAction: GraphSystemActionHandler = {
         error instanceof Error ? error.message : "The project has no GitHub repository",
       );
     }
-    const configured = (await ctx.deps.storage.getRepositoryConfig(ctx.run.projectId)).prBaseBranch;
     const target: PullRequestTarget = {
       environment,
       repo: `${repository.owner}/${repository.name}`,
       branch: workspace.branch,
-      base:
-        (typeof ctx.params.targetBranch === "string" ? ctx.params.targetBranch : undefined) ??
-        (configured?.trim() || "main"),
+      base: await ctx.prTargetBranch(),
     };
 
     let opened = await openOnce(ctx, target, description, `pr:${target.branch}`);

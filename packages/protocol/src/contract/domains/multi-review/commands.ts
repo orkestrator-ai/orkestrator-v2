@@ -71,7 +71,20 @@ function validationControl<const Name extends string>(name: Name) {
   });
 }
 
-export const startReviewValidationCommand = validationControl("start_review_validation");
+export const startReviewValidationCommand = defineCommand({
+  domain: multiReviewDomain,
+  name: "start_review_validation",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({
+    environmentId: Schema.String,
+    run: checked,
+    targetBranch: Schema.optionalKey(Schema.String),
+  }),
+  result: ReviewValidationRunSchema,
+  critical: [],
+});
 export const statusReviewValidationCommand = validationControl("status_review_validation");
 export const cancelReviewValidationCommand = validationControl("cancel_review_validation");
 

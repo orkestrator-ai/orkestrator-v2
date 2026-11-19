@@ -1,3 +1,7 @@
+import {
+  defaultPrTargetBranch,
+  resolvePrTargetBranch,
+} from "@orkestrator/protocol/git-workflow-prompts";
 import { withWorkerActionReceipt } from "./worker-action-receipts.js";
 import type { CommandContext } from "./commands-context.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
@@ -83,7 +87,7 @@ export async function launchWorkerPr(
       );
       const config = await context.storage.loadConfig();
       const base =
-        input.targetBranch ?? (config.repositories[input.projectId]?.prBaseBranch || "main");
+        input.targetBranch ?? defaultPrTargetBranch(config.repositories[input.projectId]);
       const outcome = await launchPrAgent(commandInvoker(context, dependencies), context.storage, {
         ...input,
         targetBranch: base,
@@ -115,8 +119,8 @@ export async function launchWorkerPr(
  * `canConfigureResolve`): the worker has a pull request that is neither
  * merged nor closed, and GitHub has not reported it free of conflicts (an
  * unknown mergeability still allows a resolve). The target is the PR's own
- * base branch, then the repository's PR base branch, then `main`, as
- * `pr.resolve` does.
+ * base branch, then the repository's PR base branch, its default branch, and
+ * finally `main`, as `pr.resolve` does.
  */
 export async function launchWorkerResolve(
   context: CommandContext,
@@ -151,7 +155,10 @@ export async function launchWorkerResolve(
       const config = await context.storage.loadConfig();
       const base =
         input.targetBranch ??
-        (environment.prBaseBranch || config.repositories[input.projectId]?.prBaseBranch || "main");
+        resolvePrTargetBranch({
+          environmentBase: environment.prBaseBranch,
+          repository: config.repositories[input.projectId],
+        });
       const outcome = await launchResolveConflictsAgent(
         commandInvoker(context, dependencies),
         context.storage,

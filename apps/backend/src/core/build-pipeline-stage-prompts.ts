@@ -6,6 +6,10 @@
  * the review handoff, the Address report, the pull request a restart updates)
  * and appends the user's per-step instructions after the contract.
  */
+import {
+  defaultPrTargetBranch,
+  resolvePrTargetBranch,
+} from "@orkestrator/protocol/git-workflow-prompts";
 import { pipelineFollowUps } from "@orkestrator/protocol/build-pipeline-notes";
 import {
   type BuildPipeline,
@@ -105,7 +109,8 @@ export class BuildPipelineStagePrompts {
     const notes = (await this.ctx.storage.kanban.getProjectNotes(pipeline.projectId)).content;
     const config = await this.ctx.storage.loadConfig();
     const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
-    const target = repository.prBaseBranch || "main";
+    const target = defaultPrTargetBranch(repository);
+    const reviewTarget = pipeline.reviewPackage?.targetBranch ?? target;
     if (phase === "build") {
       return {
         prompt: buildPrompt(pipeline, notes, target),
@@ -169,7 +174,7 @@ export class BuildPipelineStagePrompts {
           handoff,
           addressFindingsReportPrompt(
             pipeline.structuredReview,
-            addressFindingsValidationInstruction(pipeline.reviewPackage, target),
+            addressFindingsValidationInstruction(pipeline.reviewPackage, reviewTarget),
           ),
         ),
         schema: REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
@@ -181,7 +186,7 @@ export class BuildPipelineStagePrompts {
         prompt: verificationPrompt(
           pipeline,
           notes,
-          target,
+          reviewTarget,
           worktree,
           verificationAddressFindingsReport(pipeline),
           await this.validationAncestry(pipeline, worktree),
@@ -233,7 +238,13 @@ export class BuildPipelineStagePrompts {
         images: [],
       };
     }
-    return { prompt: resolveConflictsPrompt(target), images: [] };
+    const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);
+    return {
+      prompt: resolveConflictsPrompt(
+        resolvePrTargetBranch({ environmentBase: environment?.prBaseBranch, repository }),
+      ),
+      images: [],
+    };
   }
 
   /**

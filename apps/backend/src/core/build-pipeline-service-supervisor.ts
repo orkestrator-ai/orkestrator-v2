@@ -1,3 +1,4 @@
+import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 /**
  * The build pipeline stage supervisor: the whole-store tick, the per-pipeline
@@ -245,7 +246,7 @@ export class BuildPipelineSupervisor {
         shouldPersistTranscript: (session) => this.shouldPersistTranscript(session),
         targetBranch: async (pipeline) => {
           const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
-          return repository.prBaseBranch || "main";
+          return defaultPrTargetBranch(repository);
         },
         reviewInstruction: async () =>
           (await this.ctx.storage.loadConfig()).global.reviewInstruction,
@@ -1143,7 +1144,7 @@ export class BuildPipelineSupervisor {
     session: PipelineSession,
   ): Promise<void> {
     const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
-    const targetBranch = repository.prBaseBranch || "main";
+    const targetBranch = defaultPrTargetBranch(repository);
     await this.ctx.refreshWorkflowRollout();
     if (!session.structuredRequestId) {
       const requestId = randomUUID();
@@ -1262,7 +1263,7 @@ export class BuildPipelineSupervisor {
       if (run.status === "planned" || run.status === "running") return;
     }
     const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
-    const targetBranch = repository.prBaseBranch || "main";
+    const targetBranch = defaultPrTargetBranch(repository);
     const round = pipeline.iteration + 1;
     const notes = (await this.ctx.storage.kanban.getProjectNotes(pipeline.projectId)).content;
     const sealingStarted = Date.now();
@@ -1524,7 +1525,7 @@ export class BuildPipelineSupervisor {
    */
   async startReviewPackagePreparation(pipeline: BuildPipeline): Promise<void> {
     const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
-    const targetBranch = repository.prBaseBranch || "main";
+    const targetBranch = defaultPrTargetBranch(repository);
     if (pipeline.validationRun) {
       const cancelled = await this.ctx.invoke<unknown>("cancel_review_validation", {
         environmentId: pipeline.environmentId,

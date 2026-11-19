@@ -62,7 +62,7 @@ beforeEach(() => {
 });
 
 /** A project tracking acme/widget whose settings name `prBaseBranch` as the PR target. */
-function trackWidgetProject(prBaseBranch: string) {
+function trackWidgetProject(prBaseBranch: string, defaultBranch = "main") {
   appCommandStore(projectStore).setState({
     projects: [
       {
@@ -82,7 +82,7 @@ function trackWidgetProject(prBaseBranch: string) {
         ...originalConfig.repositories,
         "project-widget": {
           ...originalConfig.repositories["project-widget"],
-          defaultBranch: "main",
+          defaultBranch,
           prBaseBranch,
         },
       },
@@ -286,6 +286,27 @@ describe("PullRequestView", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText("Merge pull request #42?")).toBeTruthy();
     expect(within(dialog).queryByTestId("merge-target-mismatch") === null).toBe(true);
+  });
+
+  test("a repository-wide merge confirms the observed base against the project default", async () => {
+    trackWidgetProject("", "dev");
+    renderView(makeDetail({ baseRef: "main" }));
+    await screen.findByText("feat: add usage history tab");
+    expect(screen.getByTestId("pull-request-base-ref").dataset.targetMismatch).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByTestId("merge-target-mismatch").textContent).toContain(
+      "targets main, but the target branch set in this project's settings is dev",
+    );
+    expect(callsFor("merge_github_pull_request")).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Accept and merge" }));
+    await waitFor(() =>
+      expect(callsFor("merge_github_pull_request")[0]).toMatchObject({
+        expectedBaseRef: "main",
+        expectedTargetBranch: "dev",
+      }),
+    );
   });
 
   test("a pull request in a repository no project tracks is never flagged", async () => {

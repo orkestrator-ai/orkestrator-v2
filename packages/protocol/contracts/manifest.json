@@ -2272,7 +2272,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:8164b2e63ed63abaeafc94c3781173830c8267d2fff19498f4dd1bdac3c1ae7b",
-      "resultDigest": "sha256:ab20556819a5af12c7158169ba957856fc0f25c3efcd804c8cc873cf4b606862"
+      "resultDigest": "sha256:7f667da16bdfd5b8e125d3c959b13da8201f648558a6cc41cacd5f2e23318414"
     },
     "detect_pr_local": {
       "domain": "pull-requests",
@@ -2281,7 +2281,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:76d9c9a67c0887d35b829fcedfc2cbece2717294c940ad77125c0c44d96e50c4",
-      "resultDigest": "sha256:ab20556819a5af12c7158169ba957856fc0f25c3efcd804c8cc873cf4b606862"
+      "resultDigest": "sha256:7f667da16bdfd5b8e125d3c959b13da8201f648558a6cc41cacd5f2e23318414"
     },
     "disarm_pr_refresh_after_agent_completion": {
       "domain": "pull-requests",
@@ -7930,7 +7930,7 @@
       "access": "internal",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:f0c8ad47c915d2cdac3596d9ebfa547be747aeed71cd3510fbc89f39c5d27578",
+      "argsDigest": "sha256:37d8c6e0af78731e4d03630789afa5d17e398873a64428c9eec4460a03993d2a",
       "resultDigest": "sha256:bfe9d6534c27cd6ef8884145f527ce3f55806cafdd26caa7aa130e661a7adcf4"
     },
     "start_terminal_session": {

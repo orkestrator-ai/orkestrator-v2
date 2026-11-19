@@ -1,3 +1,4 @@
+import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
 import {
   isReviewValidationRun,
@@ -262,7 +263,7 @@ export async function controlReviewValidation(
   value: unknown,
   action: "start" | "status" | "cancel" | "stop-command",
   context: CommandContext,
-  resultIdValue?: string,
+  options: { resultId?: string; targetBranch?: string } = {},
 ): Promise<ReviewValidationRun> {
   const release =
     action === "start"
@@ -271,7 +272,7 @@ export async function controlReviewValidation(
   try {
     if (action === "start" && (await context.storage.getEnvironment(environmentId))?.worktreeMove)
       throw new Error("Move recovery is pending. Restart Orkestrator before starting validation.");
-    return await controlReviewValidationOnce(environmentId, value, action, context, resultIdValue);
+    return await controlReviewValidationOnce(environmentId, value, action, context, options);
   } finally {
     release?.();
   }
@@ -282,12 +283,12 @@ async function controlReviewValidationOnce(
   value: unknown,
   action: "start" | "status" | "cancel" | "stop-command",
   context: CommandContext,
-  resultIdValue?: string,
+  options: { resultId?: string; targetBranch?: string },
 ): Promise<ReviewValidationRun> {
   if (!isReviewValidationRun(value)) throw new Error("Invalid review validation run");
   const resultId =
     action === "stop-command"
-      ? validationIdentity(resultIdValue ?? "", "review validation result ID")
+      ? validationIdentity(options.resultId ?? "", "review validation result ID")
       : undefined;
   if (resultId !== undefined && !value.plan.commands.some((cmd) => cmd.id === resultId)) {
     throw new Error("Review validation command is unavailable");
@@ -313,7 +314,11 @@ async function controlReviewValidationOnce(
   // The worker reads the change against this ref to decide which on-demand
   // suites apply. Without it every command runs as planned.
   const targetRef =
-    action === "start" ? await validationTargetRef(environment, context) : undefined;
+    action === "start"
+      ? options.targetBranch === undefined
+        ? await validationTargetRef(environment, context)
+        : `origin/${validateGitRefName(options.targetBranch, "target branch")}`
+      : undefined;
   // Compact transport only: neither command output nor file contents return here.
   const payload = Buffer.from(
     JSON.stringify({
@@ -378,7 +383,7 @@ async function validationTargetRef(
 ): Promise<string | undefined> {
   try {
     const repository = await context.storage.getRepositoryConfig(environment.projectId);
-    return `origin/${validateGitRefName(repository.prBaseBranch || "main", "target branch")}`;
+    return `origin/${validateGitRefName(defaultPrTargetBranch(repository), "target branch")}`;
   } catch {
     return undefined;
   }

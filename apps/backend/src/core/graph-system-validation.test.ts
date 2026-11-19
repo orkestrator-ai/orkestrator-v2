@@ -6,15 +6,15 @@ import { canonicalJson } from "@orkestrator/protocol/canonical-json";
 import { graphBuiltInType, validateGraphArtifactValue } from "@orkestrator/protocol/graphs/types";
 import type { GraphActivationReport } from "./graph-run-executors.js";
 import { graphValidationRunId } from "./graph-system-validation.js";
-import { systemWorld, type SystemWorld } from "./graph-system-test-support.js";
+import { systemTemplate, systemWorld, type SystemWorld } from "./graph-system-test-support.js";
 
 const worlds: SystemWorld[] = [];
 afterEach(async () => {
   for (const world of worlds.splice(0)) await world.cleanup();
 });
 
-async function world(): Promise<SystemWorld> {
-  const created = await systemWorld();
+async function world(options?: Parameters<typeof systemWorld>[0]): Promise<SystemWorld> {
+  const created = await systemWorld(options);
   worlds.push(created);
   return created;
 }
@@ -192,6 +192,46 @@ function planDigest(w: SystemWorld): string {
 }
 
 describe("run-validation-and-seal", () => {
+  test.each([undefined, "main"])(
+    "validates and seals against the same pinned target with override %s",
+    async (override) => {
+      const template = systemTemplate();
+      const seal = template.nodes.find((node) => node.id === "seal");
+      if (seal?.kind !== "system") throw new Error("Missing seal action");
+      if (override) seal.params = { targetBranch: override };
+      const w = await world({ template });
+      await w.storage.updateRepositoryConfig(w.run.projectId, {
+        defaultBranch: "dev",
+        prBaseBranch: "",
+      });
+      const targetBranch = override ?? "dev";
+      const executor = w.executor({
+        sleep: async () => {
+          await w.storage.updateRepositoryConfig(w.run.projectId, {
+            defaultBranch: "other",
+            prBaseBranch: "",
+          });
+        },
+      });
+      const output = outputsOf(await executor.start(w.context(w.activation("seal"))));
+      expect(
+        w.commands.calls.find((call) => call.command === "start_review_validation")?.args,
+      ).toMatchObject({ targetBranch });
+      expect(
+        w.commands.calls.find((call) => call.command === "generate_review_package")?.args,
+      ).toMatchObject({ targetBranch });
+      const artifact = await w.artifacts.requireVerified(w.run.id, output.package!);
+      expect(artifact.body).toMatchObject({ value: { targetBranch } });
+      outputsOf(
+        await w
+          .executor({ owner: "process-2" })
+          .recover(w.context(w.activation("seal", { attempt: 2 }))),
+      );
+      expect(w.commands.count("start_review_validation")).toBe(1);
+      expect(w.commands.packages).toHaveLength(1);
+    },
+  );
+
   test("validates, seals one package and stores it as a hash-verified reference artifact", async () => {
     const w = await world();
     const outputs = outputsOf(await w.executor().start(w.context(w.activation("seal"))));

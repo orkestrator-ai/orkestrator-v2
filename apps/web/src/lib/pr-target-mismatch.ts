@@ -7,14 +7,14 @@
  * red and ask before merging when this returns a mismatch.
  */
 import type { EnvironmentPrDestination } from "@/lib/backend/config-integrations";
-import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
+import {
+  defaultPrTargetBranch,
+  type PrTargetRepositorySettings,
+} from "@orkestrator/protocol/git-workflow-prompts";
 export { configuredPrTargetForPullRequest } from "@orkestrator/protocol/github-repository";
 
 /** The two settings fields the configured target is read from. */
-export type PrTargetRepositoryConfig = {
-  prBaseBranch?: string | null;
-  defaultBranch?: string | null;
-};
+export type PrTargetRepositoryConfig = PrTargetRepositorySettings;
 
 export type PrTargetMismatch = {
   /** The branch the pull request actually merges into. */
@@ -24,15 +24,17 @@ export type PrTargetMismatch = {
 };
 
 /**
- * The project's configured PR target uses the same fallback as PR creation. Blank values count as
- * unset, because settings persist a cleared base as `""`. `null` when the
- * project's settings are not known, so nothing is flagged on a guess.
+ * The project's configured PR target: its PR base branch, else its default
+ * branch, else `main`, the same fallback PR creation and conflict resolution
+ * use. Blank values count as unset, because settings persist a cleared base
+ * as `""`. `null` when the project's settings are not known, so nothing is
+ * flagged on a guess.
  */
 export function configuredPrTargetBranch(
   repository: PrTargetRepositoryConfig | null | undefined,
 ): string | null {
   if (!repository) return null;
-  return defaultPrTargetBranch(repository.prBaseBranch);
+  return defaultPrTargetBranch(repository);
 }
 
 /**

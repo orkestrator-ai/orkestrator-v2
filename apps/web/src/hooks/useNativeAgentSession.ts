@@ -50,6 +50,11 @@ import {
 import type { PermissionRuleChoiceInput } from "@/lib/backend/permission-rules";
 import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-accounting";
 import {
+  checkHistoryPageFence,
+  historyPageSession,
+  type HistoryPageFence,
+} from "@/lib/native-history-page-fence";
+import {
   NativeDiscoveryReadSchedule,
   nativeSessionReadDemand,
 } from "@/lib/native-session-read-policy";
@@ -801,8 +806,13 @@ export function useNativeAgentSession<TMessage = unknown>({
   const historyEvictionRef = useRef(
     projectionStore.getState().historyEvictions.get(sessionKey) ?? 0,
   );
+  /** The newest live-tail read; history pages never move it. */
   const refreshSequenceRef = useRef(0);
-  /** The newest history page request; an older one in flight is superseded. */
+  /**
+   * The newest history page request; an older one in flight is superseded.
+   * Separate from `refreshSequenceRef`, so tail reads and pages never cancel
+   * each other (`native-history-page-fence.ts`).
+   */
   const historyPageSequenceRef = useRef(0);
   const projectionOperationEpochRef = useRef(0);
   const refreshesInFlightRef = useRef(0);
@@ -3116,10 +3126,21 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (budget.messages <= 0 || budget.bytes <= 0) {
         return retireLoadEarlierControl();
       }
-      const pageSequence = ++historyPageSequenceRef.current;
-      // A read already in flight answers for the tail before this page; drop it
-      // and let the next poll read the tail afresh.
-      refreshSequenceRef.current += 1;
+      /*
+       * The page's own request identity. It deliberately leaves
+       * `refreshSequenceRef` alone: a tail read already in flight still
+       * answers for the current tail, and the page merges into whichever tail
+       * is current when it lands, so neither has to cancel the other.
+       */
+      const currentFence = (): HistoryPageFence => ({
+        sequence: historyPageSequenceRef.current,
+        operationEpoch: projectionOperationEpochRef.current,
+        session: historyPageSession(syncLiveProjectionRef.current),
+        historyEpoch: historyEpochRef.current,
+        cursor: historyCursorRef.current,
+      });
+      historyPageSequenceRef.current += 1;
+      const requestedFence = currentFence();
       const rowIdentity = (message: TMessage): unknown => (message as { id?: unknown }).id;
       // The held rows as this page found them. A poll that lands while the page
       // is in flight can revise one of them (`revisedMessages`); that copy is
@@ -3137,22 +3158,20 @@ export function useNativeAgentSession<TMessage = unknown>({
       /*
        * A mutation that landed while the page was in flight owns the transcript
        * now, and a later page supersedes this one. Installing it would merge
-       * history into a live tail it no longer describes.
+       * history into a live tail it no longer describes. Nor may it land on
+       * another session generation, or on a history a read found rewritten.
        *
        * A poll that landed meanwhile does not retire the page. The page is
        * merged below into whatever live tail is current, and a poll keeps the
        * paging state while the history it describes stands; when it does not
-       * (a rotated epoch, a collapse to the live tail), the poll replaced the
-       * cursor this page was fetched behind, and that is what fences it.
+       * (a rotated epoch, a new generation, a collapse to the live tail), the
+       * poll replaced the epoch, session or cursor this page was fetched
+       * against, and that is what fences it (`checkHistoryPageFence`).
        * Retiring the page on every poll lost each page slower than the
        * 500–1500 ms cadence, so on a busy host a click on "Load earlier
        * messages" did nothing and automatic paging stalled (flakes 0483, 1602).
        */
-      if (
-        pageSequence !== historyPageSequenceRef.current ||
-        requestedOperationEpoch !== projectionOperationEpochRef.current ||
-        historyCursorRef.current !== before
-      ) {
+      if (checkHistoryPageFence(requestedFence, currentFence()) !== "current") {
         return projectionRef.current;
       }
       const syncLive = syncLiveProjectionRef.current;

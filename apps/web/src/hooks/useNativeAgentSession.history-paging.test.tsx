@@ -5,8 +5,9 @@
  * history cursor, and `loadEarlierMessages` pages behind it through
  * `get_native_agent_message_page`. These cases cover the paging engine itself:
  * how much a page may ask for, a cursor chain, a rotated paging epoch, a page
- * a mutation supersedes, a page the client budget only partly accepts, and a
- * global history eviction. They moved here from the retired sync-v1-only
+ * a mutation or a new session generation supersedes, a page that outlives
+ * tail reads (in flight before it, or streaming past it), a page the client
+ * budget only partly accepts, and a global history eviction. They moved here from the retired sync-v1-only
  * suite; the joined-cursor mint and the part-level head merges are covered in
  * `useNativeAgentSession.progressive.test.tsx`.
  */
@@ -52,7 +53,9 @@ const identity: NativeAgentViewIdentity = {
 
 const realBackendSnapshot = { ...realBackend };
 
-let transcriptUpdates: Array<() => NativeAgentTranscriptUpdate<TestMessage>> = [];
+let transcriptUpdates: Array<
+  () => NativeAgentTranscriptUpdate<TestMessage> | Promise<NativeAgentTranscriptUpdate<TestMessage>>
+> = [];
 let transcriptCalls: Array<{ knownToken?: string; forceSnapshot?: boolean }> = [];
 let messagePages: Array<
   () => NativeAgentMessagePage<TestMessage> | Promise<NativeAgentMessagePage<TestMessage>>
@@ -439,6 +442,86 @@ describe("useNativeAgentSession history paging", () => {
       appCommandStore(nativeAgentProjectionStore).getState().projections.get(SESSION_KEY) ?? null,
     ).toBeNull();
     expect(syncCache()?.historyMessages ?? []).toEqual([]);
+  });
+
+  test("a tail read already in flight when the page is requested still lands", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const tailGate = Promise.withResolvers<void>();
+    transcriptUpdates = [
+      async () => {
+        await tailGate.promise;
+        return tail("transcript-2", [...liveTail, message("m5")]);
+      },
+    ];
+    let reading: Promise<unknown> = Promise.resolve();
+    act(() => {
+      reading = result.current.refresh({ manual: false });
+    });
+    await waitFor(() => expect(transcriptCalls.length).toBeGreaterThanOrEqual(2));
+
+    const release = await holdPage(result, [message("m1"), message("m2")]);
+    // The page request must not have cancelled the tail read before it.
+    await act(async () => {
+      tailGate.resolve();
+      await reading;
+    });
+    expect(ids(result.current.projection)).toEqual(["m3", "m4", "m5"]);
+
+    await release();
+
+    expect(ids(result.current.projection)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+  });
+
+  // The ticket's success check: a page held for longer than many poll
+  // intervals while the agent keeps streaming lands on one click, with each
+  // row once, in order, ahead of everything the stream added meanwhile.
+  test("a slow page lands on one click while the live tail streams past it", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const release = await holdPage(result, [message("m1"), message("m2")]);
+    // Six polls, each streaming one row in. The live window keeps two rows, so
+    // the rows it drops age out into the held history; each view names the
+    // provider's cursor before its own first row, which the tab ignores while
+    // it holds a cursor of its own further back.
+    const streamed = [...liveTail];
+    for (let index = 5; index <= 10; index += 1) {
+      streamed.push(message(`m${index}`));
+      const window = streamed.slice(-2);
+      transcriptUpdates = [() => tail(`transcript-${index}`, window)];
+      await act(async () => {
+        await result.current.refresh({ manual: false });
+      });
+    }
+    expect(ids(result.current.projection)).toEqual(streamed.map(({ id }) => id));
+
+    await release();
+
+    const shown = ids(result.current.projection)!;
+    expect(shown).toEqual(["m1", "m2", ...streamed.map(({ id }) => id)]);
+    expect(new Set(shown).size).toBe(shown.length);
+    expect(messagePageCalls.map(({ before }) => before)).toEqual(["cursor-before-m3"]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBeUndefined();
+  });
+
+  test("a page that lands on a new session generation is discarded", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const release = await holdPage(result, [message("m1"), message("m2")]);
+    // The runtime restarted. Its view names the same epoch and the same cursor
+    // string, so only the generation tells the page it was read elsewhere.
+    transcriptUpdates = [
+      () =>
+        tail("transcript-2", liveTail, {
+          identity: { ...identity, sourceGeneration: "generation-2" },
+        }),
+    ];
+    await act(async () => {
+      await result.current.refresh({ manual: false });
+    });
+    expect(result.current.projection?.generation).toBe("generation-2");
+
+    await release();
+
+    expect(ids(result.current.projection)).toEqual(["m3", "m4"]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
   });
 
   test("a row a poll revised while an overlapping page was in flight keeps its revision", async () => {

@@ -223,6 +223,7 @@ export async function withService(
     now?: NativeAgentServiceOptions["now"];
     delay?: NativeAgentServiceOptions["delay"];
     onActivityTransition?: NativeAgentServiceOptions["onActivityTransition"];
+    onConversationRetired?: NativeAgentServiceOptions["onConversationRetired"];
     onObservationInvalidation?: NativeAgentServiceOptions["onObservationInvalidation"];
     onAsyncQuestionAttention?: NativeAgentServiceOptions["onAsyncQuestionAttention"];
     toolDetailCacheMaxEntries?: number;
@@ -248,6 +249,7 @@ export async function withService(
     ...(setup.now ? { now: setup.now } : {}),
     ...(setup.delay ? { delay: setup.delay } : {}),
     ...(setup.onActivityTransition ? { onActivityTransition: setup.onActivityTransition } : {}),
+    ...(setup.onConversationRetired ? { onConversationRetired: setup.onConversationRetired } : {}),
     ...(setup.onObservationInvalidation
       ? { onObservationInvalidation: setup.onObservationInvalidation }
       : {}),

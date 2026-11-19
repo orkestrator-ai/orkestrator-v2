@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:f2fad562a58d1e850cbbeb8b60e8fb1b75b511f682b70fa666c327e3e99617f1",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "grantId": {
+          "type": "string"
+        }
+      },
+      "required": ["grantId"],
+      "type": "object"
+    }
+  }
+}

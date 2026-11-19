@@ -41,7 +41,11 @@ import {
   openCodeWorkflowResultTurnProblem,
 } from "./policy-rules.js";
 import type { OpenCode2McpServers } from "./mcp.js";
-import { OPENCODE2_ARTIFACTS_MCP_PREFIX, OPENCODE2_DESIGN_MCP_PREFIX } from "./permissions.js";
+import {
+  OPENCODE2_ARTIFACTS_MCP_PREFIX,
+  OPENCODE2_DESIGN_MCP_PREFIX,
+  OPENCODE2_TAB_MCP_PREFIX,
+} from "./permissions.js";
 import type { OpenCode2TurnGrants } from "./turn-grants.js";
 import { openCode2BackgroundReport, openCode2ShellReportMetadata } from "./transcript.js";
 import {
@@ -117,7 +121,7 @@ export class OpenCode2WorkflowTurns {
    * Register the connections this turn will use, and drop a previous turn's
    * design or artifact server this one does not have. Nothing is dispatched.
    */
-  async prepare(sessionId: string, options: TurnOptions): Promise<void> {
+  async prepare(sessionId: string, options: TurnOptions & { readOnly?: boolean }): Promise<void> {
     const problem = openCode2WorkflowTurnProblem(options);
     if (problem) throw new ProviderDispatchPreparationError(problem);
     const connection = options.agentMcp;
@@ -130,12 +134,17 @@ export class OpenCode2WorkflowTurns {
     // Design tools refuse workflow credentials, so only a tab-scoped connection carries them.
     const design = !broker && connection.design === true;
     const artifacts = connection.artifacts?.token;
+    const tabConnection = options.readOnly
+      ? connection.readOnlyToken && { ...connection, token: connection.readOnlyToken }
+      : connection;
     await Promise.all([
       broker
         ? this.mcp.ensureWorkflowBroker(connection)
-        : this.mcp.ensureTab(sessionId, connection),
-      design
-        ? this.mcp.ensureDesign(sessionId, connection)
+        : tabConnection
+          ? this.mcp.ensureTab(sessionId, tabConnection)
+          : this.mcp.removeSessionServer(OPENCODE2_TAB_MCP_PREFIX, sessionId),
+      design && tabConnection
+        ? this.mcp.ensureDesign(sessionId, tabConnection)
         : this.mcp.removeSessionServer(OPENCODE2_DESIGN_MCP_PREFIX, sessionId),
       artifacts
         ? this.mcp.ensureArtifacts(sessionId, connection.url, artifacts)
@@ -160,10 +169,13 @@ export class OpenCode2WorkflowTurns {
     notSent: () => void,
   ) {
     return this.grants.runExclusive(sessionId, async () => {
-      await this.begin(sessionId, options).catch((error: unknown) => {
+      try {
+        await this.prepare(sessionId, options);
+        await this.begin(sessionId, options);
+      } catch (error) {
         notSent();
         throw error;
-      });
+      }
       try {
         await send();
       } catch (error) {

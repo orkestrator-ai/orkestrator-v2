@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:a732e9e847c21d4d7b95a43ab617b7a478b229844a000ca59675bbbe6585aa66",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "hosts": {},
+        "lifetimeMs": {},
+        "maxUses": {},
+        "requestId": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "number"
+        },
+        "source": {}
+      },
+      "required": ["requestId", "revision", "source"],
+      "type": "object"
+    }
+  }
+}

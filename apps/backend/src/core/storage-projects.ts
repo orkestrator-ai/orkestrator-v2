@@ -892,6 +892,10 @@ export class ProjectsRepository {
   }
 
   async getEnvironment(environmentId: string): Promise<Environment | null> {
+    return this.readEnvironmentRow(environmentId);
+  }
+
+  readEnvironmentRow(environmentId: string): Environment | null {
     const stored = this.context.loadStoreRow(this.files.environmentsFile(), environmentId);
     if (!isRecord(stored) || stored.id !== environmentId) return null;
     const environment = stored as unknown as Environment;

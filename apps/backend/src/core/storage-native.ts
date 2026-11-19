@@ -451,7 +451,7 @@ export class NativeAgentSessionsRepository {
    * {@link readNativeAgentSessionUnderLease} for the sweeps that must pass over
    * an unreadable record rather than refuse it.
    */
-  private peekNativeAgentSession(key: string): PersistedNativeAgentSession | undefined {
+  peekNativeAgentSession(key: string): PersistedNativeAgentSession | undefined {
     const stored = this.context.loadStoreRow(this.files.nativeAgentSessionsFile(), key);
     return isPersistedNativeAgentSession(stored, key) ? stored : undefined;
   }

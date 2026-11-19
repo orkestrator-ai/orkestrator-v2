@@ -125,6 +125,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/review-validation-worker.*.test.ts",
     "src/core/root-changes.test.ts",
     "src/core/shell.test.ts",
+    // Credential runs against real shells, deadlines and process-group cancellation.
+    "src/core/credentials/service-runs.test.ts",
     "src/core/terminal-history-part-*.test.ts",
     "src/core/worktrees/snapshots-git.test.ts",
     "src/preview-publication.test.ts",

@@ -89,8 +89,15 @@ describe("resume closes the session it replaced", () => {
   for (const agent of BUILD_PIPELINE_AGENTS) {
     test(`${agent}: the new tab's empty session is closed once the resume is adopted`, async () => {
       const { provider, resumeSession, closeSession } = resumableStub(agent);
+      const onConversationRetired = mock(
+        (_environmentId: string, _key: string, _sessionId: string) => {},
+      );
       await withService(
-        { prefix: `orkestrator-resume-close-${agent}-`, provider: async () => provider },
+        {
+          prefix: `orkestrator-resume-close-${agent}-`,
+          provider: async () => provider,
+          onConversationRetired,
+        },
         async ({ service, storage }) => {
           const identity = tab(agent);
           const created = await service.ensureSession(identity);
@@ -102,6 +109,9 @@ describe("resume closes the session it replaced", () => {
 
           expect(resumeSession).toHaveBeenCalledTimes(1);
           expect(closeSession.mock.calls).toEqual([["provider-session"]]);
+          expect(onConversationRetired.mock.calls).toEqual([
+            ["env-1", identity.logicalSessionKey, "provider-session"],
+          ]);
           const key = nativeAgentSessionStorageKey("env-1", agent, identity.logicalSessionKey);
           expect((await storage.getNativeAgentSession(key))?.providerSessionId).toBe(
             "provider-resumed",

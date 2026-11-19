@@ -5,6 +5,12 @@ import {
   startOpenCode2Fixture,
   type OpenCode2Fixture,
 } from "../../../../../scripts/opencode2-steer-probe.js";
+import { AgentToolsServer } from "../agent-tools.js";
+import {
+  createCredentialHarness,
+  fakeSpawner,
+  TEST_SECRET,
+} from "../credentials/service-test-support.js";
 import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
 import { OpenCode2Client } from "./client.js";
 import { openCode2TabMcpServer } from "./permissions.js";
@@ -264,4 +270,75 @@ liveTest(
     expect(existsSync(written)).toBe(true);
   },
   120_000,
+);
+
+liveTest(
+  "read-only 2.x turns cannot spend existing credential command or HTTP grants",
+  async () => {
+    const spawn = fakeSpawner();
+    let httpRequests = 0;
+    const h = await createCredentialHarness({
+      spawnProcess: spawn.spawnProcess,
+      fetch: async () => {
+        httpRequests++;
+        return new Response("fixture");
+      },
+    });
+    const tools = new AgentToolsServer(h.storage, "127.0.0.1");
+    try {
+      await tools.start();
+      tools.setCredentialToolHost(h.service);
+      const p = provider!;
+      const connection = tools.connection(
+        h.caller.environmentId,
+        h.caller.projectId,
+        "host",
+        h.caller.tabId,
+      );
+      const session = await p.createSession("build", "Credential fixture", {
+        model: "fixture/fixture",
+      });
+      for (const [use, tool] of [
+        ["command", "run_with_credential"],
+        ["http", "http_request_with_credential"],
+      ] as const) {
+        const request = await h.service.requestAccess(h.caller, {
+          label: "Fixture",
+          purpose: "Exercise permission checks",
+          use,
+          bindingName: "TOKEN",
+          hosts: ["api.example.com"],
+        });
+        const { grant } = await h.service.approve({
+          requestId: request.id,
+          revision: request.revision,
+          source: { kind: "value", value: TEST_SECRET },
+        });
+        const toolName = `${openCode2TabMcpServer(session)}_${tool}`;
+        const args =
+          use === "command"
+            ? { grantId: grant.id, command: "true" }
+            : { grantId: grant.id, method: "POST", url: "https://api.example.com" };
+        const requestId = `read-only-credential-${use}`;
+        await p.send(session, `RUN_TOOL:${toolName} ${JSON.stringify(args)}`, {
+          requestId,
+          agentMcp: connection,
+          readOnly: true,
+        });
+        await settled(session, requestId);
+        expect(
+          fixture!.model.calls.findLast((call) => call.lastRole === "user")?.tools,
+        ).not.toContain(toolName);
+        expect(lastToolResult()).toContain("No tool named");
+      }
+      expect(h.service.overview().operations).toEqual([]);
+      expect(h.service.overview().grants.every((grant) => grant.uses === 0)).toBe(true);
+      expect(spawn.spawned).toEqual([]);
+      expect(httpRequests).toBe(0);
+    } finally {
+      await tools.stop();
+      await h.close();
+    }
+  },
+  45_000,
 );

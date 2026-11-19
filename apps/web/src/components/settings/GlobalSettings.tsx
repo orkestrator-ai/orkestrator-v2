@@ -474,7 +474,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     ) => {
       const previous = read(baseline);
       const next = read(global);
-      set((current) => (replace || settingValuesEqual(current, previous) ? next : current));
+      set((current) => (replace || !settingValuesEqual(previous, next) ? next : current));
     };
     syncedGlobalSignatureRef.current = signature;
     syncedGlobalRef.current = global;

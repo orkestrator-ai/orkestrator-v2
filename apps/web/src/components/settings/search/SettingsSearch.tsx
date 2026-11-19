@@ -387,7 +387,7 @@ export function SettingsSearchResults({
                         : { descriptor, rank: index },
                     );
                   }}
-                  className="group flex min-w-0 flex-[1_1_18rem] flex-col items-start gap-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="group flex min-w-0 flex-[1_1_18rem] flex-col items-start gap-1 rounded-md text-left outline-none focus-hairline focus-hairline-outset"
                 >
                   <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
                     {descriptor.label}

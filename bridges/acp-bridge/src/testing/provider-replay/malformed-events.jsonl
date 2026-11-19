@@ -1,0 +1,10 @@
+{"replay":1,"bridge":"acp","scenario":"malformed-events","source":"synthetic","provider":"grok","providerVersion":"1.0.88","description":"An unknown update kind, an update without a kind, an update for another session, an unknown vendor notification and an update with no params arrive mid-turn; the answer still renders and the turn completes."}
+{"action":"prompt","text":"Say hello"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"future_update_kind","payload":{"opaque":true}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"content":{"type":"text","text":"no kind"}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"some-other-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"not for this session"}}}}}
+{"frame":{"jsonrpc":"2.0","method":"_x.ai/future_notification","params":{"sessionId":"fake-session"}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update"}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-1","content":{"type":"text","text":"Hello."}}}}}
+{"frame":{"jsonrpc":"2.0","id":"$prompt","result":{"stopReason":"end_turn"}}}
+{"action":"settle"}

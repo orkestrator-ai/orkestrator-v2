@@ -1,0 +1,11 @@
+{"replay":1,"bridge":"pi","scenario":"malformed-events","source":"synthetic","provider":"@earendil-works/pi-coding-agent","providerVersion":"1.5.2","description":"Unknown event types, an untyped event, an unknown delta and a tool frame without a call id arrive mid-turn; the answer still renders and the turn completes."}
+{"action":"prompt","text":"Say hello"}
+{"frame":{"type":"future_session_event","detail":{"opaque":true}}}
+{"frame":{"detail":"no type at all"}}
+{"frame":{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"timestamp":1767225600000}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"future_delta","contentIndex":0,"delta":"?"}}}
+{"frame":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello."}}}
+{"frame":{"type":"tool_execution_start","toolName":"bash","args":{"command":"true"}}}
+{"frame":{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","content":[],"stopReason":"stop","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"timestamp":1767225601000}}}
+{"frame":{"type":"agent_settled","aborted":false}}
+{"action":"end"}

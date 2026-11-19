@@ -280,6 +280,8 @@ export interface NativeAgentProgressiveInput {
   viewVersion: 1;
   knownToken?: string;
   forceSnapshot?: boolean;
+  /** Confirm a rendered unread result using source work started after this request. */
+  freshSource?: boolean;
 }
 
 export interface NativeAgentTranscriptUpdateInput extends NativeAgentProgressiveInput {

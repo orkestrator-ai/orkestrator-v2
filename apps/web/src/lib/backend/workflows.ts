@@ -290,6 +290,7 @@ export function createWorkflowsApi(client: BackendClient) {
     liveWindow: NativeAgentLiveWindow;
     knownToken?: string;
     forceSnapshot?: boolean;
+    freshSource?: boolean;
     /** Ask for part-level patches; only when the backend advertised them. */
     patchVersion?: 2;
   }): Promise<NativeAgentTranscriptUpdate<TMessage>> {
@@ -313,6 +314,7 @@ export function createWorkflowsApi(client: BackendClient) {
     viewVersion: 1;
     knownToken?: string;
     forceSnapshot?: boolean;
+    freshSource?: boolean;
   }): Promise<NativeAgentSessionStateUpdate> {
     const response = await native().get_native_agent_session_state_update(input);
     if (!isNativeAgentSessionStateUpdate(response)) {
@@ -876,9 +878,19 @@ export function createWorkflowsApi(client: BackendClient) {
     );
   }
 
-  /** Resize a local terminal session */
-  async function resizeLocalTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
-    await terminalsDomain().local_terminal_resize({ sessionId, cols, rows });
+  /** Resize a local terminal session; `clientId` as for `resizeTerminal`. */
+  async function resizeLocalTerminal(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    clientId?: string,
+  ): Promise<void> {
+    await terminalsDomain().local_terminal_resize({
+      sessionId,
+      cols,
+      rows,
+      ...(clientId === undefined ? {} : { clientId }),
+    });
   }
 
   /** Close a local terminal session */

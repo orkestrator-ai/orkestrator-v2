@@ -19,6 +19,10 @@ import {
   trimOrphanedLowSurrogate,
 } from "./commands-terminal.js";
 import { TerminalHistory, type TerminalHistoryOptions } from "./terminal-history.js";
+import {
+  TerminalSizeOwnership,
+  type TerminalSizeOwnershipOptions,
+} from "./terminal-size-ownership.js";
 import type { ContainerTerminalShell } from "./container-terminal-shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -89,6 +93,8 @@ export type TerminalRuntimeOptions = {
    * host `docker exec` client.
    */
   closeContainerShell?: (shell: ContainerTerminalShell, signal: AbortSignal) => Promise<void>;
+  /** Size-ownership clock and lease; tests drive them. */
+  sizeOwnership?: TerminalSizeOwnershipOptions;
 };
 
 type TerminalBootstrapResult = {
@@ -113,6 +119,8 @@ type PendingTerminalBootstrap = {
 export class TerminalRuntime {
   /** Durable terminal history and restorable state (`terminal-history.ts`). */
   readonly history: TerminalHistory;
+  /** Which client sets each shared session's size (`terminal-size-ownership.ts`). */
+  readonly sizeOwnership: TerminalSizeOwnership;
   private readonly processes = new Map<string, PtyProcess>();
   private readonly sessionConfigs = new Map<string, TerminalSessionConfig>();
   private readonly pendingBootstraps = new Map<string, PendingTerminalBootstrap>();
@@ -151,6 +159,7 @@ export class TerminalRuntime {
     this.survivesTermination = options.survivesTermination;
     this.closeContainerShellOption = options.closeContainerShell;
     this.history = new TerminalHistory(options.history);
+    this.sizeOwnership = new TerminalSizeOwnership(options.sizeOwnership);
   }
 
   // Processes
@@ -612,6 +621,8 @@ export class TerminalRuntime {
     this.activityCompletions.delete(id);
     if (options.explicit) this.cancelTrackedCompletions(id);
     this.processes.delete(id);
+    // A replacement PTY starts unowned, whichever client sized the old one.
+    this.sizeOwnership.forget(id);
     this.closeContainerShell(id);
     for (const key of Array.from(this.accountHomes.keys())) {
       if (key.startsWith(`${id}:`)) this.accountHomes.delete(key);
@@ -961,6 +972,7 @@ export class TerminalRuntime {
     this.activityCompletionStates.clear();
     for (const controller of this.containerShellCloses) controller.abort();
     this.containerShellCloses.clear();
+    this.sizeOwnership.clear();
     this.history.shutdown();
   }
 }

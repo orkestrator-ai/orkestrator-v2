@@ -1,0 +1,6 @@
+{"replay":1,"bridge":"claude","scenario":"interruption","source":"synthetic","provider":"@anthropic-ai/claude-agent-sdk","providerVersion":"0.3.326","description":"The model streams part of an answer and starts a command; the user stops the turn before the command returns."}
+{"action":"prompt","text":"Run the full test suite"}
+{"frame":{"type":"system","subtype":"init","session_id":"$derived","claude_code_version":"2.1.326","model":"claude-sonnet-4-6","cwd":"/replay/workspace","tools":["Read","Bash","Agent"],"mcp_servers":[],"slash_commands":[],"permissionMode":"default","apiKeySource":"none","output_style":"default","uuid":"00000000-0000-4000-8000-0000000000b0"}}
+{"frame":{"type":"assistant","message":{"id":"msg-int-1","model":"claude-sonnet-4-6","role":"assistant","content":[{"type":"text","text":"Starting the suite now."},{"type":"tool_use","id":"toolu_bash_int","name":"Bash","input":{"command":"bun test","description":"Run tests"}}]},"parent_tool_use_id":null,"uuid":"00000000-0000-4000-8000-0000000000c1"}}
+{"action":"observe","label":"mid-turn"}
+{"action":"interrupt"}

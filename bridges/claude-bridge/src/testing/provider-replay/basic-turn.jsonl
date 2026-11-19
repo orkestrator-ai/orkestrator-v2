@@ -1,0 +1,10 @@
+{"replay":1,"bridge":"claude","scenario":"basic-turn","source":"synthetic","provider":"@anthropic-ai/claude-agent-sdk","providerVersion":"0.3.326","description":"Init, thinking, a Read tool call and its result, then a closing answer and a success result."}
+{"action":"prompt","text":"Summarise the README"}
+{"frame":{"type":"system","subtype":"init","session_id":"$derived","claude_code_version":"2.1.326","model":"claude-sonnet-4-6","cwd":"/replay/workspace","tools":["Read","Bash"],"mcp_servers":[],"slash_commands":[],"permissionMode":"default","apiKeySource":"none","output_style":"default","uuid":"00000000-0000-4000-8000-0000000000a1"}}
+{"frame":{"type":"assistant","message":{"id":"msg-replay-1","model":"claude-sonnet-4-6","role":"assistant","content":[{"type":"thinking","thinking":"Reading the README first.","signature":"sig"},{"type":"tool_use","id":"toolu_read_1","name":"Read","input":{"file_path":"/replay/workspace/README.md"}}]},"parent_tool_use_id":null,"uuid":"00000000-0000-4000-8000-0000000000a2"}}
+{"frame":{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_read_1","content":"# Replay fixture\nA small project."}]},"parent_tool_use_id":null,"uuid":"00000000-0000-4000-8000-0000000000a3"}}
+{"action":"observe","label":"after-tool-result"}
+{"frame":{"type":"assistant","message":{"id":"msg-replay-2","model":"claude-sonnet-4-6","role":"assistant","content":[{"type":"text","text":"The README describes a small replay fixture project."}]},"parent_tool_use_id":null,"uuid":"00000000-0000-4000-8000-0000000000a4"}}
+{"frame":{"type":"result","subtype":"success","duration_ms":12,"duration_api_ms":10,"is_error":false,"num_turns":2,"result":"The README describes a small replay fixture project.","total_cost_usd":0,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"modelUsage":{},"permission_denials":[],"uuid":"00000000-0000-4000-8000-0000000000a5"}}
+{"action":"settle"}
+{"action":"end"}

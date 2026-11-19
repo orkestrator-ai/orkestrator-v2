@@ -1,0 +1,8 @@
+{"replay":1,"bridge":"acp","scenario":"interruption","source":"synthetic","provider":"grok","providerVersion":"1.0.88","description":"Prose streams and a long command starts; the user cancels, the bridge sends session/cancel and Grok returns cancelled."}
+{"action":"prompt","text":"Run the full test suite"}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"resp-1","content":{"type":"text","text":"Starting the suite."}}}}}
+{"frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"tool_call","toolCallId":"call-test","title":"bun test","kind":"execute","status":"pending","rawInput":{"command":"bun test"}}}}}
+{"action":"observe","label":"mid-turn"}
+{"action":"interrupt"}
+{"frame":{"jsonrpc":"2.0","id":"$prompt","result":{"stopReason":"cancelled"}}}
+{"action":"settle"}

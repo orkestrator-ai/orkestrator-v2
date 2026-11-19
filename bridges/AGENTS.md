@@ -80,6 +80,30 @@ calls them (`apps/backend/src/core/http-bridge/provider*.ts`,
   ways out — retry under the same idempotency key, or discard — rather than the
   storage-level refusal, which names an invariant the user cannot act on.
 
+## Recorded provider traffic
+
+The Claude, Cursor, Pi and ACP bridges replay a corpus of provider frames
+through their production ingestion paths
+([`tests/conformance/provider-replay/`](../tests/conformance/provider-replay/README.md));
+Codex replays app-server recordings
+(`codex-bridge/src/app-server/notification-replay.test.ts`).
+
+- **A changed expectation is a finding, not a refresh.** Regenerate one
+  (`ORKESTRATOR_PROVIDER_REPLAY_UPDATE=1`) only once the change in rows,
+  pending interactions, completion or drift is understood and intended.
+- **A scenario a bridge cannot produce is declared, not omitted.** Mark it
+  `supported: false` with the reason in `capabilities.ts`; the runner refuses
+  a fixture for it.
+- **The recorder stays off the provider's callback.** Each bridge's hook only
+  queues a frame (`@orkestrator/protocol/node/provider-replay-recorder`); it
+  needs `ORKESTRATOR_PROVIDER_RECORD_DIR` and
+  `ORKESTRATOR_PROVIDER_RECORD_CONFIRM=1`. Captures can hold prompts and
+  file contents. Scrub with `scripts/scrub-codex-recording.ts` and review the
+  retained fields before committing.
+- **ACP replay restricts fixture-supplied client requests.** Permission
+  prompts exercise the approval path. File and terminal requests are refused
+  before the relay writes them to stdout.
+
 ## The bridge token is not proof of the user's intent
 
 The agent a bridge runs shares its uid, so anything the bridge keeps in a file,

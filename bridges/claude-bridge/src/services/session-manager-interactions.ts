@@ -244,6 +244,11 @@ async function readClaudeSdkManifest(): Promise<ClaudeSdkManifest> {
   ) as ClaudeSdkManifest;
 }
 
+/** The installed Agent SDK's version, without probing the CLI. */
+export async function claudeSdkVersion(): Promise<string | undefined> {
+  return (await readClaudeSdkManifest()).version;
+}
+
 export async function getClaudeRuntimeVersions(
   probeTimeoutMs = CLAUDE_CLI_VERSION_PROBE_TIMEOUT_MS,
 ): Promise<{

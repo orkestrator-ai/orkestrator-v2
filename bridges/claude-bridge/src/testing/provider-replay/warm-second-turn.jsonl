@@ -1,0 +1,11 @@
+{"replay":1,"bridge":"claude","scenario":"basic-turn","source":"synthetic","provider":"@anthropic-ai/claude-agent-sdk","providerVersion":"0.3.326","description":"Two turns deliver their prompts to the same open Claude SDK query."}
+{"action":"prompt","text":"Summarise the README"}
+{"frame":{"type":"system","subtype":"init","session_id":"$derived","claude_code_version":"2.1.326","model":"claude-sonnet-4-6","cwd":"/replay/workspace","tools":["Read","Bash"],"mcp_servers":[],"slash_commands":[],"permissionMode":"default","apiKeySource":"none","output_style":"default","uuid":"00000000-0000-4000-8000-0000000000a1"}}
+{"frame":{"type":"assistant","message":{"id":"msg-replay-2","model":"claude-sonnet-4-6","role":"assistant","content":[{"type":"text","text":"The README describes a small replay fixture project."}]},"parent_tool_use_id":null,"uuid":"00000000-0000-4000-8000-0000000000a4"}}
+{"frame":{"type":"result","subtype":"success","duration_ms":12,"duration_api_ms":10,"is_error":false,"num_turns":2,"result":"The README describes a small replay fixture project.","total_cost_usd":0,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"modelUsage":{},"permission_denials":[],"uuid":"00000000-0000-4000-8000-0000000000a5"}}
+{"action":"settle"}
+{"action":"prompt","text":"Confirm the summary","reuseQuery":true}
+{"frame":{"type":"assistant","message":{"id":"msg-replay-warm","model":"claude-sonnet-4-6","role":"assistant","content":[{"type":"text","text":"Summary confirmed."}]},"parent_tool_use_id":null,"uuid":"00000000-0000-4000-8000-0000000000e3"}}
+{"frame":{"type":"result","subtype":"success","duration_ms":12,"duration_api_ms":10,"is_error":false,"num_turns":2,"result":"Summary confirmed.","total_cost_usd":0,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"modelUsage":{},"permission_denials":[],"uuid":"00000000-0000-4000-8000-0000000000e4"}}
+{"action":"settle"}
+{"action":"end"}

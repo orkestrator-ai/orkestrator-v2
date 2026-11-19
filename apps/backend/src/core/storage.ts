@@ -612,12 +612,14 @@ export class StorageService {
       "agent_finished" | "agent_failed" | "agent_waiting"
     > = "agent_finished",
     completionKey?: string,
+    sessionKey?: string,
   ): Promise<Environment> {
     return this.repos.projects.recordEnvironmentSessionCompletion(
       environmentId,
       occurredAt,
       reason,
       completionKey,
+      sessionKey,
     );
   }
 
@@ -626,12 +628,14 @@ export class StorageService {
     attentionKeys: readonly string[],
     occurredAt: string,
     reason?: "agent_question" | "setup_approval",
+    sessionKey?: string,
   ): Promise<{ environment: Environment; recorded: boolean }> {
     return this.repos.projects.recordEnvironmentAgentAttention(
       environmentId,
       attentionKeys,
       occurredAt,
       reason,
+      sessionKey,
     );
   }
 
@@ -639,8 +643,14 @@ export class StorageService {
     environmentId: string,
     unread: boolean,
     expectedLastActivityAt?: string | null,
+    sessionKeys?: readonly string[],
   ): Promise<Environment> {
-    return this.repos.projects.setEnvironmentUnread(environmentId, unread, expectedLastActivityAt);
+    return this.repos.projects.setEnvironmentUnread(
+      environmentId,
+      unread,
+      expectedLastActivityAt,
+      sessionKeys,
+    );
   }
 
   reorderEnvironments(projectId: string, environmentIds: string[]): Promise<Environment[]> {

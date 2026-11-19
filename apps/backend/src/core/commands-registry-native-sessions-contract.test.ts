@@ -109,7 +109,7 @@ test("a native-sessions version outside the range is refused", async () => {
     (async () =>
       command({ sessionId: "s1" }, {} as CommandContext, {
         domain: "native-sessions",
-        version: 5,
+        version: 6,
       }))(),
   ).rejects.toMatchObject({ code: "unsupported-version" });
 });

@@ -39,6 +39,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { getNativeAgentLiveUpdate } from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
+import type { PromptQueueEditFinish } from "@/lib/prompt-queue-edit";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { errorCode, ipcErrorText } from "@orkestrator/protocol/contract/ipc-error";
 import {
@@ -3076,6 +3077,49 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [scope, environmentId, queueKey, refresh],
   );
+  // In-place edits (`@/lib/prompt-queue-edit`): the backend holds the item
+  // back from delivery while the lease stands.
+  const beginQueuedEdit = useCallback(
+    async (messageId: string, options: { takeOver?: boolean } = {}) => {
+      try {
+        return await backendForScope(scope).beginPromptQueueMessageEdit({
+          queueKey,
+          environmentId,
+          messageId,
+          ...(options.takeOver ? { takeOver: true } : {}),
+        });
+      } finally {
+        await refresh().catch(() => undefined);
+      }
+    },
+    [scope, environmentId, queueKey, refresh],
+  );
+  const renewQueuedEdit = useCallback(
+    (messageId: string, leaseId: string) =>
+      backendForScope(scope).renewPromptQueueMessageEdit({
+        queueKey,
+        environmentId,
+        messageId,
+        leaseId,
+      }),
+    [scope, environmentId, queueKey],
+  );
+  const finishQueuedEdit = useCallback(
+    async (messageId: string, leaseId: string, finish: PromptQueueEditFinish) => {
+      try {
+        return await backendForScope(scope).finishPromptQueueMessageEdit({
+          queueKey,
+          environmentId,
+          messageId,
+          leaseId,
+          ...finish,
+        });
+      } finally {
+        await refresh().catch(() => undefined);
+      }
+    },
+    [scope, environmentId, queueKey, refresh],
+  );
   const retryQueue = useCallback(async () => {
     await backendForScope(scope).retryPromptQueueDispatch(queueKey);
     return refresh();
@@ -3596,6 +3640,9 @@ export function useNativeAgentSession<TMessage = unknown>({
     removeQueued,
     steerQueued,
     moveQueued,
+    beginQueuedEdit,
+    renewQueuedEdit,
+    finishQueuedEdit,
     retryQueue,
     retryRecoverableDispatch,
     discardRecoverableDispatch,

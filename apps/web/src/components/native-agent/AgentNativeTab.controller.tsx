@@ -278,6 +278,8 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { agentSettingsCanSignIn, agentTerminalSignInCommand } from "@/lib/agent-sign-in";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { ThreadChangesHeader } from "@/components/changes/ThreadChangesHeader";
+import { queuedPromptEditNote } from "@/lib/prompt-queue-edit";
+import { useNativeQueuedPromptEditing } from "./useNativeQueuedPromptEditing";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeLoginRefusalNotice } from "@/lib/claude-auth";
 import {
@@ -579,6 +581,9 @@ export function SharedNativeAgentController({
     removeQueued,
     steerQueued,
     moveQueued,
+    beginQueuedEdit,
+    renewQueuedEdit,
+    finishQueuedEdit,
     retryQueue,
     retryRecoverableDispatch,
     discardRecoverableDispatch,
@@ -3657,6 +3662,38 @@ export function SharedNativeAgentController({
     Boolean(requestedResumeSessionId) ||
     (hasConnectedSession &&
       (messages.length > 0 || authenticationRequired || allInteractions.length > 0));
+  // Edits queued prompts in place, holding each where it is; `editQueuedPrompt`
+  // (the composer edit) is the fallback for slash commands and for nodes that
+  // predate in-place edits. Called before the setup overlay's early return.
+  const queuedPromptEditing = useNativeQueuedPromptEditing({
+    queueIdentity: `${composeScope.nodeId}\u0000${sessionKey}`,
+    messages: queuedMessages,
+    editing: projection?.queue?.editing,
+    begin: beginQueuedEdit,
+    renew: renewQueuedEdit,
+    finish: finishQueuedEdit,
+    filePicker: canSearchFiles
+      ? {
+          search: fileSearch,
+          context: (messageId) => {
+            const queued = queuedMessages.find((message) => message.id === messageId);
+            const modelId = (queued as { model?: unknown } | undefined)?.model;
+            const model =
+              typeof modelId === "string"
+                ? resolvedComposer.models.find((candidate) => candidate.id === modelId)
+                : selectedModel;
+            return {
+              containerId: data.containerId,
+              worktreePath: envWorktreePath ?? coordinatorWorkspacePath,
+              allowFiles: attachmentCapabilities.files,
+              allowImages: attachmentCapabilities.images,
+              modelSupportsImages: model?.supportsImageInput,
+              modelLabel: model?.label,
+            };
+          },
+        }
+      : undefined,
+  });
   useRenderedUnreadResult(
     sessionKey,
     !setupPending &&
@@ -4140,7 +4177,8 @@ export function SharedNativeAgentController({
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   };
-  const canSteerQueuedPrompt = (message: { id: string }) => queuedPromptSteerable(message);
+  const canSteerQueuedPrompt = (message: { id: string }) =>
+    queuedPromptEditing.editState(message.id) === undefined && queuedPromptSteerable(message);
   // Why a row offers no Steer while the turn runs. Annotation requests and
   // question answers have their own cards, so they get no note here.
   const queuedRowSteerNote = (message: { id: string }) => {
@@ -4650,33 +4688,47 @@ export function SharedNativeAgentController({
             await submit(ADDRESS_ALL_REVIEW_PROMPT, undefined, false, "build");
           }}
           queue={
-            projection?.queue
+            projection?.queue || queuedPromptEditing.editor
               ? {
                   // A blocked goal turn has no row of its own, but its error and
                   // Retry must still show.
-                  length: queuedMessages.length || (projection.queue.blocked ? 1 : 0),
-                  error: projection.queue.blocked
+                  length: queuedMessages.length || (projection?.queue?.blocked ? 1 : 0),
+                  error: projection?.queue?.blocked
                     ? { message: projection.queue.blocked.error }
                     : null,
                   onOpen: () => setQueueDialogOpen(true),
+                  editor: queuedPromptEditing.editor,
                   items: queuedMessages.map((message) => {
                     // Annotation requests are frozen briefs, and removing one
                     // cancels it, so both stay behind the dialog.
                     const inline = !webAnnotationQueueOrigin(message);
-                    const note = queuedRowSteerNote(message);
+                    const editState = queuedPromptEditing.editState(message.id);
+                    const note = editState
+                      ? queuedPromptEditNote(editState)
+                      : queuedRowSteerNote(message);
                     const attachments = queuedPromptAttachments(message);
                     return {
                       id: message.id,
                       text: message.text,
                       ...(attachments.length > 0 ? { attachments } : {}),
                       ...(note ? { note } : {}),
+                      ...(editState ? { editState } : {}),
                       onSteer:
                         steerQueuedPrompt && canSteerQueuedPrompt(message)
                           ? () => runInlineQueueAction(() => steerQueuedPrompt(message))
                           : undefined,
-                      onEdit: inline
-                        ? () => runInlineQueueAction(() => editQueuedPrompt(message))
-                        : undefined,
+                      onEdit:
+                        inline && editState !== "local"
+                          ? () =>
+                              runInlineQueueAction(() =>
+                                queuedPromptEditing.edit(message, editQueuedPrompt),
+                              )
+                          : undefined,
+                      onRelease:
+                        editState === "review"
+                          ? () =>
+                              runInlineQueueAction(() => queuedPromptEditing.release(message.id))
+                          : undefined,
                       onRemove: inline
                         ? () => runInlineQueueAction(() => removeQueued(message.id))
                         : undefined,
@@ -4759,7 +4811,11 @@ export function SharedNativeAgentController({
                   onOpenWebAnnotationRequest={(requestId) =>
                     openWebAnnotationRequest(data.environmentId, requestId, composeScope)
                   }
-                  onEdit={editQueuedPrompt}
+                  onEdit={async (message) => {
+                    await queuedPromptEditing.edit(message, editQueuedPrompt);
+                    // The editor (or the composer) is below the dialog.
+                    setQueueDialogOpen(false);
+                  }}
                   onMove={async (fromIndex, toIndex) => {
                     const message = queuedMessages[fromIndex];
                     if (!message || fromIndex === toIndex) return;
@@ -4803,7 +4859,16 @@ export function SharedNativeAgentController({
                             {attachments} attachment{attachments === 1 ? "" : "s"}
                           </span>
                         ) : null}
-                        {steerNote ? <span>{steerNote}</span> : null}
+                        {(() => {
+                          const editState = queuedPromptEditing.editState(message.id);
+                          return editState ? (
+                            <span data-testid="queued-prompt-edit-state">
+                              {queuedPromptEditNote(editState)}
+                            </span>
+                          ) : steerNote ? (
+                            <span>{steerNote}</span>
+                          ) : null;
+                        })()}
                       </>
                     );
                   }}

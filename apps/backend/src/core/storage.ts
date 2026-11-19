@@ -12,6 +12,7 @@ export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 export type { EnvironmentIsolationStorage } from "./storage-environment-isolation.js";
 export type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
+export type { PromptQueueEditsStorage } from "./storage-prompt-queue-edits.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
 export type { LinearStorage } from "./storage-linear.js";
@@ -51,6 +52,7 @@ import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { EnvironmentIsolationStorage } from "./storage-environment-isolation.js";
 import type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
+import type { PromptQueueEditsStorage } from "./storage-prompt-queue-edits.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { RemovedProjectSweepResult } from "./storage-kanban-removed-projects.js";
 import type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
@@ -191,6 +193,8 @@ export class StorageService {
   readonly watchedPullRequests: WatchedPullRequestsStorage;
   /** This machine's load history (`machine-load.ts`, #2287). */
   readonly machineLoadHistory: MachineLoadHistoryStorage;
+  /** In-place edits of queued prompts (`@orkestrator/protocol/prompt-queue-edit`). */
+  readonly promptQueueEdits: PromptQueueEditsStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -216,6 +220,7 @@ export class StorageService {
     this.environmentIsolation = this.repos.environmentIsolation;
     this.watchedPullRequests = this.repos.watchedPullRequests;
     this.machineLoadHistory = this.repos.machineLoadHistory;
+    this.promptQueueEdits = this.repos.promptQueueEdits;
   }
 
   async init(): Promise<void> {

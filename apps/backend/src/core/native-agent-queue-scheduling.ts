@@ -2,6 +2,7 @@ import {
   BUILD_PIPELINE_AGENTS,
   type BuildPipelineAgent,
 } from "@orkestrator/protocol/build-pipeline";
+import { promptQueueHeadHeldByEdit } from "@orkestrator/protocol/prompt-queue-edit";
 import type { PersistedPromptQueue } from "./models.js";
 import { RecurringScheduler, type RecurringTimerFactory } from "./recurring-scheduler.js";
 import {
@@ -45,6 +46,9 @@ export function nativeQueueObligation(
   if (queue.inFlight?.steer) return "in-flight";
   if (queue.dispatchError !== undefined) return null;
   if (queue.inFlight !== undefined) return "in-flight";
+  // A head being edited waits for its edit; finishing it is a queue change,
+  // which notes the queue again.
+  if (promptQueueHeadHeldByEdit(queue)) return null;
   return queue.messages.length > 0 ? "pending" : null;
 }
 

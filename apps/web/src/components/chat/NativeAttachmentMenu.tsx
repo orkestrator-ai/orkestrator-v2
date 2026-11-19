@@ -114,7 +114,7 @@ export function createWorkspaceAttachment(
   };
 }
 
-function WorkspaceFilePickerDialog({
+export function WorkspaceFilePickerDialog({
   open,
   onOpenChange,
   fileSearch,

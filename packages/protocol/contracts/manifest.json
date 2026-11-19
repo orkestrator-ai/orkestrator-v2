@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1018,
-    "defined": 1018,
+    "commands": 1021,
+    "defined": 1021,
     "untyped": 0,
     "events": 45
   },
@@ -621,6 +621,15 @@
       "critical": ["sha256"],
       "argsDigest": "sha256:11835cd316f3ea624625e53d1b8175d96971145338cc745cdb4bd4770a6e45b0",
       "resultDigest": "sha256:4f21483d94b47a91068f71175ad9a31dcff9364db25fbc8f533b5a35fe80ebbc"
+    },
+    "begin_prompt_queue_message_edit": {
+      "domain": "native-sessions",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:19a96692b531a1eb94fcd36aaa40f9dd07cb1923f60e1f9636ef64c8ed6a3dbf",
+      "resultDigest": "sha256:26c5177eb40adcddf7ea1cc4e43308a642800b31db547a4028d6c895129f24a0"
     },
     "bootstrap_terminal_session": {
       "domain": "terminals",
@@ -2572,7 +2581,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:9ccf26517c3ab46fd3784e51fd1b6170076c8b23942c340644d3714d3fbbb565",
-      "resultDigest": "sha256:7b61930e226d9bfabbeacdeb41147f4753cf3ef23cad56c2e55f28348dc39456"
+      "resultDigest": "sha256:6ef2a5931a4c034ce559d32ee6d75e3252e5306b808c933e93d265709a683dba"
     },
     "ensure_environment_setup": {
       "domain": "environments",
@@ -2663,6 +2672,15 @@
       "critical": [],
       "argsDigest": "sha256:e3d66a8764ac8af89131b9994ea47cd89d8267d66a31a9fb64bc8f3abe2d7d09",
       "resultDigest": "sha256:c78bb38b4c6f516ac16a6b175019a47357d2d95af283d557fcf233844f5e4de9"
+    },
+    "finish_prompt_queue_message_edit": {
+      "domain": "native-sessions",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["attachments", "text"],
+      "argsDigest": "sha256:7f5d44e8d683ed55d41610922eceac8f324fbb6e5d57ea15f9fdd22d52077cc9",
+      "resultDigest": "sha256:94dc05e5163b2e4abe05f0286c18104999711d48e614ee21ea20c08922b33107"
     },
     "forget_node": {
       "domain": "nodes",
@@ -4354,7 +4372,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:c70ee0a2c1492907562dc615d9b55359b88a0961e7bdd96ebf93f46ea8ed5fc0",
-      "resultDigest": "sha256:3f9703467a8af0e2fd944b862573e22c62189219e2fde3a4141c3dabfb023dd8"
+      "resultDigest": "sha256:3976352feee717732405fa31960dbae93ad03b24068b31c5255329d1fb9588e3"
     },
     "get_rebuild_preview": {
       "domain": "environments",
@@ -5514,7 +5532,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:0614f0bac598b8660383a0add6be976ec11c6b8f3f2287fd386e1e6d5afcd91f",
-      "resultDigest": "sha256:6b0f9a955a4fcbf73c177a4a5ba4b065dc476049cfb7505be2473f8f7836384a"
+      "resultDigest": "sha256:e33f01c8e3134723c59c69ad45f7f541a2dc3177149a8fa8b8bf0d9cb73b54f1"
     },
     "list_recovery_copies": {
       "domain": "environments",
@@ -5675,7 +5693,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:2b2e20537ce5e5e3ac233142665934b5336bbb01f85df8e9a6cc3d18bb504a37",
-      "resultDigest": "sha256:3f9703467a8af0e2fd944b862573e22c62189219e2fde3a4141c3dabfb023dd8"
+      "resultDigest": "sha256:3976352feee717732405fa31960dbae93ad03b24068b31c5255329d1fb9588e3"
     },
     "mutate_mcp_definition": {
       "domain": "mcp",
@@ -6584,7 +6602,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:57e5c76fcdf3a0d8d383473541f83ee98b267cc9fb5a5a0546c5ad4b16d74ed9",
-      "resultDigest": "sha256:76d0c432e13c66f3c041c67d9680fb449535103243f9dfbd053aa727f7f26c9d"
+      "resultDigest": "sha256:d71e4d131d7f14ab7f171e114cfb141d497839e0c61b5cbd723eb07513c3da3f"
     },
     "remove_queued_build_pipeline_message": {
       "domain": "pipelines",
@@ -6675,6 +6693,15 @@
       "critical": [],
       "argsDigest": "sha256:336ee5561eaa88168790a65c5faefce3d14d1e61217e345b67f678970225268b",
       "resultDigest": "sha256:b68c125e841dad539df76d272844975f401ac38082f01795f0f724fb92375eae"
+    },
+    "renew_prompt_queue_message_edit": {
+      "domain": "native-sessions",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:44b1125f8b04c794b9892a29fbb4f2ae3dff848dfc1114eee9bbd1fded1ea88f",
+      "resultDigest": "sha256:2ce652719ad723d8b59c5b8d13f76fae7bef7f40ddc9d0a3d9b9f1947f523aca"
     },
     "reorder_environments": {
       "domain": "environments",
@@ -7061,7 +7088,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:c70ee0a2c1492907562dc615d9b55359b88a0961e7bdd96ebf93f46ea8ed5fc0",
-      "resultDigest": "sha256:3f9703467a8af0e2fd944b862573e22c62189219e2fde3a4141c3dabfb023dd8"
+      "resultDigest": "sha256:3976352feee717732405fa31960dbae93ad03b24068b31c5255329d1fb9588e3"
     },
     "return_node_outbox_mail": {
       "domain": "node-mail",

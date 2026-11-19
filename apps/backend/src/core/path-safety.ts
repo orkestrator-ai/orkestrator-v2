@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { dlopen, FFIType, ptr, read, type Pointer } from "bun:ffi";
+import { FILE_WRITE_CONFLICT_MESSAGE } from "@orkestrator/protocol/file-write-precondition";
 import { CommandFailedError, runCommandBuffer } from "./command-capture.js";
 import { APP_SLUG } from "./constants.js";
 import { assertNoNestedRepositories } from "./workspace-removal-preflight.js";
@@ -528,6 +529,22 @@ type ConfinedWriteOptions = {
   maxBytes?: number;
   /** Final mode applied to the still-open temporary inode before publication. */
   fileMode?: number;
+  /**
+   * Replacing an existing regular file keeps its permission bits instead of
+   * `fileMode` (an editor save must not drop a script's execute bit or narrow
+   * a shared file to owner-only). `fileMode` still applies to a new file.
+   */
+  preserveExistingMode?: boolean;
+  /**
+   * Publish only while the destination is a regular file whose bytes hash to
+   * this lower-case hex SHA-256. Checked after the payload is fully written to
+   * the temporary file and immediately before the rename; a mismatch, a
+   * missing file or a non-file fails with `FILE_WRITE_CONFLICT_MESSAGE` and
+   * leaves the destination untouched. This is check-then-rename, not an
+   * atomic compare-and-swap: a write by another process that lands between
+   * the check and the rename is still replaced.
+   */
+  expectedSha256?: string;
   /** Test-only synchronization point after the destination directory is pinned. */
   testHooks?: ConfinedPathTestHooks;
 };
@@ -538,7 +555,7 @@ type ConfinedWriteOptions = {
 // pathname lookup can reach a replacement directory outside the worktree.
 const PINNED_CWD_WRITE_HELPER = String.raw`
 const fs = require("node:fs"), path = require("node:path");
-const [targetPath, mode, expectedDev, expectedIno, expectedBytes, fileMode, ancestorMode, readyToken] = process.argv.slice(1);
+const [targetPath, mode, expectedDev, expectedIno, expectedBytes, fileMode, ancestorMode, modePolicy, expectedSha256, readyToken] = process.argv.slice(1);
 const invalidAncestor = () => { process.stderr.write("symlink or non-directory ancestor"); process.exit(73); };
 const cwd = fs.statSync(".");
 if (String(cwd.dev) !== expectedDev || String(cwd.ino) !== expectedIno) invalidAncestor();
@@ -598,8 +615,37 @@ process.stdin.on("end", () => {
     fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
     identity = fs.fstatSync(fd);
     fs.writeFileSync(fd, Buffer.concat(chunks));
-    fs.fchmodSync(fd, Number(fileMode));
     fs.fsyncSync(fd);
+    let finalMode = Number(fileMode);
+    // The precondition is checked as late as possible: the payload is already
+    // on disk beside the target, so only the rename remains after it.
+    if (expectedSha256 !== "-" || modePolicy === "existing") {
+      // Followed, like the editor read: a worktree symlink opens its target.
+      // Only a digest comparison leaves this process, never the bytes.
+      let current;
+      try { current = fs.statSync(target); } catch (error) { if (!error || (error.code !== "ENOENT" && error.code !== "ELOOP")) throw error; }
+      if (expectedSha256 !== "-") {
+        let matches = false;
+        if (current && current.isFile()) {
+          let existingFd;
+          try {
+            existingFd = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+            const opened = fs.fstatSync(existingFd);
+            if (opened.dev === current.dev && opened.ino === current.ino) {
+              // Hash in chunks: the current file may be far larger than the save.
+              const hash = require("node:crypto").createHash("sha256");
+              const buffer = Buffer.allocUnsafe(65536);
+              let read;
+              while ((read = fs.readSync(existingFd, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, read));
+              matches = hash.digest("hex") === expectedSha256;
+            }
+          } catch {} finally { if (existingFd !== undefined) try { fs.closeSync(existingFd); } catch {} }
+        }
+        if (!matches) { const error = new Error("file changed"); error.code = "FILE_WRITE_CONFLICT"; throw error; }
+      }
+      if (modePolicy === "existing" && current && current.isFile()) finalMode = current.mode & 0o777;
+    }
+    fs.fchmodSync(fd, finalMode);
     fs.closeSync(fd);
     fd = undefined;
     if (mode === "exclusive") {
@@ -626,7 +672,7 @@ process.stdin.on("end", () => {
     } catch {}
     const code = error && typeof error.code === "string" ? error.code : "WRITE_FAILED";
     process.stderr.write(code);
-    process.exit(76);
+    process.exit(code === "FILE_WRITE_CONFLICT" ? 78 : 76);
   }
 });
 `;
@@ -653,7 +699,12 @@ fs.rmSync(target, { recursive: true, force: true });
 const MAX_HELPER_DIAGNOSTIC_CHARS = 1_024;
 const READY_TOKEN = "ORK_WRITE_READY";
 
+/** Exit status of the write helper when `expectedSha256` no longer matches. */
+const CONFINED_WRITE_CONFLICT_EXIT = 78;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
 function confinedWriteFailure(stderr: string, exitCode: number | null): Error {
+  if (exitCode === CONFINED_WRITE_CONFLICT_EXIT) return new Error(FILE_WRITE_CONFLICT_MESSAGE);
   const diagnostic = stderr.slice(0, MAX_HELPER_DIAGNOSTIC_CHARS);
   return new Error(`Confined file write failed (${diagnostic || `exit ${exitCode}`})`);
 }
@@ -714,6 +765,7 @@ async function writeFromPinnedRoot(
   exclusive: boolean,
   fileMode: number,
   createAncestors: boolean,
+  publish: { preserveExistingMode: boolean; expectedSha256: string | undefined },
   testHooks: ConfinedPathTestHooks = {},
 ): Promise<void> {
   const helperArgs = [
@@ -726,6 +778,8 @@ async function writeFromPinnedRoot(
     String(content.byteLength),
     String(fileMode),
     createAncestors ? "create" : "existing",
+    publish.preserveExistingMode ? "existing" : "fixed",
+    publish.expectedSha256 ?? "-",
   ];
   if (testHooks.afterDirectoriesOpened) {
     await writeThroughHandshake(rootPath, helperArgs, content, testHooks.afterDirectoriesOpened);
@@ -824,6 +878,10 @@ export async function writeConfinedFile(
   if (!Number.isInteger(fileMode) || fileMode < 0 || fileMode > 0o777) {
     throw new Error("Invalid confined file mode");
   }
+  if (options.expectedSha256 !== undefined) {
+    if (!SHA256_HEX.test(options.expectedSha256)) throw new Error("Invalid expected file digest");
+    if (options.exclusive !== false) throw new Error("An expected digest needs an overwrite write");
+  }
   const canonicalRoot = await fs.realpath(rootPath);
   const fullPath = path.join(canonicalRoot, target);
   const rootStats = await fs.lstat(canonicalRoot);
@@ -838,6 +896,10 @@ export async function writeConfinedFile(
     options.exclusive !== false,
     fileMode,
     options.createAncestors !== false,
+    {
+      preserveExistingMode: options.preserveExistingMode === true,
+      expectedSha256: options.expectedSha256,
+    },
     options.testHooks,
   );
   return fullPath;

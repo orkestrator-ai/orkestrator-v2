@@ -12,6 +12,7 @@ import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import {
   CONTAINER_WRITE_CONFLICT_EXIT,
+  CONTAINER_WRITE_NOT_FILE_EXIT,
   containerFileWriteScript,
   serializeFileWrite,
 } from "./file-write-precondition.js";
@@ -119,6 +120,53 @@ describe("write_local_file with a precondition", () => {
     );
     expect(isFileWriteConflict(error)).toBe(true);
     await expect(fs.access(path.join(root, "gone.txt"))).rejects.toThrow();
+  });
+
+  test("keeps the replaced file's permission bits and leaves no temporary file", async () => {
+    const root = await worktree();
+    const target = path.join(root, "run.sh");
+    await fs.writeFile(target, "echo one");
+    await fs.chmod(target, 0o751);
+    await write(
+      {
+        worktreePath: root,
+        filePath: "run.sh",
+        base64Data: b64("echo two"),
+        expected: { sha256: fileContentSha256("echo one") },
+      },
+      context,
+    );
+    expect((await fs.stat(target)).mode & 0o777).toBe(0o751);
+    expect(await fs.readFile(target, "utf8")).toBe("echo two");
+    expect(await fs.readdir(root)).toEqual(["run.sh"]);
+  });
+
+  test("a symlinked file is compared through its link, like the editor read", async () => {
+    const root = await worktree();
+    await fs.writeFile(path.join(root, "real.txt"), "loaded");
+    await fs.symlink("real.txt", path.join(root, "link.txt"));
+    const error = await rejection(() =>
+      write(
+        {
+          worktreePath: root,
+          filePath: "link.txt",
+          base64Data: b64("edited"),
+          expected: { sha256: fileContentSha256("stale") },
+        },
+        context,
+      ),
+    );
+    expect(isFileWriteConflict(error)).toBe(true);
+    await write(
+      {
+        worktreePath: root,
+        filePath: "link.txt",
+        base64Data: b64("edited"),
+        expected: { sha256: fileContentSha256("loaded") },
+      },
+      context,
+    );
+    expect(await fs.readFile(path.join(root, "link.txt"), "utf8")).toBe("edited");
   });
 
   test("without a precondition (older clients, explicit overwrite) it writes as before", async () => {
@@ -280,32 +328,79 @@ describe.skipIf(!hasSha256sum)("the container writer script", () => {
   function run(script: string, input: string) {
     return spawnSync("bash", ["-c", script], { input: b64(input) });
   }
+  const bytes = (text: string) => Buffer.byteLength(text, "utf8");
+  const script = (target: string, loaded: string | undefined, payload: string) =>
+    containerFileWriteScript(
+      target,
+      loaded === undefined ? undefined : { sha256: fileContentSha256(loaded) },
+      bytes(payload),
+    );
 
   test("writes when the digest matches and exits with the conflict status otherwise", async () => {
     const root = await worktree();
     const target = path.join(root, "it's here.txt");
     await fs.writeFile(target, "loaded");
-    const ok = run(containerFileWriteScript(target, { sha256: fileContentSha256("loaded") }), "v2");
+    const ok = run(script(target, "loaded", "v2"), "v2");
     expect(ok.status).toBe(0);
     expect(await fs.readFile(target, "utf8")).toBe("v2");
 
-    const stale = run(
-      containerFileWriteScript(target, { sha256: fileContentSha256("loaded") }),
-      "v3",
-    );
+    const stale = run(script(target, "loaded", "v3"), "v3");
     expect(stale.status).toBe(CONTAINER_WRITE_CONFLICT_EXIT);
     expect(await fs.readFile(target, "utf8")).toBe("v2");
 
-    const missing = run(
-      containerFileWriteScript(path.join(root, "missing.txt"), {
-        sha256: fileContentSha256(""),
-      }),
-      "x",
-    );
+    const missing = run(script(path.join(root, "missing.txt"), "", "x"), "x");
     expect(missing.status).toBe(CONTAINER_WRITE_CONFLICT_EXIT);
 
-    expect(run(containerFileWriteScript(target, undefined), "forced").status).toBe(0);
+    expect(run(script(target, undefined, "forced"), "forced").status).toBe(0);
     expect(await fs.readFile(target, "utf8")).toBe("forced");
+    // Every temporary file is published or removed.
+    expect((await fs.readdir(root)).sort()).toEqual(["it's here.txt"]);
+  });
+
+  test("never publishes a truncated payload and leaves the target as it was", async () => {
+    const root = await worktree();
+    const target = path.join(root, "a.txt");
+    await fs.writeFile(target, "loaded");
+    // The client promised more bytes than arrived (it died mid-transfer).
+    const result = run(
+      containerFileWriteScript(target, { sha256: fileContentSha256("loaded") }, 1_000),
+      "partial",
+    );
+    expect(result.status).not.toBe(0);
+    expect(await fs.readFile(target, "utf8")).toBe("loaded");
+    expect(await fs.readdir(root)).toEqual(["a.txt"]);
+  });
+
+  test("keeps the replaced file's permission bits", async () => {
+    const root = await worktree();
+    const target = path.join(root, "run.sh");
+    await fs.writeFile(target, "echo one");
+    await fs.chmod(target, 0o751);
+    expect(run(script(target, "echo one", "echo two"), "echo two").status).toBe(0);
+    expect((await fs.stat(target)).mode & 0o777).toBe(0o751);
+    expect(await fs.readFile(target, "utf8")).toBe("echo two");
+  });
+
+  test("refuses a symlink or directory target instead of replacing it", async () => {
+    const root = await worktree();
+    await fs.writeFile(path.join(root, "real.txt"), "real");
+    await fs.symlink("real.txt", path.join(root, "link.txt"));
+    await fs.mkdir(path.join(root, "dir"));
+    for (const name of ["link.txt", "dir"]) {
+      const result = run(script(path.join(root, name), undefined, "x"), "x");
+      expect(result.status).toBe(CONTAINER_WRITE_NOT_FILE_EXIT);
+    }
+    expect((await fs.lstat(path.join(root, "link.txt"))).isSymbolicLink()).toBe(true);
+    expect(await fs.readFile(path.join(root, "real.txt"), "utf8")).toBe("real");
+    expect(await fs.readdir(path.join(root, "dir"))).toEqual([]);
+  });
+
+  test("creates a missing file and its directory without a precondition", async () => {
+    const root = await worktree();
+    const target = path.join(root, "nested", "new.txt");
+    expect(run(script(target, undefined, "fresh"), "fresh").status).toBe(0);
+    expect(await fs.readFile(target, "utf8")).toBe("fresh");
+    expect(await fs.readdir(path.join(root, "nested"))).toEqual(["new.txt"]);
   });
 });
 

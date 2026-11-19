@@ -6,10 +6,14 @@ import * as backend from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { Loader2, AlertCircle, FileCode, Image as ImageIcon } from "lucide-react";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
-import { fileDirtyStore, fileSaveBaseline } from "@/stores/fileDirtyStore";
+import { fileDirtyStore, fileSaveBaseline, fileSaveConflict } from "@/stores/fileDirtyStore";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
-import { useFileSave } from "@/hooks/useFileSave";
+import {
+  fileConflictResolvedToastId,
+  fileWriteConflictToastId,
+  useFileSave,
+} from "@/hooks/useFileSave";
 import { useChangeContentGeneration, useChangeProjection } from "@/hooks/useChangeProjection";
 import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
 import {
@@ -22,6 +26,7 @@ import {
 } from "@/lib/file-draft-persistence";
 import { DraftRevisionConflictError } from "@/lib/draft-conflict";
 import { loadEnvironmentImage } from "@/lib/environment-image-source";
+import { FileSaveConflictBanner } from "./FileSaveConflictBanner";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 import {
   LazyLoadBoundary,
@@ -45,6 +50,10 @@ const LazyDiffViewerTab = lazy(async () => ({
 
 const LazyMonacoFileEditor = lazy(async () => ({
   default: (await import("./MonacoFileEditor")).MonacoFileEditor,
+}));
+
+const LazyFileConflictDiff = lazy(async () => ({
+  default: (await import("./FileConflictDiff")).FileConflictDiff,
 }));
 
 /** Image file extensions that should be rendered as images */
@@ -351,8 +360,14 @@ export function FileViewerTab({
   });
   // Bumped to re-read the file after the user chose to drop their edits.
   const [reloadGeneration, setReloadGeneration] = useState(0);
+  // The conflict comparison is open (only shown while a conflict exists).
+  const [comparing, setComparing] = useState(false);
   const reloadFromDisk = useCallback(() => {
     void (async () => {
+      // "Use theirs": the buffer is replaced by disk, but stays restorable.
+      const dirty = draftScope.store(fileDirtyStore);
+      const before = dirty.getState().dirtyFiles.get(tabId);
+      const discarded = before && before.content !== before.originalContent ? before.content : null;
       // Discard the persisted draft first, or the reload would restore it.
       if (environmentId) {
         await discardFileDraft(
@@ -365,18 +380,50 @@ export function FileViewerTab({
         });
       }
       lastDraftFlushRef.current = null;
-      draftScope.store(fileDirtyStore).getState().clearDirty(tabId);
+      dirty.getState().clearDirty(tabId);
+      toast.dismiss(fileWriteConflictToastId(tabId));
+      setComparing(false);
       setReloadGeneration((generation) => generation + 1);
+      if (discarded !== null) {
+        toast.info("Loaded the version on disk", {
+          id: fileConflictResolvedToastId(tabId),
+          description: `Your unsaved edits to ${filePath} were set aside. Restore them into the editor if you still need them.`,
+          duration: 30_000,
+          action: {
+            label: "Restore mine",
+            onClick: () => {
+              // Edits on top of whatever disk holds now; a save is still checked.
+              if (dirty.getState().dirtyFiles.has(tabId)) {
+                dirty.getState().setContent(tabId, discarded);
+              }
+            },
+          },
+        });
+      }
     })();
   }, [draftScope, environmentId, filePath, tabId]);
-  const { saveFile, isSaving } = useFileSave({
+  // The banner carries every choice from here, so the toast that pointed at
+  // it is no longer needed once the comparison is open.
+  const openComparison = useCallback(() => {
+    toast.dismiss(fileWriteConflictToastId(tabId));
+    setComparing(true);
+  }, [tabId]);
+  const { saveFile, keepMine, isSaving } = useFileSave({
     tabId,
     filePath,
     containerId,
     worktreePath,
     isLocalEnvironment,
     onReloadFromDisk: reloadFromDisk,
+    onCompare: openComparison,
   });
+  const conflict = fileSaveConflict(dirtyEntry);
+  const showComparison = comparing && conflict?.kind === "changed";
+  const keepMineAndClose = useCallback(() => {
+    void keepMine().then((saved) => {
+      if (saved) setComparing(false);
+    });
+  }, [keepMine]);
 
   const reportFileDraftError = useCallback(
     function reportFileDraftError(
@@ -763,8 +810,51 @@ export function FileViewerTab({
     );
   }
 
-  if (isMarkdown && content !== null) {
+  // While disk and buffer disagree, the editor shows the conflict above it and
+  // can swap itself for the side-by-side comparison.
+  const withConflict = (editor: ReactNode): ReactNode => {
+    if (!conflict) return editor;
     return (
+      <div
+        className={cn(
+          "absolute inset-0 flex flex-col",
+          !isActive && "pointer-events-none opacity-0",
+        )}
+        style={{ backgroundColor: terminalAppearance.backgroundColor }}
+      >
+        <FileSaveConflictBanner
+          filePath={filePath}
+          conflict={conflict}
+          comparing={showComparison}
+          isSaving={isSaving}
+          onToggleCompare={() => (showComparison ? setComparing(false) : openComparison())}
+          onKeepMine={keepMineAndClose}
+          onUseTheirs={reloadFromDisk}
+        />
+        <div className="relative min-h-0 flex-1">
+          {showComparison && conflict.kind === "changed" ? (
+            <LazyLoadBoundary
+              loadingFallback={renderEditorFallback("Loading comparison...")}
+              renderError={renderEditorError}
+            >
+              <LazyFileConflictDiff
+                language={detectedLanguage}
+                disk={conflict.disk}
+                mine={conflict.mine}
+                onChange={(nextContent) => setDirtyContent(tabId, nextContent)}
+                onKeepMine={keepMineAndClose}
+              />
+            </LazyLoadBoundary>
+          ) : (
+            editor
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  if (isMarkdown && content !== null) {
+    return withConflict(
       <LazyLoadBoundary
         loadingFallback={renderEditorFallback("Loading Markdown editor...")}
         renderError={renderEditorError}
@@ -781,12 +871,12 @@ export function FileViewerTab({
           isSaving={isSaving}
           onSave={saveFile}
         />
-      </LazyLoadBoundary>
+      </LazyLoadBoundary>,
     );
   }
 
   if (isHtml && content !== null) {
-    return (
+    return withConflict(
       <LazyLoadBoundary
         loadingFallback={renderEditorFallback("Loading HTML view...")}
         renderError={renderEditorError}
@@ -804,11 +894,11 @@ export function FileViewerTab({
           onSave={saveFile}
           readSiblingFile={readSiblingFile}
         />
-      </LazyLoadBoundary>
+      </LazyLoadBoundary>,
     );
   }
 
-  return (
+  return withConflict(
     <div
       className={cn("absolute inset-0 flex flex-col", !isActive && "pointer-events-none opacity-0")}
       style={{ backgroundColor: terminalAppearance.backgroundColor }}
@@ -859,6 +949,6 @@ export function FileViewerTab({
           </LazyLoadBoundary>
         </div>
       )}
-    </div>
+    </div>,
   );
 }

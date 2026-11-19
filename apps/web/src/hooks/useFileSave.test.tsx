@@ -2,13 +2,13 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup } from "@testing-library/react";
 import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
-import { fileDirtyStore } from "@/stores/fileDirtyStore";
+import { fileDirtyStore, fileSaveConflict } from "@/stores/fileDirtyStore";
 import * as realBackend from "@/lib/backend";
 import {
   FILE_WRITE_CONFLICT_MESSAGE,
   fileContentSha256,
 } from "@orkestrator/protocol/file-write-precondition";
-import { mockToastError } from "../../../../tests/mocks/sonner";
+import { mockToastError, mockToastSuccess } from "../../../../tests/mocks/sonner";
 import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
@@ -21,10 +21,23 @@ const writeLocalFileMock = mock(
     "/repo/file.md",
 );
 
+const readLocalFileMock = mock(async (_worktreePath: string, _filePath: string) => ({
+  path: "notes.md",
+  content: "agent's version",
+  language: "markdown",
+}));
+const readContainerFileMock = mock(async (_containerId: string, _filePath: string) => ({
+  path: "README.md",
+  content: "agent's version",
+  language: "markdown",
+}));
+
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   writeContainerFile: writeContainerFileMock,
   writeLocalFile: writeLocalFileMock,
+  readLocalFile: readLocalFileMock,
+  readContainerFile: readContainerFileMock,
 }));
 
 const { useFileSave } = await import("./useFileSave");
@@ -49,7 +62,15 @@ beforeEach(() => {
   appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   writeContainerFileMock.mockClear();
   writeLocalFileMock.mockClear();
+  readLocalFileMock.mockClear();
+  readContainerFileMock.mockClear();
+  readLocalFileMock.mockImplementation(async () => ({
+    path: "notes.md",
+    content: "agent's version",
+    language: "markdown",
+  }));
   mockToastError.mockClear();
+  mockToastSuccess.mockClear();
 });
 
 afterEach(() => {
@@ -112,11 +133,12 @@ describe("useFileSave", () => {
     });
   });
 
-  test("a file changed on disk keeps the buffer and offers overwrite or reload", async () => {
+  test("a file changed on disk keeps both versions and offers compare or use theirs", async () => {
     writeLocalFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
     appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
     appCommandStore(fileDirtyStore).getState().setContent("tab", "mine");
     const reload = mock(() => undefined);
+    const compare = mock(() => undefined);
     const { result } = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "tab",
@@ -124,13 +146,26 @@ describe("useFileSave", () => {
         worktreePath: "/repo",
         isLocalEnvironment: true,
         onReloadFromDisk: reload,
+        onCompare: compare,
       }),
     );
 
     await act(async () => {
       await expect(result.current.saveFile()).resolves.toBe(false);
     });
-    expect(appCommandStore(fileDirtyStore).getState().isDirty("tab")).toBe(true);
+    // The buffer is untouched; the newer version was read back beside it.
+    const entry = appCommandStore(fileDirtyStore).getState().dirtyFiles.get("tab");
+    expect(entry).toEqual({
+      content: "mine",
+      originalContent: "agent's version",
+      baseContent: "original",
+    });
+    expect(fileSaveConflict(entry)).toEqual({
+      kind: "changed",
+      disk: "agent's version",
+      mine: "mine",
+    });
+    expect(writeLocalFileMock).toHaveBeenCalledTimes(1);
     const [title, options] = mockToastError.mock.calls.at(-1)! as [
       string,
       {
@@ -139,20 +174,198 @@ describe("useFileSave", () => {
       },
     ];
     expect(title).toBe("File changed on disk");
-    expect(options.cancel.label).toBe("Reload");
+    expect(options.action.label).toBe("Compare");
+    options.action.onClick();
+    expect(compare).toHaveBeenCalledTimes(1);
+    expect(options.cancel.label).toBe("Use theirs");
     options.cancel.onClick();
     expect(reload).toHaveBeenCalledTimes(1);
 
-    expect(options.action.label).toBe("Overwrite");
+    // A plain save again is refused again rather than overwriting.
+    writeLocalFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
+    await act(async () => {
+      await expect(result.current.saveFile()).resolves.toBe(false);
+    });
+    expect(writeLocalFileMock.mock.calls.at(-1)?.[3]).toEqual({
+      sha256: fileContentSha256("original"),
+    });
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("tab")).toBe(true);
+  });
+
+  test("keep mine writes over the version shown, and keeps it restorable", async () => {
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "mine");
+    appCommandStore(fileDirtyStore).getState().observeDiskContent("tab", "agent's version");
+    const { result } = renderHookInAppCommandScope(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "notes.md",
+        worktreePath: "/repo",
+        isLocalEnvironment: true,
+      }),
+    );
+
+    await act(async () => {
+      await expect(result.current.keepMine()).resolves.toBe(true);
+    });
+    const call = writeLocalFileMock.mock.calls.at(-1);
+    expect(decodeBase64Utf8(call?.[2] ?? "")).toBe("mine");
+    // Conditional on the newer version the user saw, never unconditional.
+    expect(call?.[3]).toEqual({ sha256: fileContentSha256("agent's version") });
+    expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("tab")).toEqual({
+      content: "mine",
+      originalContent: "mine",
+    });
+
+    const [title, options] = mockToastSuccess.mock.calls.at(-1)! as [
+      string,
+      { action: { label: string; onClick: () => void } },
+    ];
+    expect(title).toBe("Saved your version");
+    expect(options.action.label).toBe("Restore theirs");
+    act(() => options.action.onClick());
+    expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("tab")).toEqual({
+      content: "agent's version",
+      originalContent: "mine",
+    });
+  });
+
+  test("keep mine refuses again when the file moved after it was compared", async () => {
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "mine");
+    appCommandStore(fileDirtyStore).getState().observeDiskContent("tab", "agent's version");
+    writeLocalFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
+    readLocalFileMock.mockImplementation(async () => ({
+      path: "notes.md",
+      content: "agent's second version",
+      language: "markdown",
+    }));
+    const { result } = renderHookInAppCommandScope(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "notes.md",
+        worktreePath: "/repo",
+        isLocalEnvironment: true,
+      }),
+    );
+
+    await act(async () => {
+      await expect(result.current.keepMine()).resolves.toBe(false);
+    });
+    expect(writeLocalFileMock).toHaveBeenCalledTimes(1);
+    expect(
+      fileSaveConflict(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("tab")),
+    ).toEqual({
+      kind: "changed",
+      disk: "agent's second version",
+      mine: "mine",
+    });
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
+
+  test("a disk that already holds the buffer counts as saved", async () => {
+    writeContainerFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
+    readContainerFileMock.mockImplementationOnce(async () => ({
+      path: "README.md",
+      content: "mine",
+      language: "markdown",
+    }));
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "mine");
+    const { result } = renderHookInAppCommandScope(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "README.md",
+        containerId: "container-1",
+        isLocalEnvironment: false,
+      }),
+    );
+
+    await act(async () => {
+      await expect(result.current.saveFile()).resolves.toBe(true);
+    });
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("tab")).toBe(false);
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("a disk that changed and changed back is retried once with the same check", async () => {
+    writeContainerFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
+    readContainerFileMock.mockImplementationOnce(async () => ({
+      path: "README.md",
+      content: "original",
+      language: "markdown",
+    }));
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "mine");
+    const { result } = renderHookInAppCommandScope(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "README.md",
+        containerId: "container-1",
+        isLocalEnvironment: false,
+      }),
+    );
+
+    await act(async () => {
+      await expect(result.current.saveFile()).resolves.toBe(true);
+    });
+    expect(writeContainerFileMock).toHaveBeenCalledTimes(2);
+    expect(writeContainerFileMock.mock.calls[1]?.[3]).toEqual({
+      sha256: fileContentSha256("original"),
+    });
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("a file that can no longer be read keeps the buffer and saves only on request", async () => {
+    writeLocalFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
+    readLocalFileMock.mockImplementation(async () => {
+      throw new Error("ENOENT");
+    });
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "mine");
+    const { result } = renderHookInAppCommandScope(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "notes.md",
+        worktreePath: "/repo",
+        isLocalEnvironment: true,
+        onReloadFromDisk: () => undefined,
+        onCompare: () => undefined,
+      }),
+    );
+
+    const logs = captureLogs();
+    try {
+      await act(async () => {
+        await expect(result.current.saveFile()).resolves.toBe(false);
+      });
+    } finally {
+      logs.restore();
+    }
+    expect(
+      fileSaveConflict(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("tab")),
+    ).toEqual({
+      kind: "unreadable",
+      mine: "mine",
+    });
+    const options = mockToastError.mock.calls.at(-1)?.[1] as {
+      action: { label: string; onClick: () => void };
+      cancel?: unknown;
+    };
+    expect(options.action.label).toBe("Save mine");
+    expect(options.cancel).toBeUndefined();
     await act(async () => {
       options.action.onClick();
       await Promise.resolve();
     });
-    // Overwrite is the same save without the precondition.
-    const overwrite = writeLocalFileMock.mock.calls.at(-1);
-    expect(decodeBase64Utf8(overwrite?.[2] ?? "")).toBe("mine");
-    expect(overwrite?.[3]).toBeUndefined();
-    expect(appCommandStore(fileDirtyStore).getState().isDirty("tab")).toBe(false);
+    // Nothing on disk to compare against: the explicit save recreates it.
+    const recreate = writeLocalFileMock.mock.calls.at(-1);
+    expect(decodeBase64Utf8(recreate?.[2] ?? "")).toBe("mine");
+    expect(recreate?.[3]).toBeUndefined();
+    expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("tab")).toEqual({
+      content: "mine",
+      originalContent: "mine",
+    });
   });
 
   test("flushes a Unicode override through the local save path", async () => {

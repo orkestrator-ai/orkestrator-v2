@@ -106,9 +106,10 @@ import { isSafeRelativePath } from "@orkestrator/protocol/web-annotations-valida
 import { parseFileWritePrecondition } from "@orkestrator/protocol/file-write-precondition";
 import {
   CONTAINER_WRITE_CONFLICT_EXIT,
-  assertLocalFileUnchanged,
+  CONTAINER_WRITE_NOT_FILE_EXIT,
   containerFileWriteScript,
   fileWriteConflictError,
+  fileWriteNotRegularFileError,
   serializeFileWrite,
 } from "./file-write-precondition.js";
 import path from "node:path";
@@ -1114,11 +1115,14 @@ export function registerTerminalCommands(
           if (canonicalWorktreePath(currentRoot) !== canonical)
             throw new Error("The worktree moved; refresh before saving");
           try {
+            // The helper checks the digest after the payload is staged beside
+            // the target and immediately before the atomic rename.
             return await (precondition
-              ? serializeFileWrite(`local:${canonical}:${relativePath}`, async () => {
-                  await assertLocalFileUnchanged(currentRoot, relativePath, precondition);
-                  return writeFileBase64(currentRoot, relativePath, data);
-                })
+              ? serializeFileWrite(`local:${canonical}:${relativePath}`, () =>
+                  writeFileBase64(currentRoot, relativePath, data, {
+                    expectedSha256: precondition.sha256,
+                  }),
+                )
               : writeFileBase64(currentRoot, relativePath, data));
           } finally {
             // A write this backend makes is a known mutation, like a delete or
@@ -1452,7 +1456,7 @@ export function registerTerminalCommands(
       const target = validateRelativeFilePath(filePath);
       const precondition = parseFileWritePrecondition(expected);
       const fullPath = workspaceFilePath(target);
-      assertBase64PayloadWithinLimit(data);
+      const normalized = assertBase64PayloadWithinLimit(data);
       if (isAnnotationEvidencePath(target)) {
         // App-owned evidence: no symbolic link anywhere on the path, exclusive
         // temp file, atomic rename. A workspace cannot redirect this write.
@@ -1469,11 +1473,19 @@ export function registerTerminalCommands(
         // A refused precondition exits before reading stdin, which is expected.
         await runContainerWrite(
           id,
-          ["bash", "-lc", containerFileWriteScript(fullPath, precondition)],
-          data,
+          [
+            "bash",
+            "-lc",
+            containerFileWriteScript(fullPath, precondition, base64DecodedByteLength(normalized)),
+          ],
+          normalized,
           {
             errorForExit: (code) =>
-              code === CONTAINER_WRITE_CONFLICT_EXIT ? fileWriteConflictError() : undefined,
+              code === CONTAINER_WRITE_CONFLICT_EXIT
+                ? fileWriteConflictError()
+                : code === CONTAINER_WRITE_NOT_FILE_EXIT
+                  ? fileWriteNotRegularFileError()
+                  : undefined,
           },
         );
         return fullPath;

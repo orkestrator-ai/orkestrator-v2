@@ -15,11 +15,33 @@ interface FileDirtyEntry {
    * (`originalContent` follows disk so the tab shows the real difference).
    */
   baseContent?: string;
+  /**
+   * A save was refused and the file could not be read back: it was deleted,
+   * or it is no longer something the editor opens. Cleared when disk is read.
+   */
+  diskUnreadable?: true;
 }
 
 /** The content a save requires the file to still hold. */
 export function fileSaveBaseline(entry: FileDirtyEntry): string {
   return entry.baseContent ?? entry.originalContent;
+}
+
+/**
+ * The editor's conflict state: the buffer has unsaved edits and the file on
+ * disk is no longer what they were made from. Both versions are kept until the
+ * user chooses: `disk` is the newer version as last read, the buffer is
+ * `entry.content`. A save in this state is refused by the backend precondition
+ * rather than replacing the newer work.
+ */
+export type FileSaveConflict =
+  { kind: "changed"; disk: string; mine: string } | { kind: "unreadable"; mine: string };
+
+export function fileSaveConflict(entry: FileDirtyEntry | undefined): FileSaveConflict | null {
+  if (!entry) return null;
+  if (entry.diskUnreadable) return { kind: "unreadable", mine: entry.content };
+  if (entry.baseContent === undefined || entry.content === entry.originalContent) return null;
+  return { kind: "changed", disk: entry.originalContent, mine: entry.content };
 }
 
 export interface FileDirtyState {
@@ -37,6 +59,9 @@ export interface FileDirtyState {
    * from, so a later save still reports the change instead of overwriting it.
    */
   observeDiskContent: (tabId: string, content: string) => void;
+
+  /** Record that a refused save could not read the file back (see `diskUnreadable`). */
+  markDiskUnreadable: (tabId: string) => void;
 
   /**
    * Update the current content for a file tab.
@@ -110,6 +135,16 @@ export const fileDirtyStore = defineScopedStore<FileDirtyState>("file-dirty", ()
         originalContent: content,
         ...(base === content ? {} : { baseContent: base }),
       });
+      return { dirtyFiles: newMap };
+    });
+  },
+
+  markDiskUnreadable: (tabId) => {
+    set((state) => {
+      const existing = state.dirtyFiles.get(tabId);
+      if (!existing) return state;
+      const newMap = new Map(state.dirtyFiles);
+      newMap.set(tabId, { ...existing, diskUnreadable: true });
       return { dirtyFiles: newMap };
     });
   },

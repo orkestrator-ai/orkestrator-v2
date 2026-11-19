@@ -645,55 +645,6 @@ test.afterAll(async () => {
   setup = null;
 });
 
-test("the phone palette opens the shown leaf's Files panel", async () => {
-  const { commandPage, leafEnvironment, leafNodeId } = s();
-  const desktop = commandPage.viewportSize()!;
-  await sidebarEnvironmentRow(commandPage, leafEnvironment.name).click();
-  const remote = commandPage.getByTestId("remote-workspace-region");
-  await expect(remote).toHaveAttribute("data-node", leafNodeId);
-  await commandPage.setViewportSize({ width: 390, height: 844 });
-  try {
-    appendLines(1);
-    for (const [query, tabName] of [
-      ["open changes", /^Changes/],
-      ["browse files", "All files"],
-    ] as const) {
-      const drawer = commandPage
-        .getByRole("button", {
-          name: /^(Open|Close) projects and environments$/,
-        })
-        .filter({ visible: true })
-        .first();
-      await expect(drawer).toBeVisible();
-      if ((await drawer.getAttribute("aria-expanded")) === "false") await drawer.click();
-      await commandPage.getByTestId("project-search-trigger").click();
-      const input = commandPage.getByRole("combobox", { name: "Search projects and environments" });
-      await input.fill(query);
-      const action = commandPage.getByRole("option", { name: new RegExp(query, "i") });
-      await expect(action).toHaveAccessibleName(new RegExp(LEAF_NAME));
-      await action.click();
-
-      const files = commandPage.getByRole("complementary", { name: "Workspace files" });
-      await expect(files.getByRole("tab", { name: tabName })).toHaveAttribute(
-        "aria-selected",
-        "true",
-      );
-      await expect(files.getByText("README.md", { exact: true })).toBeVisible();
-      await files.screenshot({
-        path: path.join(
-          repositoryRoot,
-          "output/visual-previews",
-          `palette-remote-${query.replace(" ", "-")}-390.png`,
-        ),
-      });
-      await files.getByRole("button", { name: "Close panel" }).click();
-      await expect(files).toBeHidden();
-    }
-  } finally {
-    await commandPage.setViewportSize(desktop);
-  }
-});
-
 test("a remote row's activity keeps up with the leaf's own row (#2212)", async () => {
   test.setTimeout(900_000);
   const { commandPage, leafPage, leafEnvironment, model } = s();
@@ -841,6 +792,55 @@ test("relayed events arrive per node with a busy leaf and an inactive tab (#2212
   };
 });
 
+test("the phone palette opens the shown leaf's Files panel", async () => {
+  const { commandPage, leafEnvironment, leafNodeId } = s();
+  const desktop = commandPage.viewportSize()!;
+  await sidebarEnvironmentRow(commandPage, leafEnvironment.name).click();
+  const remote = commandPage.getByTestId("remote-workspace-region");
+  await expect(remote).toHaveAttribute("data-node", leafNodeId);
+  await commandPage.setViewportSize({ width: 390, height: 844 });
+  try {
+    appendLines(1);
+    for (const [query, tabName] of [
+      ["open changes", /^Changes/],
+      ["browse files", "All files"],
+    ] as const) {
+      const drawer = commandPage
+        .getByRole("button", {
+          name: /^(Open|Close) projects and environments$/,
+        })
+        .filter({ visible: true })
+        .first();
+      await expect(drawer).toBeVisible();
+      if ((await drawer.getAttribute("aria-expanded")) === "false") await drawer.click();
+      await commandPage.getByTestId("project-search-trigger").click();
+      const input = commandPage.getByRole("combobox", { name: "Search projects and environments" });
+      await input.fill(query);
+      const action = commandPage.getByRole("option", { name: new RegExp(query, "i") });
+      await expect(action).toHaveAccessibleName(new RegExp(LEAF_NAME));
+      await action.click();
+
+      const files = commandPage.getByRole("complementary", { name: "Workspace files" });
+      await expect(files.getByRole("tab", { name: tabName })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      await expect(files.getByText("README.md", { exact: true })).toBeVisible();
+      await files.screenshot({
+        path: path.join(
+          repositoryRoot,
+          "output/visual-previews",
+          `palette-remote-${query.replace(" ", "-")}-390.png`,
+        ),
+      });
+      await files.getByRole("button", { name: "Close panel" }).click();
+      await expect(files).toBeHidden();
+    }
+  } finally {
+    await commandPage.setViewportSize(desktop);
+  }
+});
+
 test("past sessions refuse a disconnected owner and resume durably after reconnect", async () => {
   test.setTimeout(240_000);
   const { command, commandPage, leaf, leafEnvironment, leafNodeId, identity } = s();
@@ -923,10 +923,12 @@ test("past sessions refuse a disconnected owner and resume durably after reconne
   await commandPage.reload();
   await revealRow(commandPage, leafEnvironment.name);
   await sidebarEnvironmentRow(commandPage, leafEnvironment.name).click();
-  await openHistory();
+  const reloadedHistory = await openHistory();
   await expect(commandPage.getByTestId(`command-palette-history-${tabId}`)).toBeVisible({
     timeout: VIEW_TIMEOUT_MS,
   });
+  await reloadedHistory.press("Escape");
+  await expect(reloadedHistory).toBeHidden();
 });
 
 test("Settings offers explicit recovery after its last leaf is removed", async () => {

@@ -126,8 +126,9 @@ so and offers "Use what is shown", the only way to retarget.
 A command with `confirm` opens a confirmation inside the palette naming the
 environment, project and machine. When confirmed it re-reads availability
 for the same frozen target and refuses (showing why, running nothing) if the
-target went away, changed or became unavailable. Escape leaves the
-confirmation; a second Escape closes the palette.
+target went away, changed or became unavailable. Keyboard confirmation needs
+a fresh Enter press. Escape leaves the confirmation and a second Escape
+closes the palette.
 
 ### Running, failures and duplicates
 
@@ -186,27 +187,30 @@ picker's own list, on the context environment's machine, once per palette
 session and platform; typing filters that answer locally. It lists only the
 platforms the environment already has an agent tab for, because listing
 resolves the platform's bridge and a search must not start one. It needs a
-running environment on a writable machine (otherwise the group says so) and leaves out archived
-conversations and ones already open in a tab. One platform failing marks the
-group `partial`; all failing marks it `failed`. Titles are the provider's;
-no message content is read. Reconnecting the machine reloads its lists.
+running environment on a writable machine. Reconnecting the machine reloads
+its lists. The search excludes archived conversations and matches open tabs
+by platform and live session ID, including OpenCode 2.x's prefixed resume IDs.
+Providers with opaque resume handles can still return open conversations.
+One failing platform marks the group `partial`. If all fail, the group reports
+`failed`. Search reads titles from the provider list.
 
 Opening a past session adds an agent tab for that platform to the context
 environment (refused, with a reason, while setup runs, at the tab limit or
 when the environment is not running), parks a resume request for it
 (`native-agent-resume-requests.ts`: keyed by node, environment and tab,
-bounded, expiring after a minute if the tab never reads it), and saves the layout. The new tab reads
-the request on mount, starts no conversation of its own while it waits, and
-once the save succeeds runs the picker's own resume handler with the chosen
-conversation. A failed layout save offers to retry the same tab and conversation.
-Closing the tab cancels its parked resume. A resume that
-fails reports through the picker's existing error path. The tab is created
-on the frozen target only, so a window switch cannot move it.
+bounded, expiring after a minute if the tab never reads it), and saves the layout.
+The new tab reads the request on mount and waits for the save before running
+the picker's own resume handler with the chosen conversation. A failed layout
+save offers to retry the same tab and conversation. Closing the tab cancels its
+parked resume. The picker's existing error path reports resume failures.
+The tab opens on the frozen target even when the window switches environments.
 
 ## Keyboard, pointer, touch and focus
 
 Arrow keys move, Enter runs or opens, Alt+Up and Alt+Down change category, and Escape backs out. Tab moves focus
-to controls such as the filter menu and context refresh.
+to controls such as the filter menu and context refresh. If a selected History
+row disappears during refresh, Enter waits for that row to return or for the
+user to select another result.
 Every row is a button, so a pointer or touch reaches every command, including
 an unavailable row's next step and the confirmation's buttons. Focus returns
 to where it was when the palette opened (the trigger, a composer, a
@@ -249,6 +253,5 @@ targets are set yet: they wait for a baseline from these entries.
   settings are reachable ("Browser previews").
 - Delete environment: the row's delete dialog carries notices (pull request,
   design) the palette does not reproduce.
-
 - Restart environment: the palette can offer it once the owning backend can
   record the full operation before stopping the container.

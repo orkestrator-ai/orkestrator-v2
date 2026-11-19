@@ -240,8 +240,13 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
    * Read one persisted environment, as `getEnvironmentSnapshots` lists it; `null`
    * when it no longer exists. Backends before this command reject it as unknown.
    */
-  async function getEnvironmentSnapshot(environmentId: string): Promise<Environment | null> {
-    return environments().getEnvironmentSnapshot({ environmentId });
+  async function getEnvironmentSnapshot(
+    environmentId: string,
+    machine?: AccountMachine,
+  ): Promise<Environment | null> {
+    return hydrationRequests.run(() =>
+      environmentsOn(machine).getEnvironmentSnapshot({ environmentId }),
+    );
   }
 
   async function reorderEnvironments(

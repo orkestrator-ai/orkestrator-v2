@@ -5,6 +5,7 @@ import {
   CREDENTIAL_LIMITS,
   CREDENTIAL_TIMING,
   CredentialError,
+  credentialHeaderNameProblem,
   normalizeCredentialHost,
   normalizeCredentialHosts,
   type CredentialHttpMethod,
@@ -71,10 +72,38 @@ const RETURNED_HEADERS = [
   "x-request-id",
 ];
 
+/** The canonical headers shared by idempotency and dispatch. */
+export function normalizeCredentialRequestHeaders(
+  input: CredentialHttpInput["headers"],
+): Record<string, string> {
+  const headers: Record<string, string> = Object.create(null);
+  for (const [name, value] of Object.entries(input ?? {})) {
+    const lower = name.toLowerCase();
+    if (
+      CREDENTIAL_FORBIDDEN_HEADERS.has(lower) ||
+      Object.hasOwn(headers, lower) ||
+      !/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/u.test(name) ||
+      typeof value !== "string" ||
+      value.length > 4_096 ||
+      // Visible ASCII and spaces only: anything else either splits the header
+      // or makes fetch throw before sending, which would read as "unknown".
+      !/^[\x20-\x7e\t]*$/u.test(value)
+    ) {
+      throw new CredentialError("INVALID_INPUT", `Header ${name} cannot be set on this request.`);
+    }
+    headers[lower] = value;
+  }
+  if (Object.keys(headers).length > 32) {
+    throw new CredentialError("INVALID_INPUT", "At most 32 headers can be set.");
+  }
+  return headers;
+}
+
 /** Validates the agent's request against the grant; throws `CredentialError`. */
 export function prepareCredentialHttpRequest(
   input: CredentialHttpInput,
   policy: CredentialHttpPolicy,
+  headers = normalizeCredentialRequestHeaders(input.headers),
 ): PreparedHttpRequest {
   const method = input.method.toUpperCase() as CredentialHttpMethod;
   if (!(CREDENTIAL_HTTP_METHODS as readonly string[]).includes(method)) {
@@ -105,27 +134,12 @@ export function prepareCredentialHttpRequest(
   }
   url.host = host;
   url.hash = "";
-  const headers: Record<string, string> = {};
-  const credentialHeader =
-    policy.auth.scheme === "header" ? policy.auth.header.toLowerCase() : null;
-  for (const [name, value] of Object.entries(input.headers ?? {})) {
-    const lower = name.toLowerCase();
-    if (
-      CREDENTIAL_FORBIDDEN_HEADERS.has(lower) ||
-      lower === credentialHeader ||
-      !/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/u.test(name) ||
-      typeof value !== "string" ||
-      value.length > 4_096 ||
-      // Visible ASCII and spaces only: anything else either splits the header
-      // or makes fetch throw before sending, which would read as "unknown".
-      !/^[\x20-\x7e\t]*$/u.test(value)
-    ) {
-      throw new CredentialError("INVALID_INPUT", `Header ${name} cannot be set on this request.`);
+  if (policy.auth.scheme === "header") {
+    const problem = credentialHeaderNameProblem(policy.auth.header);
+    if (problem) throw new CredentialError("INVALID_INPUT", problem);
+    if (Object.hasOwn(headers, policy.auth.header.toLowerCase())) {
+      throw new CredentialError("INVALID_INPUT", "The request cannot set the credential header.");
     }
-    headers[lower] = value;
-  }
-  if (Object.keys(headers).length > 32) {
-    throw new CredentialError("INVALID_INPUT", "At most 32 headers can be set.");
   }
   if (input.body !== undefined) {
     if (method === "GET" || method === "HEAD") {
@@ -265,13 +279,16 @@ export async function sendCredentialHttpRequest(
   prepared: PreparedHttpRequest,
   materializedHeaders: Record<string, string>,
   redaction: readonly RedactionValue[],
-  options: { fetch?: CredentialFetch; address: string; signal: AbortSignal },
+  options: { fetch?: CredentialFetch; address: string; signal: AbortSignal; timeoutMs?: number },
 ): Promise<CredentialHttpOutcome> {
   if (options.signal.aborted) {
     return { kind: "not-sent", reason: "No authorized destination." };
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CREDENTIAL_TIMING.httpTimeoutMs);
+  const timer = setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? CREDENTIAL_TIMING.httpTimeoutMs,
+  );
   const onAbort = () => controller.abort();
   options.signal.addEventListener("abort", onAbort, { once: true });
   if (options.signal.aborted) onAbort();
@@ -291,7 +308,10 @@ export async function sendCredentialHttpRequest(
     options.signal?.removeEventListener("abort", onAbort);
     const code = failureCode(error);
     if (NOT_SENT_CODES.has(code)) return { kind: "not-sent", reason: code };
-    return { kind: "unknown", reason: controller.signal.aborted ? "timeout" : code };
+    return {
+      kind: "unknown",
+      reason: options.signal.aborted ? "cancelled" : controller.signal.aborted ? "timeout" : code,
+    };
   }
   try {
     const body = await readBounded(

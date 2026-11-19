@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { CREDENTIAL_ANY_TAB } from "@orkestrator/protocol/agent-credentials";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { StorageService } from "../storage.js";
 import type { CredentialCaller } from "./access.js";
@@ -93,6 +94,9 @@ export async function createCredentialHarness(
     shell: "/bin/sh",
   };
   const host: CredentialHost = {
+    async hasApprovalTab(environmentId, tabId) {
+      return environmentId === "env-1" && [CREDENTIAL_ANY_TAB, "tab-1", "tab-2"].includes(tabId);
+    },
     async session(environmentId, tabId) {
       return sessions.get(sessionKey(environmentId, tabId)) ?? null;
     },

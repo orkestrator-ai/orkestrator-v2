@@ -6,6 +6,7 @@ import type {
   CredentialVaultKind,
 } from "@orkestrator/protocol/agent-credentials";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { currentCredentialOwner } from "./owner.js";
 import type { CredentialFetch } from "./public-https.js";
 import type { CredentialRecordStore } from "./records.js";
 import type { CredentialLaunch } from "./runner.js";
@@ -15,7 +16,7 @@ import { MemoryCredentialVault, type CredentialVault } from "./vault.js";
 export interface CredentialSessionInfo {
   agent: string | null;
   logicalSessionKey: string;
-  /** The provider conversation; a new one in the same tab ends earlier grants. */
+  /** The provider conversation that owns a pending request. */
   providerSessionId: string | null;
   /** The session's resolved execution policy, when recorded. */
   policy: NativeAgentExecutionPolicy | null;
@@ -37,6 +38,7 @@ export interface CredentialRuntimeInfo {
 export interface CredentialHost {
   session(environmentId: string, tabId: string): Promise<CredentialSessionInfo | null>;
   runtime(environmentId: string): Promise<CredentialRuntimeInfo | null>;
+  hasApprovalTab(environmentId: string, tabId: string): Promise<boolean>;
   /** Reads authoritative rows inside the dispatch transaction. */
   dispatchBinding?(
     environmentId: string,
@@ -86,6 +88,7 @@ export class CredentialContext {
   readonly now: () => number;
   readonly monotonic: () => number;
   readonly bootId: string;
+  readonly owner = currentCredentialOwner();
   readonly fetch: CredentialFetch | undefined;
   readonly resolveHttpAddress: CredentialServiceOptions["resolveHttpAddress"];
   readonly spawnProcess: typeof spawn | undefined;
@@ -138,6 +141,7 @@ export class CredentialContext {
         const wake = () => {
           clearTimeout(timer);
           waiting.delete(wake);
+          if (waiting.size === 0 && this.waiters.get(key) === waiting) this.waiters.delete(key);
           resolve();
         };
         timer = setTimeout(wake, Math.min(remaining, 5_000));

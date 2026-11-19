@@ -5,6 +5,7 @@ import {
   CREDENTIAL_LIMITS,
   CREDENTIAL_TIMING,
   CredentialError,
+  credentialBindingNameProblem,
   credentialValueProblem,
   normalizeCredentialHosts,
   type CredentialOperationRecord,
@@ -17,16 +18,19 @@ import { connectionAllowsProject, type CredentialConnections } from "./connectio
 import type { CredentialContext } from "./context.js";
 import {
   materializeCredentialHeaders,
+  normalizeCredentialRequestHeaders,
   prepareCredentialHttpRequest,
   sendCredentialHttpRequest,
   type CredentialHttpAnswer,
   type CredentialHttpInput,
 } from "./http-operation.js";
+import { credentialOwnerAlive } from "./owner.js";
 import { assertCredentialPolicy } from "./policy.js";
 import { resolvePublicAddress } from "./public-https.js";
 import {
   publicRecord,
   type CredentialRows,
+  type CredentialRunCleanup,
   type StoredGrant,
   type StoredOperation,
 } from "./records.js";
@@ -93,9 +97,25 @@ function refundUse(rows: CredentialRows, grantId: string): void {
   if (grant && grant.uses > 0) rows.putGrant({ ...grant, uses: grant.uses - 1 });
 }
 
+function findReplay(
+  operations: readonly StoredOperation[],
+  caller: CredentialCaller,
+  grantId: string,
+  key: string,
+): StoredOperation | undefined {
+  return operations.find(
+    (operation) =>
+      operation.tabId === caller.tabId &&
+      operation.grantId === grantId &&
+      operation.internal.idempotencyKey === key,
+  );
+}
+
 export class CredentialOperations {
   private readonly running = new Map<string, { cancel(options?: { hard?: boolean }): void }>();
   private stopped = false;
+  private recovery: Promise<void> | undefined;
+  private cleanupCursor = 0;
   private readonly results = new Map<string, Partial<CredentialOperationView>>();
 
   constructor(
@@ -177,7 +197,32 @@ export class CredentialOperations {
       }
     }
     assertCredentialPolicy(kind, session, runtime, grant.command);
+    if (kind === "command" && grant.binding) {
+      const problem = credentialBindingNameProblem(grant.binding.name, {
+        containerEnvironment: runtime.runtime.kind === "container" && grant.binding.kind === "env",
+      });
+      if (problem) throw new CredentialError("INVALID_INPUT", problem);
+    }
     return { grant, agent: session?.agent ?? null };
+  }
+
+  private async authorizeNewUse(
+    caller: CredentialCaller,
+    input: { grantId: string; idempotencyKey?: string; waitMs?: number },
+    kind: CredentialUse,
+    print: string,
+  ): Promise<{ grant: StoredGrant } | { replay: CredentialOperationView }> {
+    const { grantId, idempotencyKey, waitMs } = input;
+    const previous = await this.replay(caller, grantId, idempotencyKey, print, waitMs);
+    if (previous) return { replay: previous };
+    try {
+      return await this.authorize(caller, grantId, kind);
+    } catch (error) {
+      // The other backend may have used the last admission during the first lookup.
+      const raced = await this.replay(caller, grantId, idempotencyKey, print, waitMs);
+      if (raced) return { replay: raced };
+      throw error;
+    }
   }
 
   private invalidateBinding(
@@ -220,10 +265,7 @@ export class CredentialOperations {
       if (!grant) throw new CredentialError("GRANT_NOT_FOUND", "No such grant for this tab.");
       const operations = rows.operations(caller.environmentId);
       if (idempotencyKey) {
-        const existing = operations.find(
-          (operation) =>
-            operation.grantId === grantId && operation.internal.idempotencyKey === idempotencyKey,
-        );
+        const existing = findReplay(operations, caller, grantId, idempotencyKey);
         if (existing) {
           if (existing.internal.fingerprint !== print) {
             throw new CredentialError(
@@ -236,6 +278,12 @@ export class CredentialOperations {
       }
       const unusable = grantUnusableReason(this.context, grant);
       if (unusable) throw unusable;
+      if (
+        kind === "command" &&
+        rows.countRunCleanup(caller.environmentId) >= CREDENTIAL_LIMITS.maxRecordsPerEnvironment
+      ) {
+        throw new CredentialError("REQUEST_LIMIT", "Credential command cleanup is pending.");
+      }
       const open = operations.filter(
         (operation) =>
           operation.tabId === caller.tabId &&
@@ -272,6 +320,7 @@ export class CredentialOperations {
           fingerprint: print,
           scope: { projectId: grant.projectId, providerSessionId: null },
           bootId: this.context.bootId,
+          owner: this.context.owner,
         },
       };
       rows.putOperation(operation);
@@ -360,7 +409,7 @@ export class CredentialOperations {
       const updated: StoredOperation = {
         ...current,
         state: "cancelled_before_start",
-        cleanup,
+        cleanup: cleanup === "none" && rows.runCleanup(operation.id) ? "unconfirmed" : cleanup,
         finishedAt: this.context.now(),
         error,
       };
@@ -436,8 +485,9 @@ export class CredentialOperations {
     const kept = this.results.get(operation.id);
     const view: CredentialOperationView = { ...publicRecord(operation), ...kept };
     if (operation.state === "reserved" || operation.state === "running") {
-      view.note =
-        "Still running. Call get_credential_operation with this operationId to wait for the result; do not start it again.";
+      view.note = operation.internal.cancelRequested
+        ? "Cancellation requested. Call get_credential_operation to check the outcome before repeating it."
+        : "Still running. Call get_credential_operation with this operationId to wait for the result; do not start it again.";
     } else if (!kept && operation.kind === "command" && FINAL_STATES.has(operation.state)) {
       view.note =
         "The output of this run is no longer kept (Orkestrator restarted or many runs followed).";
@@ -467,15 +517,9 @@ export class CredentialOperations {
       CREDENTIAL_TIMING.runMaxTimeoutMs,
     );
     const print = fingerprint({ kind: "command", command: input.command, timeoutMs });
-    const replayed = await this.replay(
-      caller,
-      input.grantId,
-      input.idempotencyKey,
-      print,
-      input.waitMs,
-    );
-    if (replayed) return replayed;
-    const { grant } = await this.authorize(caller, input.grantId, "command");
+    const admission = await this.authorizeNewUse(caller, input, "command", print);
+    if ("replay" in admission) return admission.replay;
+    const { grant } = admission;
     if (grant.command !== undefined && grant.command !== input.command) {
       throw new CredentialError(
         "SCOPE_MISMATCH",
@@ -512,6 +556,7 @@ export class CredentialOperations {
     if (this.context.records.getOperation(operation.id)?.state !== "reserved") return;
     let launch;
     let handle;
+    let stagingRecorded = false;
     try {
       await this.authorize(caller, grant.id, "command", operation);
       if (this.context.records.getOperation(operation.id)?.state !== "reserved") return;
@@ -533,11 +578,24 @@ export class CredentialOperations {
         return;
       }
       if (!grant.binding) throw new CredentialError("SCOPE_MISMATCH", "The grant has no binding.");
-      if (launch.target === "container" && launch.containerId) {
-        this.update(operation.id, {
-          internal: { ...operation.internal, containerId: launch.containerId },
-        });
+      const cleanup: CredentialRunCleanup = {
+        id: operation.id,
+        environmentId: operation.environmentId,
+        owner: this.context.owner,
+        ...(launch.target === "container" && launch.containerId
+          ? { containerId: launch.containerId }
+          : {}),
+      };
+      const staged = this.context.records.transaction((rows) => {
+        if (rows.operation(operation.id)?.state !== "reserved") return false;
+        rows.putRunCleanup(cleanup);
+        return true;
+      });
+      if (!staged) {
+        launch.release?.();
+        return;
       }
+      stagingRecorded = true;
       handle = startCredentialRun({
         id: operation.id,
         launch,
@@ -552,6 +610,7 @@ export class CredentialOperations {
       });
     } catch (error) {
       launch?.release?.();
+      if (stagingRecorded) this.recordRunCleanup(operation.id, "confirmed");
       this.cancelBeforeStart(
         operation,
         error instanceof CredentialError ? error.message : "The command could not be prepared.",
@@ -576,6 +635,7 @@ export class CredentialOperations {
       .then((result) => this.finishCommand(operation, result))
       .catch((error: unknown) => {
         log.warn("run.failed", { error: formatLogError(error) });
+        this.recordRunCleanup(operation.id, "unconfirmed");
         this.update(operation.id, {
           state: "outcome_unknown",
           finishedAt: this.context.now(),
@@ -606,14 +666,12 @@ export class CredentialOperations {
     waitMs?: number,
   ): Promise<CredentialOperationView | null> {
     if (!idempotencyKey) return null;
-    const existing = this.context.records
-      .listOperations(caller.environmentId)
-      .find(
-        (operation) =>
-          operation.tabId === caller.tabId &&
-          operation.grantId === grantId &&
-          operation.internal.idempotencyKey === idempotencyKey,
-      );
+    const existing = findReplay(
+      this.context.records.listOperations(caller.environmentId),
+      caller,
+      grantId,
+      idempotencyKey,
+    );
     if (!existing) return null;
     await this.owned(caller, existing.id);
     if (existing.internal.fingerprint !== print) {
@@ -625,7 +683,17 @@ export class CredentialOperations {
     return this.wait(caller, existing.id, boundedWait(waitMs));
   }
 
+  private recordRunCleanup(id: string, cleanup: StoredOperation["cleanup"]): void {
+    this.context.records.transaction((rows) => {
+      const pending = rows.runCleanup(id);
+      if (!pending) return;
+      if (cleanup === "confirmed") rows.confirmRunCleanup(id);
+      else rows.putRunCleanup({ ...pending, retryable: true });
+    });
+  }
+
   private finishCommand(operation: StoredOperation, result: CredentialRunResult): void {
+    this.recordRunCleanup(operation.id, result.cleanup);
     const current = this.context.records.getOperation(operation.id);
     if (!current) return;
     if (current.state === "cancelled_before_start") {
@@ -671,20 +739,19 @@ export class CredentialOperations {
     caller: CredentialCaller,
     input: CredentialHttpRunInput,
   ): Promise<CredentialOperationView> {
+    const headers = normalizeCredentialRequestHeaders(input.headers);
     const print = fingerprint({
       kind: "http",
       method: String(input.method).toUpperCase(),
       url: String(input.url),
-      headers: Object.entries(input.headers ?? {})
-        .map(([name, value]) => [name.toLowerCase(), value])
-        .sort(),
+      headers: Object.entries(headers).sort(),
       body: input.body === undefined ? null : fingerprint(input.body),
     });
-    const replayed = await this.replay(caller, input.grantId, input.idempotencyKey, print);
-    if (replayed) return replayed;
-    const { grant } = await this.authorize(caller, input.grantId, "http");
+    const admission = await this.authorizeNewUse(caller, input, "http", print);
+    if ("replay" in admission) return admission.replay;
+    const { grant } = admission;
     if (!grant.http) throw new CredentialError("SCOPE_MISMATCH", "This grant has no HTTP policy.");
-    const prepared = prepareCredentialHttpRequest(input, grant.http);
+    const prepared = prepareCredentialHttpRequest(input, grant.http, headers);
     const { operation, existing } = this.reserve(
       caller,
       grant.id,
@@ -735,7 +802,6 @@ export class CredentialOperations {
       if (grant.source.kind === "connection" && outcome.kind !== "not-sent") {
         this.connections.noteUsed(grant.source.connectionId);
       }
-      const safe = prepared.method === "GET" || prepared.method === "HEAD";
       if (outcome.kind === "answered") {
         this.keep(operation.id, { http: outcome.answer });
         this.update(operation.id, {
@@ -751,7 +817,7 @@ export class CredentialOperations {
         });
       } else {
         this.update(operation.id, {
-          state: safe ? "failed" : "outcome_unknown",
+          state: "outcome_unknown",
           finishedAt: this.context.now(),
           error: `No answer arrived (${outcome.reason}).`,
         });
@@ -821,13 +887,25 @@ export class CredentialOperations {
 
   async cancel(caller: CredentialCaller, operationId: string): Promise<CredentialOperationView> {
     const operation = await this.owned(caller, operationId);
-    this.running.get(operationId)?.cancel();
-    return this.view(this.cancelBeforeStart(operation, "Cancelled before dispatch."));
+    return this.view(this.cancelOperation(operation, "Cancelled before dispatch."));
   }
 
-  private cancelOperation(operation: StoredOperation, reason: string): void {
+  private cancelOperation(operation: StoredOperation, reason: string): StoredOperation {
+    const current =
+      operation.state === "reserved" ? this.cancelBeforeStart(operation, reason) : operation;
+    if (current.state === "running") {
+      this.context.records.transaction((rows) => {
+        const running = rows.operation(current.id);
+        if (running?.state === "running" && !running.internal.cancelRequested) {
+          rows.putOperation({
+            ...running,
+            internal: { ...running.internal, cancelRequested: true },
+          });
+        }
+      });
+    }
     this.running.get(operation.id)?.cancel();
-    if (operation.state === "reserved") this.cancelBeforeStart(operation, reason);
+    return this.context.records.getOperation(operation.id) ?? current;
   }
 
   /** Stops pending and running work of ended grants. */
@@ -847,6 +925,7 @@ export class CredentialOperations {
       if (
         !grant ||
         grantUnusableReason(this.context, grant, true) ||
+        operation?.internal.cancelRequested ||
         operation?.state === "cancelled_before_start"
       )
         entry.cancel();
@@ -859,66 +938,97 @@ export class CredentialOperations {
     }
   }
 
-  /**
-   * Startup: an operation a previous process left open cannot be resumed.
-   * A reserved one never started; a running one may have done anything, and
-   * its processes and files are not confirmed gone.
-   */
+  /** Settle dead owners' work and recover materializations independently of outcomes. */
   async reconcileStartup(): Promise<void> {
-    const reconciled: string[] = [];
-    const containerRuns: Array<{ id: string; containerId: string }> = [];
     const changed = this.context.records.transaction((rows) => {
       const environments = new Set<string>();
       for (const operation of rows.operations()) {
-        if (operation.internal.bootId === this.context.bootId) continue;
-        if (operation.state === "reserved") {
-          refundUse(rows, operation.grantId);
-          rows.putOperation({
-            ...operation,
-            state: "cancelled_before_start",
-            finishedAt: this.context.now(),
-            error: "Orkestrator restarted before it started.",
+        if (
+          operation.internal.bootId === this.context.bootId ||
+          credentialOwnerAlive(operation.internal.owner)
+        )
+          continue;
+        // Older builds tracked staged container runs only on the operation.
+        // Include cancelled reservations, which could already have staged a file.
+        if (
+          !operation.internal.owner &&
+          operation.kind === "command" &&
+          operation.cleanup !== "confirmed" &&
+          (operation.state === "reserved" ||
+            operation.state === "running" ||
+            operation.state === "cancelled_before_start" ||
+            operation.cleanup === "unconfirmed") &&
+          !rows.runCleanup(operation.id)
+        ) {
+          rows.putRunCleanup({
+            id: operation.id,
+            environmentId: operation.environmentId,
+            ...(operation.internal.containerId
+              ? { containerId: operation.internal.containerId }
+              : {}),
           });
-          environments.add(operation.environmentId);
-          reconciled.push(operation.id);
-          if (operation.internal.containerId) {
-            containerRuns.push({ id: operation.id, containerId: operation.internal.containerId });
-          }
-        } else if (operation.state === "running") {
-          rows.putOperation({
-            ...operation,
-            state: "outcome_unknown",
-            finishedAt: this.context.now(),
-            cleanup: "unconfirmed",
-            error: "Orkestrator restarted while it ran.",
-          });
-          environments.add(operation.environmentId);
-          reconciled.push(operation.id);
-          if (operation.internal.containerId) {
-            containerRuns.push({ id: operation.id, containerId: operation.internal.containerId });
-          }
         }
+        const reserved = operation.state === "reserved";
+        if (!reserved && operation.state !== "running") continue;
+        if (reserved) refundUse(rows, operation.grantId);
+        rows.putOperation({
+          ...operation,
+          state: reserved ? "cancelled_before_start" : "outcome_unknown",
+          finishedAt: this.context.now(),
+          cleanup: rows.runCleanup(operation.id) ? "unconfirmed" : operation.cleanup,
+          error: reserved
+            ? "The owning backend stopped before dispatch."
+            : "The owning backend stopped while it ran.",
+        });
+        environments.add(operation.environmentId);
+        this.context.notify(operation.id);
       }
       return [...environments];
     });
     for (const environmentId of changed) this.context.announce(environmentId);
-    // Private files of worktree runs the previous process left behind. Only
-    // those runs' own directories: the names are their operation ids.
-    for (const id of reconciled) {
-      await fs
-        .rm(path.join(this.context.runRoot, id), { recursive: true, force: true })
-        .catch(() => undefined);
-    }
-    // A container run's processes and files are inside the container, which
-    // may still be running: end them there. Best effort; the record stays
-    // "unconfirmed" either way.
-    for (const run of containerRuns) {
-      await cleanupContainerRun({
-        containerId: run.containerId,
-        id: run.id,
-        env: process.env,
-        ...(this.context.spawnProcess ? { spawnProcess: this.context.spawnProcess } : {}),
-      });
+    await this.cleanMaterializations();
+  }
+
+  cleanMaterializations(): Promise<void> {
+    this.recovery ??= this.recoverMaterializations().finally(() => {
+      this.recovery = undefined;
+    });
+    return this.recovery;
+  }
+
+  private async recoverMaterializations(): Promise<void> {
+    const runs = this.context.records.listRunCleanup();
+    if (!runs.length) return;
+    const count = Math.min(runs.length, 8);
+    const start = this.cleanupCursor % runs.length;
+    this.cleanupCursor = start + count;
+    for (let offset = 0; offset < count; offset++) {
+      if (this.stopped) return;
+      const run = runs[(start + offset) % runs.length]!;
+      if (this.running.has(run.id) || (!run.retryable && credentialOwnerAlive(run.owner))) continue;
+      if (!/^[a-f0-9-]{36}$/u.test(run.id)) continue;
+      const cleaned = run.containerId
+        ? (await cleanupContainerRun({
+            containerId: run.containerId,
+            id: run.id,
+            env: process.env,
+            ...(this.context.spawnProcess ? { spawnProcess: this.context.spawnProcess } : {}),
+          })) === "confirmed"
+        : await fs
+            .rm(path.join(this.context.runRoot, run.id), { recursive: true, force: true })
+            .then(
+              () => true,
+              () => false,
+            );
+      if (this.stopped) return;
+      if (cleaned) {
+        this.context.records.transaction((rows) => {
+          rows.confirmRunCleanup(run.id);
+          const operation = rows.operation(run.id);
+          if (operation) rows.putOperation({ ...operation, cleanup: "confirmed" });
+        });
+        this.context.announce(run.environmentId);
+      }
     }
   }
 

@@ -18,7 +18,11 @@ export function useCredentialSnapshot(
 ): { snapshot: CredentialTabSnapshot | null; refresh: () => void } {
   const scope = useNodeScope();
   const key = environmentId && tabId ? `${environmentId}\0${tabId}` : null;
-  const [state, setState] = useState<{ key: string; snapshot: CredentialTabSnapshot } | null>(null);
+  const [state, setState] = useState<{
+    key: string;
+    scope: typeof scope;
+    snapshot: CredentialTabSnapshot;
+  } | null>(null);
   const refreshRef = useRef<() => void>(() => undefined);
 
   useEffect(() => {
@@ -30,7 +34,7 @@ export function useCredentialSnapshot(
       void backendForScope(scope)
         .getCredentialSnapshot({ environmentId, tabId })
         .then((snapshot) => {
-          if (!disposed && request === sequence) setState({ key, snapshot });
+          if (!disposed && request === sequence) setState({ key, scope, snapshot });
         })
         .catch(() => undefined);
     };
@@ -55,5 +59,8 @@ export function useCredentialSnapshot(
   }, [scope, key, environmentId, tabId]);
 
   const refresh = useCallback(() => refreshRef.current(), []);
-  return { snapshot: state && state.key === key ? state.snapshot : null, refresh };
+  return {
+    snapshot: state && state.key === key && state.scope === scope ? state.snapshot : null,
+    refresh,
+  };
 }

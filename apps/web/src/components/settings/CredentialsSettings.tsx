@@ -29,13 +29,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { CredentialValueInput } from "@/components/ui/credential-value-input";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { onResourceChanged, onViewSafetyCheck } from "@/lib/resource-sync";
 import { cn } from "@/lib/utils";
-import { useEnvironmentStore, useProjectStore } from "@/stores";
+import type { Environment, Project } from "@/types";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import {
   SETTINGS_CARD_CLASS,
@@ -115,14 +116,17 @@ function parseHosts(text: string): string[] | null {
 export function CredentialsSettings() {
   const { machine: chosen } = useAccountMachine();
   const machine = isWindowMachine(chosen) ? undefined : chosen;
-  const projects = useProjectStore((state) => state.projects);
-  const environments = useEnvironmentStore((state) => state.environments);
   // Keyed by machine, so a list read from another machine is never shown or acted on.
   const [read, setRead] = useState<{
     machine: typeof machine;
     overview: CredentialOverview;
+    projects: Project[] | null;
+    environments: Environment[];
   } | null>(null);
-  const overview = read && read.machine === machine ? read.overview : null;
+  const current = read?.machine === machine ? read : null;
+  const overview = current?.overview ?? null;
+  const projects = current?.projects;
+  const environments = current?.environments;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [form, setForm] = useState<ConnectionForm | null>(null);
@@ -134,16 +138,35 @@ export function CredentialsSettings() {
   const sequence = useRef(0);
   const reload = useCallback(() => {
     const request = ++sequence.current;
-    return backend.getCredentialOverview(machine).then(
-      (snapshot) => {
+    return Promise.all([
+      backend.getCredentialOverview(machine),
+      backend.getProjects(machine).catch(() => null),
+    ])
+      .then(async ([overview, projects]) => {
         if (request !== sequence.current) return;
-        setRead({ machine, overview: snapshot });
+        setRead((previous) => ({
+          machine,
+          overview,
+          projects,
+          environments: previous && previous.machine === machine ? previous.environments : [],
+        }));
         setError(null);
-      },
-      (cause: unknown) => {
+        const ids = [...new Set(overview.grants.map((grant) => grant.environmentId))];
+        const environments = await Promise.all(
+          ids.map((id) => backend.getEnvironmentSnapshot(id, machine).catch(() => null)),
+        );
+        if (request === sequence.current) {
+          setRead({
+            machine,
+            overview,
+            projects,
+            environments: environments.filter((row): row is Environment => Boolean(row)),
+          });
+        }
+      })
+      .catch((cause: unknown) => {
         if (request === sequence.current) setError(errorText(cause));
-      },
-    );
+      });
   }, [machine]);
 
   useEffect(() => {
@@ -158,13 +181,13 @@ export function CredentialsSettings() {
 
   const projectName = useCallback(
     (projectId: string) =>
-      projects.find((project) => project.id === projectId)?.name ??
+      projects?.find((project) => project.id === projectId)?.name ??
       `Project ${projectId.slice(0, 8)}`,
     [projects],
   );
   const environmentName = useCallback(
     (environmentId: string) =>
-      environments.find((environment) => environment.id === environmentId)?.name ??
+      environments?.find((environment) => environment.id === environmentId)?.name ??
       `Environment ${environmentId.slice(0, 8)}`,
     [environments],
   );
@@ -190,13 +213,18 @@ export function CredentialsSettings() {
       if (problem) return problem;
     }
     if (form.mode !== "replace") {
-      if (!form.allProjects && form.projectIds.length === 0) return "Choose at least one project.";
+      if (!form.allProjects) {
+        if (!projects) return "Projects could not be loaded from this machine.";
+        if (!form.projectIds.length) return "Choose at least one project.";
+        if (form.projectIds.some((id) => !projects.some((project) => project.id === id)))
+          return "Remove projects no longer available on this machine.";
+      }
       if (parseHosts(form.hosts) === null) {
         return "Hosts are public host names such as api.example.com, at most 16.";
       }
     }
     return null;
-  }, [form]);
+  }, [form, projects]);
 
   const submitForm = async () => {
     if (!form || formProblem) return;
@@ -250,7 +278,7 @@ export function CredentialsSettings() {
   return (
     <SettingsPageLayout
       title="Credentials"
-      description="Secrets agents can ask to use: API keys, tokens and passwords. An agent never sees a value. It asks on its tab, you choose a saved credential or type one there, and it gets a grant for that task alone, for the time you pick. Saving a credential here lets no agent use it on its own."
+      description="Save API keys, tokens, and passwords for agents to request. Each approved grant can be used by any native agent tab in its environment and survives conversation changes until it expires, runs out of uses, or is revoked."
       actions={
         <Button
           size="sm"
@@ -508,20 +536,16 @@ export function CredentialsSettings() {
                 </>
               ) : null}
               {form.mode !== "edit" ? (
-                <label className="block space-y-1">
+                <div className="space-y-1">
                   <span className="text-xs font-medium">Value</span>
-                  <Input
-                    type="password"
-                    autoComplete="off"
-                    spellCheck={false}
-                    aria-label="Credential value"
+                  <CredentialValueInput
                     value={form.value}
-                    onChange={(event) => setForm({ ...form, value: event.target.value })}
+                    onValueChange={(value) => setForm({ ...form, value })}
                   />
                   <span className="block text-[11px] text-muted-foreground">
-                    Stored exactly as typed. {vault?.detail}
+                    Paste multiline values to preserve line breaks. {vault?.detail}
                   </span>
-                </label>
+                </div>
               ) : null}
               {form.mode !== "replace" ? (
                 <>
@@ -538,7 +562,34 @@ export function CredentialsSettings() {
                     </label>
                     {!form.allProjects ? (
                       <div className="max-h-40 space-y-1 overflow-y-auto rounded border border-zinc-800 p-2">
-                        {projects.map((project) => (
+                        {!projects ? (
+                          <p className="text-xs text-muted-foreground">
+                            Projects are unavailable on this machine.
+                          </p>
+                        ) : projects.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            This machine has no projects.
+                          </p>
+                        ) : null}
+                        {form.projectIds
+                          .filter(
+                            (id) => projects && !projects.some((project) => project.id === id),
+                          )
+                          .map((id) => (
+                            <label key={id} className="flex items-center gap-2 text-xs">
+                              <Checkbox
+                                checked
+                                onCheckedChange={() =>
+                                  setForm({
+                                    ...form,
+                                    projectIds: form.projectIds.filter((each) => each !== id),
+                                  })
+                                }
+                              />
+                              {projectName(id)} (unavailable)
+                            </label>
+                          ))}
+                        {projects?.map((project) => (
                           <label key={project.id} className="flex items-center gap-2 text-xs">
                             <Checkbox
                               checked={form.projectIds.includes(project.id)}

@@ -13,7 +13,7 @@ tab that asked. The person picks a saved credential or types a value, picks
 how long the grant lasts, and allows it. The backend stores the value (in the
 system keychain, or in memory for a one-off), creates a **grant** for the
 **environment** (bound to its runtime), and the agent receives the grant id.
-Every agent tab in that environment, OpenCode included, may use the grant.
+Eligible native agent tabs in that environment, OpenCode included, may use the grant under their execution policy.
 The agent then uses the grant through `run_with_credential` (the backend
 runs a command with the value in that command's environment or a private
 file) or `http_request_with_credential` (the backend sends one HTTPS request
@@ -56,8 +56,11 @@ sequenceDiagram
 
 Four user-facing records, all metadata, in four database stores (`credential-connections`,
 and `credential-requests`, `credential-grants`, `credential-operations`, each
-owned by its environment). A separate `credential-vault-cleanup` store tracks
-retired vault entries awaiting removal. Values are never in the database.
+owned by its environment). The `credential-vault-cleanup` store tracks
+staged writes and retired entries. The `credential-run-cleanup` store tracks
+command materializations until cleanup succeeds, even if the operation is
+already terminal or its environment record has been removed. Values are never
+in the database.
 
 - **Connection** (a saved credential): name, description, the projects that
   may ask for it (`null` = every project on this machine), the hosts a trusted
@@ -67,10 +70,11 @@ retired vault entries awaiting removal. Values are never in the database.
 - **Request**: what the agent asked for (label, purpose, use, binding or HTTP
   policy, an optional exact command, an optional suggested connection name),
   and the runtime it was made in. Its `tabId` is the tab that shows the card:
-  the asking tab, or for OpenCode the tab id the agent passes (a placement
-  hint only), or `*` for every agent tab of the environment. States: `pending`,
+  the asking tab, a valid native tab named by an environment-wide caller, or
+  `*` for every native agent tab of the environment. States: `pending`,
   `granted`, `declined`, `expired`, `cancelled`. Waits 10 minutes for a
-  person. A tab may have four pending at once; a pending request is cancelled
+  person. Each authenticated caller may have four pending at once, regardless
+  of where the cards appear. A pending request is cancelled
   when its tab closes or the conversation that asked ends.
 - **Grant**: the effective permission the backend computed: environment,
   project, runtime, the tab that asked (for display only), source (connection with its pinned value version, or a temporary
@@ -123,9 +127,11 @@ same checks, in `CredentialOperations.authorize`:
 
 An ambiguous outcome is never retried automatically: a timeout or a lost
 connection after sending is `outcome_unknown`. A use that ended before
-anything ran (`cancelled_before_start`) gives its use back. The same
-idempotency key with the same request returns the existing operation; with a
-different request it is refused (`IDEMPOTENCY_CONFLICT`).
+anything ran (`cancelled_before_start`) gives its use back. Within one grant and authenticated caller, replaying the same idempotency
+key with the same request returns the retained operation even after the grant
+ends. Reusing that key for a different request returns
+`IDEMPOTENCY_CONFLICT`. Cancellation of a running operation is recorded
+durably so its owner can act on it and report the outcome.
 
 ### Execution policy
 
@@ -141,6 +147,7 @@ A credential grant never widens what the session may already do:
 | Restricted network enforced by the container firewall | Runs inside the firewall under the command rules above | Refused |
 | Network capability denied | Refused | Refused |
 | Coordinator (read-only) | Refused | Refused under the coordinator's network policy |
+| OpenCode read-only turn | Credential tools withheld | Credential tools withheld |
 
 ## Running a command
 
@@ -157,7 +164,8 @@ isolation variables, or in the container as `node` in `/workspace`.
   `/tmp/orkestrator-credentials/<operation>` with umask 077.
 - Binding names are validated. Names that change how programs start
   (`PATH`, `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `BASH_ENV`, `ORKESTRATOR_*`, …)
-  are refused.
+  are refused. Docker client controls such as `DOCKER_*` and proxy settings
+  are also refused for container environment-variable delivery.
 - A worktree run is its own process group. When the command exits, times out
   (10 minutes by default, 60 at most) or is cancelled, the whole group is
   ended, so a background descendant does not keep the value. A container run
@@ -180,8 +188,10 @@ request must be `https` to one of those hosts exactly (port included), with no
 user info. The default HTTPS port and numeric port spelling are canonicalized.
 The backend checks every address returned by DNS and connects directly to a
 validated public address. TLS and HTTP still use the approved hostname.
-The agent may not set `Authorization`, `Cookie`, `Host`, hop-by-hop
-headers or the credential's own header. Redirects are returned, not followed,
+The agent may not set `Authorization`, `Cookie`, `Host`, `Accept-Encoding`,
+hop-by-hop headers or the credential's own header. Header names are
+case-insensitive and duplicates are rejected. The transport requests identity
+encoding. Redirects are returned, not followed,
 so a credential never reaches a host nobody approved. The answer carries the
 status, a short list of safe headers (no `set-cookie`) and up to 128 KiB of
 body, all filtered. A truncated body drops the suffix still held by the filter.
@@ -204,8 +214,9 @@ credential."
 
 ## Storage
 
-`vault.ts`. A saved value is written under a random entry id, read back and compared before
-anything refers to it. Reads and deletion use the vault recorded for that
+`vault.ts`. A pending cleanup record is committed before writing the saved
+value under a random entry ID. The value is read back and compared, then the
+pending record is removed in the same transaction that publishes the connection. Reads and deletion use the vault recorded for that
 entry, even if the backend chose a different default on restart. Replacing
 or deleting a connection ends its grants immediately. Physical removal is
 retried from a durable cleanup record until the original vault confirms it.
@@ -219,8 +230,10 @@ retried from a durable cleanup record until the original vault confirms it.
 | Tests (`NODE_ENV=test`) | Memory only. No test can reach the real keychain. |
 
 One-off ("temporary") values are held only in the backend's memory and are
-gone on restart. The registry writer's startup work ends their grants and
-settles operations the previous process left open
+gone when their owning backend exits. The registry writer checks process
+identity during recovery before ending a grant or settling an operation from
+another boot. It leaves work owned by a live backend in place. The cleanup
+sweep retries unresolved vault and command materializations
 (`CredentialService.reconcileStartup`).
 
 The four provider keys in `config.json` are unchanged; see
@@ -229,11 +242,12 @@ and the decisions below.
 
 ## Agent tools
 
-Registered on the general agent-tools server for every connection
-(`credentials/tools.ts`). On OpenCode's environment-wide connection the
-caller is the environment; `request_credential` takes an optional `tabId`
-(the mailbox tab id from the turn's instructions) only to choose which tab
-shows the card.
+Registered on eligible connections to the general agent-tools server
+(`credentials/tools.ts`). Claude tmux and shared bridge fallback connections
+have no approval card and omit the credential tools. OpenCode's read-only turns
+also omit them at the provider and authenticate to MCP with a restricted token.
+An eligible environment-wide connection may pass a native `tabId` as a
+placement hint for `request_credential`.
 
 | Tool | Does |
 | --- | --- |

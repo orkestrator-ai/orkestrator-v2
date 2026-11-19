@@ -6,12 +6,14 @@ import {
   type CredentialRequestRecord,
   type CredentialVaultKind,
 } from "@orkestrator/protocol/agent-credentials";
+import type { CredentialProcessOwner } from "./owner.js";
 import type { StorageDatabase, StoreRows } from "../storage-database.js";
 import {
   CREDENTIAL_CONNECTIONS_STORE,
   CREDENTIAL_GRANTS_STORE,
   CREDENTIAL_OPERATIONS_STORE,
   CREDENTIAL_REQUESTS_STORE,
+  CREDENTIAL_RUN_CLEANUP_STORE,
   CREDENTIAL_VAULT_CLEANUP_STORE,
 } from "./layout.js";
 
@@ -35,11 +37,21 @@ export interface RetiredVaultEntry {
   id: string;
   connectionId: string;
   storage: CredentialVaultKind;
+  staging?: { owner: CredentialProcessOwner; bootId: string; abandoned?: true };
+}
+
+export interface CredentialRunCleanup {
+  id: string;
+  environmentId: string;
+  owner?: CredentialProcessOwner;
+  containerId?: string;
+  retryable?: true;
 }
 
 export interface StoredRequest extends CredentialRequestRecord {
   internal: {
     agent: string | null;
+    callerTabId?: string;
     logicalSessionKey: string;
     providerSessionId: string | null;
     runtimeIdentity: string;
@@ -59,6 +71,7 @@ export interface StoredGrant extends CredentialGrantRecord {
     entryId: string;
     /** The backend process that issued it, and its monotonic clock then. */
     bootId: string;
+    owner?: CredentialProcessOwner;
     issuedMonotonicMs: number;
     lifetimeMs: number;
   };
@@ -70,11 +83,10 @@ export interface StoredOperation extends CredentialOperationRecord {
     fingerprint: string;
     scope?: { projectId: string; providerSessionId: string | null };
     bootId: string;
-    /** A local run's private directory, removed when it ends. */
-    runDirectory?: string;
-    /** A container run's container and private directory. */
+    owner?: CredentialProcessOwner;
+    cancelRequested?: boolean;
+    /** Legacy location hint. New commands journal this in credential-run-cleanup. */
     containerId?: string;
-    containerDirectory?: string;
   };
 }
 
@@ -83,7 +95,8 @@ type CredentialStore =
   | typeof CREDENTIAL_CONNECTIONS_STORE
   | typeof CREDENTIAL_REQUESTS_STORE
   | typeof CREDENTIAL_GRANTS_STORE
-  | typeof CREDENTIAL_OPERATIONS_STORE;
+  | typeof CREDENTIAL_OPERATIONS_STORE
+  | typeof CREDENTIAL_RUN_CLEANUP_STORE;
 
 /**
  * Rows of one credential store. Every `rows(...)` call names its store
@@ -99,6 +112,8 @@ function storeRows(database: StorageDatabase, store: CredentialStore): StoreRows
       return database.rows(CREDENTIAL_REQUESTS_STORE);
     case CREDENTIAL_GRANTS_STORE:
       return database.rows(CREDENTIAL_GRANTS_STORE);
+    case CREDENTIAL_RUN_CLEANUP_STORE:
+      return database.rows(CREDENTIAL_RUN_CLEANUP_STORE);
     case CREDENTIAL_OPERATIONS_STORE:
       return database.rows(CREDENTIAL_OPERATIONS_STORE);
   }
@@ -174,6 +189,12 @@ function parseRetiredEntry(raw: unknown): RetiredVaultEntry | null {
     : null;
 }
 
+function parseRunCleanup(raw: unknown): CredentialRunCleanup | null {
+  return isRecord(raw) && hasStrings(raw, ["id", "environmentId"])
+    ? (raw as unknown as CredentialRunCleanup)
+    : null;
+}
+
 /** The client view of a record: everything except `internal`. */
 export function publicRecord<T extends { internal: unknown }>(record: T): Omit<T, "internal"> {
   const { internal: _internal, ...rest } = record;
@@ -232,7 +253,7 @@ export class CredentialRecordStore {
     return record?.id === id ? record : null;
   }
 
-  /** Runs `fn` in one transaction over the four stores. */
+  /** Runs `fn` in one transaction over the credential stores. */
   transaction<T>(fn: (rows: CredentialRows) => T): T {
     const database = this.database();
     return database.transaction(() => fn(new CredentialRows(database)));
@@ -252,6 +273,10 @@ export class CredentialRecordStore {
 
   listRetiredEntries(connectionId?: string): RetiredVaultEntry[] {
     return this.list(CREDENTIAL_VAULT_CLEANUP_STORE, parseRetiredEntry, connectionId);
+  }
+
+  listRunCleanup(environmentId?: string): CredentialRunCleanup[] {
+    return this.list(CREDENTIAL_RUN_CLEANUP_STORE, parseRunCleanup, environmentId);
   }
 
   // --- Requests ---------------------------------------------------------------
@@ -368,8 +393,28 @@ export class CredentialRows {
       connectionId: connection.id,
       storage: connection.storage,
     };
-    this.rows(CREDENTIAL_VAULT_CLEANUP_STORE).put(record.id, JSON.stringify(record));
+    this.putVaultCleanup(record);
     return record;
+  }
+
+  putVaultCleanup(record: RetiredVaultEntry): void {
+    this.rows(CREDENTIAL_VAULT_CLEANUP_STORE).put(record.id, JSON.stringify(record));
+  }
+
+  countRunCleanup(environmentId: string): number {
+    return this.rows(CREDENTIAL_RUN_CLEANUP_STORE).list({ owner: environmentId }).length;
+  }
+
+  putRunCleanup(record: CredentialRunCleanup): void {
+    this.rows(CREDENTIAL_RUN_CLEANUP_STORE).put(record.id, JSON.stringify(record));
+  }
+
+  runCleanup(id: string): CredentialRunCleanup | null {
+    return this.read(CREDENTIAL_RUN_CLEANUP_STORE, id, parseRunCleanup);
+  }
+
+  confirmRunCleanup(id: string): void {
+    this.rows(CREDENTIAL_RUN_CLEANUP_STORE).delete(id);
   }
 
   confirmVaultRemoval(entryId: string): void {

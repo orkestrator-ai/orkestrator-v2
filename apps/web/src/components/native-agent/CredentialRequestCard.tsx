@@ -12,6 +12,7 @@ import {
 } from "@orkestrator/protocol/agent-credentials";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { Button } from "@/components/ui/button";
+import { CredentialValueInput } from "@/components/ui/credential-value-input";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { backendForScope } from "@/lib/backend/scope-backend";
@@ -81,17 +82,10 @@ export function CredentialRequestCard({
       ),
     [connections, request.use, request.http?.hosts],
   );
-  const suggested = usable.find(
-    (connection) =>
-      request.suggestedConnection &&
-      connection.name.toLowerCase() === request.suggestedConnection.toLowerCase(),
-  );
   const [chosenMode, setMode] = useState<"connection" | "value">(
     usable.length > 0 ? "connection" : "value",
   );
-  const [chosenConnectionId, setConnectionId] = useState<string>(
-    suggested?.id ?? usable[0]?.id ?? "",
-  );
+  const [chosenConnectionId, setConnectionId] = useState("");
   const connectionId = usable.some((each) => each.id === chosenConnectionId)
     ? chosenConnectionId
     : "";
@@ -100,7 +94,7 @@ export function CredentialRequestCard({
   const showSavedChoice = usable.length > 0 || mode === "connection";
   const [value, setValue] = useState("");
   const [save, setSave] = useState(false);
-  const [saveName, setSaveName] = useState(request.suggestedConnection ?? request.label);
+  const [saveName, setSaveName] = useState(request.label);
   const [lifetimeMs, setLifetimeMs] = useState<number>(CREDENTIAL_DEFAULT_GRANT_LIFETIME_MS);
   const [once, setOnce] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -239,6 +233,12 @@ export function CredentialRequestCard({
           </div>
         )}
 
+        {request.suggestedConnection ? (
+          <p className="break-words text-muted-foreground">
+            Agent suggestion: {request.suggestedConnection}
+          </p>
+        ) : null}
+
         <fieldset className="space-y-2" disabled={busy}>
           <legend className="sr-only">Credential to use</legend>
           {showSavedChoice ? (
@@ -262,7 +262,7 @@ export function CredentialRequestCard({
               >
                 {!connectionId ? (
                   <option value="" disabled>
-                    Choose a saved credential
+                    Choose a credential
                   </option>
                 ) : null}
                 {usable.map((connection) => (
@@ -289,23 +289,20 @@ export function CredentialRequestCard({
               />
             ) : null}
             <span className="shrink-0">Enter a value</span>
-            <Input
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              aria-label="Credential value"
-              className="h-8 min-w-0 flex-1 text-xs"
-              maxLength={CREDENTIAL_LIMITS.valueMaxBytes}
-              value={value}
-              onFocus={() => setMode("value")}
-              onChange={(event) => setValue(event.target.value)}
-            />
           </label>
+          <CredentialValueInput
+            value={value}
+            onFocus={() => setMode("value")}
+            onValueChange={(next) => {
+              setMode("value");
+              setValue(next);
+            }}
+          />
           {mode === "value" ? (
             <div className="space-y-1.5 pl-1">
               {valueProblem ? <p className="text-destructive">{valueProblem}</p> : null}
               <p className="text-[11px] text-muted-foreground">
-                The value is sent exactly as typed and is not kept in this window.
+                Paste multiline values to preserve line breaks. The value stays hidden.
               </p>
               {vault.canSave ? (
                 <label className="flex items-center gap-2">
@@ -333,6 +330,12 @@ export function CredentialRequestCard({
             </div>
           ) : null}
         </fieldset>
+
+        <p className="text-muted-foreground">
+          Any native agent tab in this environment can use this grant, including after you close
+          this tab or start a new conversation. The grant ends when it expires, runs out of uses, or
+          is revoked.
+        </p>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <label className="flex items-center gap-2">

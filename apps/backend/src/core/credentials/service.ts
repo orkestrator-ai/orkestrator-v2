@@ -49,6 +49,7 @@ export class CredentialService {
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private readonly sweepIntervalMs: number;
   private stopped = false;
+  private recoversDeadOwners = false;
 
   constructor(options: CredentialServiceOptions) {
     this.context = new CredentialContext(options);
@@ -81,12 +82,12 @@ export class CredentialService {
   /**
    * Settles what a previous process left: its temporary values are gone, so
    * its temporary grants end; its open operations cannot be resumed. Only the
-   * data directory's registry writer runs this, so a second backend on the
-   * same directory never ends the first one's grants.
+   * registry writer runs this after checking which owners are still live.
    */
   async reconcileStartup(): Promise<void> {
+    this.recoversDeadOwners = true;
     this.access.invalidateEarlierTemporaryGrants();
-    await this.operations.reconcileStartup();
+    await Promise.all([this.operations.reconcileStartup(), this.connections.cleanRetiredEntries()]);
   }
 
   /** The explicit stop (invariant 15): timers, waiters and running work. */
@@ -103,7 +104,13 @@ export class CredentialService {
     try {
       this.access.sweep();
       this.operations.reconcileRunning();
-      void this.connections.cleanRetiredEntries().catch((error: unknown) => {
+      if (this.recoversDeadOwners) this.access.invalidateEarlierTemporaryGrants();
+      void Promise.all([
+        this.connections.cleanRetiredEntries(),
+        this.recoversDeadOwners
+          ? this.operations.reconcileStartup()
+          : this.operations.cleanMaterializations(),
+      ]).catch((error: unknown) => {
         log.warn("sweep.failed", { error: formatLogError(error) });
       });
     } catch (error) {

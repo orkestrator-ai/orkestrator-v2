@@ -57,6 +57,7 @@ export type CommandContext = {
       projectId: string,
       target: "host" | "container",
       tabId?: string,
+      options?: { credentialsDisabled: true },
     ): AgentToolConnection;
     workflowResultConnection?(
       environmentId: string,

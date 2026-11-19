@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { AgentToolsServer } from "../agent-tools.js";
+import { AgentToolsServer, type AgentToolConnection } from "../agent-tools.js";
+import { FakeOpenCode2Server } from "../opencode2/fake-server.test-support.js";
+import { openCode2TabMcpServer } from "../opencode2/permissions.js";
+import { OpenCode2Provider } from "../opencode2/provider.js";
 import {
   createCredentialHarness,
   fakeSpawner,
@@ -40,7 +43,14 @@ afterEach(async () => {
 });
 
 async function call(tabId: string | undefined, method: string, params?: Record<string, unknown>) {
-  const { url, token } = server.connection("env-1", "project-1", "host", tabId);
+  return callConnection(server.connection("env-1", "project-1", "host", tabId), method, params);
+}
+
+async function callConnection(
+  { url, token }: AgentToolConnection,
+  method: string,
+  params?: Record<string, unknown>,
+) {
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -205,4 +215,90 @@ describe("credential tools", () => {
     });
     expect(run.body.result?.structuredContent).toMatchObject({ state: "succeeded" });
   });
+});
+
+test("a native OpenCode read-only turn denies credential dispatch at the provider and MCP", async () => {
+  const fake = new FakeOpenCode2Server();
+  const provider = new OpenCode2Provider(fake.client(), { monitorEvents: false });
+  try {
+    const sessionId = await provider.createSession("build", "Fixture");
+    const grants = await Promise.all(
+      ["command", "http"].map(async (use) => {
+        const request = await h.service.requestAccess(h.caller, {
+          label: "Fixture token",
+          purpose: "Fixture",
+          use,
+          bindingName: "API_TOKEN",
+          hosts: ["api.example.com"],
+        });
+        return (
+          await h.service.approve({
+            requestId: request.id,
+            revision: request.revision,
+            source: { kind: "value", value: TEST_SECRET },
+          })
+        ).grant;
+      }),
+    );
+    const connection = server.connection("env-1", "project-1", "host", h.caller.tabId);
+    await provider.send(sessionId, "Review only", {
+      requestId: "fixture-review",
+      readOnly: true,
+      agentMcp: connection,
+    });
+    const config = fake.mcp.get(openCode2TabMcpServer(sessionId))?.config as {
+      headers: { Authorization: string };
+    };
+    const token = config.headers.Authorization.replace(/^Bearer /u, "");
+    expect(token === connection.readOnlyToken && token !== connection.token).toBe(true);
+    const list = await callConnection({ url: connection.url, token }, "tools/list");
+    expect(list.body.result?.tools?.some(({ name }) => CREDENTIAL_TOOLS.includes(name))).toBe(
+      false,
+    );
+    const operations = [
+      { name: "run_with_credential", arguments: { grantId: grants[0]!.id, command: "fixture" } },
+      {
+        name: "http_request_with_credential",
+        arguments: {
+          grantId: grants[1]!.id,
+          method: "POST",
+          url: "https://api.example.com",
+          body: "fixture",
+        },
+      },
+    ];
+    for (const operation of operations) {
+      const permissions = fake.calls
+        .filter((call) => call.method === "PATCH" && call.path === `/api/session/${sessionId}`)
+        .flatMap((call) => (call.body as { permissions?: unknown[] }).permissions ?? []);
+      expect(permissions).toContainEqual({
+        action: `*_${operation.name}`,
+        resource: "*",
+        effect: "deny",
+      });
+      const rejected = await callConnection(
+        { url: connection.url, token },
+        "tools/call",
+        operation,
+      );
+      expect(rejected.body.result?.isError ?? "error" in rejected.body).toBe(true);
+    }
+    expect(h.service.overview().operations).toEqual([]);
+    expect(h.service.overview().grants.every((grant) => grant.uses === 0)).toBe(true);
+  } finally {
+    await provider.dispose();
+    fake.stop();
+  }
+});
+
+test("a tmux connection has no credential tools and keeps ordinary tools", async () => {
+  const connection = server.connection("env-1", "project-1", "host", "tmux-1", {
+    credentialsDisabled: true,
+  });
+  const result = await callConnection(connection, "tools/list");
+  const names = result.body.result?.tools?.map(({ name }) => name) ?? [];
+  expect(names.length).toBeGreaterThan(0);
+  expect(names.some((name) => CREDENTIAL_TOOLS.includes(name))).toBe(false);
+  server.revokeTab("env-1", "tmux-1");
+  expect((await callConnection(connection, "tools/list")).body.result).toBeUndefined();
 });

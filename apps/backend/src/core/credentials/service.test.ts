@@ -1,5 +1,11 @@
+import { mkdir, readdir } from "node:fs/promises";
 import { afterEach, describe, expect, test } from "bun:test";
-import { CREDENTIAL_LIMITS, CREDENTIAL_TIMING } from "@orkestrator/protocol/agent-credentials";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
+import {
+  CREDENTIAL_ANY_TAB,
+  CREDENTIAL_LIMITS,
+  CREDENTIAL_TIMING,
+} from "@orkestrator/protocol/agent-credentials";
 import type { CredentialCaller } from "./access.js";
 import {
   createCredentialHarness,
@@ -1190,7 +1196,7 @@ describe("credential policy and dispatch", () => {
     store.transaction((rows) =>
       rows.putOperation({
         ...reserved!,
-        internal: { ...reserved!.internal, containerId: "fixture-container" },
+        internal: { ...reserved!.internal, owner: undefined, containerId: "fixture-container" },
       }),
     );
     const restarted = h.restart();
@@ -1208,19 +1214,23 @@ describe("credential policy and dispatch", () => {
     ).toEqual([true]);
   });
 
-  test("retained output and idempotent replay stay with the environment, not another project", async () => {
+  test("uses a separate idempotency key per authenticated tab even after exhaustion", async () => {
     const h = await harness();
-    const grant = await grantCommand(h);
+    const grant = await grantCommand(h, { maxUses: 2 });
     const input = { grantId: grant.id, command: "true", idempotencyKey: "keep" };
     const run = await h.service.runCommand(h.caller, { ...input, waitMs: 20_000 });
     replaceConversation(h);
     const other = { ...h.caller, tabId: "tab-2" };
     expect((await h.service.getOperation(other, run.id, 0)).stdout?.text).toContain("ran:true");
-    expect((await h.service.runCommand(other, input)).id).toBe(run.id);
+    const second = await h.service.runCommand(other, { ...input, command: "false" });
+    expect(second.id).not.toBe(run.id);
+    expect((await h.service.runCommand(h.caller, input)).id).toBe(run.id);
+    expect((await h.service.runCommand(other, { ...input, command: "false" })).id).toBe(second.id);
+    await expect(h.service.runCommand(other, input)).rejects.toThrow("IDEMPOTENCY_CONFLICT");
     await expect(
       h.service.getOperation({ ...h.caller, projectId: "project-2" }, run.id, 0),
     ).rejects.toThrow("SCOPE_MISMATCH");
-    expect(spawner.spawned).toHaveLength(1);
+    expect(spawner.spawned).toHaveLength(2);
   });
 
   test("history pressure preserves an approved grant's original idempotency key", async () => {
@@ -1352,4 +1362,261 @@ describe("trusted HTTPS regressions", () => {
     const fast = await Promise.race([waiting, Bun.sleep(500).then(() => null)]);
     expect(fast?.state).toBe("succeeded");
   });
+});
+
+test("placement hints cannot increase the environment caller's pending quota", async () => {
+  const h = await harness();
+  const caller = { ...h.caller, tabId: CREDENTIAL_ANY_TAB };
+  const input = { label: "Token", purpose: "Test", use: "command", bindingName: "TOKEN" };
+  const placed = await h.service.requestAccess(caller, { ...input, tabHint: "tab-2" });
+  expect(placed.tabId).toBe("tab-2");
+  for (let index = 0; index < 3; index++) {
+    const broadcast = await h.service.requestAccess(caller, {
+      ...input,
+      tabHint: `invalid-${index}`,
+    });
+    expect(broadcast.tabId).toBe(CREDENTIAL_ANY_TAB);
+  }
+  await expect(h.service.requestAccess(caller, { ...input, tabHint: "tab-1" })).rejects.toThrow(
+    "REQUEST_LIMIT",
+  );
+  expect(
+    h.service.tabSnapshot({ environmentId: caller.environmentId, tabId: "tab-2" }).requests,
+  ).toHaveLength(4);
+  expect(
+    h.service.tabSnapshot({ environmentId: caller.environmentId, tabId: "tab-1" }).requests,
+  ).toHaveLength(3);
+});
+
+test("duplicate HTTP headers fail before replay in either order", async () => {
+  let sent = 0;
+  const h = await harness({
+    fetch: async () => {
+      sent++;
+      return new Response("ok");
+    },
+  });
+  const { grant } = await savedGrant(h, "http");
+  const input = {
+    grantId: grant.id,
+    method: "GET",
+    url: "https://api.example.com",
+    idempotencyKey: "stable",
+  };
+  const original = await h.service.httpRequest(h.caller, {
+    ...input,
+    headers: { "X-Custom": "one" },
+  });
+  for (const headers of [
+    { "X-Custom": "one", "x-custom": "two" },
+    { "x-custom": "two", "X-Custom": "one" },
+  ]) {
+    await expect(h.service.httpRequest(h.caller, { ...input, headers })).rejects.toThrow(
+      "INVALID_INPUT",
+    );
+  }
+  expect(
+    (await h.service.httpRequest(h.caller, { ...input, headers: { "x-custom": "one" } })).id,
+  ).toBe(original.id);
+  expect(sent).toBe(1);
+});
+
+test("Accept-Encoding is reserved in new requests and legacy grants before charging a use", async () => {
+  const h = await harness();
+  await expect(
+    h.service.requestAccess(h.caller, {
+      label: "Token",
+      purpose: "Test",
+      use: "http",
+      hosts: ["api.example.com"],
+      authScheme: "header",
+      authHeader: "Accept-Encoding",
+    }),
+  ).rejects.toThrow("INVALID_INPUT");
+  const { grant } = await savedGrant(h, "http", 1);
+  const store = h.storage.credentialRecordStore();
+  const legacy = store.getGrant(grant.id)!;
+  const input = { grantId: grant.id, method: "GET", url: "https://api.example.com" };
+  await expect(
+    h.service.httpRequest(h.caller, { ...input, headers: { "ACCEPT-ENCODING": "gzip" } }),
+  ).rejects.toThrow("INVALID_INPUT");
+  store.transaction((rows) =>
+    rows.putGrant({
+      ...legacy,
+      http: { hosts: ["api.example.com"], auth: { scheme: "header", header: "accept-encoding" } },
+    }),
+  );
+  await expect(h.service.httpRequest(h.caller, input)).rejects.toThrow("INVALID_INPUT");
+  expect(store.getGrant(grant.id)?.uses).toBe(0);
+});
+
+test.each(["GET", "HEAD"])("a lost %s answer remains unknown on replay", async (method) => {
+  let sent = 0;
+  const h = await harness({
+    fetch: async () => {
+      sent++;
+      throw new Error("fixture lost response");
+    },
+  });
+  const { grant } = await savedGrant(h, "http");
+  const input = {
+    grantId: grant.id,
+    method,
+    url: "https://api.example.com",
+    idempotencyKey: "lost",
+  };
+  const result = await h.service.httpRequest(h.caller, input);
+  expect(result.state).toBe("outcome_unknown");
+  expect(result.note).toContain("Check before repeating");
+  expect((await h.service.httpRequest(h.caller, input)).id).toBe(result.id);
+  expect(sent).toBe(1);
+});
+
+test.each([
+  "DOCKER_HOST",
+  "DOCKER_CONTEXT",
+  "DOCKER_CONFIG",
+  "DOCKER_TLS_VERIFY",
+  "DOCKER_CERT_PATH",
+])(
+  "rejects %s as a binding and refuses a stored grant before invoking Docker",
+  async (bindingName) => {
+    const h = await harness();
+    h.runtimes.set(h.caller.environmentId, {
+      runtime: { kind: "container", isolation: "shared-container" },
+      identity: "container:fixture",
+      networkAccess: "full",
+    });
+    await expect(
+      h.service.requestAccess(h.caller, {
+        label: "Token",
+        purpose: "Test",
+        use: "command",
+        bindingName,
+      }),
+    ).rejects.toThrow("INVALID_INPUT");
+    const grant = await grantCommand(h);
+    const store = h.storage.credentialRecordStore();
+    const legacy = store.getGrant(grant.id)!;
+    store.transaction((rows) =>
+      rows.putGrant({ ...legacy, binding: { kind: "env", name: bindingName } }),
+    );
+    await expect(
+      h.service.runCommand(h.caller, { grantId: grant.id, command: "true" }),
+    ).rejects.toThrow("INVALID_INPUT");
+    expect(store.getGrant(grant.id)?.uses).toBe(0);
+    expect(spawner.spawned).toHaveLength(0);
+  },
+);
+
+test("a missing saved value becomes unavailable and a bounded sweep restores it", async () => {
+  const h = await harness();
+  const { grant } = await savedGrant(h, "command");
+  const stored = h.storage.credentialRecordStore().getGrant(grant.id)!;
+  await h.vault.delete(stored.internal.entryId);
+  expect((await h.service.runCommand(h.caller, { grantId: grant.id, command: "true" })).state).toBe(
+    "cancelled_before_start",
+  );
+  expect(h.service.overview().connections[0]?.status).toBe("unavailable");
+  await h.vault.put(stored.internal.entryId, TEST_SECRET);
+  await h.service.connections.cleanRetiredEntries();
+  expect(h.service.overview().connections[0]?.status).toBe("ready");
+});
+
+test("startup invalidation cannot orphan a cancelled reservation's staged file", async () => {
+  const h = await harness();
+  const grant = await grantCommand(h);
+  const records = h.storage.credentialRecordStore();
+  const owner = { pid: fakePid(14), start: "exited-fixture" };
+  const saved = records.getGrant(grant.id)!;
+  records.transaction((rows) =>
+    rows.putGrant({
+      ...saved,
+      internal: { ...saved.internal, owner, bootId: "prior-boot" },
+    }),
+  );
+  const { id } = saved;
+  for (const container of [false, true]) {
+    const operationId = crypto.randomUUID();
+    const directory = `${h.dataDir}/credentials/runs/${operationId}`;
+    if (!container) {
+      await mkdir(directory, { recursive: true });
+      await Bun.write(`${directory}/TEST_TOKEN`, TEST_SECRET);
+    }
+    records.transaction((rows) => {
+      rows.putOperation({
+        id: operationId,
+        environmentId: h.caller.environmentId,
+        tabId: h.caller.tabId,
+        grantId: id,
+        kind: "command",
+        state: "reserved",
+        createdAt: 1,
+        cleanup: "none",
+        summary: "fixture",
+        internal: { idempotencyKey: null, fingerprint: "fixture", bootId: "prior-boot", owner },
+      });
+      rows.putRunCleanup({
+        id: operationId,
+        environmentId: h.caller.environmentId,
+        owner,
+        ...(container ? { containerId: "fixture-container" } : {}),
+      });
+    });
+  }
+  const other = h.restart();
+  await other.reconcileStartup();
+  expect(records.getGrant(id)?.state).toBe("invalidated");
+  expect(records.listRunCleanup()).toHaveLength(0);
+  expect(records.listOperations().map((op) => [op.state, op.cleanup])).toEqual([
+    ["cancelled_before_start", "confirmed"],
+    ["cancelled_before_start", "confirmed"],
+  ]);
+  expect(await readdir(`${h.dataDir}/credentials/runs`)).toEqual([]);
+  expect(
+    spawner.spawned.map((spawned) => spawned.args.includes("orkestrator-credential-cleanup")),
+  ).toEqual([true]);
+});
+
+test("a waiter drops its bucket after another backend settles a request", async () => {
+  const h = await harness();
+  const request = await h.service.requestAccess(h.caller, {
+    label: "Token",
+    purpose: "Fixture",
+    use: "command",
+    bindingName: "TOKEN",
+  });
+  const pending = h.service.getRequest(h.caller, request.id, 10);
+  expect(h.service["context"]["waiters"].size).toBe(1);
+  h.restart().decline({ requestId: request.id, revision: request.revision });
+  expect((await pending).request.state).toBe("declined");
+  expect(h.service["context"]["waiters"].size).toBe(0);
+});
+
+test("cancelling an HTTPS use from another backend reaches the live request", async () => {
+  const dispatched = Promise.withResolvers<AbortSignal>();
+  const h = await harness({
+    fetch: (_url, { signal }) =>
+      new Promise((_resolve, reject) => {
+        dispatched.resolve(signal!);
+        signal!.addEventListener("abort", () => reject(new Error("fixture cancelled")), {
+          once: true,
+        });
+      }),
+  });
+  const { grant } = await savedGrant(h, "http");
+  const sending = h.service.httpRequest(h.caller, {
+    grantId: grant.id,
+    method: "POST",
+    url: "https://api.example.com",
+  });
+  const signal = await dispatched.promise;
+  const [operation] = h.service.overview().operations;
+  const ack = await h.restart().cancelOperation(h.caller, operation!.id);
+  expect(ack.note).toContain("Cancellation requested");
+  h.service.sweep();
+  expect(signal.aborted).toBe(true);
+  const done = await sending;
+  expect(done.state).toBe("outcome_unknown");
+  expect(done.error).toContain("cancelled");
 });

@@ -97,6 +97,7 @@ describe("CredentialRequestCard", () => {
       screen.getByText(/Code running in this environment will be able to read this credential/u),
     ).toBeTruthy();
     expect(screen.getByText("$NPM_TOKEN")).toBeTruthy();
+    expect(screen.getByText(/Any native agent tab in this environment/u)).toBeTruthy();
     const allow = screen.getByRole("button", { name: "Allow" }) as HTMLButtonElement;
     expect(allow.disabled).toBe(true);
     const input = screen.getByLabelText("Credential value") as HTMLInputElement;
@@ -113,7 +114,7 @@ describe("CredentialRequestCard", () => {
     await waitFor(() => expect(input.value).toBe(""));
   });
 
-  test("offers a saved credential first, matching the agent's suggestion", async () => {
+  test("requires an explicit saved credential selection and displays the agent's suggestion", async () => {
     renderInAppCommandScope(
       <CredentialRequestCard
         request={request({ suggestedConnection: "NPM" })}
@@ -121,11 +122,17 @@ describe("CredentialRequestCard", () => {
         vault={VAULT}
       />,
     );
+    expect(screen.getByText("Agent suggestion: NPM")).toBeTruthy();
+    const allow = screen.getByRole("button", { name: "Allow" }) as HTMLButtonElement;
+    expect(allow.disabled).toBe(true);
+    fireEvent.change(screen.getByRole("combobox", { name: "Saved credential to use" }), {
+      target: { value: "other" },
+    });
     fireEvent.click(screen.getByLabelText("Allow one use only"));
-    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    fireEvent.click(allow);
     await waitFor(() => expect(approveCredentialRequest).toHaveBeenCalledTimes(1));
     expect(approveCredentialRequest.mock.calls[0]?.[0]).toMatchObject({
-      source: { kind: "connection", connectionId: "connection-1" },
+      source: { kind: "connection", connectionId: "other" },
       maxUses: 1,
     });
   });
@@ -143,6 +150,7 @@ describe("CredentialRequestCard", () => {
       />,
     );
     expect(screen.getByText("api.example.com")).toBeTruthy();
+    expect(screen.getByText(/Any native agent tab in this environment/u)).toBeTruthy();
     expect(screen.getByText(/The agent never receives the value/u)).toBeTruthy();
     expect(screen.queryByLabelText("Saved credential") === null).toBe(true);
     expect(screen.getByText(/are not offered/u)).toBeTruthy();
@@ -155,6 +163,9 @@ describe("CredentialRequestCard", () => {
     renderInAppCommandScope(
       <CredentialRequestCard request={request()} connections={[connection()]} vault={VAULT} />,
     );
+    fireEvent.change(screen.getByRole("combobox", { name: "Saved credential to use" }), {
+      target: { value: "connection-1" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Allow" }));
     expect(await screen.findByText("This request has expired.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Decline" }));
@@ -252,4 +263,20 @@ test("a refreshed remote snapshot clears a removed choice and routes the next ap
   } finally {
     invokeOnNode.mockRestore();
   }
+});
+
+test("preserves and masks multiline approval input", async () => {
+  renderInAppCommandScope(
+    <CredentialRequestCard request={request()} connections={[]} vault={VAULT} />,
+  );
+  const input = screen.getByLabelText("Credential value") as HTMLInputElement;
+  const value = "  fixture one\r\nfixture two\n  ";
+  fireEvent.paste(input, { clipboardData: { getData: () => value } });
+  expect(input.value).toBe("");
+  expect(input.placeholder).toBe("Multiline value pasted");
+  fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+  await waitFor(() => expect(approveCredentialRequest).toHaveBeenCalledTimes(1));
+  expect(approveCredentialRequest.mock.calls[0]?.[0]).toMatchObject({
+    source: { kind: "value", value },
+  });
 });

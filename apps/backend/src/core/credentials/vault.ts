@@ -122,6 +122,16 @@ export class FileCredentialVault implements CredentialVault {
 
   async delete(entryId: string): Promise<void> {
     await fs.rm(this.file(entryId), { force: true });
+    // The journal also owns temporary files left before rename.
+    const entries = await fs.readdir(this.directory).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    for (const name of entries) {
+      if (name.startsWith(`.${entryId}.`) && name.endsWith(".tmp")) {
+        await fs.rm(path.join(this.directory, name), { force: true });
+      }
+    }
   }
 
   /** Startup: tighten the directory and remove interrupted writes. */
@@ -154,7 +164,7 @@ function bunSecrets(): BunSecrets | null {
 
 const KEYCHAIN_TIMEOUT_MS = 10_000;
 
-async function withTimeout<T>(work: Promise<T>, what: string): Promise<T> {
+async function withTimeout<T>(work: Promise<T>, what: string, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -162,7 +172,7 @@ async function withTimeout<T>(work: Promise<T>, what: string): Promise<T> {
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           () => reject(new CredentialVaultError(`The keychain did not answer (${what})`)),
-          KEYCHAIN_TIMEOUT_MS,
+          timeoutMs,
         );
       }),
     ]);
@@ -180,10 +190,12 @@ async function withTimeout<T>(work: Promise<T>, what: string): Promise<T> {
 export class KeychainCredentialVault implements CredentialVault {
   readonly kind = "keychain" as const;
   readonly service: string;
+  private readonly writes = new Map<string, Promise<void>>();
 
   constructor(
     dataDir: string,
     private readonly secrets: BunSecrets,
+    private readonly timeoutMs = KEYCHAIN_TIMEOUT_MS,
   ) {
     const digest = createHash("sha256").update(path.resolve(dataDir)).digest("hex").slice(0, 16);
     this.service = `orkestrator-credentials-${digest}`;
@@ -191,19 +203,33 @@ export class KeychainCredentialVault implements CredentialVault {
 
   async put(entryId: string, value: string): Promise<void> {
     assertEntryId(entryId);
-    await withTimeout(this.secrets.set({ service: this.service, name: entryId, value }), "write");
+    const write = this.secrets.set({ service: this.service, name: entryId, value });
+    this.writes.set(entryId, write);
+    const forget = () => {
+      if (this.writes.get(entryId) === write) this.writes.delete(entryId);
+    };
+    void write.then(forget, forget);
+    await withTimeout(write, "write", this.timeoutMs);
   }
 
   async get(entryId: string): Promise<string | null> {
     assertEntryId(entryId);
-    return withTimeout(this.secrets.get({ service: this.service, name: entryId }), "read");
+    return withTimeout(
+      this.secrets.get({ service: this.service, name: entryId }),
+      "read",
+      this.timeoutMs,
+    );
   }
 
   async delete(entryId: string): Promise<void> {
     assertEntryId(entryId);
+    if (this.writes.has(entryId)) {
+      throw new CredentialVaultError("The keychain write is still pending.");
+    }
     const deleted = await withTimeout(
       this.secrets.delete({ service: this.service, name: entryId }),
       "delete",
+      this.timeoutMs,
     );
     if (!deleted && (await this.get(entryId)) !== null) {
       throw new CredentialVaultError("The keychain did not remove the credential.");
@@ -221,7 +247,15 @@ export class KeychainCredentialVault implements CredentialVault {
       return read === value;
     } catch (error) {
       log.info("vault.keychain-unavailable", { error: formatLogError(error) });
-      await this.delete(entryId).catch(() => undefined);
+      // This probe value is synthetic. If a timed-out write lands later,
+      // clean up after it settles instead of racing it with a delete.
+      const pending = this.writes.get(entryId);
+      if (pending) {
+        const cleanup = () => this.delete(entryId).catch(() => undefined);
+        void pending.then(cleanup, cleanup);
+      } else {
+        await this.delete(entryId).catch(() => undefined);
+      }
       return false;
     }
   }

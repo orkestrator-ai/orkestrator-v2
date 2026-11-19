@@ -367,9 +367,22 @@ export const CREDENTIAL_FORBIDDEN_HEADERS = new Set([
   "trailer",
   "keep-alive",
   "expect",
+  "accept-encoding",
 ]);
 
-export function credentialBindingNameProblem(name: string): string | null {
+const DOCKER_CLIENT_ENV_NAMES = new Set([
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+]);
+
+export function credentialBindingNameProblem(
+  name: string,
+  options: { containerEnvironment?: boolean } = {},
+): string | null {
   if (!name || name.length > CREDENTIAL_LIMITS.bindingNameMaxChars) {
     return "Binding names are 1 to 64 characters.";
   }
@@ -382,6 +395,11 @@ export function credentialBindingNameProblem(name: string): string | null {
   ) {
     return `${name} changes how programs start, so it cannot hold a credential.`;
   }
+  if (
+    options.containerEnvironment &&
+    (name.startsWith("DOCKER_") || DOCKER_CLIENT_ENV_NAMES.has(name))
+  )
+    return `${name} configures the host Docker client, so it cannot hold a container credential.`;
   return null;
 }
 
@@ -393,8 +411,11 @@ export function credentialHeaderNameProblem(header: string): string | null {
   ) {
     return "Header names are 1 to 64 token characters.";
   }
+  if (header.toLowerCase() === "authorization") {
+    return "Use the bearer or basic scheme for Authorization.";
+  }
   if (CREDENTIAL_FORBIDDEN_HEADERS.has(header.toLowerCase())) {
-    return `${header} cannot carry a credential; use the bearer scheme for Authorization.`;
+    return `${header} is reserved and cannot carry a credential.`;
   }
   return null;
 }

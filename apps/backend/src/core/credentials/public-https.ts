@@ -47,13 +47,14 @@ export async function resolvePublicAddress(
   hostname: string,
   resolve: (hostname: string) => Promise<readonly { address: string }[]> = (host) =>
     lookup(host, { all: true }),
+  timeoutMs = 5_000,
 ): Promise<string | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const answers = await Promise.race([
       resolve(hostname),
       new Promise<null>((resolveTimeout) => {
-        timer = setTimeout(() => resolveTimeout(null), 5_000);
+        timer = setTimeout(() => resolveTimeout(null), timeoutMs);
       }),
     ]);
     if (

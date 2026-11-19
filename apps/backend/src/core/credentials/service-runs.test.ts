@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
+import { access } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { EventEmitter } from "node:events";
@@ -158,9 +159,21 @@ describe("real command runs", () => {
       command: "sleep 30",
       waitMs: 0,
     });
+    const stopped = h.service.getOperation(h.caller, started.id, 4_000);
+    await h.service.cancelOperation(h.caller, started.id);
+    await stopped;
     h.service.stop();
+    const records = h.storage.credentialRecordStore();
+    const previous = records.getGrant(grant.id)!;
+    records.transaction((rows) =>
+      rows.putGrant({
+        ...previous,
+        internal: { ...previous.internal, owner: { pid: fakePid(10), start: "exited-fixture" } },
+      }),
+    );
     const restarted = h.restart();
     await restarted.reconcileStartup();
+    expect(records.getGrant(grant.id)?.state).toBe("invalidated");
     const active = restarted.tabSnapshot({ environmentId: "env-1" }).grants.map((each) => each.id);
     expect(active).toEqual([kept.grant.id]);
     const operation = restarted.overview().operations.find((each) => each.id === started.id);
@@ -198,6 +211,41 @@ describe("credential cancellation while a real command runs", () => {
       error: "Cancelled.",
       cleanup: "confirmed",
     });
+  });
+
+  test("writer takeover preserves a live owner's file and another backend can cancel the run", async () => {
+    const h = await harness();
+    const request = await h.service.requestAccess(h.caller, {
+      label: "Key file",
+      purpose: "Fixture",
+      use: "command",
+      bindingName: "KEY_FILE",
+      bindingKind: "file",
+    });
+    const { grant } = await h.service.approve({
+      requestId: request.id,
+      revision: request.revision,
+      source: { kind: "value", value: TEST_SECRET },
+    });
+    const run = await waitForCommand(h, grant.id);
+    const secretFile = `${h.dataDir}/credentials/runs/${run.id}/KEY_FILE`;
+    await access(secretFile);
+    const other = h.restart();
+    await other.reconcileStartup();
+    await access(secretFile);
+    const records = h.storage.credentialRecordStore();
+    expect(records.getGrant(grant.id)?.state).toBe("active");
+    expect(records.getOperation(run.id)?.state).toBe("running");
+    expect((await other.cancelOperation(h.caller, run.id)).note).toContain(
+      "Cancellation requested",
+    );
+    h.service.sweep();
+    expect(await h.service.getOperation(h.caller, run.id, 4_000)).toMatchObject({
+      state: "outcome_unknown",
+      error: "Cancelled.",
+      cleanup: "confirmed",
+    });
+    await expect(access(secretFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test("retiring a conversation leaves the environment's grant and its run alone", async () => {
@@ -344,6 +392,42 @@ describe.skipIf(!image)("credential runner in a real container", () => {
     expect(spawnSync(command, args, { timeout: 10_000, stdio: "ignore" }).status).toBe(125);
     expect(exec("test", "!", "-e", marker).status).toBe(0);
     expect(exec("test", "!", "-e", `/tmp/orkestrator-credentials/${id}`).status).toBe(0);
+  });
+
+  test("startup removes the real container file of an already cancelled reservation", async () => {
+    const h = await harness();
+    const id = randomUUID();
+    const directory = `/tmp/orkestrator-credentials/${id}`;
+    expect(
+      exec("sh", "-c", 'umask 077; mkdir -p "$1"; printf fixture > "$1/TOKEN"', "stage", directory)
+        .status,
+    ).toBe(0);
+    expect(exec("test", "-s", `${directory}/TOKEN`).status).toBe(0);
+    const owner = { pid: fakePid(24), start: "exited-fixture" };
+    const records = h.storage.credentialRecordStore();
+    records.transaction((rows) => {
+      rows.putOperation({
+        id,
+        environmentId: h.caller.environmentId,
+        tabId: h.caller.tabId,
+        grantId: "fixture",
+        kind: "command",
+        state: "cancelled_before_start",
+        cleanup: "unconfirmed",
+        createdAt: 1,
+        finishedAt: 2,
+        summary: "fixture",
+        internal: { idempotencyKey: null, fingerprint: "fixture", bootId: "prior-boot", owner },
+      });
+      rows.putRunCleanup({ id, environmentId: h.caller.environmentId, containerId, owner });
+    });
+    await h.restart().reconcileStartup();
+    expect(exec("test", "!", "-e", directory).status).toBe(0);
+    expect(records.getOperation(id)).toMatchObject({
+      state: "cancelled_before_start",
+      cleanup: "confirmed",
+    });
+    expect(records.listRunCleanup()).toEqual([]);
   });
 
   test("cleanup stops a detached tagged descendant and removes the bound file", async () => {

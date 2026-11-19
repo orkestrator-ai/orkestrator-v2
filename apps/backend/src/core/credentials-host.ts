@@ -1,3 +1,4 @@
+import { CREDENTIAL_ANY_TAB } from "@orkestrator/protocol/agent-credentials";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { stat } from "node:fs/promises";
 import {
@@ -23,6 +24,7 @@ import type {
 } from "./credentials/index.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { paneLayoutLeaves } from "./storage-shared-pane-layout.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
 
@@ -42,6 +44,23 @@ class CredentialLaunchError extends Error {}
 
 export function createCredentialHost(context: CommandContext): CredentialHost {
   return {
+    async hasApprovalTab(environmentId, tabId) {
+      const layout = await context.storage.getPaneLayout(environmentId);
+      const environment = context.storage.readEnvironmentRow(environmentId);
+      return Boolean(
+        environment &&
+        paneLayoutLeaves(layout?.root).some((leaf) =>
+          leaf.tabs.some(
+            (tab) =>
+              typeof tab.id === "string" &&
+              (tabId === CREDENTIAL_ANY_TAB || tab.id === tabId) &&
+              tab.type === "agent-native" &&
+              !environment.tabTeardownIntents?.[tab.id],
+          ),
+        ),
+      );
+    },
+
     async session(environmentId, tabId) {
       const logicalSessionKey = `env-${environmentId}:${tabId}`;
       const session = (await context.storage.readNativeAgentSessionsSnapshot()).find(

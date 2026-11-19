@@ -8,6 +8,7 @@ import {
   type CredentialConnection,
 } from "@orkestrator/protocol/agent-credentials";
 import type { CredentialContext } from "./context.js";
+import { credentialOwnerAlive } from "./owner.js";
 import {
   publicRecord,
   type CredentialRows,
@@ -102,7 +103,10 @@ export class CredentialConnections {
 
   list(): CredentialConnection[] {
     const awaitingCleanup = new Set(
-      this.context.records.listRetiredEntries().map((entry) => entry.connectionId),
+      this.context.records
+        .listRetiredEntries()
+        .filter((entry) => !entry.staging || entry.staging.abandoned)
+        .map((entry) => entry.connectionId),
     );
     return this.context.records.listConnections().map((record) => ({
       ...publicRecord(record),
@@ -124,29 +128,42 @@ export class CredentialConnections {
   }
 
   private assertCanSave(): void {
-    if (!this.context.vaultStatus.canSave) {
+    if (this.context.isStopped || !this.context.vaultStatus.canSave) {
       throw new CredentialError("STORE_UNAVAILABLE", this.context.vaultStatus.detail);
     }
   }
 
-  /**
-   * Writes a value under a fresh entry and reads it back before anything
-   * refers to it; a mismatch removes the entry and fails.
-   */
-  private async storeValue(value: string): Promise<string> {
-    const entryId = newCredentialEntryId();
+  /** Publish the cleanup obligation before a write can reach the vault. */
+  private stageValue(connectionId: string): RetiredVaultEntry {
+    const entry: RetiredVaultEntry = {
+      id: newCredentialEntryId(),
+      connectionId,
+      storage: this.context.vault.kind,
+      staging: { owner: this.context.owner, bootId: this.context.bootId },
+    };
+    this.context.records.transaction((rows) => {
+      assertVaultCapacity(rows, rows.connections().length);
+      rows.putVaultCleanup(entry);
+    });
+    return entry;
+  }
+
+  private async writeValue(entry: RetiredVaultEntry, value: string): Promise<void> {
     try {
-      await this.context.vault.put(entryId, value);
-      const read = await this.context.vault.get(entryId);
-      if (read !== value) throw new Error("read-back mismatch");
+      await this.context.vault.put(entry.id, value);
+      if ((await this.context.vault.get(entry.id)) !== value) throw new Error("read-back mismatch");
     } catch {
-      await this.context.vault.delete(entryId).catch(() => undefined);
       throw new CredentialError(
         "STORE_UNAVAILABLE",
         "The credential store did not keep the value. Nothing was saved.",
       );
     }
-    return entryId;
+  }
+
+  private async abandonValue(entry: RetiredVaultEntry): Promise<void> {
+    const abandoned = { ...entry, staging: { ...entry.staging!, abandoned: true as const } };
+    this.context.records.transaction((rows) => rows.putVaultCleanup(abandoned));
+    await this.cleanRetiredEntry(abandoned);
   }
 
   async create(input: ConnectionInput & { value: unknown }): Promise<CredentialConnection> {
@@ -159,10 +176,10 @@ export class CredentialConnections {
     if (this.context.records.listConnections().length >= CREDENTIAL_LIMITS.maxConnections) {
       throw new CredentialError("REQUEST_LIMIT", "At most 200 connections can be saved.");
     }
-    const entryId = await this.storeValue(input.value);
+    const entry = this.stageValue(randomUUID());
     const now = this.context.now();
     const record: StoredConnection = {
-      id: randomUUID(),
+      id: entry.connectionId,
       name,
       ...(description ? { description } : {}),
       projectIds,
@@ -173,12 +190,12 @@ export class CredentialConnections {
       createdAt: now,
       updatedAt: now,
       status: "ready",
-      internal: { entryId },
+      internal: { entryId: entry.id },
     };
     try {
+      await this.writeValue(entry, input.value);
       this.context.records.transaction((rows) => {
         const existingConnections = rows.connections();
-        assertVaultCapacity(rows, existingConnections.length);
         if (existingConnections.length >= CREDENTIAL_LIMITS.maxConnections) {
           throw new CredentialError("REQUEST_LIMIT", "At most 200 connections can be saved.");
         }
@@ -186,9 +203,10 @@ export class CredentialConnections {
           throw new CredentialError("INVALID_INPUT", `A connection named ${name} already exists.`);
         }
         rows.putConnection(record);
+        rows.confirmVaultRemoval(entry.id);
       });
     } catch (error) {
-      await this.context.vault.delete(entryId).catch(() => undefined);
+      await this.abandonValue(entry);
       throw error;
     }
     this.context.announce("connections");
@@ -249,14 +267,14 @@ export class CredentialConnections {
     if (!this.context.records.getConnection(input.id)) {
       throw new CredentialError("REQUEST_NOT_FOUND", "That connection no longer exists.");
     }
-    const entryId = await this.storeValue(input.value);
+    const entry = this.stageValue(input.id);
     let result: { next: StoredConnection; ended: Ended; retired: RetiredVaultEntry };
     try {
+      await this.writeValue(entry, input.value);
       result = this.context.records.transaction((rows) => {
         const current = rows.connection(input.id);
         if (!current)
           throw new CredentialError("REQUEST_NOT_FOUND", "That connection no longer exists.");
-        assertVaultCapacity(rows, rows.connections().length);
         const retired = rows.retireVaultEntry(current);
         const next: StoredConnection = {
           ...current,
@@ -265,9 +283,10 @@ export class CredentialConnections {
           revision: current.revision + 1,
           updatedAt: this.context.now(),
           status: "ready",
-          internal: { entryId },
+          internal: { entryId: entry.id },
         };
         rows.putConnection(next);
+        rows.confirmVaultRemoval(entry.id);
         return {
           next,
           retired,
@@ -275,7 +294,7 @@ export class CredentialConnections {
         };
       });
     } catch (error) {
-      await this.context.vault.delete(entryId).catch(() => undefined);
+      await this.abandonValue(entry);
       throw error;
     }
     this.afterGrantsEnded(result.ended);
@@ -312,14 +331,15 @@ export class CredentialConnections {
     const vault = this.context.vaultFor(connection.storage);
     if (!vault) return null;
     const value = await vault.get(entryId);
-    // Older versions could mark a connection unavailable after reading the wrong vault.
-    if (value !== null && connection.status === "unavailable" && !this.context.isStopped) {
-      this.context.records.transaction((rows) => {
+    const status = value === null ? "unavailable" : "ready";
+    if (connection.status !== status && !this.context.isStopped) {
+      const changed = this.context.records.transaction((rows) => {
         const current = rows.connection(id);
-        if (current?.internal.entryId === entryId)
-          rows.putConnection({ ...current, status: "ready" });
+        if (current?.internal.entryId !== entryId || current.status === status) return false;
+        rows.putConnection({ ...current, status });
+        return true;
       });
-      this.context.announce("connections");
+      if (changed) this.context.announce("connections");
     }
     return value;
   }
@@ -351,6 +371,14 @@ export class CredentialConnections {
   }
 
   private cleanRetiredEntry(entry: RetiredVaultEntry): Promise<boolean> {
+    const staging = entry.staging;
+    if (
+      staging &&
+      credentialOwnerAlive(staging.owner) &&
+      !(staging.bootId === this.context.bootId && staging.abandoned)
+    ) {
+      return Promise.resolve(false);
+    }
     const inFlight = this.cleaning.get(entry.id);
     if (inFlight) return inFlight;
     const vault = this.context.vaultFor(entry.storage);

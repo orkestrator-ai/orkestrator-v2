@@ -20,6 +20,8 @@ export const CREDENTIAL_REQUESTS_STORE = "credential-requests";
 export const CREDENTIAL_GRANTS_STORE = "credential-grants";
 /** One row per use of a grant, owned by its environment. */
 export const CREDENTIAL_OPERATIONS_STORE = "credential-operations";
+/** Command materializations that still need confirmed cleanup. */
+export const CREDENTIAL_RUN_CLEANUP_STORE = "credential-run-cleanup";
 
 function ownerOf(field: string) {
   return (value: unknown): string | undefined => {
@@ -30,6 +32,7 @@ function ownerOf(field: string) {
 }
 
 export const CREDENTIAL_STORE_LAYOUTS: Record<string, StoreLayout> = {
+  [CREDENTIAL_RUN_CLEANUP_STORE]: { kind: "record", owner: ownerOf("environmentId") },
   [CREDENTIAL_CONNECTIONS_STORE]: { kind: "record" },
   [CREDENTIAL_VAULT_CLEANUP_STORE]: { kind: "record", owner: ownerOf("connectionId") },
   [CREDENTIAL_REQUESTS_STORE]: { kind: "record", owner: ownerOf("environmentId") },

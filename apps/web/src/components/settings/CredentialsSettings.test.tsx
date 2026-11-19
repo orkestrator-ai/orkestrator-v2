@@ -7,6 +7,8 @@ import type {
 } from "@orkestrator/protocol/agent-credentials";
 import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import type { Environment, Project } from "@/types";
+import { AccountMachineProvider } from "./account-machine";
 import * as realBackend from "@/lib/backend";
 
 function connection(overrides: Partial<CredentialConnection> = {}): CredentialConnection {
@@ -65,6 +67,22 @@ const createCredentialConnection = mock(async (_input: unknown, _machine?: unkno
 );
 const deleteCredentialConnection = mock(async () => ({ deleted: true }));
 const revokeCredentialGrant = mock(async () => ({ grant: null }));
+const getProjects = mock(async (machine?: string | null): Promise<Project[]> => [
+  {
+    id: machine === "leaf-node" ? "leaf-project" : "command-project",
+    name: machine === "leaf-node" ? "Leaf project" : "Command project",
+  } as Project,
+]);
+const getEnvironmentSnapshot = mock(
+  async (_id: string, machine?: string | null) =>
+    ({
+      id: "env-1",
+      name: machine === "leaf-node" ? "Leaf environment" : "Command environment",
+    }) as Environment,
+);
+const replaceCredentialConnectionValue = mock(async (_input: unknown, _machine?: unknown) =>
+  connection(),
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackend,
@@ -72,6 +90,9 @@ mock.module("@/lib/backend", () => ({
   createCredentialConnection,
   deleteCredentialConnection,
   revokeCredentialGrant,
+  getProjects,
+  getEnvironmentSnapshot,
+  replaceCredentialConnectionValue,
 }));
 
 const { CredentialsSettings } = await import("./CredentialsSettings");
@@ -83,6 +104,7 @@ afterEach(() => {
   createCredentialConnection.mockClear();
   deleteCredentialConnection.mockClear();
   revokeCredentialGrant.mockClear();
+  replaceCredentialConnectionValue.mockClear();
 });
 
 afterAll(() => {
@@ -177,4 +199,58 @@ test("refreshes the Revoke control while the last use is still running", async (
   fireEvent.click(revoke);
   await waitFor(() => expect(revokeCredentialGrant).toHaveBeenCalledTimes(1));
   await screen.findByText("No agent holds a credential grant.");
+});
+
+test("loads the selected machine's projects and labels and writes its chosen policy", async () => {
+  const mount = (machine: string | null) =>
+    renderInAppCommandScope(
+      <AccountMachineProvider value={{ machine, name: machine }}>
+        <CredentialsSettings />
+      </AccountMachineProvider>,
+    );
+  for (const [machine, project, other, environment, projectId] of [
+    [null, "Command project", "Leaf project", "Command environment", "command-project"],
+    ["leaf-node", "Leaf project", "Command project", "Leaf environment", "leaf-project"],
+  ] as const) {
+    const form = mount(machine);
+    await screen.findByText(new RegExp(environment, "u"));
+    fireEvent.click(screen.getByRole("button", { name: /Add credential/u }));
+    const dialog = await screen.findByRole("dialog");
+    const [name] = within(dialog).getAllByRole("textbox");
+    fireEvent.change(name!, { target: { value: "Fixture" } });
+    const value = "  fixture\r\nmore\n  ";
+    fireEvent.paste(within(dialog).getByLabelText("Credential value", { exact: true }), {
+      clipboardData: { getData: () => value },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("checkbox", { name: "Every project on this machine" }),
+    );
+    expect(within(dialog).queryByLabelText(other)).toBeFalsy();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: project }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(createCredentialConnection).toHaveBeenLastCalledWith(
+        { name: "Fixture", value, projectIds: [projectId], httpHosts: [] },
+        machine ?? undefined,
+      ),
+    );
+    form.unmount();
+  }
+});
+
+test("replaces a value with exact multiline clipboard bytes", async () => {
+  renderInAppCommandScope(<CredentialsSettings />);
+  fireEvent.click(await screen.findByRole("button", { name: "Replace the value of npm" }));
+  const dialog = await screen.findByRole("dialog");
+  const value = "fixture\nsecond line";
+  fireEvent.paste(within(dialog).getByLabelText("Credential value", { exact: true }), {
+    clipboardData: { getData: () => value },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Replace" }));
+  await waitFor(() =>
+    expect(replaceCredentialConnectionValue).toHaveBeenCalledWith(
+      { id: "connection-1", value },
+      undefined,
+    ),
+  );
 });

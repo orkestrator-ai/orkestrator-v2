@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { CREDENTIAL_LIMITS } from "@orkestrator/protocol/agent-credentials";
 import {
   createCredentialHarness,
@@ -300,4 +301,119 @@ describe("saved connections across vault selection", () => {
     expect(h.vault.size()).toBe(CREDENTIAL_LIMITS.maxConnections);
     expect(h.service.overview().connections).toHaveLength(CREDENTIAL_LIMITS.maxConnections);
   });
+});
+
+test("an interrupted fresh vault write stays recoverable across startup", async () => {
+  const directory = await tempDir();
+  const vault = new FileCredentialVault(directory);
+  const h = await createCredentialHarness({ vault });
+  harnesses.push(h);
+  const id = newCredentialEntryId();
+  const records = h.storage.credentialRecordStore();
+  records.transaction((rows) =>
+    rows.putVaultCleanup({
+      id,
+      connectionId: crypto.randomUUID(),
+      storage: "file",
+      staging: { bootId: "prior-boot", owner: { pid: fakePid(20), start: "exited-fixture" } },
+    }),
+  );
+  await vault.put(id, TEST_SECRET);
+  await fs.writeFile(path.join(directory, `.${id}.earlier.tmp`), TEST_SECRET, { mode: 0o600 });
+  expect(records.listConnections()).toEqual([]);
+  await h.restart().reconcileStartup();
+  expect(await vault.get(id)).toBeNull();
+  expect(await fs.readdir(directory)).toEqual([]);
+  expect(records.listRetiredEntries()).toEqual([]);
+});
+
+test("failed compensation keeps a staged vault entry tracked until deletion succeeds", async () => {
+  const h = await createCredentialHarness();
+  harnesses.push(h);
+  await h.service.createConnection({ name: "Duplicate", value: TEST_SECRET });
+  const records = h.storage.credentialRecordStore();
+  const remove = spyOn(h.vault, "delete").mockRejectedValue(new Error("fixture vault unavailable"));
+  try {
+    await expect(
+      h.service.createConnection({ name: "Duplicate", value: "other-fixture-value" }),
+    ).rejects.toThrow("already exists");
+    expect(records.listConnections()).toHaveLength(1);
+    const [orphan] = records.listRetiredEntries();
+    expect(orphan?.staging?.abandoned).toBe(true);
+    expect(await h.vault.get(orphan!.id)).toBe("other-fixture-value");
+    // A second backend must leave a live owner's uncertain vault write alone.
+    await h.restart().reconcileStartup();
+    expect(records.listRetiredEntries()).toHaveLength(1);
+    records.transaction((rows) =>
+      rows.putVaultCleanup({
+        ...orphan!,
+        staging: { ...orphan!.staging!, owner: { pid: fakePid(21), start: "exited-fixture" } },
+      }),
+    );
+    remove.mockRestore();
+    await h.restart().reconcileStartup();
+    expect(records.listRetiredEntries()).toEqual([]);
+    expect(await h.vault.get(orphan!.id)).toBeNull();
+  } finally {
+    remove.mockRestore();
+  }
+});
+
+test("timed-out keychain writes cannot race a delete and orphan a late value", async () => {
+  const secrets = fakeSecrets();
+  const pending = Promise.withResolvers<void>();
+  const writeCompleted = Promise.withResolvers<void>();
+  const vault = new KeychainCredentialVault(
+    "/data",
+    {
+      ...secrets,
+      async set(args) {
+        await pending.promise;
+        await secrets.set(args);
+        writeCompleted.resolve();
+      },
+    },
+    15,
+  );
+  const entryId = newCredentialEntryId();
+  await expect(vault.put(entryId, TEST_SECRET)).rejects.toThrow("keychain did not answer (write)");
+  await expect(vault.delete(entryId)).rejects.toThrow("keychain write is still pending");
+  pending.resolve();
+  await writeCompleted.promise;
+  await Promise.resolve();
+  await vault.delete(entryId);
+  expect(secrets.items.size).toBe(0);
+});
+
+test("a replacement that loses a deletion race journals the fresh value for retry", async () => {
+  const h = await createCredentialHarness();
+  harnesses.push(h);
+  const saved = await h.service.createConnection({ name: "Before race", value: TEST_SECRET });
+  const records = h.storage.credentialRecordStore();
+  const hold = Promise.withResolvers<void>();
+  const written = Promise.withResolvers<string>();
+  const put = h.vault.put.bind(h.vault);
+  const write = spyOn(h.vault, "put").mockImplementation(async (id, value) => {
+    await put(id, value);
+    written.resolve(id);
+    await hold.promise;
+  });
+  const replacing = h.service.replaceConnectionValue({ id: saved.id, value: "fixture-new-value" });
+  const newEntryId = await written.promise;
+  expect(records.listRetiredEntries(saved.id).map((entry) => entry.id)).toEqual([newEntryId]);
+  await h.service.deleteConnection(saved.id);
+  const remove = spyOn(h.vault, "delete").mockRejectedValue(new Error("fixture vault unavailable"));
+  try {
+    hold.resolve();
+    await expect(replacing).rejects.toThrow("REQUEST_NOT_FOUND");
+    expect(records.listRetiredEntries(saved.id)).toMatchObject([
+      { id: newEntryId, staging: { abandoned: true } },
+    ]);
+  } finally {
+    remove.mockRestore();
+    write.mockRestore();
+  }
+  await h.service.connections.cleanRetiredEntries();
+  expect(records.listRetiredEntries(saved.id)).toEqual([]);
+  expect(await h.vault.get(newEntryId)).toBeNull();
 });

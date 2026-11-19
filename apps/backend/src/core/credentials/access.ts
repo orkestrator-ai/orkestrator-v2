@@ -1,3 +1,4 @@
+import { credentialOwnerAlive } from "./owner.js";
 import { assertCredentialPolicy } from "./policy.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -235,6 +236,12 @@ export class CredentialAccess {
     let http: CredentialHttpPolicy | undefined;
     if (use === "command") {
       requestBinding = binding(input.bindingKind, input.bindingName);
+      if (runtime.runtime.kind === "container" && requestBinding.kind === "env") {
+        const problem = credentialBindingNameProblem(requestBinding.name, {
+          containerEnvironment: true,
+        });
+        if (problem) throw new CredentialError("INVALID_INPUT", problem);
+      }
       if (input.command !== undefined) {
         if (typeof input.command !== "string" || !input.command.trim()) {
           throw new CredentialError("INVALID_INPUT", "command must be the exact command text.");
@@ -258,6 +265,7 @@ export class CredentialAccess {
       typeof input.suggestedConnection === "string"
         ? sanitizeCredentialText(input.suggestedConnection, CREDENTIAL_LIMITS.nameMaxChars)
         : "";
+    const tabId = await this.placementTab(caller, input.tabHint);
     const now = this.context.now();
     if (this.context.isStopped)
       throw new CredentialError("POLICY_DENIED", "The credential service is stopping.");
@@ -266,7 +274,7 @@ export class CredentialAccess {
       revision: 1,
       environmentId: caller.environmentId,
       projectId: caller.projectId,
-      tabId: placementTab(caller, input.tabHint),
+      tabId,
       label,
       purpose,
       use,
@@ -278,6 +286,7 @@ export class CredentialAccess {
       createdAt: now,
       expiresAt: now + CREDENTIAL_TIMING.requestWaitMs,
       internal: {
+        callerTabId: caller.tabId,
         agent: session?.agent ?? null,
         logicalSessionKey: session?.logicalSessionKey ?? "",
         // Only so a pending request is cancelled when the conversation that
@@ -289,7 +298,14 @@ export class CredentialAccess {
     this.context.records.transaction((rows) => {
       const pending = rows
         .requests(caller.environmentId)
-        .filter((request) => request.tabId === record.tabId && request.state === "pending");
+        .filter(
+          (request) =>
+            (request.internal.callerTabId ??
+              (request.internal.logicalSessionKey ? request.tabId : CREDENTIAL_ANY_TAB)) ===
+              caller.tabId &&
+            request.state === "pending" &&
+            request.expiresAt > now,
+        );
       if (pending.length >= CREDENTIAL_LIMITS.maxPendingRequestsPerTab) {
         throw new CredentialError(
           "REQUEST_LIMIT",
@@ -300,6 +316,24 @@ export class CredentialAccess {
     });
     this.context.announce(caller.environmentId);
     return publicRecord(record);
+  }
+
+  /** An environment-wide caller's hint only selects an existing approval surface. */
+  private async placementTab(caller: CredentialCaller, hint: unknown): Promise<string> {
+    if (caller.tabId !== CREDENTIAL_ANY_TAB) return caller.tabId;
+    if (
+      typeof hint === "string" &&
+      /^[A-Za-z0-9_.:-]{1,200}$/u.test(hint) &&
+      (await this.context.host.hasApprovalTab(caller.environmentId, hint))
+    )
+      return hint;
+    if (await this.context.host.hasApprovalTab(caller.environmentId, CREDENTIAL_ANY_TAB)) {
+      return CREDENTIAL_ANY_TAB;
+    }
+    throw new CredentialError(
+      "POLICY_DENIED",
+      "Open a native agent tab to approve a credential request.",
+    );
   }
 
   /** A request of the caller's environment, optionally waiting for a decision. */
@@ -373,6 +407,17 @@ export class CredentialAccess {
     }
 
     assertCredentialPolicy(request.use, session, runtime, request.command);
+    const bindingProblem =
+      request.binding &&
+      credentialBindingNameProblem(request.binding.name, {
+        containerEnvironment:
+          runtime.runtime.kind === "container" && request.binding.kind === "env",
+      });
+    const headerProblem =
+      request.http?.auth.scheme === "header" &&
+      credentialHeaderNameProblem(request.http.auth.header);
+    const problem = bindingProblem || headerProblem;
+    if (problem) throw new CredentialError("INVALID_INPUT", problem);
 
     let http: CredentialHttpPolicy | undefined;
     if (request.use === "http" && request.http) {
@@ -406,6 +451,17 @@ export class CredentialAccess {
             `${connection.name} may not be sent to ${outside.join(", ")}. Add the host to the connection in Settings first.`,
           );
         }
+      }
+      if (
+        connection.status !== "ready" ||
+        (await this.connections
+          .readValue(connection.id, connection.internal.entryId)
+          .catch(() => null)) === null
+      ) {
+        throw new CredentialError(
+          "VALUE_UNAVAILABLE",
+          "The saved credential value is unavailable.",
+        );
       }
       grantSource = {
         kind: "connection",
@@ -463,6 +519,7 @@ export class CredentialAccess {
           : {}),
         entryId,
         bootId: this.context.bootId,
+        owner: this.context.owner,
         issuedMonotonicMs: this.context.monotonic(),
         lifetimeMs,
       },
@@ -474,6 +531,19 @@ export class CredentialAccess {
         if (!current)
           throw new CredentialError("REQUEST_NOT_FOUND", "That request no longer exists.");
         this.assertPendingRevision(current, input.revision);
+        if (grantSource.kind === "connection" && connectionPin) {
+          const saved = rows.connection(grantSource.connectionId);
+          if (
+            saved?.internal.entryId !== entryId ||
+            saved.revision !== connectionPin.revision ||
+            saved.valueVersion !== connectionPin.valueVersion ||
+            saved.status !== "ready"
+          )
+            throw new CredentialError(
+              "REQUEST_STALE",
+              "The saved credential changed. Choose it again.",
+            );
+        }
         const next: StoredRequest = {
           ...current,
           revision: current.revision + 1,
@@ -637,7 +707,10 @@ export class CredentialAccess {
   /** Startup: temporary values from an earlier process are gone. */
   invalidateEarlierTemporaryGrants(): void {
     this.endGrants(
-      (grant) => grant.source.kind === "temporary" && grant.internal.bootId !== this.context.bootId,
+      (grant) =>
+        grant.source.kind === "temporary" &&
+        grant.internal.bootId !== this.context.bootId &&
+        !credentialOwnerAlive(grant.internal.owner),
       "invalidated",
       "Orkestrator restarted, and temporary values are not kept across restarts.",
     );
@@ -679,18 +752,6 @@ export class CredentialAccess {
       this.context.notify(request.id);
     }
   }
-}
-
-/**
- * Which tab shows a request: the caller's own tab, or, for an
- * environment-wide caller, the tab id the agent was told in its turn
- * instructions (a placement hint only: it grants nothing), else every tab.
- */
-function placementTab(caller: CredentialCaller, hint: unknown): string {
-  if (caller.tabId !== CREDENTIAL_ANY_TAB) return caller.tabId;
-  return typeof hint === "string" && /^[A-Za-z0-9_.:-]{1,200}$/u.test(hint)
-    ? hint
-    : CREDENTIAL_ANY_TAB;
 }
 
 function parseMaxUses(value: unknown): number | null {

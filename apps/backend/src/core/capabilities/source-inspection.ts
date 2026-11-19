@@ -42,6 +42,7 @@ import {
   CapabilityError,
   looksLikeText,
   readPackageTree,
+  sha256Hex,
   treeDigest,
   type PackageFile,
 } from "./security.js";
@@ -160,6 +161,50 @@ export function parseMcpDefinitions(value: unknown, warnings: string[]): McpDefi
     });
   }
   return result;
+}
+
+const MCP_DEFINITION_FILE = /(?:^|\/)(?:\.mcp|mcp)\.json$/;
+
+function sanitizeMcpFile(file: PackageFile): PackageFile {
+  if (!MCP_DEFINITION_FILE.test(file.path)) return file;
+  const value = parseJson(file);
+  if (!isRecord(value)) {
+    throw new CapabilityError(
+      "unsafe-content",
+      "An MCP configuration file is not a valid JSON object.",
+    );
+  }
+  const map = isRecord(value.mcpServers) ? value.mcpServers : value;
+  let changed = false;
+  for (const raw of Object.values(map)) {
+    if (!isRecord(raw)) continue;
+    const url = typeof raw.url === "string" ? URL.parse(raw.url) : null;
+    if (url?.username || url?.password) {
+      throw new CapabilityError(
+        "secrets-detected",
+        "An MCP endpoint contains embedded credentials.",
+      );
+    }
+    for (const field of [raw.env, raw.headers]) {
+      if (!isRecord(field)) continue;
+      for (const [key, entry] of Object.entries(field)) {
+        if (
+          entry === "" ||
+          (typeof entry === "string" && /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(entry))
+        )
+          continue;
+        field[key] = "";
+        changed = true;
+      }
+    }
+  }
+  if (!changed) return file;
+  const content = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+  return { ...file, content, bytes: content.length, sha256: sha256Hex(content) };
+}
+
+export function containsLiteralMcpCredentials(files: PackageFile[]): boolean {
+  return files.some((file) => sanitizeMcpFile(file) !== file);
 }
 
 function endpointHost(url: string): string | undefined {
@@ -325,8 +370,17 @@ function detectMcp(
         ? `${definition.transport.toUpperCase()} server at ${host ?? "a configured address"}`
         : `Runs ${definition.command ?? "a local program"}`,
       risk: definition.transport === "stdio" ? "executable" : "network",
-      ...(definition.command ? { executes: [definition.command] } : {}),
-      ...(host ? { endpoints: [host] } : {}),
+      ...(definition.command
+        ? {
+            executes: [
+              definition.command,
+              `arguments:${sha256Hex(JSON.stringify(definition.args ?? []))}`,
+            ],
+          }
+        : {}),
+      ...(host && definition.url
+        ? { endpoints: [host, `endpoint:${sha256Hex(new URL(definition.url).href)}`] }
+        : {}),
       providerHints,
       requirements: {
         ...(definition.command ? { binaries: [path.posix.basename(definition.command)] } : {}),
@@ -479,6 +533,7 @@ export function inspectFiles(
   files: PackageFile[],
   options: { revision?: string; fallbackName?: string } = {},
 ): InspectedPackage {
+  if (source.kind === "git") assertFetchableRepo(source.repo);
   const packageId = capabilityPackageId(source);
   const warnings: string[] = [];
   const detected = detectComponents(packageId, files, warnings);
@@ -488,6 +543,7 @@ export function inspectFiles(
       "No skill, plugin, command, prompt, hook or MCP server was found in this source.",
     );
   }
+  files = files.map(sanitizeMcpFile);
   const artifactDigest = treeDigest(files);
   const firstSkill = detected.components.find((entry) => entry.kind === "skill");
   const displayName =
@@ -526,7 +582,19 @@ export function assertFetchableRepo(repo: string): void {
   if (!value || value.startsWith("-")) {
     throw new CapabilityError("invalid-request", "Not a repository address.");
   }
-  if (/^(?:https:\/\/|ssh:\/\/)[^\s]+$/.test(value)) return;
+  if (/^(?:https:\/\/|ssh:\/\/)[^\s]+$/.test(value)) {
+    const url = URL.parse(value);
+    if (
+      url &&
+      (url.password || (url.protocol === "https:" && (url.username || url.search || url.hash)))
+    ) {
+      throw new CapabilityError(
+        "invalid-request",
+        "Use a repository address without embedded credentials, query or fragment.",
+      );
+    }
+    if (url?.hostname) return;
+  }
   if (/^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s]+$/.test(value)) return;
   throw new CapabilityError(
     "invalid-request",

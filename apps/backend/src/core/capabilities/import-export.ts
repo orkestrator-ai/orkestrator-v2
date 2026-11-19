@@ -10,6 +10,10 @@
  * packages are fetched at the exact locked revision and refused if their
  * digest differs from the lockfile's.
  */
+import {
+  capabilityRevisionComponents,
+  revisionDigest,
+} from "@orkestrator/protocol/capability-resources-resolve";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -70,7 +74,8 @@ export function exportSetups(state: CapabilityState, setupIds: readonly string[]
     packages: [],
     setups: {},
   };
-  const locked = new Set<string>();
+  const locked = new Map<string, string>();
+  const catalogue = new Map(Object.entries(state.components));
   const slugs = new Map<string, string>();
   for (const id of setupIds) {
     const setup = state.setups[id];
@@ -96,28 +101,40 @@ export function exportSetups(state: CapabilityState, setupIds: readonly string[]
           `${pkg.displayName} was authored in Orkestrator; another fleet can import it only from this command node's cache. Publish it to a repository to share it widely.`,
         );
       }
+      const digest = revisionDigest(pkg, selection.version);
+      const components = digest && capabilityRevisionComponents(pkg, digest, catalogue);
+      if (!digest || !components) {
+        throw new CapabilityError(
+          "conflict",
+          "The selected package revision cannot be exported because its inventory is unavailable.",
+        );
+      }
+      const revision =
+        digest === pkg.artifactDigest
+          ? pkg.revision
+          : pkg.previousRevisions!.find((entry) => entry.artifactDigest === digest)!.revision;
       packages.push({
         source: pkg.source,
-        revision: selection.version === "latest" ? pkg.revision : selection.version,
+        revision,
         ...(selection.components ? { components: selection.components } : {}),
         ...(selection.required ? { required: true } : {}),
       });
       packageIds.push(pkg.id);
-      if (!locked.has(pkg.id)) {
-        locked.add(pkg.id);
+      const priorDigest = locked.get(pkg.id);
+      if (priorDigest && priorDigest !== digest) {
+        throw new CapabilityError(
+          "unsupported",
+          "The portable format supports one revision per package. Export these setups separately.",
+        );
+      }
+      if (!priorDigest) {
+        locked.set(pkg.id, digest);
         lock.packages.push({
           id: pkg.id,
           source: pkg.source,
-          revision: pkg.revision,
-          artifactDigest: pkg.artifactDigest,
-          components: pkg.componentIds
-            .map((componentId) => state.components[componentId])
-            .filter((component) => component !== undefined)
-            .map((component) => ({
-              id: component.id,
-              kind: component.kind,
-              pathOrKey: component.pathOrKey,
-            })),
+          revision,
+          artifactDigest: digest,
+          components: components.map(({ id, kind, pathOrKey }) => ({ id, kind, pathOrKey })),
         });
       }
     }
@@ -285,20 +302,13 @@ export function planImport(
         artifactDigest: entry.artifactDigest,
       };
     }
-    if (existing.provenance === "external" || existing.provenance === "administrator") {
-      return {
-        packageId: entry.id,
-        action: "conflict" as const,
-        revision: entry.revision,
-        artifactDigest: entry.artifactDigest,
-        reason: "The library holds a different revision that Orkestrator does not own.",
-      };
-    }
     return {
       packageId: entry.id,
-      action: "update" as const,
+      action: "conflict" as const,
       revision: entry.revision,
       artifactDigest: entry.artifactDigest,
+      reason:
+        "The library holds a different revision. Review it through the package update or rollback workflow before importing.",
     };
   });
   return { setups, packages };

@@ -549,6 +549,7 @@ export interface NativeAgentServiceOptions {
    */
   capabilityPreflight?: (input: {
     environmentId: string;
+    environmentIncarnation?: string;
     projectId?: string;
     agent: string;
     logicalSessionKey: string;

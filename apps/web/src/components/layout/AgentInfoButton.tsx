@@ -1825,15 +1825,13 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                 />
                 {isCoordinatorSession ? null : (
                   <AgentInfoCapabilitiesSection
+                    nodeId={nodeScope.nodeId}
                     environmentId={activeSession.environmentId}
                     projectId={sessionProjectId}
                     provider={activeSession.provider}
                     sessionKey={activeSession.sessionKey}
                     running={(neutralProjection?.turn.phase ?? "idle") !== "idle"}
                     policy={neutralProjection?.policy}
-                    commands={neutralProjection?.slashCommands}
-                    catalogueStatus={neutralProjection?.slashCommandCatalogue?.status}
-                    generation={neutralProjection?.generation}
                     readOnly={isWorkflowSession}
                   />
                 )}

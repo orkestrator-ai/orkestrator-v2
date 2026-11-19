@@ -15,6 +15,10 @@ import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
 import { StorageService } from "../storage.js";
 import { testCapabilityHomes } from "./native-ownership.js";
 import { CapabilityService } from "./service.js";
+import { parseNodePlanTargets } from "./executor.js";
+import { CapabilityArtifactStore } from "./artifact-store.js";
+import { treeDigest, validatePackageFiles } from "./security.js";
+import { CAPABILITY_LIMITS } from "@orkestrator/protocol/capability-resources";
 
 interface Node {
   id: string;
@@ -125,10 +129,17 @@ async function fleet() {
   return { command, leafA, leafB };
 }
 
-async function addSkill(command: Node, name: string, body: string, setupId = MY_SETUP_ID) {
+async function addSkill(
+  command: Node,
+  name: string,
+  body: string,
+  setupId = MY_SETUP_ID,
+  managedId?: string,
+) {
   const inspection = await command.service.authorPackage({
     kind: "skill",
     name,
+    ...(managedId ? { managedId } : {}),
     description: `${name} skill`,
     content: body,
   });
@@ -252,15 +263,11 @@ describe("add once, use wherever compatible", () => {
 
   test("a package with a secret cannot be added", async () => {
     const { command } = await fleet();
-    const inspection = await command.service.authorPackage({
-      kind: "skill",
-      name: "leaky",
-      content: "token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
-    });
-    expect(inspection.secretsFound).toEqual(["GitHub token"]);
     await expect(
-      command.service.previewChange({
-        change: { kind: "add-to-setup", inspectionId: inspection.inspectionId },
+      command.service.authorPackage({
+        kind: "skill",
+        name: "leaky",
+        content: "token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
       }),
     ).rejects.toThrow("GitHub token");
   });
@@ -326,6 +333,61 @@ describe("remote safety", () => {
     expect(settled[0]?.status).toBe("installed-next-session");
   });
 
+  test("a lost update reply settles the attempted digest without writing again", async () => {
+    const { command, leafA } = await fleet();
+    const first = await addSkill(command, "notes", "Version one.");
+    leafA.loseNextApplyAnswer = true;
+    const source = first.inspection.source;
+    if (source.kind !== "managed") throw new Error("Expected an authored package.");
+    const second = await addSkill(command, "notes", "Version two.", MY_SETUP_ID, source.managedId);
+    expect(first.inspection.artifactDigest).not.toBe(second.inspection.artifactDigest);
+    const calls = leafA.applyCalls.length;
+    await command.service.reconciler.reconcileNode(leafA.id, "recheck");
+    expect(leafA.applyCalls).toHaveLength(calls);
+    expect(await fs.readFile(skillFile(leafA, ".claude", "notes"), "utf8")).toContain(
+      "Version two.",
+    );
+    const settled = await command.service.getOperation({
+      operationId: second.applied.operation.id,
+    });
+    expect(settled.state).toBe("completed");
+  });
+
+  test("an unenrolled node is observed without receiving toolkit writes", async () => {
+    const { command, leafA } = await fleet();
+    await command.service.setMachineEnrollment({ nodeId: leafA.id, enrolled: false });
+    await addSkill(command, "notes", "Keep this on enrolled machines.");
+    command.service.noteNodeConnected(leafA.id);
+    await command.service.getInventory({ nodeId: leafA.id, refresh: true });
+    await command.service.reconciler.idle();
+    expect(leafA.applyCalls).toEqual([]);
+  });
+
+  test("executor refuses an unknown provider before native routing", () => {
+    expect(() =>
+      parseNodePlanTargets([{ action: "install", kind: "mcp-server", provider: "imaginary" }]),
+    ).toThrow("Plan provider is not valid");
+  });
+
+  test("artifact transfer preserves a supplementary character at a chunk boundary", async () => {
+    const { command } = await fleet();
+    const max = CAPABILITY_LIMITS.artifactChunkBytes;
+    const prefix = Buffer.alloc((((max - 128) / 4) | 0) * 3);
+    const padding = max - prefix.toString("base64").length - 63;
+    const files = validatePackageFiles([
+      { path: "a".repeat(padding) + ".txt", content: prefix, executable: false },
+      { path: "b📦.md", content: Buffer.from("hello"), executable: false },
+    ]);
+    const digest = treeDigest(files);
+    const target = new CapabilityArtifactStore(path.join(command.dir, "transfers"));
+    const chunks = CapabilityArtifactStore.bundleChunks(files);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const [index, chunk] of chunks.entries()) {
+      await target.stageChunk(digest, index, chunks.length, chunk);
+    }
+    expect((await target.get(digest)).map((file) => file.path)).toContain("b📦.md");
+  });
+
   test("a leaf refuses a plan from an older command-node epoch", async () => {
     const { leafA } = await fleet();
     await leafA.service.executorObserve({ controllerId: "bk_new", epoch: 5 });
@@ -346,6 +408,24 @@ describe("remote safety", () => {
 });
 
 describe("ownership and drift", () => {
+  test("adoption refuses directory links outside the provider root locally and remotely", async () => {
+    const { command, leafA } = await fleet();
+    for (const node of [command, leafA]) {
+      const outside = path.join(node.dir, "private");
+      const location = path.join(node.home, ".claude", "skills");
+      await fs.mkdir(outside);
+      await fs.writeFile(path.join(outside, "SKILL.md"), "Private fixture");
+      await fs.mkdir(location, { recursive: true });
+      await fs.symlink(outside, path.join(location, "escape"), "dir");
+      await expect(
+        command.service.adoptExternal({ nodeId: node.id, itemId: "claude-user-skills/escape" }),
+      ).rejects.toThrow();
+    }
+    expect(
+      Object.keys((await command.storage.capabilities.loadCapabilityState()).inspections),
+    ).toEqual([]);
+  });
+
   test("a manually edited skill is reported and kept until the user decides", async () => {
     const { command, leafA } = await fleet();
     const { inspection } = await addSkill(command, "style", "Original.");
@@ -566,7 +646,7 @@ describe("editing and rollback", () => {
 });
 
 describe("session launch", () => {
-  test("a required component the session's policy denies blocks the launch; the manifest is frozen otherwise", async () => {
+  test("policy denial and missing required delivery both refuse launch", async () => {
     const { command } = await fleet();
     const inspection = await command.service.authorPackage({
       kind: "mcp-server",
@@ -589,17 +669,38 @@ describe("session launch", () => {
         policy: denied,
       }),
     ).rejects.toThrow("require a capability it cannot have");
-    const allowed = await command.service.preflightSession({
-      environmentId: "env-1",
-      provider: "claude",
-      sessionKey: "s2",
+    await expect(
+      command.service.preflightSession({
+        environmentId: "env-1",
+        provider: "claude",
+        sessionKey: "s2",
+      }),
+    ).rejects.toThrow("not verified");
+  });
+
+  test("required files must still match the delivered revision at launch", async () => {
+    const { command } = await fleet();
+    const inspection = await command.service.authorPackage({
+      kind: "skill",
+      name: "docs",
+      content: "Write docs.",
     });
+    const preview = await command.service.previewChange({
+      change: { kind: "add-to-setup", inspectionId: inspection.inspectionId, required: true },
+    });
+    await command.service.applyChange({
+      operationId: preview.operation.id,
+      approvedDigest: preview.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    const launch = { environmentId: "env-1", provider: "claude" as const, sessionKey: "s1" };
+    const allowed = await command.service.preflightSession(launch);
     expect(allowed?.resolvedPackages).toHaveLength(1);
-    const view = await command.service.getSessionView({
-      sessionKey: "s2",
-      target: { provider: "claude" },
-    });
-    expect(view.launchManifestDigest).toBe(allowed?.manifestDigest);
+    await expect(
+      command.service.preflightSession({ ...launch, environmentIncarnation: "container-1" }),
+    ).rejects.toThrow("cannot have");
+    await fs.writeFile(skillFile(command, ".claude", "docs"), "Local changes.");
+    await expect(command.service.preflightSession(launch)).rejects.toThrow("not verified");
   });
 });
 
@@ -638,6 +739,25 @@ describe("portable setups", () => {
       intent: exported.intent,
       lock: exported.lock.replace(inspection.artifactDigest, `sha256:${"0".repeat(64)}`),
     });
-    expect(tampered.packages[0]?.action).toBe("update");
+    expect(tampered.packages[0]?.action).toBe("conflict");
+    expect(tampered.valid).toBe(false);
+    await expect(command.service.importSetup({ previewId: tampered.previewId })).rejects.toThrow(
+      "invalid",
+    );
+
+    const missingMetadata = await command.service.previewImport({
+      intent: exported.intent,
+      lock: JSON.stringify({
+        ...lock,
+        packages: lock.packages.map((entry: object) => ({ ...entry, components: [] })),
+      }),
+    });
+    expect(missingMetadata.valid).toBe(false);
+    expect(missingMetadata.issues[0]?.message).toContain("component inventory");
+
+    await command.service.setPackageState({ packageId: inspection.packageId, pinned: true });
+    await expect(
+      command.service.importSetup({ previewId: importPreview.previewId }),
+    ).rejects.toThrow("changed after this preview");
   });
 });

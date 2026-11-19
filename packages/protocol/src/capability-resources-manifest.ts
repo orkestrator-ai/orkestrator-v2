@@ -353,14 +353,27 @@ export function validateCapabilityLockfile(
     }
   }
   if (intent) {
-    const locked = new Set(packages.map((pkg) => pkg.id));
+    const locked = new Map(packages.map((pkg) => [pkg.id, pkg]));
+    if (locked.size !== packages.length) {
+      issues.push({ path: "$.packages", message: "The lockfile repeats a package identity." });
+    }
     for (const [name, setup] of Object.entries(intent.setups)) {
       for (const pkg of setup.packages) {
         const id = capabilityPackageId(pkg.source);
-        if (!locked.has(id)) {
+        const entry = locked.get(id);
+        if (!entry) {
           issues.push({
             path: `$.setups.${name}`,
             message: `${id} is in the manifest but not in the lockfile.`,
+          });
+        } else if (
+          pkg.revision &&
+          pkg.revision !== entry.revision &&
+          pkg.revision !== entry.artifactDigest
+        ) {
+          issues.push({
+            path: `$.setups.${name}`,
+            message: "The selected revision differs from the lockfile.",
           });
         }
       }

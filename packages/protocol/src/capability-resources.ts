@@ -331,7 +331,12 @@ export interface CapabilityPackage {
   risk: CapabilityRisk;
   publisher?: string;
   /** Revisions kept for rollback, newest first. */
-  previousRevisions?: Array<{ revision: string; artifactDigest: string; replacedAt: string }>;
+  previousRevisions?: Array<{
+    revision: string;
+    artifactDigest: string;
+    replacedAt: string;
+    components?: CapabilityComponent[];
+  }>;
   /** Pinned: updates are proposed but never applied, even under a trusted-source rule. */
   pinned?: boolean;
   /** Paused: kept in every setup but not delivered anywhere until resumed. */

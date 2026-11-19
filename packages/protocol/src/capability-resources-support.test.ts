@@ -81,7 +81,7 @@ describe("support matrix", () => {
     );
     expect(BASELINE_CAPABILITY_SUPPORT.pi["native-plugin"].install.level).toBe("unsupported");
     expect(BASELINE_CAPABILITY_SUPPORT.pi["native-plugin"].install.reason).toContain("excludes");
-    expect(BASELINE_CAPABILITY_SUPPORT.claude["native-plugin"].install.level).toBe("supported");
+    expect(BASELINE_CAPABILITY_SUPPORT.claude["native-plugin"].install.level).toBe("unsupported");
   });
 
   test("standalone hooks are never installed for any provider", () => {

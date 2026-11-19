@@ -232,7 +232,8 @@ export function AddCapabilityDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className={`max-h-[90vh] max-w-3xl overflow-y-auto ${Z_FULLSCREEN_DIALOG}`}
+        size="3xl"
+        className={`max-h-[90vh] overflow-y-auto ${Z_FULLSCREEN_DIALOG}`}
         overlayClassName={Z_FULLSCREEN_DIALOG}
         data-testid="add-capability-dialog"
       >

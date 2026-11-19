@@ -3013,6 +3013,9 @@ export class NativeAgentService {
         : undefined;
     await this.options.capabilityPreflight?.({
       environmentId: input.environmentId,
+      ...(environment && environment.environmentType !== "local"
+        ? { environmentIncarnation: environment.containerId ?? environment.id }
+        : {}),
       ...(environment?.projectId ? { projectId: environment.projectId } : {}),
       agent: input.agent,
       logicalSessionKey: input.logicalSessionKey,

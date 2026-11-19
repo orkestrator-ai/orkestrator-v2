@@ -78,12 +78,7 @@ import {
 import type { CapabilitiesStorage } from "../storage-capabilities.js";
 import { CapabilityArtifactStore } from "./artifact-store.js";
 import { authoredFiles, parseAuthoredInput } from "./authoring.js";
-import {
-  CapabilityExecutor,
-  parseNodePlanTargets,
-  type McpInstaller,
-  type PluginCli,
-} from "./executor.js";
+import { CapabilityExecutor, parseNodePlanTargets, type McpInstaller } from "./executor.js";
 import {
   exportSetups,
   parseManifests,
@@ -110,7 +105,7 @@ import {
 } from "./operations.js";
 import { desiredStateForNode, installationKey, planNode, sha256, supportFor } from "./planning.js";
 import { CapabilityReconciler, localTransport } from "./reconciler.js";
-import { effectiveReceiptStatus, recordCatalogueEvidence } from "./runtime-evidence.js";
+import { effectiveReceiptStatus } from "./runtime-evidence.js";
 import {
   CapabilityError,
   readPackageTree,
@@ -119,6 +114,7 @@ import {
   type PackageFile,
 } from "./security.js";
 import {
+  containsLiteralMcpCredentials,
   inspectFiles,
   inspectGitSource,
   newInspectionId,
@@ -165,7 +161,6 @@ export interface CapabilityServiceDeps {
   homes(): CapabilityHomes;
   inventory: Omit<InventorySources, "homes">;
   mcp?: McpInstaller;
-  pluginCli?: PluginCli;
   gitRun?: GitFetchOptions["run"];
   now?: () => string;
 }
@@ -271,7 +266,6 @@ export class CapabilityService {
       artifacts: this.artifacts,
       homes: deps.homes,
       ...(deps.mcp ? { mcp: deps.mcp } : {}),
-      ...(deps.pluginCli ? { pluginCli: deps.pluginCli } : {}),
       ...(deps.now ? { now: deps.now } : {}),
     });
     const local = localTransport({
@@ -371,11 +365,32 @@ export class CapabilityService {
 
   async observeSelf(): Promise<CapabilityInventory> {
     const selfId = await this.deps.selfId();
-    return collectCapabilityInventory(
+    const inventory = await collectCapabilityInventory(
       selfId,
       { ...this.deps.inventory, homes: this.deps.homes() },
       () => this.now(),
     );
+    const observeMcp = this.deps.mcp?.observe;
+    if (!observeMcp) return inventory;
+    const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
+    for (const item of inventory.items) {
+      if (item.kind !== "mcp-server") continue;
+      const applied = Object.values(executor.applied).find(
+        ({ mcp, componentId }) =>
+          mcp && componentId && item.provider === mcp.provider && item.name === mcp.name,
+      );
+      if (!applied?.mcp || !applied.packageId || !applied.componentId) continue;
+      const status = await observeMcp(applied.mcp).catch(() => "unavailable");
+      if (status === "present" || status === "drifted") {
+        item.locationId = `mcp:${applied.mcp.provider}`;
+        item.ownership = "managed";
+        item.packageId = applied.packageId;
+        item.componentId = applied.componentId;
+        item.digest = applied.digest;
+        item.drifted = status === "drifted";
+      }
+    }
+    return inventory;
   }
 
   // --- Reads ------------------------------------------------------------------
@@ -440,6 +455,12 @@ export class CapabilityService {
     const digest = pkg?.artifactDigest ?? state.inspections[packageId]?.artifactDigest;
     if (!digest) throw new CapabilityError("not-found", "That package is not in the library.");
     const files = await this.artifacts.get(digest);
+    if (scanPackageSecrets(files).length || containsLiteralMcpCredentials(files)) {
+      throw new CapabilityError(
+        "secrets-detected",
+        "The cached artifact contains credential material. Inspect a clean revision.",
+      );
+    }
     const file = files.find((entry) => entry.path === filePath);
     if (!file) throw new CapabilityError("not-found", "That file is not in the package.");
     const text = file.content.subarray(0, CAPABILITY_LIMITS.maxPreviewChars).toString("utf8");
@@ -462,12 +483,22 @@ export class CapabilityService {
     const selfId = await this.deps.selfId();
     const nodeId = typeof args.nodeId === "string" && args.nodeId ? args.nodeId : selfId;
     if (nodeId === selfId) return this.observeSelf();
-    if (args.refresh === true) await this.reconciler.reconcileNode(nodeId, "refresh");
+    if (args.refresh === true) return this.observeNode(nodeId);
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const inventory = state.machines[nodeId]?.inventory;
     if (!inventory)
       throw new CapabilityError("not-found", "That machine has not reported its inventory yet.");
     return inventory;
+  }
+
+  private async observeNode(nodeId: string): Promise<CapabilityInventory> {
+    if (nodeId === (await this.deps.selfId())) return this.observeSelf();
+    const state = await this.deps.storage.capabilities.loadCapabilityState();
+    return remoteTransport({
+      selfId: this.deps.selfId,
+      link: this.deps.link,
+      artifacts: this.artifacts,
+    }).observe(nodeId, state.epoch);
   }
 
   async getTargetSupport(args: Record<string, unknown>): Promise<CapabilityTargetSupportResult> {
@@ -506,6 +537,8 @@ export class CapabilityService {
       graphNode?: string;
       sessionKey?: string;
       ceiling: CapabilityPermissionCeiling;
+      launchInventory?: CapabilityInventory;
+      forLaunch?: boolean;
     },
   ): EffectiveAgentResources {
     const machine = state.machines[input.target.nodeId];
@@ -559,7 +592,47 @@ export class CapabilityService {
       setups: new Map(Object.entries(state.setups)),
       packages: new Map(Object.entries(state.packages)),
       components: new Map(Object.entries(state.components)),
-      support: supportFor(machine?.inventory, input.target.provider),
+      support: supportFor(
+        input.launchInventory ?? machine?.inventory,
+        input.target.provider,
+        input.target.environmentIncarnation !== undefined ? "container" : "host",
+      ),
+      ...(input.forLaunch
+        ? {
+            requiredDelivery: (component, digest) => {
+              if (
+                input.target.environmentIncarnation !== undefined ||
+                input.target.accountHomeId !== undefined
+              ) {
+                return "The required revision cannot be verified in this container or account.";
+              }
+              const matching = Object.values(state.receipts).some((receipt) => {
+                if (
+                  receipt.nodeId !== input.target.nodeId ||
+                  !receipt.providers.includes(input.target.provider) ||
+                  receipt.componentId !== component.id ||
+                  receipt.packageDigest !== digest ||
+                  receipt.outcomeUnknown ||
+                  (receipt.status !== "installed-next-session" && receipt.status !== "ready")
+                )
+                  return false;
+                return (
+                  input.launchInventory?.items.some(
+                    (item) =>
+                      item.ownership === "managed" &&
+                      item.componentId === component.id &&
+                      item.locationId === receipt.locationId &&
+                      !item.drifted &&
+                      item.digest === receipt.digest,
+                  ) === true
+                );
+              });
+              return matching
+                ? undefined
+                : `The required revision of ${component.name} is not verified on this machine.`;
+            },
+          }
+        : {}),
       ceiling: input.ceiling,
       admin: {
         forbiddenSources: state.settings.forbiddenSources,
@@ -593,21 +666,6 @@ export class CapabilityService {
     const sessionKey = asText(args.sessionKey, "sessionKey");
     const target = parseTarget(args.target, await this.deps.selfId());
     const sessionRunning = args.sessionRunning === true;
-    if (args.catalogue !== undefined) {
-      const catalogue = asRecord(args.catalogue, "catalogue");
-      const names = stringList(catalogue.names, 512);
-      const catalogueState = typeof catalogue.state === "string" ? catalogue.state : "unknown";
-      this.deps.storage.capabilities.mutateCapabilityState((state) => {
-        const recorded = recordCatalogueEvidence(state, {
-          target,
-          catalogueState,
-          names,
-          ...(typeof catalogue.generation === "string" ? { generation: catalogue.generation } : {}),
-          now: this.now(),
-        });
-        return { result: undefined, changed: recorded > 0 };
-      });
-    }
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const assigned = this.assignmentSetups(state, "session", sessionKey);
     // The session's own policy, as its projection reports it: it can only narrow.
@@ -626,6 +684,7 @@ export class CapabilityService {
           (entry) =>
             entry.nodeId === target.nodeId &&
             entry.componentId === componentId &&
+            entry.packageDigest === pkg.artifactDigest &&
             entry.providers.includes(target.provider),
         );
         const status = receipt
@@ -783,6 +842,12 @@ export class CapabilityService {
     inspected: InspectedPackage,
     requestKey: string | undefined,
   ): Promise<CapabilitySourceInspection> {
+    if (inspected.secretsFound.length > 0) {
+      throw new CapabilityError(
+        "secrets-detected",
+        `Remove the detected credential (${inspected.secretsFound.join(", ")}) before inspecting this package.`,
+      );
+    }
     await this.artifacts.put(inspected.files);
     const id = newInspectionId();
     const now = this.now();
@@ -1026,7 +1091,8 @@ export class CapabilityService {
       throw new CapabilityError("invalid-request", "Not an inventory item.");
     }
     const directory = locationDirectory(locationId, this.deps.homes());
-    if (location.layout === "directory") return readPackageTree(path.join(directory, entry));
+    if (location.layout === "directory")
+      return readPackageTree(path.join(directory, entry), { within: directory });
     const files = await readPackageTree(directory, { only: [entry] });
     if (files.length !== 1)
       throw new CapabilityError("not-found", "That item is no longer installed.");
@@ -1106,17 +1172,19 @@ export class CapabilityService {
     const reasons = approvalReasonsFor(draft, applied.addedComponentIds);
     if (change.kind === "update") {
       const update = state.updates[change.updateId];
+      const inspection = state.inspections[`update:${change.updateId}`];
+      if (inspection?.secretsFound?.length) {
+        throw new CapabilityError("secrets-detected", "The new revision contains a credential.");
+      }
       if (update) reasons.push(...update.reasons);
     }
-    if (change.kind === "add-to-setup" || change.kind === "adopt") {
-      const inspection = state.inspections[change.inspectionId]!;
-      const secrets = await this.secretsInArtifact(inspection.artifactDigest);
-      if (secrets.length > 0) {
-        throw new CapabilityError(
-          "secrets-detected",
-          `The package contains what looks like a ${secrets.join(", ")}. Remove it before adding the package.`,
-        );
-      }
+    if (
+      change.kind === "add-to-setup" ||
+      change.kind === "adopt" ||
+      change.kind === "update" ||
+      change.kind === "rollback"
+    ) {
+      await this.assertPackageArtifactsSafe(draft, applied.packageIds);
     }
     const id = newOperationId();
     const now = this.now();
@@ -1157,11 +1225,19 @@ export class CapabilityService {
     return { operation: operationSnapshot(record), replayed: false };
   }
 
-  private async secretsInArtifact(digest: string): Promise<string[]> {
-    try {
-      return scanPackageSecrets(await this.artifacts.get(digest));
-    } catch {
-      return [];
+  private async assertPackageArtifactsSafe(state: CapabilityState, packageIds: string[]) {
+    for (const packageId of packageIds) {
+      const pkg = state.packages[packageId];
+      if (!pkg) continue;
+      const files = await this.artifacts.get(pkg.artifactDigest);
+      const secrets = scanPackageSecrets(files);
+      if (containsLiteralMcpCredentials(files)) secrets.push("literal MCP credential");
+      if (secrets.length > 0) {
+        throw new CapabilityError(
+          "secrets-detected",
+          `Remove the detected credential (${secrets.join(", ")}) before applying this revision.`,
+        );
+      }
     }
   }
 
@@ -1203,6 +1279,14 @@ export class CapabilityService {
       );
     }
     const change = operation.change;
+    if (
+      change.kind === "add-to-setup" ||
+      change.kind === "adopt" ||
+      change.kind === "update" ||
+      change.kind === "rollback"
+    ) {
+      await this.assertPackageArtifactsSafe(replanned.draft, replanned.applied.packageIds);
+    }
     const result = this.deps.storage.capabilities.mutateCapabilityState((current) => {
       const record = current.operations[operationId] as CapabilityOperationRecord | undefined;
       if (!record || (record.state !== "awaiting-approval" && record.state !== "planned")) {
@@ -1217,6 +1301,14 @@ export class CapabilityService {
         }
       }
       const applied = applyChangeToState(current, change, actor);
+      if (
+        applied.packageIds.some(
+          (id) =>
+            current.packages[id]?.artifactDigest !== replanned.draft.packages[id]?.artifactDigest,
+        )
+      ) {
+        throw new CapabilityError("conflict", "The selected revision changed after approval.");
+      }
       if (change.kind === "adopt") {
         // The installed bytes are the package's: take ownership in place.
         const inspection = state.inspections[change.inspectionId];
@@ -1302,8 +1394,12 @@ export class CapabilityService {
       if (!operation) throw new CapabilityError("not-found", "That operation does not exist.");
       if (isTerminalCapabilityOperationState(operation.state))
         return { result: operation, changed: false };
-      // Writes already sent are not undone; the machine keeps what it applied
-      // and the next reconcile follows the (unchanged) desired state.
+      if (operation.state !== "awaiting-approval" && operation.state !== "planned") {
+        throw new CapabilityError(
+          "conflict",
+          "This change was already approved and will continue applying.",
+        );
+      }
       operation.state = "cancelled";
       operation.updatedAt = this.now();
       return { result: structuredClone(operation), changed: true };
@@ -1912,28 +2008,105 @@ export class CapabilityService {
     }
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const plan = planImport(state, parsed.intent, parsed.lock);
-    const approvalReasons = parsed.lock.packages.flatMap((pkg) =>
-      pkg.components
-        .filter((component) => component.kind === "hook" || component.kind === "mcp-server")
-        .map(
-          (component) =>
-            `${pkg.id} includes a ${component.kind === "hook" ? "hook" : "MCP server"} (${component.pathOrKey}).`,
-        ),
-    );
+    const approvalReasons: string[] = [];
+    const issues = [...parsed.issues];
+    if (issues.length === 0 && plan.packages.every((entry) => entry.action !== "conflict")) {
+      for (const entry of parsed.lock.packages) {
+        try {
+          const inspected = await this.inspectLockedArtifact(entry);
+          approvalReasons.push(...capabilityInstallApproval(inspected.components).reasons);
+          await this.artifacts.put(inspected.files);
+        } catch (error) {
+          if (!(error instanceof CapabilityError)) throw error;
+          issues.push({ path: "packages", message: error.message });
+        }
+      }
+    }
     const valid =
-      parsed.issues.length === 0 && plan.packages.every((entry) => entry.action !== "conflict");
-    this.deps.storage.capabilities.mutateCapabilityState((current) => {
-      current.imports[previewId] = {
-        id: previewId,
-        digest: sha256(`${intentText}\0${lockText}`),
-        intent: parsed.intent,
-        lock: parsed.lock,
-        ...(projectId ? { projectId } : {}),
-        createdAt: this.now(),
-      };
-      return { result: undefined, changed: true };
-    });
-    return { previewId, issues: parsed.issues, ...plan, approvalReasons, valid };
+      issues.length === 0 && plan.packages.every((entry) => entry.action !== "conflict");
+    if (valid) {
+      this.deps.storage.capabilities.mutateCapabilityState((current) => {
+        current.imports[previewId] = {
+          id: previewId,
+          digest: this.importBasis(state, parsed.lock!, projectId),
+          verified: true,
+          intent: parsed.intent,
+          lock: parsed.lock,
+          ...(projectId ? { projectId } : {}),
+          createdAt: this.now(),
+        };
+        return { result: undefined, changed: true };
+      });
+    }
+    return { previewId, issues, ...plan, approvalReasons: [...new Set(approvalReasons)], valid };
+  }
+
+  private importBasis(
+    state: CapabilityState,
+    lock: NonNullable<ReturnType<typeof parseManifests>["lock"]>,
+    projectId?: string,
+  ) {
+    return sha256(
+      canonicalCapabilityJson({
+        packages: lock.packages.map((entry) => state.packages[entry.id] ?? null),
+        setups: state.setups,
+        assignment: projectId ? (state.assignments[`project:${projectId}`] ?? null) : null,
+      }),
+    );
+  }
+
+  private async inspectLockedArtifact(
+    entry: NonNullable<ReturnType<typeof parseManifests>["lock"]>["packages"][number],
+    cachedOnly = false,
+  ): Promise<InspectedPackage> {
+    let inspected: InspectedPackage;
+    if (entry.source.kind === "provider-marketplace") {
+      throw new CapabilityError(
+        "unsupported",
+        "Marketplace plugin imports require verified immutable content.",
+      );
+    }
+    if (await this.artifacts.has(entry.artifactDigest)) {
+      inspected = inspectFiles(entry.source, await this.artifacts.get(entry.artifactDigest), {
+        revision: entry.revision,
+      });
+    } else if (!cachedOnly && entry.source.kind === "git") {
+      inspected = await inspectGitSource(
+        { ...entry.source, channel: entry.revision },
+        { workRoot: this.deps.dataDir, ...(this.deps.gitRun ? { run: this.deps.gitRun } : {}) },
+      );
+      // The immutable fetch ref is distinct from the package's update channel.
+      inspected.source = entry.source;
+    } else {
+      throw new CapabilityError(
+        "source-unavailable",
+        "A locked artifact is unavailable on this machine.",
+      );
+    }
+    if (inspected.secretsFound.length > 0) {
+      throw new CapabilityError("secrets-detected", "A locked artifact contains a credential.");
+    }
+    if (
+      inspected.artifactDigest !== entry.artifactDigest ||
+      inspected.revision !== entry.revision
+    ) {
+      throw new CapabilityError(
+        "unsafe-content",
+        "A locked artifact does not match the approved revision and digest.",
+      );
+    }
+    const componentInventory = (components: typeof entry.components) =>
+      components.map(({ id, kind, pathOrKey }) => JSON.stringify([id, kind, pathOrKey])).sort();
+    if (
+      canonicalCapabilityJson(componentInventory(inspected.components)) !==
+      canonicalCapabilityJson(componentInventory(entry.components))
+    ) {
+      throw new CapabilityError(
+        "unsafe-content",
+        "The lockfile component inventory differs from the inspected artifact.",
+      );
+    }
+    return inspected;
   }
 
   async importSetup(args: Record<string, unknown>, actor?: string): Promise<CapabilitySetupList> {
@@ -1953,68 +2126,30 @@ export class CapabilityService {
   private async completeImport(previewId: string, actor?: string): Promise<void> {
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     const record = state.imports[previewId];
-    if (!record)
-      throw new CapabilityError("conflict", "The import preview expired; preview it again.");
+    if (!record?.verified)
+      throw new CapabilityError(
+        "conflict",
+        "The import preview expired or is invalid; preview it again.",
+      );
     const intent = record.intent as NonNullable<ReturnType<typeof parseManifests>["intent"]>;
     const lock = record.lock as NonNullable<ReturnType<typeof parseManifests>["lock"]>;
     const fetched: InspectedPackage[] = [];
     for (const entry of lock.packages) {
-      const existing = state.packages[entry.id];
-      if (existing?.artifactDigest === entry.artifactDigest) continue;
-      if (entry.source.kind === "git") {
-        const inspected = await inspectGitSource(
-          { ...entry.source, channel: entry.revision },
-          { workRoot: this.deps.dataDir, ...(this.deps.gitRun ? { run: this.deps.gitRun } : {}) },
-        );
-        if (inspected.artifactDigest !== entry.artifactDigest) {
-          throw new CapabilityError(
-            "unsafe-content",
-            `${entry.id} at ${entry.revision} does not match the lockfile's digest; nothing was imported.`,
-          );
-        }
-        if (inspected.secretsFound.length > 0) {
-          throw new CapabilityError(
-            "secrets-detected",
-            `${entry.id} contains what looks like a credential; nothing was imported.`,
-          );
-        }
-        fetched.push(inspected);
-      } else if (entry.source.kind === "managed") {
-        if (!(await this.artifacts.has(entry.artifactDigest))) {
-          throw new CapabilityError(
-            "source-unavailable",
-            `${entry.id} was authored on another fleet and its files are not here; publish it to a repository.`,
-          );
-        }
-        fetched.push(
-          inspectFiles(entry.source, await this.artifacts.get(entry.artifactDigest), {
-            revision: entry.revision,
-          }),
-        );
-      } else if (
-        entry.source.kind === "provider-marketplace" &&
-        entry.source.provider === "claude"
-      ) {
-        const manifest = Buffer.from(
-          `${JSON.stringify({ marketplace: entry.source.qualifiedId }, null, 2)}\n`,
-        );
-        fetched.push(
-          inspectMarketplacePlugin(entry.source, [
-            {
-              path: "marketplace-plugin.json",
-              bytes: manifest.length,
-              executable: false,
-              sha256: "",
-              content: manifest,
-            },
-          ]),
-        );
-      } else {
-        throw new CapabilityError("unsupported", `${entry.id} cannot be fetched on this machine.`);
+      if (state.packages[entry.id]?.artifactDigest !== entry.artifactDigest) {
+        fetched.push(await this.inspectLockedArtifact(entry, true));
       }
     }
-    for (const inspected of fetched) await this.artifacts.put(inspected.files);
     this.deps.storage.capabilities.mutateCapabilityState((current) => {
+      if (
+        current.imports[previewId]?.digest !== record.digest ||
+        this.importBasis(current, lock, record.projectId) !== record.digest ||
+        planImport(current, intent, lock).packages.some((entry) => entry.action === "conflict")
+      ) {
+        throw new CapabilityError(
+          "conflict",
+          "The library changed after this preview; review the import again.",
+        );
+      }
       const now = this.now();
       for (const inspected of fetched) {
         for (const component of inspected.components) current.components[component.id] = component;
@@ -2046,9 +2181,18 @@ export class CapabilityService {
           createdAt: now,
         };
       }
-      const bySlug = new Map(
-        Object.values(current.setups).map((setup) => [setupSlug(setup), setup.id]),
-      );
+      const bySlug = record.projectId
+        ? new Map(
+            Object.keys(intent.setups).map((slug) => [
+              slug,
+              `project-toolkit-${sha256(`${record.projectId}\0${slug}`).slice(-32)}`,
+            ]),
+          )
+        : new Map(
+            Object.values(current.setups)
+              .filter((setup) => !setup.id.startsWith("project-toolkit-"))
+              .map((setup) => [setupSlug(setup), setup.id]),
+          );
       for (const [slug, setupIntent] of Object.entries(intent.setups)) {
         const id =
           bySlug.get(slug) ?? (slug === MY_SETUP_ID ? MY_SETUP_ID : `toolkit-${slug}`.slice(0, 64));
@@ -2123,9 +2267,8 @@ export class CapabilityService {
     }
     const target = parseTarget(args.target, await this.deps.selfId());
     const componentIds = stringList(args.componentIds, 200);
-    await this.reconciler.reconcileNode(target.nodeId, "verify");
+    const inventory = await this.observeNode(target.nodeId);
     const state = await this.deps.storage.capabilities.loadCapabilityState();
-    const inventory = state.machines[target.nodeId]?.inventory;
     const checks: CapabilityVerification["checks"] = [];
     for (const componentId of componentIds) {
       const receipts = Object.values(state.receipts).filter(
@@ -2148,21 +2291,28 @@ export class CapabilityService {
           (entry) => entry.componentId === componentId && entry.locationId === receipt.locationId,
         );
         const effective = effectiveReceiptStatus(state, receipt, target.provider);
+        const matches = item && !item.drifted && item.digest === receipt.digest;
         const fileKind =
           !receipt.locationId.startsWith("mcp:") && !receipt.locationId.startsWith("plugin:");
         checks.push({
           componentId,
           level: effective.verification,
-          status: fileKind && !item ? "drifted" : effective.status,
+          status:
+            !matches &&
+            (effective.status === "ready" || effective.status === "installed-next-session")
+              ? "drifted"
+              : effective.status,
           detail: fileKind
             ? item
-              ? item.drifted
+              ? !matches
                 ? "The files are present but have local changes."
                 : effective.verification === "unverified"
                   ? "The files are present. This agent reports no live inventory, so loading cannot be confirmed until it is used."
                   : "The files are present and match the installed revision."
               : "The files are missing from the machine."
-            : "Recorded in the provider's configuration.",
+            : matches
+              ? "The managed definition matches the recorded revision."
+              : "The managed definition could not be verified.",
         });
       }
     }
@@ -2188,11 +2338,18 @@ export class CapabilityService {
     target: CapabilityTarget;
     sessionKey: string;
     ceiling: CapabilityPermissionCeiling;
+    templateId?: string;
+    graphNode?: string;
   }): Promise<EffectiveAgentResources> {
     const state = await this.deps.storage.capabilities.loadCapabilityState();
+    const launchInventory = await this.observeNode(input.target.nodeId).catch(() => undefined);
     return this.resolveFor(state, {
       target: input.target,
+      forLaunch: true,
+      ...(launchInventory ? { launchInventory } : {}),
       sessionKey: input.sessionKey,
+      ...(input.templateId ? { templateId: input.templateId } : {}),
+      ...(input.graphNode ? { graphNode: input.graphNode } : {}),
       ceiling: input.ceiling,
     });
   }
@@ -2208,6 +2365,10 @@ export class CapabilityService {
   async preflightSession(input: {
     environmentId: string;
     projectId?: string;
+    environmentIncarnation?: string;
+    accountHomeId?: string;
+    templateId?: string;
+    graphNode?: string;
     provider: AgentPlatform;
     sessionKey: string;
     policy?: Parameters<typeof nativeAgentDeniedCapabilities>[0];
@@ -2228,12 +2389,30 @@ export class CapabilityService {
           nodeId: await this.deps.selfId(),
           provider: input.provider,
           environmentId: input.environmentId,
+          ...(input.environmentIncarnation
+            ? { environmentIncarnation: input.environmentIncarnation }
+            : {}),
+          ...(input.accountHomeId ? { accountHomeId: input.accountHomeId } : {}),
           ...(input.projectId ? { projectId: input.projectId } : {}),
           sessionId: input.sessionKey,
         },
         sessionKey: input.sessionKey,
+        ...(input.templateId ? { templateId: input.templateId } : {}),
+        ...(input.graphNode ? { graphNode: input.graphNode } : {}),
         ceiling,
       });
+    } catch (error) {
+      log.warn("service.preflight-failed", { error: formatLogError(error, { message: false }) });
+      return null;
+    }
+    if (effective.launchBlockers.length > 0) {
+      const first = effective.launchBlockers[0]!;
+      throw new CapabilityError(
+        "approval-required",
+        `This session's setups require a capability it cannot have: ${first.reason} Change the session's setups in Capabilities, or mark the component optional.`,
+      );
+    }
+    try {
       this.deps.storage.capabilities.mutateCapabilityState((state) => {
         state.launches[input.sessionKey] = {
           sessionKey: input.sessionKey,
@@ -2250,14 +2429,6 @@ export class CapabilityService {
       });
     } catch (error) {
       log.warn("service.preflight-failed", { error: formatLogError(error, { message: false }) });
-      return null;
-    }
-    if (effective.launchBlockers.length > 0) {
-      const first = effective.launchBlockers[0]!;
-      throw new CapabilityError(
-        "approval-required",
-        `This session's setups require a capability it cannot have: ${first.reason} Change the session's setups in Capabilities, or mark the component optional.`,
-      );
     }
     return effective;
   }

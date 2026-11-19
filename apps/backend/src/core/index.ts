@@ -1375,6 +1375,9 @@ export class OrkestratorBackend {
           if (!context.capabilities || !isAgentPlatform(input.agent)) return;
           await context.capabilities.preflightSession({
             environmentId: input.environmentId,
+            ...(input.environmentIncarnation
+              ? { environmentIncarnation: input.environmentIncarnation }
+              : {}),
             ...(input.projectId ? { projectId: input.projectId } : {}),
             provider: input.agent,
             sessionKey: input.logicalSessionKey,
@@ -1771,6 +1774,7 @@ export class OrkestratorBackend {
     // Agent nodes run on the shared agent branch runner (item 204).
     this.graphAgents = installGraphAgentExecutor({
       graphRuns: this.graphRuns,
+      capabilityPreflight: async (input) => context.capabilities?.preflightSession(input) ?? null,
       artifacts: graphArtifacts,
       storage,
       invoke: invokeCommand,

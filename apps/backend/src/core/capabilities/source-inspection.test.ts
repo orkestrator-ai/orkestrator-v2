@@ -51,7 +51,10 @@ describe("inspection", () => {
     expect(kinds.hook?.risk).toBe("privileged");
     expect(kinds.hook?.executes).toEqual(["./guard.sh"]);
     expect(kinds.hook?.triggers).toEqual(["PreToolUse"]);
-    expect(kinds["mcp-server"]?.endpoints).toEqual(["docs.example.com"]);
+    expect(kinds["mcp-server"]?.endpoints?.[0]).toBe("docs.example.com");
+    expect(
+      inspected.files.find((file) => file.path === ".mcp.json")?.content.toString(),
+    ).not.toContain("abc123");
     expect(kinds["mcp-server"]?.requirements.envRefs).toEqual(["Authorization"]);
     expect(kinds["native-plugin"]?.risk).toBe("privileged");
     expect(kinds.skill?.dependencies).toEqual([kinds["native-plugin"]!.id]);
@@ -95,6 +98,8 @@ describe("inspection", () => {
       "ext::sh -c id",
       "--upload-pack=x",
       "http://insecure/x",
+      "https://user:synthetic-password@github.com/a/b",
+      "https://synthetic-token@github.com/a/b",
     ]) {
       expect(() => assertFetchableRepo(bad)).toThrow();
     }

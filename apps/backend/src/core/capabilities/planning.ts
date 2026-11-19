@@ -33,6 +33,7 @@ import type { CapabilityInventory } from "@orkestrator/protocol/capability-resou
 import {
   canonicalCapabilityJson,
   resolveEffectiveAgentResources,
+  capabilityRevisionComponents,
   UNRESTRICTED_CAPABILITY_CEILING,
   type CapabilityLayer,
 } from "@orkestrator/protocol/capability-resources-resolve";
@@ -87,20 +88,20 @@ export function installationKey(nodeId: string, locationId: string, componentId:
   return `${nodeId}|${locationId}|${componentId}`;
 }
 
-/**
- * The setups that install files machine-wide: My setup, every toolkit with
- * no narrower target selectors, and every toolkit an assignment uses (its
- * files must be present for the sessions that select it).
- */
+/** A named setup writes into shared homes only with explicit machine-wide targeting. */
 export function machineWideSetupIds(state: CapabilityState): string[] {
-  const ids = new Set<string>([MY_SETUP_ID]);
-  for (const setup of Object.values(state.setups)) {
-    if (!setup.targetSelectors || setup.targetSelectors.length === 0) ids.add(setup.id);
-  }
-  for (const assignment of Object.values(state.assignments)) {
-    for (const id of assignment.setupIds) if (state.setups[id]) ids.add(id);
-  }
-  return [...ids].sort();
+  return [
+    MY_SETUP_ID,
+    ...Object.values(state.setups)
+      .filter(
+        (setup) =>
+          setup.id !== MY_SETUP_ID &&
+          !setup.targetSelectors?.length &&
+          setup.machineSelectors.length > 0,
+      )
+      .map((setup) => setup.id)
+      .sort(),
+  ];
 }
 
 /** Which setups reference a package, for the installation's reference list. */
@@ -119,10 +120,11 @@ function referencingSetups(
 export function supportFor(
   inventory: CapabilityInventory | undefined,
   provider: AgentPlatform,
+  location: "host" | "container" = "host",
 ): CapabilitySupportMatrix {
   const entry = inventory?.providers.find((candidate) => candidate.provider === provider);
   return describeCapabilitySupport(provider, {
-    location: "host",
+    location,
     ...(entry ? { available: entry.available } : {}),
     ...(entry?.version ? { providerVersion: entry.version } : {}),
   });
@@ -154,7 +156,12 @@ export function desiredStateForNode(
   /** componentId -> providers wanting it, with the digest. */
   const wanted = new Map<
     string,
-    { providers: Set<AgentPlatform>; digest: string; packageId: string }
+    {
+      providers: Set<AgentPlatform>;
+      digest: string;
+      packageId: string;
+      component: CapabilityComponent;
+    }
   >();
   const plain: DesiredInstallation[] = [];
 
@@ -208,43 +215,19 @@ export function desiredStateForNode(
       });
     }
     for (const pkg of resolved.resolvedPackages) {
-      const source = packages.get(pkg.id)?.source;
+      const selected = capabilityRevisionComponents(
+        packages.get(pkg.id)!,
+        pkg.artifactDigest,
+        components,
+      );
+      const revisionComponents = new Map(selected?.map((component) => [component.id, component]));
       for (const componentId of pkg.components) {
-        const component = components.get(componentId)!;
+        const component = revisionComponents.get(componentId);
+        if (!component) continue;
         if (component.providerHints.length > 0 && !component.providerHints.includes(provider))
           continue;
         if (component.kind === "mcp-server") {
           const locationId = `mcp:${provider}`;
-          plain.push({
-            key: installationKey(nodeId, locationId, componentId),
-            nodeId,
-            locationId,
-            componentId,
-            packageId: pkg.id,
-            digest: pkg.artifactDigest,
-            providers: [provider],
-            alsoVisibleTo: [],
-            references: referencingSetups(state, pkg.id, setupIds),
-          });
-          continue;
-        }
-        if (component.kind === "native-plugin") {
-          if (provider !== "claude" || source?.kind !== "provider-marketplace") {
-            undeliverable.push({
-              nodeId,
-              provider,
-              componentId,
-              packageId: pkg.id,
-              status: "unsupported",
-              reason:
-                provider === "claude"
-                  ? "Claude installs plugins from a marketplace; this package's other components are delivered individually."
-                  : (support.kinds["native-plugin"].install.reason ??
-                    "Native plugins are not supported for this provider."),
-            });
-            continue;
-          }
-          const locationId = `plugin:${provider}`;
           plain.push({
             key: installationKey(nodeId, locationId, componentId),
             nodeId,
@@ -271,26 +254,46 @@ export function desiredStateForNode(
           });
           continue;
         }
-        const entry = wanted.get(componentId) ?? {
+        const revisionKey = `${componentId}|${pkg.artifactDigest}`;
+        const entry = wanted.get(revisionKey) ?? {
           providers: new Set<AgentPlatform>(),
+          component,
           digest: pkg.artifactDigest,
           packageId: pkg.id,
         };
         entry.providers.add(provider);
-        wanted.set(componentId, entry);
+        wanted.set(revisionKey, entry);
       }
     }
   }
 
   const installations: DesiredInstallation[] = [...plain];
-  for (const [componentId, entry] of [...wanted.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    const component = components.get(componentId)!;
+  const locations = new Map<string, DesiredInstallation>();
+  const conflicts = new Set<string>();
+  for (const [, entry] of [...wanted.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const component = entry.component;
+    const componentId = component.id;
     const providers = AGENT_PLATFORMS.filter((provider) => entry.providers.has(provider));
     const placement = planCapabilityLocations(component.kind, providers);
     for (const location of placement.locations) {
       const readBy = capabilityLocation(location.id)?.readBy ?? [];
-      installations.push({
-        key: installationKey(nodeId, location.id, componentId),
+      const key = installationKey(nodeId, location.id, componentId);
+      const previous = locations.get(key);
+      if (previous && previous.digest !== entry.digest) {
+        conflicts.add(key);
+        for (const provider of [...previous.providers, ...location.providers]) {
+          undeliverable.push({
+            nodeId,
+            provider,
+            componentId,
+            packageId: entry.packageId,
+            status: "unsupported",
+            reason: "Different revisions share the same physical provider location.",
+          });
+        }
+      }
+      locations.set(key, {
+        key,
         nodeId,
         locationId: location.id,
         componentId,
@@ -312,6 +315,7 @@ export function desiredStateForNode(
       });
     }
   }
+  installations.push(...[...locations.values()].filter(({ key }) => !conflicts.has(key)));
   installations.sort((a, b) => a.key.localeCompare(b.key));
   const manifestDigest = sha256(
     canonicalCapabilityJson(installations.map((entry) => [entry.key, entry.digest])),
@@ -396,7 +400,14 @@ export function planNode(
   );
 
   for (const installation of desired.installations) {
-    const component = state.components[installation.componentId];
+    const pkg = state.packages[installation.packageId];
+    const component =
+      pkg &&
+      (pkg.artifactDigest === installation.digest
+        ? state.components[installation.componentId]
+        : pkg.previousRevisions
+            ?.find((revision) => revision.artifactDigest === installation.digest)
+            ?.components?.find((entry) => entry.id === installation.componentId));
     if (!component) continue;
     const receipt = state.receipts[installation.key];
     const fileLocation = capabilityLocation(installation.locationId);
@@ -405,7 +416,9 @@ export function planNode(
       receipt.packageDigest === installation.digest &&
       receipt.packageId === installation.packageId &&
       !receipt.outcomeUnknown &&
+      !options.forceKeys?.has(installation.key) &&
       receipt.status !== "failed" &&
+      receipt.status !== "needs-auth" &&
       receipt.status !== "outcome-unknown" &&
       receipt.status !== "drifted";
     if (options.driftKeys?.has(installation.key) && !options.forceKeys?.has(installation.key)) {
@@ -464,7 +477,6 @@ export function planNode(
         : {}),
     });
     if (action === "keep") continue;
-    const pkg = state.packages[installation.packageId];
     targets.push({
       key: installation.key,
       action: action === "update" ? "update" : "install",

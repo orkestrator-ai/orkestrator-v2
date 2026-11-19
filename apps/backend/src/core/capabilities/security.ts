@@ -105,6 +105,7 @@ export function isMarkerPath(relative: string): boolean {
 }
 
 export interface ReadTreeOptions {
+  within?: string;
   maxFiles?: number;
   maxBytes?: number;
   maxFileBytes?: number;
@@ -126,6 +127,15 @@ export async function readPackageTree(
   const maxBytes = options.maxBytes ?? CAPABILITY_LIMITS.maxPackageBytes;
   const maxFileBytes = options.maxFileBytes ?? CAPABILITY_LIMITS.maxFileBytes;
   const realRoot = await fs.realpath(root);
+  if (
+    options.within &&
+    realRoot !== path.join(await fs.realpath(options.within), path.basename(root))
+  ) {
+    throw new CapabilityError(
+      "unsafe-content",
+      "The inventory item is outside the provider directory.",
+    );
+  }
   const files: PackageFile[] = [];
   let total = 0;
 

@@ -39,6 +39,7 @@ import { GRAPH_RUN_OBSERVATION_MS } from "./graph-run-pass.js";
 const GRAPH_GUARD_PROBE_ATTEMPTS = 3;
 
 export interface GraphAgentWiringInput {
+  capabilityPreflight?: GraphAgentExecutorDependencies["capabilityPreflight"];
   graphRuns: GraphRunService;
   artifacts: GraphArtifactStore;
   storage: {
@@ -124,6 +125,7 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
   const executor = new GraphAgentNodeExecutor({
     storage: input.storage,
     providers,
+    ...(input.capabilityPreflight ? { capabilityPreflight: input.capabilityPreflight } : {}),
     questions,
     progress,
     ...(input.workflowResults ? { workflowResults: input.workflowResults } : {}),

@@ -111,26 +111,18 @@ export function evidenceFor(
 }
 
 /**
- * A receipt's status and level after folding in runtime evidence. `ready`
- * only with `advertised` evidence or better.
+ * A receipt's status. Catalogue names alone cannot attest which bytes were loaded.
  */
 export function effectiveReceiptStatus(
-  state: CapabilityState,
+  _state: CapabilityState,
   receipt: InstallationReceipt,
-  provider: CapabilityTarget["provider"],
+  _provider: CapabilityTarget["provider"],
 ): {
   status: CapabilityTargetStatus;
   verification: CapabilityVerificationLevel | "unverified";
   lastVerifiedAt?: string;
 } {
-  const evidence = evidenceFor(state, { nodeId: receipt.nodeId, provider }, receipt.componentId);
-  if (
-    evidence &&
-    verificationRank(evidence.level) >= verificationRank("advertised") &&
-    receipt.status === "installed-next-session"
-  ) {
-    return { status: "ready", verification: evidence.level, lastVerifiedAt: evidence.observedAt };
-  }
+  // Stored catalogue names from previous versions did not prove package identity.
   return {
     status: receipt.status,
     verification: receipt.verification,

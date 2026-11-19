@@ -238,6 +238,11 @@ export class CapabilityReconciler {
     const expectedDigests = new Map<string, string>();
     for (const receipt of Object.values(state.receipts)) {
       if (receipt.nodeId !== nodeId || !receipt.outcomeUnknown) continue;
+      if (receipt.locationId.startsWith("mcp:")) {
+        if (receipt.pendingWrite?.packageDigest)
+          expectedDigests.set(receipt.id, receipt.pendingWrite.packageDigest);
+        continue;
+      }
       const expected = await expectedInstalledDigest(this.deps.artifacts, state, receipt).catch(
         () => undefined,
       );
@@ -266,15 +271,20 @@ export class CapabilityReconciler {
         if (receipt.outcomeUnknown) {
           const expected = expectedDigests.get(receipt.id) ?? receipt.digest;
           if (
-            fileKind &&
+            (fileKind || receipt.locationId.startsWith("mcp:")) &&
             expected &&
+            !seen?.drifted &&
             seen?.digest === expected &&
             seen.packageId === receipt.packageId
           ) {
             receipt.outcomeUnknown = false;
+            receipt.packageDigest = receipt.pendingWrite?.packageDigest ?? receipt.packageDigest;
+            delete receipt.pendingWrite;
             receipt.digest = expected;
             receipt.status = "installed-next-session";
-            receipt.verification = "present";
+            receipt.verification = fileKind ? "present" : "enabled";
+          } else if (receipt.pendingWrite?.action === "remove" && fileKind && !seen) {
+            delete current.receipts[receipt.id];
           } else if (fileKind) {
             // Observed absent or different: the write did not land. Plan it afresh.
             delete current.receipts[receipt.id];
@@ -327,6 +337,7 @@ export class CapabilityReconciler {
       if (entry.state === "open" || entry.state === "kept-local") driftKeys.add(key);
       if (entry.state === "replaced") forceKeys.add(key);
     }
+    if (!(state.machines[nodeId]?.enrolled ?? state.settings.enrollNewMachines)) return;
     const desired = desiredStateForNode(state, nodeId, inventory);
     const plan = planNode(state, desired, { connected: true, forceKeys, driftKeys });
 
@@ -354,6 +365,21 @@ export class CapabilityReconciler {
           ),
         ];
         for (const digest of digests) await this.deps.transport.stage(nodeId, epoch, digest);
+        const latest = await this.deps.storage.capabilities.loadCapabilityState();
+        if (!(latest.machines[nodeId]?.enrolled ?? latest.settings.enrollNewMachines)) return;
+        this.deps.storage.capabilities.mutateCapabilityState((current) => {
+          for (const target of plan.targets) {
+            const receipt = current.receipts[target.key];
+            if (receipt) {
+              receipt.outcomeUnknown = true;
+              receipt.pendingWrite = {
+                action: target.action,
+                ...(target.artifactDigest ? { packageDigest: target.artifactDigest } : {}),
+              };
+            }
+          }
+          return { result: undefined, changed: true };
+        });
         results = await this.deps.transport.apply(nodeId, epoch, operationId, plan.targets);
       } catch (error) {
         const classified = classifyTransportError(error, "apply_capability_node_plan");
@@ -455,6 +481,7 @@ export class CapabilityReconciler {
               operationId,
               appliedAt: now,
               outcomeUnknown: true,
+              pendingWrite: { action: target.action, packageDigest: installation.digest },
             };
           }
         }
@@ -465,7 +492,16 @@ export class CapabilityReconciler {
         machine.appliedManifestDigest = desired.manifestDigest;
         machine.syncedRevision = current.revision;
       }
-      const ids = updateOperationTargets(current, settled);
+      const plannedByKey = new Map(plan.planned.map((target) => [target.key, target]));
+      const ids = updateOperationTargets(current, settled, (target) => {
+        const planned = plannedByKey.get(target.key);
+        return (
+          planned?.toDigest === target.toDigest &&
+          (target.action === "remove"
+            ? planned?.action === "remove" && planned.fromDigest === target.fromDigest
+            : planned !== undefined && planned.action !== "remove")
+        );
+      });
       for (const id of ids) {
         const operation = current.operations[id];
         if (operation) finalizeOperation(operation);
@@ -505,8 +541,10 @@ export async function expectedInstalledDigest(
 ): Promise<string | undefined> {
   const component = state.components[receipt.componentId];
   const location = capabilityLocation(receipt.locationId);
-  if (!component || !location || !receipt.packageDigest) return undefined;
-  const files = componentFiles(await artifacts.get(receipt.packageDigest), component);
+  const digest = receipt.pendingWrite?.packageDigest ?? receipt.packageDigest;
+  if (!component || !location || !digest || receipt.pendingWrite?.action === "remove")
+    return undefined;
+  const files = componentFiles(await artifacts.get(digest), component);
   if (files.length === 0) return undefined;
   if (location.layout === "directory") return treeDigest(files);
   const entry = `${installName(component.name, component.pathOrKey, "file")}.md`;

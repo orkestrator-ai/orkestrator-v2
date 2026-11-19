@@ -69,6 +69,7 @@ import type { GraphGuardPeerSource } from "./graph-agent-remote-attribution.js";
 import { graphAnswerTurnPrompt, type GraphAgentQuestions } from "./graph-agent-questions.js";
 import { GraphAgentResults, type GraphAgentResultService } from "./graph-agent-results.js";
 import { graphAgentBranch } from "./graph-agent-state.js";
+import { graphAgentSessionKey } from "./graph-agent-state.js";
 import { appendGraphAgentProgress, type GraphAgentProgressInbox } from "./graph-agent-tools.js";
 import {
   GRAPH_SURPLUS_BRANCH_ERROR,
@@ -92,6 +93,10 @@ import {
 const MAX_PENDING_CONSUMPTIONS = 256;
 
 export interface GraphAgentExecutorDependencies {
+  capabilityPreflight?: Pick<
+    import("./capabilities/service.js").CapabilityService,
+    "preflightSession"
+  >["preflightSession"];
   storage: { getEnvironment(environmentId: string): Promise<Environment | null> };
   providers: GraphAgentProviders;
   questions: GraphAgentQuestions;
@@ -367,6 +372,27 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
         graphEnforcementGuardResult(node, platform, decision, problem, context.now()),
       ]);
       if (problem) return failed(problem, "guard-violation", facts);
+      const { run } = context;
+      try {
+        await this.dependencies.capabilityPreflight?.({
+          environmentId: environment.id,
+          projectId: run.projectId,
+          ...(environment.environmentType !== "local"
+            ? { environmentIncarnation: environment.containerId ?? environment.id }
+            : {}),
+          provider: platform,
+          sessionKey: graphAgentSessionKey(run.id, activation.key),
+          templateId: run.template.id,
+          graphNode: `${run.template.id}/${node.id}`,
+          policy: decision.compiled.policy,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Required graph capabilities could not be verified";
+        return failed(message, "guard-violation", facts);
+      }
       // An isolated branch works in its own worktree (item 403), made before
       // the baseline so the guards know where to look. A retry of this call
       // reuses the one this activation recorded.

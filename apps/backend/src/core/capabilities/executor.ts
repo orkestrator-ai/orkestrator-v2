@@ -17,12 +17,12 @@
  *
  * MCP servers go through this machine's own MCP management service (the same
  * revisions and locks the MCP servers settings use). Native plugins go
- * through the provider's own CLI. Anything else is reported unsupported.
+ * require verified immutable content before managed delivery can be supported.
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   isComponentKind,
   isSafeCapabilityRelativePath,
@@ -87,8 +87,11 @@ export interface NodePlanResult {
   replayed?: boolean;
 }
 
+type McpOwnership = import("./types.js").CapabilityMcpOwnership;
+
 /** Writes and removes MCP definitions in one provider's user configuration. */
 export interface McpInstaller {
+  observe?(ownership: McpOwnership): Promise<"present" | "missing" | "drifted" | "unavailable">;
   install(input: {
     provider: AgentPlatform;
     name: string;
@@ -99,21 +102,25 @@ export interface McpInstaller {
       url?: string;
     };
     requestId: string;
-  }): Promise<{ status: CapabilityTargetStatus; reason?: string }>;
-  remove(input: { provider: AgentPlatform; name: string; requestId: string }): Promise<{
+    previous?: McpOwnership;
+    force?: boolean;
+  }): Promise<{ status: CapabilityTargetStatus; reason?: string; ownership?: McpOwnership }>;
+  remove(input: {
+    provider: AgentPlatform;
+    name: string;
+    requestId: string;
+    previous: McpOwnership;
+  }): Promise<{
     status: CapabilityTargetStatus;
     reason?: string;
   }>;
 }
-
-export type PluginCli = (provider: AgentPlatform, args: string[]) => Promise<string>;
 
 export interface CapabilityExecutorDeps {
   storage: { capabilities: CapabilitiesStorage };
   artifacts: CapabilityArtifactStore;
   homes: () => CapabilityHomes;
   mcp?: McpInstaller;
-  pluginCli?: PluginCli;
   now?: () => string;
 }
 
@@ -155,7 +162,10 @@ export function parseNodePlanTargets(value: unknown): NodePlanTarget[] {
     ) {
       throw new CapabilityError("invalid-request", "Plan path is not valid.");
     }
-    const provider = optional("provider") as AgentPlatform | undefined;
+    const provider = raw.provider;
+    if (provider !== undefined && !isAgentPlatform(provider)) {
+      throw new CapabilityError("invalid-request", "Plan provider is not valid.");
+    }
     return {
       key: text("key"),
       action,
@@ -260,8 +270,14 @@ export class CapabilityExecutor {
   private async applyOne(target: NodePlanTarget): Promise<NodePlanResult> {
     const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
     const previous = executor.applied[target.key];
-    if (target.kind === "mcp-server") return this.applyMcp(target, previous !== undefined);
-    if (target.kind === "native-plugin") return this.applyPlugin(target);
+    if (target.kind === "mcp-server") return this.applyMcp(target, previous);
+    if (target.kind === "native-plugin")
+      return {
+        key: target.key,
+        status: "unsupported",
+        verification: "requested",
+        reason: "Managed plugin delivery requires an immutable, verified plugin artifact.",
+      };
     if (target.kind === "hook") {
       return {
         key: target.key,
@@ -445,7 +461,10 @@ export class CapabilityExecutor {
     return { key: target.key, status: "ready", verification: "requested" };
   }
 
-  private async applyMcp(target: NodePlanTarget, managedBefore: boolean): Promise<NodePlanResult> {
+  private async applyMcp(
+    target: NodePlanTarget,
+    previous: { digest: string; mcp?: McpOwnership } | undefined,
+  ): Promise<NodePlanResult> {
     if (!this.deps.mcp || !target.provider) {
       return {
         key: target.key,
@@ -455,7 +474,7 @@ export class CapabilityExecutor {
       };
     }
     if (target.action === "remove") {
-      if (!managedBefore) {
+      if (!previous?.mcp) {
         return {
           key: target.key,
           status: "drifted",
@@ -466,7 +485,8 @@ export class CapabilityExecutor {
       const removed = await this.deps.mcp.remove({
         provider: target.provider,
         name: target.pathOrKey,
-        requestId: target.key,
+        requestId: `${target.key}:${previous.digest}`,
+        previous: previous.mcp,
       });
       if (removed.status === "ready") this.forget(target);
       return {
@@ -501,6 +521,19 @@ export class CapabilityExecutor {
         reason: `Needs ${[...definition.envKeys, ...definition.headerKeys].join(", ")} on this machine. Add the server in MCP servers settings with your own values; Orkestrator never copies credentials between machines.`,
       };
     }
+    if (
+      previous?.mcp &&
+      previous.digest === target.artifactDigest &&
+      !target.force &&
+      (await this.deps.mcp.observe?.(previous.mcp)) === "present"
+    ) {
+      return {
+        key: target.key,
+        status: "installed-next-session",
+        verification: "enabled",
+        replayed: true,
+      };
+    }
     const result = await this.deps.mcp.install({
       provider: target.provider,
       name: definition.name,
@@ -510,10 +543,12 @@ export class CapabilityExecutor {
         ...(definition.args ? { args: definition.args } : {}),
         ...(definition.url ? { url: definition.url } : {}),
       },
-      requestId: target.key,
+      requestId: `${target.key}:${target.artifactDigest}`,
+      ...(previous?.mcp ? { previous: previous.mcp } : {}),
+      ...(target.force ? { force: true } : {}),
     });
     if (result.status === "installed-next-session" || result.status === "ready") {
-      this.record(target, target.artifactDigest);
+      this.record(target, target.artifactDigest, result.ownership);
     }
     return {
       key: target.key,
@@ -521,51 +556,6 @@ export class CapabilityExecutor {
       verification: result.status === "ready" ? "enabled" : "present",
       ...(result.reason ? { reason: result.reason } : {}),
     };
-  }
-
-  private async applyPlugin(target: NodePlanTarget): Promise<NodePlanResult> {
-    const provider = target.provider;
-    if (provider !== "claude" || !target.qualifiedId) {
-      const support = describeCapabilitySupport(provider ?? "claude", { location: "host" });
-      return {
-        key: target.key,
-        status: "unsupported",
-        verification: "requested",
-        reason:
-          provider === "claude"
-            ? "Claude plugins are installed from a marketplace; this package's skills and commands are delivered individually instead."
-            : (support.kinds["native-plugin"].install.reason ??
-              "Native plugins are not supported for this provider."),
-      };
-    }
-    if (!this.deps.pluginCli) {
-      return {
-        key: target.key,
-        status: "unsupported",
-        verification: "requested",
-        reason: "The Claude CLI is not available on this machine.",
-      };
-    }
-    if (!/^[@A-Za-z0-9][@A-Za-z0-9._/-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/.test(target.qualifiedId)) {
-      throw new CapabilityError("invalid-request", "Not a plugin id.");
-    }
-    try {
-      if (target.action === "remove") {
-        await this.deps.pluginCli("claude", ["plugin", "uninstall", target.qualifiedId]);
-        this.forget(target);
-        return { key: target.key, status: "ready", verification: "requested" };
-      }
-      await this.deps.pluginCli("claude", ["plugin", "install", target.qualifiedId]);
-      this.record(target, target.artifactDigest ?? target.qualifiedId);
-      return { key: target.key, status: "installed-next-session", verification: "enabled" };
-    } catch (error) {
-      return {
-        key: target.key,
-        status: "failed",
-        verification: "requested",
-        reason: `Claude could not ${target.action === "remove" ? "uninstall" : "install"} ${target.qualifiedId}. ${boundedReason(error)}`,
-      };
-    }
   }
 
   private installedStatus(target: NodePlanTarget): CapabilityTargetStatus {
@@ -582,9 +572,14 @@ export class CapabilityExecutor {
     return maxVerificationLevel(matrix, target.kind) === "present" ? "unverified" : "present";
   }
 
-  private record(target: NodePlanTarget, digest: string): void {
+  private record(target: NodePlanTarget, digest: string, mcp?: McpOwnership): void {
     this.deps.storage.capabilities.mutateCapabilityExecutorState((state) => {
-      state.applied[target.key] = { digest, at: this.now(), action: target.action };
+      state.applied[target.key] = {
+        digest,
+        at: this.now(),
+        action: target.action,
+        ...(mcp ? { mcp, packageId: target.packageId, componentId: target.componentId } : {}),
+      };
     });
   }
 

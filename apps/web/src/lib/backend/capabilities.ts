@@ -40,6 +40,7 @@ export type CapabilityChangeInput =
   | {
       kind: "add-to-setup";
       inspectionId: string;
+      expectedArtifactDigest?: string;
       setupId?: string;
       components?: string[];
       required?: boolean;
@@ -247,3 +248,43 @@ export type CapabilitiesBackendApi = ReturnType<typeof createCapabilitiesApi>;
 
 /** The window's command-scope binding. */
 export const capabilitiesApi: CapabilitiesBackendApi = createCapabilitiesApi(commandBackendClient);
+
+export const {
+  listCapabilityPackages,
+  getCapabilityPackage,
+  readCapabilityFile,
+  listCapabilitySetups,
+  getCapabilityInventory,
+  getCapabilityTargetSupport,
+  getEffectiveAgentResources,
+  getCapabilitySessionView,
+  listCapabilityMachines,
+  listCapabilityDrift,
+  listCapabilityActivity,
+  listCapabilityOperations,
+  getCapabilityOperation,
+  listCapabilityUpdates,
+  inspectCapabilitySource,
+  authorCapabilityPackage,
+  adoptExternalCapability,
+  previewCapabilityChange,
+  applyCapabilityChange,
+  cancelCapabilityOperation,
+  setCapabilitySetup,
+  deleteCapabilitySetup,
+  assignCapabilitySetup,
+  manageCapabilityException,
+  setCapabilityMachineEnrollment,
+  setCapabilityPackageState,
+  resolveCapabilityDrift,
+  refreshCapabilityUpdates,
+  previewCapabilityUpdate,
+  approveCapabilityUpdate,
+  dismissCapabilityUpdate,
+  setCapabilityUpdatePolicy,
+  rollbackCapabilityPackage,
+  exportCapabilitySetup,
+  previewCapabilityImport,
+  importCapabilitySetup,
+  verifyAgentCapability,
+} = capabilitiesApi;

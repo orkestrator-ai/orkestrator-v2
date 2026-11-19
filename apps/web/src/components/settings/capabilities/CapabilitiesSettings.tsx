@@ -153,7 +153,8 @@ export function CapabilitiesSettings({ initialTab = "library" }: { initialTab?: 
         onOpenChange={(open) => !open && setUpdatePreview(null)}
       >
         <DialogContent
-          className={`max-w-3xl ${Z_FULLSCREEN_DIALOG}`}
+          size="3xl"
+          className={`${Z_FULLSCREEN_DIALOG}`}
           overlayClassName={Z_FULLSCREEN_DIALOG}
         >
           <DialogHeader>

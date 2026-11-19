@@ -362,6 +362,7 @@ export function PackageDetail({
                       const result = await capabilitiesApi.previewCapabilityChange({
                         kind: "add-to-setup",
                         inspectionId: inspection.inspectionId,
+                        expectedArtifactDigest: pkg.artifactDigest,
                         setupId: pkg.assignedSetupIds[0] ?? "my-setup",
                       });
                       setEditing(null);
@@ -384,6 +385,9 @@ export function PackageDetail({
                     packageId,
                     detail.files[0]!.path,
                   );
+                  if (source.truncated) {
+                    throw new Error("This source exceeds the editor's preview limit.");
+                  }
                   setEditing({ path: source.path, content: source.content });
                 })
               }
@@ -552,7 +556,8 @@ export function PackageDetail({
 
       <Dialog open={preview !== null} onOpenChange={(open) => !open && setPreview(null)}>
         <DialogContent
-          className={`max-w-3xl ${Z_FULLSCREEN_DIALOG}`}
+          size="3xl"
+          className={`${Z_FULLSCREEN_DIALOG}`}
           overlayClassName={Z_FULLSCREEN_DIALOG}
         >
           <DialogHeader>
@@ -582,7 +587,8 @@ export function PackageDetail({
         }}
       >
         <DialogContent
-          className={`max-w-xl ${Z_FULLSCREEN_DIALOG}`}
+          size="xl"
+          className={`${Z_FULLSCREEN_DIALOG}`}
           overlayClassName={Z_FULLSCREEN_DIALOG}
         >
           <DialogHeader>

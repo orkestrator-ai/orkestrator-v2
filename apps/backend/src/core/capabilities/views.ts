@@ -105,6 +105,20 @@ export function availabilityCells(
           });
           continue;
         }
+        const drift = state.drift[`drift:${installation.key}`];
+        if (drift?.state === "open" || drift?.state === "kept-local") {
+          cells.push({
+            target: { nodeId: machine.nodeId, provider },
+            nodeName: machine.name,
+            componentId,
+            status: "drifted",
+            verification: "requested",
+            locationId: installation.locationId,
+            reason: "A conflicting local item was left untouched.",
+            remedy: REMEDIES.drifted!,
+          });
+          continue;
+        }
         if (!receipt) {
           cells.push({
             target: { nodeId: machine.nodeId, provider },

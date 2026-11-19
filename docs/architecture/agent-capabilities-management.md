@@ -46,7 +46,6 @@ flowchart TB
   REC -->|node link, epoch| LEAF[Leaf's CapabilityExecutor]
   EXE --> FILES[provider skill/command directories]
   EXE --> MCP[McpManagementService]
-  EXE --> CLI[claude plugin install/uninstall]
   LAUNCH[native session launch] -->|preflight| SVC
 ```
 
@@ -66,7 +65,7 @@ Backend code is in `apps/backend/src/core/capabilities/`:
 | `executor.ts` | This machine's writer: idempotent per key, epoch-checked, ownership-preserving. |
 | `native-ownership.ts` | Location ids → this machine's directories; ownership markers and the location index. |
 | `inventory.ts` | Managed and external items, plugins (fully qualified ids) and MCP servers. |
-| `runtime-evidence.ts` | Verification levels from session catalogues; never readiness from a copy. |
+| `runtime-evidence.ts` | Receipt status. A catalogue name does not establish the identity of the loaded artifact. |
 | `update-checker.ts` | Remote head checks, re-inspection, update proposals. |
 | `import-export.ts` | `orkestrator.capabilities.yaml` and `orkestrator.capabilities.lock.json`. |
 | `authoring.ts` | Skills, commands, prompts, subagents, hook manifests, MCP definitions and uploads authored in the UI. |
@@ -96,7 +95,7 @@ raises the epoch, so the previous controller is refused everywhere.
 Two passes (`resolveEffectiveAgentResources`):
 
 1. **Desired resources**: My setup (only on an enrolled machine) → toolkits
-   that apply machine-wide → project assignments → template and environment
+   with explicit machine-wide selectors → project assignments → template and environment
    assignments → graph-node assignments → session assignments and explicit
    selections. A later layer may override a version (reported as a conflict
    diagnostic) or exclude a component. Exclusions are `<selector>|<id>`.
@@ -146,7 +145,7 @@ observed context: a provider that is not installed, or a container.
 
 | Provider | Skills | Native plugins | MCP servers | Commands / prompts | Hooks |
 | --- | --- | --- | --- | --- | --- |
-| Claude | install, live inventory | marketplace install/uninstall through `claude plugin` | through MCP management | `~/.claude/commands`, `~/.claude/agents` | only inside a plugin |
+| Claude | install, live inventory | discovery only, pending immutable artifact delivery | through MCP management | `~/.claude/commands`, `~/.claude/agents` | unsupported for managed delivery |
 | Codex | install, live inventory | discovery only | through MCP management | prompts (unqualified) | unsupported |
 | Cursor | install, no live inventory | unsupported (SDK has no plugin API) | through MCP management | commands (unqualified) | unsupported |
 | Grok | install, no live inventory | discovery only | through MCP management | unsupported | unsupported |
@@ -169,7 +168,7 @@ commit together; delivery then follows the newest desired state.
 
 One reconcile pass per machine (`CapabilityReconciler.passOnce`):
 
-1. observe the inventory; no answer → targets are `offline` and nothing is queued;
+1. observe the inventory; no answer → targets remain `offline` until reconnect or supersession;
 2. settle unknown outcomes from that observation: an unanswered write whose
    bytes are there is confirmed, otherwise it is planned afresh (never re-sent
    blindly);
@@ -184,8 +183,7 @@ backend start (resuming operations in flight) and a five-minute timer. An
 offline machine reconciles against the **latest** desired state when it
 returns; superseded operations are never replayed.
 
-The executor never overwrites or removes an item without its marker or index
-entry (external), and never overwrites a managed item with local changes
+The executor checks the ownership marker for files and the native source and entry fingerprint for MCP definitions. It leaves externally owned entries in place, and never overwrites a managed item with local changes
 unless the user chose Replace. Adopting an external item takes ownership in
 place only when its bytes equal the package's. Removal happens only when no
 setup or assignment still references the copy.
@@ -205,25 +203,20 @@ setup or assignment still references the copy.
 
 Verification levels: `requested` → `present` → `enabled` → `allowed` →
 `advertised` → `load-confirmed` → `observed-in-use`. A copy is `present`; a
-provider with no live inventory stays "installed; not runtime-verified".
-`advertised` comes only from a session's own `ready` command catalogue
-(`recordCatalogueEvidence`); a stale catalogue is not evidence. "Synced" is
-never used for "Ready".
+provider without artifact-specific runtime evidence stays "installed; not runtime-verified".
+Catalogue names are insufficient to identify the installed revision.
 
 ## Runtime connection points
 
-- **Native session launch**: `NativeAgentService.createProviderSession` calls
-  the `capabilityPreflight` option, which resolves the session under its own
-  policy, records the frozen manifest (`launches`) and refuses a launch with
-  a required component it cannot have. Any internal failure is logged
-  (`capabilities/service.preflight-failed`) and never blocks a session. Graph
-  agent nodes launch through the same path, so their manifest digest is
-  recorded at launch too.
-- **Session chip**: the agent information panel's Capabilities section shows
-  the setups, readiness, each component's live semantics, Change (session
-  toolkits), See details, Test (non-destructive, with consent) and Copy
-  diagnostics (ids and digests only). A session keeps the packages it
-  launched with; a change since shows as Next session.
+- **Session launch**: native launches and graph activations resolve the target
+  and its policy before provider work begins. A required component needs
+  a matching observed delivery on the host. Required container and alternate
+  account deliveries need target-specific evidence before they qualify.
+  The launch manifest records the selected revisions for diagnostics.
+  Provider homes are shared and existing sessions can still see changes there.
+- **Session chip**: the agent information panel shows the owning machine's
+  receipts, Change (session toolkits), See details, Test (read-only, with
+  consent) and Copy diagnostics (ids and digests only).
 - **Graph designer**: the agent node's Capabilities tab has a Toolkits section
   beside the permission form; a toolkit component the node's compiled policy
   denies is shown as a conflict.
@@ -256,8 +249,12 @@ setups, sources, revisions, provider and group selectors, exclusions, update
 policy) and `orkestrator.capabilities.lock.json` (resolved digests and
 components). Machine, session, environment and account selectors, local-only
 packages and every credential are left out; both validators refuse secrets
-and host paths. Import previews setups and packages, fetches each Git package
-at its locked revision, and fails the whole import if a digest differs.
+and host paths. Import previews setups and packages, verifies the locked bytes and component
+inventory before approval, and checks that the library still matches the
+preview when applying. Existing packages at a different revision go through
+the update or rollback workflow. Project imports create project-owned
+setups and leave fleet setups intact. Project-only assignments need isolated
+delivery, so they do not write into shared provider homes.
 
 ## Security
 
@@ -269,7 +266,9 @@ at its locked revision, and fails the whole import if a digest differs.
 - Writes go through `confinedPath` under a location the backend chose; no
   command takes a destination path or a command to run.
 - MCP definitions keep environment and header keys only; literal values are
-  dropped with a warning. Secrets found in a package block adding it.
+  removed before computing the artifact digest. Detected credentials block package
+  inspection and revision approval. Git repository URLs with embedded credentials
+  are rejected before fetch.
 - Events (`capability-management-changed`) carry a revision and opaque ids.
 - Logs carry codes and references only (`capabilities` log area).
 

@@ -53,6 +53,7 @@ export interface InstallationReceipt {
   verifiedAt?: string;
   /** Present when the node answered in a way that does not prove the write happened. */
   outcomeUnknown?: boolean;
+  pendingWrite?: { action: "install" | "update" | "remove"; packageDigest?: string };
 }
 
 /** Runtime evidence for a component in a provider session generation. */
@@ -94,6 +95,7 @@ export interface PackageArtifactRecord {
 export interface SourceInspectionRecord {
   id: string;
   requestKey?: string;
+  secretsFound?: string[];
   source: PackageSource;
   packageId: string;
   displayName: string;
@@ -134,6 +136,7 @@ export interface CapabilityRequestRecord {
 }
 
 export interface CapabilityImportRecord {
+  verified?: true;
   id: string;
   digest: string;
   intent: unknown;
@@ -217,9 +220,26 @@ export const CAPABILITY_COLLECTIONS = [
  * What a machine records about the command node it takes capability plans
  * from: the highest epoch it has seen, so a stale controller is refused.
  */
+export interface CapabilityMcpOwnership {
+  sourceId: string;
+  fingerprint: string;
+  provider: AgentPlatform;
+  name: string;
+}
+
 export interface CapabilityExecutorState {
   controllerId?: string;
   epoch: number;
   /** Idempotency: plan keys already applied, with their receipts' digests. */
-  applied: Record<string, { digest: string; at: string; action: string }>;
+  applied: Record<
+    string,
+    {
+      digest: string;
+      at: string;
+      action: string;
+      mcp?: CapabilityMcpOwnership;
+      packageId?: string;
+      componentId?: string;
+    }
+  >;
 }

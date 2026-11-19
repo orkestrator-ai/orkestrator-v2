@@ -114,7 +114,13 @@ export class CapabilityArtifactStore {
       executable: file.executable,
       data: file.content.toString("base64"),
     }));
-    const text = JSON.stringify(bundle);
+    // Escaping non-ASCII code units lets old and new receivers decode each chunk independently.
+    const text = JSON.stringify(bundle).replace(/[^\x00-\x7f]/gu, (character) =>
+      character
+        .split("")
+        .map((unit) => "\\u" + unit.charCodeAt(0).toString(16).padStart(4, "0"))
+        .join(""),
+    );
     const chunks: string[] = [];
     for (let offset = 0; offset < text.length; offset += CAPABILITY_LIMITS.artifactChunkBytes) {
       chunks.push(text.slice(offset, offset + CAPABILITY_LIMITS.artifactChunkBytes));

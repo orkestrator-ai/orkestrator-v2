@@ -187,7 +187,14 @@ describe("resolution", () => {
     const versioned = pkg("p1", [skill], {
       revision: "r2",
       artifactDigest: "sha256:new",
-      previousRevisions: [{ revision: "r1", artifactDigest: "sha256:old", replacedAt: "t" }],
+      previousRevisions: [
+        {
+          revision: "r1",
+          artifactDigest: "sha256:old",
+          replacedAt: "t",
+          components: [skill, docsServer],
+        },
+      ],
     });
     const mine = setup(MY_SETUP_ID, []);
     mine.packageSelections = [{ packageId: "p1", version: "r2" }];
@@ -200,6 +207,7 @@ describe("resolution", () => {
       }),
     );
     expect(resolved.resolvedPackages[0]!.artifactDigest).toBe("sha256:old");
+    expect(resolved.resolvedPackages[0]!.components).toContain(docsServer.id);
     expect(resolved.warnings[0]).toContain("overrides version r2");
 
     const excluded = setup(MY_SETUP_ID, ["p1"], { exclusions: ["provider:claude|p1"] });

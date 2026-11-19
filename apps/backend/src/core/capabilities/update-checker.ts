@@ -75,7 +75,7 @@ export async function checkPackageUpdate(
   }
   const inspected = await deps.inspect(pkg);
   if (inspected.artifactDigest === pkg.artifactDigest) return null;
-  await deps.storeArtifact(inspected);
+  if (inspected.secretsFound.length === 0) await deps.storeArtifact(inspected);
   const before = pkg.componentIds
     .map((id) => state.components[id])
     .filter((component) => component !== undefined);
@@ -114,7 +114,8 @@ export async function checkPackageUpdate(
       revision: inspected.revision,
       artifactDigest: inspected.artifactDigest,
       ...(inspected.publisher ? { publisher: inspected.publisher } : {}),
-      components: inspected.components,
+      components: inspected.secretsFound.length > 0 ? [] : inspected.components,
+      ...(inspected.secretsFound.length > 0 ? { secretsFound: inspected.secretsFound } : {}),
       createdAt: now,
       // Kept until the update is handled; the proposal names it.
       expiresAt: new Date(Date.parse(now) + 30 * 24 * 60 * 60_000).toISOString(),

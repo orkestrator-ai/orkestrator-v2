@@ -7,7 +7,6 @@ import {
   nativeAgentDeniedCapabilities,
   nativeAgentUserMcpGrant,
   type NativeAgentExecutionPolicy,
-  type NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
 
 import { Button } from "@/components/ui/button";
@@ -39,26 +38,22 @@ const READINESS: Record<CapabilitySessionView["readiness"], { status: string; la
  * policy narrows what is shown; a setup never widens it.
  */
 export function AgentInfoCapabilitiesSection({
+  nodeId,
   environmentId,
   projectId,
   provider,
   sessionKey,
   running,
   policy,
-  commands,
-  catalogueStatus,
-  generation,
   readOnly,
 }: {
+  nodeId: string;
   environmentId: string;
   projectId?: string;
   provider: AgentPlatform;
   sessionKey: string;
   running: boolean;
   policy?: NativeAgentExecutionPolicy;
-  commands?: NativeAgentSlashCommand[];
-  catalogueStatus?: string;
-  generation?: string | number;
   readOnly?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -73,37 +68,15 @@ export function AgentInfoCapabilitiesSection({
     }),
     [policy],
   );
-  const names = useMemo(
-    () => (commands ?? []).map((command) => command.name).slice(0, 512),
-    [commands],
-  );
   const view = useCapabilityResource(
     () =>
       capabilitiesApi.getCapabilitySessionView({
         sessionKey,
-        target: { provider, environmentId, ...(projectId ? { projectId } : {}) },
+        target: { nodeId, provider, environmentId, ...(projectId ? { projectId } : {}) },
         sessionRunning: running,
         ceiling,
-        ...(catalogueStatus
-          ? {
-              catalogue: {
-                state: catalogueStatus,
-                names,
-                ...(generation !== undefined ? { generation: String(generation) } : {}),
-              },
-            }
-          : {}),
       }),
-    [
-      sessionKey,
-      provider,
-      environmentId,
-      projectId,
-      running,
-      catalogueStatus,
-      names.join("\n"),
-      JSON.stringify(ceiling),
-    ],
+    [sessionKey, nodeId, provider, environmentId, projectId, running, JSON.stringify(ceiling)],
   );
   const setups = useCapabilityResource(() => capabilitiesApi.listCapabilitySetups(), []);
   const data = view.state.data;
@@ -142,7 +115,7 @@ export function AgentInfoCapabilitiesSection({
           onClick={() =>
             void capabilitiesApi
               .verifyAgentCapability(
-                { provider, environmentId },
+                { nodeId, provider, environmentId },
                 (data?.components ?? []).map((component) => component.componentId),
               )
               .then((result) =>

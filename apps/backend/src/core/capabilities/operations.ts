@@ -40,6 +40,7 @@ export type CapabilityChange =
   | {
       kind: "add-to-setup";
       inspectionId: string;
+      expectedArtifactDigest?: string;
       setupId: string;
       components?: string[];
       required?: boolean;
@@ -115,6 +116,9 @@ export function parseCapabilityChange(value: unknown): CapabilityChange {
       return {
         kind: "add-to-setup",
         inspectionId: requireText(record, "inspectionId"),
+        ...(record.expectedArtifactDigest !== undefined
+          ? { expectedArtifactDigest: requireText(record, "expectedArtifactDigest") }
+          : {}),
         setupId: typeof record.setupId === "string" ? record.setupId : MY_SETUP_ID,
         ...(components ? { components } : {}),
         ...(record.required === true ? { required: true } : {}),
@@ -194,7 +198,21 @@ export function applyChangeToState(
         throw new CapabilityError("conflict", "The inspection expired; inspect the source again.");
       }
       const existing = state.packages[inspection.packageId];
+      if (
+        change.kind === "add-to-setup" &&
+        change.expectedArtifactDigest &&
+        (inspection.source.kind !== "managed" ||
+          existing?.artifactDigest !== change.expectedArtifactDigest)
+      ) {
+        throw new CapabilityError(
+          "conflict",
+          "The authored package changed. Open its latest source before editing.",
+        );
+      }
       const added: string[] = [];
+      const previousComponents = existing?.componentIds.flatMap((id) =>
+        state.components[id] ? [state.components[id]!] : [],
+      );
       if (!existing || existing.artifactDigest !== inspection.artifactDigest) {
         for (const component of inspection.components) {
           if (!state.components[component.id]) added.push(component.id);
@@ -215,11 +233,10 @@ export function applyChangeToState(
           artifactDigest: inspection.artifactDigest,
           componentIds: inspection.components.map((component) => component.id),
           provenance:
-            change.kind === "adopt"
-              ? "managed"
-              : inspection.source.kind === "managed"
-                ? "managed"
-                : "managed",
+            existing?.provenance ??
+            (inspection.source.kind === "local" && change.kind !== "adopt"
+              ? "external"
+              : "managed"),
           risk: inspection.components.reduce(
             (risk, component) =>
               ["instructions", "network", "executable", "privileged"].indexOf(component.risk) >
@@ -235,6 +252,7 @@ export function applyChangeToState(
                   revision: existing.revision,
                   artifactDigest: existing.artifactDigest,
                   replacedAt: now,
+                  components: previousComponents!,
                 },
                 ...(existing.previousRevisions ?? []),
               ].slice(0, 5)
@@ -244,6 +262,7 @@ export function applyChangeToState(
             : existing?.pinned
               ? { pinned: true }
               : {}),
+          ...(existing?.paused ? { paused: true } : {}),
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
         };
@@ -268,7 +287,16 @@ export function applyChangeToState(
       };
       setup.packageSelections = [
         ...setup.packageSelections.filter((entry) => entry.packageId !== inspection.packageId),
-        selection,
+        setup.packageSelections.find(
+          (entry) =>
+            entry.packageId === inspection.packageId &&
+            inspection.source.kind === "managed" &&
+            existing &&
+            change.kind === "add-to-setup" &&
+            change.pin === undefined &&
+            change.components === undefined &&
+            change.required === undefined,
+        ) ?? selection,
       ].slice(0, CAPABILITY_LIMITS.maxSelectionsPerSetup);
       // A new revision of a package already in the setup keeps its exceptions unless new ones are given.
       if (
@@ -331,7 +359,12 @@ export function applyChangeToState(
       for (const id of pkg.componentIds) delete state.components[id];
       for (const component of inspection.components) state.components[component.id] = component;
       pkg.previousRevisions = [
-        { revision: pkg.revision, artifactDigest: pkg.artifactDigest, replacedAt: now },
+        {
+          revision: pkg.revision,
+          artifactDigest: pkg.artifactDigest,
+          replacedAt: now,
+          components: before,
+        },
         ...(pkg.previousRevisions ?? []),
       ].slice(0, 5);
       pkg.revision = inspection.revision;
@@ -362,10 +395,18 @@ export function applyChangeToState(
         );
       const restored = state.inspections[`rollback:${pkg.id}:${previous.artifactDigest}`];
       if (!restored) throw new CapabilityError("conflict", "Preview the rollback again.");
+      const before = pkg.componentIds.flatMap((id) =>
+        state.components[id] ? [state.components[id]!] : [],
+      );
       for (const id of pkg.componentIds) delete state.components[id];
       for (const component of restored.components) state.components[component.id] = component;
       pkg.previousRevisions = [
-        { revision: pkg.revision, artifactDigest: pkg.artifactDigest, replacedAt: now },
+        {
+          revision: pkg.revision,
+          artifactDigest: pkg.artifactDigest,
+          replacedAt: now,
+          components: before,
+        },
         ...(pkg.previousRevisions ?? []).filter(
           (entry) => entry.artifactDigest !== previous.artifactDigest,
         ),
@@ -422,6 +463,7 @@ export function approvalReasonsFor(
 export function updateOperationTargets(
   state: CapabilityState,
   results: ReadonlyMap<string, { status: CapabilityTargetStatus; reason?: string }>,
+  matches: (target: CapabilityPlannedTarget) => boolean = () => true,
 ): string[] {
   const touched: string[] = [];
   for (const operation of Object.values(state.operations)) {
@@ -430,7 +472,7 @@ export function updateOperationTargets(
     let changed = false;
     for (const target of operation.targets) {
       const result = results.get(target.key);
-      if (!result) continue;
+      if (!result || !matches(target)) continue;
       target.status = result.status;
       if (result.reason) target.reason = result.reason;
       else delete target.reason;
@@ -445,7 +487,11 @@ export function updateOperationTargets(
   return touched;
 }
 
-const UNSETTLED: ReadonlySet<CapabilityTargetStatus> = new Set(["pending", "outcome-unknown"]);
+const UNSETTLED: ReadonlySet<CapabilityTargetStatus> = new Set([
+  "pending",
+  "outcome-unknown",
+  "offline",
+]);
 const FAILED: ReadonlySet<CapabilityTargetStatus> = new Set([
   "failed",
   "drifted",
@@ -459,9 +505,7 @@ export function finalizeOperation(operation: CapabilityOperationSnapshot): void 
     (target) => target.action !== "skip" && target.action !== "keep",
   );
   if (writes.some((target) => UNSETTLED.has(target.status))) return;
-  const failed = writes.filter(
-    (target) => FAILED.has(target.status) || target.status === "offline",
-  );
+  const failed = writes.filter((target) => FAILED.has(target.status));
   operation.state =
     failed.length === 0
       ? "completed"

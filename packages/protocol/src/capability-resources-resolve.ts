@@ -128,6 +128,8 @@ export interface CapabilityResolutionInput {
   packages: ReadonlyMap<string, CapabilityPackage>;
   components: ReadonlyMap<string, CapabilityComponent>;
   support: CapabilitySupportMatrix;
+  /** When resolving a launch, return the reason a required revision is unavailable. */
+  requiredDelivery?: (component: CapabilityComponent, artifactDigest: string) => string | undefined;
   ceiling: CapabilityPermissionCeiling;
   admin?: CapabilityAdminPolicy;
   hash: (text: string) => string;
@@ -306,6 +308,8 @@ export function resolveEffectiveAgentResources(
     }
     if (excluded.has(packageId)) continue;
     if (pkg.paused) {
+      if (required)
+        launchBlockers.push({ componentId: packageId, reason: "The required package is paused." });
       warnings.push(`${pkg.displayName} is paused and is not delivered.`);
       continue;
     }
@@ -319,13 +323,26 @@ export function resolveEffectiveAgentResources(
     const forbiddenSource = (admin.forbiddenSources ?? []).find((prefix) =>
       packageId.startsWith(prefix),
     );
-    const wanted = (selection.components ?? pkg.componentIds).filter(
-      (componentId) => pkg.componentIds.includes(componentId) && !excluded.has(componentId),
+    const revisionComponents = capabilityRevisionComponents(pkg, digest, components);
+    if (!revisionComponents) {
+      const reason = "The selected revision's component inventory is unavailable.";
+      blocked.push({ componentId: packageId, reason });
+      if (required) launchBlockers.push({ componentId: packageId, reason });
+      continue;
+    }
+    const byId = new Map(revisionComponents.map((component) => [component.id, component]));
+    const wanted = (selection.components ?? [...byId.keys()]).filter(
+      (componentId) => !excluded.has(componentId),
     );
     const delivered: string[] = [];
     for (const componentId of wanted) {
-      const component = components.get(componentId);
-      if (!component) continue;
+      const component = byId.get(componentId);
+      if (!component) {
+        const reason = "The selected revision does not contain this component.";
+        blocked.push({ componentId, reason });
+        if (required) launchBlockers.push({ componentId, reason });
+        continue;
+      }
       const reasonBlocked =
         (forbiddenSource !== undefined ? "Administrator policy forbids this source." : undefined) ??
         ((admin.forbiddenComponents ?? []).some((id) => id === componentId || id === packageId)
@@ -352,6 +369,10 @@ export function resolveEffectiveAgentResources(
         warnings.push(
           `${component.name}: its scripts cannot run because the session denies shell; its instructions are still available.`,
         );
+      }
+      if (required) {
+        const reason = input.requiredDelivery?.(component, digest);
+        if (reason) launchBlockers.push({ componentId, reason });
       }
       delivered.push(componentId);
     }
@@ -388,7 +409,22 @@ export function resolveEffectiveAgentResources(
   };
 }
 
-function revisionDigest(pkg: CapabilityPackage, version: string): string | null {
+export function capabilityRevisionComponents(
+  pkg: CapabilityPackage,
+  digest: string,
+  current: ReadonlyMap<string, CapabilityComponent>,
+): CapabilityComponent[] | undefined {
+  if (digest !== pkg.artifactDigest) {
+    return pkg.previousRevisions?.find((revision) => revision.artifactDigest === digest)
+      ?.components;
+  }
+  return pkg.componentIds.flatMap((id) => {
+    const component = current.get(id);
+    return component ? [component] : [];
+  });
+}
+
+export function revisionDigest(pkg: CapabilityPackage, version: string): string | null {
   if (version === "latest" || version === pkg.revision || version === pkg.artifactDigest) {
     return pkg.artifactDigest;
   }

@@ -9,7 +9,7 @@
  *   location table deciding which providers each copy reaches;
  * - MCP servers through this machine's `McpManagementService`, the same
  *   revisions, locks and validation the MCP servers settings use;
- * - Claude marketplace plugins through `claude plugin install|uninstall`;
+ * - marketplace plugin discovery without managed native writes;
  * - discovery from the existing skill locations, the provider plugin
  *   listings (`discoverAgentPlugins`) and MCP management's catalog.
  */
@@ -68,18 +68,42 @@ export function mcpManagementInstaller(
     return { mcp, target, snapshot } as const;
   };
   return {
-    async install({ provider, name, definition, requestId }) {
+    async observe(ownership) {
+      const found = await backendTarget(ownership.provider);
+      if ("error" in found || found.snapshot.freshness !== "fresh") return "unavailable";
+      const existing = found.snapshot.definitions.find(
+        (entry) => entry.name === ownership.name && entry.sourceId === ownership.sourceId,
+      );
+      if (!existing) return "missing";
+      const identity = await found.mcp.capabilityEntryIdentity(
+        found.target.targetId,
+        existing.entryId,
+      );
+      return identity?.fingerprint === ownership.fingerprint ? "present" : "drifted";
+    },
+    async install({ provider, name, definition, requestId, previous, force }) {
       const found = await backendTarget(provider);
       if ("error" in found) return { status: "unsupported", reason: found.error };
       const { mcp, target, snapshot } = found;
+      if (snapshot.freshness !== "fresh")
+        return { status: "failed", reason: "The MCP configuration could not be read completely." };
       const existing = snapshot.definitions.find((entry) => entry.name === name);
-      if (existing) {
+      const identity = existing
+        ? await mcp.capabilityEntryIdentity(target.targetId, existing.entryId)
+        : null;
+      if (
+        existing &&
+        (!identity ||
+          !previous ||
+          identity.sourceId !== previous.sourceId ||
+          (!force && identity.fingerprint !== previous.fingerprint))
+      ) {
         return {
           status: "drifted",
-          reason: `${name} is already configured for ${provider}; adopt or remove it in MCP servers settings. It was left untouched.`,
+          reason: "A local MCP definition already uses this name and was left untouched.",
         };
       }
-      const sourceId = target.defaultSourceId;
+      const sourceId = identity?.sourceId ?? target.defaultSourceId;
       const source = snapshot.sources.find((entry) => entry.sourceId === sourceId);
       if (!sourceId || !source || !source.writable) {
         return {
@@ -88,53 +112,96 @@ export function mcpManagementInstaller(
         };
       }
       const mutation: McpMutation = {
-        requestId: mcpRequestId(requestId),
+        requestId: mcpRequestId(`${requestId}:${source.revision}:${force === true}`),
         targetId: target.targetId,
         applyIntent: "save",
-        operation: {
-          kind: "add",
-          sourceId,
-          expectedRevision: source.revision,
-          definition: {
-            name,
-            transport: definition.transport,
-            ...(definition.command ? { command: definition.command } : {}),
-            ...(definition.args ? { args: definition.args } : {}),
-            ...(definition.url ? { url: definition.url } : {}),
-            enabled: true,
-          },
-        },
+        operation:
+          existing && identity
+            ? {
+                kind: "update",
+                entryId: existing.entryId,
+                expectedRevision: identity.revision,
+                patch: {
+                  ...(existing.transport !== definition.transport
+                    ? {
+                        transport: {
+                          to: definition.transport,
+                          discard: ["command", "args", "cwd", "env", "url", "headers"],
+                        },
+                      }
+                    : {}),
+                  ...(definition.command
+                    ? { command: { kind: "set", value: definition.command } }
+                    : {}),
+                  ...(definition.transport === "stdio"
+                    ? { args: (definition.args ?? []).map((value) => ({ kind: "set", value })) }
+                    : {}),
+                  ...(definition.url ? { url: { kind: "set", value: definition.url } } : {}),
+                },
+              }
+            : {
+                kind: "add",
+                sourceId,
+                expectedRevision: source.revision,
+                definition: { name, ...definition, enabled: true },
+              },
       };
       try {
-        await mcp.mutate({ mutation });
+        const saved = await mcp.mutate({ mutation });
+        const identity =
+          saved.entryId && (await mcp.capabilityEntryIdentity(target.targetId, saved.entryId));
+        if (!identity || identity.revision !== saved.savedRevision) {
+          return {
+            status: "drifted",
+            reason: "The saved MCP definition changed before ownership could be recorded.",
+          };
+        }
+        return {
+          status: "installed-next-session",
+          ownership: {
+            sourceId: identity.sourceId,
+            fingerprint: identity.fingerprint,
+            provider,
+            name,
+          },
+        };
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "MCP management refused the change.";
         return { status: "failed", reason: message.slice(0, 400) };
       }
-      return { status: "installed-next-session" };
     },
-    async remove({ provider, name, requestId }) {
+    async remove({ provider, name, requestId, previous }) {
       const found = await backendTarget(provider);
       if ("error" in found) return { status: "unsupported", reason: found.error };
       const { mcp, target, snapshot } = found;
+      if (snapshot.freshness !== "fresh")
+        return { status: "failed", reason: "The MCP configuration could not be read completely." };
       const existing = snapshot.definitions.find(
-        (entry) => entry.name === name && entry.sourceId === target.defaultSourceId,
+        (entry) => entry.name === name && entry.sourceId === previous.sourceId,
       );
       if (!existing) return { status: "ready" };
-      const source = snapshot.sources.find((entry) => entry.sourceId === existing.sourceId);
-      if (!source?.revision)
-        return { status: "failed", reason: "The MCP configuration could not be read." };
+      const identity = await mcp.capabilityEntryIdentity(target.targetId, existing.entryId);
+      if (
+        !identity ||
+        identity.sourceId !== previous.sourceId ||
+        identity.fingerprint !== previous.fingerprint
+      ) {
+        return {
+          status: "drifted",
+          reason: "The locally changed MCP definition was left untouched.",
+        };
+      }
       try {
         await mcp.mutate({
           mutation: {
-            requestId: mcpRequestId(`${requestId}:remove`),
+            requestId: mcpRequestId(`${requestId}:remove:${identity.revision}`),
             targetId: target.targetId,
             applyIntent: "save",
             operation: {
               kind: "remove",
               entryId: existing.entryId,
-              expectedRevision: source.revision,
+              expectedRevision: identity.revision,
             },
           },
         });
@@ -248,6 +315,5 @@ export function createCapabilityService(
           }),
     },
     mcp: mcpManagementInstaller(() => context.mcpManagement),
-    ...(isolated ? {} : { pluginCli: (provider, args) => runner(provider, args) }),
   });
 }

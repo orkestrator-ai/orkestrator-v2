@@ -521,6 +521,20 @@ export class McpManagementService {
     return editableDefinition(entry, this.capabilitiesFor(target), this.rowReadOnly(target));
   }
 
+  /** Internal ownership proof for a capability-managed native entry. */
+  async capabilityEntryIdentity(targetId: string, entryId: string) {
+    await this.init();
+    const target = await resolveTarget(targetId, this.options.storage);
+    const { catalog } = await this.loadTargetCatalog(target, await this.specsFor(target));
+    const entry = catalog.entries.find((candidate) => candidate.entryId === entryId);
+    if (!entry?.raw || !entry.source.file?.revision || entry.conflict || entry.issue) return null;
+    return {
+      sourceId: entry.source.spec.sourceId,
+      revision: entry.source.file.revision,
+      fingerprint: await this.operations.entryDigest(entry.raw),
+    };
+  }
+
   async getOperation(args: { operationId?: unknown }): Promise<McpOperationSnapshot> {
     await this.init();
     await this.operations.refresh();

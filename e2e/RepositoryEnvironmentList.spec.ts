@@ -383,6 +383,7 @@ test("two browsers save independent Manual orders across a command-node restart"
   const token = randomUUID();
   let commandNode: Awaited<ReturnType<typeof startCommandNode>> | undefined;
   const writes: Promise<unknown>[] = [];
+  const reconciled = new Set<Page>();
   let releaseWrites!: () => void;
   const bothDropped = new Promise<void>((resolve) => {
     releaseWrites = resolve;
@@ -398,6 +399,7 @@ test("two browsers save independent Manual orders across a command-node restart"
     }
     expect(body.command).toBe("get_portal_layout");
     await route.fulfill({ json: await commandNode!.invoke(body) });
+    if (writes.length === 2) reconciled.add(route.request().frame().page());
   };
   try {
     commandNode = await startCommandNode(dataDir, token);
@@ -415,6 +417,7 @@ test("two browsers save independent Manual orders across a command-node restart"
     await expect(page.getByTestId("updates")).toContainText(ORK);
     await expect(second.getByTestId("updates")).toContainText("github.com/acme/website");
     expect(writes).toHaveLength(2);
+    await expect.poll(() => reconciled.size).toBe(2);
     await commandNode.stop();
     commandNode = await startCommandNode(dataDir, token);
     for (const client of [page, second]) {
@@ -514,7 +517,11 @@ async function startCommandNode(dataDir: string, token: string) {
       async invoke(body: { command: string; args?: unknown }): Promise<unknown> {
         const response = await fetch(new URL("/__orkestrator/invoke", origin), {
           method: "POST",
-          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            connection: "close",
+          },
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(10_000),
         });

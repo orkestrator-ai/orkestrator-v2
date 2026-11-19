@@ -4,6 +4,13 @@ import path from "node:path";
 import { Terminal as HeadlessTerminal } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import {
+  sanitizeHistoryChunk,
+  TERMINAL_PARSER_CARRY_MAX_BYTES,
+  trackParserCarry,
+  type ParserState,
+} from "./terminal-history-scanners.js";
+import { HeadlessParseScheduler } from "./terminal-parse-scheduler.js";
+import {
   DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
   DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
   DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
@@ -37,7 +44,6 @@ const TERMINAL_HISTORY_SCROLLBACK = 2_000;
 const TERMINAL_STATE_MAX_BYTES = 2 * 1024 * 1024;
 const TERMINAL_HISTORY_RECORD_MAX_BYTES = 128 * 1024;
 const TERMINAL_HISTORY_RECORD_MAX_ROWS = 500;
-const TERMINAL_PARSER_CARRY_MAX_BYTES = 64 * 1024;
 const TERMINAL_HISTORY_FLUSH_MS = 250;
 const TERMINAL_CHECKPOINT_MS = 5_000;
 const TERMINAL_HISTORY_PAGE_CONCURRENCY = 4;
@@ -63,7 +69,6 @@ type QueuedChunk = {
 };
 /** One chunk's numbered rows, joined by newlines, still holding its queue charge. */
 type NumberedRows = { first: number; at: number; text: string; charge: number };
-type ParserState = "normal" | "escape" | "csi" | "string" | "string-escape";
 
 type Manifest = {
   formatVersion: 1;
@@ -107,6 +112,8 @@ type Session = {
   flushQueued: boolean;
   lastCheckpointAt: number;
   bytesSinceCheckpoint: number;
+  /** Counts scheduled checkpoints; only the newest one queued on `parseTail` runs. */
+  checkpointTicket: number;
   manifest: Manifest;
   estimatedBytes: number;
   scrollback: number;
@@ -200,10 +207,6 @@ async function atomicWrite(filePath: string, contents: string): Promise<void> {
   const temporary = `${filePath}.${randomUUID()}.tmp`;
   await fs.writeFile(temporary, contents, { encoding: "utf8", mode: 0o600 });
   await fs.rename(temporary, filePath);
-}
-
-function writeTerminal(terminal: HeadlessTerminal, text: string): Promise<void> {
-  return new Promise((resolve) => terminal.write(text, resolve));
 }
 
 function blankManifest(
@@ -315,77 +318,6 @@ async function reconcileCommittedSegments(session: Session, manifest: Manifest):
   if (changed) manifest.historyGap = true;
 }
 
-function trackParserCarry(session: Session, text: string): void {
-  for (const character of text) {
-    const appendCarry = () => {
-      if (session.parserCarryOverflow) return;
-      session.parserCarry += character;
-      session.parserCarryBytes += Buffer.byteLength(character, "utf8");
-    };
-    switch (session.parserState) {
-      case "normal":
-        if (character === "\x1b") {
-          session.parserState = "escape";
-          session.parserCarry = character;
-          session.parserCarryBytes = 1;
-        } else if (character === "\x9b") {
-          session.parserState = "csi";
-          session.parserCarry = character;
-          session.parserCarryBytes = Buffer.byteLength(character, "utf8");
-        } else if (["\x90", "\x98", "\x9d", "\x9e", "\x9f"].includes(character)) {
-          session.parserState = "string";
-          session.parserCarry = character;
-          session.parserCarryBytes = Buffer.byteLength(character, "utf8");
-        }
-        break;
-      case "escape":
-        appendCarry();
-        if (character === "[") session.parserState = "csi";
-        else if (["]", "P", "X", "^", "_"].includes(character)) session.parserState = "string";
-        else if (character < " " || character > "/") {
-          session.parserState = "normal";
-          session.parserCarry = "";
-          session.parserCarryBytes = 0;
-        }
-        break;
-      case "csi":
-        appendCarry();
-        if (character >= "@" && character <= "~") {
-          session.parserState = "normal";
-          session.parserCarry = "";
-          session.parserCarryBytes = 0;
-        }
-        break;
-      case "string":
-        appendCarry();
-        if (character === "\x07" || character === "\x9c") {
-          session.parserState = "normal";
-          session.parserCarry = "";
-          session.parserCarryBytes = 0;
-        } else if (character === "\x1b") {
-          session.parserState = "string-escape";
-        }
-        break;
-      case "string-escape":
-        appendCarry();
-        if (character === "\\") {
-          session.parserState = "normal";
-          session.parserCarry = "";
-          session.parserCarryBytes = 0;
-        } else {
-          session.parserState = character === "\x1b" ? "string-escape" : "string";
-        }
-        break;
-    }
-    if (session.parserCarryBytes > TERMINAL_PARSER_CARRY_MAX_BYTES) {
-      session.parserCarry = "";
-      session.parserCarryBytes = 0;
-      session.parserCarryOverflow = true;
-    }
-    if (session.parserState === "normal") session.parserCarryOverflow = false;
-  }
-}
-
 export type TerminalHistoryConfiguration = {
   sessionId: string;
   dataDir: string;
@@ -422,81 +354,6 @@ function splitHistoryRecords(text: string): string[] {
     offset = end;
   }
   return chunks;
-}
-
-function sanitizeHistoryChunk(session: Session, text: string, final = false): string {
-  let input = `${session.archiveHighSurrogate}${text}`;
-  session.archiveHighSurrogate = "";
-  if (!final && input.length > 0) {
-    const last = input.charCodeAt(input.length - 1);
-    if (last >= 0xd800 && last <= 0xdbff) {
-      session.archiveHighSurrogate = input.at(-1)!;
-      input = input.slice(0, -1);
-    }
-  }
-  let output = "";
-  const emit = (character: string) => {
-    if (session.archivePendingCr) {
-      output += "\n";
-      session.archivePendingCr = false;
-      if (character === "\n") return;
-    }
-    if (character === "\r") {
-      session.archivePendingCr = true;
-    } else if (
-      character === "\n" ||
-      character === "\t" ||
-      (character >= " " && (character < "\x7f" || character > "\x9f"))
-    ) {
-      output += character;
-    }
-  };
-  for (const character of input) {
-    switch (session.archiveParserState) {
-      case "normal":
-        if (character === "\x1b") session.archiveParserState = "escape";
-        else if (character === "\x9b") session.archiveParserState = "csi";
-        else if (["\x90", "\x98", "\x9d", "\x9e", "\x9f"].includes(character)) {
-          session.archiveParserState = "string";
-        } else {
-          emit(character);
-        }
-        break;
-      case "escape":
-        if (character === "[") session.archiveParserState = "csi";
-        else if (["]", "P", "X", "^", "_"].includes(character)) {
-          session.archiveParserState = "string";
-        } else if (character < " " || character > "/") {
-          session.archiveParserState = "normal";
-        }
-        break;
-      case "csi":
-        if (character >= "@" && character <= "~") session.archiveParserState = "normal";
-        break;
-      case "string":
-        if (character === "\x07" || character === "\x9c") {
-          session.archiveParserState = "normal";
-        } else if (character === "\x1b") {
-          session.archiveParserState = "string-escape";
-        }
-        break;
-      case "string-escape":
-        if (character === "\\") session.archiveParserState = "normal";
-        else session.archiveParserState = character === "\x1b" ? "string-escape" : "string";
-        break;
-    }
-  }
-  if (final) {
-    if (session.archiveHighSurrogate) {
-      emit("�");
-      session.archiveHighSurrogate = "";
-    }
-    if (session.archivePendingCr) {
-      output += "\n";
-      session.archivePendingCr = false;
-    }
-  }
-  return output;
 }
 
 /** The longest prefix within `maximumBytes`: whole lines if any fit, else whole characters. */
@@ -551,6 +408,8 @@ export class TerminalHistory {
   private readonly maxGlobalPendingChunks: number;
   private readonly pageReadHook: (() => Promise<void>) | null;
   private readonly serializeHook: (() => void) | null;
+  /** Meters headless parsing so no burst holds the event loop (`terminal-parse-scheduler.ts`). */
+  private readonly parser = new HeadlessParseScheduler();
 
   constructor(options: TerminalHistoryOptions = {}) {
     this.maxDirectories = Math.max(
@@ -842,8 +701,9 @@ export class TerminalHistory {
     if (checkpointValid && checkpoint) {
       const hasQueuedLiveOutput = session.receivedRevision > 0;
       session.terminal.resize(checkpoint.cols, checkpoint.rows);
-      await writeTerminal(session.terminal, checkpoint.output);
-      if (checkpoint.pendingOutput) await writeTerminal(session.terminal, checkpoint.pendingOutput);
+      await this.parser.write(session.terminal, checkpoint.output);
+      if (checkpoint.pendingOutput)
+        await this.parser.write(session.terminal, checkpoint.pendingOutput);
       trackParserCarry(session, checkpoint.pendingOutput ?? "");
       session.appliedRevision = checkpoint.revision ?? 0;
       if (!hasQueuedLiveOutput) {
@@ -961,6 +821,7 @@ export class TerminalHistory {
       flushQueued: false,
       lastCheckpointAt: 0,
       bytesSinceCheckpoint: 0,
+      checkpointTicket: 0,
       manifest: blankManifest(historyId, incarnation, input.environmentId, input.tabId),
       estimatedBytes,
       scrollback,
@@ -1327,9 +1188,16 @@ export class TerminalHistory {
     }
     session.lastCheckpointAt = now;
     session.bytesSinceCheckpoint = 0;
+    session.checkpointTicket += 1;
+    const ticket = session.checkpointTicket;
     session.parseTail = session.parseTail
       .then(async () => {
         if (session.disposed) return;
+        // Output arriving faster than it is parsed queues one checkpoint per
+        // megabyte behind the backlog. Each serialization holds the event loop
+        // for milliseconds, and all but the newest would be overwritten as soon
+        // as the parser caught up, so only the newest queued one runs.
+        if (ticket !== session.checkpointTicket) return;
         if (session.parserCarryOverflow) return;
         this.numberQueuedOutput(session);
         const output = this.serializedState(session);
@@ -1392,7 +1260,7 @@ export class TerminalHistory {
         }
         trackParserCarry(session, text);
         const scrollbackAtCapacity = session.terminal.buffer.active.baseY >= session.scrollback;
-        await writeTerminal(session.terminal, text);
+        await this.parser.write(session.terminal, text);
         if (
           scrollbackAtCapacity ||
           (session.terminal.buffer.active.baseY >= session.scrollback &&

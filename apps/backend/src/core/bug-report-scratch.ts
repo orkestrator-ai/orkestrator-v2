@@ -9,6 +9,7 @@ import path from "node:path";
 
 import { BUG_REPORT_SCREENSHOT_DIRECTORY } from "@orkestrator/protocol/bug-report";
 
+import type { ReadableHostRoot } from "./path-safety.js";
 import type { BugReportsStorage } from "./storage-bug-reports.js";
 
 export const BUG_REPORT_SCRATCH_PREFIX = "orkestrator-bug-report-";
@@ -39,10 +40,13 @@ export function isOwnedBugReportScratchDir(scratchDir: string): boolean {
  */
 export async function bugReportImageRoots(
   bugReports: Pick<BugReportsStorage, "listBugReports"> | undefined,
-): Promise<string[]> {
+): Promise<ReadableHostRoot[]> {
   if (!bugReports) return [];
   const reports = await bugReports.listBugReports().catch(() => []);
   return reports
     .filter((report) => isOwnedBugReportScratchDir(report.scratchDir))
-    .map((report) => path.join(report.scratchDir, BUG_REPORT_SCREENSHOT_DIRECTORY));
+    .map((report) => ({
+      path: path.join(report.scratchDir, BUG_REPORT_SCREENSHOT_DIRECTORY),
+      trustedParent: path.dirname(report.scratchDir),
+    }));
 }

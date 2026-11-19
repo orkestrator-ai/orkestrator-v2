@@ -1,3 +1,4 @@
+import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
 /**
  * Narrow-only execution policy (H4) against a scripted app-server: a thread that
  * is really attached, a config that really yields, and a restart that really
@@ -232,4 +233,53 @@ test("journal-blocked prompts leave the restored policy pending", async () => {
   expect(await h.runtime.updateConfig(sessionId, { mode: "build", policy: widerPolicy })).toBe(
     "updated",
   );
+});
+
+test("a report upgrades its existing session and forwards a sandboxed Auto review turn", async () => {
+  const oldWorkspace = process.env[BUG_REPORT_WORKSPACE_ENV];
+  const h = await harness();
+  const workspace = "/tmp/ws";
+  process.env[BUG_REPORT_WORKSPACE_ENV] = workspace;
+  try {
+    const policy = { ...askPolicy, id: "interactive-host" as const };
+    const sessionId = await attachedSession(h, policy);
+    expect(
+      await h.runtime.updateConfig(sessionId, {
+        policy: { ...policy, approvals: "auto-approve" },
+      }),
+    ).toBe("updated");
+    await expect(
+      h.runtime.updateConfig(sessionId, {
+        policy: { ...policy, approvals: "auto-approve", projectResources: true },
+      }),
+    ).rejects.toBeInstanceOf(PolicyWideningRefusedError);
+
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Inspect report",
+        requestId: "review",
+        attachments: [],
+        approvalMode: "auto-review",
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      h
+        .child()
+        .requests.filter((request) => request.method === "turn/start")
+        .at(-1)?.params,
+    ).toMatchObject({
+      cwd: workspace,
+      approvalsReviewer: "auto_review",
+      approvalPolicy: { granular: { sandbox_approval: false, request_permissions: false } },
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        excludeSlashTmp: true,
+        excludeTmpdirEnvVar: true,
+      },
+    });
+  } finally {
+    if (oldWorkspace === undefined) delete process.env[BUG_REPORT_WORKSPACE_ENV];
+    else process.env[BUG_REPORT_WORKSPACE_ENV] = oldWorkspace;
+  }
 });

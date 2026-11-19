@@ -1,3 +1,4 @@
+import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
 import { stat } from "node:fs/promises";
 import {
   DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
@@ -425,11 +426,13 @@ export class CodexRuntimePrompt {
     // thread on one sandbox and the turn on the other. The decision is also
     // in the thread reload key (`promptThreadConfig`), so an attached thread
     // started under the other decision is reloaded before the turn.
-    const sandboxOff = input.readOnly
-      ? (this.ctx.options.readOnlyCommandSandboxOff ?? codexReadOnlyCommandSandboxOff)(
-          session.config,
-        )
-      : undefined;
+    const reportWorkspace = Boolean(process.env[BUG_REPORT_WORKSPACE_ENV]);
+    const sandboxOff =
+      input.readOnly && !reportWorkspace
+        ? (this.ctx.options.readOnlyCommandSandboxOff ?? codexReadOnlyCommandSandboxOff)(
+            session.config,
+          )
+        : undefined;
     if (sandboxOff) {
       // Codex reads its rules when a thread starts or resumes, and a
       // sandbox-off thread is always started or reloaded under that decision
@@ -446,7 +449,12 @@ export class CodexRuntimePrompt {
     const promptConfig = (): EngineTurnConfig => {
       return {
         ...session.config,
-        ...codexApprovalConfig(session.config.policy, session.config.sandbox, input.approvalMode),
+        ...codexApprovalConfig(
+          session.config.policy,
+          session.config.sandbox,
+          input.approvalMode,
+          reportWorkspace,
+        ),
         ...(input.readOnly
           ? {
               sandbox: sandboxOff ? "danger-full-access" : "read-only",

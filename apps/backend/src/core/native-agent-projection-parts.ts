@@ -1,3 +1,5 @@
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
+import { bugReportInitialApprovalMode, validBugReportApprovalMode } from "./bug-report-runtime.js";
 import * as shared from "./native-agent-service-shared.js";
 import type {
   NativeAgentComposerState,
@@ -1182,12 +1184,36 @@ export class NativeAgentProjectionParts {
         executionProfiles.some((profile) => profile.id === storedExecutionProfileId))
         ? storedExecutionProfileId
         : undefined;
-    const approvalModes = nativeAgentApprovalModes(input.agent, session.policy);
-    const selectedApprovalModeId = resolveNativeAgentApprovalMode(
-      input.agent,
-      session.policy,
-      providerControls?.approvalMode ?? session.controls?.approvalMode,
-    );
+    const isReport = Boolean(bugReportIdFromRuntimeId(session.environmentId));
+    const approvalModes = nativeAgentApprovalModes(input.agent, session.policy).map((mode) => {
+      if (!isReport || input.agent !== "codex") return mode;
+      if (mode.id === "auto-review") {
+        return {
+          ...mode,
+          description: "Review eligible requests automatically. Sandbox escapes are denied.",
+        };
+      }
+      if (mode.id === "never") {
+        return {
+          ...mode,
+          label: "No prompts",
+          description: "Run within the report sandbox without asking.",
+        };
+      }
+      return mode;
+    });
+    const selectedApprovalModeId =
+      isReport && (input.agent === "claude" || input.agent === "codex")
+        ? (validBugReportApprovalMode(
+            input.agent,
+            session.policy,
+            session.controls?.approvalMode,
+          ) ?? bugReportInitialApprovalMode(input.agent))
+        : resolveNativeAgentApprovalMode(
+            input.agent,
+            session.policy,
+            providerControls?.approvalMode ?? session.controls?.approvalMode,
+          );
     const composer: NativeAgentComposerState = {
       models,
       ...(resolvedSelection.selectedModelId

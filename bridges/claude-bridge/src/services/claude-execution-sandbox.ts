@@ -1,3 +1,4 @@
+import { BUG_REPORT_WORKSPACE_ENV } from "@orkestrator/protocol/bug-report";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { realpathSync } from "node:fs";
 import {
@@ -117,7 +118,7 @@ export function claudeExecutionSandbox(
     failIfUnavailable: true,
     autoAllowBashIfSandboxed: policy.approvals === "auto-approve" && !asksForApproval,
     // Without a human, an escape request would be granted unseen.
-    allowUnsandboxedCommands: asksForApproval,
+    allowUnsandboxedCommands: asksForApproval && !process.env[BUG_REPORT_WORKSPACE_ENV],
     network: {
       allowLocalBinding: policy.networkAccess === "full",
       // Otherwise an unlisted domain becomes an auto-approved permission request.

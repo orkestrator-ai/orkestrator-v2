@@ -43,7 +43,7 @@ import { stopLocalServer } from "./commands-servers.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { gitHubCli, gitHubCliEnv, resolveGitHubToken } from "./git/index.js";
 import { runCommand } from "./shell.js";
-import { writeConfinedFile } from "./path-safety.js";
+import { MAX_BINARY_FILE_BYTES, writeConfinedFile } from "./path-safety.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import type { BugReportRecord } from "./storage-bug-reports.js";
 import {
@@ -51,7 +51,7 @@ import {
   isOwnedBugReportScratchDir as ownedScratchDir,
 } from "./bug-report-scratch.js";
 
-const MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024;
+const MAX_SCREENSHOT_BYTES = MAX_BINARY_FILE_BYTES;
 const MAX_DRAFT_FILE_BYTES = 1024 * 1024;
 const MAX_CONTEXT_STRING = 512;
 
@@ -261,8 +261,11 @@ export async function saveBugReportScreenshot(
   if (typeof base64Data !== "string" || !base64Data) throw new Error("Screenshot is empty");
   const record = await requireReport(context, reportId);
   const bytes = Buffer.from(base64Data, "base64");
-  if (bytes.length === 0 || bytes.length > MAX_SCREENSHOT_BYTES) {
-    throw new Error("Screenshot is empty or too large");
+  if (bytes.length === 0) throw new Error("Screenshot is empty");
+  if (bytes.length > MAX_SCREENSHOT_BYTES) {
+    throw new Error(
+      `Screenshot exceeds the ${MAX_SCREENSHOT_BYTES / (1024 * 1024)} MiB preview limit`,
+    );
   }
   const isPng = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   if (!isPng) throw new Error("Screenshot must be a PNG image");

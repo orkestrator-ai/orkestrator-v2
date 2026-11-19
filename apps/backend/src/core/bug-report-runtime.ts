@@ -3,7 +3,11 @@ import {
   bugReportIdFromRuntimeId,
   type BugReportAgent,
 } from "@orkestrator/protocol/bug-report";
-import type { NativeAgentExecutionPolicyOverride } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentApprovalModes,
+  type NativeAgentExecutionPolicy,
+  type NativeAgentExecutionPolicyOverride,
+} from "@orkestrator/protocol/native-agent";
 
 import type { Environment } from "./models.js";
 import type { BugReportRecord, BugReportsStorage } from "./storage-bug-reports.js";
@@ -15,20 +19,7 @@ import type { BugReportRecord, BugReportsStorage } from "./storage-bug-reports.j
  */
 export const BUG_REPORT_PROJECT_ID = "bug-report";
 
-/**
- * Read-only, apart from the scratch directory, with the approval mode the
- * user picks.
- *
- * The provider sandbox lets the agent write only inside its working directory
- * (the report's scratch directory) whatever approval mode is chosen. Claude
- * and Codex offer a mode picker, so their policy allows every mode and the
- * session starts in the asking one (`bugReportInitialApprovalMode`): the user
- * can then step up to accepting edits, auto review or approving everything,
- * which the picker could not offer while the policy was `ask`. OpenCode has no
- * mode picker, so its policy stays `ask` and every escalation still goes to
- * the user. The filing itself never runs in the agent: the sheet's File issue
- * button does it.
- */
+/** Report bridges enforce provider-specific write boundaries independently of the picker. */
 export function bugReportExecutionPolicyOverride(
   agent: BugReportAgent | undefined,
 ): NativeAgentExecutionPolicyOverride {
@@ -53,6 +44,24 @@ export function bugReportInitialApprovalMode(agent: BugReportAgent): string | un
     case "opencode":
       return undefined;
   }
+}
+
+export function validBugReportApprovalMode(
+  agent: BugReportAgent,
+  policy: NativeAgentExecutionPolicy | undefined,
+  mode: string | undefined,
+): string | undefined {
+  return nativeAgentApprovalModes(agent, policy).some(
+    (option) => option.id === mode && !option.disabled,
+  )
+    ? mode
+    : undefined;
+}
+
+export function isLegacyBugReportPolicy(
+  policy: NativeAgentExecutionPolicy | undefined,
+): policy is NativeAgentExecutionPolicy & { approvals: "ask" } {
+  return policy?.sandbox === "provider" && policy.approvals === "ask" && !policy.projectResources;
 }
 
 export type BugReportRuntimeResolution =

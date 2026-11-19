@@ -1140,6 +1140,14 @@ export class StorageService {
     );
   }
 
+  upgradeBugReportSessionPolicy(
+    ...args: Parameters<
+      StorageService["repos"]["nativeAgentSessions"]["upgradeBugReportSessionPolicy"]
+    >
+  ): Promise<PersistedNativeAgentSession> {
+    return this.repos.nativeAgentSessions.upgradeBugReportSessionPolicy(...args);
+  }
+
   transitionCoordinatorResearchPolicy(
     expected: PersistedNativeAgentSession,
     policy: NonNullable<PersistedNativeAgentSession["policy"]>,

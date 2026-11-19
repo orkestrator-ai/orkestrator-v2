@@ -1073,6 +1073,11 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * Restate trusted session-held permissions before dispatch and after restart.
    * Process-held authority is refreshed by the launcher instead.
    */
+  /** Applies a trusted reporter policy upgrade to the same bridge conversation. */
+  synchronizeBugReportSessionPolicy?(
+    sessionId: string,
+    policy: NativeAgentExecutionPolicy,
+  ): Promise<void>;
   synchronizeSessionPolicy?(sessionId: string, policy: NativeAgentExecutionPolicy): Promise<void>;
   resumeSession?(
     sessionId: string,

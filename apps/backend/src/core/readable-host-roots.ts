@@ -1,5 +1,6 @@
 import { bugReportImageRoots } from "./bug-report-scratch.js";
 import type { CommandContext } from "./commands-context.js";
+import type { ReadableHostRoot } from "./path-safety.js";
 import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
 import { getWorktreeBaseDir } from "./worktrees/index.js";
 
@@ -15,7 +16,7 @@ import { getWorktreeBaseDir } from "./worktrees/index.js";
  */
 export async function readableHostFileRoots(
   context: Pick<CommandContext, "storage" | "worktreeDir">,
-): Promise<string[]> {
+): Promise<ReadableHostRoot[]> {
   // Worktrees created in a folder the user chose are readable one by one,
   // never the chosen folder as a whole.
   const customWorktrees = (await context.storage.loadEnvironments())

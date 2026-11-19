@@ -106,6 +106,41 @@ describe("bug report service", () => {
     });
   });
 
+  test("accepts captures at the transcript limit and reports oversized captures", async () => {
+    const context = await createContext();
+    const { report } = await createBugReport(context, {});
+    scratchDirs.push(report!.scratchDir);
+    const limit = 10 * 1024 * 1024;
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const captureOfSize = (size: number) => {
+      // Pad a 1×1 PNG with a checksummed ancillary text chunk before IEND.
+      const chunk = Buffer.alloc(size - png.length, 65);
+      chunk.writeUInt32BE(chunk.length - 12);
+      chunk.write("tEXtfixture\0", 4);
+      chunk.writeUInt32BE(Bun.hash.crc32(chunk.subarray(4, -4)), chunk.length - 4);
+      return Buffer.concat([png.subarray(0, -12), chunk, png.subarray(-12)], size).toString(
+        "base64",
+      );
+    };
+    const commands = createCommandRegistry();
+    const saved = await saveBugReportScreenshot(context, report!.id, captureOfSize(limit));
+    const readContext = {
+      ...context,
+      worktreeDir: path.join(context.storage.getDataDir(), "worktrees"),
+    };
+    const rendered = await commands.get("read_file_base64")!(
+      { filePath: saved.path } as never,
+      readContext,
+    );
+    expect(Buffer.from(rendered as string, "base64").length).toBe(limit);
+    await expect(
+      saveBugReportScreenshot(context, report!.id, captureOfSize(limit + 1)),
+    ).rejects.toThrow("10 MiB preview limit");
+  });
+
   test("rejects agents the flow does not offer", async () => {
     const context = await createContext();
     const { report } = await createBugReport(context, {});

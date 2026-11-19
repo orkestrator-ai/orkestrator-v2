@@ -1861,6 +1861,13 @@ export class AppServerEngine implements CodexEngine {
       // `request_user_input` without this.
       ...codexRequestUserInputConfig(config.policy),
       ...extraConfig,
+      ...(config.excludeTemporaryWriteRoots
+        ? {
+            "sandbox_workspace_write.exclude_tmpdir_env_var": true,
+            "sandbox_workspace_write.exclude_slash_tmp": true,
+            "sandbox_workspace_write.writable_roots": [],
+          }
+        : {}),
       ...(config.agentMcp
         ? {
             // Replace the complete server table. The app-server process may
@@ -3090,8 +3097,8 @@ function toSandboxPolicy(config: EngineTurnConfig): Record<string, unknown> {
         type: "workspaceWrite",
         writableRoots: [],
         networkAccess,
-        excludeTmpdirEnvVar: false,
-        excludeSlashTmp: false,
+        excludeTmpdirEnvVar: config.excludeTemporaryWriteRoots ?? false,
+        excludeSlashTmp: config.excludeTemporaryWriteRoots ?? false,
       };
     case "danger-full-access":
     default:

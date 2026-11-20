@@ -3653,8 +3653,9 @@ This opt-in check pairs a fresh command profile with the published 2.39.8-beta
 backend. It makes a disposable copy of the profile's fixture repository on the
 leaf, switches the real browser dialog to it, and checks that creation reaches
 the leaf and that the environment remains visible after a reload. A second
-browser tab exercises recovery when a project's summary still advertises a
-checkout but the live read omits the project.
+browser context uses the signed-in storage state and installs module routing
+before opening its first page. It exercises recovery when a project's summary
+still advertises a checkout but the live read omits the project.
 
 Start a profile with `mise run dev:test --profile create-handoff --fixture
 --headless --agent-platforms pi --no-agent-credentials`. Run the check once

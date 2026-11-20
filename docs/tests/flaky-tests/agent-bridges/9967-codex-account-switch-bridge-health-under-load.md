@@ -2,7 +2,7 @@
 
 - **ID:** 9967
 - **Status:** open
-- **Date observed:** 2026-11-16; recurred 2026-11-17 and twice on 2026-11-18
+- **Date observed:** 2026-11-16; recurred 2026-11-17, twice on 2026-11-18 and twice on 2026-11-20
 - **Test:** `automatic switching on the pinned codex > a planning turn stays a planning turn when it is resent`;
   `automatic switching on the pinned codex > two reviewers on one bridge each continue once, still read-only`;
   `automatic switching on the pinned codex > another limit moves nothing and resends nothing`
@@ -100,6 +100,32 @@ The product fix the recurrence above proposed, in
   alone after the change (28.4 s). Not yet proven under the CI load that
   produced the race; the health-timeout mode from 2026-11-16 is not addressed
   by this fix, so the case stays open.
+
+### Recurrences: 2026-11-20, after the port-race fix
+
+Both recurrences were checked with `mise run flaky:recurrence`, which answered
+"open. Record the failure as a recurrence" for base `a01039913` and for base
+`918d7caaf`. Both came after the port-race fix merged.
+
+- CI push run 44743899361 (`main` at `a01039913`), job "Tests (backend)"
+  136314180655: `two reviewers on one bridge each continue once, still
+  read-only` failed after 49,600.33 ms at
+  `account-switch-resend-suite.ts:137`. `evidence.bridgePids` had three
+  entries where two were expected, so one bridge start too many happened.
+  The shard printed no scenario output for it, so it does not show whether
+  the extra start was a port-taken retry or a restart. Backend shard: 23,755
+  pass, 1 fail. The file passed alone on the same runner (47.8 s).
+- CI pull-request run 44783881191 (#2516, `9d821d0f1`, base `918d7caaf`),
+  job "Tests (backend)" 136453472421: `a 5-hour refusal continues on the new
+  account` failed after 31,033.63 ms with the 2026-11-16 symptom,
+  `start_local_codex_server_cmd` failing after 16,041 ms with `Server on port
+  33813 did not become healthy`. This time the bridge printed its ready line
+  (`Orkestrator bridge listening on port 33813`) before the backend stopped
+  it, so it did bind. The output has no timestamps, so it cannot show whether
+  the line came early or only just inside the 15 s budget, which
+  `waitForLocalServerStartup` counts from spawn, cold start included. The
+  boot Docker reachability probes (about 3.4 s and 3.8 s) ran at the same
+  time again. The file passed alone on the same runner (58.4 s).
 
 ## Investigation so far
 

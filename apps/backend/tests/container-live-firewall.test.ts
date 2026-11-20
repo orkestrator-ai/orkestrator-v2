@@ -16,6 +16,7 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { networkOwnerContainer } from "../src/core/container-network-owner";
 import { getHostPort } from "../src/core/commands-container-exec";
+import { OPENCODE2_SERVER_PORT } from "../src/core/constants";
 import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/egress-gateway";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
@@ -297,7 +298,8 @@ describe("C23 allowlist edits, refresh and revocation", () => {
         expect((await environmentNetworkPolicy(environment.id, context)).enforcement).toBe(
           "gateway",
         );
-        // The runtime's published ports are the gateway's.
+        // The runtime's published ports are the gateway's. Nothing serves
+        // OpenCode's published port in this case, so the probe server can.
         await docker([
           "exec",
           "-d",
@@ -306,9 +308,9 @@ describe("C23 allowlist edits, refresh and revocation", () => {
           containerId,
           "node",
           "-e",
-          'require("http").createServer((q, r) => r.end("ok")).listen(4096)',
+          `require("http").createServer((q, r) => r.end("ok")).listen(${OPENCODE2_SERVER_PORT})`,
         ]);
-        const hostPort = await getHostPort(containerId, 4096);
+        const hostPort = await getHostPort(containerId, OPENCODE2_SERVER_PORT);
         expect(hostPort).toBeGreaterThan(0);
         let answered = "";
         for (let attempt = 0; attempt < 30 && answered !== "ok"; attempt += 1) {

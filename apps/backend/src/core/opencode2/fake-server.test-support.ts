@@ -191,11 +191,12 @@ export class FakeOpenCode2Server {
   private seq = new Map<string, number>();
   private counter = 0;
 
-  constructor() {
+  constructor(beforeResponse?: () => Promise<void>) {
     this.server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch: (request) => this.handle(request),
+      fetch: (request) =>
+        beforeResponse ? beforeResponse().then(() => this.handle(request)) : this.handle(request),
     });
   }
 

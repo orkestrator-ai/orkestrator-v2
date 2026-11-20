@@ -26,7 +26,16 @@ const SCOPE = ["environmentId", "logicalSessionKey"];
 const HANDLER_KEYS: Record<string, readonly string[]> = {
   transcript_artifact_capabilities: [],
   transcript_artifact_get_publication: [...SCOPE, "publicationId"],
-  transcript_artifact_list_publications: [...SCOPE, "afterSequence", "limit"],
+  // Rich interaction cards (#2511) added the optional page and lookup keys.
+  transcript_artifact_list_publications: [
+    ...SCOPE,
+    "afterSequence",
+    "beforeSequence",
+    "limit",
+    "newestFirst",
+    "artifactId",
+    "revision",
+  ],
   transcript_artifact_read_representation: [
     ...SCOPE,
     "publicationId",

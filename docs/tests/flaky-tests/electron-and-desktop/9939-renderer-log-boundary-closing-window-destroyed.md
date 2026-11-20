@@ -1,8 +1,8 @@
 # Renderer log boundary: a closing window read after it was destroyed (`e2e/agent-testing/renderer-log-boundary-electron.spec.ts`)
 
 - **ID:** 9939
-- **Status:** resolved
-- **Date observed:** 2026-11-15
+- **Status:** open
+- **Date observed:** 2026-11-15; recurred 2026-11-20 after the fix
 - **Test:** `a real window sends its startup markers to the main process and none of its logger lines`
 - **File:** `e2e/agent-testing/renderer-log-boundary-electron.spec.ts:204` at
   `a8b89f154` (line 212 now); the failing call was at line 319.
@@ -35,3 +35,29 @@
 - **Reproduced:** no. The fix landed in other work before this case was
   filed, and the failure was seen once, under load, on a base without it.
 - **Stress:** none recorded for this case.
+
+## Recurrence (2026-11-20): the destroyed-window filter was not enough
+
+- CI pull-request run 44743383781 (#2511, `ef74c7258`, base `9a5a84f63`),
+  job "Native menu (ubuntu-latest)" 136312419980: the fifth repetition
+  (`repeat4`) of this test failed with `electronApplication.evaluate:
+  TypeError: Object has been destroyed`. The stack points into the
+  `Array.some` callback of the DevTools poll
+  (`renderer-log-boundary-electron.spec.ts:324`), which already skips windows
+  whose `isDestroyed()` is true. 24 passed, 1 failed (2.5 min).
+- `mise run flaky:recurrence -- 9939 --base 9a5a84f63` answered "resolved,
+  and the base contains its fix (22e845e8fd). This is a real recurrence", so
+  the case is open again.
+- **Root cause (evidence-backed hypothesis):** the evaluate before the poll
+  still only calls `extra.close()` and returns. While that window is closing,
+  its `BrowserWindow` can still say it is not destroyed when its
+  `webContents` already is, so the filter lets it through and the read
+  throws.
+- **Fix (branch `fix-ci-round-3-8ad0c62eed90`):** that evaluate now waits for
+  the extra window's `closed` event before it returns. The window that causes
+  the race is gone before the poll starts, and the `isDestroyed()` filters
+  stay for any other window that is closing.
+- **Verification:** none yet. The branch was prepared on a headless Linux
+  host where no display may be started, so the Electron suite was not run.
+  Close the case once "Native menu (ubuntu-latest)" passes all five
+  repetitions with the fix.

@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { ProviderUnavailableError, readProviderStatus } from "../agent-provider-contract.js";
-import { OPENCODE2_STOP_CLEANUP_MS, OpenCode2BackgroundWork } from "./background-subagents.js";
+import {
+  OPENCODE2_STOP_CLEANUP_MS,
+  OPENCODE2_STOP_SETTLE_MS,
+  OpenCode2BackgroundWork,
+} from "./background-subagents.js";
 import { OpenCode2Client } from "./client.js";
 import { openCode2TurnTerminalError } from "./environment-provider.js";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";
@@ -455,6 +459,49 @@ describe("shell settlement and Stop interleavings", () => {
     expect(server.interrupts).toEqual([id]);
     expect(server.sessions.get(id)?.running).toBe(false);
   });
+
+  test.each([
+    ["run cleared", true],
+    ["run still active", false],
+  ] as const)(
+    "reconciles a late sub-agent wake across the settle deadline (%s)",
+    async (_outcome, clearsRun) => {
+      const { server, provider, client } = setupWork();
+      const parent = await provider.createSession("build", "stop");
+      const child = server.addChildSession(parent, { running: false });
+      let elapsed = 0;
+      const scans: number[] = [];
+      const activeSessions = client.activeSessions.bind(client);
+      client.activeSessions = (...args) => {
+        scans.push(elapsed);
+        if (scans.length === 2) {
+          elapsed = OPENCODE2_STOP_SETTLE_MS - 50;
+          server.reportChild(child);
+        }
+        return activeSessions(...args);
+      };
+      const interrupt = client.interrupt.bind(client);
+      const interrupted: string[] = [];
+      client.interrupt = async (...args) => {
+        interrupted.push(args[0]);
+        elapsed += 100;
+        return clearsRun ? interrupt(...args) : false;
+      };
+      const work = new OpenCode2BackgroundWork(client, {
+        running: () => client.activeSessions(),
+        now: () => clock,
+        monotonicNow: () => elapsed,
+        sleep: async (ms) => {
+          elapsed += ms;
+        },
+      });
+
+      expect(await work.stop(parent)).toBe(clearsRun);
+      expect(interrupted).toEqual([parent]);
+      expect(scans).toEqual([0, 100, OPENCODE2_STOP_SETTLE_MS + 50]);
+      expect(server.sessions.get(parent)?.running).toBe(!clearsRun);
+    },
+  );
 
   test.each(["envelope", "started", "status", "shellID", "completed"] as const)(
     "malformed job %s keeps observation and Stop pending",

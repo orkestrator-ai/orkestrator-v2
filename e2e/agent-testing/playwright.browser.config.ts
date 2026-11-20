@@ -67,6 +67,7 @@ export default defineConfig({
     "close-retention-live.spec.ts",
     "multi-client-restarts-live.spec.ts",
     "remote-bandwidth-live.spec.ts",
+    "terminal-echo-latency-live.spec.ts",
     "restore-apply-bulk-live.spec.ts",
     "transcript-parts-live.spec.ts",
     "graph-profiles-fake.spec.ts",

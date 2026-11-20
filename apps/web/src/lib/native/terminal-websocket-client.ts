@@ -49,6 +49,9 @@ type DesiredChannel = {
   /** Consecutive failed subscription attempts, used to back off the retry. */
   subscribeAttempts: number;
   applicationTail: Promise<void>;
+  applicationEpoch: number;
+  pendingOutputFrames: number;
+  pendingOutputBytes: number;
   pendingAcknowledgement: { generation: number; revision: number } | null;
   acknowledgementTimer: ReturnType<typeof setTimeout> | null;
 };
@@ -77,6 +80,8 @@ export type TerminalWebSocketClientOptions = {
   reconnectRandom?: () => number;
   /** Clock that decides whether a dropped socket had stayed up long enough. */
   reconnectNow?: () => number;
+  maxPendingOutputFrames?: number;
+  maxPendingOutputBytes?: number;
   maxAwaitingSnapshotFrames?: number;
   maxAwaitingSnapshotBytes?: number;
   maxPendingOperations?: number;
@@ -98,6 +103,7 @@ export type TerminalWebSocketClientOptions = {
   onChannelUnavailable?(sessionId: string): void;
 };
 
+const DEFAULT_MAX_PENDING_OUTPUT_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_AWAITING_SNAPSHOT_FRAMES = 1_024;
 const DEFAULT_MAX_PENDING_OPERATIONS = 1_024;
 const DEFAULT_MAX_PENDING_OPERATION_BYTES = 2 * 1024 * 1024;
@@ -222,6 +228,9 @@ export class TerminalWebSocketClient {
         retryTimer: null,
         subscribeAttempts: 0,
         applicationTail: Promise.resolve(),
+        applicationEpoch: 0,
+        pendingOutputFrames: 0,
+        pendingOutputBytes: 0,
         pendingAcknowledgement: null,
         acknowledgementTimer: null,
       };
@@ -674,6 +683,7 @@ export class TerminalWebSocketClient {
         case "desync": {
           const channel = this.channels.get(frame.channelId);
           if (!channel) return;
+          channel.applicationEpoch += 1;
           channel.awaitingSnapshot = true;
           channel.requiresResubscribe = true;
           channel.revision = null;
@@ -780,27 +790,61 @@ export class TerminalWebSocketClient {
       });
   }
 
+  private recoverOutputChannel(channel: DesiredChannel): void {
+    if (this.desired.get(channel.sessionId) !== channel) return;
+    channel.applicationEpoch += 1;
+    channel.awaitingSnapshot = true;
+    channel.requiresResubscribe = true;
+    channel.revision = null;
+    channel.receivedRevision = null;
+    this.clearAcknowledgement(channel);
+    this.clearBuffered(channel);
+    this.markUnavailable(channel);
+    this.unsubscribeForRecovery(channel);
+    // A cursorless subscription explicitly requests snapshot recovery. Wait
+    // for the bounded old tail to retire before admitting another batch.
+    void channel.applicationTail.then(() => this.scheduleSubscribe(channel));
+  }
+
   private enqueueOutput(channel: DesiredChannel, payload: TerminalSocketPayload): void {
-    const application = channel.applicationTail.then(() => this.applyOutput(channel, payload));
-    channel.applicationTail = application.catch(() => {
-      if (this.desired.get(channel.sessionId) !== channel) return;
-      channel.awaitingSnapshot = true;
-      channel.requiresResubscribe = true;
-      channel.revision = null;
-      channel.receivedRevision = null;
-      this.clearBuffered(channel);
-      this.markUnavailable(channel);
-      this.unsubscribeForRecovery(channel);
-      this.scheduleSubscribe(channel);
-    });
+    const bytes = payload.bytes?.byteLength ?? 0;
+    if (
+      channel.pendingOutputFrames >=
+        (this.options.maxPendingOutputFrames ?? DEFAULT_MAX_AWAITING_SNAPSHOT_FRAMES) ||
+      channel.pendingOutputBytes + bytes >
+        (this.options.maxPendingOutputBytes ?? DEFAULT_MAX_PENDING_OUTPUT_BYTES)
+    ) {
+      this.recoverOutputChannel(channel);
+      return;
+    }
+    const epoch = channel.applicationEpoch;
+    channel.pendingOutputFrames += 1;
+    channel.pendingOutputBytes += bytes;
+    channel.applicationTail = channel.applicationTail
+      .then(() => this.applyOutput(channel, payload, epoch))
+      .catch(() => {
+        if (channel.applicationEpoch === epoch) this.recoverOutputChannel(channel);
+      })
+      .finally(() => {
+        channel.pendingOutputFrames -= 1;
+        channel.pendingOutputBytes -= bytes;
+      });
   }
 
   private async applyOutput(
     channel: DesiredChannel,
     payload: TerminalSocketPayload,
+    epoch: number,
   ): Promise<void> {
-    if (payload.bytes === undefined) return;
+    if (
+      payload.bytes === undefined ||
+      channel.awaitingSnapshot ||
+      epoch !== channel.applicationEpoch ||
+      this.desired.get(channel.sessionId) !== channel
+    )
+      return;
     if (channel.generation !== payload.generation) {
+      channel.applicationEpoch += 1;
       channel.awaitingSnapshot = true;
       channel.requiresResubscribe = true;
       channel.revision = null;
@@ -818,6 +862,7 @@ export class TerminalWebSocketClient {
     const receivedRevision = channel.receivedRevision ?? channel.revision ?? 0;
     if (payload.revision <= receivedRevision) return;
     if (payload.revision !== receivedRevision + 1) {
+      channel.applicationEpoch += 1;
       channel.awaitingSnapshot = true;
       channel.requiresResubscribe = true;
       channel.revision = null;
@@ -837,6 +882,7 @@ export class TerminalWebSocketClient {
     if (
       this.desired.get(channel.sessionId) !== channel ||
       channel.awaitingSnapshot ||
+      epoch !== channel.applicationEpoch ||
       channel.generation !== payload.generation
     )
       return;
@@ -1024,6 +1070,7 @@ export class TerminalWebSocketClient {
     this.rejectAllOperations(error);
     for (const channel of this.desired.values()) {
       this.clearAcknowledgement(channel);
+      channel.applicationEpoch += 1;
       if (channel.retryTimer) clearTimeout(channel.retryTimer);
       channel.retryTimer = null;
       channel.channelId = null;

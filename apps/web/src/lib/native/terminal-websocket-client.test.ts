@@ -499,6 +499,57 @@ describe("TerminalWebSocketClient", () => {
     });
   });
 
+  test("bounds a blocked renderer tail and recovers on a cursorless subscription", async () => {
+    const { client, sockets, channelUnavailable } = createHarness({
+      maxPendingOutputFrames: 2,
+      maxPendingOutputBytes: 8,
+    });
+    const received: TerminalSocketPayload[] = [];
+    let unblock!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    client.subscribe("session-a", (payload) => {
+      received.push(payload);
+      if (!payload.desynced && payload.revision === 1) return blocked;
+    });
+    const socket = sockets[0]!;
+    openAndReady(socket);
+    acceptSubscription(socket, "session-a", 11);
+    const send = (channelId: number, revision: number) =>
+      socket.receive(
+        encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.output,
+          channelId,
+          generation: 1,
+          revision,
+          bytes: new TextEncoder().encode("data"),
+        }),
+      );
+    send(11, 1);
+    await tick();
+    for (let revision = 2; revision <= 100; revision += 1) send(11, revision);
+    await tick();
+    expect(channelUnavailable).toHaveBeenCalledWith("session-a");
+    expect(received.map(({ revision }) => revision)).toEqual([1]);
+    expect(sentControls(socket)).toContainEqual({ type: "unsubscribe", channelId: 11 });
+    unblock();
+    await tick();
+    await tick();
+    expect(subscribeFrame(socket, "session-a")).not.toHaveProperty("revision");
+    expect(sentControls(socket).filter(({ type }) => type === "subscribe")).toHaveLength(2);
+    acceptSubscription(socket, "session-a", 12, 1, 100, "snapshot-required");
+    expect(received.at(-1)).toMatchObject({ desynced: true, revision: 100 });
+    client.observeSnapshot("session-a", { generation: 1, revision: 100 });
+    await tick();
+    send(12, 101);
+    await tick();
+    expect(received.map(({ revision }) => revision)).toEqual([1, 100, 101]);
+    expect(sentControls(socket).filter(({ type }) => type === "ack")).toEqual([
+      { type: "ack", channelId: 12, generation: 1, revision: 101 },
+    ]);
+  });
+
   test("coalesces output acknowledgements to the latest applied revision", async () => {
     const { client, sockets } = createHarness({ acknowledgementDelayMs: 20 });
     client.subscribe("session-a", () => undefined);

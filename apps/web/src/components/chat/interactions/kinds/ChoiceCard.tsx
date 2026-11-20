@@ -80,7 +80,7 @@ export function ChoiceCard({
       {spec.questions.map((question) => {
         const selected =
           (disabled && answered
-            ? answered.answers.find((a) => a.questionId === question.id)?.optionIds
+            ? answered.answers?.find((a) => a.questionId === question.id)?.optionIds
             : value.answers[question.id]?.optionIds) ?? [];
         return (
           <fieldset key={question.id} className="flex flex-col gap-2" disabled={disabled}>

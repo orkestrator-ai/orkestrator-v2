@@ -980,7 +980,10 @@ test("graph consolidation repairs an unverified command claim before publishing 
     expect(record.phase).toBe("ready");
     expect(record.consolidatedReport?.reviewScope.commandsRun).toEqual([]);
     expect(record.consolidatedReport?.reviewScope.commandsNotRun).toEqual([
-      expect.objectContaining({ command, reason: expect.stringContaining("No approved rerun") }),
+      expect.objectContaining({
+        command,
+        reason: expect.stringContaining("Review reports disagree."),
+      }),
     ]);
   } finally {
     await world.cleanup();

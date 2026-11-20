@@ -126,6 +126,15 @@ const CONSOLIDATION_SCOPE =
   "This is a merge, not another review. The reviewers already read the change and ran validation. Your job is to combine their reports into one: match findings that describe the same defect, merge them, and carry every other finding forward. Work from the reports. Look at the code only when the reports cannot settle whether two findings are the same defect, or when reviewers directly contradict each other about the same code. Even then, read only the cited locations. Do not re-verify findings, re-run validation, explore the codebase, or look for new issues.";
 
 /**
+ * Said only when reviewers disagree about a check. The consolidator never
+ * runs it: reviewer text carries no execution authority. The backend re-runs
+ * the disputed commands of the sealed validation plan on the reviewed commit
+ * after the report is submitted (`review-disputed-checks.ts`).
+ */
+export const DISPUTED_CHECKS_CONSOLIDATION_NOTE =
+  "Reviewers supplied conflicting validation outcomes for some checks. Leave every disputed check out of commandsRun and commandsNotRun, and do not run it yourself. After you submit, the backend re-runs each disputed check that is a command of the sealed validation plan on the reviewed commit, and records the observed result, or why it could not be re-run, in the consolidated report.";
+
+/**
  * Said only when a reviewer ran with a lens, so a panel without lenses gets
  * the same consolidation prompt as before. The label explains why coverage
  * differs between reviewers; it is not a reason to weigh findings differently.
@@ -186,7 +195,7 @@ ${MULTI_REVIEW_CONSOLIDATION_PROMPT_CONTINUATION}${JSON.stringify(input.targetBr
 - If a workflow result tool is assigned, never call its submission tool with a probe, placeholder, partial report, or transport test. Submit only the complete final consolidated report; an accepted submission cannot be replaced.
 - This is a report-consolidation turn, not a planning turn. ${MULTI_REVIEW_PLAN_TOOL_PROHIBITION} A plan, plan-review card, or approval request is not a valid result. Do not ask anyone to approve a plan or switch modes. Return the consolidated structured report directly.
 - Do not edit files, run validation or any command beyond those targeted reads, ask questions, or add prose outside the provider-enforced structured result.
-${hasDisputes ? "Reviewers supplied conflicting validation outcomes. These checks remain unverified. The backend records them as disputed and there is no rerun during consolidation." : ""}
+${hasDisputes ? DISPUTED_CHECKS_CONSOLIDATION_NOTE : ""}
 ${buildStructuredReviewOutputGuide(
   scopeFilledByBackend
     ? CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA.properties.reviewScope.required

@@ -267,6 +267,13 @@ export class BuildPipelineSupervisor {
         captureWorkspaceBaseline: (pipeline) => this.readOnly.capturePanel(pipeline),
         workspaceChanged: (pipeline) => this.readOnly.panelChanged(pipeline),
         provisionalFindings: this.ctx.provisionalFindings,
+        // Without a target branch the backend uses the project's PR target,
+        // as the pipeline's own validation run does.
+        rerunDisputedChecks: (pipeline, run) =>
+          this.ctx.invoke<ReviewValidationRun>("start_review_validation", {
+            environmentId: pipeline.environmentId,
+            run,
+          }),
         concurrency: this.ctx.options.reviewFanoutConcurrency,
         efficiency: this.ctx.options.efficiency,
         pollGate: (pipeline) => ({

@@ -253,6 +253,7 @@ export function promptWorktreeSnapshot(
 // Report provenance lives in review-fanout-provenance.ts; re-exported for owners.
 export {
   attributeReportFindings,
+  completedReviewerReports,
   consolidationOverlap,
   consolidationReports,
   consolidationResultContext,

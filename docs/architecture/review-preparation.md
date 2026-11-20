@@ -756,14 +756,41 @@ The report therefore says whether the review happened:
 
 Reviewers sometimes record conflicting outcomes for the same command.
 Consolidation compares exact command strings, preserving whitespace inside
-arguments. Reviewer text supplies evidence only. A consolidation slot checks
-for disputed outcome claims before accepting a report, on both the graph and
-bespoke paths. The backend records the disputed checks under
-`reviewScope.commandsNotRun` and adds a limitation. If the report budget cannot
-hold every command, the limitation counts the omitted disputes.
+arguments. Reviewer text supplies evidence only. A consolidation slot refuses
+a disputed outcome claim before accepting a report, on both the graph and
+bespoke paths, and the consolidation prompt tells the consolidator to leave
+disputed checks out and not to run them.
 
-Consolidation has no approved runner on the reviewed snapshot. Disputed checks
-remain unverified, including when the live checkout has moved on.
+The backend then re-runs them
+([`review-disputed-checks.ts`](../../apps/backend/src/core/review-disputed-checks.ts)).
+Only a command of the sealed validation plan is re-run: the plan the package
+was sealed from, discovered at the package's commit. A disputed command
+matches a planned one in its sealed form (`cd '<cwd>' && <command>`) or, when
+exactly one planned command has that text, as the bare command. Up to four
+matched checks run together in one run of the environment's validation worker,
+each alone (no dependencies) and under a 30-minute cap. The worker refuses to
+run when HEAD is not the plan's commit, so the result describes the reviewed
+snapshot even when the live checkout has moved on.
+
+- **Where it runs.** Standalone Multi Review and the Build Pipeline panel
+  re-run when they accept the consolidated report, and retry on their next pass
+  while the run is still going. A graph consolidation waits for the run when it
+  accepts its result; the plan is the package artifact's `validation-plan`
+  input.
+- **Restart-safe.** The run id is derived from the review and the package, so
+  every pass, a schema repair or a backend restart joins the run already
+  claimed in the environment instead of starting another.
+- **What is recorded.** A re-run that produced a result goes into
+  `reviewScope.commandsRun` with the observed result, the commit, the exit code
+  and the output paths in its summary. Every other disputed check goes into
+  `reviewScope.commandsNotRun` with the reason it was not re-run (not a planned
+  command, no plan, a plan from another commit, over the cap, cancelled, timed
+  out or no runner). A limitation counts both, and the checks the report budget
+  could not hold. A check that could not be re-run is never recorded as passed.
+- **Read back.** A report the backend already recorded (an accepted graph
+  artifact projected onto the Multi Review record) keeps the backend's re-run
+  entries, which start with a fixed summary prefix; a model cannot submit that
+  prefix because every disputed `commandsRun` claim is refused at submission.
 
 ## Fan-out budgets and benchmark
 

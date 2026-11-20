@@ -23,6 +23,7 @@ import {
   disputedCheckDigests,
   disputedReviewChecks,
   recordDisputedChecks,
+  type DisputedCheckReruns,
 } from "./review-disputed-checks.js";
 
 export function reviewerProvenanceLabel(
@@ -117,7 +118,9 @@ function provenanceSources(
   return sources;
 }
 
-function completedReports(reviewers: readonly ReviewerRecord[]): StructuredReviewReport[] {
+export function completedReviewerReports(
+  reviewers: readonly ReviewerRecord[],
+): StructuredReviewReport[] {
   return reviewers.flatMap((reviewer) =>
     reviewer.status === "completed" && reviewer.report ? [reviewer.report] : [],
   );
@@ -135,7 +138,7 @@ export function consolidationResultContext(reviewers: readonly ReviewerRecord[])
   scope?: ConsolidationScopeLists;
   disputedCheckDigests?: string[];
 } {
-  const reports = completedReports(reviewers);
+  const reports = completedReviewerReports(reviewers);
   const scope = consolidationScopeLists(reports);
   const digests = disputedCheckDigests(disputedReviewChecks(reports));
   return {
@@ -153,20 +156,27 @@ export function consolidationResultContext(reviewers: readonly ReviewerRecord[])
  * backend: the same decision {@link consolidationResultContext} makes.
  */
 export function consolidationScopeFilledByBackend(reviewers: readonly ReviewerRecord[]): boolean {
-  return consolidationScopeLists(completedReports(reviewers)) !== undefined;
+  return consolidationScopeLists(completedReviewerReports(reviewers)) !== undefined;
 }
 
 /**
  * The consolidated report with backend-derived review models, and every way it
  * breaks the finding provenance contract. Disputed validation evidence is
- * projected by the backend for every transport.
+ * projected by the backend for every transport: pass the backend's
+ * `reruns` for a report a model just submitted. Without them the backend's
+ * own earlier re-run entries are kept (a report it already recorded).
  */
 export function deriveConsolidatedProvenance(
   report: StructuredReviewReport,
   reviewers: readonly ReviewerRecord[],
+  reruns?: DisputedCheckReruns,
 ): { report: StructuredReviewReport; issues: ReviewContractValidationIssue[] } {
   const issues: ReviewContractValidationIssue[] = [];
-  report = recordDisputedChecks(report, disputedReviewChecks(completedReports(reviewers)));
+  report = recordDisputedChecks(
+    report,
+    disputedReviewChecks(completedReviewerReports(reviewers)),
+    reruns,
+  );
   const sources = provenanceSources(reviewers);
   const inspect = (
     reviewModels: string[] | undefined,

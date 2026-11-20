@@ -2,7 +2,10 @@ import {
   disputedCheckDigests,
   disputedReviewChecks,
   recordDisputedChecks,
+  settleDisputedCheckReruns,
+  type DisputedCheckReruns,
 } from "./review-disputed-checks.js";
+import { abortableSleep } from "./abortable-timing.js";
 import { isGraphReviewConsolidationNode } from "./graph-agent-builtins.js";
 /**
  * One graph agent activation as the shared agent branch runner's host
@@ -34,7 +37,11 @@ import {
 } from "@orkestrator/protocol/graphs/prompts";
 import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import { GraphTypeLibrary, type GraphErrorCause } from "@orkestrator/protocol/graphs/types";
-import { isReviewPackageReference } from "@orkestrator/protocol/review-workflow";
+import {
+  isReviewPackageReference,
+  isReviewValidationPlan,
+  type ReviewValidationPlan,
+} from "@orkestrator/protocol/review-workflow";
 import { reviewChunkCoverageFailure } from "./review-diff-artifact.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -97,6 +104,18 @@ export const GRAPH_AGENT_WORDING: AgentBranchWording = Object.freeze({
   validResult: "valid results",
   stallStopReason: "so the run could continue",
 });
+
+/** How often a consolidation waiting on its disputed checks' re-run reads it. */
+const DISPUTED_CHECK_RERUN_POLL_MS = 2_000;
+
+/** What the synchronous host calls and acceptance read from the inputs. */
+interface GraphAgentLightInputs {
+  sources: Record<string, string>;
+  criterionIds?: string[];
+  disputes: Set<string>;
+  /** The sealed package a consolidation reviews, and the plan it was sealed from. */
+  reviewed?: { packageId: string; headRef: string; plan: ReviewValidationPlan | undefined };
+}
 
 /** The backend stopped mid-call: the runner stops and the pass reports nothing. */
 class GraphAgentStoppedFenceError extends Error {
@@ -181,9 +200,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
   private guardViolated = false;
   private results: GraphAgentResults | undefined;
   private inputs: GraphAgentInputs | undefined;
-  private lightSources:
-    | Promise<{ sources: Record<string, string>; criterionIds?: string[]; disputes: Set<string> }>
-    | undefined;
+  private lightSources: Promise<GraphAgentLightInputs> | undefined;
 
   constructor(
     private readonly executor: GraphAgentHostOwner,
@@ -242,16 +259,13 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
   }
 
   /** Item ids and ticket criteria of the inputs, from the store (no file hashing). */
-  private light(): Promise<{
-    sources: Record<string, string>;
-    criterionIds?: string[];
-    disputes: Set<string>;
-  }> {
+  private light(): Promise<GraphAgentLightInputs> {
     this.lightSources ??= (async () => {
       const sources: Record<string, string> = {};
       const reports: StructuredReviewReport[] = [];
       const reportProducers: GraphArtifact["producer"][] = [];
       let diffChunkCount: number | undefined;
+      let reviewed: GraphAgentLightInputs["reviewed"];
       const consolidating = isGraphReviewConsolidationNode(this.input.node);
       let criterionIds: string[] | undefined;
       const { run, node, activation } = this.context;
@@ -283,7 +297,14 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         }
         if (consolidating && port?.name === "package") {
           const reference = "value" in artifact.body ? artifact.body.value : undefined;
-          if (isReviewPackageReference(reference)) diffChunkCount = reference.diffChunkCount;
+          if (isReviewPackageReference(reference)) {
+            diffChunkCount = reference.diffChunkCount;
+            reviewed = {
+              packageId: reference.id,
+              headRef: reference.headRef,
+              plan: await this.sealedValidationPlan(artifact, reference.headRef),
+            };
+          }
         }
         // The ids the prompt showed (`graphAgentArtifactSources`), recorded or derived.
         const itemIds = port
@@ -322,10 +343,51 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       return {
         sources,
         disputes: disputedReviewChecks(reports),
+        ...(reviewed ? { reviewed } : {}),
         ...(criterionIds ? { criterionIds } : {}),
       };
     })();
     return this.lightSources;
+  }
+
+  /**
+   * The validation plan the package was sealed from: an input of the package
+   * artifact, discovered at the package's commit. Re-runs use only this plan.
+   */
+  private async sealedValidationPlan(
+    reviewPackage: GraphArtifact,
+    headRef: string,
+  ): Promise<ReviewValidationPlan | undefined> {
+    for (const id of reviewPackage.inputs) {
+      const input = await this.context.artifacts.get(this.context.run.id, id);
+      if (!input?.type.startsWith("validation-plan@") || !("value" in input.body)) continue;
+      const plan = input.body.value;
+      if (isReviewValidationPlan(plan) && plan.headRef === headRef) return plan;
+    }
+    return undefined;
+  }
+
+  /**
+   * Re-runs a consolidation's disputed checks on the reviewed commit through
+   * the environment's validation worker and waits for the result. The run id
+   * is derived from the activation, so a restarted pass joins the same run.
+   */
+  private async disputedCheckReruns(light: GraphAgentLightInputs): Promise<DisputedCheckReruns> {
+    const rerun = this.dependencies.rerunDisputedChecks;
+    const { run, activation, environmentId, signal } = this.context;
+    for (;;) {
+      const reruns = await settleDisputedCheckReruns({
+        disputes: light.disputes,
+        plan: light.reviewed?.plan,
+        headRef: light.reviewed?.headRef,
+        scopeKey: `graph\0${run.id}\0${activation.key}\0${light.reviewed?.packageId ?? ""}`,
+        control: rerun ? (planned) => rerun(environmentId, planned) : undefined,
+      });
+      if (reruns !== "pending") return reruns;
+      if (!(await abortableSleep(DISPUTED_CHECK_RERUN_POLL_MS, signal))) {
+        throw new GraphAgentStoppedFenceError();
+      }
+    }
   }
 
   private async loadedInputs(): Promise<GraphAgentInputs> {
@@ -700,16 +762,18 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       : undefined;
     // An `items` branch's outputs stand for its item (item 401).
     const sourceItem = graphAgentItemBinding(run, this.input.node, activation)?.item.id;
-    const { disputes } = await this.light();
+    const light = await this.light();
+    const { disputes } = light;
+    let reruns: DisputedCheckReruns | undefined;
     for (const slot of results.slots) {
       if (!Object.hasOwn(values, slot.port.name)) continue;
       const submitted = values[slot.port.name];
-      const value =
-        disputes.size &&
+      const disputed =
+        disputes.size > 0 &&
         slot.definition.name === "review-report" &&
-        isStructuredReviewReport(submitted)
-          ? recordDisputedChecks(submitted, disputes)
-          : submitted;
+        isStructuredReviewReport(submitted);
+      if (disputed) reruns ??= await this.disputedCheckReruns(light);
+      const value = disputed ? recordDisputedChecks(submitted, disputes, reruns) : submitted;
       const itemIds = graphAgentItemIds(slot.definition, value, activation);
       const validation = results.validation(slot);
       const artifact = await this.context.artifacts.putValue({

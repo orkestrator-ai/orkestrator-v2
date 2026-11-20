@@ -52,6 +52,7 @@ import {
 import type {
   ReviewPackageContext,
   ReviewPackageReference,
+  ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
 import {
   ReviewContractValidationError,
@@ -106,6 +107,7 @@ import {
   ReviewFanoutRunner,
   attachAgentBeforeDispatch,
   commitProgressObservation,
+  completedReviewerReports,
   consolidationOverlap,
   consolidationReports,
   createReviewConsolidationPrompt,
@@ -121,6 +123,7 @@ import {
   type ReviewerPollGate,
 } from "./review-fanout.js";
 import { buildPipelineStage, buildPipelineStageTurn } from "./build-pipeline-stages.js";
+import { disputedReviewChecks, settleDisputedCheckReruns } from "./review-disputed-checks.js";
 import {
   clearReviewerAdmission,
   compactReviewerAdmissionQueue,
@@ -278,6 +281,15 @@ export interface BuildPipelineReviewFanoutDeps {
   workspaceChanged(pipeline: BuildPipeline): Promise<boolean>;
   /** The findings live reviewers reported through `report_finding`. */
   provisionalFindings?: Pick<ProvisionalFindingInbox, "take">;
+  /**
+   * Starts or reads a re-run of disputed checks in the pipeline's environment
+   * (`start_review_validation`). Without it disputed checks are recorded as
+   * not re-run.
+   */
+  rerunDisputedChecks?(
+    pipeline: BuildPipeline,
+    run: ReviewValidationRun,
+  ): Promise<ReviewValidationRun>;
 }
 
 /** What the supervisor should do after one fan-out pass. */
@@ -1600,7 +1612,23 @@ export class BuildPipelineReviewFanout {
     // that sends the build straight to Verify.
     const blocked = structuredReviewBlockedFailure(parsed.data);
     if (blocked !== null) return { kind: "failed", error: blocked };
-    const provenance = deriveConsolidatedProvenance(parsed.data, state.reviewers);
+    // Disputed checks are re-run on the reviewed commit before the report is
+    // kept. The run id is derived from the pipeline and package, so the next
+    // pass (or a restart) joins the same environment-owned run.
+    const reviewed = pipeline.reviewPackage;
+    const reruns = await settleDisputedCheckReruns({
+      disputes: disputedReviewChecks(completedReviewerReports(state.reviewers)),
+      plan:
+        pipeline.validationRun?.plan ??
+        (reviewed && "validationPlan" in reviewed ? reviewed.validationPlan : undefined),
+      headRef: reviewed && "headRef" in reviewed ? reviewed.headRef : undefined,
+      scopeKey: `build-pipeline\0${pipeline.id}\0${pipeline.iteration}\0${reviewed && "id" in reviewed ? reviewed.id : ""}`,
+      control: this.deps.rerunDisputedChecks
+        ? (run) => this.deps.rerunDisputedChecks!(pipeline, run)
+        : undefined,
+    });
+    if (reruns === "pending") return { kind: "working" };
+    const provenance = deriveConsolidatedProvenance(parsed.data, state.reviewers, reruns);
     if (provenance.issues.length > 0) {
       return this.prepareConsolidationRepair(
         pipeline,

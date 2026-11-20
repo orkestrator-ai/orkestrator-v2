@@ -227,6 +227,7 @@ import {
   attachAgentBeforeDispatch,
   captureReviewWorktreeSnapshot,
   commitProgressObservation,
+  completedReviewerReports,
   consolidationReports,
   consolidationOverlap,
   deriveConsolidatedProvenance,
@@ -238,6 +239,11 @@ import {
   reviewFanoutReviewerMode,
   type ReviewFanoutHost,
 } from "./review-fanout.js";
+import {
+  disputedReviewChecks,
+  settleDisputedCheckReruns,
+  type DisputedCheckReruns,
+} from "./review-disputed-checks.js";
 import {
   MULTI_REVIEW_REVIEWER_RESULT_KIND,
   multiReviewStepResultKind,
@@ -4369,6 +4375,29 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     return this.options.stallAbandonMs ?? DEFAULT_STALL_ABANDON_MS;
   }
 
+  /**
+   * Re-runs the panel's disputed checks through the environment's validation
+   * worker, against the sealed plan at the package's commit. Stateless: the
+   * run id is derived from the workflow and package, so every pass (and a
+   * restart) joins the same environment-owned run.
+   */
+  private disputedCheckReruns(
+    workflow: MultiReviewWorkflow,
+  ): Promise<DisputedCheckReruns | "pending"> {
+    return settleDisputedCheckReruns({
+      disputes: disputedReviewChecks(completedReviewerReports(workflow.reviewers)),
+      plan: workflow.validationRun?.plan,
+      headRef: workflow.reviewPackage?.headRef,
+      scopeKey: `multi-review\0${workflow.id}\0${workflow.reviewPackage?.id ?? ""}`,
+      control: (run) =>
+        this.invoke<ReviewValidationRun>("start_review_validation", {
+          environmentId: workflow.environmentId,
+          run,
+          targetBranch: workflow.targetBranch,
+        }),
+    });
+  }
+
   private async advanceValidation(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     let run = workflow.validationRun!;
     if (run.status === "planned" || run.status === "running") {
@@ -5153,7 +5182,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         await this.release(workflow, token);
         return;
       }
-      const provenance = deriveConsolidatedProvenance(parsed.data, workflow.reviewers);
+      // Disputed checks are re-run by the backend on the reviewed commit
+      // before the report is kept; the next pass reads the re-run again.
+      const reruns = await this.disputedCheckReruns(workflow);
+      await this.assertFence(workflow.id, token);
+      if (reruns === "pending") return;
+      const provenance = deriveConsolidatedProvenance(parsed.data, workflow.reviewers, reruns);
       if (provenance.issues.length > 0) {
         await this.prepareAddressFindingsSessionSchemaRepair(
           workflow,

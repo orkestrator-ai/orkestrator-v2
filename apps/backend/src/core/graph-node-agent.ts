@@ -49,6 +49,7 @@ import {
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
 import type { GraphErrorCause } from "@orkestrator/protocol/graphs/types";
+import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { isAgentBranchFenceError } from "./agent-branch-commits.js";
 import { AgentBranchRunner } from "./agent-branch-runner.js";
 import type { AgentBranchPollGate, AgentBranchRecord } from "./agent-branch-types.js";
@@ -169,6 +170,15 @@ export interface GraphAgentExecutorDependencies {
     readTranscript: () => Promise<readonly unknown[]>;
     settling: boolean;
   }): Promise<GraphActivationSession["transcript"] | undefined>;
+  /**
+   * Starts or reads a re-run of a consolidation's disputed checks in the
+   * environment (`start_review_validation`). Without it disputed checks are
+   * recorded as not re-run.
+   */
+  rerunDisputedChecks?(
+    environmentId: string,
+    run: ReviewValidationRun,
+  ): Promise<ReviewValidationRun>;
   pollGate?: AgentBranchPollGate;
   progressTracker?: MultiReviewProgressTracker;
   stallWarningMs?: number;

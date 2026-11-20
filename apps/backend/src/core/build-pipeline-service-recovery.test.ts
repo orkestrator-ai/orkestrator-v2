@@ -870,7 +870,10 @@ describe("BuildPipelineService structured results", () => {
       expect(Buffer.byteLength(pending.pendingPromptAttempt!.prompt, "utf8")).toBeLessThanOrEqual(
         MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
       );
-      expect(pending.pendingPromptAttempt!.prompt).toContain("… [truncated]");
+      expect(pending.pendingPromptAttempt!.prompt).toContain(
+        "was omitted to keep the prompt bounded",
+      );
+      expect(pending.pendingPromptAttempt!.prompt).not.toContain("oversized");
       const requestId = pending.pendingPromptAttempt!.requestId;
       expect(pending.structuredReviewRequestId).toBe(requestId);
       const reviewSession = pending.sessions.at(-1)!;

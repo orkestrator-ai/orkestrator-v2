@@ -531,10 +531,21 @@ Schema rules, because the manifest digests each schema's JSON Schema export
 digest:
 
 - `args` is a `Schema.Struct`; its field names are the argument keys.
-- Wire numbers are `Schema.Finite` (or `Schema.Int`). `Schema.Number` also
-  accepts and exports `"Infinity"`, `"-Infinity"` and `"NaN"`.
+- Wire numbers are `Schema.Finite` (or `Schema.Int`). `Schema.Number`
+  exports `"Infinity"`, `"-Infinity"` and `"NaN"` strings that its decoder
+  refuses.
 - Optional fields are `Schema.optionalKey(...)`. `Schema.optional` exports
-  `anyOf [T, null]`.
+  `anyOf [T, null]` but refuses `null`, and its export is identical to
+  `Schema.optionalKey(Schema.NullOr(T))`, which accepts it, so a stored
+  schema cannot say which one an older release had. Where a field must take
+  `null`, use `optionalKey(NullOr(...))` and treat `null` as absent
+  (`push_set_subscriptions`' `nodeId`, which 2.39.9-beta published as
+  `anyOf [string, null]`).
+- `mise run contract:manifest` (and its `--check` in CI) fails on a defined
+  command whose arguments use `Schema.Number`, `Schema.optional` or
+  `Schema.UndefinedOr` (`argumentSchemaProblems` in
+  `scripts/contract-argument-rules.ts`), so the two rules above cannot be
+  broken unnoticed until a release snapshots the schema.
 - A RegExp passed to `Schema.isPattern` has the `u` flag; without it the
   export has no `pattern`.
 - A named schema (`identifier` annotation) is one shared constant. Two
@@ -1326,7 +1337,13 @@ export const nodeMailClient = domainClient(nodeMail, {
   older stored schema (`SchemaRepresentation.fromJsonSchemaDocument`, then
   `effect/Arbitrary`, 25 seeded samples, sent as JSON) are refused by
   `decodeCommandArgs` with the definition the real registry registered, in
-  a sandboxed child. No handler runs.
+  a sandboxed child. No handler runs. Before sampling, the
+  `"Infinity" | "-Infinity" | "NaN"` branch `Schema.Number` exports is
+  dropped (`withoutNonFiniteNumberBranch` in
+  `scripts/contract-argument-rules.ts`): its decoder never accepted those
+  strings, and JSON carries no non-finite number, so such a fixture is no
+  evidence. 2.39.9-beta published `get_native_agent_tool_output`'s `cursor`
+  and `limit` that way.
 - **Mixed-version qualification** (plan item
   [1012](../../plans/unified/1012-mixed-version-qualification.md)) ran this
   checkout against a published release in both node topologies, weekly. It

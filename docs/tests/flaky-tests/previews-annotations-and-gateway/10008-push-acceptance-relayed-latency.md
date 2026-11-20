@@ -46,3 +46,18 @@
   Evidence: `/tmp/orkestrator-test-run.QhGIbq/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Isolated rerun:** `mise run test:logged -- --name refresh-main-push-acceptance-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts --parallel=1 --only-failures`
   passed the owning file in 10.7 seconds.
+
+## Recurrence on `main` CI, 2026-11-20
+
+- **Observed:** GitHub Actions run 44713370307, `CI` on `main` at
+  `a296c3777f65f1a5f8aaf1899851957e058d08ea`, `Tests (backend)` shard,
+  Linux x64. `mise run flaky:recurrence -- 10008 --base a296c3777f65f1a5f8aaf1899851957e058d08ea`
+  reported the case open.
+- **Failure:** virtual p95 of 300 ms against the 250 ms budget
+  (`push-acceptance.test.ts:163`), after 371.70 ms.
+- **Rerun alone:** the runner's single rerun of
+  `apps/backend/tests/push-acceptance.test.ts` failed too ("FAILED ALONE", 4.4 s).
+  This is the first observation of the case failing outside an aggregate run,
+  so aggregate load alone does not explain it.
+- **Next run:** `main` CI run 44720980632 at `6db2b4164` passed the backend
+  shard, case included.

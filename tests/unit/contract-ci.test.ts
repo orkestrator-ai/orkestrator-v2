@@ -515,6 +515,33 @@ describe("argument schemas", () => {
     ).toThrow('"not"');
   });
 
+  test("Schema.Number's non-finite string branch generates no fixtures (stage 2)", async () => {
+    const generator = await loadFixtureGenerator();
+    const nonFinite = { enum: ["Infinity", "-Infinity", "NaN"], type: "string" };
+    // `Schema.optionalKey(Schema.Number)` as 2.39.9-beta exported it.
+    const document = objectSchema({ limit: { anyOf: [{ type: "number" }, nonFinite] } }, ["limit"]);
+    const samples = generator.sample(document, 100, "non-finite") as { limit: unknown }[];
+    expect(samples).toHaveLength(100);
+    expect(samples.every((sample) => typeof sample.limit === "number")).toBe(true);
+    expect(importableSchemaNode({ anyOf: [{ type: "number" }, nonFinite] })).toEqual({
+      type: "number",
+    });
+    expect(
+      importableSchemaNode({ description: "d", anyOf: [{ type: "number" }, nonFinite] }),
+    ).toEqual({ description: "d", anyOf: [{ type: "number" }] });
+    // Only next to a number branch: the same strings on their own stay accepted.
+    const strings = { anyOf: [{ type: "boolean" }, nonFinite] };
+    expect(importableSchemaNode(strings)).toBe(strings);
+    // A real refusal of a number is still evidence.
+    const report = runArgumentFixtures(
+      [{ command: "read", digest: documentDigest(document), releases: ["2.40.0"], document }],
+      () => "Expected string",
+      generator,
+      5,
+    );
+    expect(report.failures.map((failure) => failure.message)).toEqual(["Expected string"]);
+  });
+
   test("a refusal only inside an unconstrained value is counted, not failed (stage 2)", async () => {
     const generator = await loadFixtureGenerator();
     const opaque = objectSchema({ to: { type: "string" }, capture: {} }, ["to", "capture"]);

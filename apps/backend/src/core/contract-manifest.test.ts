@@ -12,7 +12,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import * as Schema from "effect/Schema";
-import { defineCommand } from "@orkestrator/protocol/contract/command";
+import { defineCommand, type ArgsSchema } from "@orkestrator/protocol/contract/command";
 import { defineDomain, isDomainName } from "@orkestrator/protocol/contract/domain";
 import { BACKEND_EVENTS } from "@orkestrator/protocol/contract/domains/events";
 import { defineEvent, defineEventFamily } from "@orkestrator/protocol/contract/event";
@@ -180,6 +180,68 @@ describe("buildContractManifest", () => {
         build(FAKE_COMMANDS, { ...FAKE_MAP, system: ["alpha_restart", "alpha_restart"] }),
       ),
     ).toContainEqual(expect.stringContaining("listed twice under contract domain system"));
+  });
+});
+
+describe("argument schema rules", () => {
+  /** A registry holding one defined command with `args`. */
+  const registryWith = (args: ArgsSchema) => {
+    const registry = new CommandRegistry();
+    const register = createRegistryRegistrar(registry, { validateResults: false });
+    register(
+      defineCommand({
+        domain: nodeMail,
+        name: "fake_rule_breaker",
+        since: 1,
+        access: "internal",
+        read: false,
+        args,
+        result: Schema.Struct({}),
+        critical: [],
+      }),
+      () => ({}),
+    );
+    return registry;
+  };
+  const buildWith = (args: ArgsSchema) =>
+    buildContractManifest(registryWith(args), { domainMap: {}, events: [] });
+
+  test("refuses Schema.optional and UndefinedOr, which export a null they refuse", () => {
+    const problems = problemsOf(() =>
+      buildWith(
+        Schema.Struct({
+          nodeId: Schema.optional(Schema.String),
+          nested: Schema.Struct({ items: Schema.Array(Schema.UndefinedOr(Schema.String)) }),
+        }),
+      ),
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("fake_rule_breaker arguments admit undefined at");
+    expect(problems[0]).toContain(".nested.items[]");
+    expect(problems[0]).toContain(".nodeId");
+  });
+
+  test("refuses Schema.Number, which exports non-finite strings it refuses", () => {
+    const problems = problemsOf(() =>
+      buildWith(Schema.Struct({ limit: Schema.optionalKey(Schema.Number) })),
+    );
+    expect(problems).toEqual([
+      expect.stringContaining(
+        "fake_rule_breaker arguments use Schema.Number at #/properties/limit",
+      ),
+    ]);
+  });
+
+  test("accepts optionalKey, optionalKey(NullOr(...)), NullOr and Schema.Finite", () => {
+    const manifest = buildWith(
+      Schema.Struct({
+        nodeId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        assignee: Schema.NullOr(Schema.String),
+        limit: Schema.optionalKey(Schema.Finite),
+        count: Schema.Int,
+      }),
+    );
+    expect(Object.keys(manifest.commands)).toEqual(["fake_rule_breaker"]);
   });
 });
 

@@ -473,7 +473,7 @@ export class GatewayHandlers {
     const push = this.ctx.backend.push!;
     try {
       const result: PushSetSubscriptionsResult =
-        args.nodeId !== undefined && !access.relayedNodes
+        args.nodeId !== undefined && args.nodeId !== null && !access.relayedNodes
           ? { status: "refused", reason: "unavailable" }
           : await push.setSubscriptions(
               pushCredentialOwner(gatewayRequestCredential(request)),

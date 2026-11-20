@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:92cb6c5c8691fc848687fc8953bee7640758b723a48560aabf87bec37f1edd75",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "anchor": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "number"
+        },
+        "detailRef": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "number"
+        },
+        "logicalSessionKey": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "toolUseId": {
+          "type": "string"
+        }
+      },
+      "required": ["agent", "environmentId", "logicalSessionKey", "toolUseId"],
+      "type": "object"
+    }
+  }
+}

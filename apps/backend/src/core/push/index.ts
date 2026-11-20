@@ -144,7 +144,9 @@ export interface BackendPushOptions {
 class PushArgumentError extends Error {}
 
 function parseArgs(args: Record<string, unknown>): PushSetSubscriptionsArgs {
-  const { streamId, setRevision, subscriptions, nodeId } = args;
+  const { streamId, setRevision, subscriptions } = args;
+  // `null` means absent (the command's schema accepts it; see push-subscriptions.ts).
+  const nodeId = args.nodeId === null ? undefined : args.nodeId;
   if (nodeId !== undefined && (typeof nodeId !== "string" || nodeId.length > 200)) {
     throw new PushArgumentError("nodeId must be a bounded string");
   }

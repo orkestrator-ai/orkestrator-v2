@@ -44,6 +44,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalJson } from "@orkestrator/protocol/contract/json-schema";
+import { withoutNonFiniteNumberBranch } from "./contract-argument-rules.ts";
 import { formatSnapshotJson } from "./contract-snapshots.ts";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -360,12 +361,20 @@ const NON_NULL_SCHEMA: JsonObject = Object.freeze({
 });
 
 /**
- * Rewrites what Effect's importer refuses into an equivalent it accepts.
- * `Schema.Struct({})`, the arguments of every command that takes none, exports
- * as `{ not: { type: "null" } }` (any value but `null`), and the importer has
- * no `not`. Only that exact node is rewritten; any other `not` still fails.
+ * Rewrites a stored node into the values its parser accepted, in a form
+ * Effect's importer accepts:
+ *
+ * - `Schema.Struct({})`, the arguments of every command that takes none,
+ *   exports as `{ not: { type: "null" } }` (any value but `null`), and the
+ *   importer has no `not`. Only that exact node is rewritten; any other `not`
+ *   still fails.
+ * - `Schema.Number` exports a `"Infinity" | "-Infinity" | "NaN"` string branch
+ *   its decoder refuses (`withoutNonFiniteNumberBranch` in
+ *   `scripts/contract-argument-rules.ts`), so a fixture from it is no
+ *   evidence. That branch is dropped.
  */
-export function importableSchemaNode(schema: JsonObject): JsonObject {
+export function importableSchemaNode(input: JsonObject): JsonObject {
+  const schema = withoutNonFiniteNumberBranch(input) as JsonObject;
   const not = schema.not;
   if (
     not === null ||

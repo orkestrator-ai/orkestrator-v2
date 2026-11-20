@@ -246,7 +246,7 @@ a stop after several turns on real bridges" under "Assumptions and
 decisions".
 
 **Investigation.** All the refusals come from one backend function,
-`performProjectionSteer` (`native-agent-prompt-dispatch.ts`), and from the recovery
+`performProjectionSteer` (`native-agent/prompt-dispatch.ts`), and from the recovery
 retry. That makes a backend-owned fix possible, which the renderer, Agent Info
 and the CLI then share. `idle` and `mismatch` are both proven "not sent"
 answers: the bridge clears its steer record before answering, and the
@@ -287,11 +287,11 @@ at-most-once dispatch.
   which probes `/session/:id/steer/dispatch`. No platform is hard-coded.
 - A steer that misses its turn becomes the next turn (task 10).
   `performProjectionSteer` hands an `idle` or `mismatch` answer to
-  `deliverMissedSteer` (`native-agent-missed-steer.ts`): an ordinary turn now
+  `deliverMissedSteer` (`native-agent/missed-steer.ts`): an ordinary turn now
   when nothing is running, the prompt queue otherwise, reported as `applied`
   with `deliveredAs: "new-turn" | "queued"`. `onMissedTurn: "refuse"` keeps
   the old answer for a caller bound to one run (the CLI's `--expect-run`).
-- Abort ladder (`apps/backend/src/core/native-agent-service.ts`): it
+- Abort ladder (`apps/backend/src/core/native-agent/service.ts`): it
   calls `provider.abort`, waits up to `abortGraceMs` (default 5 s), then calls
   `hardAbort`, and records a stop notice naming the rung that fired.
 - Claude (`bridges/claude-bridge/src/services/`):
@@ -365,7 +365,7 @@ at-most-once dispatch.
   `setSteeringMode` / `setFollowUpMode` from Pi's settings
   (`agent-session.ts`). The backend reads `/session/:id/queue` into
   `providerQueue` (`http-bridge-provider.ts`), and
-  `mergeNativeAgentQueueItems` (`native-agent-transcript-projection.ts`) merges it
+  `mergeNativeAgentQueueItems` (`native-agent/transcript-projection.ts`) merges it
   into the projection queue.
 - Grok: `actions: {}`. The dormant interjection extension
   (`bridges/acp-bridge/src/grok-interjection.ts`) runs only with
@@ -676,7 +676,7 @@ Decisions, each the option built:
 - **Why not the recommendation.** Against `claudeQueryOptions`:
   - Every reopened conversation resumes, and a spare cannot.
   - The first turn's `agentMcp` URL and bearer token are resolved per dispatch
-    (`resolveAgentMcp` in `native-agent-prompt-dispatch.ts`) and `mcpServers` is fixed at
+    (`resolveAgentMcp` in `native-agent/prompt-dispatch.ts`) and `mcpServers` is fixed at
     prewarm, so an ordinary first turn would miss the spare or start without the
     Orkestrator tools a workflow result needs.
   - `allowedTools`, `disallowedTools`, the read-only hook, the sandbox and
@@ -726,10 +726,10 @@ Built as the four recommended options above. What follows is each choice the
 build had to make inside them.
 
 - **Where the fallback lives.** In the backend, as the recommendation said.
-  `performProjectionSteer` (`native-agent-prompt-dispatch.ts`) now calls the
+  `performProjectionSteer` (`native-agent/prompt-dispatch.ts`) now calls the
   unchanged steer (`steerProjectionOnce`) and hands an `idle` or `mismatch`
   answer to `deliverMissedSteer`, a collaborator in
-  `native-agent-missed-steer.ts`. It is a new file because the service is
+  `native-agent/missed-steer.ts`. It is a new file because the service is
   already over 4,600 lines. The composer, Agent Info, the CLI and the voice
   `steer_session` tool all reach it through `perform_native_agent_session_action`.
   The queue's own steer and a queued async-question answer

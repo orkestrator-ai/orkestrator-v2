@@ -1,7 +1,7 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { wrapRegistrar } from "./commands-registry-contracts.js";
 import { registerDefinedDesignCommands } from "./design/index.js";
-import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
 
 /** Registers the design command surface with its definitions (see `design/commands.ts`). */
 export function registerDesignCommands(

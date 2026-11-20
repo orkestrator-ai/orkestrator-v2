@@ -1,5 +1,7 @@
 # Live provider review fixes: backend timing failures in repository validation
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/service-summary-transcripts.test.ts`.
+
 - **ID:** 0887
 - **Status:** open
 - **Date observed:** 2026-10-25

@@ -339,7 +339,7 @@ describe("Coordinator chat steering", () => {
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
 
     // The turn ends and the backend's queue drain sends it as the next turn
-    // (native-agent-prompt-queue-dispatcher.test.ts covers that drain for a
+    // (native-agent/prompt-queue-dispatcher.test.ts covers that drain for a
     // coordinator). The tab only reflects it: no second send from here.
     running = false;
     queuedItems = [];

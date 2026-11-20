@@ -32,9 +32,9 @@ import { listRunningBridgeTargets } from "./log-policy-bridges.js";
 import { startLogPolicyService } from "./log-policy-service.js";
 import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import { summarizePendingInteractions } from "@orkestrator/protocol/agent-registry";
-import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent-goal-check.js";
-import { NativeAgentGoalVerifier } from "./native-agent-goal-verifier.js";
-import { NativeAgentSuborkService } from "./native-agent-suborks.js";
+import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent/goal-check.js";
+import { NativeAgentGoalVerifier } from "./native-agent/goal-verifier.js";
+import { NativeAgentSuborkService } from "./native-agent/suborks.js";
 import { commandWorkspaceProbe } from "./workspace-read-only-guard.js";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { randomUUID } from "node:crypto";
@@ -255,10 +255,10 @@ import {
   isAgentTurnEndTransition,
   nativeAgentSessionStorageKey,
   NativeAgentService,
-} from "./native-agent-service.js";
+} from "./native-agent/service.js";
 import { openCode2EnvironmentServer } from "./opencode2/container-server-lifecycle.js";
 import { openCode2WorkerMailbox } from "./opencode2/index.js";
-import { openCodeWorkflowDependencies } from "./native-agent-opencode-server.js";
+import { openCodeWorkflowDependencies } from "./native-agent/index.js";
 import {
   authenticatePipelineWorkerMailCapability,
   BuildPipelineActivity,

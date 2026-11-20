@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 import {
   OPENCODE2_ARTIFACTS_MCP_PREFIX,

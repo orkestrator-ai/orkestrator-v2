@@ -16,7 +16,7 @@
  * The per-agent bridge commands are built from one factory each
  * (`start_<agent>_server`, `start_local_<agent>_server_cmd`, ...), because the
  * backend registers and the backend's own callers build those names from the
- * agent (`native-agent-service.ts`, `graph-agent-providers.ts`,
+ * agent (`native-agent/service.ts`, `graph-agent-providers.ts`,
  * `build-pipeline/service-agents.ts`, `await_bridge_ready`).
  *
  * `access` is `workspace` (no command here is workspace-excluded, and a

@@ -34,11 +34,11 @@ import { checkWebAnnotationWorkspacePaths } from "./source-checks.js";
 import { materializedEvidencePath } from "./materialization.js";
 import { composeDraftHoldsQueue } from "../compose-draft-occupancy.js";
 import type { Environment, PersistedNativeAgentSession, PersistedPromptQueue } from "../models.js";
-import type { NativeAgentService } from "../native-agent-service.js";
+import type { NativeAgentService } from "../native-agent/service.js";
 import {
   isEnvironmentReadyForAgents,
   nativeAgentSessionStorageKey,
-} from "../native-agent-service-shared.js";
+} from "../native-agent/service-shared.js";
 import { assertValidPromptAttachments } from "../prompt-attachments.js";
 import type { StorageService } from "../storage.js";
 import {

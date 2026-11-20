@@ -2,6 +2,8 @@
 
 Current path for the recorded account file is `apps/backend/src/core/agent-accounts/containers.test.ts`.
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/service-progressive.test.ts`.
+
 - **ID:** 9861
 - **Status:** open
 - **Date observed:** 2026-10-21

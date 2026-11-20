@@ -1,0 +1,3255 @@
+import { DEFAULT_AGENT_ACCOUNT_ID } from "@orkestrator/protocol/agent-accounts";
+import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
+import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
+import { turnOutcomeFailureKind } from "../agent-usage-limits.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
+const nativeAgentGoalLog = createLogger("native-agent.goal");
+export * from "./service-shared.js";
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
+import * as shared from "./service-shared.js";
+import { readNativeAgentLiveUpdate } from "./live-update.js";
+import type {
+  BuildPipelineAgent,
+  TaskSnapshotImage,
+  AgentActivityState,
+  AgentInteractionApplyOutcome,
+  AgentInteractionResolution,
+  AgentModel,
+  NativeAgentControlUpdate,
+  NativeAgentDispatchOutcome,
+  NativeAgentForkOutcome,
+  NativeAgentResumeEntry,
+  NativeAgentSessionProjection,
+  NativeAgentSessionAction,
+  NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
+  NativeAgentToolDetails,
+  Environment,
+  PersistedNativeAgentSession,
+  StorageService,
+  BridgeConnection,
+  NativeAgentRuntimeProvider,
+  PromptAttachment,
+  CommandInvoker,
+  EnsureNativeAgentSessionInput,
+  DispatchNativeAgentPromptInput,
+  AdoptNativeAgentSessionInput,
+  InspectNativeAgentSessionInput,
+  NativeAgentProjectionInput,
+  NativeAgentServiceOptions,
+  NativeAgentAuthStatus,
+  NativeAgentMcpServerAction,
+  NativeAgentMessagePageInput,
+  NativeAgentTranscriptUpdateInput,
+  NativeAgentProgressiveInput,
+  NativeAgentDiscoveryUpdateInput,
+  NativeAgentLiveUpdateInput,
+  NativeAgentMessagePage,
+  MailInjectDispatchOutcome,
+  MailSteerDispatchOutcome,
+} from "./service-shared.js";
+import {
+  BUILD_PIPELINE_AGENTS,
+  INITIAL_PROMPT_STAGING_DIRECTORY,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  NativeAgentProviderSessionMissingError,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  controlsFromSessionInput,
+  createNativeAgentProvider,
+  isValidInteractionMetadata,
+  REQUIRED_CONVERSATION_CHANGED,
+  nativeAgentSessionStorageKey,
+  nativeCapabilities,
+  nonBlank,
+  readProviderStatus,
+  stagePromptImages,
+  createHash,
+  ProviderUnavailableError,
+  ACP_SESSION_CREATE_ATTEMPTS,
+  ACP_SESSION_CREATE_RETRY_BASE_MS,
+} from "./service-shared.js";
+import { schedulingEnabled } from "../commands-registry-scheduled-jobs.js";
+import { withProviderSessionTeardownLock } from "../provider-session-ownership.js";
+import {
+  agentMessagingEnabled,
+  coordinatorResearchLine,
+  coordinatorRuntimeEnvironment,
+  coordinatorRuntimeUnavailableMessage,
+  heldCoordinatorConversation,
+  loadCoordinatorResearch,
+  pendingCheckoutUpdate,
+  readCoordinatorWaitingOn,
+  renderCheckoutUpdate,
+  resolveCoordinatorRuntime,
+} from "../coordinator/index.js";
+import {
+  buildCoordinatorContext,
+  type CoordinatorContextDelegation,
+} from "@orkestrator/protocol/coordinator-context";
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  agentSessionOwnerKey,
+  type CoordinatorConversation,
+  type CoordinatorWorkspace,
+} from "@orkestrator/protocol/coordinator";
+import {
+  type NativeAgentCommandRefreshOutcome,
+  type NativeAgentDefaultModelResolution,
+  type NativeAgentModelSubstitution,
+  type NativeAgentDiscoveryUpdate,
+  type NativeAgentLiveUpdate,
+  type NativeAgentSessionStateUpdate,
+  type NativeAgentTranscriptUpdate,
+  nativeAgentCapabilities,
+  type NativeAgentContextUsage,
+} from "@orkestrator/protocol/native-agent";
+import { resolveNativeAgentExecutionPolicy } from "./execution-policy.js";
+import {
+  bugReportExecutionPolicyOverride,
+  bugReportInitialApprovalMode,
+  isLegacyBugReportPolicy,
+  validBugReportApprovalMode,
+  bugReportRuntimeEnvironment,
+  bugReportRuntimeUnavailableMessage,
+  resolveBugReportRuntime,
+} from "../bug-report-runtime.js";
+import {
+  bugReportFirstPromptNote,
+  bugReportIdFromRuntimeId,
+  type BugReportAgent,
+} from "@orkestrator/protocol/bug-report";
+import type { NativeAgentProviderEnvironment } from "./provider.js";
+import { assertValidPromptImages, mimeTypeForImageData } from "../prompt-attachments.js";
+import {
+  ProviderRegistry,
+  providerCacheKey,
+  bridgeConnectionIdentity,
+} from "./provider-registry.js";
+import { NATIVE_AGENT_SESSION_VERSION } from "../models.js";
+import {
+  NativeAgentObservationBroker,
+  type NativeAgentObservationDemand,
+  type NativeAgentObservationStatus,
+  type NativeAgentObservationView,
+  type NativeAgentObservationWakeReason,
+} from "./observation.js";
+import { NativeAgentTurnRecovery } from "./turn-recovery.js";
+import { NativeAgentUsageLimitResend } from "./usage-limit-resend.js";
+import { NativeAgentCatalogCache } from "./catalog-cache.js";
+import { NativeAgentInteractionTracker } from "./interaction-tracker.js";
+import { NativeAgentLaunchActivityReconciler } from "./launch-activity-reconciler.js";
+import { NativeAgentPromptQueueDispatcher } from "./prompt-queue-dispatcher.js";
+import { NativeAgentSessionOperations } from "./session-operations.js";
+import { NativeAgentPromptDispatch } from "./prompt-dispatch.js";
+import { NativeAgentMailInjection } from "./mail-injection.js";
+import {
+  NativeAgentTranscriptProjection,
+  type ResolvedProjectionSession,
+} from "./transcript-projection.js";
+import { PermissionRuleEnforcer, type PermissionRuleChoice } from "../permission-rules/index.js";
+import { DEFAULT_WORKFLOW_DISCOVERY_MS, settleArtifactDispatchTurn } from "../workflows/index.js";
+import {
+  PromptRejectedError,
+  type ProviderMcpConfigEvidenceRead,
+  type ProviderReadOptions,
+} from "../agent-provider-contract.js";
+import { localServerStopCommandName } from "../local-server-runtime.js";
+import { openCodeEnvironmentDependencies, sessionTakesAgentTools } from "./opencode-server.js";
+import type { OpenCodeEnvironmentDependencies } from "../opencode2/index.js";
+import { type AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
+import type { MailboxPresence } from "@orkestrator/protocol/agent-mail";
+import {
+  GOAL_TOKEN_BUDGET_PLATFORMS,
+  type GoalCommand,
+} from "@orkestrator/protocol/native-agent-goal";
+import {
+  GoalCommandError,
+  NativeAgentGoalService,
+  type GoalCommandResult,
+} from "./goal-service.js";
+import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import { NativeAgentHandoffs } from "./handoffs.js";
+import { NativeAgentSignInResends } from "./sign-in-resend.js";
+import { SettledTurnUsage } from "./settled-turn-usage.js";
+import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
+import { sessionHeldDispatchModelUpdate, unofferedDispatchModelMessage } from "./dispatch-model.js";
+/**
+ * An ensured session, plus the model substitution its creation made. The
+ * substitution is reported to the caller only and is never persisted.
+ */
+export type EnsuredNativeAgentSession = PersistedNativeAgentSession & {
+  modelSubstitution?: NativeAgentModelSubstitution;
+};
+
+/**
+ * In-process marker that `trustedSessionInput` already prepended the coordinator
+ * preamble to this input.
+ *
+ * The injection has to be idempotent: `dispatchPromptInternal` runs
+ * `trustedSessionInput` and then hands the same object to `ensureSession`, which
+ * runs it again. That used to be detected by testing the prompt for a leading
+ * `<orkestrator-coordinator-context>`, which any caller could satisfy by
+ * submitting text that opens with a block of their own — suppressing the real
+ * authority block and substituting a forged one, which transcript stripping then
+ * hid from view. A module-private symbol cannot be reached or serialized by a
+ * caller across the JSON RPC boundary, so only this function can set it, while
+ * object spreads inside the dispatch path carry it forward.
+ */
+const COORDINATOR_CONTEXT_APPLIED = Symbol("orkestrator.coordinatorContextApplied");
+const BUG_REPORT_CONTEXT_APPLIED = Symbol("orkestrator.bugReportContextApplied");
+
+export class NativeAgentService {
+  /** Orders publication admission against dispatch and Stop for this session only. */
+  withSessionWorkFence<T>(
+    input: NativeAgentProjectionInput,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.promptQueues.withSessionWorkFence(input, operation);
+  }
+
+  /**
+   * Wake the durable queue worker after an intent-level queue mutation.
+   *
+   * The periodic scan remains the crash/restart safety net, but a newly queued
+   * interactive prompt should not wait for that timer. The worker owns all
+   * provider I/O and its per-queue task map coalesces concurrent notifications.
+   */
+  /** Step 08 diagnostics for the keyed launch/queue driver (`null` on rollback). */
+  schedulingStatus() {
+    return this.promptQueues.schedulingStatus();
+  }
+
+  wakeEnvironment(environmentId: string): void {
+    return this.promptQueues.wakeEnvironment(environmentId);
+  }
+
+  reconcileScheduling() {
+    return this.promptQueues.reconcileScheduling();
+  }
+
+  notifyPromptQueueChanged(queueKey: string): void {
+    return this.promptQueues.notifyPromptQueueChanged(queueKey);
+  }
+
+  /**
+   * Drain one session's queue now, named by the session's own identity.
+   *
+   * The turn-end edge already knows which session became free; waiting for the
+   * next two-second sweep to rediscover that is latency for nothing. A session
+   * with no queue costs one storage read, and the drain coalesces with any
+   * pass already running.
+   */
+  drainPromptQueueForSession(input: {
+    agent?: BuildPipelineAgent;
+    logicalSessionKey?: string;
+  }): Promise<void> {
+    return this.promptQueues.drainPromptQueueForSession(input);
+  }
+
+  /** Cached runtime providers, their bridge generations and their retirement. */
+  private readonly providerRegistry: ProviderRegistry;
+  /** Admits each prompt against a replacement or move of its environment. */
+  private readonly environmentFence: NonNullable<NativeAgentServiceOptions["environmentFence"]>;
+
+  getTranscriptUpdate(
+    input: NativeAgentTranscriptUpdateInput,
+  ): Promise<NativeAgentTranscriptUpdate> {
+    return this.projections.getTranscriptUpdate(input);
+  }
+
+  async getSessionStateUpdate(
+    input: NativeAgentProgressiveInput,
+  ): Promise<NativeAgentSessionStateUpdate> {
+    const update = await this.projections.getSessionStateUpdate(input);
+    void this.retryOwedSettledUsage(input);
+    return update;
+  }
+
+  getLiveUpdate(input: NativeAgentLiveUpdateInput): Promise<NativeAgentLiveUpdate> {
+    return readNativeAgentLiveUpdate(this.projections, input);
+  }
+
+  getDiscoveryUpdate(input: NativeAgentDiscoveryUpdateInput): Promise<NativeAgentDiscoveryUpdate> {
+    return this.projections.getDiscoveryUpdate(input);
+  }
+
+  getMessagePage(input: NativeAgentMessagePageInput): Promise<NativeAgentMessagePage> {
+    return this.projections.getMessagePage(input);
+  }
+
+  getProjectionToolDetails(
+    input: NativeAgentProjectionInput & { detailRef: string },
+  ): Promise<NativeAgentToolDetails> {
+    return this.projections.getProjectionToolDetails(input);
+  }
+
+  /**
+   * The last projection this process built for one session, if any. Purely
+   * in-memory: never reads a provider or hydrates a transcript, so background
+   * observers may consult it freely. It can be stale or absent.
+   */
+  cachedProjectionSnapshot(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): NativeAgentSessionProjection | null {
+    return this.projections.cachedProjectionSnapshot(environmentId, agent, logicalSessionKey);
+  }
+  /** Projection-only model and command catalogues. */
+  private readonly catalogs: NativeAgentCatalogCache;
+  /** Renderer views of provider sessions and every cache behind them. */
+  private readonly projections: NativeAgentTranscriptProjection;
+  /** Records a turn's usage when its outcome is first recorded. */
+  private readonly settledTurnUsage = new SettledTurnUsage({
+    observe: (session, usage) => this.projections.observeSessionUsage(session, usage),
+  });
+  /** Orkestrator's permission rules (todo 0723 (retired)); absent with a narrow storage double. */
+  private readonly permissionRules: PermissionRuleEnforcer | undefined;
+  /** Pending approvals and questions: observation records and the monitor sweep. */
+  private readonly interactions: NativeAgentInteractionTracker;
+  /** Activity sweeps, exact turn edges and the startup-launch scan. */
+  private readonly launches: NativeAgentLaunchActivityReconciler;
+  /** Prompt-queue drains, session work fences and parked-dispatch settles. */
+  private readonly promptQueues: NativeAgentPromptQueueDispatcher;
+  /** The goal loop. Public so the turn-end edge and agent tools can reach it. */
+  readonly goals: NativeAgentGoalService;
+  /** Stop, resume, fork, session actions, sign-in, controls and interaction answers. */
+  private readonly sessionOperations: NativeAgentSessionOperations;
+  private promptDispatchInstance: NativeAgentPromptDispatch | undefined;
+  /** Mail delivery, through the prompt dispatch's entry points. */
+  private readonly mailInjection: NativeAgentMailInjection;
+  /** "Continue in…": the source transcript read and delivery at first dispatch. */
+  readonly handoffs: NativeAgentHandoffs;
+  /** Prompts Claude refused for want of a login, sent again after a sign-in. */
+  readonly signInResends: NativeAgentSignInResends;
+  sessionActivitySnapshot(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): AgentActivityState | "unknown" {
+    return this.launches.sessionActivitySnapshot(environmentId, agent, logicalSessionKey);
+  }
+
+  /**
+   * Activity as the *turn* consumers read it, with background work removed.
+   *
+   * {@link sessionActivitySnapshot} answers what the environment indicator
+   * shows, and a bridge reports `working` there for as long as tasks the
+   * session launched are alive — a backgrounded dev server or file watcher can
+   * hold that for the rest of the session. The parent turn has still ended and
+   * the composer is still free, which the bridge reports separately as
+   * `readyForInput`.
+   *
+   * Everything that gates on "can this session take a prompt right now" must
+   * read that release rather than the raw state. Mail injection only claims a
+   * message for an `idle` mailbox, so without this collapse one long-lived
+   * background process would silence a worker for as long as it runs.
+   */
+  sessionTurnActivitySnapshot(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): AgentActivityState | "unknown" {
+    return this.launches.sessionTurnActivitySnapshot(environmentId, agent, logicalSessionKey);
+  }
+
+  /**
+   * Whether one environment's bridge has an in-flight dispatch or a session
+   * last observed working, waiting, or running background tasks.
+   *
+   * Uses the raw state, not the turn view: replacing the bridge kills its whole
+   * process tree, so a backgrounded test run or dev server is lost just like a
+   * turn. Purely in-memory apart from the session list; never reads a bridge.
+   */
+  hasObservedLiveWork(environmentId: string, agent: BuildPipelineAgent): Promise<boolean> {
+    return this.launches.hasObservedLiveWork(environmentId, agent);
+  }
+
+  /**
+   * Rebuild the durable environment activity projection from provider-owned
+   * session state. This does not depend on a mounted tab or a renderer event.
+   */
+  /**
+   * Run (or join) one activity sweep.
+   *
+   * `startedAfter` is for a consumer that needs an answer read *after* its
+   * request — a demand for a post-dispatch or fresher observation. It passes
+   * the sweep number it saw ({@link activityScanNumber}) when the demand was
+   * made and joins a sweep in flight only if that sweep started later; a
+   * sweep that started earlier may already have read the group, so every such
+   * caller shares one follow-up sweep instead.
+   */
+  reconcileAgentActivity(options: { startedAfter?: number } = {}): Promise<void> {
+    return this.launches.reconcileAgentActivity(options);
+  }
+
+  private sessionTurnIsBusy(input: NativeAgentProjectionInput): boolean {
+    const activity = this.launches.sessionTurnActivitySnapshot(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    return activity === "working" || activity === "waiting";
+  }
+
+  /**
+   * Run `/goal` for a tab outside the prompt path: it never queues behind a
+   * turn or journals a request, because pausing a goal must work mid-turn.
+   */
+  async runGoalCommand(
+    input: EnsureNativeAgentSessionInput & { text: string },
+  ): Promise<GoalCommandResult> {
+    const { text, ...ensure } = input;
+    this.assertAcceptingWork();
+    const session = await this.ensureSession(ensure);
+    return this.goals.command(session, text, { busy: this.sessionTurnIsBusy(input) });
+  }
+
+  /**
+   * The same, from structured fields, so a caller's text is never re-parsed.
+   * Setting or resuming needs the live session. Anything else acts on the record
+   * alone: pausing or clearing must not start a bridge for a goal that is about
+   * to do nothing.
+   */
+  async performGoalCommand(
+    input: EnsureNativeAgentSessionInput & { command: GoalCommand },
+  ): Promise<GoalCommandResult> {
+    const { command, ...ensure } = input;
+    this.assertAcceptingWork();
+    const session =
+      command.kind === "set" || command.kind === "resume"
+        ? await this.ensureSession(ensure)
+        : await this.storage.getNativeAgentSession(
+            nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+          );
+    if (!session) throw new GoalCommandError("This session has no conversation yet.");
+    return this.goals.perform(session, command, { busy: this.sessionTurnIsBusy(input) });
+  }
+
+  /** A session's goal with its check output, and its recent history. */
+  readGoalDetail(input: NativeAgentProjectionInput) {
+    return this.goals.detail(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+    );
+  }
+
+  /** Fresh no-touch admission read, including background work and persisted sessions after reload. */
+  hasActiveCheckoutWork(environmentId: string): Promise<boolean> {
+    return this.launches.hasActiveCheckoutWork(environmentId);
+  }
+
+  /**
+   * The shared observation for one session, reading only when the retained
+   * one does not satisfy the demand.
+   *
+   * This is the entry point for consumers that need to know whether a
+   * session is busy — workflows and queues (step 08), mail, the coordinator —
+   * instead of issuing their own provider read. It never starts a bridge,
+   * attaches, hydrates or touches liveness: a miss wakes the session's group
+   * and runs (or queues one follow-up) activity sweep, which uses the no-touch
+   * observer path. `requirePostDispatch` refuses any answer read before the
+   * latest dispatch to the session, so a cached pre-dispatch idle can never
+   * advance a pipeline. A failed read answers `recovering`, never idle.
+   */
+  observeSessionActivity(
+    input: { environmentId: string; agent: BuildPipelineAgent; logicalSessionKey: string },
+    demand: NativeAgentObservationDemand = {},
+  ): Promise<NativeAgentObservationView> {
+    return this.launches.observeSessionActivity(input, demand);
+  }
+
+  /** Wake one environment's provider group(s) for the next sweep. */
+  wakeObservation(
+    environmentId: string,
+    reason: NativeAgentObservationWakeReason,
+    agent?: BuildPipelineAgent,
+  ): void {
+    return this.launches.wakeObservation(environmentId, reason, agent);
+  }
+
+  /** Content-free observer state for diagnostics and the client's gap anchor. */
+  observationStatus(): NativeAgentObservationStatus & { stamp: ViewRevisionStamp } {
+    return this.launches.observationStatus();
+  }
+
+  reconcileInitialLaunch(environmentId: string): Promise<void> {
+    return this.launches.reconcileInitialLaunch(environmentId);
+  }
+  private readonly scanTasks = new Set<Promise<void>>();
+  /**
+   * Shared observation records, dispatch/generation fences and next-due
+   * provider groups (recurring-processes step 07). `observedSessionActivity`
+   * above stays the edge state machine; the broker says how old, how
+   * trustworthy and how reusable each answer is.
+   */
+  private readonly observations: NativeAgentObservationBroker;
+  private unsubscribeObservationWakeups: (() => void) | null = null;
+  /** Unregisters the projection's cache gauges; called once on shutdown. */
+  private removeProjectionCacheGauges: () => void = () => undefined;
+  /**
+   * Automatic continuation of incomplete turns, for platforms with a recovery
+   * strategy, and the manual-prompt claims that keep it from racing the user.
+   */
+  private readonly turnRecovery: NativeAgentTurnRecovery;
+  private readonly usageLimitResend: NativeAgentUsageLimitResend;
+
+  sessionPendingInteractions(
+    input: NativeAgentProjectionInput,
+  ): Promise<AgentInteractionRequest[] | null> {
+    return this.interactions.sessionPendingInteractions(input);
+  }
+
+  /**
+   * A committed stop: the environment's bridges and their parked requests are
+   * gone, so nothing may keep reporting them as pending (see
+   * `NativeAgentTranscriptProjection.withdrawEnvironmentInteractions`).
+   */
+  withdrawEnvironmentInteractions(environmentId: string): void {
+    this.interactions.withdrawEnvironment(environmentId);
+    this.projections.withdrawEnvironmentInteractions(environmentId);
+  }
+
+  /**
+   * An environment's runtime stopped with its bridges: withdraw their parked
+   * requests and settle the sessions' turn activity
+   * (`NativeAgentLaunchActivityReconciler.settleStoppedSessions`). Called by
+   * every path that stops a runtime itself; the activity sweep catches
+   * container runtimes that stopped some other way.
+   */
+  async environmentRuntimeStopped(environmentId: string): Promise<void> {
+    this.withdrawEnvironmentInteractions(environmentId);
+    const sessions = await this.storage.listNativeAgentSessions();
+    await this.launches.settleStoppedSessions(environmentId, sessions);
+  }
+
+  /**
+   * The backend is about to stop this environment's bridges on purpose, so a
+   * sweep that finds one gone must not report its turn as failed
+   * (`NativeAgentLaunchActivityReconciler.runtimeStopRequested`).
+   */
+  runtimeStopRequested(environmentId: string, agent?: BuildPipelineAgent): Promise<void> {
+    return this.launches.runtimeStopRequested(environmentId, agent);
+  }
+
+  /** Whether the session's last turn was cut off by its runtime stopping. */
+  sessionStoppedMidTurn(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): boolean {
+    return this.launches.sessionStoppedMidTurn(environmentId, agent, logicalSessionKey);
+  }
+
+  private initialization: Promise<void> | null = null;
+  private stopped = false;
+
+  constructor(
+    private readonly storage: StorageService,
+    private readonly invoke: CommandInvoker,
+    private readonly options: NativeAgentServiceOptions = {},
+  ) {
+    this.environmentFence = options.environmentFence ?? new EnvironmentMutationFence();
+    this.catalogs = new NativeAgentCatalogCache({
+      invoke,
+      now: () => this.now(),
+      announce: (environmentId) => {
+        if (!this.stopped) {
+          this.storage.announceNativeAgentSessionProjection(environmentId, "command-catalog");
+        }
+      },
+    });
+    this.observations = new NativeAgentObservationBroker(() => this.now());
+    this.providerRegistry = new ProviderRegistry({
+      now: () => this.now(),
+      isStopped: () => this.stopped,
+      assertAcceptingWork: () => this.assertAcceptingWork(),
+      assertEnvironmentLive: (environmentId) => this.assertEnvironmentLive(environmentId),
+      options,
+      observations: this.observations,
+      bridgeConnection: (agent, environment, model, effort) =>
+        this.bridgeConnection(agent, environment, model, effort),
+      observeBridgeConnection: (agent, environment) =>
+        this.observeBridgeConnection(agent, environment),
+      createProvider: (connection, environmentId, cacheKey) =>
+        createNativeAgentProvider(connection, {
+          onObservationHint: (providerSessionId, parts) => {
+            this.observations.wakeGroup(cacheKey, "provider-event");
+            options.onPushObservationHint?.(
+              environmentId,
+              connection.agent,
+              providerSessionId,
+              parts,
+            );
+          },
+          stageImages: (images) => this.stageImages(environmentId, images),
+          environment: this.providerEnvironment(environmentId),
+          planUsage: options.planUsage,
+          ...this.openCodeServer(environmentId),
+        }),
+      forgetGroup: (cacheKey) => this.launches.forgetActivityGroup(cacheKey),
+    });
+    this.turnRecovery = new NativeAgentTurnRecovery({
+      storage,
+      now: () => this.now(),
+      isStopped: () => this.stopped,
+      assertAcceptingWork: () => this.assertAcceptingWork(),
+      observeProvider: (input) => this.observeProvider(input),
+      // A recovery continues a turn something else started; it keeps that origin.
+      dispatchPrompt: (input, prepare) =>
+        this.dispatchPromptInternal(input, prepare, false, false, true),
+      observedActivity: (key) => this.launches.observedActivity(key),
+    });
+    this.usageLimitResend = new NativeAgentUsageLimitResend({
+      storage,
+      stops: () => this.options.usageLimitStops,
+      now: () => this.now(),
+      isStopped: () => this.stopped,
+      requestOutcome: (input) =>
+        this.sessionRequestOutcome({ ...input, ignoreQueuedPrompts: true }),
+      observedActivity: (key) => this.launches.observedActivity(key),
+      // It continues a turn something else started, so it keeps that origin.
+      dispatchPrompt: (input, prepare) =>
+        this.dispatchPromptInternal(input, prepare, false, false, true),
+    });
+    // Optional because narrow test doubles of the storage omit the store.
+    this.permissionRules =
+      typeof storage.permissionRuleStore === "function"
+        ? new PermissionRuleEnforcer({
+            store: () => storage.permissionRuleStore(),
+            getEnvironment: (environmentId) => storage.getEnvironment(environmentId),
+            now: () => this.now(),
+            onApplied: (application) => {
+              if (this.stopped) return;
+              this.storage.announceNativeAgentSessionProjection(
+                application.environmentId,
+                "permission-rule",
+                {
+                  agent: application.agent,
+                  logicalSessionKey: application.logicalSessionKey,
+                },
+              );
+            },
+          })
+        : undefined;
+    this.projections = new NativeAgentTranscriptProjection({
+      storage,
+      options,
+      ...(this.permissionRules ? { permissionRules: this.permissionRules } : {}),
+      catalogs: this.catalogs,
+      cachedProvider: (input) =>
+        this.providerRegistry.cached(providerCacheKey(input.environmentId, input.agent)),
+      observedActivity: (sessionKey) => this.launches.observedActivity(sessionKey),
+      providerGeneration: (input) =>
+        this.providerRegistry.connectionIdentity(
+          providerCacheKey(input.environmentId, input.agent),
+        ),
+      now: () => this.now(),
+      isStopped: () => this.stopped,
+      assertProjectionInput: (input) => this.assertProjectionInput(input),
+      resolveProjectionSession: (input) => this.resolveProjectionSession(input),
+      provider: (input) => this.provider(input),
+      recordAsyncQuestionAttention: (environmentId, sessionKey, itemIds, logicalSessionKey) =>
+        this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds, logicalSessionKey),
+      scheduleAmbiguousDispatchSettle: (input, key, requestId, provider) =>
+        this.promptQueues.scheduleAmbiguousDispatchSettle(input, key, requestId, provider),
+      scheduleAmbiguousSteerSettle: (input, key, requestId, provider) =>
+        this.promptQueues.scheduleAmbiguousSteerSettle(input, key, requestId, provider),
+    });
+    this.removeProjectionCacheGauges = recurringDiagnosticsRegistry.addCacheSource(
+      "native-projection",
+      this.projections,
+    );
+    this.promptQueues = new NativeAgentPromptQueueDispatcher({
+      storage,
+      isStopped: () => this.stopped,
+      trackScan: (task) => this.trackScan(task),
+      refreshProjection: (input) => this.projections.refreshProjectionState(input),
+      queueSessionObservedBusy: (environmentId, agent, logicalSessionKey, head) =>
+        this.launches.queueSessionObservedBusy(environmentId, agent, logicalSessionKey, head),
+      assertEnvironmentLive: (environmentId) => this.assertEnvironmentLive(environmentId),
+      ensureSession: (input) => this.ensureSession(input),
+      provider: (input) => this.provider(input),
+      dispatchPrompt: (input) => this.dispatchPrompt(input),
+      dispatchQueuedAsyncQuestionAnswer: (input, resolved, text, requestId) =>
+        this.promptDispatch.dispatchQueuedAsyncQuestionAnswer(input, resolved, text, requestId),
+      recordObservedTurnOutcome: (session, status, detail, provider, failureKind, usage) =>
+        this.recordObservedTurnOutcome(session, status, detail, provider, failureKind, usage),
+      usageLimitResendPending: (key) => this.usageLimitResend.isPending(key),
+      settleAmbiguousDispatch: (input, key, requestId, provider) =>
+        this.promptDispatch.settleAmbiguousDispatch(input, key, requestId, provider),
+      settleAmbiguousSteer: (input, key, requestId, provider) =>
+        this.promptDispatch.settleAmbiguousSteer(input, key, requestId, provider),
+    });
+    this.launches = new NativeAgentLaunchActivityReconciler({
+      storage,
+      invoke,
+      options,
+      providerRegistry: this.providerRegistry,
+      observations: this.observations,
+      turnRecovery: this.turnRecovery,
+      usageLimitResend: this.usageLimitResend,
+      now: () => this.now(),
+      isStopped: () => this.stopped,
+      observeProvider: (input) => this.observeProvider(input),
+      trackScan: (task) => this.trackScan(task),
+      recordAsyncQuestionAttention: (environmentId, sessionKey, itemIds, logicalSessionKey) =>
+        this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds, logicalSessionKey),
+      recordRevisedUsage: (session, provider) =>
+        this.settledTurnUsage.record(
+          session,
+          provider.refreshUsage ? { refreshUsage: provider.refreshUsage.bind(provider) } : provider,
+        ),
+      withdrawEnvironmentInteractions: (environmentId) =>
+        this.withdrawEnvironmentInteractions(environmentId),
+      forgetPendingInteractions: (sessionKey) =>
+        this.interactions.forgetPendingInteractions(sessionKey),
+      ...(this.permissionRules
+        ? {
+            applyPermissionRules: (session, provider) =>
+              this.permissionRules!.applyToWaitingSession(session, provider),
+          }
+        : {}),
+      dispatchPrompt: (input) => this.dispatchPrompt(input),
+      dispatchPromptWithPreparation: (input, prepare) =>
+        this.dispatchPromptInternal(input, prepare),
+      goalHoldsTurnEnd: (sessionKey) => this.goals.holdsTurnEnd(sessionKey),
+      sweepGoals: () => {
+        this.goals.sweep();
+        this.options.suborks?.sweep();
+      },
+    });
+    this.goals = new NativeAgentGoalService({
+      storage,
+      now: () => this.now(),
+      isStopped: () => this.stopped,
+      trackScan: (task) => this.trackScan(task),
+      requestOutcome: (input) => this.sessionRequestOutcome(input),
+      turnActivity: (input) =>
+        this.launches.sessionTurnActivitySnapshot(
+          input.environmentId,
+          input.agent,
+          input.logicalSessionKey,
+        ),
+      stoppedMidTurn: (input) =>
+        this.launches.sessionStoppedMidTurn(
+          input.environmentId,
+          input.agent,
+          input.logicalSessionKey,
+        ),
+      environmentRunning: async (environmentId) => {
+        try {
+          await this.assertEnvironmentLive(environmentId);
+          return (await storage.getEnvironment(environmentId))?.status === "running";
+        } catch {
+          return false;
+        }
+      },
+      notifyQueue: (queueKey) => this.notifyPromptQueueChanged(queueKey),
+      sessionTokens: async (input) => {
+        const provider = await this.observeProvider(input);
+        const key = nativeAgentSessionStorageKey(
+          input.environmentId,
+          input.agent,
+          input.logicalSessionKey,
+        );
+        const session = await storage.getNativeAgentSession(key);
+        if (!provider || !session) return undefined;
+        const snapshot = await provider.sessionStateSnapshot?.(session.providerSessionId);
+        const tokens = snapshot?.contextUsage?.sessionTokens;
+        if (tokens !== undefined || !provider.usageFromMessages) return tokens;
+        // OpenCode's lightweight snapshot only has streamed usage. An inactive
+        // tab can miss that evidence; meter its bounded authoritative transcript
+        // before deciding whether another goal turn fits the budget.
+        const messages = await provider.messages(session.providerSessionId, {
+          limit: provider.usageMessageLimit ?? provider.messageReadLimit ?? 1_000,
+        });
+        return provider.usageFromMessages(messages)?.sessionTokens;
+      },
+      workspaceFingerprint: async (environmentId) =>
+        options.goalEnvironment?.workspaceFingerprint(environmentId),
+      runCheck: async (input) =>
+        options.goalEnvironment?.runCheck(input) ?? {
+          kind: "unavailable",
+          detail: "This backend cannot run checks.",
+        },
+      ...(options.goalEnvironment?.verifier ? { verifier: options.goalEnvironment.verifier } : {}),
+      announce: (session) => {
+        this.projections.invalidateProjection(session.key);
+        this.launches.announceSessionContent(session);
+      },
+      ringAttention: async (session, goal) => {
+        // A failed turn already rang on its own edge.
+        if (goal.statusReason === "turn-failed") return;
+        await storage.recordEnvironmentSessionCompletion(
+          session.environmentId,
+          new Date(this.now()).toISOString(),
+          goal.statusReason === "continuation-failed"
+            ? "agent_failed"
+            : goal.status === "blocked"
+              ? "agent_waiting"
+              : "agent_finished",
+          undefined,
+          session.logicalSessionKey,
+        );
+      },
+      releaseTurnEnd: async (session) => options.onGoalReleasedTurnEnd?.(session),
+      supportsGoals: (agent) => nativeCapabilities(agent).actions?.goal === true,
+      supportsTokenBudget: (agent) =>
+        (GOAL_TOKEN_BUDGET_PLATFORMS as readonly string[]).includes(agent),
+    });
+    this.interactions = new NativeAgentInteractionTracker({
+      storage,
+      now: () => this.now(),
+      observeProvider: (input) => this.observeProvider(input),
+      cachedProjectionSnapshot: (environmentId, agent, logicalSessionKey) =>
+        this.projections.cachedProjectionSnapshot(environmentId, agent, logicalSessionKey),
+    });
+    this.sessionOperations = new NativeAgentSessionOperations({
+      storage,
+      options,
+      projections: this.projections,
+      promptQueues: this.promptQueues,
+      interactions: this.interactions,
+      ...(this.permissionRules ? { permissionRules: this.permissionRules } : {}),
+      now: () => this.now(),
+      assertProjectionInput: (input) => this.assertProjectionInput(input),
+      resolveProjectionSession: (input, stopping) => this.resolveProjectionSession(input, stopping),
+      provider: (input) => this.provider(input),
+      replaceBridgeForWiderPolicy: (input) => this.replaceBridgeForWiderPolicy(input),
+      observeProvider: (input) => this.observeProvider(input),
+      trustedSessionInput: (input) => this.trustedSessionInput(input),
+      adoptSession: (input) => this.adoptSession(input),
+      getProjection: (input) => this.getProjection(input),
+      performProjectionSteer: (input, resolved, action) =>
+        this.promptDispatch.performProjectionSteer(input, resolved, action),
+    });
+    this.handoffs = new NativeAgentHandoffs({
+      storage,
+      provider: (input) => this.provider(input),
+    });
+    this.signInResends = new NativeAgentSignInResends({
+      storage,
+      now: () => this.now(),
+      provider: (input) => this.provider(input),
+      observeProvider: (input) => this.observeProvider(input),
+      dispatch: (input) => this.dispatchPromptInternal(input, undefined, true),
+      trackScan: (task) => this.trackScan(task),
+    });
+    this.mailInjection = new NativeAgentMailInjection({
+      storage,
+      options,
+      launches: this.launches,
+      observations: this.observations,
+      projections: this.projections,
+      dispatch: this.promptDispatch,
+      provider: (input) => this.provider(input),
+      resolveProjectionSession: (input) => this.resolveProjectionSession(input),
+    });
+    /*
+     * Durable session mutations wake the affected provider group. Only a
+     * backed-off group is affected at all — every other group is read on
+     * every sweep — so this is a cheap hint, never a read of its own.
+     * Optional because narrow test doubles of the storage omit listeners.
+     */
+    this.unsubscribeObservationWakeups =
+      typeof storage.addResourceChangeListener === "function"
+        ? storage.addResourceChangeListener((change) => {
+            // Step 08: queue mutations and environment changes (readiness,
+            // identity, launch intent) wake only their own due keys.
+            if (change.resource === "prompt-queue") {
+              this.promptQueues.queueChanged(change.id);
+              return;
+            }
+            if (change.resource === "environment") {
+              this.promptQueues.wakeEnvironment(change.id);
+              return;
+            }
+            if (change.resource !== "native-agent-session") return;
+            this.observations.wakeEnvironment(change.id, "session-mutation", change.agent);
+          })
+        : null;
+  }
+
+  /**
+   * Prompt dispatch, steer and their recovery; the one owner of fence and
+   * lease order. Built on first use rather than in the constructor so a
+   * service assembled from the prototype alone (the bridge-replacement suite)
+   * still reaches the real dispatch admission. The constructor builds it while
+   * wiring mail injection, once every collaborator it shares exists.
+   */
+  private get promptDispatch(): NativeAgentPromptDispatch {
+    return (this.promptDispatchInstance ??= this.createPromptDispatch());
+  }
+
+  private createPromptDispatch(): NativeAgentPromptDispatch {
+    // Callbacks are arrows over the service, so suites that patch a service
+    // seam (`provider`, `trustedSessionInput`, `ensureSession`) still reach
+    // the moved dispatch code.
+    return new NativeAgentPromptDispatch({
+      storage: this.storage,
+      invoke: this.invoke,
+      options: this.options,
+      environmentFence: this.environmentFence,
+      catalogs: this.catalogs,
+      projections: this.projections,
+      promptQueues: this.promptQueues,
+      observations: this.observations,
+      launches: this.launches,
+      providerRegistry: this.providerRegistry,
+      turnRecovery: this.turnRecovery,
+      goals: this.goals,
+      handoffs: this.handoffs,
+      signInResends: this.signInResends,
+      now: () => this.now(),
+      assertAcceptingWork: () => this.assertAcceptingWork(),
+      assertEnvironmentLive: (environmentId) => this.assertEnvironmentLive(environmentId),
+      assertProjectionInput: (input) => this.assertProjectionInput(input),
+      beginBridgeWork: (input) => this.beginBridgeWork(input),
+      trustedSessionInput: (input) => this.trustedSessionInput(input),
+      ensureSession: (input) => this.ensureSession(input),
+      provider: (input) => this.provider(input),
+      resolveProjectionSession: (input) => this.resolveProjectionSession(input),
+      applySessionHeldDispatchModel: (input, session, provider) =>
+        this.applySessionHeldDispatchModel(input, session, provider),
+      sessionTurnIsBusy: (input) => this.sessionTurnIsBusy(input),
+      recordObservedTurnOutcome: (session, status, detail, provider, failureKind, usage) =>
+        this.recordObservedTurnOutcome(session, status, detail, provider, failureKind, usage),
+      settleArtifactTurn: (session, requestId) => this.settleArtifactTurn(session, requestId),
+      tabMailFor: (durable) => this.tabMailFor(durable),
+      notifyPromptQueueChanged: (queueKey) => this.notifyPromptQueueChanged(queueKey),
+    });
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private readonly bridgeReplacements = new Set<string>();
+  private readonly bridgeAdmissions = new Map<string, number>();
+
+  private bridgeKey(input: NativeAgentProjectionInput): string {
+    return JSON.stringify([input.environmentId, input.agent]);
+  }
+
+  private beginBridgeWork(input: NativeAgentProjectionInput): () => void {
+    const key = this.bridgeKey(input);
+    if (this.bridgeReplacements.has(key))
+      throw new Error("Bridge replacement in progress; retry after it finishes");
+    this.bridgeAdmissions.set(key, (this.bridgeAdmissions.get(key) ?? 0) + 1);
+    return () => {
+      const count = (this.bridgeAdmissions.get(key) ?? 1) - 1;
+      if (count) this.bridgeAdmissions.set(key, count);
+      else this.bridgeAdmissions.delete(key);
+    };
+  }
+
+  /** Resolve a provider, starting its bridge if needed. */
+  private provider(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider> {
+    return this.providerRegistry.resolve(input);
+  }
+
+  /**
+   * Stop a bridge so the provider resolved next starts a fresh one. A bridge
+   * with live work keeps it: the user's change to one conversation must not end
+   * another's turn, so the resume fails with what to do instead.
+   */
+  private async replaceBridgeForWiderPolicy(input: NativeAgentProjectionInput): Promise<void> {
+    const key = this.bridgeKey(input);
+    if (this.bridgeReplacements.has(key) || this.bridgeAdmissions.has(key)) {
+      throw new Error("Cannot replace a bridge with admitted work or a replacement in progress");
+    }
+    this.bridgeReplacements.add(key);
+    try {
+      if (await this.hasObservedLiveWork(input.environmentId, input.agent)) {
+        throw new Error(
+          `The wider execution policy cannot apply while a ${input.agent} turn is running in this environment. Resume this conversation again once it has finished.`,
+        );
+      }
+      const environment = await this.assertEnvironmentLive(input.environmentId);
+      if (environment.environmentType === "local") {
+        await this.invoke(localServerStopCommandName(input.agent), {
+          environmentId: environment.id,
+        });
+      } else {
+        if (!environment.containerId) throw new Error("Native agent container is unavailable");
+        await this.invoke(`stop_${input.agent}_server`, { containerId: environment.containerId });
+      }
+      await this.provider(input);
+    } finally {
+      this.bridgeReplacements.delete(key);
+    }
+  }
+
+  /** Resolve a provider for observation only, never starting a bridge. */
+  private observeProvider(
+    input: EnsureNativeAgentSessionInput,
+  ): Promise<NativeAgentRuntimeProvider | undefined> {
+    return this.providerRegistry.observe(input);
+  }
+
+  /**
+   * Every provider this service caches for an environment reaches the same
+   * OpenCode server, whichever creation site cached it.
+   */
+  private openCodeServer(environmentId: string): { openCode?: OpenCodeEnvironmentDependencies } {
+    const openCode = openCodeEnvironmentDependencies(
+      this.options.openCodeServer,
+      this.storage,
+      environmentId,
+    );
+    return openCode ? { openCode } : {};
+  }
+
+  /**
+   * The environment an interactive provider serves. The provider factory
+   * derives platform-specific dependencies from it (per-environment on-disk
+   * state under the backend data directory, for example). Every creation site
+   * that can cache a tab's provider passes it: whichever one caches the
+   * provider serves the tab, so the observer and tab-close paths must not pass
+   * less than the tab path does. Storage doubles without a data directory get
+   * no on-disk provider state.
+   */
+  private providerEnvironment(environmentId: string): NativeAgentProviderEnvironment {
+    // Read per call rather than per provider: providers are cached for the
+    // life of a bridge connection, so a settings edit would otherwise not
+    // reach the model catalogue until the environment restarted.
+    const loadConfig = () => this.storage.loadConfig();
+    const guidance = this.options.signInGuidance;
+    const signInGuidance = guidance
+      ? { signInGuidance: (agent: string) => guidance(environmentId, agent) }
+      : {};
+    const optional = { ...signInGuidance };
+    return typeof this.storage.getDataDir === "function"
+      ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig, ...optional }
+      : { environmentId, loadConfig, ...optional };
+  }
+
+  /** Stage base64 images into the workspace so a bridge will accept them. */
+  private async stageImages(
+    environmentId: string,
+    images: readonly TaskSnapshotImage[],
+  ): Promise<PromptAttachment[]> {
+    // A coordinator's workspace is the user's own checkout, and the synthesized
+    // environment behind it carries that path like any other worktree. Staging
+    // there would have a read-only session write files into the repository it
+    // exists not to touch, so its images go to the same application-data
+    // directory a pasted attachment uses — the one root the bridge is
+    // launched able to read besides the checkout.
+    const coordinator = await resolveCoordinatorRuntime(this.storage, environmentId);
+    if (coordinator.status === "unavailable") {
+      throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
+    }
+    if (coordinator.status === "ready") {
+      const staged: PromptAttachment[] = [];
+      for (const image of assertValidPromptImages(images)) {
+        const path = await this.storage.coordinators.writeCoordinatorAttachment(
+          coordinator.coordinatorId,
+          coordinator.conversationId,
+          image.filename,
+          image.data,
+        );
+        staged.push({
+          type: "image",
+          path,
+          filename: image.filename,
+          dataUrl: `data:${mimeTypeForImageData(image.filename, image.data)};base64,${image.data}`,
+        });
+      }
+      return staged;
+    }
+    const environment = await this.assertEnvironmentLive(environmentId);
+    return stagePromptImages(this.invoke, environment, images, INITIAL_PROMPT_STAGING_DIRECTORY);
+  }
+
+  private async bridgeConnection(
+    agent: BuildPipelineAgent,
+    environment: Environment,
+    model?: string,
+    effort?: string,
+  ): Promise<BridgeConnection> {
+    if (environment.environmentType === "local") {
+      const result = await this.invoke<{ port: number; authToken?: string }>(
+        `start_local_${agent}_server_cmd`,
+        { environmentId: environment.id },
+      );
+      if (!result.authToken) {
+        throw new Error(`${agent} bridge authentication is unavailable`);
+      }
+      return {
+        agent,
+        baseUrl: `http://127.0.0.1:${result.port}`,
+        authToken: result.authToken,
+        ...(agent === "claude" || agent === "codex"
+          ? {
+              accountId:
+                this.options.localBridgeAccountId?.(`${agent}:${environment.id}`) ?? "unknown",
+            }
+          : {}),
+        directory: environment.worktreePath,
+        model,
+        effort,
+      };
+    }
+
+    if (!environment.containerId) {
+      throw new Error("Native agent container is unavailable");
+    }
+    const result = await this.invoke<{ hostPort: number; authToken?: string }>(
+      `start_${agent}_server`,
+      { containerId: environment.containerId },
+    );
+    if (!result.authToken) {
+      throw new Error(`${agent} bridge authentication is unavailable`);
+    }
+    return {
+      agent,
+      baseUrl: `http://127.0.0.1:${result.hostPort}`,
+      authToken: result.authToken,
+      ...(agent === "claude" || agent === "codex" ? { accountId: "unknown" } : {}),
+      model,
+      effort,
+    };
+  }
+
+  /**
+   * Bridge coordinates for an already-running bridge, or `undefined`.
+   *
+   * The peek commands are the read-only twins of the start commands: they
+   * report a live, authenticated bridge and never spawn one. Anything that
+   * cannot be answered without starting a process is reported as "not running"
+   * rather than started on the observer's behalf.
+   */
+  private async observeBridgeConnection(
+    agent: BuildPipelineAgent,
+    environment: Environment,
+  ): Promise<BridgeConnection | undefined> {
+    if (environment.environmentType === "local") {
+      const result = await this.invoke<{ port: number; authToken: string } | null>(
+        "peek_local_agent_bridge",
+        { environmentId: environment.id, agent },
+      );
+      if (!result?.authToken) return undefined;
+      return {
+        agent,
+        baseUrl: `http://127.0.0.1:${result.port}`,
+        authToken: result.authToken,
+        ...(agent === "claude" || agent === "codex"
+          ? {
+              accountId:
+                this.options.localBridgeAccountId?.(`${agent}:${environment.id}`) ?? "unknown",
+            }
+          : {}),
+        directory: environment.worktreePath,
+      };
+    }
+
+    if (!environment.containerId) return undefined;
+    const result = await this.invoke<{ hostPort: number; authToken: string } | null>(
+      "peek_container_agent_bridge",
+      {
+        containerId: environment.containerId,
+        agent,
+      },
+    );
+    if (!result?.authToken) return undefined;
+    return {
+      agent,
+      baseUrl: `http://127.0.0.1:${result.hostPort}`,
+      authToken: result.authToken,
+      ...(agent === "claude" || agent === "codex" ? { accountId: "unknown" } : {}),
+    };
+  }
+
+  /**
+   * A bug report's session: its platform and policy come from the report,
+   * never the caller. The first prompt carries a pointer to the briefing the
+   * report wrote into its scratch directory.
+   */
+  private async trustedBugReportInput<T extends EnsureNativeAgentSessionInput>(
+    input: T,
+    record: { id: string; agent: BugReportAgent; briefedAt?: string; scratchDir: string },
+  ): Promise<T> {
+    if (record.agent !== input.agent) {
+      throw new Error("This bug report belongs to a different agent platform");
+    }
+    const existing = await this.storage.getNativeAgentSession(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+    );
+    const policy =
+      existing?.policy ??
+      resolveNativeAgentExecutionPolicy(
+        { environmentType: "local", networkAccessMode: "full" },
+        input.origin ?? "interactive-native",
+        bugReportExecutionPolicyOverride(record.agent),
+      );
+    const trusted = {
+      ...input,
+      approvalMode: validBugReportApprovalMode(record.agent, policy, input.approvalMode),
+      executionPolicy: existing?.executionPolicy,
+      policy,
+    };
+    if (
+      "prompt" in input &&
+      typeof input.prompt === "string" &&
+      !record.briefedAt &&
+      !(BUG_REPORT_CONTEXT_APPLIED in input)
+    ) {
+      // Marked before the send rather than after it: a briefing pointer that
+      // reaches the agent twice is harmless, and the briefing file itself is
+      // loaded from the working directory on every turn anyway.
+      await this.storage.bugReports.mutateBugReport(record.id, (current) => ({
+        ...current,
+        briefedAt: current.briefedAt ?? new Date().toISOString(),
+      }));
+      return {
+        ...trusted,
+        [BUG_REPORT_CONTEXT_APPLIED]: true,
+        prompt: `${bugReportFirstPromptNote(`${record.scratchDir}/AGENTS.md`)}${input.prompt}`,
+      } as T;
+    }
+    return trusted;
+  }
+
+  /**
+   * The checkout-update notice for a coordinator conversation's first turn
+   * after the checkout moved (`coordinator/checkout-update.ts`), or "".
+   * Reading the commits is best-effort: without them the notice still says
+   * the checkout moved.
+   */
+  private async coordinatorCheckoutUpdate(
+    workspace: CoordinatorWorkspace,
+    conversation: CoordinatorConversation,
+  ): Promise<string> {
+    const update = pendingCheckoutUpdate(workspace, conversation);
+    if (!update) return "";
+    const changes =
+      update.fromCommit && update.toCommit && this.options.coordinatorCheckoutChanges
+        ? await this.options
+            .coordinatorCheckoutChanges(workspace.projectId, update.fromCommit, update.toCommit)
+            .catch(() => null)
+        : null;
+    return renderCheckoutUpdate(update, workspace.repositoryStatus?.upstream, changes);
+  }
+
+  /** Resolve coordinator authority from persisted ownership, never caller metadata. */
+  private async trustedSessionInput<T extends EnsureNativeAgentSessionInput>(input: T): Promise<T> {
+    const bugReport = await resolveBugReportRuntime(this.storage, input.environmentId);
+    if (bugReport.status === "unavailable") {
+      throw new Error(bugReportRuntimeUnavailableMessage(bugReport));
+    }
+    if (bugReport.status === "ready") return this.trustedBugReportInput(input, bugReport.record);
+    let coordinator = await resolveCoordinatorRuntime(this.storage, input.environmentId);
+    if (coordinator.status === "ready" && this.options.waitForMergeSync) {
+      await this.options.waitForMergeSync(coordinator.workspace.projectId);
+      coordinator = await resolveCoordinatorRuntime(this.storage, input.environmentId);
+    }
+    if (coordinator.status === "not-coordinator") {
+      const environment = await this.storage.getEnvironment(input.environmentId);
+      const existing = await this.storage.getNativeAgentSession(
+        nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      );
+      return {
+        ...input,
+        ...(environment
+          ? {
+              owner: {
+                kind: "environment" as const,
+                projectId: environment.projectId,
+                environmentId: environment.id,
+              },
+            }
+          : {}),
+        executionPolicy: existing?.executionPolicy,
+        ...(environment
+          ? {
+              policy:
+                existing?.policy ??
+                resolveNativeAgentExecutionPolicy(
+                  environment,
+                  input.origin ?? "interactive-native",
+                  environment.agentSettings?.executionPolicy,
+                ),
+            }
+          : { policy: undefined }),
+      };
+    }
+    if (coordinator.status === "unavailable") {
+      throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
+    }
+    const { coordinatorId, workspace } = coordinator;
+    const existing = await this.storage.getNativeAgentSession(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+    );
+    // The persisted conversation decides the platform, never the caller. The
+    // resolver has already rejected an unassigned conversation and one whose
+    // platform is no longer qualified, so a mismatch here is a caller pointing
+    // at somebody else's session.
+    if (coordinator.conversation.agent !== input.agent) {
+      throw new Error("Coordinator conversation is unavailable");
+    }
+    // Fetch updates remote refs, not the checkout the coordinator reads. It
+    // may still be running after the renderer's bounded pre-send check.
+    if (
+      workspace.repositoryStatus?.operationState !== undefined &&
+      workspace.repositoryStatus.operationState !== "idle" &&
+      workspace.repositoryStatus.operationState !== "fetching"
+    ) {
+      throw new Error("The project checkout is changing; wait for the Git operation to finish");
+    }
+    const research = await loadCoordinatorResearch(this.storage);
+    const webResearch = research.mode;
+    const trusted = {
+      ...input,
+      origin: "coordinator",
+      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      owner: { kind: "coordinator", projectId: workspace.projectId, coordinatorId },
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      // Resolved fresh rather than read from the record: the coordinator
+      // policy is never user-overridable, and its only variable part is the
+      // research setting, which applies from the next turn. OpenCode has no
+      // bridge to hold process authority, so this is what it runs under.
+      policy: resolveNativeAgentExecutionPolicy(
+        { environmentType: "local", networkAccessMode: "restricted" },
+        "coordinator",
+        undefined,
+        webResearch,
+      ),
+    };
+    if (
+      existing &&
+      existing.policy &&
+      JSON.stringify(existing.policy) !== JSON.stringify(trusted.policy)
+    ) {
+      // Only the research exception may change on a coordinator conversation.
+      // All ownership and other policy fields still pass the normal identity
+      // check. Never turn an unrelated or forged policy into coordinator authority.
+      const oldAllow = existing.policy.capabilityPolicy?.allow;
+      if (oldAllow?.some((capability) => capability !== "web.search")) {
+        throw new Error("Native agent session key collision");
+      }
+      this.assertSessionIdentity(
+        existing,
+        {
+          ...trusted,
+          policy: {
+            ...trusted.policy,
+            capabilityPolicy: { ...trusted.policy.capabilityPolicy, allow: oldAllow },
+          },
+        },
+        existing.key,
+      );
+      // Resolve launcher authority before recording the change. A busy bridge
+      // refuses replacement; session-held permissions apply explicitly.
+      const provider = await this.provider(trusted);
+      if (provider.synchronizeSessionPolicy) {
+        const { status } = await readProviderStatus(provider, existing.providerSessionId);
+        // A missing provider session is replaced by ensureSession below.
+        if (status !== "missing") {
+          await provider.synchronizeSessionPolicy(existing.providerSessionId, trusted.policy);
+        }
+      }
+      await this.storage.transitionCoordinatorResearchPolicy(
+        existing,
+        trusted.policy,
+        trusted.owner,
+      );
+    }
+    if (
+      "prompt" in input &&
+      typeof input.prompt === "string" &&
+      !(COORDINATOR_CONTEXT_APPLIED in input)
+    ) {
+      const status = workspace.repositoryStatus;
+      // Workers start where a normal environment would: the latest commit of
+      // the configured base branch, not wherever this checkout happens to be.
+      const baseBranch = await this.storage
+        .getRepositoryConfig(workspace.projectId)
+        .then((config) => config.defaultBranch?.trim() || "main")
+        .catch(() => "main");
+      const side = coordinator.conversation.role === "side";
+      const checkoutUpdate = await this.coordinatorCheckoutUpdate(
+        workspace,
+        coordinator.conversation,
+      );
+      const nodeLine = (await this.options.coordinatorNodeContext?.().catch(() => null)) ?? "";
+      const delegation: CoordinatorContextDelegation = side
+        ? {
+            kind: "side",
+            title: coordinator.conversation.title,
+            messagingEnabled: await agentMessagingEnabled(this.storage),
+          }
+        : (await this.options.coordinatorDelegationAvailable?.(coordinator.conversation.agent))
+          ? {
+              kind: "main",
+              baseBranch,
+              schedulingEnabled: await schedulingEnabled(this.storage),
+              waitingOn: await readCoordinatorWaitingOn(this.storage, coordinatorId),
+            }
+          : {
+              kind: "unavailable",
+              messagingEnabled: await agentMessagingEnabled(this.storage),
+            };
+      const project = await this.storage.getProject(workspace.projectId).catch(() => null);
+      const context = buildCoordinatorContext({
+        project: {
+          id: workspace.projectId,
+          name: project?.name,
+          checkoutPath: project?.localPath ?? status?.repositoryRoot,
+        },
+        coordinatorId,
+        repository: {
+          contextRevision: workspace.repositoryContextRevision,
+          branch: status?.branch,
+          headCommit: status?.headCommit,
+        },
+        researchLine: coordinatorResearchLine(research),
+        nodeLine,
+        checkoutUpdate,
+        delegation,
+      });
+      return {
+        ...trusted,
+        [COORDINATOR_CONTEXT_APPLIED]: true,
+        prompt: `${context}\n\n${input.prompt}`,
+      } as T;
+    }
+    return trusted;
+  }
+
+  init(): Promise<void> {
+    if (this.stopped) return Promise.reject(new Error("Native agent service is shut down"));
+    if (this.initialization) return this.initialization;
+    const operation = this.initialize().catch((error) => {
+      if (this.initialization === operation) this.initialization = null;
+      throw error;
+    });
+    this.initialization = operation;
+    return operation;
+  }
+
+  private async initialize(): Promise<void> {
+    await this.repairPersistedStartupTabs().catch(() => undefined);
+    await this.goals.init().catch((error: unknown) => {
+      nativeAgentGoalLog.warn("recover.failed", { error: formatLogError(error) });
+    });
+    await Promise.allSettled([
+      this.trackScan(this.launches.launchScan()),
+      this.trackScan(this.promptQueues.queueScan()),
+    ]);
+    if (this.stopped) return;
+    const launchReconcileIntervalMs = this.options.launchReconcileIntervalMs;
+    const progressMs = Number.isFinite(launchReconcileIntervalMs)
+      ? Math.max(20, launchReconcileIntervalMs as number)
+      : 2_000;
+    this.promptQueues.startKeyedScheduling(() => this.launches.countedLaunchScan(), {
+      progressIntervalMs: progressMs,
+      // Safety discovery. A test that shortens the launch cadence keeps
+      // discovery at that cadence; production uses the 30 s interval.
+      discoveryIntervalMs:
+        this.options.queueDiscoveryIntervalMs ??
+        (Number.isFinite(launchReconcileIntervalMs) ? progressMs : DEFAULT_WORKFLOW_DISCOVERY_MS),
+      ...(this.options.queueSchedulerClock
+        ? {
+            now: this.options.queueSchedulerClock.now,
+            timers: this.options.queueSchedulerClock.timers,
+          }
+        : {}),
+    });
+  }
+
+  /**
+   * Upgrade only a still-present canonical startup tab from the historical
+   * provider-specific terminal record to the native pane identity. Missing
+   * tabs are left missing because their absence may be an intentional close,
+   * and a tab that already holds the native identity is left completely alone:
+   * this runs on every backend start, so touching a healthy tab would be a
+   * recurring rewrite of state this repair does not own.
+   */
+  private async repairPersistedStartupTabs(): Promise<void> {
+    const sessions = (await this.storage.listNativeAgentSessions())
+      .filter(
+        (session) =>
+          session.origin === "interactive-native" &&
+          session.logicalSessionKey === `env-${session.environmentId}:${STARTUP_AGENT_TAB_ID}`,
+      )
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const repairedEnvironments = new Set<string>();
+    for (const session of sessions) {
+      if (this.stopped) return;
+      if (repairedEnvironments.has(session.environmentId)) continue;
+      repairedEnvironments.add(session.environmentId);
+      await this.storage
+        .ensureStartupNativeAgentTab({
+          environmentId: session.environmentId,
+          agent: session.agent,
+          providerSessionId: session.providerSessionId,
+          existingOnly: true,
+          upgradeOnly: true,
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  private async upgradeBugReportSessionPolicy(
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<PersistedNativeAgentSession> {
+    if (
+      (session.agent !== "claude" && session.agent !== "codex") ||
+      !isLegacyBugReportPolicy(session.policy)
+    )
+      return session;
+    const policy = { ...session.policy, approvals: "auto-approve" as const };
+    const approvalMode = bugReportInitialApprovalMode(session.agent)!;
+    const updated = await this.storage.upgradeBugReportSessionPolicy(
+      session,
+      policy,
+      approvalMode,
+      () => provider.synchronizeBugReportSessionPolicy?.(session.providerSessionId, policy),
+    );
+    this.projections.invalidateProjection(session.key);
+    return updated;
+  }
+
+  async ensureSession(input: EnsureNativeAgentSessionInput): Promise<EnsuredNativeAgentSession> {
+    input = await this.trustedSessionInput(input);
+    this.assertAcceptingWork();
+    if (
+      !nonBlank(input.environmentId) ||
+      !nonBlank(input.logicalSessionKey) ||
+      !BUILD_PIPELINE_AGENTS.includes(input.agent) ||
+      !isValidInteractionMetadata(input)
+    ) {
+      throw new Error("Invalid native agent session request");
+    }
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    await this.assertEnvironmentLive(input.environmentId);
+    const provider = await this.provider(input);
+    const existing = await this.storage.getNativeAgentSession(key);
+    const reportSession = Boolean(bugReportIdFromRuntimeId(input.environmentId));
+    if (
+      input.requireProviderSessionId &&
+      existing?.providerSessionId !== input.requireProviderSessionId
+    ) {
+      throw new PromptRejectedError(REQUIRED_CONVERSATION_CHANGED);
+    }
+    if (existing) {
+      this.assertSessionIdentity(existing, input, key);
+      await this.assertEnvironmentLive(input.environmentId);
+      provider.registerSession?.(existing.providerSessionId, {
+        origin: existing.origin,
+        interactionPolicy: existing.interactionPolicy,
+        phase: input.phase,
+      });
+      /*
+       * Liveness only. A session whose last turn ended in a terminal error —
+       * "Selected model is at capacity", a usage limit, a transport fault — is
+       * still a live session with an intact rollout, and the user's next move is
+       * usually to change model and continue. Letting that error escape here
+       * failed every later ensure/dispatch on the *previous* turn's failure, so
+       * the tab could never send the message that would have cleared it.
+       */
+      const { status } = await readProviderStatus(provider, existing.providerSessionId);
+      await this.assertEnvironmentLive(input.environmentId);
+      if (status !== "missing") {
+        // Restate session-held authority even after a backend restart. Providers
+        // with process-held authority were refreshed by the launcher above.
+        if (input.owner?.kind === "coordinator" && input.policy) {
+          await provider.synchronizeSessionPolicy?.(existing.providerSessionId, input.policy);
+        }
+        if (
+          ((!existing.owner || !existing.policy) && input.owner) ||
+          (!existing.initialPromptPresentation && input.initialPromptPresentation)
+        ) {
+          const enriched = await this.storage.adoptNativeAgentSession({
+            key,
+            environmentId: input.environmentId,
+            agent: input.agent,
+            logicalSessionKey: input.logicalSessionKey,
+            providerSessionId: existing.providerSessionId,
+            origin: existing.origin,
+            interactionPolicy: existing.interactionPolicy,
+            owner: input.owner,
+            executionPolicy: input.executionPolicy,
+            policy: input.policy,
+            initialPromptPresentation: input.initialPromptPresentation,
+          });
+          return enriched;
+        }
+        return reportSession && (status === "idle" || status === "error")
+          ? this.upgradeBugReportSessionPolicy(existing, provider)
+          : existing;
+      }
+      if (input.requireProviderSessionId) {
+        throw new PromptRejectedError(REQUIRED_CONVERSATION_CHANGED);
+      }
+      await this.storage.invalidateNativeAgentSession(key, existing.providerSessionId);
+    }
+    /*
+     * Create the provider session under the native-agent lock alone.
+     *
+     * `getOrCreateNativeAgentSession` deliberately holds *that* lock across the
+     * external create, so two backend processes cannot mint two real provider
+     * sessions for one logical key. It does not need the global environments
+     * lock as well: it re-asserts the environment both before and after the
+     * create, which is a strictly stronger fence than the single up-front check
+     * `runWithLiveEnvironment` performed.
+     *
+     * Holding the environments lock here was the same contention bug the
+     * dispatch path fixed, on a slower path: a cold agent start runs up to four
+     * session-create attempts with backoff, and every second of that stalled
+     * activity, unread and deletion bookkeeping for *every* environment.
+     */
+    /*
+     * Only an inherited default is resolved; an explicit model stays pinned
+     * and lets dispatch report its availability. A configured
+     * default can name a provider this login has not connected, and storing it
+     * as the session's controls would outrank the runtime's own default and
+     * reject the first prompt. An unset one resolves to the runtime's effective
+     * default. Either answer is stored on this session only; the configuration
+     * keeps the user's choice.
+     */
+    // A new OpenCode session resolves even an explicit model: a picker read
+    // from the durable catalogue can offer a model this login has no sign-in
+    // for, and OpenCode serves only the providers it has credentials for. A
+    // model it serves resolves to itself.
+    const resolution =
+      !input.model ||
+      input.model === "default" ||
+      input.modelSource === "default" ||
+      input.agent === "opencode"
+        ? await this.resolveDefaultModel(provider, input.model)
+        : undefined;
+    const modelSubstitution = resolution?.substitution;
+    if (resolution?.modelId) input = { ...input, model: resolution.modelId };
+    if (reportSession && (input.agent === "claude" || input.agent === "codex")) {
+      const approvalMode =
+        input.approvalMode ??
+        validBugReportApprovalMode(
+          input.agent,
+          existing?.policy,
+          existing?.controls?.approvalMode,
+        ) ??
+        bugReportInitialApprovalMode(input.agent);
+      input = {
+        ...input,
+        ...(input.policy && isLegacyBugReportPolicy(input.policy)
+          ? { policy: { ...input.policy, approvals: "auto-approve" } }
+          : {}),
+        approvalMode,
+      };
+    }
+    const session = await this.storage.getOrCreateNativeAgentSession(
+      {
+        key,
+        environmentId: input.environmentId,
+        agent: input.agent,
+        logicalSessionKey: input.logicalSessionKey,
+        origin: input.origin,
+        interactionPolicy: input.interactionPolicy,
+        controls: controlsFromSessionInput(input),
+        owner: input.owner,
+        executionPolicy: input.executionPolicy,
+        policy: input.policy,
+        initialPromptPresentation: input.initialPromptPresentation,
+        // Kept on the record so the tab shows it whichever request created the
+        // session: a first prompt's dispatch answers with no room for it.
+        ...(modelSubstitution ? { modelSubstitutionNotice: modelSubstitution } : {}),
+      },
+      () => this.createProviderSession(provider, input),
+    );
+    // A concurrent ensure may have created the session first, with its own
+    // controls; only report a substitution this session actually carries.
+    return modelSubstitution && session.controls?.modelId === modelSubstitution.modelId
+      ? { ...session, modelSubstitution }
+      : session;
+  }
+
+  /**
+   * Apply a dispatch's explicit model to a runtime whose prompts carry none
+   * (`runsSessionHeldModel`), the way a model pick is applied: through a
+   * control update under the admission/delivery lease, after replay and
+   * conflict checks and before anything is journaled. A model the login's live
+   * catalogue positively does not offer is refused here with the draft intact,
+   * rather than reaching the runtime and failing there.
+   * See `dispatch-model.ts`.
+   */
+  private async applySessionHeldDispatchModel(
+    input: DispatchNativeAgentPromptInput,
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<NativeAgentControlUpdate | undefined> {
+    const update = sessionHeldDispatchModelUpdate(input, session);
+    if (!update?.modelId) return undefined;
+    const availability = await this.resolveDefaultModel(provider, update.modelId);
+    if (availability?.substitution) {
+      throw new PromptRejectedError(
+        unofferedDispatchModelMessage(session.agent, update.modelId, availability.substitution),
+      );
+    }
+    await provider.updateInteractiveControls?.(session.providerSessionId, update);
+    return update;
+  }
+
+  private async resolveDefaultModel(
+    provider: NativeAgentRuntimeProvider,
+    modelId: string | undefined,
+  ): Promise<NativeAgentDefaultModelResolution | undefined> {
+    if (!provider.resolveDefaultModel) return undefined;
+    try {
+      return await provider.resolveDefaultModel(modelId);
+    } catch {
+      // Connectivity is advisory here. Dispatch preflight still reports a
+      // model the runtime cannot serve.
+      return undefined;
+    }
+  }
+
+  async adoptSession(input: AdoptNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
+    return this.promptQueues.withSessionMutationFence(input, () =>
+      this.adoptSessionUnderFence(input),
+    );
+  }
+
+  private async adoptSessionUnderFence(
+    input: AdoptNativeAgentSessionInput,
+  ): Promise<PersistedNativeAgentSession> {
+    input = await this.trustedSessionInput(input);
+    this.assertAcceptingWork();
+    if (
+      !nonBlank(input.environmentId) ||
+      !nonBlank(input.logicalSessionKey) ||
+      !nonBlank(input.providerSessionId) ||
+      !BUILD_PIPELINE_AGENTS.includes(input.agent) ||
+      !isValidInteractionMetadata(input) ||
+      (input.expectedProviderSessionId !== undefined && !nonBlank(input.expectedProviderSessionId))
+    ) {
+      throw new Error("Invalid native agent session adoption request");
+    }
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    await this.assertEnvironmentLive(input.environmentId);
+    const provider = await this.provider(input);
+    // Acquisition and last-owner close share a lifecycle fence. Recheck liveness
+    // after waiting: a close may have completed while this adoption was queued.
+    return withProviderSessionTeardownLock(
+      this.storage,
+      input.environmentId,
+      input.agent,
+      input.providerSessionId,
+      async () => {
+        provider.registerSession?.(input.providerSessionId, {
+          origin: input.origin ?? "interactive-native",
+          interactionPolicy:
+            input.interactionPolicy ??
+            (input.origin === "build-pipeline" || input.origin === "automated-review"
+              ? UNATTENDED_AGENT_INTERACTION_POLICY
+              : INTERACTIVE_AGENT_INTERACTION_POLICY),
+          phase: input.phase,
+        });
+        // Same liveness-only rule as ensureSession: a failed last turn is not a
+        // missing session, and adopting one must still succeed.
+        const { status } = await readProviderStatus(provider, input.providerSessionId);
+        await this.assertEnvironmentLive(input.environmentId);
+        if (status === "missing") {
+          throw new NativeAgentProviderSessionMissingError();
+        }
+        const session = await this.storage.adoptNativeAgentSession({
+          key,
+          environmentId: input.environmentId,
+          agent: input.agent,
+          logicalSessionKey: input.logicalSessionKey,
+          providerSessionId: input.providerSessionId,
+          origin: input.origin,
+          interactionPolicy: input.interactionPolicy,
+          controls: input.controls ?? controlsFromSessionInput(input),
+          owner: input.owner,
+          executionPolicy: input.executionPolicy,
+          policy: input.policy,
+          initialPromptPresentation: input.initialPromptPresentation,
+          expectedProviderSessionId: input.expectedProviderSessionId,
+        });
+        const retired = input.expectedProviderSessionId;
+        if (retired && retired !== session.providerSessionId) {
+          this.options.onConversationRetired?.(
+            input.environmentId,
+            input.logicalSessionKey,
+            retired,
+          );
+        }
+        return session;
+      },
+    );
+  }
+
+  /**
+   * Render a backend-owned provider session without persisting a native-agent
+   * mapping. Build pipelines retain the authoritative identity and lifecycle,
+   * so persisting this inspection would make historical stages participate in
+   * the native-session activity and interaction sweeps forever.
+   */
+  async inspectSession(
+    input: InspectNativeAgentSessionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
+    input = await this.trustedSessionInput(input);
+    this.assertAcceptingWork();
+    if (
+      !nonBlank(input.environmentId) ||
+      !nonBlank(input.logicalSessionKey) ||
+      !nonBlank(input.providerSessionId) ||
+      !BUILD_PIPELINE_AGENTS.includes(input.agent) ||
+      !isValidInteractionMetadata(input) ||
+      (input.refreshUsage !== undefined && typeof input.refreshUsage !== "boolean")
+    ) {
+      throw new Error("Invalid native agent session inspection request");
+    }
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    await this.assertEnvironmentLive(input.environmentId);
+    const provider = await this.provider(input);
+    const origin = input.origin ?? "interactive-native";
+    const interactionPolicy =
+      input.interactionPolicy ??
+      (origin === "build-pipeline" || origin === "automated-review"
+        ? UNATTENDED_AGENT_INTERACTION_POLICY
+        : INTERACTIVE_AGENT_INTERACTION_POLICY);
+    provider.registerSession?.(input.providerSessionId, {
+      origin,
+      interactionPolicy,
+      phase: input.phase,
+    });
+    const { status } = await readProviderStatus(provider, input.providerSessionId);
+    await this.assertEnvironmentLive(input.environmentId);
+    if (status === "missing") {
+      throw new NativeAgentProviderSessionMissingError();
+    }
+    const timestamp = new Date(this.now()).toISOString();
+    const session: PersistedNativeAgentSession = {
+      version: NATIVE_AGENT_SESSION_VERSION,
+      key,
+      environmentId: input.environmentId,
+      agent: input.agent,
+      logicalSessionKey: input.logicalSessionKey,
+      providerSessionId: input.providerSessionId,
+      origin,
+      interactionPolicy,
+      controls: input.controls ?? controlsFromSessionInput(input),
+      owner: input.owner,
+      executionPolicy: input.executionPolicy,
+      policy: input.policy,
+      initialPromptPresentation: input.initialPromptPresentation,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    return this.projections.refreshProjection(
+      {
+        environmentId: input.environmentId,
+        agent: input.agent,
+        logicalSessionKey: input.logicalSessionKey,
+        refreshUsage: input.refreshUsage,
+      },
+      true,
+      { key, session, provider, transient: true },
+    );
+  }
+
+  private async upgradeBugReportProjectionPolicy(input: NativeAgentProjectionInput): Promise<void> {
+    if (!bugReportIdFromRuntimeId(input.environmentId) || input.agent === "opencode") return;
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(key);
+    if (!session || !isLegacyBugReportPolicy(session.policy)) return;
+    const provider = await this.provider(input);
+    // Projections can be read while a turn runs. Its active provider policy
+    // stays in force until the conversation is idle.
+    const { status } = await readProviderStatus(provider, session.providerSessionId);
+    if (status === "idle" || status === "error")
+      await this.upgradeBugReportSessionPolicy(session, provider);
+  }
+
+  async getProjection(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
+    this.assertProjectionInput(input);
+    await this.upgradeBugReportProjectionPolicy(input);
+    return this.projections.refreshProjection(input, true);
+  }
+
+  /**
+   * Drop every cached model/command list for this environment and re-read.
+   *
+   * Providers discover models at their own cadence, so a user who has just
+   * installed or authorized one needs a way to say "look again" without
+   * restarting the environment. Neutral, so it works for any provider rather
+   * than only the one whose tab used to own a refresh button.
+   */
+  async refreshProjectionModels(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
+    this.assertProjectionInput(input);
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(sessionKey);
+    if (session) this.assertSessionIdentity(session, input, sessionKey);
+    const provider = await this.provider(input);
+    // Discard in-flight discovery rather than waiting for it. Awaiting it would
+    // only make this explicit user action inherit the latency of the very work
+    // it just discarded — up to a full bridge request timeout.
+    this.catalogs.invalidateModels(input.environmentId);
+    this.catalogs.invalidateCommands(input, session?.providerSessionId);
+    // Best-effort, and dropped *after* the caches above rather than before.
+    // Some providers answer this by reaching their bridge process — Pi has to,
+    // because its `ModelRuntime` owns a credential snapshot this side cannot
+    // invalidate — so it can fail for reasons that have nothing to do with the
+    // local caches. The in-flight discovery has already been discarded, so
+    // throwing here would leave the refresh both failed *and* stale, which is
+    // strictly worse than the partial refresh this did when it could not throw
+    // at all. Re-listing against a bridge that did not refresh still gives the
+    // best answer that bridge can produce.
+    //
+    // try/catch rather than `.catch`: the contract allows a synchronous
+    // implementation — OpenCode's returns `void` — so there is not always a
+    // promise to attach to, and a synchronous throw has to be caught too.
+    try {
+      await provider.refreshCatalog?.();
+    } catch (error) {
+      log.warn("catalogue.refresh-failed", { agent: input.agent, error: formatLogError(error) });
+    }
+    return this.projections.refreshProjection(input, true);
+  }
+
+  /**
+   * Explicit command refresh for one session.
+   *
+   * Asks the provider to reload what it can, re-reads the catalogue, and says
+   * which of those actually happened — a push-only provider cannot claim a
+   * reload. Never restarts a provider and never cancels its work.
+   */
+  async refreshProjectionCommands(input: NativeAgentProjectionInput): Promise<{
+    outcome: NativeAgentCommandRefreshOutcome;
+    message?: string;
+    projection: NativeAgentSessionProjection | null;
+  }> {
+    this.assertProjectionInput(input);
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(sessionKey);
+    if (session) this.assertSessionIdentity(session, input, sessionKey);
+    const capabilities = nativeCapabilities(input.agent);
+    // No stored session means no projection to show a catalogue in (see
+    // `resolveProjectionSession`), so there is nothing to reload and no
+    // provider is started or read.
+    if (!session) {
+      return capabilities.slashCommands
+        ? {
+            outcome: "failed",
+            message: "The agent session has not started yet, so there are no commands to refresh.",
+            projection: null,
+          }
+        : { outcome: "unsupported", projection: null };
+    }
+    const provider = await this.provider(input);
+    const supported =
+      capabilities.slashCommands && Boolean(provider.slashCommands || provider.commandCatalogue);
+    const result = supported
+      ? await this.catalogs.refreshCommands(input, provider, session.providerSessionId)
+      : { outcome: "unsupported" as const };
+    this.projections.invalidateProjection(sessionKey);
+    return { ...result, projection: await this.projections.refreshProjection(input, true) };
+  }
+
+  /**
+   * Called when an environment is deleted, after its session records went;
+   * never on tab close, unmount or switch. Drops the projection caches of its
+   * sessions, which nothing can read again.
+   */
+  forgetEnvironmentProjections(environmentId: string): void {
+    this.projections.forgetEnvironment(environmentId);
+  }
+
+  /** Called when an environment is deleted; never on tab unmount or switch. */
+  forgetEnvironmentCommandCatalogues(environmentId: string): void {
+    this.catalogs.forgetEnvironmentCommands(environmentId);
+  }
+
+  async listProjectionModels(input: NativeAgentProjectionInput): Promise<AgentModel[]> {
+    this.assertProjectionInput(input);
+    const provider = await this.provider(input);
+    return provider.modelCatalog ? (await provider.modelCatalog()).slice(0, 512) : [];
+  }
+
+  /**
+   * Read the bounded raw OpenCode catalogue for durable cache refreshes.
+   *
+   * Picker-facing callers must continue using `listProjectionModels`, which
+   * applies the configured provider allowlist. The cache deliberately retains
+   * the wider source catalogue so a provider added later is available to launch
+   * dialogs before an environment starts another bridge.
+   */
+  async listModelCatalogForCache(input: NativeAgentProjectionInput): Promise<AgentModel[]> {
+    this.assertProjectionInput(input);
+    const provider = await this.provider(input);
+    if (provider.rawModelCatalog) {
+      return (await provider.rawModelCatalog()).slice(0, 512);
+    }
+    return provider.modelCatalog ? (await provider.modelCatalog()).slice(0, 512) : [];
+  }
+
+  /**
+   * Providers the runtime reports as connected, for the durable catalogue
+   * snapshot. Undefined when the runtime does not report connectivity.
+   */
+  async connectedModelProviders(input: NativeAgentProjectionInput): Promise<string[] | undefined> {
+    this.assertProjectionInput(input);
+    const provider = await this.provider(input);
+    return provider.connectedModelProviders?.();
+  }
+
+  dispatchIntent(input: DispatchNativeAgentPromptInput): Promise<NativeAgentDispatchOutcome> {
+    return this.promptDispatch.dispatchIntent(input);
+  }
+
+  /** Whether an existing tab's session can take another prompt; never creates one. */
+  promptReadiness(input: NativeAgentProjectionInput): Promise<"idle" | "busy" | "unavailable"> {
+    return this.promptDispatch.promptReadiness(input);
+  }
+
+  /** Discard a parked dispatch or steer without sending it. */
+  discardRecoverableDispatch(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<{ discarded: boolean }> {
+    return this.promptDispatch.discardRecoverableDispatch(input);
+  }
+
+  retryRecoverableDispatch(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<NativeAgentDispatchOutcome> {
+    return this.promptDispatch.retryRecoverableDispatch(input);
+  }
+
+  async stopProjectionSession(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
+    // Do not wait on a dispatch's storage lease before sending the abort that
+    // releases it. Both tasks are observed immediately, and Stop only settles
+    // after the durable goal fence and provider interrupt have both finished.
+    const [, projection] = await Promise.all([
+      this.goals.userStop(
+        nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      ),
+      this.sessionOperations.stopProjectionSession(input),
+      // Stopping the caller stops what it asked for. Its own bound on a bridge
+      // that does not answer keeps this from holding Stop up indefinitely.
+      this.options.suborks?.stopForSession(
+        nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      ),
+    ]);
+    return projection;
+  }
+
+  /**
+   * Stops the session's turn only while `requestId` is still the turn it is
+   * running; a turn that ended or was replaced by a newer one is left alone.
+   * For a caller that sent one turn into a tab it shares with the user. Unlike
+   * a user's Stop it leaves goals and suborks alone.
+   */
+  stopRequest(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<{ stopped: boolean }> {
+    return this.sessionOperations.stopProjectionRequest(
+      {
+        environmentId: input.environmentId,
+        agent: input.agent,
+        logicalSessionKey: input.logicalSessionKey,
+      },
+      input.requestId,
+    );
+  }
+
+  /** A tab's close, or the person's Stop on the group: stops what the session asked for. */
+  async stopSuborksForSession(sessionKey: string, batchId?: string): Promise<void> {
+    await this.options.suborks?.stopForSession(sessionKey, batchId);
+  }
+
+  /** A session's `ask_agents` calls changed: its views read the projection again. */
+  announceSuborks(sessionKey: string): void {
+    this.projections.invalidateProjection(sessionKey);
+    void this.storage
+      .getNativeAgentSession(sessionKey)
+      .then((session) => {
+        if (session) this.launches.announceSessionContent(session);
+      })
+      .catch(() => undefined);
+  }
+
+  stopProjectionBackgroundTask(
+    input: NativeAgentProjectionInput & { taskId: string },
+  ): Promise<NativeAgentSessionProjection | null> {
+    return this.sessionOperations.stopProjectionBackgroundTask(input);
+  }
+
+  dismissProjectionSuggestedPrompt(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
+    return this.sessionOperations.dismissProjectionSuggestedPrompt(input);
+  }
+
+  setProjectionResumableSessionArchived(
+    input: NativeAgentProjectionInput & { resumableSessionId: string; archived: boolean },
+  ): Promise<void> {
+    return this.sessionOperations.setProjectionResumableSessionArchived(input);
+  }
+
+  listProjectionResumableSessions(
+    input: NativeAgentProjectionInput & { includeArchived?: boolean },
+  ): Promise<NativeAgentResumeEntry[]> {
+    return this.sessionOperations.listProjectionResumableSessions(input);
+  }
+
+  resumeProjectionSession(
+    input: NativeAgentProjectionInput & {
+      providerSessionId: string;
+      controls?: NativeAgentControlUpdate;
+    },
+  ): Promise<NativeAgentSessionProjection | null> {
+    return this.sessionOperations.resumeProjectionSession(input);
+  }
+
+  forkProjectionSession(
+    input: NativeAgentProjectionInput & { messageId?: string },
+  ): Promise<NativeAgentForkOutcome> {
+    return this.sessionOperations.forkProjectionSession(input);
+  }
+
+  performProjectionAction(
+    input: NativeAgentProjectionInput & { action: NativeAgentSessionAction },
+  ): Promise<NativeAgentSessionActionOutcome> {
+    return this.sessionOperations.performProjectionAction(input);
+  }
+
+  listProjectionBranches(input: NativeAgentProjectionInput): Promise<NativeAgentSessionBranchList> {
+    return this.sessionOperations.listProjectionBranches(input);
+  }
+
+  performProjectionMcpAction(
+    input: NativeAgentProjectionInput & {
+      serverId: string;
+      action: NativeAgentMcpServerAction;
+    },
+  ): Promise<{ url?: string }> {
+    return this.sessionOperations.performProjectionMcpAction(input);
+  }
+
+  readProjectionAuthStatus(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentAuthStatus | null> {
+    return this.sessionOperations.readProjectionAuthStatus(input);
+  }
+
+  beginProjectionSignIn(
+    input: NativeAgentProjectionInput & { deviceCode?: boolean },
+  ): Promise<{ url?: string; code?: string }> {
+    return this.sessionOperations.beginProjectionSignIn(input);
+  }
+
+  cancelProjectionSignIn(input: NativeAgentProjectionInput): Promise<{ cancelled: boolean }> {
+    return this.sessionOperations.cancelProjectionSignIn(input);
+  }
+
+  signOutProjectionProvider(input: NativeAgentProjectionInput): Promise<void> {
+    return this.sessionOperations.signOutProjectionProvider(input);
+  }
+
+  /** One renderer request transfers a queue item into the backend-owned receipt. */
+  steerQueuedPrompt(
+    input: NativeAgentProjectionInput & { messageId: string },
+  ): Promise<NativeAgentSessionActionOutcome | null> {
+    return this.promptDispatch.steerQueuedPrompt(input);
+  }
+
+  async updateProjectionControls(
+    input: NativeAgentProjectionInput & { update: NativeAgentControlUpdate },
+  ): Promise<NativeAgentSessionProjection | null> {
+    await this.upgradeBugReportProjectionPolicy(input);
+    return this.sessionOperations.updateProjectionControls(input);
+  }
+
+  resolveProjectionInteraction(
+    input: NativeAgentProjectionInput & {
+      interactionId: string;
+      resolution: AgentInteractionResolution;
+    },
+  ): Promise<AgentInteractionApplyOutcome> {
+    return this.sessionOperations.resolveProjectionInteraction(input);
+  }
+
+  approveProjectionInteractionAndRemember(
+    input: NativeAgentProjectionInput & { interactionId: string; choice: PermissionRuleChoice },
+  ): ReturnType<NativeAgentSessionOperations["approveProjectionInteractionAndRemember"]> {
+    return this.sessionOperations.approveProjectionInteractionAndRemember(input);
+  }
+
+  holdProjectionInteraction(
+    input: NativeAgentProjectionInput & { interactionId: string; held: boolean },
+  ): Promise<AgentInteractionApplyOutcome> {
+    return this.sessionOperations.holdProjectionInteraction(input);
+  }
+
+  private assertProjectionInput(input: NativeAgentProjectionInput): void {
+    this.assertAcceptingWork();
+    if (
+      !nonBlank(input.environmentId) ||
+      !nonBlank(input.logicalSessionKey) ||
+      !BUILD_PIPELINE_AGENTS.includes(input.agent)
+    ) {
+      throw new Error("Invalid native agent projection request");
+    }
+  }
+
+  private async resolveProjectionSession(
+    input: NativeAgentProjectionInput,
+    stopping = false,
+  ): Promise<ResolvedProjectionSession | null> {
+    this.assertProjectionInput(input);
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(key);
+    if (!session) return null;
+    this.assertSessionIdentity(session, input, key);
+    // Stop may reach work already running behind a hold. Never start a bridge
+    // or reopen a provider session just to stop one.
+    const held = stopping && (await heldCoordinatorConversation(this.storage, input.environmentId));
+    if (
+      held &&
+      (held.conversation.agent !== input.agent ||
+        held.conversation.logicalSessionKey !== input.logicalSessionKey)
+    ) {
+      throw new Error("Native agent session key collision");
+    }
+    const provider = held
+      ? this.providerRegistry.cached(providerCacheKey(input.environmentId, input.agent))
+      : await this.provider(input);
+    if (!provider) return null;
+    provider.registerSession?.(session.providerSessionId, {
+      origin: session.origin,
+      interactionPolicy: session.interactionPolicy,
+    });
+    return { key, session, provider, transient: false as const };
+  }
+  private async recordAsyncQuestionAttention(
+    environmentId: string,
+    sessionKey: string,
+    itemIds: readonly string[],
+    logicalSessionKey?: string,
+  ): Promise<void> {
+    const attentionKeys = itemIds.slice(-64).map((itemId) => {
+      const digest = createHash("sha256")
+        .update(sessionKey)
+        .update("\0")
+        .update(itemId)
+        .digest("hex");
+      return `codex:${digest}`;
+    });
+    if (attentionKeys.length === 0) return;
+    const attention = await this.storage.recordEnvironmentAgentAttention(
+      environmentId,
+      attentionKeys,
+      new Date(this.now()).toISOString(),
+      "agent_question",
+      logicalSessionKey,
+    );
+    if (attention.recorded) {
+      this.options.onAsyncQuestionAttention?.({ environmentId, sessionKey });
+    }
+  }
+
+  sessionPresentationSnapshot(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): { presence: AgentActivityState | "unknown"; title?: string } {
+    const projection = this.projections.cachedProjectionSnapshot(
+      environmentId,
+      agent,
+      logicalSessionKey,
+    );
+    return {
+      presence: this.launches.sessionActivitySnapshot(environmentId, agent, logicalSessionKey),
+      ...(projection?.title ? { title: projection.title } : {}),
+    };
+  }
+
+  /** Bounded retry bookkeeping for on-demand turn-outcome reads. */
+  private readonly turnOutcomeAttempts = new Map<string, { attempts: number; retryAt: number }>();
+
+  /**
+   * Whether the turn started by `requestId` finished on its own as the
+   * session's last word. Beyond {@link sessionTurnOutcome}, a turn a stop
+   * reached is `interrupted`, and one followed by any later prompt or steer is
+   * `superseded`, because the conversation then no longer ends with it.
+   */
+  async sessionRequestOutcome(
+    input: NativeAgentProjectionInput & {
+      requestId: string;
+      expectedProviderSessionId?: string;
+      /** Prompts queued behind the turn say nothing about how the turn itself ended. */
+      ignoreQueuedPrompts?: boolean;
+    },
+  ): Promise<{
+    outcome: "completed" | "failed" | "interrupted" | "superseded" | "pending" | "unknown";
+    error?: string;
+  }> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const initial = await this.storage.getNativeAgentSession(key);
+    if (!initial) return { outcome: "unknown" };
+    const classify = async () => {
+      const { session, queue } = await this.storage.readNativeAgentPublicationState(
+        key,
+        `${input.agent}\0${input.logicalSessionKey}`,
+      );
+      if (
+        !session ||
+        session.providerSessionId !== initial.providerSessionId ||
+        (input.expectedProviderSessionId !== undefined &&
+          session.providerSessionId !== input.expectedProviderSessionId)
+      ) {
+        return { outcome: "unknown" as const };
+      }
+      const interrupt = this.promptQueues.pendingTurnInterrupt(key, input.requestId);
+      if (interrupt?.providerSessionId === session.providerSessionId) {
+        try {
+          const persisted = await this.storage.recordNativeAgentTurnInterrupt(
+            key,
+            session.providerSessionId,
+            input.requestId,
+          );
+          if (persisted) this.promptQueues.releaseTurnInterrupt(key, input.requestId);
+        } catch {
+          /* Retain the fence and retry on the next observation. */
+        }
+        return { outcome: "interrupted" as const };
+      }
+      if (session.interruptedRequestIds?.includes(input.requestId))
+        return { outcome: "interrupted" as const };
+      if (this.promptQueues.interruptFencesOverflowed()) return { outcome: "unknown" as const };
+      const ids = session.dispatchedRequestIds ?? [];
+      if (!ids.includes(input.requestId)) return { outcome: "unknown" as const };
+      if (ids.at(-1) !== input.requestId) return { outcome: "superseded" as const };
+      if (
+        this.promptQueues.hasPendingSessionMutation(key) ||
+        session.pendingDispatch ||
+        session.pendingSteer ||
+        (!input.ignoreQueuedPrompts && (queue?.messages.length || queue?.inFlight))
+      ) {
+        return { outcome: "pending" as const };
+      }
+      return undefined;
+    };
+    const before = await classify();
+    if (before) return before;
+    const outcome = await this.sessionTurnOutcome(input);
+    // Provider and persistence reads await: Stop, replacement and follow-ups
+    // may have changed the authorization while historical outcome work ran.
+    return (await classify()) ?? outcome;
+  }
+
+  /**
+   * How the turn started by `requestId` ended, without reading the transcript.
+   *
+   * A durable record (written by the queue drain's own status read, or by an
+   * earlier call) answers immediately. Otherwise, only while this request is
+   * still the session's latest dispatch and the turn looks finished, one
+   * provider status read settles it: a provider keeps a terminal turn error
+   * until the next turn, so `error` then is this turn's error. `pending` means
+   * "ask again later"; `unknown` means the outcome cannot be established.
+   */
+  async sessionTurnOutcome(input: NativeAgentProjectionInput & { requestId: string }): Promise<{
+    outcome: "completed" | "failed" | "pending" | "unknown";
+    error?: string;
+    failureKind?: TurnFailureKind;
+  }> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(key);
+    if (!session) return { outcome: "unknown" };
+    const recorded = session.turnOutcomes?.find((entry) => entry.requestId === input.requestId);
+    if (recorded) {
+      // A settled read that failed is retried by the next outcome call.
+      void this.retryOwedSettledUsage(input);
+      return {
+        outcome: recorded.outcome,
+        ...(recorded.error ? { error: recorded.error } : {}),
+        ...(recorded.failureKind ? { failureKind: recorded.failureKind } : {}),
+      };
+    }
+    const ids = session.dispatchedRequestIds ?? [];
+    if (ids[ids.length - 1] !== input.requestId) return { outcome: "unknown" };
+    const activity = this.launches.sessionTurnActivitySnapshot(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    if (activity === "working" || activity === "waiting") return { outcome: "pending" };
+    const attemptKey = `${key}\0${input.requestId}`;
+    const attempt = this.turnOutcomeAttempts.get(attemptKey);
+    if (attempt && attempt.retryAt > this.now()) return { outcome: "pending" };
+    const retry = (): { outcome: "pending" | "unknown" } => {
+      const attempts = (attempt?.attempts ?? 0) + 1;
+      if (attempts >= 3) {
+        this.turnOutcomeAttempts.delete(attemptKey);
+        return { outcome: "unknown" };
+      }
+      if (!attempt && this.turnOutcomeAttempts.size >= 256) {
+        const oldest = this.turnOutcomeAttempts.keys().next().value;
+        if (oldest !== undefined) this.turnOutcomeAttempts.delete(oldest);
+      }
+      this.turnOutcomeAttempts.set(attemptKey, {
+        attempts,
+        retryAt: this.now() + 5_000 * attempts,
+      });
+      return { outcome: "pending" };
+    };
+    let provider: NativeAgentRuntimeProvider | undefined;
+    let observation: Awaited<ReturnType<typeof readProviderStatus>>;
+    try {
+      provider = await this.observeProvider(input);
+      // An absent observation can be a temporarily unavailable bridge.
+      if (!provider) return retry();
+      observation = await readProviderStatus(provider, session.providerSessionId);
+    } catch {
+      return retry();
+    }
+    if (observation.status === "running" || observation.status === "blocked") return retry();
+    if (observation.status !== "idle" && observation.status !== "error") {
+      this.turnOutcomeAttempts.delete(attemptKey);
+      return { outcome: "unknown" };
+    }
+    let terminalError: string | null = null;
+    if (observation.status === "idle" && provider.turnTerminalError) {
+      try {
+        terminalError = await provider.turnTerminalError(
+          session.providerSessionId,
+          input.requestId,
+        );
+      } catch {
+        return retry();
+      }
+    }
+    this.turnOutcomeAttempts.delete(attemptKey);
+    const outcome =
+      observation.status === "error" || terminalError !== null
+        ? ("failed" as const)
+        : ("completed" as const);
+    const error =
+      outcome === "failed" ? (terminalError ?? observation.error)?.slice(0, 500) : undefined;
+    const failureKind =
+      outcome === "failed"
+        ? turnOutcomeFailureKind(
+            session.agent,
+            error,
+            terminalError === null ? observation.failureKind : undefined,
+          )
+        : undefined;
+    this.settleArtifactTurn(session, input.requestId);
+    // A turn awaited only through the CLI may never get a projection read.
+    this.settledTurnUsage.record(session, provider, observation.contextUsage);
+    try {
+      await this.storage.recordNativeAgentTurnOutcome(key, session.providerSessionId, {
+        requestId: input.requestId,
+        outcome,
+        ...(error ? { error } : {}),
+        ...(failureKind ? { failureKind } : {}),
+        observedAt: new Date(this.now()).toISOString(),
+      });
+    } catch {
+      // The answer is still correct for this call; a later call re-reads.
+    }
+    return { outcome, ...(error ? { error } : {}), ...(failureKind ? { failureKind } : {}) };
+  }
+
+  /**
+   * The tab a turn runs in, for a provider whose Orkestrator connection is
+   * environment-wide (OpenCode). That connection cannot tell the agent which
+   * of the environment's mailboxes it is, so the turn's instructions do
+   * (`openCodeTabMailInstruction`).
+   */
+  private async tabMailFor(
+    durable: PersistedNativeAgentSession,
+  ): Promise<{ environmentId: string; tabId: string } | undefined> {
+    if (
+      durable.owner?.kind !== "environment" ||
+      nativeAgentCapabilities(durable.agent).agentTools === true
+    ) {
+      return undefined;
+    }
+    const prefix = `env-${durable.environmentId}:`;
+    const tabId = durable.logicalSessionKey.startsWith(prefix)
+      ? durable.logicalSessionKey.slice(prefix.length)
+      : "";
+    if (!tabId) return undefined;
+    const config = await this.storage.loadConfig().catch(() => null);
+    if (config?.global.agentMessaging?.enabled !== true) return undefined;
+    return { environmentId: durable.environmentId, tabId };
+  }
+
+  private settleArtifactTurn(
+    session: Pick<PersistedNativeAgentSession, "environmentId" | "logicalSessionKey">,
+    requestId: string,
+  ): void {
+    settleArtifactDispatchTurn(
+      this.options.artifactDispatch,
+      session.environmentId,
+      session.logicalSessionKey,
+      requestId,
+    );
+  }
+
+  /**
+   * Retries a settled-turn usage read that failed or was pushed out of the
+   * queue, on the session's next outcome or state read. Costs nothing unless
+   * one is owed; never throws.
+   */
+  private async retryOwedSettledUsage(input: NativeAgentProjectionInput): Promise<void> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    if (!this.settledTurnUsage.owes(key)) return;
+    try {
+      const session = await this.storage.getNativeAgentSession(key);
+      if (!session) return;
+      this.settledTurnUsage.retryOwed(session, await this.observeProvider(input));
+    } catch {
+      // Still owed; the next read tries again.
+    }
+  }
+
+  /**
+   * Record the latest dispatched turn's outcome from a status read the caller
+   * already made (the queue drain reads status before sending the next prompt).
+   * An `idle` read counts only when the turn is not visibly still running.
+   */
+  private async recordObservedTurnOutcome(
+    session: PersistedNativeAgentSession,
+    status: string,
+    detail: string | undefined,
+    provider?: Pick<
+      NativeAgentRuntimeProvider,
+      "turnTerminalError" | "sessionStateSnapshot" | "refreshUsage" | "recentTurnUsage"
+    >,
+    reportedFailureKind?: TurnFailureKind,
+    /** Usage from the caller's own status read, so the settle need not read again. */
+    observedUsage?: NativeAgentContextUsage,
+  ): Promise<number | void> {
+    const requestId = session.dispatchedRequestIds?.at(-1);
+    if (!requestId || session.turnOutcomes?.some((entry) => entry.requestId === requestId)) return;
+    if (status !== "idle" && status !== "error") return;
+    let failure = status === "error" ? detail : undefined;
+    if (status === "idle") {
+      const activity = this.launches.sessionTurnActivitySnapshot(
+        session.environmentId,
+        session.agent,
+        session.logicalSessionKey,
+      );
+      if (activity === "working" || activity === "waiting") return;
+      if (provider?.turnTerminalError) {
+        try {
+          failure =
+            (await provider.turnTerminalError(session.providerSessionId, requestId)) ?? undefined;
+        } catch (error) {
+          if (error instanceof ProviderUnavailableError && error.retryAfterMs !== undefined) {
+            return error.retryAfterMs;
+          }
+          // Unreadable: leave the outcome for an observer rather than
+          // recording a success nobody proved.
+          return;
+        }
+      }
+    }
+    this.settleArtifactTurn(session, requestId);
+    this.signInResends.noteTurnEnded(session);
+    this.settledTurnUsage.record(session, provider, observedUsage);
+    const failed = status === "error" || failure !== undefined;
+    const failureKind = failed
+      ? turnOutcomeFailureKind(
+          session.agent,
+          failure,
+          status === "error" ? reportedFailureKind : undefined,
+        )
+      : undefined;
+    try {
+      await this.storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
+        requestId,
+        outcome: failed ? "failed" : "completed",
+        ...(failure ? { error: failure.slice(0, 500) } : {}),
+        ...(failureKind ? { failureKind } : {}),
+        observedAt: new Date(this.now()).toISOString(),
+      });
+    } catch {
+      // Best-effort bookkeeping; it must never fault the caller's drain.
+    }
+  }
+
+  /** Delivery gate; recovers proven-unsent mail before checking its durable fence. */
+  mailInjectPresence(
+    input: NativeAgentProjectionInput,
+    known: { environment?: Environment | null } = {},
+  ): Promise<MailboxPresence> {
+    return this.mailInjection.mailInjectPresence(input, known);
+  }
+
+  reconcileMailInject(
+    input: NativeAgentProjectionInput & { requestId: string; steerRecovery?: boolean },
+  ): Promise<"dispatched" | "not-dispatched" | "unknown"> {
+    return this.mailInjection.reconcileMailInject(input);
+  }
+
+  dispatchMailInject(input: DispatchNativeAgentPromptInput): Promise<MailInjectDispatchOutcome> {
+    return this.mailInjection.dispatchMailInject(input);
+  }
+
+  /** Deliver mail into the turn that is running now (Deliver now). */
+  steerMailInject(
+    input: NativeAgentProjectionInput & { text: string; requestId: string },
+  ): Promise<MailSteerDispatchOutcome> {
+    return this.mailInjection.steerMailInject(input);
+  }
+
+  /** Whether a mail steer reached the agent; only evidence counts. */
+  reconcileMailSteer(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<"dispatched" | "not-dispatched" | "unknown"> {
+    return this.mailInjection.reconcileMailSteer(input);
+  }
+
+  dispatchPrompt(input: DispatchNativeAgentPromptInput): Promise<PersistedNativeAgentSession> {
+    return this.promptDispatch.dispatchPrompt(input);
+  }
+
+  /**
+   * The dispatch entry turn recovery, the usage-limit and sign-in resends and
+   * the launch reconciler reach; its fences are taken in `NativeAgentPromptDispatch`.
+   */
+  private dispatchPromptInternal(
+    ...args: Parameters<NativeAgentPromptDispatch["dispatchPromptInternal"]>
+  ): Promise<PersistedNativeAgentSession> {
+    return this.promptDispatch.dispatchPromptInternal(...args);
+  }
+
+  /** The last progressive reads per domain, for diagnostics. Memory only. */
+  /**
+   * The push layer observes one session: shares its settled reads between the
+   * observer and the viewers it announces changes to. Returns the stop.
+   */
+  observePushSession(environmentId: string, agent: string, logicalSessionKey: string) {
+    return this.projections.observePushSession(
+      nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
+    );
+  }
+
+  /**
+   * How the push layer's observer of a session of this provider may be woken
+   * by the bridge's observe stream (to-do 8102 task 2): `revisions` when the
+   * stream is live and announces every state and transcript change, so the
+   * observer reads on its hints with a backstop, running or idle; `hints`
+   * when it is live without revisions (an older Claude or Codex bridge), which
+   * qualifies only a quiet idle session; `none` keeps the cadence.
+   */
+  canWakePushObserverFromBridge(
+    environmentId: string,
+    agent: string,
+  ): "revisions" | "hints" | "none" {
+    const provider = this.providerRegistry.cached(
+      providerCacheKey(environmentId, agent as BuildPipelineAgent),
+    );
+    if (!provider) return "none";
+    if (provider.observationStreamRevisions?.() === true) return "revisions";
+    return provider.observationStreamLive?.() === true ? "hints" : "none";
+  }
+
+  forgetPushSettled(environmentId: string, agent: string, logicalSessionKey: string): void {
+    this.projections.forgetPushSettled(
+      nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
+    );
+  }
+
+  /** A bridge hint woke the push observer: its next read starts fresh work, shares stay. */
+  notePushHint(environmentId: string, agent: string, logicalSessionKey: string): void {
+    this.projections.notePushHint(
+      nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
+    );
+  }
+
+  /**
+   * What the session's cached live view says about one tool call, for the
+   * `tool-output` push topic. In memory only: never reads a provider.
+   */
+  toolOutputSource(
+    environmentId: string,
+    agent: string,
+    logicalSessionKey: string,
+    toolUseId: string,
+    messageId?: string,
+  ) {
+    return this.projections.toolOutputSource(
+      { environmentId, agent: agent as BuildPipelineAgent, logicalSessionKey },
+      toolUseId,
+      messageId,
+    );
+  }
+
+  /** One bounded slice of a tool call's output (`get_native_agent_tool_output`). */
+  readToolOutput(input: Parameters<NativeAgentTranscriptProjection["readToolOutput"]>[0]) {
+    return this.projections.readToolOutput(input);
+  }
+
+  progressiveReadSamples() {
+    return this.projections.progressiveReadSamples();
+  }
+
+  async shutdown(): Promise<void> {
+    this.stopped = true;
+    this.goals.stop();
+    // Before settling projections: a title run in flight is what they wait on.
+    await this.options.sessionTitles?.shutdown().catch(() => undefined);
+    this.unsubscribeObservationWakeups?.();
+    this.unsubscribeObservationWakeups = null;
+    this.promptQueues.stopScheduling();
+    await Promise.allSettled([
+      ...this.projections.pendingRefreshes(),
+      ...this.catalogs.pendingWork(),
+    ]);
+    await this.projections.settleAndClearProgressiveReads();
+    await Promise.allSettled(this.scanTasks);
+    while (
+      this.launches.pendingLaunchTasks().length > 0 ||
+      this.promptQueues.pendingDrains().length > 0 ||
+      this.turnRecovery.pendingTasks().length > 0 ||
+      this.usageLimitResend.pendingTasks().length > 0
+    ) {
+      await Promise.allSettled([
+        ...this.launches.pendingLaunchTasks(),
+        ...this.promptQueues.pendingDrains(),
+        ...this.turnRecovery.pendingTasks(),
+        ...this.usageLimitResend.pendingTasks(),
+      ]);
+    }
+    await this.providerRegistry.shutdown();
+    this.observations.clear();
+    this.turnRecovery.clear();
+    this.usageLimitResend.clear();
+    this.catalogs.clear();
+    this.projections.clear();
+    this.removeProjectionCacheGauges();
+  }
+
+  /**
+   * One provider per environment and agent.
+   *
+   * Model and effort are deliberately excluded from the key and passed per call
+   * instead: keying on them accumulated an undisposed provider — and for
+   * OpenCode a permanent event stream — for every variant a user ever queued.
+   */
+  /**
+   * Forget a closed provider session's in-memory registration on the cached
+   * provider, if one exists. Never resolves or starts a bridge: tab teardown
+   * calls this after the provider-side close was confirmed, and only when no
+   * other logical tab still maps to the same provider session.
+   */
+  releaseProviderSession(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    providerSessionId: string,
+  ): void {
+    this.providerRegistry
+      .cached(providerCacheKey(environmentId, agent))
+      ?.releaseSession?.(providerSessionId);
+  }
+
+  /**
+   * The identity a later resume of this live session must name, read before
+   * the session is closed. Codex resumes a thread, not the bridge session that
+   * served it; providers that report nothing resume by the live id itself.
+   *
+   * Observe only: never starts a bridge. `undefined` when no bridge answers
+   * or the read fails, so a caller never mistakes a guess for an identity.
+   */
+  async resumableSessionIdIfRunning(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    providerSessionId: string,
+  ): Promise<string | undefined> {
+    const provider = await this.observeProvider({
+      environmentId,
+      agent,
+      logicalSessionKey: "tab-close",
+    }).catch(() => undefined);
+    if (!provider?.sessionStateSnapshot) return undefined;
+    const snapshot = await provider.sessionStateSnapshot(providerSessionId).catch(() => undefined);
+    if (!snapshot || snapshot.status === "missing") return undefined;
+    const resumable = snapshot.resumableSessionId?.trim();
+    return resumable || (agent === "codex" ? undefined : providerSessionId);
+  }
+
+  /**
+   * Which of these resume-list ids the agent lists as archived (design links
+   * use it to tell an archived conversation from one that can be resumed).
+   *
+   * Observe only: never starts a bridge, and asks only a platform that can
+   * archive. `undefined` when no bridge answers or the list fails, so a
+   * caller never reads "not known" as "not archived" or the reverse.
+   */
+  async archivedResumableSessionIdsIfRunning(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    resumableSessionIds: readonly string[],
+  ): Promise<ReadonlySet<string> | undefined> {
+    if (resumableSessionIds.length === 0 || !nativeCapabilities(agent).actions?.archive) {
+      return undefined;
+    }
+    const provider = await this.observeProvider({
+      environmentId,
+      agent,
+      logicalSessionKey: "design-link-archived",
+    }).catch(() => undefined);
+    if (!provider?.listResumableSessions) return undefined;
+    const entries = await provider
+      .listResumableSessions({ includeArchived: true })
+      .catch(() => undefined);
+    if (!entries) return undefined;
+    const wanted = new Set(resumableSessionIds);
+    return new Set(
+      entries
+        .filter((entry) => entry.archived === true && wanted.has(entry.sessionId))
+        .map((entry) => entry.sessionId),
+    );
+  }
+
+  /**
+   * Tab close through the provider, so the provider's own close runs: for
+   * OpenCode that settles workflow-turn ownership, restores temporary reviewer
+   * permissions and rejects pending requests before forgetting the session.
+   *
+   * Never starts a bridge. The cached provider is used only while it still
+   * points at the running bridge; a restarted bridge gets a fresh provider,
+   * cached like any other. `not-running` means no bridge answers, so the
+   * caller keeps its durable intent.
+   */
+  async closeProviderSessionIfRunning(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    providerSessionId: string,
+  ): Promise<"closed" | "not-running" | "unsupported"> {
+    this.assertAcceptingWork();
+    const cacheKey = providerCacheKey(environmentId, agent);
+    const input = { environmentId, agent, logicalSessionKey: "tab-close" };
+    let provider: NativeAgentRuntimeProvider | undefined;
+    if (this.options.provider) {
+      this.providerRegistry.clearBridgeAbsent(cacheKey);
+      provider = await this.observeProvider(input);
+    } else {
+      const environment = await this.assertEnvironmentLive(environmentId);
+      const connection = await this.observeBridgeConnection(agent, environment);
+      if (!connection) return "not-running";
+      const identity = bridgeConnectionIdentity(connection);
+      const cached = this.providerRegistry.cachedForConnection(cacheKey, identity);
+      if (cached) {
+        provider = cached;
+      } else {
+        this.assertAcceptingWork();
+        provider = createNativeAgentProvider(connection, {
+          stageImages: (images) => this.stageImages(environmentId, images),
+          environment: this.providerEnvironment(environmentId),
+          planUsage: this.options.planUsage,
+          ...this.openCodeServer(environmentId),
+        });
+        this.providerRegistry.cache(cacheKey, provider, identity);
+      }
+    }
+    if (!provider) return "not-running";
+    if (!provider.closeSession) return "unsupported";
+    await provider.closeSession(providerSessionId);
+    return "closed";
+  }
+
+  /** Destructive lifecycle admission: fresh metadata reads, without starting a bridge. */
+  async assertEnvironmentIdleForMove(environmentId: string): Promise<void> {
+    const sessions = (await this.storage.listNativeAgentSessions()).filter(
+      (session) => session.environmentId === environmentId,
+    );
+    for (const session of sessions) {
+      if (session.pendingDispatch)
+        throw new Error("An agent submission is unresolved; settle it before moving");
+      if (!session.providerSessionId) continue;
+      this.providerRegistry.clearBridgeAbsent(providerCacheKey(environmentId, session.agent));
+      const input = {
+        environmentId,
+        agent: session.agent,
+        logicalSessionKey: session.logicalSessionKey,
+      };
+      let provider: NativeAgentRuntimeProvider | undefined;
+      if (this.options.provider) {
+        provider = await this.observeProvider(input);
+      } else {
+        // The move stops bridges between its two reads. Cached providers can
+        // still point at a stopped child, so verify its current connection.
+        const connection = await this.observeBridgeConnection(
+          session.agent,
+          await this.assertEnvironmentLive(environmentId),
+        );
+        if (connection) {
+          const key = providerCacheKey(environmentId, session.agent);
+          const identity = bridgeConnectionIdentity(connection);
+          const cached = this.providerRegistry.cachedForConnection(key, identity);
+          if (cached) provider = cached;
+          else {
+            provider = createNativeAgentProvider(connection, {
+              planUsage: this.options.planUsage,
+              ...this.openCodeServer(environmentId),
+            });
+            this.providerRegistry.cache(key, provider, identity);
+          }
+        }
+      }
+      if (!provider) {
+        const observed = this.launches.observedActivity(session.key);
+        if (observed && observed.state !== "idle")
+          throw new Error(
+            "An agent is running in this environment; wait for it to finish before moving",
+          );
+        continue;
+      }
+      if (!provider.activity)
+        throw new Error("Agent activity cannot be verified; stop the agent before moving");
+      const state = await provider.activity(session.providerSessionId);
+      if (state !== "idle" && state !== "missing")
+        throw new Error(
+          "An agent is running in this environment; wait for it to finish before moving",
+        );
+      this.launches.recordObservedActivity(session.key, {
+        providerSessionId: session.providerSessionId,
+        state: "idle",
+      });
+    }
+  }
+
+  /**
+   * Opaque token for what {@link humanPromptOutputIfRunning} reads, from the
+   * activity sweep's last observation: the provider session and its content
+   * revision. No read of any kind. `undefined` when the bridge reports no
+   * revision, so the human-prompt monitor reads that session every time.
+   */
+  humanPromptContentRevision(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): string | undefined {
+    const observed = this.launches.observedActivity(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    return observed?.contentRevision === undefined
+      ? undefined
+      : `${observed.providerSessionId}\0${observed.contentRevision}`;
+  }
+
+  /** Background observation bypasses the tab-facing projection and its shared cache. */
+  async humanPromptOutputIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ) {
+    const session = await this.storage.getNativeAgentSession(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    if (!session?.providerSessionId) return null;
+    const provider = await this.observeProvider({ environmentId, agent, logicalSessionKey });
+    return provider?.humanPromptOutput?.(session.providerSessionId) ?? null;
+  }
+
+  /**
+   * Reload MCP configuration in an environment's *already running* bridge.
+   *
+   * Resolves the provider the way the activity sweep does, so it never starts
+   * a bridge, and calls a session-free bridge route, so it neither touches a
+   * session's liveness nor re-attaches an idle thread — and it still works
+   * after a bridge restart forgot every session. `not-running` is an answer:
+   * a process that is not running reads the saved file when it starts.
+   */
+  async reloadMcpConfigurationIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+  ): Promise<"reloaded" | "not-running" | "unsupported" | "busy"> {
+    const provider = await this.observeProvider({
+      environmentId,
+      agent,
+      logicalSessionKey: "mcp-configuration-reload",
+    });
+    if (!provider) return "not-running";
+    if (!provider.reloadMcpConfiguration) return "unsupported";
+    return provider.reloadMcpConfiguration();
+  }
+
+  /**
+   * Names of the MCP servers an environment's *already running* OpenCode
+   * server lists for its worktree, resolved like
+   * {@link reloadMcpConfigurationIfRunning}: never starts a process.
+   * OpenCode's inventory is directory-level, so no session is named.
+   * `undefined` when nothing is running. `options.signal` ends the listing.
+   */
+  async openCodeMcpServerNamesIfRunning(
+    environmentId: string,
+    options: ProviderReadOptions = {},
+  ): Promise<string[] | undefined> {
+    const provider = await this.observeProvider({
+      environmentId,
+      agent: "opencode",
+      logicalSessionKey: "mcp-configuration-reload",
+    });
+    options.signal?.throwIfAborted();
+    const servers = await provider?.mcpServers?.("", options);
+    return servers?.map((server) => server.name);
+  }
+
+  /**
+   * Which saved MCP configuration a session's live runtime was built from,
+   * for the MCP apply scheduler only.
+   *
+   * Observation-only on every hop: the persisted mapping supplies the
+   * provider session id, the provider is resolved the way the activity sweep
+   * resolves it (never starting a bridge), and the bridge route read is
+   * `/runtime-health`, which touches no liveness, hydrates no transcript and
+   * re-attaches nothing. The answer is never projected to a renderer.
+   * `options.signal` ends the bridge read.
+   */
+  async mcpConfigEvidenceIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+    options: ProviderReadOptions = {},
+  ): Promise<ProviderMcpConfigEvidenceRead> {
+    const session = await this.storage.getNativeAgentSession(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    if (!session?.providerSessionId) return { state: "none" };
+    const provider = await this.observeProvider({ environmentId, agent, logicalSessionKey });
+    if (!provider) return { state: "not-running" };
+    if (!provider.mcpConfigEvidence) return { state: "none" };
+    options.signal?.throwIfAborted();
+    return provider.mcpConfigEvidence(session.providerSessionId, options);
+  }
+
+  /**
+   * Agent Capabilities runtime proof for one session
+   * (`capabilities/runtime-proof.ts`), observation-only on every hop exactly
+   * as {@link mcpConfigEvidenceIfRunning}: never starts a bridge, touches
+   * liveness or re-attaches. A provider without the report is `unsupported`.
+   */
+  async capabilityEvidenceIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+    options: ProviderReadOptions = {},
+  ): Promise<import("@orkestrator/protocol/capability-evidence").CapabilitySessionEvidenceRead> {
+    const session = await this.storage.getNativeAgentSession(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    if (!session?.providerSessionId) return { state: "none" };
+    const provider = await this.observeProvider({ environmentId, agent, logicalSessionKey });
+    if (!provider) return { state: "not-running" };
+    if (!provider.capabilityEvidence) return { state: "unsupported" };
+    options.signal?.throwIfAborted();
+    return provider.capabilityEvidence(session.providerSessionId, options);
+  }
+
+  capabilityActivity(sessionKey: string): string | undefined {
+    return this.launches.observedActivity(sessionKey)?.state;
+  }
+
+  private trackScan(task: Promise<void>): Promise<void> {
+    const tracked = task.finally(() => {
+      this.scanTasks.delete(tracked);
+    });
+    this.scanTasks.add(tracked);
+    return tracked;
+  }
+
+  private assertAcceptingWork(): void {
+    if (this.stopped) throw new Error("Native agent service is shut down");
+  }
+
+  private async assertEnvironmentLive(environmentId: string): Promise<Environment> {
+    this.assertAcceptingWork();
+    const bugReport = await resolveBugReportRuntime(this.storage, environmentId);
+    if (bugReport.status === "unavailable") {
+      throw new Error(bugReportRuntimeUnavailableMessage(bugReport));
+    }
+    if (bugReport.status === "ready") {
+      return bugReportRuntimeEnvironment(environmentId, bugReport.record);
+    }
+    const coordinator = await resolveCoordinatorRuntime(this.storage, environmentId);
+    if (coordinator.status === "unavailable") {
+      throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
+    }
+    if (coordinator.status === "ready") {
+      return coordinatorRuntimeEnvironment(environmentId, coordinator);
+    }
+    const environment = await this.storage.getEnvironment(environmentId);
+    if (!environment || environment.deletionRequestedAt) {
+      throw new Error("Native agent environment is unavailable");
+    }
+    this.assertAcceptingWork();
+    return environment;
+  }
+
+  private assertSessionIdentity(
+    session: PersistedNativeAgentSession,
+    input: EnsureNativeAgentSessionInput,
+    key: string,
+  ): void {
+    if (
+      session.key !== key ||
+      session.environmentId !== input.environmentId ||
+      session.agent !== input.agent ||
+      session.logicalSessionKey !== input.logicalSessionKey ||
+      (input.origin !== undefined && session.origin !== input.origin) ||
+      (input.interactionPolicy !== undefined &&
+        session.interactionPolicy.mode !== input.interactionPolicy.mode) ||
+      (input.owner !== undefined &&
+        session.owner !== undefined &&
+        agentSessionOwnerKey(session.owner) !== agentSessionOwnerKey(input.owner)) ||
+      (input.executionPolicy !== undefined &&
+        session.executionPolicy !== undefined &&
+        session.executionPolicy !== input.executionPolicy) ||
+      (input.policy !== undefined &&
+        session.policy !== undefined &&
+        JSON.stringify(session.policy) !== JSON.stringify(input.policy))
+    ) {
+      throw new Error("Native agent session key collision");
+    }
+  }
+
+  private async createProviderSession(
+    provider: NativeAgentRuntimeProvider,
+    input: EnsureNativeAgentSessionInput,
+  ): Promise<string> {
+    await this.assertEnvironmentLive(input.environmentId);
+    const environment = await this.storage.getEnvironment(input.environmentId);
+    const prefix = `env-${input.environmentId}:`;
+    const tabId = input.logicalSessionKey.startsWith(prefix)
+      ? input.logicalSessionKey.slice(prefix.length)
+      : "";
+    const agentMcp =
+      sessionTakesAgentTools(input.agent) &&
+      input.owner?.kind === "environment" &&
+      tabId &&
+      environment &&
+      this.options.resolveAgentToolConnection
+        ? await this.options.resolveAgentToolConnection(
+            input.environmentId,
+            input.owner.projectId,
+            tabId,
+            environment.environmentType === "local" ? "host" : "container",
+          )
+        : undefined;
+    const accountHomeId =
+      environment?.environmentType === "local" &&
+      (input.agent === "claude" || input.agent === "codex")
+        ? this.options.localBridgeAccountId?.(`${input.agent}:${input.environmentId}`)
+        : undefined;
+    await this.options.capabilityPreflight?.({
+      environmentId: input.environmentId,
+      ...(accountHomeId && accountHomeId !== DEFAULT_AGENT_ACCOUNT_ID ? { accountHomeId } : {}),
+      ...(environment && environment.environmentType !== "local"
+        ? { environmentIncarnation: environment.containerId ?? environment.id }
+        : {}),
+      ...(environment?.projectId ? { projectId: environment.projectId } : {}),
+      agent: input.agent,
+      logicalSessionKey: input.logicalSessionKey,
+      ...(input.policy ? { policy: input.policy } : {}),
+    });
+    const options = {
+      clientSessionKey: input.logicalSessionKey,
+      model: input.model,
+      effort: input.reasoningEffort,
+      mode: input.sessionMode,
+      fastMode: input.fastMode,
+      agentMcp,
+      policy: input.policy,
+      interaction: {
+        origin: input.origin ?? "interactive-native",
+        interactionPolicy:
+          input.interactionPolicy ??
+          (input.origin === "build-pipeline" || input.origin === "automated-review"
+            ? UNATTENDED_AGENT_INTERACTION_POLICY
+            : INTERACTIVE_AGENT_INTERACTION_POLICY),
+        phase: input.phase,
+      },
+    };
+    const maxAttempts =
+      input.agent === "cursor" || input.agent === "grok" || input.agent === "pi"
+        ? ACP_SESSION_CREATE_ATTEMPTS
+        : 1;
+    let providerSessionId: string | undefined;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        providerSessionId = await provider.createSession(
+          input.phase ?? "build",
+          input.title?.trim() || "Agent Session",
+          options,
+        );
+        break;
+      } catch (error) {
+        if (!(error instanceof ProviderUnavailableError) || attempt === maxAttempts) {
+          throw error;
+        }
+        // ACP and Pi session/create are both idempotent by clientSessionKey.
+        // Retrying here keeps a short bridge initialization race represented as
+        // "connecting" by the waiting renderer, without risking two sessions.
+        // Pi belongs here because its cold start builds a model runtime the
+        // same way an ACP spawn does.
+        await this.assertEnvironmentLive(input.environmentId);
+        const delay = ACP_SESSION_CREATE_RETRY_BASE_MS * 2 ** (attempt - 1);
+        await (this.options.delay
+          ? this.options.delay(delay)
+          : new Promise<void>((resolve) => setTimeout(resolve, delay)));
+      }
+    }
+    if (!providerSessionId) {
+      throw new ProviderUnavailableError(`${input.agent} session creation did not complete`);
+    }
+    await this.assertEnvironmentLive(input.environmentId);
+    return providerSessionId;
+  }
+}

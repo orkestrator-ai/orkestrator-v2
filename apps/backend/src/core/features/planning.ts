@@ -58,7 +58,7 @@ import {
   type WorkflowWakeReason,
 } from "../workflows/index.js";
 import type { PlanUsageState } from "../plan-usage/index.js";
-import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveEnvironmentExecutionPolicy } from "../native-agent/index.js";
 import { createAgentModelCatalogReader, resolveFastMode } from "../build-pipeline/index.js";
 import { recurringWorkMetrics } from "../recurring-work-metrics.js";
 import {

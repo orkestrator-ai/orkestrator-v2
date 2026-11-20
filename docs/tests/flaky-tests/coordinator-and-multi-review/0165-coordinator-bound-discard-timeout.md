@@ -1,5 +1,7 @@
 # Coordinator bound discard confirmations timeout under aggregate load
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/service-reconciliation.test.ts`.
+
 - **ID:** 0165
 - **Status:** open
 - **Date observed:** 2026-09-26

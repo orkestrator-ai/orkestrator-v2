@@ -46,7 +46,7 @@ const { openBackendDatabase } = await import(path.join(core, "storage-stores.ts"
 const { UsageHistoryStore } = await import(path.join(core, "usage-history-store.ts"));
 const { USAGE_HISTORY_STORE } = await import(path.join(core, "usage-history-layout.ts"));
 const { NATIVE_AGENT_DISPLAY_TAIL_STORE } = await import(
-  path.join(core, "native-agent-display-tail-layout.ts")
+  path.join(core, "native-agent/display-tail-layout.ts")
 );
 
 interface Result {

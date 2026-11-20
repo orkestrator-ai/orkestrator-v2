@@ -4,8 +4,8 @@
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import { pipelineWorkerTabForResultKey } from "../build-pipeline/pipeline-worker-identity.js";
 import { multiReviewNativeAddressFindingsOptions } from "./native-address-findings.js";
-import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent-service.js";
-import type { NativeAgentRuntimeProvider } from "../native-agent-provider.js";
+import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent/service.js";
+import type { NativeAgentRuntimeProvider } from "../native-agent/provider.js";
 import { dispatchMultiReviewAddressFindingsPrompt } from "./address-findings-dispatch.js";
 import { TEST_REVIEW_PREPARATION } from "../build-pipeline/test-fixtures.js";
 import { expect, jest, test } from "bun:test";

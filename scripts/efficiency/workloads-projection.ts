@@ -4,7 +4,7 @@
  * and the step-14 whole-message delta stream (E05).
  *
  * The provider is an in-memory stub answering with the same protocol helpers
- * a bridge uses, like `native-agent-service-summary-transcripts.test.ts`. It
+ * a bridge uses, like `native-agent/service-summary-transcripts.test.ts`. It
  * counts calls per provider method; no bridge, network or profile is touched.
  */
 import { mkdtemp, rm } from "node:fs/promises";
@@ -81,7 +81,7 @@ function directCursor(modules: Modules, value: Json): string | undefined {
 
 async function loadModules(context: WorkloadContext): Promise<Modules> {
   const service = await context.load<{ NativeAgentService: Modules["service"] }>(
-    "apps/backend/src/core/native-agent-service.ts",
+    "apps/backend/src/core/native-agent/service.ts",
   );
   const storage = await context.load<{ StorageService: Modules["storage"] }>(
     "apps/backend/src/core/storage.ts",
@@ -360,7 +360,7 @@ export async function projectionChangedReadWorkload(
     findings: ["E05"],
     fixture: { messages: 100, contentBytes: 200, changedMessages: 1 },
     method:
-      "getTranscriptUpdate with the previous token after the tail changed; JSON.stringify calls on projected assistant rows counted as in native-agent-projection-encoding.test.ts (source rows excluded).",
+      "getTranscriptUpdate with the previous token after the tail changed; JSON.stringify calls on projected assistant rows counted as in native-agent/projection-encoding.test.ts (source rows excluded).",
     cases: [
       { id: "one-tail-change", description: "v1 provider window, revisioned", run, repetitions: 5 },
     ],

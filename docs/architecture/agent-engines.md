@@ -297,7 +297,7 @@ a real login and the title run with real cost, are on the
 
 ## Session titles
 
-The backend owns every native session's title (`native-agent-session-titles.ts`).
+The backend owns every native session's title (`native-agent/session-titles.ts`).
 On each projection read it shows, in order: a backend title the provider has
 not accepted yet, the provider's own title unless it is a placeholder ("Agent
 Session", Claude's "Session 1a2b3c"), a backend title the provider already
@@ -499,7 +499,7 @@ after a Settings refresh.
 The backend's activity sweep (every 2 s) is the one observer of whether a
 session is busy; everything else reads its shared observation. What each
 provider offers it is `NATIVE_AGENT_OBSERVATION_CAPABILITIES`
-(`apps/backend/src/core/native-agent-observation.ts`). The columns that drive
+(`apps/backend/src/core/native-agent/observation.ts`). The columns that drive
 policy:
 
 | Provider | Activity read | Idle backend wakeup | Client idle backoff | Idle view changes without a transition |
@@ -822,7 +822,7 @@ picker and the run on the same model:
   or Control MCP `model` that differs from the session's stored model is
   applied the way a model pick is, a control update persisted under the session
   lease and sent to the bridge, before anything is journaled
-  (`native-agent-dispatch-model.ts`, keyed on the platform policy's
+  (`native-agent/dispatch-model.ts`, keyed on the platform policy's
   `runsSessionHeldModel`). A model the live `model/list` positively does not
   offer is refused with the draft kept, naming a model to pick instead. An
   inherited default (`modelSource: "default"`) never changes the session.
@@ -841,7 +841,7 @@ Codex's reasoning summary (`summary`) and `personality` are not offered.
 no `parameters` (`normalizedCodexModels` in `commands-registry-projects.ts`),
 so the composer has no Codex parameter control and Codex has no entry in
 `SUPPRESSED_COMPOSER_PARAMETERS`. A `summary` value an older session record
-still holds is retired for Codex only (`native-agent-retired-parameters.ts`):
+still holds is retired for Codex only (`native-agent/retired-parameters.ts`):
 the next control update drops it, and prompt and resume bodies never forward
 it. A control update that sets it is refused, as for any parameter no
 descriptor offers.
@@ -983,7 +983,7 @@ retired, every OpenCode tab also started a 1.x `opencode serve` (with its own
 database checks and MCP registration) before the 2.x server, which is the
 other half of the 20 to 30 s first-turn delay this removed.
 
-`createNativeAgentProvider()` (`native-agent-provider.ts`) returns an
+`createNativeAgentProvider()` (`native-agent/provider.ts`) returns an
 `OpenCodeEnvironmentProvider` (`opencode2/environment-provider.ts`) for
 `opencode` and an `HttpBridgeProvider` for every other platform. Both satisfy
 the `NativeAgentRuntimeProvider` contract in `agent-provider-contract.ts`, so
@@ -1012,11 +1012,11 @@ backend process rather than in a disposable bridge. Treat
 `OpenCodeEnvironmentProvider` as an in-process bridge and keep the boundary as
 strict as an HTTP one:
 
-- Shared native-agent code (`native-agent-service-*.ts`) does not branch on
+- Shared native-agent code (`native-agent/service-*.ts`) does not branch on
   `agent === "opencode"` or import OpenCode modules
   (`agent-provider-boundaries.test.ts` enforces both). The service hands
   `createNativeAgentProvider` the environment's server through a
-  provider-neutral seam (`native-agent-opencode-server.ts`).
+  provider-neutral seam (`native-agent/opencode-server.ts`).
 - The renderer does not talk to the OpenCode server and does not normalize
   OpenCode messages; it receives the same normalized projections and
   transcripts as every other platform (`opencode2/transcript.ts`).

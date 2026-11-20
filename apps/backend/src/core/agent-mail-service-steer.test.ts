@@ -6,8 +6,8 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import { AgentMailService } from "./agent-mail-service.js";
 import { fixture, replaceRecipientTab } from "./agent-mail-service-test-support.js";
-import { createProviderStub } from "./native-agent-service-projection-test-support.js";
-import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { createProviderStub } from "./native-agent/service-projection-test-support.js";
+import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent/service.js";
 import { seedStore } from "./storage-test-support.js";
 import type { StorageService } from "./storage.js";
 

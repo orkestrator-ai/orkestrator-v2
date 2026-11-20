@@ -40,7 +40,7 @@ import {
   type ProviderTranscriptSnapshot,
 } from "../agent-provider-contract.js";
 import { asRecord, nonEmptyString } from "../agent-provider-runtime.js";
-import { inlineFileContentLabel, inlineFileUrlDisposition } from "../native-agent-inline-files.js";
+import { inlineFileContentLabel, inlineFileUrlDisposition } from "../native-agent/index.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import type { OpenCode2Event } from "./events.js";
 import {

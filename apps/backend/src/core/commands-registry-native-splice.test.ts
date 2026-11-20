@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
-import { isSpliceableResult } from "./native-agent-projection-encoding.js";
+import { isSpliceableResult } from "./native-agent/projection-encoding.js";
 
 const identity = {
   environmentId: "env-1",

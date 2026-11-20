@@ -1,5 +1,7 @@
 # To-do 6260 preparation: owners triaged `related` through a transitive import
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/projection-encoding.ts`.
+
 - **ID:** 6862
 - **Status:** open
 - **Date observed:** 2026-11-05 (aggregate), 2026-11-06 (reruns)

@@ -1,5 +1,10 @@
 # `NativeAgentService > retries once past a parked dispatch the provider can now vouch for` (`apps/backend/src/core/native-agent-service-dispatch.test.ts:767`)
 
+Current paths for the relocated files:
+
+- `apps/backend/src/core/native-agent/prompt-dispatch.ts`
+- `apps/backend/src/core/native-agent/service-dispatch.test.ts`
+
 - **ID:** 0032
 - **Status:** resolved
 - **Date observed:** 2026-08-25

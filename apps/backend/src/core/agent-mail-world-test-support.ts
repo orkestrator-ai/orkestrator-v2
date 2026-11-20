@@ -26,7 +26,7 @@ import {
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordinator/service.js";
 import type { CoordinatorDeliverNowResult } from "./coordinator/deliver-now.js";
-import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js";
+import type { MailSteerDispatchOutcome } from "./native-agent/service-shared.js";
 import type { PipelineWorkerMailPort } from "./build-pipeline/worker-mail.js";
 import { CoordinatorRequestFlights } from "./coordinator/request-flights.js";
 import type { CoordinatorStatusWakeOptions } from "./coordinator/status-wakes.js";

@@ -1,5 +1,7 @@
 # Egress repair aggregate: unchanged process and scan owners
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/goal-check.test.ts`.
+
 - **ID:** 6150
 - **Status:** open
 - **Date observed:** 2026-11-05

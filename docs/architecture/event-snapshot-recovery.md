@@ -26,7 +26,7 @@ compare revisions from two generations of the same row.
 | Resource manifest generation / snapshot revisions | Persistent storage snapshots; opaque 128-bit hex digests | Scoped manifests (`get_scoped_resource_revision_manifest`), conditional resource snapshots | Equality only. Covers persistent resources, not ephemeral views. |
 | View owner generation | One lifetime of the service that owns a view (for PR/diff: one `PrMonitorService` / `DiffStatsService` instance, a random UUID) | `generation` on view events and snapshots | Equality only. A different value means the owner was replaced (backend restart, transport switch, retarget to a different lineage): reset the view. |
 | View domain revision | Per owner generation; integer that increases by exactly one per announced event (`packages/protocol/src/view-sync.ts`) | `revision` on view events and snapshots | Order events against a snapshot, drop duplicates, detect a missed event as a gap. Revision `0` = nothing announced yet (snapshots only). |
-| Native observation generation + revision | One `NativeAgentObservationBroker` lifetime (`native-agent-observation.ts`); revision advances by exactly one per announced session activity transition | `generation`/`revision` on `native-agent-session-activity`, plus `agent`/`logical_session_key`; current position in `get_native_agent_sync_capabilities.observation` | `apps/web/src/lib/native-observation-events.ts` only: invalidation, never state. A gap or new generation re-reads every mounted native view. |
+| Native observation generation + revision | One `NativeAgentObservationBroker` lifetime (`native-agent/observation.ts`); revision advances by exactly one per announced session activity transition | `generation`/`revision` on `native-agent-session-activity`, plus `agent`/`logical_session_key`; current position in `get_native_agent_sync_capabilities.observation` | `apps/web/src/lib/native-observation-events.ts` only: invalidation, never state. A gap or new generation re-reads every mounted native view. |
 | Push connection `seq` | One push connection (one authoritative event stream's `streamId`); contiguous across subscription changes | `seq` on `push.changed` / `push.resync`; `seqBase` in the `push_set_subscriptions` answer | `packages/protocol/src/push-client.ts` only. A gap re-sends the subscription set; see [push-events.md](push-events.md). |
 | Push key stamp | One topic observer lifetime per key (`generation`) and its announced changes (`revision`) | `push.changed` changes and the subscription answer | Equality of `generation`, order of `revision` within it, for one key only: an invalidation, never state. |
 | Target generation (worktree snapshots) | One tracked environment's lineage inside a `DiffStatsService` generation (worktree path or container, comparison ref); a service-unique integer, new on retarget, resume from pause, or re-track | `targetGeneration` on worktree snapshot states and on file-list/tree read stamps | Equality only. A different value means the file list and tree describe a different target: re-read, never compare its revisions with the old lineage's. An untracked environment is announced as a removal. |
@@ -286,11 +286,11 @@ keeps the baseline, Claude only with `quietObservation`, a content
 announcement reads at once, two views share one read per round),
 `apps/web/src/lib/native-session-shared-reads.test.ts`,
 `packages/protocol/src/native-agent-observation.test.ts`,
-`apps/backend/src/core/native-agent-service-reconciliation.test.ts` (content
+`apps/backend/src/core/native-agent/service-reconciliation.test.ts` (content
 announcements in the stamp sequence),
-`apps/backend/src/core/native-agent-service-progressive.test.ts` (unchanged
+`apps/backend/src/core/native-agent/service-progressive.test.ts` (unchanged
 discovery and catalogue renewals, stale-only flips and drift stay silent),
-`apps/backend/src/core/native-agent-service-quiet-discovery.test.ts` (a quiet
+`apps/backend/src/core/native-agent/service-quiet-discovery.test.ts` (a quiet
 view's backstop reads answer `unchanged`, todo 8151). The
 live per-provider run is `e2e/agent-testing/idle-observation-live.spec.ts`.
 

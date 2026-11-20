@@ -74,7 +74,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 
 **Context.** The idle A/B and a 10-cycle soak ran on macOS (Live evidence, Live soak). The file says each busy step needs credentials, a scripted UI or a fault injector that `scripts/recurring-live-ab.ts` lacks. Outage and resume overlap with the live outage workload in 0051. The run is batched for macOS and Docker Desktop in 0031.
 
-**Investigation.** `scripts/recurring-live-ab.ts` still drives only profile lifecycle, sampling, freshness probes and the soak (`--soak-cycles`, `scripts/recurring-live-ab.ts:141`). It has no client, credential or fault-injection phase. The keyed domains it would exercise are still switched per domain at `apps/backend/src/core/build-pipeline/context.ts:145`, `feature-planning.ts:259`, `looped-review-service.ts:420`, `review/service.ts:625`, `native-agent-service.ts:988` and `index.ts:359`. Nothing since `00a0cb82` has added busy-profile tooling. Scheduled jobs (#1242) added a new recurring kind, `scheduled-job-tick` (`packages/protocol/src/recurring-work.ts:325`), which a busy profile should include.
+**Investigation.** `scripts/recurring-live-ab.ts` still drives only profile lifecycle, sampling, freshness probes and the soak (`--soak-cycles`, `scripts/recurring-live-ab.ts:141`). It has no client, credential or fault-injection phase. The keyed domains it would exercise are still switched per domain at `apps/backend/src/core/build-pipeline/context.ts:145`, `feature-planning.ts:259`, `looped-review-service.ts:420`, `review/service.ts:625`, `native-agent/service.ts:988` and `index.ts:359`. Nothing since `00a0cb82` has added busy-profile tooling. Scheduled jobs (#1242) added a new recurring kind, `scheduled-job-tick` (`packages/protocol/src/recurring-work.ts:325`), which a busy profile should include.
 
 **Decisions.**
 
@@ -109,7 +109,7 @@ phase in `recurring-live-ab.ts`). No real provider or login is needed.
 **Outcome (2026-11-06).** Rechecked on `ee2cc8423`: the driver still had no
 client, approval or workflow phase, and the keyed domains are switched at
 `build-pipeline/context.ts:241`, `features/planning.ts:265`,
-`review/service.ts:751`, `native-agent-service.ts:1438`, `index.ts:525`
+`review/service.ts:751`, `native-agent/service.ts:1438`, `index.ts:525`
 and, since graph runs, `graph-run-service.ts:241` (looped review is retired).
 The recommendation was taken, with every turn on a fake model: a busy phase
 (`--busy-rounds`, `scripts/recurring-live-ab-busy.ts` with its Playwright
@@ -592,7 +592,7 @@ qualify differently (decision W1). Both are removed (decision W2):
 - Tests that drove the rollback drivers now drive the keyed ones on a manual
   clock (`index.test.ts`: tab-resource coalescing, periodic activity and
   shutdown, a rejected sweep, repeated init, fault wiring;
-  `native-agent-service-dispatch.test.ts`: launch scans and the cadence
+  `native-agent/service-dispatch.test.ts`: launch scans and the cadence
   floor), and `workflows/supervisor.test.ts` pins the revertible list.
 - `recurring-work.md`, `native-agent-service.md`, `testing-guide.md` and the
   `recurring-live-ab.ts` header describe the change. The catalogue
@@ -652,7 +652,7 @@ observation sharing, was retired on 2026-11-11, so
 - The backend no longer reads it (`index.ts`), and `NativeAgentServiceOptions`
   no longer accepts `observationSharing`, so a stably idle group of a
   qualified provider always backs off and a busy queue always reuses the
-  sweep's fresh observation (`native-agent-launch-activity-reconciler.ts`).
+  sweep's fresh observation (`native-agent/launch-activity-reconciler.ts`).
   Dispatch and generation fences and the mail freshness gate are unchanged.
 - The desktop allowlist (`backend-process.ts`) drops it; its test no longer
   passes it through.
@@ -2490,7 +2490,7 @@ Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
     stays invisible; the row cache's `bytes` is serialized length, not heap.
     Tests: `recurring-diagnostics-caches.test.ts`,
     `storage-database-cache-gauges.test.ts`,
-    `native-agent-projection-cache-gauges.test.ts`,
+    `native-agent/projection-cache-gauges.test.ts`,
     `change-tracking/service-cache-gauges.test.ts`, and the worktree case
     in `public-api/test-support.test.ts`.
 25. **Agent sessions without a billed turn.** Options: credentialed Claude
@@ -2521,7 +2521,7 @@ Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
     Cons: sessions are found through the cached projections' inputs (the
     key is a hash), so one read only through the progressive path is left
     to that path's own bounds. Tests: the release case in
-    `native-agent-projection-cache-gauges.test.ts` and the ordering case in
+    `native-agent/projection-cache-gauges.test.ts` and the ordering case in
     `commands-environment-cleanup.test.ts`; live, the fixed run kept them at
     the two long-lived sessions (see Long soak). Three other projection
     maps have no eviction at all but stayed at zero without a browser

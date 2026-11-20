@@ -18,7 +18,7 @@
 //   `agent-accounts/containers.ts`;
 // - `pr-auto-merge.ts` (imports `project-home-environment.ts` and
 //   `action-default-selection.ts`) and `pr-auto-merge-resolve-settled.ts`
-//   (imports `native-agent-service-shared.ts` and `public-api/index.ts`), for
+//   (imports `native-agent/service-shared.ts` and `public-api/index.ts`), for
 //   the composition root `core/index.ts`;
 // - `pr-monitor-runtime.ts` (imports `commands-pr-monitor.ts`), for
 //   `backend-runtime.ts`;

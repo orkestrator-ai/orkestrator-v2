@@ -1,5 +1,7 @@
 # NativeAgentService healthy-commit test timed out under aggregate load
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/service-base.test.ts`.
+
 - **ID:** 0950
 - **Status:** resolved
 - **Date observed:** 2026-10-26

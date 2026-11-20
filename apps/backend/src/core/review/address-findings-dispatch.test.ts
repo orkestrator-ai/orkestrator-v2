@@ -10,7 +10,7 @@ import {
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { addressFindingsReportPrompt } from "../build-pipeline/prompts.js";
-import { NativeAgentProviderSessionMissingError } from "../native-agent-service.js";
+import { NativeAgentProviderSessionMissingError } from "../native-agent/service.js";
 import {
   InvalidMultiReviewAddressFindingsStateError,
   MissingMultiReviewAddressFindingsSessionError,

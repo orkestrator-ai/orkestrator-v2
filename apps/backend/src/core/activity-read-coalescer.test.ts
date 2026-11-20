@@ -7,7 +7,7 @@ import type {
 } from "./agent-provider-contract.js";
 import { ActivityReadCoalescer } from "./activity-read-coalescer.js";
 import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
-import type { ActivityGroupProvider, ActivityGroupRead } from "./native-agent-activity-reads.js";
+import type { ActivityGroupProvider, ActivityGroupRead } from "./native-agent/activity-reads.js";
 
 /** A bridge-backed provider surface that records every activity read. */
 class BatchProvider {

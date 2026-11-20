@@ -3,7 +3,7 @@
 Status: living. Owner modules:
 [`native-agent-goal.ts`](../../packages/protocol/src/native-agent-goal.ts) (model,
 transitions, carrier, command parsing) and
-[`native-agent-goal-service.ts`](../../apps/backend/src/core/native-agent-goal-service.ts)
+[`native-agent/goal-service.ts`](../../apps/backend/src/core/native-agent/goal-service.ts)
 (the loop). The design and decisions were in the goal plan, retired on
 2026-11-07 when the plans were consolidated (read it with
 `git show 2b876486b:plans/goals.md`).
@@ -127,7 +127,7 @@ that constraint in the objective.
 ## Verifier and other surfaces
 
 `/goal <objective> --verifier <agent>[:model]` adds a fresh read-only session that
-judges a `done` report and returns a verdict, in `native-agent-goal-verifier.ts`. With
+judges a `done` report and returns a verdict, in `native-agent/goal-verifier.ts`. With
 both a check and a verifier, the check runs first and both must pass. Its spend
 counts toward the budget, and it can take several minutes. Read-only enforcement
 follows the provider's tier, so it is advisory on Grok.

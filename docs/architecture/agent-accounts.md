@@ -11,7 +11,7 @@ Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
 `apps/web/src/components/layout/AgentInfoAccountSection.tsx`,
 `apps/backend/src/core/agent-sign-ins.ts`,
 `apps/backend/src/core/agent-accounts/auto-switch.ts`,
-`apps/backend/src/core/native-agent-usage-limit-resend.ts`,
+`apps/backend/src/core/native-agent/usage-limit-resend.ts`,
 `packages/protocol/src/agent-account-auto-switch.ts`,
 `packages/protocol/src/agent-account-shared-usage.ts`,
 `apps/backend/src/core/agent-accounts/usage-sharing.ts`,
@@ -262,7 +262,7 @@ link-and-code panel and resumes a sign-in already running. When the card
 answers `Not logged in`, a successful sign-in sends the refused prompt again,
 from whichever client signs in and whether or not the tab is open. Claude ran
 nothing for that prompt, so sending it again cannot repeat work. The backend owns
-this (`native-agent-sign-in-resend.ts`): it remembers each accepted plain prompt
+this (`native-agent/sign-in-resend.ts`): it remembers each accepted plain prompt
 in memory, exactly as sent, because Claude's transcript stores an attached image
 as inline data rather than its path, and records it durably on the session
 (`signInResend`) only when the turn ends in the notice. An accepted later dispatch
@@ -1120,7 +1120,7 @@ Four things can move it:
   creating a session or preparing each new turn, so an idle bridge moves over
   even when the provider is cached. A busy bridge stays on its running account: a shared registry of provider
   observations and sends keeps another workflow owner's running turn on it
-  (`workflow-account-handoff.test.ts`).
+  (`native-agent/workflow-account-handoff.test.ts`).
 - **A 5-hour limit resetting.** Each check arms one timer per provider for the
   soonest reset of another included account only the 5-hour limit keeps out
   (`nextFiveHourRefresh`), 15 seconds after it, so the machine is back on the soonest
@@ -1349,7 +1349,7 @@ restart path, spending its one restart continuation; making activity observation
 see workflow turns would change what every bridge replacement waits for, so it is
 left until it shows up in use.
 
-- **Native tabs** (`native-agent-usage-limit-resend.ts`) work from the activity
+- **Native tabs** (`native-agent/usage-limit-resend.ts`) work from the activity
   sweep's turn-end edges. The request id is derived from the stopped request
   (`usage-limit-resend:<n>:<root>`), so a repeated observation or a restart finds
   the dispatch journal entry rather than a second turn. Only a `failed` outcome

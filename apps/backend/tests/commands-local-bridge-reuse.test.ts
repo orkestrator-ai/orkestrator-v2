@@ -11,7 +11,7 @@ import {
   createProviderStub,
   withService,
   waitForCondition,
-} from "../src/core/native-agent-service-projection-test-support";
+} from "../src/core/native-agent/service-projection-test-support";
 
 const {
   createCommandRegistry,

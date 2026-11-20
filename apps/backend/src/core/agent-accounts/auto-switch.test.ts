@@ -956,7 +956,7 @@ describe("a limit error mid-turn", () => {
 
 describe("the provider a workflow holds", () => {
   test("hands a stop to the switcher for its own platform, and only with accounts", async () => {
-    const { createNativeAgentProvider } = await import("../native-agent-provider.js");
+    const { createNativeAgentProvider } = await import("../native-agent/provider.js");
     const handleLimitStop = mock(async () => "resend" as const);
     const connection = { baseUrl: "http://127.0.0.1:1", authToken: "token" };
     const claude = createNativeAgentProvider(
@@ -991,7 +991,7 @@ describe("the provider a workflow holds", () => {
   });
 
   test("knows which of its turns its polls last saw running", async () => {
-    const { trackRunningTurns } = await import("../native-agent-provider.js");
+    const { trackRunningTurns } = await import("../native-agent/provider.js");
     const statuses: Record<string, ProviderStatus> = { r1: "running", r2: "blocked" };
     const provider = {
       status: async (sessionId: string) => statuses[sessionId]!,

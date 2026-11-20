@@ -1,5 +1,5 @@
 import { sessionGoal, type NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
-import type { NativeAgentService } from "./native-agent-service.js";
+import type { NativeAgentService } from "./native-agent/service.js";
 import type { StorageService } from "./storage.js";
 
 /** Read the same worker session and turn views locally and over the node link. */

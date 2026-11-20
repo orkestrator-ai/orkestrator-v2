@@ -1,5 +1,7 @@
 # Activity sweep batch tests see no bridge requests
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/service-activity-batch.test.ts`.
+
 - **ID:** 0247
 - **Status:** resolved
 - **Date observed:** 2026-10-15

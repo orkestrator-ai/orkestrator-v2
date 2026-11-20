@@ -1,5 +1,10 @@
 # Shared observation fixture receives no HTTP requests in aggregate
 
+Current paths for the relocated files:
+
+- `apps/backend/src/core/native-agent/service-reconciliation.test.ts`
+- `apps/backend/src/core/native-agent/service.ts`
+
 - **ID:** 0672
 - **Status:** resolved
 - **Date observed:** 2026-10-22

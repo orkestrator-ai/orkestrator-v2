@@ -63,7 +63,7 @@ env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
 
 ### 3. Projection maps with no eviction
 
-**Problem.** Three maps of `NativeAgentTranscriptProjection` (`native-agent-transcript-projection.ts`; since 0057 split it on 2026-11-17 they live in `native-agent-progressive-reads.ts` and `native-agent-progressive-transcript.ts`) have no bound and are emptied only by `invalidateProjection`, `forgetEnvironment` or shutdown, so sessions that are read and then go quiet without an invalidation accumulate.
+**Problem.** Three maps of `NativeAgentTranscriptProjection` (`native-agent/transcript-projection.ts`; since 0057 split it on 2026-11-17 they live in `native-agent/progressive-reads.ts` and `native-agent/progressive-transcript.ts`) have no bound and are emptied only by `invalidateProjection`, `forgetEnvironment` or shutdown, so sessions that are read and then go quiet without an invalidation accumulate.
 
 **Context.** Their gauges were zero throughout both soaks (task 4): no client read a transcript through the progressive path. `forgetEnvironment` (task 1) clears them for a deleted environment's cached sessions.
 
@@ -114,7 +114,7 @@ epochs through `pruneProjectionEpoch`, which keeps any epoch a read in
 flight still needs. Why: deletion is the only point where no reader can
 come back to those sessions, and the existing invalidation already clears
 every per-session map; a byte bound would still hold dead views. Tests:
-`native-agent-projection-cache-gauges.test.ts` (releases only the deleted
+`native-agent/projection-cache-gauges.test.ts` (releases only the deleted
 environment's caches) and `commands-environment-cleanup.test.ts` (called
 after the session records go). Live: see 0048's
 [Long soak](0048-recurring-work-qualification.md#long-soak-2026-11-06-linux).
@@ -122,7 +122,7 @@ after the session records go). Live: see 0048's
 ### Task 3: each map follows its owner (2026-11-11)
 
 Chose the recommended option, after checking the snapshot share's callers.
-In `NativeAgentTranscriptProjection` (`native-agent-transcript-projection.ts`; since 2026-11-17 `progressiveReadEpochs` and `interactiveSnapshotShares` are in `native-agent-progressive-reads.ts` and `progressiveSourceTokens` in `native-agent-progressive-transcript.ts`):
+In `NativeAgentTranscriptProjection` (`native-agent/transcript-projection.ts`; since 2026-11-17 `progressiveReadEpochs` and `interactiveSnapshotShares` are in `native-agent/progressive-reads.ts` and `progressiveSourceTokens` in `native-agent/progressive-transcript.ts`):
 
 - `progressiveReadEpochs`: a read's starting epoch is deleted when the read
   settles. Only `progressiveReadCovering`, which lets a caller join a read in
@@ -144,11 +144,11 @@ In `NativeAgentTranscriptProjection` (`native-agent-transcript-projection.ts`; s
 Why: each map then tracks something that is already bounded (reads in
 flight, the progressive transcript cache), so no new constant is needed, and
 join behaviour within a read is unchanged. An LRU bound would have been a
-guess and could split a join. Tests: `native-agent-projection-cache-gauges.test.ts`
+guess and could split a join. Tests: `native-agent/projection-cache-gauges.test.ts`
 asserts that a settled read keeps neither its epoch nor its share (and a
 later read gets the newer snapshot), that a discovery read still in flight
 does not keep a settled share, and that an evicted transcript takes its
-source token with it; `native-agent-service-progressive.test.ts` still pins
+source token with it; `native-agent/service-progressive.test.ts` still pins
 that reads issued together share one snapshot. The projection, progressive
 and sync suites pass. Live: the
 task 4 soak below.

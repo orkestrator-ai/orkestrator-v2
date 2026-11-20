@@ -16,7 +16,7 @@ import {
   PendingNativeAgentSteerError,
   StorageService,
 } from "./storage.js";
-import { createNativeAgentDisplayTail } from "./native-agent-display-tails.js";
+import { createNativeAgentDisplayTail } from "./native-agent/display-tails.js";
 import { sessionIncompleteTurnNotice } from "./models.js";
 import { STORAGE_DATABASE_FILE } from "./storage-database.js";
 import {

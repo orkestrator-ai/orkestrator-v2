@@ -8,7 +8,7 @@ import {
   type NativeAgentCommandIntent,
 } from "@orkestrator/protocol/native-agent";
 import type { BridgeConnection, NativeAgentRuntimeProvider } from "../agent-provider-contract.js";
-import { PromptRejectedError } from "../native-agent-provider.js";
+import { PromptRejectedError } from "../native-agent/provider.js";
 import {
   claudeConnection,
   codexConnection,
@@ -26,8 +26,8 @@ import {
 import {
   NativeAgentCommandCatalogueCache,
   commandCatalogueKey,
-} from "../native-agent-command-catalogue.js";
-import { planCommandDispatch } from "../native-agent-command-dispatch.js";
+} from "../native-agent/command-catalogue.js";
+import { planCommandDispatch } from "../native-agent/command-dispatch.js";
 
 /** Command catalogue and command-selection transport for HTTP bridges. */
 describe("HTTP bridge command transport", () => {

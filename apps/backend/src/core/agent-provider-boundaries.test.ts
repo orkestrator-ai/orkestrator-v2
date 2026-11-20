@@ -9,7 +9,7 @@ const PROVIDER_SOURCE_FILES = [
   "http-bridge/provider.ts",
   "http-bridge/runtime-health.ts",
   "http-bridge/transport.ts",
-  "native-agent-provider.ts",
+  "native-agent/provider.ts",
 ] as const;
 
 /** The neutral modules above plus every OpenCode 2.x provider module. */
@@ -39,30 +39,30 @@ describe("agent provider module boundaries", () => {
   test("keeps OpenCode implementation details out of the pipeline adapter", async () => {
     const pipelineAdapter = await source("build-pipeline/provider.ts");
 
-    expect(pipelineAdapter).not.toMatch(/@opencode-ai|\.\/opencode(?:-|2\/)|OpenCodeProvider/);
+    expect(pipelineAdapter).not.toMatch(/@opencode-ai|\.\.\/opencode(?:-|2\/)|OpenCodeProvider/);
     expect(pipelineAdapter).not.toContain("interactiveSnapshot");
     expect(pipelineAdapter).not.toContain("modelCatalog");
   });
 
   test("keeps OpenCode wiring and policy out of the shared native-agent service", async () => {
     // OpenCode-specific construction lives behind `createNativeAgentProvider`
-    // and its policy behind `native-agent-platform-policy.ts`; the shared
+    // and its policy behind `native-agent/platform-policy.ts`; the shared
     // service only imports the connection type, never OpenCode runtime modules,
     // and does not branch on the platform.
-    const files = (await readdir(import.meta.dir)).filter(
-      (file) => /^native-agent-service-.*\.ts$/.test(file) && !file.endsWith(".test.ts"),
-    );
+    const files = (await readdir(path.join(import.meta.dir, "native-agent")))
+      .filter((file) => /^service-.*\.ts$/.test(file) && !file.endsWith(".test.ts"))
+      .map((file) => `native-agent/${file}`);
     expect(files.length).toBeGreaterThan(0);
     for (const filename of files) {
       const contents = await source(filename);
       const runtimeContents =
-        filename === "native-agent-service-shared.ts"
+        filename === "native-agent/service-shared.ts"
           ? contents.replace(
-              'import type { OpenCode2ServerConnection } from "./opencode2/index.js";',
+              'import type { OpenCode2ServerConnection } from "../opencode2/index.js";',
               "",
             )
           : contents;
-      expect(runtimeContents, filename).not.toMatch(/from ["']\.\/opencode(?:-|2\/)/);
+      expect(runtimeContents, filename).not.toMatch(/from ["']\.\.\/opencode(?:-|2\/)/);
       expect(contents, filename).not.toMatch(/[!=]==\s*"opencode"/);
     }
   });

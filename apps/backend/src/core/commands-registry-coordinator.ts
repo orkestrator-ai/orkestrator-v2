@@ -71,7 +71,7 @@ import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import { isGitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
-import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service.js";
 import { localServerStopCommandName } from "./local-server-runtime.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";

@@ -17,7 +17,7 @@ import {
 import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerPromptCommands } from "../commands-registry-prompts.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { StorageService } from "../storage.js";
 import { compileWebAnnotationBrief, composeWebAnnotationDispatchText } from "./brief.js";
 import {

@@ -20,7 +20,7 @@ import {
 import {
   createProviderStub,
   withService,
-} from "../src/core/native-agent-service-projection-test-support.js";
+} from "../src/core/native-agent/service-projection-test-support.js";
 import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { BackendPush } from "../src/core/push/index.js";
 import { registryCommandAccess } from "../src/core/nodes/workspace-grant-test-support.js";

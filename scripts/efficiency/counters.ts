@@ -63,7 +63,7 @@ export function countingMessages<T extends { parts?: unknown[] }>(
 
 /**
  * Temporarily wraps the global `JSON.stringify` to count calls whose value
- * matches `predicate`, as `native-agent-projection-encoding.test.ts` does.
+ * matches `predicate`, as `native-agent/projection-encoding.test.ts` does.
  * Always restores the original, including when `run` throws.
  */
 export async function countStringifyCalls<T>(

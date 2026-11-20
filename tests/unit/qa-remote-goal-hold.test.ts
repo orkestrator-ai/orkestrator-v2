@@ -21,7 +21,7 @@ import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 
 import { MailWorld } from "../../apps/backend/src/core/agent-mail-world-test-support";
 import { AgentRegistry } from "../../apps/backend/src/core/agent-registry";
-import { nativeAgentSessionStorageKey } from "../../apps/backend/src/core/native-agent-service-shared";
+import { nativeAgentSessionStorageKey } from "../../apps/backend/src/core/native-agent/index.js";
 import { NodeCoordinatorRemote } from "../../apps/backend/src/core/nodes/index.js";
 import { StorageService } from "../../apps/backend/src/core/storage";
 import { WorkerTabCloseAdmission } from "../../apps/backend/src/core/worker-tab-close-admission";

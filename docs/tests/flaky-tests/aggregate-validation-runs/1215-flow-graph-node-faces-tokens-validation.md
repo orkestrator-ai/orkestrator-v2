@@ -1,5 +1,7 @@
 # Flow graph node faces and live pipeline tokens branch validation
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/service-reconciliation.test.ts`.
+
 - **ID:** 1215
 - **Status:** open
 - **Date observed:** 2026-10-27

@@ -243,7 +243,7 @@ When touching the session catalogue (`session-manager-catalog.ts`):
 - **The no-control fallback costs a process.** `createProbe()` spawns a whole
   Claude CLI, so `commandInventory` caches the catalogue the way `mcpInventory`
   already did, and the model catalogue keeps its own answer. The backend re-reads both on every session projection
-  (`native-agent-full-projection.ts`), so an uncached fallback is one spawn
+  (`native-agent/full-projection.ts`), so an uncached fallback is one spawn
   per turn boundary rather than a one-off.
 - **A probe's list is not the session's.** It has none of the inline servers, so
   an MCP action through a probe updates only the row it acted on

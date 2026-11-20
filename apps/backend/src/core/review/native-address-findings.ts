@@ -1,4 +1,4 @@
-import type { NativeAgentService } from "../native-agent-service.js";
+import type { NativeAgentService } from "../native-agent/service.js";
 import type { MultiReviewServiceOptions } from "./service.js";
 
 /** Production mapping shared by settlement and publication admission. */

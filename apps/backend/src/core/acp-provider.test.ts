@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ProviderUnavailableError } from "./agent-provider-contract.js";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
-import type { BridgeConnection } from "./native-agent-provider.js";
+import type { BridgeConnection } from "./native-agent/provider.js";
 import {
   ACP_BRIDGE_MAX_BODY_BYTES,
   answerResolution,

@@ -242,7 +242,7 @@ checking). There is no separate Resolve or "Checking mergeability" button.
 
 The Merge PR dialog's Resolve option, the Resolve configure dialog and the
 `⌘⇧U` shortcut all call `launch_native_agent_job` with `tabReuse`. The backend, not the renderer,
-chooses the tab (`native-agent-job-tab-reuse.ts`), because it owns the layout, the
+chooses the tab (`native-agent/job-tab-reuse.ts`), because it owns the layout, the
 session and the queue:
 
 - A Resolve tab is one whose job recorded the completion action. Every job launch
@@ -266,7 +266,7 @@ session and the queue:
   Unavailable existing tabs or provider refusals normally open a new tab.
 - With no Resolve tab open, a build pipeline's own Resolve Conflicts session is
   reopened as the Resolve tab before anything else
-  (`native-agent-job-pipeline-resolve.ts`): the newest `resolve-conflicts`
+  (`native-agent/job-pipeline-resolve.ts`): the newest `resolve-conflicts`
   session of a `complete` or `failed` pipeline in the environment, not one still
   running, on an enabled agent the launch may reuse. Its provider session is
   adopted under a new tab with the completion action, so the prompt continues

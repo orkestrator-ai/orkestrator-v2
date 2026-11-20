@@ -24,7 +24,7 @@ import {
   type NativeAgentExecutionPolicy,
   type NativeAgentExecutionPolicyOverride,
 } from "@orkestrator/protocol/native-agent";
-import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "./native-agent/execution-policy.js";
 
 const VOCABULARY: GraphCapabilityName[] = [
   ...NATIVE_AGENT_CAPABILITIES,

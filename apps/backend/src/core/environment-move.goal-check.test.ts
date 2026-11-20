@@ -1,6 +1,6 @@
 // Moving, stopping or deleting an environment drains a running goal check and its descendants.
 import { expect, test, setDefaultTimeout } from "bun:test";
-import { runGoalCheck } from "./native-agent-goal-check.js";
+import { runGoalCheck } from "./native-agent/goal-check.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { moveEnvironmentTask } from "./environment-move.js";

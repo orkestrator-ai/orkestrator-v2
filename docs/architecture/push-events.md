@@ -41,13 +41,13 @@ old cadence.
 | `review-transcript` topic: reviewer and step transcripts, woken by record saves and the reviewer bridge's hints | `apps/backend/src/core/push/review-transcript-push-topic.ts`, `apps/backend/src/core/review/transcript-push.ts` |
 | `environment` topic: lifecycle and attention digests per subscribed environment | `apps/backend/src/core/push/environment-push-topic.ts` |
 | `tool-output` topic: one tool call's output, riding its session's observer | `apps/backend/src/core/push/tool-output-push-topic.ts` |
-| Bounded tool output read (`get_native_agent_tool_output`): slicing, anchors, bounds | `packages/protocol/src/native-agent-tool-output.ts`, `apps/backend/src/core/native-agent-tool-output-reads.ts` |
+| Bounded tool output read (`get_native_agent_tool_output`): slicing, anchors, bounds | `packages/protocol/src/native-agent-tool-output.ts`, `apps/backend/src/core/native-agent/tool-output-reads.ts` |
 | Expanded running tool row: tail, subscription, load earlier | `apps/web/src/lib/chat/tool-output-tail.ts`, `NativeMessage.renderer.tsx` |
 | Composition, gateway port | `apps/backend/src/core/push/index.ts` |
 | Relayed nodes: the command node's subscription controller (D10) | `apps/backend/src/core/nodes/node-push-subscriptions.ts` |
 | Relayed nodes: the shared leaf stream, its push hold and frame routing | `apps/backend/src/core/nodes/node-event-relay.ts`, `node-event-stream.ts` |
 | Gateway: connection per stream, offer, frames, subscribe command, `/metrics` | `apps/backend/src/gateway-handlers.ts`, `gateway-events.ts` |
-| Settled-read share between the observer and the viewers | `NativeAgentProgressiveReads.observeSession` (`native-agent-progressive-reads.ts`) |
+| Settled-read share between the observer and the viewers | `NativeAgentProgressiveReads.observeSession` (`native-agent/progressive-reads.ts`) |
 | Transport: `push-stream-state` from each `gateway.connected` | `apps/web/src/lib/native/node-transport.ts` |
 | Per-node client slot, routing (`pushRouteFor`) and `usePushSubscription` | `apps/web/src/lib/push/push-subscriptions.ts` |
 | Live view integration and recovery cadence | `useNativeAgentSession.ts`, `native-session-read-policy.ts` |

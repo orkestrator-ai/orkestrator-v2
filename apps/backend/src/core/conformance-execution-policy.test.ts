@@ -31,7 +31,7 @@ import {
 } from "../../../../tests/conformance/execution-policy/suite.js";
 import type { BridgeConnection } from "./agent-provider-contract.js";
 import { bridgePromptBody } from "./http-bridge/prompt-body.js";
-import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "./native-agent/execution-policy.js";
 import { openCode2PolicyRules } from "./opencode2/permissions.js";
 import { effectiveOpenCodePolicy } from "./opencode2/policy-rules.js";
 import type { OpenCode2PermissionRule } from "./opencode2/types.js";

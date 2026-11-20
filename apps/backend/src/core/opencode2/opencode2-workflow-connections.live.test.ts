@@ -3,7 +3,7 @@ import {
   startOpenCode2Fixture,
   type OpenCode2Fixture,
 } from "../../../../../scripts/opencode2-steer-probe.js";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import { OpenCode2Client } from "./client.js";
 import {
   OPENCODE2_ARTIFACTS_MCP_PREFIX,

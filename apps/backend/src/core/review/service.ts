@@ -136,7 +136,7 @@ import {
   parseAddressFindingsResult,
 } from "./prompts.js";
 import { parseReviewPackageReference } from "./package.js";
-import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveEnvironmentExecutionPolicy } from "../native-agent/index.js";
 import {
   createPackagedMultiReviewerPrompt,
   createMultiReviewConsolidationPrompt,

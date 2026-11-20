@@ -5,7 +5,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/environments";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
-import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service.js";
 import { registerTmuxBackendCommands } from "./tmux.js";
 import {
   nativeAgentSessionResumeIdentity,

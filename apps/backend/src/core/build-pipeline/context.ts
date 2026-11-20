@@ -71,7 +71,7 @@ import {
   DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS,
   type CommandInvoker,
 } from "./service-helpers.js";
-import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveEnvironmentExecutionPolicy } from "../native-agent/index.js";
 import {
   buildPipelineObligation,
   buildPipelineTarget,

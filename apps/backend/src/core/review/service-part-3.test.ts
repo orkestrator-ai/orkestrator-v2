@@ -3,7 +3,7 @@
 // review/service-test-support.ts.
 import { multiReviewAddressFindingsIdentity } from "./address-findings-identity.js";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
-import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./validation-prompts.js";
 import { randomUUID } from "node:crypto";
 import { captureReviewWorktreeSnapshot } from "./fanout.js";

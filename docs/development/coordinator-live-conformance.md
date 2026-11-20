@@ -72,7 +72,7 @@ built on 2026-11-13 (see "Decisions made when the to-do was retired").
     `delegation`, Claude has no waiting tools, one async contract string;
   - `coordinator/providers.test.ts`: tiers, the safety-level setting, host
     probe, delegation derived from the mail round trip;
-  - `native-agent-service-reconciliation.test.ts` (presence and the turn-end
+  - `native-agent/service-reconciliation.test.ts` (presence and the turn-end
     edge), `coordinator/service.test.ts` (one wake per delegation, crash
     recovery), `agent-mail-service.test.ts` (one carrier per drain),
     `control-mcp/server.test.ts` (tool contract and poll guard);
@@ -774,7 +774,7 @@ is the truth, and the manual-test checklist holds the runs still owed.
   `resolveDefaultModel`, and every Codex worker a coordinator launched on a
   ChatGPT login ran the shipped `gpt-5.4` and failed with HTTP 400. The
   startup dispatch now marks a settings model `modelSource: "default"` and an
-  `initialAgentModel` explicit (`native-agent-launch-activity-reconciler.ts`;
+  `initialAgentModel` explicit (`native-agent/launch-activity-reconciler.ts`;
   test "the initial prompt's Codex model"). Writing the substitute into the
   settings was rejected: the settings keep the user's choice.
 - **An OpenCode coordinator keeps its Control MCP credential** (fixed

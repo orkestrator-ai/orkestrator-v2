@@ -13,7 +13,7 @@ import { AGENT_MAIL_MAX_VERIFY_ATTEMPTS } from "./storage-agent-mail-injects.js"
 import { openBackendDatabase } from "./storage-stores.js";
 import { exportStoresAsLegacyJson, readStoredValue, seedStore } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
-import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent/service.js";
 import {
   AmbiguousPromptDispatchError,
   type NativeAgentRuntimeProvider,

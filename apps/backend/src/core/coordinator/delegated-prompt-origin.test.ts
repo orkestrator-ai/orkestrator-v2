@@ -10,8 +10,8 @@ import {
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { coordinatorScopeTurnOrigin } from "../control-mcp/tools-shared.js";
 import { coordinatorCallerTurnOrigin } from "./turn-origin.js";
-import { NativeAgentService } from "../native-agent-service.js";
-import { createProviderStub } from "../native-agent-service-projection-test-support.js";
+import { NativeAgentService } from "../native-agent/service.js";
+import { createProviderStub } from "../native-agent/service-projection-test-support.js";
 import { MailWorld } from "../agent-mail-world-test-support.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import type { CommandContext, CommandHandler } from "../commands-context.js";

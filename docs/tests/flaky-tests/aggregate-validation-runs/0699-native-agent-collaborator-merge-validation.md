@@ -1,5 +1,18 @@
 # Native-agent collaborator merge validation
 
+Current paths for the relocated files:
+
+- `apps/backend/src/core/native-agent/launch-activity-reconciler.test.ts`
+- `apps/backend/src/core/native-agent/prompt-queue-dispatcher.test.ts`
+- `apps/backend/src/core/native-agent/retired-dispatch.test.ts`
+- `apps/backend/src/core/native-agent/service-activity-batch.test.ts`
+- `apps/backend/src/core/native-agent/service-dispatch.test.ts`
+- `apps/backend/src/core/native-agent/service-progressive.test.ts`
+- `apps/backend/src/core/native-agent/service-reconciliation.test.ts`
+- `apps/backend/src/core/native-agent/service-resume-close.test.ts`
+- `apps/backend/src/core/native-agent/service-turn-outcome.test.ts`
+- `apps/backend/src/core/native-agent/transcript-projection.test.ts`
+
 - **ID:** 0699
 - **Status:** environmental
 - **Date observed:** 2026-10-23

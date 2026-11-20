@@ -2,6 +2,11 @@
 
 Current path for the relocated file: `apps/backend/src/core/build-pipeline/service-supervisor.test.ts`.
 
+Current paths for the relocated files:
+
+- `apps/backend/src/core/native-agent/prompt-queue-dispatcher.test.ts`
+- `apps/backend/src/core/native-agent/service-turn-outcome.test.ts`
+
 - **ID:** 0956
 - **Status:** resolved
 - **Date observed:** 2026-10-26

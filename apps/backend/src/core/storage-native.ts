@@ -2,7 +2,13 @@ import { turnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import * as shared from "./storage-shared.js";
 import path from "node:path";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
-import { nativeAgentSessionWithControls } from "./native-agent-session-controls.js";
+import {
+  isNativeAgentDisplayTail,
+  type NativeAgentDisplayTail,
+  type NativeAgentDisplayTailDeletion,
+  NativeAgentDisplayTailStore,
+  nativeAgentSessionWithControls,
+} from "./native-agent/index.js";
 import {
   nativeAgentSessionBackendTitle,
   nativeAgentSessionResumeIdentity,
@@ -95,14 +101,6 @@ import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { bugReportRuntimeEnvironment } from "./bug-report-runtime.js";
 import type { IncompleteTurnNotice } from "./models.js";
-import {
-  isNativeAgentDisplayTail,
-  type NativeAgentDisplayTail,
-} from "./native-agent-display-tails.js";
-import {
-  NativeAgentDisplayTailStore,
-  type NativeAgentDisplayTailDeletion,
-} from "./native-agent-display-tail-store.js";
 import type { StorageContext } from "./storage-context.js";
 import { StoreCorruptError } from "./storage-database.js";
 import { FrozenStoreSnapshot } from "./storage-frozen-snapshot.js";

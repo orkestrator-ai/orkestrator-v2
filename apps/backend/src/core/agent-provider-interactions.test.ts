@@ -8,7 +8,7 @@ import {
 import {
   ProviderUnavailableError,
   type ProviderSessionRegistration,
-} from "./native-agent-provider.js";
+} from "./native-agent/provider.js";
 import { codexConnection, httpProvider, answerResolution } from "./agent-provider-test-support.js";
 import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
 import { OpenCode2Provider } from "./opencode2/provider.js";

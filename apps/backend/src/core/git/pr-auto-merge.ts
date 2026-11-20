@@ -51,10 +51,10 @@ const DESTINATION_HOLD =
  *
  * There is one Resolve tab per environment. A later conflict episode sends
  * the prompt again to the open Resolve tab (manual or automatic) through the
- * job tab reuse path (`native-agent-job-tab-reuse.ts`): a settled tab runs it
+ * job tab reuse path (`native-agent/job-tab-reuse.ts`): a settled tab runs it
  * now, a busy one queues it until its current work ends. With no Resolve tab
  * open, the conversation a build pipeline's Resolve Conflicts step had is
- * reopened as the Resolve tab (`native-agent-job-pipeline-resolve.ts`). A new
+ * reopened as the Resolve tab (`native-agent/job-pipeline-resolve.ts`). A new
  * tab opens only when neither exists or the open one cannot take a prompt.
  */
 

@@ -1,5 +1,7 @@
 # Maximal command-catalogue inventories exceed the aggregate deadline
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/command-catalogue-scale.test.ts`.
+
 - **ID:** 0826
 - **Status:** resolved
 - **Date observed:** 2026-10-25

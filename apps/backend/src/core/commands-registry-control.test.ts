@@ -13,15 +13,15 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 import { withCoordinatorDelegationPresentation } from "./coordinator/delegation-authority.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
-import { NativeAgentService } from "./native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
+import { NativeAgentService } from "./native-agent/service.js";
 import {
   AmbiguousPromptDispatchError,
   type AgentSessionProvider,
   type ProviderStatus,
-} from "./native-agent-provider.js";
-import { queueInternals } from "./native-agent-service-test-collaborators.js";
-import { resendToOpenJobTab } from "./native-agent-job-tab-reuse.js";
+} from "./native-agent/provider.js";
+import { queueInternals } from "./native-agent/service-test-collaborators.js";
+import { resendToOpenJobTab } from "./native-agent/job-tab-reuse.js";
 import { NATIVE_JOB_RECEIPT_LIMIT, NativeJobReceiptCapacityError } from "./storage-prompts.js";
 import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";

@@ -62,7 +62,7 @@ import {
 } from "@orkestrator/protocol/testing/codex-managed-network-card";
 import { HttpBridgeInteractionAdapter } from "../src/core/http-bridge/interactions";
 import type { Environment, PersistedNativeAgentSession } from "../src/core/models";
-import { resolveNativeAgentExecutionPolicy } from "../src/core/native-agent-execution-policy";
+import { resolveNativeAgentExecutionPolicy } from "../src/core/native-agent/execution-policy";
 import { PermissionRuleEnforcer } from "../src/core/permission-rules/enforcer";
 import { StorageService } from "../src/core/storage";
 

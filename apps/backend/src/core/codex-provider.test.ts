@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ProviderUnavailableError } from "./native-agent-provider.js";
+import { ProviderUnavailableError } from "./native-agent/provider.js";
 import { codexConnection, httpProvider, waitUntil } from "./agent-provider-test-support.js";
 
 describe("HTTP bridge provider (codex)", () => {

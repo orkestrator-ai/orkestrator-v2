@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
 import { FrozenStoreSnapshot } from "./storage-frozen-snapshot.js";
 import {
   readStoredValue,

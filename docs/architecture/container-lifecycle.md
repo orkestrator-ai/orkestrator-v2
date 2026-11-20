@@ -366,7 +366,7 @@ activity sweep catches a container runtime that stopped any other way (found
 exited by lifecycle reconciliation): once per stop, for container
 environments whose status is `stopped`. Qualified live for Claude (C11,
 `e2e/agent-testing/container-approval-stop.spec.ts`); the activity settle is
-covered by `native-agent-service-stopped-runtime.test.ts`.
+covered by `native-agent/service-stopped-runtime.test.ts`.
 
 A stop also clears the renderer's local panes for that environment, together
 with its hydration state. It releases only local views: no native or tmux tab
@@ -2716,7 +2716,7 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
   `policyPending` marker: the next policy a request sends replaces it, and the
   marker clears once a request sets one or a prompt starts. When the user widens
   a policy, the backend replaces the bridge and resumes
-  (`replaceBridgeForWiderPolicy` in `native-agent-service.ts`), and refuses while
+  (`replaceBridgeForWiderPolicy` in `native-agent/service.ts`), and refuses while
   a turn is running in that environment. `readOnly` stays a per-turn intent;
   that is safe only because the backend alone holds the bridge token and, on a
   `bridge-launch=1` image, signs the turn. A separate uid for the bridge was not

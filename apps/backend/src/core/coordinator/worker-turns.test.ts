@@ -7,7 +7,7 @@ import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "../co
 import { ControlMcpServer } from "../control-mcp/server.js";
 import { launchDelegationRequest } from "./delegation-request.js";
 import { CoordinatorService } from "./service.js";
-import type { ProviderCommandCatalogue, ProviderSendOptions } from "../native-agent-provider.js";
+import type { ProviderCommandCatalogue, ProviderSendOptions } from "../native-agent/provider.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "../public-api/test-provider.js";
 import { createEnvironment } from "../storage.js";
 

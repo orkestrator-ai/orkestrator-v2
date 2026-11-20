@@ -16,12 +16,12 @@ import {
 } from "@orkestrator/protocol/tab-teardown";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { StorageService } from "./storage.js";
-import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service.js";
 import type { NativeAgentProvider } from "./models.js";
 import { replacedSessionCloseIntent } from "./provider-session-ownership.js";
 import { DesignService } from "./design/service.js";
 import { createTestRenderer } from "./design/test-support.js";
-import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
+import { createProviderStub, withService } from "./native-agent/service-projection-test-support.js";
 
 /**
  * Tab close retains conversation history on every platform. These cover the

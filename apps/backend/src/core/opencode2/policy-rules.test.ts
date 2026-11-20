@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import {
   openCodePermissionRules,
   openCodeReviewPermissionRules,

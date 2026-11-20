@@ -6,7 +6,7 @@ import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-sta
 import {
   encodedValue,
   markSpliceableResult,
-} from "../src/core/native-agent-projection-encoding.js";
+} from "../src/core/native-agent/projection-encoding.js";
 
 describe("remote gateway", () => {
   test("authenticated metrics expose null diagnostics when the singletons are absent", async () => {

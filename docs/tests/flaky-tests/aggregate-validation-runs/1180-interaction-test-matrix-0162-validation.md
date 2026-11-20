@@ -1,5 +1,10 @@
 # Interaction test matrix (todo 0162) branch validation
 
+Current paths for the relocated files:
+
+- `apps/backend/src/core/native-agent/service-abort-ladder.test.ts`
+- `apps/backend/src/core/native-agent/service-stopped-runtime.test.ts`
+
 - **ID:** 1180
 - **Status:** open
 - **Date observed:** 2026-10-27

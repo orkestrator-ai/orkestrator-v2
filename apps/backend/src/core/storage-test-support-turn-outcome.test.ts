@@ -9,7 +9,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { readProjectUsageLimits } from "./agent-usage-limits.js";
-import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
 import { createEnvironment, StorageService } from "./storage.js";
 import { appendNativeAgentTurnOutcome } from "./storage-test-support.js";
 

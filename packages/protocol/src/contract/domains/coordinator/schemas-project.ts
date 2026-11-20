@@ -390,7 +390,7 @@ export const WorkerGoalSchema = openRecord({
   replayed: optionalBoolean,
 });
 
-/** `SuborkAskResult` (`native-agent-suborks.ts`). */
+/** `SuborkAskResult` (`native-agent/suborks.ts`). */
 export const SuborkAskResultSchema = openRecord({
   batchId: optionalString,
   suborks: Schema.optional(Schema.Array(OpenObject)),

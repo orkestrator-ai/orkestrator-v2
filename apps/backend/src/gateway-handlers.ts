@@ -43,10 +43,7 @@ import type {
   GatewayEventClient,
 } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
-import {
-  isSpliceableResult,
-  spliceEncodedJsonBytes,
-} from "./core/native-agent-projection-encoding.js";
+import { isSpliceableResult, spliceEncodedJsonBytes } from "./core/native-agent/index.js";
 import { backendMetricsSnapshot } from "./core/backend-metrics.js";
 import type { CommandInvocation } from "./core/commands-context.js";
 import { decodeInvokeEnvelope } from "@orkestrator/protocol/contract/envelope";

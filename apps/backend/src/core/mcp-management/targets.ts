@@ -22,7 +22,7 @@ import { mcpFailure, type McpTargetContext } from "@orkestrator/protocol/mcp-man
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 
 import type { Environment, Project } from "../models.js";
-import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveEnvironmentExecutionPolicy } from "../native-agent/index.js";
 import type { PreviewServicesStorage } from "../storage-preview-services.js";
 import type { TargetContextInfo } from "./types.js";
 

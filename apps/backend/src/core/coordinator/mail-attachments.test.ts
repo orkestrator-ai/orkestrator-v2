@@ -23,7 +23,7 @@ import {
   ScriptedSteerProvider,
   stageSession,
 } from "../build-pipeline/pipeline-worker-mail-test-support.js";
-import { coordinatorPromptWithAttachmentPaths } from "../native-agent-handoffs.js";
+import { coordinatorPromptWithAttachmentPaths } from "../native-agent/handoffs.js";
 import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { runCommand } from "../shell.js";
 

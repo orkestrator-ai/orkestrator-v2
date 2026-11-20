@@ -773,7 +773,7 @@ export const CommandRefreshResultSchema = openRecord({
   projection: Schema.optional(NullableProjectionSchema),
 });
 
-/** `GoalCommandResult` (backend `native-agent-goal-service.ts`). */
+/** `GoalCommandResult` (backend `native-agent/goal-service.ts`). */
 export const GoalCommandResultSchema = openRecord({
   message: Schema.optional(Schema.String),
   goal: optionalObject,

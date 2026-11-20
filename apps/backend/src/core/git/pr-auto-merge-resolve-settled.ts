@@ -1,6 +1,6 @@
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import type { PersistedNativeAgentSession, PersistedPromptQueue } from "../models.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { nativePromptQueueKey, nativeTabsOfLayout } from "../public-api/index.js";
 import type { StorageService } from "../storage.js";
 
@@ -15,7 +15,7 @@ import type { StorageService } from "../storage.js";
  * matched it. Either way the token stayed armed and auto-merge waited forever.
  *
  * A Resolve tab is one whose job recorded the completion action, as in
- * `native-agent-job-tab-reuse.ts`. With no Resolve tab open nothing is
+ * `native-agent/job-tab-reuse.ts`. With no Resolve tab open nothing is
  * resolving, so the answer is `true`; the caller re-checks before acting, so a
  * launch caught between arming and opening its tab is not mistaken for a
  * finished one.

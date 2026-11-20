@@ -60,7 +60,7 @@ const { createTranscriptArtifactService } = await import(
   path.join(core, "transcript-artifacts/runtime-wiring.ts")
 );
 const { NATIVE_AGENT_DISPLAY_TAIL_STORE } = await import(
-  path.join(core, "native-agent-display-tail-layout.ts")
+  path.join(core, "native-agent/display-tail-layout.ts")
 );
 
 const ENVIRONMENTS = 136;

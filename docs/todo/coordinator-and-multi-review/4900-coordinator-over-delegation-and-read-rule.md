@@ -14,7 +14,7 @@ Analysed 2026-11-05 against `main` at `ce7989a50`.
 
 **Problem.** The Scope line sends any "multi-file investigation" to a worker "even when it only reads".
 
-**Context.** The same sentence stops a read-only coordinator doing long work itself, which is its purpose. It is stated in `buildCoordinatorContext` (`packages/protocol/src/coordinator-context.ts`), where a test holds the block's size, so a rewording that stays short needs no other change. `Scope:` is asserted by `native-agent-service-base.test.ts` ("belongs in a worker environment you launch").
+**Context.** The same sentence stops a read-only coordinator doing long work itself, which is its purpose. It is stated in `buildCoordinatorContext` (`packages/protocol/src/coordinator-context.ts`), where a test holds the block's size, so a rewording that stays short needs no other change. `Scope:` is asserted by `native-agent/service-base.test.ts` ("belongs in a worker environment you launch").
 
 **Investigation.** The report's recommendation was to reword only after the check of real transcripts (task 1, now on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)), so this stays open. The text is unchanged from the report. Since the report, `COORDINATOR_ROUTING_RULE` offers `send_prompt_to_tab` and `launch_job` on an idle worker before `launch_environment`, so the count also shows whether that clause changed anything.
 

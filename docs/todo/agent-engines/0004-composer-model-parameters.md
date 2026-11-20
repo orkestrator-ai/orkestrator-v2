@@ -22,7 +22,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Resolution (2026-10-28).** Done in 0727: the backend's Codex catalogue no longer emits the `summary` descriptor that kept the entry needed, the entry is gone, both tests are flipped, and item 1 below now matches the code. The investigation below describes `main` at `863b5782`.
 
-**Investigation.** The bridge half is done: no `personality` or summary parameter remains in `bridges/codex-bridge/src/app-server-runtime-lifecycle.ts` or `engine/app-server-engine.ts`, and `maxBudgetUsd` is gone from the Claude bridge. But `packages/protocol/src/native-agent.ts:976` still reads `codex: Object.freeze(["parameter:summary"])`, unchanged at every commit from `1e76744d` to HEAD, although the doc comment above it (:960-965) was rewritten to drop the Codex sentence. The tests still expect suppression: `apps/backend/src/core/native-agent-service-projection.test.ts:3120-3122` (Codex's expected controls omit `parameter:summary`) and `apps/web/src/components/native-agent/AgentNativeTab.test.tsx:6244` and :6290 ("hides unsupported Codex summary in a %s tab"). The renderer test the file names does not exist. Behaviour is harmless (nothing produces the control), but the record is wrong.
+**Investigation.** The bridge half is done: no `personality` or summary parameter remains in `bridges/codex-bridge/src/app-server-runtime-lifecycle.ts` or `engine/app-server-engine.ts`, and `maxBudgetUsd` is gone from the Claude bridge. But `packages/protocol/src/native-agent.ts:976` still reads `codex: Object.freeze(["parameter:summary"])`, unchanged at every commit from `1e76744d` to HEAD, although the doc comment above it (:960-965) was rewritten to drop the Codex sentence. The tests still expect suppression: `apps/backend/src/core/native-agent/service-projection.test.ts:3120-3122` (Codex's expected controls omit `parameter:summary`) and `apps/web/src/components/native-agent/AgentNativeTab.test.tsx:6244` and :6290 ("hides unsupported Codex summary in a %s tab"). The renderer test the file names does not exist. Behaviour is harmless (nothing produces the control), but the record is wrong.
 
 **Decisions.**
 
@@ -38,7 +38,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** A Codex session already holding a model the login does not offer fails at Codex with HTTP 400 instead of being refused before send.
 
-**Context.** The dispatch-change case is done (`applySessionHeldDispatchModel`, `apps/backend/src/core/native-agent-service.ts:1173`; test at `native-agent-service-dispatch-model.test.ts:150`). The bridge deliberately does not cache `model/list`.
+**Context.** The dispatch-change case is done (`applySessionHeldDispatchModel`, `apps/backend/src/core/native-agent/service.ts:1173`; test at `native-agent/service-dispatch-model.test.ts:150`). The bridge deliberately does not cache `model/list`.
 
 **Investigation.** No report of the 400 being confusing is recorded. The 400 names the model.
 
@@ -91,7 +91,7 @@ checklist on 2026-11-10.
     single list of parameters the input bar must not show: Claude `thinking`
     and `context1m`, Cursor `variant`. Codex has no entry.
 - The backend builds composer controls from `parameters` generically
-  (`native-agent-service-shared.ts`) and keeps `parameterValues` in session
+  (`native-agent/service-shared.ts`) and keeps `parameterValues` in session
   state, so a reload restores them.
 - Per provider:
   - Claude: `thinking` and `context1m` from `claudeModelParameters`
@@ -106,10 +106,10 @@ checklist on 2026-11-10.
   - Pi: `setModel(model, { persist })` through `applyComposerToSession`
     (`bridges/pi-bridge/src/agent-session.ts`).
   - Codex: no parameters (`normalizedCodexModels` emits none; a stored
-    `summary` value is retired, `native-agent-retired-parameters.ts`). Its
+    `summary` value is retired, `native-agent/retired-parameters.ts`). Its
     turns run the bridge session's `config.model`; a dispatch naming another
     model is applied to that config first
-    (`apps/backend/src/core/native-agent-dispatch-model.ts`).
+    (`apps/backend/src/core/native-agent/dispatch-model.ts`).
 - The Codex bridge's `POST /session/:id/config` replaces the whole session
   config. The backend restates every field a control update leaves alone
   (`updateCodexSessionConfig` in `http-bridge-codex-config.ts`), so a model or
@@ -139,7 +139,7 @@ checklist on 2026-11-10.
    report where `summary` is supported. Tests (from 0727): the backend
    projection test "filters only provider-specific parameter controls for %s
    at the backend boundary" expects Codex to pass `parameter:summary` through
-   (`native-agent-service-projection.test.ts`); the renderer test "suppresses
+   (`native-agent/service-projection.test.ts`); the renderer test "suppresses
    no Codex parameter control in a %s tab" (`AgentNativeTab.test.tsx`); the
    catalogue assertions that Codex rows have no `parameters`
    (`commands-state-sync.test.ts`, `commands-registry-coordinator.test.ts`);
@@ -159,7 +159,7 @@ checklist on 2026-11-10.
    (`bridges/claude-bridge/src/routes/session.ts`, test "config applies %s
    and ignores stale permission parameters"). The residue went on 2026-10-25:
    a stored legacy value is dropped by every control update
-   (`storage-native.ts`, `native-agent-retired-parameters.ts`) and is never
+   (`storage-native.ts`, `native-agent/retired-parameters.ts`) and is never
    forwarded in a prompt's `parameterValues` (`http-bridge-prompt-body.ts`).
    Tests: "drops a stored pre-approval-mode permissionMode value on any
    control update" (`storage-native-agent-sessions.test.ts`) and the
@@ -191,7 +191,7 @@ checklist on 2026-11-10.
    (`http-bridge-codex-config.ts`, split out of `http-bridge-provider.ts`,
    which also keeps that module under the 1,500-line provider limit). A 404/409 maps to the
    retryable `ProviderUnavailableError`. Tests:
-   `native-agent-service-dispatch-model.test.ts` (applied before the turn,
+   `native-agent/service-dispatch-model.test.ts` (applied before the turn,
    persisted, not reapplied; inherited default untouched; Claude unaffected)
    and four new cases in `http-bridge-provider.test.ts` (approval and fast
    updates restate the config, a model pick keeps Plan and fast and drops the
@@ -340,7 +340,7 @@ checklist on 2026-11-10.
     none. Claude, Cursor, Grok and Pi carry the composer's `selectedModelId`
     on every prompt (`AgentNativeTab.controller.tsx`, `send` options). For
     Codex the backend applies a differing dispatch model to the session first
-    (`native-agent-dispatch-model.ts`).
+    (`native-agent/dispatch-model.ts`).
   - New sessions: a Codex provider's `resolveDefaultModel`
     (`resolveCodexBridgeDefaultModel`, attached in `createNativeAgentProvider`)
     checks an inherited default against the bridge's `/global/models`. If the live list

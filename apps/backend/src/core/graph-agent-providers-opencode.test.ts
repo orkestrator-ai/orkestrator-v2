@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { GraphAgentProviders } from "./graph-agent-providers.js";
 import type { Environment } from "./models.js";
-import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "./native-agent/execution-policy.js";
 import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
 import { OpenCode2Provider } from "./opencode2/provider.js";
 

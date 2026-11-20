@@ -315,10 +315,14 @@ test("a real window sends its startup markers to the main process and none of it
       )!;
       const action = help.submenu!.items.find((item) => item.label === "Open Developer Tools")!;
       action.click();
-      extra.close();
+      // Wait until it is gone. A window still closing stays listed, and
+      // reading its `webContents` throws "Object has been destroyed".
+      await new Promise<void>((resolve) => {
+        extra.once("closed", () => resolve());
+        extra.close();
+      });
     });
-    // `extra` is closing: it can still be listed while already destroyed, and
-    // reading `webContents` from it throws "Object has been destroyed".
+    // Other windows can still be closing, so skip destroyed ones.
     await expect
       .poll(() =>
         app.evaluate(({ BrowserWindow }) =>

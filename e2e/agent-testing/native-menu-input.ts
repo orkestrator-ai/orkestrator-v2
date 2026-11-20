@@ -14,7 +14,10 @@ function powershell(script: string): string {
       "-EncodedCommand",
       Buffer.from(script, "utf16le").toString("base64"),
     ],
-    { encoding: "utf8", timeout: 10_000 },
+    // Heavy, with nothing to await: the first call starts PowerShell and
+    // loads .NET plus the UIAutomation or WinForms assemblies. On a Windows
+    // runner that took more than 10 s once (#2515's first repetition).
+    { encoding: "utf8", timeout: 45_000 },
   ).trim();
 }
 

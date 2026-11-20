@@ -43,7 +43,12 @@ export function sqlitePaths(relocated: boolean): string[] {
   const opencode = relocated
     ? "/home/node/.local/share/opencode/orkestrator-db"
     : "/home/node/.local/share/opencode";
-  return [`${codex}/state_5.sqlite`, `${codex}/thread_history_1.sqlite`, `${opencode}/opencode.db`];
+  // OpenCode 2.x's own database: a migration leaves 1.x's `opencode.db` behind.
+  return [
+    `${codex}/state_5.sqlite`,
+    `${codex}/thread_history_1.sqlite`,
+    `${opencode}/opencode2.db`,
+  ];
 }
 
 export async function sqliteSnapshot(containerId: string, relocated: boolean): Promise<string> {

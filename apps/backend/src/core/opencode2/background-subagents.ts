@@ -232,7 +232,13 @@ export class OpenCode2BackgroundWork {
       await interruptParent?.(signal);
       const attempted = new Set<string>();
       let quiet = false;
-      for (let poll = 0; poll <= OPENCODE2_STOP_SETTLE_MS / STOP_POLL_MS; poll += 1) {
+      // The window is a duration, not a poll count. Each poll's reads add to
+      // its length, so on a slow server a fixed count ran past the cleanup
+      // abort and every stop reported pending. This is wall-clock time, like
+      // that abort; an injected `sleep` still ends at the count.
+      const settleUntil = performance.now() + OPENCODE2_STOP_SETTLE_MS;
+      const lastPoll = OPENCODE2_STOP_SETTLE_MS / STOP_POLL_MS;
+      for (let poll = 0; ; poll += 1) {
         const descendants = await this.descendants(sessionId, signal);
         const jobs = await this.stopJobs(sessionId, signal);
         const running = await this.client.activeSessions(signal);
@@ -257,7 +263,8 @@ export class OpenCode2BackgroundWork {
         // during interruption or its report may still be on the way.
         quiet =
           !!jobs && !jobs.some((job) => pendingShell(job, this.deps.now())) && active.length === 0;
-        if (poll < OPENCODE2_STOP_SETTLE_MS / STOP_POLL_MS) await sleep(STOP_POLL_MS);
+        if (poll >= lastPoll || performance.now() >= settleUntil) break;
+        await sleep(STOP_POLL_MS);
       }
       if (!quiet || !(await ownsStop())) return false;
       const descendants = await this.descendants(sessionId, signal);

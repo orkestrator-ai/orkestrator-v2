@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test, type Page } from "./browser-test";
+import { expect, fetchModulesOutsideChromium, test, type Page } from "./browser-test";
 import {
   installPublishedBackend,
   startPairingBackend,
@@ -83,6 +83,7 @@ interface Environment {
 }
 
 test("Create Environment switches to and submits on a backend one release behind", async ({
+  browser,
   page,
 }, testInfo) => {
   test.setTimeout(180_000);
@@ -189,7 +190,14 @@ test("Create Environment switches to and submits on a backend one release behind
 
     // A cold workspace can hydrate after its advertised checkout disappears.
     // Keep the real portal summary and replace only this tab's project read.
-    const recoveryPage = await page.context().newPage();
+    // A second signed-in context, routed like the fixture's own, so its
+    // modules load outside Chromium's network path too.
+    const recoveryContext = await browser.newContext({
+      storageState: await page.context().storageState(),
+      viewport: { width: 1440, height: 940 },
+    });
+    await fetchModulesOutsideChromium(recoveryContext);
+    const recoveryPage = await recoveryContext.newPage();
     try {
       await recoveryPage.route("**/__orkestrator/invoke", async (route) => {
         const request = route.request();
@@ -223,7 +231,7 @@ test("Create Environment switches to and submits on a backend one release behind
         animations: "disabled",
       });
     } finally {
-      await recoveryPage.close();
+      await recoveryContext.close();
     }
   } finally {
     if (nodeId) await command.invoke("forget_node", { nodeId }).catch(() => undefined);

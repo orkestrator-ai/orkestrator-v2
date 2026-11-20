@@ -50,9 +50,9 @@ function Triggers() {
             if (element) anchors.current.set(key, element);
           }}
           onPointerEnter={() => group.enter(key)}
-          onPointerLeave={() => group.leave()}
+          onPointerLeave={() => group.leave(key)}
           onFocus={() => group.openNow(key)}
-          onBlur={() => group.blurred()}
+          onBlur={() => group.blurred(key)}
         >
           {key}
         </button>
@@ -65,7 +65,9 @@ function Triggers() {
         onPointerEnter={() => {
           if (group.openKey) group.enter(group.openKey);
         }}
-        onPointerLeave={() => group.leave()}
+        onPointerLeave={() => {
+          if (group.openKey) group.leave(group.openKey);
+        }}
       >
         {group.openKey}
       </HoverPopoverPanel>

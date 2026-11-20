@@ -530,15 +530,15 @@ export function HierarchicalSidebar() {
     [applySidebarView, isMobile],
   );
 
-  // Compact has no environment rows to act on.
+  // The compact list starts with its own selection, scoped to the open repository.
   useEffect(() => {
-    if (compactActive && isMultiSelectMode) clearMultiSelection();
-  }, [clearMultiSelection, compactActive, isMultiSelectMode]);
+    if (compactActive) clearMultiSelection();
+  }, [clearMultiSelection, compactActive]);
 
   // Handle Escape key to clear multi-selection
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isMultiSelectMode) {
+      if (e.key === "Escape" && !e.defaultPrevented && isMultiSelectMode) {
         clearMultiSelection();
       }
     };

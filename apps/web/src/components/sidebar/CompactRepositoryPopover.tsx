@@ -1,11 +1,5 @@
-import {
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  type FocusEvent,
-  type KeyboardEvent,
-  type MouseEvent,
-} from "react";
+import { useLayoutEffect, useMemo, useRef, type FocusEvent, type KeyboardEvent } from "react";
+import { EnvironmentRowActivationContext } from "@/components/environments/EnvironmentRow";
 import {
   RepositoryEnvironmentRows,
   type BoundEnvironmentRendering,
@@ -92,6 +86,7 @@ export function CompactRepositoryPopover({
   onPointerEnter,
   onPointerLeave,
   onDismiss,
+  onFocusInside,
   onBlurOutside,
 }: {
   id: string;
@@ -110,10 +105,12 @@ export function CompactRepositoryPopover({
   onPointerLeave: () => void;
   /** Closes the popover; `returnFocus` puts focus back on the icon. */
   onDismiss: (returnFocus: boolean) => void;
+  onFocusInside: () => void;
   /** Focus moved somewhere other than the popover and its icon. */
   onBlurOutside: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const focusedTarget = useRef<EventTarget | null>(null);
   const { machines } = rendering;
   // The same machines compact lists repositories from: every connected one.
   const shownIds = useMemo(
@@ -133,7 +130,7 @@ export function CompactRepositoryPopover({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const panel = panelRef.current;
-    if (!panel) return;
+    if (!panel || !open || event.defaultPrevented || !panel.contains(event.target as Node)) return;
     if (event.key === "Escape" || event.key === "ArrowLeft") {
       event.preventDefault();
       event.stopPropagation();
@@ -141,14 +138,6 @@ export function CompactRepositoryPopover({
       return;
     }
     const target = event.target as HTMLElement;
-    if (
-      (event.key === "Enter" || event.key === " ") &&
-      target.closest("[data-environment-selection-id]")
-    ) {
-      // The row has opened its environment; the environment takes focus next.
-      onDismiss(false);
-      return;
-    }
     const rows = rowTargets(panel);
     const current = rows.indexOf(target);
     if (event.key === "Tab") {
@@ -180,19 +169,36 @@ export function CompactRepositoryPopover({
     rows[Math.min(Math.max(next, 0), rows.length - 1)]?.focus();
   };
 
-  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
-    const modified = event.shiftKey || event.metaKey || event.ctrlKey;
-    if (!modified && (event.target as HTMLElement).closest("[data-environment-selection-id]")) {
-      onDismiss(false);
-    }
+  const handleActivation = () => {
+    const active = document.activeElement;
+    // An environment can take focus synchronously. Otherwise leave focus on its rail icon.
+    onDismiss(
+      active !== null && (panelRef.current?.contains(active) || focusedTarget.current === active),
+    );
+  };
+
+  const handleFocus = (event: FocusEvent<HTMLDivElement>) => {
+    if (!open) return;
+    // React delivers focus events from this panel's own portaled row controls too.
+    focusedTarget.current = event.target;
+    onFocusInside();
   };
 
   const handleBlur = (event: FocusEvent<HTMLDivElement>) => {
+    if (!open) return;
+    const panel = event.currentTarget;
     const next = event.relatedTarget as HTMLElement | null;
-    if (!next || panelRef.current?.contains(next) || next === getAnchor()) return;
-    // A row's own menu or confirmation dialog takes focus; the popover holds them.
-    if (next.closest('[role="menu"], [role="dialog"], [role="alertdialog"]')) return;
-    onBlurOutside();
+    focusedTarget.current = null;
+    if (panel.contains(next)) return;
+    if (next === getAnchor() && next !== null) {
+      onBlurOutside();
+      return;
+    }
+    // Let a nested portal's focus event arrive before treating this as leaving.
+    queueMicrotask(() => {
+      if (panelRef.current !== panel || panel.dataset.state !== "open") return;
+      if (focusedTarget.current === null) onBlurOutside();
+    });
   };
 
   const firstMember = repository.members[0];
@@ -209,11 +215,11 @@ export function CompactRepositoryPopover({
       data-testid="compact-repository-popover"
       data-repository={repository.key}
       tabIndex={-1}
-      className="flex max-h-[min(28rem,calc(100vh-1rem))] w-72 flex-col overflow-hidden outline-hidden"
+      className="flex max-h-[min(28rem,var(--hover-popover-available-height))] w-72 max-w-(--hover-popover-available-width) flex-col overflow-hidden outline-hidden"
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
       onKeyDown={handleKeyDown}
-      onClick={handleClick}
+      onFocus={handleFocus}
       onBlur={handleBlur}
       panelRef={panelRef}
     >
@@ -225,21 +231,27 @@ export function CompactRepositoryPopover({
           </span>
         ) : null}
       </div>
-      <div data-compact-popover-rows className="min-h-0 overflow-y-auto py-1">
-        {listsMachines ? (
-          <RepositoryEnvironmentRows
-            machines={machines}
-            shownIds={shownIds}
-            repositoryKey={repository.key}
-            ordering={rendering.ordering}
-            bound={rendering.bound}
-            empty={<EmptyRows />}
-          />
-        ) : firstMember ? (
-          <LocalProjectRows projectId={firstMember.projectId} rendering={rendering} />
-        ) : (
-          <EmptyRows />
-        )}
+      <div
+        data-compact-popover-rows
+        data-sidebar-scroll={open || undefined}
+        className="min-h-0 overflow-y-auto py-1"
+      >
+        <EnvironmentRowActivationContext.Provider value={handleActivation}>
+          {listsMachines ? (
+            <RepositoryEnvironmentRows
+              machines={machines}
+              shownIds={shownIds}
+              repositoryKey={repository.key}
+              ordering={rendering.ordering}
+              bound={rendering.bound}
+              empty={<EmptyRows />}
+            />
+          ) : firstMember ? (
+            <LocalProjectRows projectId={firstMember.projectId} rendering={rendering} />
+          ) : (
+            <EmptyRows />
+          )}
+        </EnvironmentRowActivationContext.Provider>
       </div>
     </HoverPopoverPanel>
   );

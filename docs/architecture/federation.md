@@ -1019,8 +1019,11 @@ sidebar one large icon wide (56px), listing only top-level repositories.
   its project's rows from its project group's environments. A repository with
   no environments says so. Only one popover is shown (`useHoverPopoverGroup`):
   the first waits a short hover-intent delay, moving to another icon swaps it
-  at once, and it closes a moment after the pointer leaves both the icon and
-  the popover, with a strip joining them so the gap does not count as leaving.
+  at once while the pointer controls the popover, and it closes a moment after
+  the pointer leaves both the icon and the popover. A strip joins them across
+  the gap. Keyboard focus in the icon, rows or a nested menu holds the popover
+  open while the pointer moves. Modifier clicks select rows within the open
+  repository, and closing or switching the popover clears that selection.
   Choosing an environment opens it and closes the popover; clicking the icon
   still opens what it did. From the keyboard, Right moves into the popover, Up,
   Down, Home and End move among its rows, Enter opens one, and Escape, Left or

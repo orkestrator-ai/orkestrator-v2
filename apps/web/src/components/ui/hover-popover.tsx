@@ -30,13 +30,13 @@ export interface HoverPopoverGroup<K extends string> {
   /** The pointer entered a trigger or its popover. */
   enter: (key: K) => void;
   /** The pointer left a trigger or its popover. */
-  leave: () => void;
+  leave: (key: K) => void;
   /** Opens a trigger's popover at once (keyboard). */
   openNow: (key: K) => void;
   /** Closes at once. */
   close: () => void;
   /** Focus left a trigger or its popover: closes unless the pointer still holds it open. */
-  blurred: () => void;
+  blurred: (key: K) => void;
 }
 
 /**
@@ -53,6 +53,7 @@ export function useHoverPopoverGroup<K extends string>({
   const [openKey, setOpenKey] = useState<K | null>(null);
   const openKeyRef = useRef<K | null>(null);
   const hoveredRef = useRef<K | null>(null);
+  const focusedRef = useRef<K | null>(null);
   const openTimerRef = useRef<number | null>(null);
   const closeTimerRef = useRef<number | null>(null);
 
@@ -71,14 +72,13 @@ export function useHoverPopoverGroup<K extends string>({
   const enter = useCallback(
     (key: K) => {
       hoveredRef.current = key;
+      // A keyboard user can still be navigating rows or a nested modal.
+      if (focusedRef.current !== null) return;
+      clearTimers();
       if (openKeyRef.current !== null) {
-        clearTimers();
         if (openKeyRef.current !== key) show(key);
         return;
       }
-      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
-      if (openTimerRef.current !== null) window.clearTimeout(openTimerRef.current);
       openTimerRef.current = window.setTimeout(() => {
         openTimerRef.current = null;
         show(key);
@@ -87,19 +87,24 @@ export function useHoverPopoverGroup<K extends string>({
     [clearTimers, openDelay, show],
   );
 
-  const leave = useCallback(() => {
-    hoveredRef.current = null;
-    clearTimers();
-    if (openKeyRef.current === null) return;
-    closeTimerRef.current = window.setTimeout(() => {
-      closeTimerRef.current = null;
-      show(null);
-    }, closeDelay);
-  }, [clearTimers, closeDelay, show]);
+  const leave = useCallback(
+    (key: K) => {
+      if (hoveredRef.current !== key) return;
+      hoveredRef.current = null;
+      clearTimers();
+      if (openKeyRef.current === null || focusedRef.current === openKeyRef.current) return;
+      closeTimerRef.current = window.setTimeout(() => {
+        closeTimerRef.current = null;
+        show(null);
+      }, closeDelay);
+    },
+    [clearTimers, closeDelay, show],
+  );
 
   const openNow = useCallback(
     (key: K) => {
       clearTimers();
+      focusedRef.current = key;
       show(key);
     },
     [clearTimers, show],
@@ -107,12 +112,17 @@ export function useHoverPopoverGroup<K extends string>({
 
   const close = useCallback(() => {
     clearTimers();
+    focusedRef.current = null;
     show(null);
   }, [clearTimers, show]);
 
-  const blurred = useCallback(() => {
-    if (hoveredRef.current === null) close();
-  }, [close]);
+  const blurred = useCallback(
+    (key: K) => {
+      if (focusedRef.current === key) focusedRef.current = null;
+      if (openKeyRef.current === key && hoveredRef.current !== key) close();
+    },
+    [close],
+  );
 
   useEffect(() => clearTimers, [clearTimers]);
 
@@ -180,10 +190,22 @@ export function HoverPopoverPanel({
       const anchor = getAnchor();
       if (!anchor) return;
       const rect = anchor.getBoundingClientRect();
+      const rootZoom = getComputedStyle(document.documentElement).zoom ?? "";
+      const zoom = Number.parseFloat(rootZoom) / (rootZoom.endsWith("%") ? 100 : 1) || 1;
+      const left = rect.right / zoom;
+      const viewportHeight = window.innerHeight / zoom;
+      wrapper.style.setProperty(
+        "--hover-popover-available-height",
+        `${Math.max(0, viewportHeight - VIEWPORT_MARGIN_PX * 2)}px`,
+      );
+      wrapper.style.setProperty(
+        "--hover-popover-available-width",
+        `${Math.max(0, window.innerWidth / zoom - left - sideOffset - VIEWPORT_MARGIN_PX)}px`,
+      );
       const height = wrapper.offsetHeight;
-      const bottomLimit = window.innerHeight - VIEWPORT_MARGIN_PX - height;
-      const top = Math.max(VIEWPORT_MARGIN_PX, Math.min(rect.top - 4, bottomLimit));
-      wrapper.style.left = `${rect.right}px`;
+      const bottomLimit = viewportHeight - VIEWPORT_MARGIN_PX - height;
+      const top = Math.max(VIEWPORT_MARGIN_PX, Math.min(rect.top / zoom - 4, bottomLimit));
+      wrapper.style.left = `${left}px`;
       wrapper.style.top = `${top}px`;
     };
     place();
@@ -191,12 +213,13 @@ export function HoverPopoverPanel({
     window.addEventListener("scroll", place, true);
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(place) : null;
     observer?.observe(wrapper);
+    observer?.observe(document.documentElement);
     return () => {
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
       observer?.disconnect();
     };
-  }, [anchorKey, getAnchor, present]);
+  }, [anchorKey, getAnchor, present, sideOffset]);
 
   if (!present) return null;
 
@@ -204,6 +227,8 @@ export function HoverPopoverPanel({
     <div
       ref={wrapperRef}
       data-slot="hover-popover"
+      inert={!open}
+      aria-hidden={!open || undefined}
       className={cn(
         "fixed top-0 left-0 z-50",
         // A closing panel takes no pointer: it is already on its way out.

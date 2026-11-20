@@ -193,7 +193,7 @@ function CompactRepositoryIcon({
         )}
         onClick={onOpen}
         onPointerEnter={() => popover.enter(key)}
-        onPointerLeave={() => popover.leave()}
+        onPointerLeave={() => popover.leave(key)}
         onFocus={(event) => {
           if (takeSuppressedFocus()) return;
           if (focusVisible(event.currentTarget)) popover.openNow(key);
@@ -201,7 +201,7 @@ function CompactRepositoryIcon({
         onBlur={(event) => {
           const next = event.relatedTarget as HTMLElement | null;
           if (next && document.getElementById(popoverId)?.contains(next)) return;
-          popover.blurred();
+          popover.blurred(key);
         }}
         onKeyDown={(event) => {
           if (event.key === "ArrowRight") {
@@ -290,6 +290,7 @@ export function CompactRepositoryList({
   const { portalState } = useFederation();
   const layout = usePortalLayout();
   const selectProject = useUIStore((state) => state.selectProject);
+  const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const remoteActive = useRemoteWorkspaceStore((state) => state.active);
 
@@ -312,6 +313,11 @@ export function CompactRepositoryList({
   if (popover.openKey !== null && popover.openKey !== shownKey) setShownKey(popover.openKey);
   const shownRepository = repositories.find((repository) => repository.key === shownKey) ?? null;
   const popoverOpen = popover.openKey !== null && shownRepository !== null;
+  const selectionKey = popoverOpen ? shownKey : null;
+  // Checked rows belong to the repository currently shown in the panel.
+  useEffect(() => {
+    if (selectionKey !== null) return clearMultiSelection;
+  }, [clearMultiSelection, selectionKey]);
   const popoverRendering = useMemo(() => ({ ...rendering, machines }), [machines, rendering]);
   const clearFocusPending = useCallback(() => setFocusPending(false), []);
   const takeSuppressedFocus = () => {
@@ -444,9 +450,16 @@ export function CompactRepositoryList({
         onPointerEnter={() => {
           if (popover.openKey !== null) popover.enter(popover.openKey);
         }}
-        onPointerLeave={() => popover.leave()}
+        onPointerLeave={() => {
+          if (shownKey !== null) popover.leave(shownKey);
+        }}
         onDismiss={dismissPopover}
-        onBlurOutside={() => popover.blurred()}
+        onFocusInside={() => {
+          if (popover.openKey !== null) popover.openNow(popover.openKey);
+        }}
+        onBlurOutside={() => {
+          if (shownKey !== null) popover.blurred(shownKey);
+        }}
       />
     </nav>
   );

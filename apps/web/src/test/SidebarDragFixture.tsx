@@ -115,6 +115,8 @@ function install() {
   const alignment = params.has("alignment");
   const attentionTarget = params.has("attention-target");
   const activitySort = params.has("activity-sort");
+  const compactPopover = params.has("compact-popover");
+  const scrollRail = compactPopover && params.has("scroll");
   // `?merge-ready`: `p-env-1` and `q-env-1` have a PR ready to merge, while
   // `p-env-2`'s is blocked, so the two can be compared side by side.
   const signal = params.get("signal");
@@ -142,13 +144,14 @@ function install() {
     saved?.projects ??
     (groups ? ["p", "p2", "q", "q2"] : ["p", "q"])
       .concat(alignment ? ["solo"] : [])
+      .concat(scrollRail ? Array.from({ length: 9 }, (_, index) => `extra-${index + 1}`) : [])
       .map((id, order) => ({
         id,
         name: alignment && id === "p2" ? LONG_NAME : id,
         gitUrl:
           id === "solo"
             ? ""
-            : `https://github.com/acme/${id.startsWith("p") ? "source" : "target"}.git`,
+            : `https://github.com/acme/${id.startsWith("extra-") ? id : id.startsWith("p") ? "source" : "target"}.git`,
         localPath: null,
         addedAt: "2026-10-22T00:00:00Z",
         order,
@@ -174,7 +177,7 @@ function install() {
         ...row,
       }))
     : projects.flatMap((project) =>
-        [1, 2, 3].map((index) => ({
+        (scrollRail && project.id.startsWith("extra-") ? [1] : [1, 2, 3]).map((index) => ({
           id: `${project.id}-env-${index}`,
           name: `${project.id}-env-${index}`,
           projectId: project.id,
@@ -411,7 +414,7 @@ function install() {
     activitySortOrder: (params.get("order") as ActivitySortOrder | null) ?? "priority",
   });
   useMachineViewStore.setState({
-    grouping: "repository",
+    grouping: compactPopover ? "compact" : "repository",
     machineFilter: [],
     environmentOrdering: "machine",
     collapsedMachines: [],

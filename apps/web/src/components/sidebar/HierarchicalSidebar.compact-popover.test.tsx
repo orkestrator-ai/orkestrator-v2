@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { environmentKey } from "@orkestrator/protocol/federation";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import {
@@ -19,10 +20,12 @@ import {
   connectionList,
   installDesktopFake,
   remoteConnection,
+  SELF_NODE_ID,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
+import { CompactRepositoryList } from "./CompactRepositoryList";
 import { appCommandStore } from "@/test/app-command-store";
 import {
   installControlledTimeout,
@@ -69,9 +72,21 @@ const featureB = {
   order: 2,
 } as Environment;
 
-function installTwoMachines() {
+function installTwoMachines(manualOrder = false) {
+  const leaf = remoteConnection("leaf", "leaf", "teal");
   installDesktopFake({
-    list: connectionList([remoteConnection("leaf", "leaf", "teal")]),
+    list: connectionList([leaf]),
+    layout: manualOrder
+      ? {
+          manualOrderSupported: true,
+          environmentOrder: {
+            "github.com/acme/app": [
+              environmentKey({ backendId: leaf.backendId!, environmentId: "leaf-app-env" }),
+              environmentKey({ backendId: SELF_NODE_ID, environmentId: featureA.id }),
+            ],
+          },
+        }
+      : undefined,
     datasets: {
       leaf: {
         projects: [
@@ -153,6 +168,7 @@ beforeEach(() => {
   useUIChromeStore.setState({ environmentSortMode: "project" });
   useMachineViewStore.setState({
     grouping: "compact",
+    environmentOrdering: "machine",
     machineFilter: [],
     collapsedMachines: [],
     collapsedProjectKeys: [],
@@ -291,6 +307,52 @@ describe("hovering an icon", () => {
     expect(within(shown).getByText(/Needs attention/)).toBeTruthy();
   });
 
+  test("uses the command node's saved manual order across machines", async () => {
+    installTwoMachines(true);
+    useMachineViewStore.setState({ environmentOrdering: "manual" });
+    renderSidebar();
+    const [icon] = await findCompactIcons(2);
+    const shown = hoverOpen(icon!);
+    await waitFor(() => {
+      expect(
+        within(shown)
+          .getAllByRole("button", { name: /feature-a|remote-app/ })
+          .map((row) => row.getAttribute("aria-label")?.split(",")[0]),
+      ).toEqual(["remote-app", "feature-a"]);
+    });
+  });
+
+  test("a window with no named machines draws its project group's rows", async () => {
+    renderInAppCommandScope(
+      <FederationProvider>
+        <CompactRepositoryList
+          machines={[]}
+          localProjects={[localProject]}
+          environments={[featureA, featureB]}
+          loading={false}
+          onAddProject={() => {}}
+          rendering={{
+            ordering: "machine",
+            bound: {
+              renderEnvironment: (id) => <button>{id}</button>,
+              selectedEnvironmentId: null,
+              onDragEnd: () => {},
+              onCreate: () => {},
+            },
+            projectEnvironments: (id) => (id === localProject.id ? [featureB, featureA] : []),
+          }}
+        />
+      </FederationProvider>,
+    );
+    const [icon] = await findCompactIcons(1);
+    const shown = hoverOpen(icon!);
+    expect(
+      within(shown)
+        .getAllByRole("button")
+        .map((row) => row.textContent),
+    ).toEqual(["feature-b", "feature-a"]);
+  });
+
   test("a project with no environments shows its name and an empty state", async () => {
     appCommandStore(environmentStore).getState().setEnvironments([localHome]);
     renderSidebar();
@@ -303,6 +365,78 @@ describe("hovering an icon", () => {
 });
 
 describe("opening from the popover", () => {
+  test("opens a remote row on its owning workspace and dismisses the panel", async () => {
+    installTwoMachines();
+    renderSidebar();
+    const [icon] = await findCompactIcons(2);
+    const shown = hoverOpen(icon!);
+    fireEvent.click(await within(shown).findByRole("button", { name: /^remote-app/ }));
+    expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+      nodeId: remoteConnection("leaf", "leaf", "teal").backendId,
+      projectId: "leaf-app",
+      environmentId: "leaf-app-env",
+    });
+    expect(popover()?.dataset.state).toBe("closed");
+  });
+
+  test("opens a deleting row even though it is outside the selectable range", async () => {
+    appCommandStore(environmentStore).setState({ deletingEnvironments: new Set([featureB.id]) });
+    renderSidebar();
+    const [icon] = await findCompactIcons(1);
+    const shown = hoverOpen(icon!);
+    const row = within(shown).getByRole("button", { name: /^feature-b/ });
+    expect(row.hasAttribute("data-environment-selection-id")).toBe(false);
+    fireEvent.click(row);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(featureB.id);
+    expect(popover()?.dataset.state).toBe("closed");
+  });
+
+  test("modifier clicks select a displayed range and a plain click opens the row", async () => {
+    const featureC = { ...featureA, id: "feature-c", name: "feature-c", order: 3 };
+    appCommandStore(environmentStore)
+      .getState()
+      .setEnvironments([localHome, featureA, featureB, featureC]);
+    renderSidebar();
+    const [icon] = await findCompactIcons(1);
+    const shown = hoverOpen(icon!);
+    const [a, b, c] = within(shown).getAllByRole("button", { name: /^feature-/ });
+    fireEvent.click(a!, { ctrlKey: true });
+    expect(
+      within(shown)
+        .getAllByRole("checkbox")
+        .map((box) => box.getAttribute("aria-checked")),
+    ).toEqual(["true", "false", "false"]);
+    fireEvent.click(c!, { shiftKey: true });
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([
+      featureA.id,
+      featureB.id,
+      featureC.id,
+    ]);
+    fireEvent.click(b!, { metaKey: true });
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([
+      featureA.id,
+      featureC.id,
+    ]);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+    expect(shown.dataset.state).toBe("open");
+    fireEvent.click(b!);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(featureB.id);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([]);
+    expect(shown.dataset.state).toBe("closed");
+  });
+
+  test("switching repositories ends the previous row selection", async () => {
+    installTwoMachines();
+    renderSidebar();
+    const [app, tools] = await findCompactIcons(2);
+    const shown = hoverOpen(app!);
+    fireEvent.click(within(shown).getByRole("button", { name: /^feature-a/ }), { metaKey: true });
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([featureA.id]);
+    fireEvent.pointerLeave(app!);
+    fireEvent.pointerEnter(tools!);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([]);
+    expect(tools!.getAttribute("aria-expanded")).toBe("true");
+  });
   test("clicking an environment opens it as the full list does, and closes the popover", async () => {
     renderSidebar();
     const [icon] = await findCompactIcons(1);
@@ -325,6 +459,50 @@ describe("opening from the popover", () => {
 });
 
 describe("the keyboard", () => {
+  test("keeps the focused row when the pointer leaves or enters another icon", async () => {
+    installTwoMachines();
+    renderSidebar();
+    const [app, tools] = await findCompactIcons(2);
+    hoverOpen(app!);
+    act(() => app!.focus());
+    fireEvent.keyDown(app!, { key: "ArrowRight" });
+    const row = within(popover()!).getByRole("button", { name: /^feature-a/ });
+    fireEvent.pointerLeave(app!);
+    settleClose();
+    fireEvent.pointerEnter(tools!);
+    expect(document.activeElement).toBe(row);
+    expect(tools!.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.keyDown(row, { key: "Escape" });
+    expect(document.activeElement).toBe(app!);
+    expect(popover()?.parentElement?.hasAttribute("inert")).toBe(true);
+  });
+
+  test("null relatedTarget dismisses a keyboard-opened panel", async () => {
+    renderSidebar();
+    const [icon] = await findCompactIcons(1);
+    act(() => icon!.focus());
+    fireEvent.keyDown(icon!, { key: "ArrowRight" });
+    const row = within(popover()!).getByRole("button", { name: /^feature-a/ });
+    expect(document.activeElement).toBe(row);
+    await act(async () => row.blur());
+    expect(popover()?.dataset.state).toBe("closed");
+  });
+
+  test("focus leaving closes a panel when the pointer is holding another icon", async () => {
+    installTwoMachines();
+    renderSidebar();
+    const [app, tools] = await findCompactIcons(2);
+    hoverOpen(app!);
+    act(() => tools!.focus());
+    fireEvent.keyDown(tools!, { key: "ArrowRight" });
+    const row = await within(popover()!).findByRole("button", { name: /^tools-feature/ });
+    const outside = screen.getByRole("button", { name: "Sidebar view: Compact" });
+    await act(async () => outside.focus());
+    expect(document.activeElement).toBe(outside);
+    expect(
+      row.closest('[data-testid="compact-repository-popover"]')?.getAttribute("data-state"),
+    ).toBe("closed");
+  });
   test("Right moves into the popover; Up and Down move among its rows; Enter opens one", async () => {
     renderSidebar();
     const [icon] = await findCompactIcons(1);

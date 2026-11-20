@@ -3657,8 +3657,8 @@ browser tab exercises recovery when a project's summary still advertises a
 checkout but the live read omits the project.
 
 Start a profile with `mise run dev:test --profile create-handoff --fixture
---headless --agent-platforms pi --no-agent-credentials`. Once the profile is
-ready, run:
+--headless --agent-platforms pi --no-agent-credentials`. Run the check once
+the profile is ready.
 
 ```sh
 ORKESTRATOR_AGENT_TEST_PROFILE=create-handoff ORKESTRATOR_AGENT_TEST_HANDOFF_PAIRING=1 \

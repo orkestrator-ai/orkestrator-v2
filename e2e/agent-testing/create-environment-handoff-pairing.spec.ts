@@ -213,12 +213,15 @@ test("Create Environment switches to and submits on a backend one release behind
       const failure = recoveryPage.getByText(
         `Could not open the new environment form on ${leafName}`,
       );
-      await expect(failure).toBeVisible();
+      await expect(failure).toBeInViewport({ ratio: 1 });
       await expect(recovered.getByLabel("Environment name (optional)")).toHaveValue(
         "Keep my draft",
       );
       await expect(recovered.getByRole("checkbox", { name: "Launch agent" })).not.toBeChecked();
-      await recoveryPage.screenshot({ path: testInfo.outputPath("recovered-form.png") });
+      await recoveryPage.screenshot({
+        path: testInfo.outputPath("recovered-form.png"),
+        animations: "disabled",
+      });
     } finally {
       await recoveryPage.close();
     }

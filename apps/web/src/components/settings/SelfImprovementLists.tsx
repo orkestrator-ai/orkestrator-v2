@@ -1,4 +1,5 @@
 import type {
+  SelfImprovementMachineResult,
   SelfImprovementRunSummary,
   SelfImprovementTheme,
   SelfImprovementTrackedItem,
@@ -208,6 +209,7 @@ export function LastRunDetails({
       {run.outcome === "succeeded" && nothing ? (
         <p className="text-xs text-muted-foreground">Nothing new to file and no fix to judge.</p>
       ) : null}
+      {run.machines && run.machines.length > 0 ? <MachineList machines={run.machines} /> : null}
       <div className="space-y-0.5 text-xs text-muted-foreground">
         {conversations.enabled ? (
           <p>
@@ -238,6 +240,50 @@ export function LastRunDetails({
           ))}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+/** What a run read from one connected leaf node, in words. */
+export function machineResultText(machine: SelfImprovementMachineResult): string {
+  if (machine.diagnostics === "needs-update") return "needs an update to take part";
+  const parts = [machine.diagnostics === "read" ? "diagnostics" : "diagnostics could not be read"];
+  if (machine.conversations === "read") {
+    parts.push(
+      `${machine.conversationParts} conversation part${machine.conversationParts === 1 ? "" : "s"}`,
+    );
+  } else if (machine.conversations === "failed") {
+    parts.push("conversations could not be read");
+  } else if (machine.conversations === "needs-update") {
+    parts.push("conversations need an update");
+  }
+  return parts.join(", ");
+}
+
+function machineFailed(machine: SelfImprovementMachineResult): boolean {
+  return (
+    machine.diagnostics !== "read" || ["failed", "needs-update"].includes(machine.conversations)
+  );
+}
+
+/** The connected leaf nodes a command node's run read too. */
+function MachineList({ machines }: { machines: readonly SelfImprovementMachineResult[] }) {
+  return (
+    <div>
+      <p className="text-xs font-medium text-foreground">
+        Also read {machines.length} connected machine{machines.length === 1 ? "" : "s"}
+      </p>
+      <ul className="mt-1 space-y-0.5 text-xs">
+        {machines.map((machine) => (
+          <li
+            key={machine.nodeId}
+            className={machineFailed(machine) ? "text-amber-400" : "text-muted-foreground"}
+          >
+            <span className="text-foreground">{machine.name}</span>
+            {machine.appVersion ? ` (app ${machine.appVersion})` : ""}: {machineResultText(machine)}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

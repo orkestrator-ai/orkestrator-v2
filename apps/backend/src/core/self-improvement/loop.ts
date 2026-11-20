@@ -31,14 +31,22 @@ import {
 } from "@orkestrator/protocol/self-improvement";
 import { ticketLabelKey } from "@orkestrator/protocol/ticket-labels";
 import type { BundleData } from "./bundle.js";
-import { type InsightRun, runInsights } from "./insights/analyze.js";
+import { mergeMachineSignals, newestVersion } from "./fleet.js";
+import {
+  type InsightLeaf,
+  type InsightLeafResult,
+  type InsightRun,
+  runInsights,
+} from "./insights/analyze.js";
 import type { ModelRunner } from "./insights/model.js";
 import type { InsightProgress } from "./progress.js";
 import { IMPROVEMENT_LABEL, INSIGHT_LABEL, insightTicketFor, LABELS } from "./insights/tickets.js";
 import type { TranscriptSources } from "./insights/transcripts.js";
+import type { LeafBundle } from "./leaves.js";
 import {
   applyLedgerChange,
   buildDigest,
+  type DigestMachine,
   type DigestRecord,
   type DigestSignal,
   IMPROVED_RATIO,
@@ -51,7 +59,7 @@ import {
   saveLedger,
 } from "./ledger.js";
 import { renderDigest } from "./report.js";
-import { extractSignals } from "./signals.js";
+import { extractSignals, versionTimeline, UNKNOWN_VERSION } from "./signals.js";
 
 /** New diagnostics tickets in any 24 hours, however often runs happen. */
 export const MAX_NEW_TICKETS = SELF_IMPROVEMENT_LIMITS.diagnosticsTicketsPerDay;
@@ -100,8 +108,11 @@ export interface Board {
 
 export type LoopSummary = Omit<
   SelfImprovementRunSummary,
-  "trigger" | "startedAt" | "finishedAt" | "outcome" | "error"
->;
+  "trigger" | "startedAt" | "finishedAt" | "outcome" | "error" | "machines"
+> & {
+  /** What the conversation review did with each leaf asked, by node id; the service reports it. */
+  conversationLeaves?: Record<string, InsightLeafResult>;
+};
 
 export interface LoopOptions {
   stateDir: string;
@@ -119,7 +130,36 @@ export interface LoopOptions {
   /** Told as the conversation review checks files and reads parts. */
   insightProgress?: InsightProgress;
   /** The conversation review: a model runner and where transcripts are. `false` turns it off. */
-  insights?: { runner: ModelRunner; sources: TranscriptSources; excludeDirs: string[] } | false;
+  insights?:
+    | {
+        runner: ModelRunner;
+        sources: TranscriptSources;
+        excludeDirs: string[];
+        /** Connected leaf nodes whose conversations are read too (a command node). */
+        leaves?: Array<Omit<InsightLeaf, "versionAt">>;
+      }
+    | false;
+  /**
+   * On a command node: this machine, and the connected leaves whose
+   * diagnostics were read. Their signals are merged with this machine's
+   * (`fleet.ts`).
+   */
+  fleet?: { self: { nodeId: string; name: string }; bundles: LeafBundle[] };
+}
+
+function digestMachine(nodeId: string, name: string, data: BundleData): DigestMachine {
+  return {
+    nodeId,
+    name,
+    sha256: data.sha256,
+    createdAt: data.manifest.createdAt,
+    appVersion: data.manifest.appVersion,
+    platform: data.manifest.platform,
+    arch: data.manifest.arch,
+    essentialEntries: data.essential.length,
+    healthRows: data.health.length,
+    hasDatabase: data.database !== null,
+  };
 }
 
 function shortHash(value: string): string {
@@ -206,6 +246,12 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
   const step = options.onStep ?? (() => {});
   const dryRun = options.dryRun === true;
   const summary = emptySummary(Boolean(options.insights));
+  const leafBundles = options.fleet?.bundles ?? [];
+  // A ticket done now is fixed in releases after every version running now, on any machine.
+  const runningVersion = newestVersion([
+    data.manifest.appVersion,
+    ...leafBundles.map((leaf) => leaf.data.manifest.appVersion),
+  ]);
 
   // 1. The board.
   step("board");
@@ -263,7 +309,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
         entry.signature,
         {
           status: "fixed",
-          fixedAfter: data.manifest.appVersion,
+          fixedAfter: runningVersion,
           ...(ticket.prUrl ? { pr: ticket.prUrl } : {}),
         },
         digests,
@@ -290,7 +336,17 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
   if (reconciled) persist();
 
   // 2. Conversations.
-  const extracted = extractSignals(data);
+  const extracted =
+    options.fleet && leafBundles.length > 0
+      ? mergeMachineSignals([
+          { ...options.fleet.self, extracted: extractSignals(data) },
+          ...leafBundles.map((leaf) => ({
+            nodeId: leaf.nodeId,
+            name: leaf.name,
+            extracted: extractSignals(leaf.data),
+          })),
+        ])
+      : extractSignals(data);
   let insightRun: InsightRun | null = null;
   if (options.insights) {
     step("reading-conversations");
@@ -306,6 +362,22 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
         statusOf: (slug) => ledger.entries[`insight:${slug}`]?.status ?? null,
         onThemes: () => step("grouping-themes"),
         ...(options.insightProgress ? { progress: options.insightProgress } : {}),
+        ...(options.insights.leaves && options.insights.leaves.length > 0
+          ? {
+              leaves: options.insights.leaves.map((leaf) => {
+                const bundle = leafBundles.find((entry) => entry.nodeId === leaf.nodeId);
+                return bundle
+                  ? {
+                      ...leaf,
+                      versionAt: versionTimeline(
+                        bundle.data.essential,
+                        bundle.data.manifest.appVersion || UNKNOWN_VERSION,
+                      ).versionAt,
+                    }
+                  : leaf;
+              }),
+            }
+          : {}),
       });
       extracted.signals.push(...insightRun.signals);
       // Saved notes not yet grouped would make every theme look rarer than it
@@ -319,6 +391,7 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
         costUsd: Math.round(insightRun.costUsd * 100) / 100,
         errors: insightRun.errors,
       });
+      summary.conversationLeaves = insightRun.leaves;
     } catch (error) {
       summary.conversations.errors.push((error as Error).message);
     }
@@ -329,7 +402,14 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
   const createdAt = Date.parse(data.manifest.createdAt);
   const previous =
     digests.filter((digest) => Date.parse(digest.bundle.createdAt) < createdAt).at(-1) ?? null;
-  const digest = buildDigest(data, extracted, previous, ledger, now());
+  const machines =
+    options.fleet && leafBundles.length > 0
+      ? [
+          digestMachine(options.fleet.self.nodeId, options.fleet.self.name, data),
+          ...leafBundles.map((leaf) => digestMachine(leaf.nodeId, leaf.name, leaf.data)),
+        ]
+      : undefined;
+  const digest = buildDigest(data, extracted, previous, ledger, now(), machines);
   summary.digestId = digest.id;
 
   // 4. Verdicts. The ledger changes once the board has been told (step 5).

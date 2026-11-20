@@ -6,7 +6,7 @@
  * Holds signatures, numbers, ticket and PR references and short notes a person
  * wrote. Never log content.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { BundleData } from "./bundle.js";
@@ -133,6 +133,20 @@ export interface Judgement {
   unit: string;
 }
 
+/** One machine's bundle in a digest that covers several. */
+export interface DigestMachine {
+  nodeId: string;
+  name: string;
+  sha256: string;
+  createdAt: string;
+  appVersion: string;
+  platform: string;
+  arch: string;
+  essentialEntries: number;
+  healthRows: number;
+  hasDatabase: boolean;
+}
+
 export interface DigestRecord {
   schemaVersion: typeof DIGEST_SCHEMA_VERSION;
   id: string;
@@ -150,6 +164,12 @@ export interface DigestRecord {
     healthRows: number;
     hasDatabase: boolean;
   };
+  /**
+   * On a command node that also read its leaves: every machine whose
+   * diagnostics are in this digest, this one first. `bundle` above is this
+   * machine's; signals and observed hours cover them all. Absent otherwise.
+   */
+  machines?: DigestMachine[];
   window: ExtractedSignals["window"];
   observedHours: ExtractedSignals["observedHours"];
   signals: DigestSignal[];
@@ -331,8 +351,18 @@ export function buildDigest(
   previous: DigestRecord | null,
   ledger: Ledger,
   now: Date = new Date(),
+  machines?: readonly DigestMachine[],
 ): DigestRecord {
-  const id = digestIdOf(data);
+  // A digest of several machines is named by all their bundles, so a leaf's new data is a new digest.
+  const id =
+    machines && machines.length > 0
+      ? digestIdOf({
+          ...data,
+          sha256: createHash("sha256")
+            .update(machines.map((machine) => machine.sha256).join("\n"))
+            .digest("hex"),
+        })
+      : digestIdOf(data);
   const previousValues = new Map(
     previous?.signals.map((signal) => [signal.signature, signal]) ?? [],
   );
@@ -428,6 +458,7 @@ export function buildDigest(
       healthRows: data.health.length,
       hasDatabase: data.database !== null,
     },
+    ...(machines && machines.length > 0 ? { machines: [...machines] } : {}),
     window: extracted.window,
     observedHours: extracted.observedHours,
     signals,

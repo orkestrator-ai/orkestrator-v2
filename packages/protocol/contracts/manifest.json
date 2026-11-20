@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1084,
-    "defined": 1084,
+    "commands": 1086,
+    "defined": 1086,
     "untyped": 0,
     "events": 48
   },
@@ -1507,6 +1507,24 @@
       "critical": [],
       "argsDigest": "sha256:3abc33044de8f3d2b68f8dc7920928edaddb1372213db50ebb5538ab375b3fc3",
       "resultDigest": "sha256:72a502e0700129e7d8f6c1d0b43e23b54f6b60c87ff633f2910efb8165e04479"
+    },
+    "collect_self_improvement_conversations": {
+      "domain": "system",
+      "since": 2,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ea3074f5f174463204a383700f724c9b36c291d4d4fdd6034486fcce273f540c",
+      "resultDigest": "sha256:5a615dbf88a52f87022e10fbfb6daf5288bd04c729e235c6e4e4e12fa0a119a0"
+    },
+    "collect_self_improvement_diagnostics": {
+      "domain": "system",
+      "since": 2,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:57167a617095ad9edc9b86373fd2697e81cb22d9c9d7ee658f72e5db55f64fd1",
+      "resultDigest": "sha256:ac7a2193da35edbda9b6c69e7f0032ee1b50553daf1498936748d9ad42652afa"
     },
     "collect_shared_usage_readings": {
       "domain": "accounts",

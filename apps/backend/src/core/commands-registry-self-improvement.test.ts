@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { CommandContext } from "./commands-context.js";
-import { kanbanBoard } from "./commands-registry-self-improvement.js";
+import {
+  kanbanBoard,
+  registerSelfImprovementCommands,
+  selfImprovementFleet,
+} from "./commands-registry-self-improvement.js";
+import type { CommandRegistrar } from "./commands-registry-types.js";
+import { NODE_ROUTING_EXCLUDED_COMMANDS } from "./nodes/node-routing.js";
 import { withTemporaryStorage } from "./storage-test-support.js";
 
 describe("the self-improvement board over Kanban storage", () => {
@@ -54,5 +60,98 @@ describe("the self-improvement board over Kanban storage", () => {
       expect(await board.locate!("missing")).toBeNull();
       expect((await board.list()).map((ticket) => ticket.id)).toEqual([id]);
     });
+  });
+});
+
+describe("the leaf side of a command node's run", () => {
+  function handlers() {
+    const registered = new Map<string, (args: unknown, context: CommandContext) => unknown>();
+    const register = ((target: string | { name: string }, handler: never) => {
+      registered.set(typeof target === "string" ? target : target.name, handler);
+    }) as unknown as CommandRegistrar;
+    registerSelfImprovementCommands(register);
+    return registered;
+  }
+
+  test("answers only a command node attached to this node", async () => {
+    const leafHandlers = handlers();
+    const context = {
+      nodes: { listControllers: () => [{ controllerId: "bk_command" }] },
+    } as unknown as CommandContext;
+    for (const name of [
+      "collect_self_improvement_diagnostics",
+      "collect_self_improvement_conversations",
+    ]) {
+      const handler = leafHandlers.get(name)!;
+      await expect(Promise.resolve().then(() => handler({}, context))).rejects.toThrow(
+        "Expected controllerId",
+      );
+      await expect(
+        Promise.resolve().then(() => handler({ controllerId: "bk_stranger" }, context)),
+      ).rejects.toThrow("not attached");
+      // Never reachable through another node's routing.
+      expect(NODE_ROUTING_EXCLUDED_COMMANDS.has(name)).toBe(true);
+    }
+  });
+});
+
+describe("the leaves a command node's run reads", () => {
+  test("are its connected nodes, called over its own link; other nodes have none", async () => {
+    const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const link = {
+      connected: true,
+      hello: null,
+      invoke: async (command: string, args: Record<string, unknown>) => {
+        calls.push({ command, args });
+        return command === "collect_self_improvement_diagnostics"
+          ? { archive: Buffer.from("bundle").toString("base64") }
+          : { segments: [], skipped: [], waiting: 4 };
+      },
+    };
+    const nodes = {
+      mode: () => "command",
+      selfIdentity: async () => "bk_desk",
+      selfProfile: async () => ({ displayName: "Desk" }),
+      listNodes: async () => ({
+        nodes: [
+          {
+            nodeId: "bk_vps",
+            displayName: "VPS",
+            fallbackName: "vps",
+            connection: { state: "connected" },
+          },
+          {
+            nodeId: "bk_off",
+            displayName: "Off",
+            fallbackName: "off",
+            connection: { state: "offline" },
+          },
+        ],
+      }),
+      link: (nodeId: string) => (nodeId === "bk_vps" ? link : null),
+    };
+    const fleet = await selfImprovementFleet({ nodes } as unknown as CommandContext);
+    expect(fleet?.self).toEqual({ nodeId: "bk_desk", name: "Desk" });
+    expect(fleet?.leaves.map((leaf) => [leaf.nodeId, leaf.name])).toEqual([["bk_vps", "VPS"]]);
+    const leaf = fleet!.leaves[0]!;
+    expect((await leaf.diagnostics()).toString()).toBe("bundle");
+    const cursor = { schemaVersion: 1 as const, conversations: {} };
+    expect(await leaf.conversations({ cursor, maxSegments: 10 })).toEqual({
+      segments: [],
+      skipped: [],
+      waiting: 4,
+    });
+    expect(calls.map((call) => [call.command, call.args.controllerId])).toEqual([
+      ["collect_self_improvement_diagnostics", "bk_desk"],
+      ["collect_self_improvement_conversations", "bk_desk"],
+    ]);
+    expect(calls[1]!.args).toMatchObject({ cursor, maxSegments: 10 });
+
+    expect(
+      await selfImprovementFleet({
+        nodes: { ...nodes, mode: () => "leaf" },
+      } as unknown as CommandContext),
+    ).toBeNull();
+    expect(await selfImprovementFleet({} as CommandContext)).toBeNull();
   });
 });

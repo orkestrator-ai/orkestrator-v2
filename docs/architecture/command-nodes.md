@@ -916,6 +916,19 @@ never a credential. A node whose collect fails (an unknown command included)
 is reported as failed for that pass. The model
 is in [agent-accounts.md](agent-accounts.md#shared-readings).
 
+## Self-improvement across nodes
+
+A self-improvement run on a command node reads each connected leaf as well as
+itself. The command node dials out over its own link: it collects each
+leaf's diagnostics bundle (`collect_self_improvement_diagnostics`) and its
+unread conversation parts after read positions the command node keeps for it
+(`collect_self_improvement_conversations`). Both commands only read, run only
+over the link of an attached command node and are never routed. The command
+node merges the signals, runs the model and files the tickets on its own
+board; a leaf that fails or is offline is listed in the run's summary and
+left out. The model is in
+[self-improvement.md](self-improvement.md#leaf-nodes).
+
 ## Projects on leaf nodes
 
 - **Copying a project to another machine.** Any project's menu offers

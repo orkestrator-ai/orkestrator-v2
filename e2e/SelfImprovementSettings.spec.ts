@@ -81,3 +81,23 @@ test("a preview lists the parts it would read without claiming to have read them
   await expect(dialog.getByText("A preview calls no model, so no notes are taken")).toBeVisible();
   await expect(dialog.getByText(/notes found so far/)).toHaveCount(0);
 });
+
+test("a command node's last run lists what it read from each connected machine", async ({
+  page,
+}) => {
+  await page.goto("/self-improvement-settings?leaves");
+  await expect(page.getByText("Also read 3 connected machines")).toBeVisible();
+  await expect(page.getByText("build-vps").locator("..")).toHaveText(
+    "build-vps (app 2.41.0): diagnostics, 9 conversation parts",
+  );
+  await expect(page.getByText("travel-laptop").locator("..")).toHaveText(
+    "travel-laptop (app 2.40.2): diagnostics, conversations could not be read",
+  );
+  await expect(page.getByText("old-mini").locator("..")).toHaveText(
+    "old-mini: needs an update to take part",
+  );
+
+  await page.goto("/self-improvement-settings?finished");
+  await expect(page.getByText("storage snapshot.failed: ENOSPC").first()).toBeVisible();
+  await expect(page.getByText(/connected machine/)).toHaveCount(0);
+});

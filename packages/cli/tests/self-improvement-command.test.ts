@@ -114,6 +114,36 @@ describe("orkestrator self-improvement run --wait", () => {
     expect(run.out).toContain("new ticket #7");
   });
 
+  test("names each connected machine a command node's run read", async () => {
+    const box = await fixture({
+      lastRun: lastRun({
+        machines: [
+          {
+            nodeId: "bk_vps",
+            name: "build-vps",
+            diagnostics: "read",
+            appVersion: "2.41.0",
+            conversations: "read",
+            conversationParts: 9,
+          },
+          {
+            nodeId: "bk_old",
+            name: "old-mini",
+            diagnostics: "needs-update",
+            conversations: "off",
+            conversationParts: 0,
+          },
+        ],
+      }),
+    });
+    const run = await box.run(["self-improvement", "run", "--wait", "--request-id", "si-4"]);
+    expect(run.code).toBe(0);
+    expect(run.out).toContain(
+      "machine build-vps (app 2.41.0): diagnostics read, conversations read (9 parts)",
+    );
+    expect(run.out).toContain("machine old-mini: diagnostics needs-update");
+  });
+
   test("exits as failed when its run failed, with the fixed reason", async () => {
     const box = await fixture({
       lastRun: lastRun({ outcome: "failed", error: "Could not read the project's board." }),

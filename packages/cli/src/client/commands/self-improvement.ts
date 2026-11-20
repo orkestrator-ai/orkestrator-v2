@@ -39,6 +39,17 @@ function runLines(run: SelfImprovementRunSummary): string[] {
     );
   }
   for (const error of run.conversations.errors) lines.push(`  conversation review: ${error}`);
+  for (const machine of run.machines ?? []) {
+    const conversations =
+      machine.conversations === "read"
+        ? `, conversations read (${machine.conversationParts} parts)`
+        : machine.conversations === "off"
+          ? ""
+          : `, conversations ${machine.conversations}`;
+    lines.push(
+      `  machine ${machine.name}${machine.appVersion ? ` (app ${machine.appVersion})` : ""}: diagnostics ${machine.diagnostics}${conversations}`,
+    );
+  }
   return lines;
 }
 
@@ -85,7 +96,7 @@ export const selfImprovementCommands: CommandSpec[] = [
     action: "self-improvement.run",
     summary: "Start a self-improvement run (experimental); --wait follows it to the end.",
     description:
-      "Exports this machine's diagnostics, reviews conversations when that is on, and files what it finds on the chosen project's board. --dry-run reports what it would file without filing it or calling a model.",
+      "Exports this machine's diagnostics (on a command node, its connected leaf nodes' too), reviews conversations when that is on, and files what it finds on the chosen project's board. --dry-run reports what it would file without filing it or calling a model.",
     positionals: [],
     options: [
       {

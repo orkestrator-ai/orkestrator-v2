@@ -55,6 +55,18 @@ const ADMIN = new Set([
   "reconcile_workflow_scheduling",
 ]);
 
+/** `internal`: the leaf side of a command node's self-improvement run, over its link only. */
+const INTERNAL = new Set([
+  "collect_self_improvement_diagnostics",
+  "collect_self_improvement_conversations",
+]);
+
+/** Commands added after version 1. */
+const SINCE: Record<string, number> = {
+  collect_self_improvement_diagnostics: 2,
+  collect_self_improvement_conversations: 2,
+};
+
 const CRITICAL: Record<string, readonly string[]> = {
   request_host_update: ["version", "drain"],
   cancel_host_update: ["jobId"],
@@ -65,14 +77,17 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("system definitions", () => {
-  it("defines the domain's 52 commands once each, since version 1", () => {
+  it("defines the domain's 54 commands once each, since version 1 unless recorded", () => {
     const names = SYSTEM_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(52);
-    expect(new Set(names).size).toBe(52);
+    expect(names).toHaveLength(54);
+    expect(new Set(names).size).toBe(54);
     expect(systemDomain).toMatchObject({ name: "system", version: 2, min: 1 });
     for (const def of SYSTEM_COMMANDS) {
       expect(def.domain).toBe(systemDomain);
-      expect(def.since).toBe(1);
+      expect({ name: def.name, since: def.since }).toEqual({
+        name: def.name,
+        since: SINCE[def.name] ?? 1,
+      });
       expect(def.encoded).toBe(false);
     }
   });
@@ -85,7 +100,7 @@ describe("system definitions", () => {
       });
       expect({ name: def.name, access: def.access }).toEqual({
         name: def.name,
-        access: ADMIN.has(def.name) ? "admin" : "workspace",
+        access: ADMIN.has(def.name) ? "admin" : INTERNAL.has(def.name) ? "internal" : "workspace",
       });
       expect({ name: def.name, critical: [...def.critical] }).toEqual({
         name: def.name,

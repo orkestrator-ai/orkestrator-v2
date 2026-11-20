@@ -164,6 +164,53 @@ describe("Settings → Self-improvement", () => {
     ).toBeTruthy();
   });
 
+  test("lists what a command node's run read from each connected machine", async () => {
+    render(
+      fakeApi(
+        status({
+          lastRun: {
+            ...RUN,
+            machines: [
+              {
+                nodeId: "bk_vps",
+                name: "VPS",
+                diagnostics: "read",
+                appVersion: "2.31.0",
+                conversations: "read",
+                conversationParts: 4,
+              },
+              {
+                nodeId: "bk_old",
+                name: "Old laptop",
+                diagnostics: "needs-update",
+                conversations: "needs-update",
+                conversationParts: 0,
+              },
+              {
+                nodeId: "bk_away",
+                name: "Away",
+                diagnostics: "failed",
+                conversations: "off",
+                conversationParts: 0,
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    expect(await screen.findByText("Also read 3 connected machines")).toBeTruthy();
+    const item = (name: string) => screen.getByText(name).closest("li")?.textContent;
+    expect(item("VPS")).toBe("VPS (app 2.31.0): diagnostics, 4 conversation parts");
+    expect(item("Old laptop")).toBe("Old laptop: needs an update to take part");
+    expect(item("Away")).toBe("Away: diagnostics could not be read");
+  });
+
+  test("a run that read no other machine lists none", async () => {
+    render(fakeApi(status()));
+    await screen.findAllByText("Agents keep reaching for npm");
+    expect(screen.queryByText(/connected machine/) === null).toBe(true);
+  });
+
   test("Run now starts a run and follows it", async () => {
     const api = fakeApi(status());
     render(api);

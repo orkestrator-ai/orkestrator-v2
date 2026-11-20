@@ -1198,6 +1198,90 @@ describe("build pipeline multi-model review", () => {
     );
   });
 
+  test.each(["corrected", "exhausted"] as const)(
+    "tool-v1 Build Pipeline consolidation with disputes is %s",
+    async (outcome) => {
+      await withPipeline(
+        async ({ service, read, provider, workflowResults }) => {
+          provider.runningModels.add("opus");
+          provider.runningModels.add("sonnet");
+          provider.runningConsolidation = true;
+          const started = await service.start(startInput(fourReviewers().slice(0, 2)));
+          await advanceUntil(service, read, started.id, "reviewing");
+          for (let pass = 0; pass < 10; pass++) {
+            if (
+              (await read(started.id)).reviewFanout?.reviewers.every(
+                (reviewer) => reviewer.dispatchState === "sent",
+              )
+            )
+              break;
+            await service.advanceNow(started.id);
+          }
+          const scope = { environmentId: "env-1", projectId: "project-1" };
+          const command = "mise run test";
+          const withOutcome = (result: "passed" | "failed", summary: string) => {
+            const report = reportFor("Reviewed the pinned package.");
+            report.reviewScope.commandsRun.push({ command, result, summary });
+            return report;
+          };
+          const reviewers = (await read(started.id)).reviewFanout!.reviewers;
+          for (const [index, reviewer] of reviewers.entries()) {
+            expect(reviewer.resultTransport).toBe("tool-v1");
+            expect(
+              await workflowResults!.submit(
+                scope,
+                reviewer.requestId!,
+                withOutcome(index === 0 ? "passed" : "failed", "Reviewer outcome."),
+              ),
+            ).toMatchObject({ ok: true });
+          }
+          provider.runningModels.clear();
+          for (let pass = 0; pass < 10; pass++) {
+            if ((await read(started.id)).reviewFanout?.consolidation?.state === "sent") break;
+            await service.advanceNow(started.id);
+          }
+          const current = (await read(started.id)).reviewFanout!.consolidation!;
+          expect(current.resultTransport).toBe("tool-v1");
+          const disputed = withOutcome("failed", "Claimed outcome from consolidation.");
+          const refusal = await workflowResults!.submit(scope, current.requestId, disputed);
+          expect(refusal).toMatchObject({
+            ok: false,
+            error: {
+              nextAction: "correct",
+              issues: [expect.objectContaining({ path: "$.reviewScope.commandsRun[0]" })],
+            },
+          });
+          if (outcome === "corrected") {
+            expect(
+              await workflowResults!.submit(scope, current.requestId, reportFor("Merged review.")),
+            ).toMatchObject({ ok: true });
+            provider.runningConsolidation = false;
+            const verified = await advanceUntil(service, read, started.id, "verifying", 10);
+            expect(verified.structuredReview?.reviewScope.commandsNotRun).toEqual([
+              expect.objectContaining({
+                command,
+                reason: expect.stringContaining("No approved rerun"),
+              }),
+            ]);
+          } else {
+            for (let attempt = 2; attempt <= 4; attempt++) {
+              disputed.reviewScope.commandsRun[0]!.summary = `Invalid attempt ${attempt}.`;
+              const submission = await workflowResults!.submit(scope, current.requestId, disputed);
+              expect(submission).toMatchObject({
+                ok: false,
+                error: { nextAction: attempt === 4 ? "stop" : "correct" },
+              });
+            }
+            provider.runningConsolidation = false;
+            const failed = await advanceUntil(service, read, started.id, "failed", 25);
+            expect(failed.structuredReview).toBeUndefined();
+          }
+        },
+        { toolMode: true, toolKinds: ["review-report", "consolidated-review"] },
+      );
+    },
+  );
+
   test("fails after the consolidation repair budget is exhausted", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       provider.invalidConsolidationResults = 10;

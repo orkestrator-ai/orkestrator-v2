@@ -893,7 +893,7 @@ export function ProjectSearchBar({
   return (
     // Sits in the sidebar header's row, beside its sort, refresh and add
     // buttons, taking the width they leave.
-    <div data-testid="project-search-bar" className="flex min-w-0 flex-1 items-center">
+    <div data-testid="project-search-bar" className="@container flex min-w-0 flex-1 items-center">
       <button
         type="button"
         data-testid="project-search-trigger"
@@ -907,7 +907,9 @@ export function ProjectSearchBar({
         <kbd
           data-testid="project-search-shortcut"
           aria-hidden="true"
-          className="ml-auto shrink-0 rounded-[5px] border border-border/70 bg-zinc-900 px-1.5 py-px font-sans text-[11px] font-medium text-zinc-300"
+          // Shown only once the field has room for the placeholder as well, so
+          // a 280px sidebar reads "Search projects, …" rather than "Search proj…".
+          className="ml-auto hidden shrink-0 rounded-[5px] border border-border/70 bg-zinc-900 px-1.5 py-px font-sans text-[11px] font-medium text-zinc-300 @[15rem]:inline-block"
         >
           {shortcutLabel}
         </kbd>

@@ -58,6 +58,8 @@ export interface CursorEntry {
    * and does not count as evidence (`readConversationsByVersion`).
    */
   reviewedAt?: number;
+  /** Resolved at review time for a remote conversation. */
+  reviewedVersion?: string;
 }
 
 export interface InsightCursor {

@@ -423,6 +423,16 @@ describe("a run on a command node", () => {
         },
         conversations: async () => ({ segments: [], skipped: [], waiting: 0 }),
       },
+      {
+        nodeId: "bk_bad_health",
+        name: "Invalid health",
+        diagnostics: async () =>
+          bundleArchive({
+            createdAt: NOW,
+            health: [{ kind: "started", at: Number.MAX_VALUE, pid: 2, startedAt: NOW }],
+          }),
+        conversations: async () => ({ segments: [], skipped: [], waiting: 0 }),
+      },
     ];
     const h = harness({
       fleet: async () => ({ self: { nodeId: "bk_desk", name: "Desk" }, leaves }),
@@ -455,6 +465,13 @@ describe("a run on a command node", () => {
         conversations: "off",
         conversationParts: 0,
       },
+      {
+        nodeId: "bk_bad_health",
+        name: "Invalid health",
+        diagnostics: "failed",
+        conversations: "off",
+        conversationParts: 0,
+      },
     ]);
     // The leaf's own problem was filed alongside this machine's.
     expect(lastRun?.created.map((item) => item.signature)).toContain("tmux:poll.failed");
@@ -463,7 +480,7 @@ describe("a run on a command node", () => {
     );
     expect(
       capture.records().find((record) => record.event === "run.finished")?.fields,
-    ).toMatchObject({ leaves: 3, leavesRead: 1 });
+    ).toMatchObject({ leaves: 4, leavesRead: 1 });
     expect(capture.lines.join("\n")).not.toContain("secret path");
   });
 

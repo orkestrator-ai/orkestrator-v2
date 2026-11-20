@@ -119,26 +119,28 @@ describe("a leaf's conversations", () => {
       text: "PERSON: hello",
       typedMessages: 1,
     };
-    const selection = parseLeafSelection(
-      {
-        segments: [
-          segment,
-          { ...segment, conversationId: "claude:two", provider: "gemini" },
-          { ...segment, conversationId: "claude:three", text: "x".repeat(MAX_SEGMENT_CHARS * 2) },
-          { ...segment, conversationId: "claude:four", to: 0 },
-          { ...segment, conversationId: "claude:five" },
-          "not a part",
-        ],
-        skipped: [{ conversationId: "claude:six", to: 3, file: "/f", lastAt: NOW }, { to: 1 }],
-        waiting: 2,
-      },
-      1,
-    );
+    const another = { ...segment, conversationId: "claude:two" };
+    const skipped = [{ conversationId: "claude:six", to: 3, file: "/f", lastAt: NOW }];
+    const envelope = { segments: [segment, another], skipped, waiting: 2 };
+    const selection = parseLeafSelection(envelope, 1, NOW);
     expect(selection.segments.map((part) => part.conversationId)).toEqual(["claude:one"]);
-    // Over the limit asked for: counted as waiting, not read.
     expect(selection.waiting).toBe(3);
     expect(selection.skipped.map((part) => part.conversationId)).toEqual(["claude:six"]);
-    expect(parseLeafSelection(null, 30)).toEqual({ segments: [], skipped: [], waiting: 0 });
+    const empty = { segments: [], skipped: [], waiting: 0 };
+    expect(parseLeafSelection(empty, 30, NOW)).toEqual(empty);
+    for (const invalid of [
+      null,
+      {},
+      { ...envelope, segments: [{ ...segment, provider: "gemini" }] },
+      { ...envelope, segments: [{ ...segment, lastAt: Number.MAX_VALUE }] },
+      { ...envelope, segments: [{ ...segment, lastAt: NOW + 10 * HOUR }] },
+      { ...envelope, segments: [segment, { ...segment, text: "x".repeat(MAX_SEGMENT_CHARS * 2) }] },
+      { ...envelope, skipped: [{ ...skipped[0], lastAt: Number.MAX_VALUE }] },
+    ]) {
+      expect(() => parseLeafSelection(invalid, 30, NOW)).toThrow(
+        "no readable conversation selection",
+      );
+    }
   });
 
   test("positions sent to a leaf keep valid entries only", () => {

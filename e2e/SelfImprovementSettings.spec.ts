@@ -86,9 +86,9 @@ test("a command node's last run lists what it read from each connected machine",
   page,
 }) => {
   await page.goto("/self-improvement-settings?leaves");
-  await expect(page.getByText("Also read 3 connected machines")).toBeVisible();
+  await expect(page.getByText("Attempted reads from 3 connected machines")).toBeVisible();
   await expect(page.getByText("build-vps").locator("..")).toHaveText(
-    "build-vps (app 2.41.0): diagnostics, 9 conversation parts",
+    "build-vps (app 2.41.0): diagnostics, 9 conversation parts reviewed",
   );
   await expect(page.getByText("travel-laptop").locator("..")).toHaveText(
     "travel-laptop (app 2.40.2): diagnostics, conversations could not be read",
@@ -100,4 +100,35 @@ test("a command node's last run lists what it read from each connected machine",
   await page.goto("/self-improvement-settings?finished");
   await expect(page.getByText("storage snapshot.failed: ENOSPC").first()).toBeVisible();
   await expect(page.getByText(/connected machine/)).toHaveCount(0);
+});
+
+test("fleet summaries describe failed attempts and preview candidates accurately", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/self-improvement-settings?leaves&failed-leaves");
+  const heading = page.getByText("Attempted reads from 3 connected machines");
+  await expect(heading).toBeVisible();
+  await expect(page.getByText("build-vps").locator("..")).toHaveText(
+    "build-vps: diagnostics could not be read, conversations could not be read",
+  );
+  await heading.locator("..").screenshot({
+    path: `output/visual-previews/self-improvement-fleet-labels-failed-${testInfo.project.name}.png`,
+  });
+
+  await page.goto("/self-improvement-settings?leaves&preview");
+  await expect(page.getByText("build-vps").locator("..")).toHaveText(
+    "build-vps (app 2.41.0): diagnostics, 9 conversation parts to review",
+  );
+  await expect(page.getByText(/Conversations: found 30 parts to review/)).toBeVisible();
+  await page.reload();
+  await expect(heading).toBeVisible();
+  await heading.locator("..").screenshot({
+    path: `output/visual-previews/self-improvement-fleet-labels-preview-${testInfo.project.name}.png`,
+  });
+
+  await page.goto("/self-improvement-settings?leaves");
+  await expect(heading).toBeVisible();
+  await heading.locator("..").screenshot({
+    path: `output/visual-previews/self-improvement-fleet-labels-completed-${testInfo.project.name}.png`,
+  });
 });

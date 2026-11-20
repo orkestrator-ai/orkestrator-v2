@@ -925,8 +925,9 @@ unread conversation parts after read positions the command node keeps for it
 (`collect_self_improvement_conversations`). Both commands only read, run only
 over the link of an attached command node and are never routed. The command
 node merges the signals, runs the model and files the tickets on its own
-board; a leaf that fails or is offline is listed in the run's summary and
-left out. The model is in
+board. The summary lists each leaf it contacted, including failed attempts.
+Offline leaves are left out of collection. Diagnostics verdicts remain pending
+when an affected leaf cannot supply enough evidence. The model is in
 [self-improvement.md](self-improvement.md#leaf-nodes).
 
 ## Projects on leaf nodes

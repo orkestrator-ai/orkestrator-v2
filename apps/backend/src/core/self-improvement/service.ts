@@ -35,6 +35,7 @@ import {
   type ModelRunner,
 } from "./insights/model.js";
 import { defaultSources, type TranscriptSources } from "./insights/transcripts.js";
+import { extractSignals } from "./signals.js";
 import { type LeafBundle, leafFailure, type LeafNode } from "./leaves.js";
 import { loadLedger, writeAtomic } from "./ledger.js";
 import { type Board, runLoop } from "./loop.js";
@@ -349,9 +350,7 @@ export class SelfImprovementService {
         onStep,
         insightProgress: running.progress,
         insights,
-        ...(fleet.self && fleet.bundles.length > 0
-          ? { fleet: { self: fleet.self, bundles: fleet.bundles } }
-          : {}),
+        ...(fleet.self ? { fleet: { self: fleet.self, bundles: fleet.bundles } } : {}),
       });
       const machines = fleet.results.map((machine): SelfImprovementMachineResult => {
         const review = conversationLeaves?.[machine.nodeId];
@@ -415,15 +414,16 @@ export class SelfImprovementService {
     } catch (error) {
       log.warn("leaves.list-failed", { error: formatLogError(error, { message: false }) });
     }
-    if (!fleet || fleet.leaves.length === 0) {
+    if (!fleet) {
       return { self: null, leaves: [], bundles: [], results: [] };
     }
     const read = await Promise.all(
       fleet.leaves.map(async (leaf) => {
         try {
           const data = await readBundleArchive(await leaf.diagnostics());
+          const extracted = extractSignals(data);
           running.progress.leafAnswered();
-          return { leaf, data, state: "read" as const };
+          return { leaf, data, extracted, state: "read" as const };
         } catch (error) {
           const state = leafFailure(error);
           // Content-free: the node id is an identity, not content; the message can quote a path.
@@ -431,15 +431,15 @@ export class SelfImprovementService {
             state,
             error: formatLogError(error, { message: false }),
           });
-          return { leaf, data: null, state };
+          return { leaf, data: null, extracted: null, state };
         }
       }),
     );
     return {
       self: fleet.self,
       leaves: fleet.leaves,
-      bundles: read.flatMap(({ leaf, data }) =>
-        data ? [{ nodeId: leaf.nodeId, name: leaf.name, data }] : [],
+      bundles: read.flatMap(({ leaf, data, extracted }) =>
+        data && extracted ? [{ nodeId: leaf.nodeId, name: leaf.name, data, extracted }] : [],
       ),
       results: read.map(({ leaf, data, state }) => ({
         nodeId: leaf.nodeId,

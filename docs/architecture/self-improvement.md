@@ -93,7 +93,8 @@ service around it is in `service.ts`. Its steps are those the page shows
    the project it was filed on (the ledger entry's `projectId`) and applies
    the table above. Done records "fixed in any version newer than the one
    running now" (`fixedAfter`): on a command node, the newest version running
-   on any machine whose diagnostics were read.
+   on any machine whose diagnostics were read, including the last known
+   versions of unavailable leaves that contributed to the fault's baseline.
 3. **Reading conversations** and **grouping themes**, when the review is on
    (see [Conversation review](#conversation-review)).
 4. **Digesting.** Ranks every signal from the bundle and the themes, and
@@ -143,12 +144,15 @@ project.
   two machines is one signal, one ticket and one verdict, and ledger entries
   saved before leaves were read keep matching. A signal's evidence names the
   machines it was seen on (`machines=Desk, VPS`).
-  - A rate becomes occurrences **per machine-day**: every machine's
-    occurrences over the days every machine watched that source, quiet ones
-    included. Observed hours are summed per version across machines, which
-    is the quantity a verdict measures after a fix, so adding a quiet
-    machine cannot pass for a fix, and a fix is judged on every machine that
-    runs it.
+  - Fleet rates use occurrences per machine-day of observed source exposure.
+    Uncovered machines contribute no hours. For crashes, each machine uses the
+    health summary or the essential-log fallback that supplied its counts.
+  - Fix verdicts compare the machines that saw the baseline fault. If an
+    affected leaf is unavailable when a ticket moves to Done, its last known
+    version also contributes to the inferred fix boundary. Each machine must
+    supply at least 24 hours on fix-carrying versions. For rates, each
+    contributor has equal weight in both measurements. An older fleet
+    baseline without recoverable contributors remains awaiting evidence.
   - A gauge is the worst value on any machine.
   - The score ranks by the fleet's total rate, so a problem on every machine
     outranks the same problem on one.
@@ -160,10 +164,12 @@ project.
   (`insights/nodes/<hash of node id>/cursor.json`), so the leaf keeps no
   record and a run that fails before saving them reads the same parts again.
   A leaf's conversation ids carry its node id (`@<nodeId>/claude:<session>`),
-  so two machines never share one. The run's 30 parts are shared: each
-  connected leaf may send up to 30 ÷ (leaves + 1), and this machine takes what
-  they leave. A leaf's conversations are dated on its own app versions when
-  its bundle was read.
+  so two machines never share one. The run reserves at least one of its 30
+  slots for local review. It rotates the remaining slots across large fleets
+  using a saved position, and the local node takes any unused slots. The app
+  version resolved for a reviewed leaf part stays with the cursor and notes
+  across runs. With no version evidence at review time, the part counts as
+  unknown and cannot serve as fix-carrying evidence.
 - **Summary.** `lastRun.machines` lists each leaf asked: its name, app
   version, and whether its diagnostics and conversations were `read`,
   `failed` or `needs-update` (it predates the commands), or `off` (the review

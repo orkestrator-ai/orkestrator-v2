@@ -198,9 +198,9 @@ describe("Settings → Self-improvement", () => {
         }),
       ),
     );
-    expect(await screen.findByText("Also read 3 connected machines")).toBeTruthy();
+    expect(await screen.findByText("Attempted reads from 3 connected machines")).toBeTruthy();
     const item = (name: string) => screen.getByText(name).closest("li")?.textContent;
-    expect(item("VPS")).toBe("VPS (app 2.31.0): diagnostics, 4 conversation parts");
+    expect(item("VPS")).toBe("VPS (app 2.31.0): diagnostics, 4 conversation parts reviewed");
     expect(item("Old laptop")).toBe("Old laptop: needs an update to take part");
     expect(item("Away")).toBe("Away: diagnostics could not be read");
   });

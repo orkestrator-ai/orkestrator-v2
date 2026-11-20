@@ -10,6 +10,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { BundleData } from "./bundle.js";
+import { diagnosticSource, type MachineSignals, observedSourceHours } from "./fleet.js";
 import {
   compareVersions,
   type ExtractedSignals,
@@ -59,12 +60,21 @@ export type Verdict =
   | "holding"
   | "regressed";
 
+interface DiagnosticBaseline {
+  /** The local machine uses the empty key so a role change preserves its identity. */
+  contributors: Record<string, SignalSource>;
+  /** Equal-weight mean of contributor rates, or maximum for gauges. */
+  value: number | null;
+}
+
 export interface Baseline {
   digestId: string;
   at: string;
   value: number;
   unit: string;
   kind: MeasureKind;
+  /** Null identifies an older fleet baseline whose contributors cannot be recovered. */
+  diagnostics?: DiagnosticBaseline | null;
 }
 
 export interface Observation {
@@ -113,6 +123,7 @@ export interface Ledger {
 export type Trend = "new" | "up" | "down" | "flat";
 
 export interface DigestSignal extends Signal {
+  diagnosticBaseline?: DiagnosticBaseline;
   trend: Trend;
   previousValue: number | null;
   ledger: { status: LedgerStatus; ticket?: string; verdict: Verdict } | null;
@@ -315,19 +326,125 @@ export function postFixMeasure(
   return { value: hours > 0 ? (count / hours) * perUnit : 0, hours };
 }
 
+interface FleetEvidence {
+  machines: readonly MachineSignals[];
+  fleet: boolean;
+  history: readonly DigestRecord[];
+}
+
+function diagnosticBaselines(machines: readonly MachineSignals[]): Map<string, DiagnosticBaseline> {
+  const groups = new Map<
+    string,
+    {
+      contributors: Array<[string, SignalSource]>;
+      value: number;
+      rate: boolean;
+      uncovered: boolean;
+    }
+  >();
+  for (const machine of machines) {
+    for (const signal of machine.extracted.signals) {
+      if (signal.source === "insights") continue;
+      const rate = signal.measure.kind === "rate";
+      const group = groups.get(signal.signature) ?? {
+        contributors: [],
+        value: 0,
+        rate,
+        uncovered: false,
+      };
+      group.contributors.push([machine.nodeId, signal.source]);
+      if (rate) {
+        const hours = observedSourceHours(machine.extracted, signal.source);
+        if (hours > 0) group.value += (signal.count / hours) * 24;
+        else group.uncovered = true;
+      } else {
+        group.value = Math.max(group.value, signal.measure.value);
+      }
+      groups.set(signal.signature, group);
+    }
+  }
+  return new Map(
+    Array.from(groups, ([signature, { contributors, value, rate, uncovered }]) => [
+      signature,
+      {
+        contributors: Object.fromEntries(contributors),
+        value: uncovered ? null : rate ? value / contributors.length : value,
+      },
+    ]),
+  );
+}
+
+function diagnosticPostFix(
+  entry: LedgerEntry,
+  kind: MeasureKind,
+  evidence: FleetEvidence,
+): { value: number; hours: number } | null {
+  const cohort = entry.baseline?.diagnostics;
+  if (!cohort || cohort.value === null) return null;
+  const machines = new Map(evidence.machines.map((machine) => [machine.nodeId, machine]));
+  const measurements = Object.entries(cohort.contributors).map(([nodeId, source]) => {
+    const machine = machines.get(nodeId);
+    if (!machine) return { value: 0, hours: 0 };
+    const signal = machine.extracted.signals.find((item) => item.signature === entry.signature);
+    return (
+      postFixMeasure(
+        { ...entry, source: diagnosticSource(entry.signature, source, machine) },
+        signal,
+        kind,
+        machine.extracted.observedHours,
+      ) ?? { value: 0, hours: 0 }
+    );
+  });
+  if (measurements.length === 0) return null;
+  return {
+    hours: Math.min(...measurements.map(({ hours }) => hours)),
+    value:
+      kind === "gauge"
+        ? Math.max(...measurements.map(({ value }) => value))
+        : measurements.reduce((sum, { value }) => sum + value, 0) / measurements.length,
+  };
+}
+
+function recoverDiagnosticBaseline(entry: LedgerEntry, evidence: FleetEvidence): void {
+  const baseline = entry.baseline;
+  if (!baseline || baseline.diagnostics !== undefined || entry.source === "insights") return;
+  const digest = evidence.history.find(({ id }) => id === baseline.digestId);
+  const signal = digest?.signals.find(({ signature }) => signature === entry.signature);
+  if (signal?.diagnosticBaseline) {
+    baseline.diagnostics = signal.diagnosticBaseline;
+  } else if (digest && !digest.machines?.length) {
+    baseline.diagnostics = { contributors: { "": entry.source }, value: baseline.value };
+  } else if (digest?.machines?.length || evidence.fleet) {
+    // A fleet aggregate cannot prove which machines saw the original fault.
+    baseline.diagnostics = null;
+  }
+}
+
 export function judge(
   entry: LedgerEntry,
   signal: Signal | undefined,
   observedHours: ExtractedSignals["observedHours"],
+  evidence?: FleetEvidence,
 ): { verdict: Verdict; post: { value: number; hours: number } | null } {
   if (entry.status === "ignored") return { verdict: "ignored", post: null };
   if (entry.status === "tracking") return { verdict: "tracking", post: null };
   const kind = entry.baseline?.kind ?? signal?.measure.kind ?? "rate";
-  const post = postFixMeasure(entry, signal, kind, observedHours);
+  const useCohort =
+    evidence &&
+    entry.source !== "insights" &&
+    (evidence.fleet || entry.baseline?.diagnostics !== undefined);
+  const post = useCohort
+    ? diagnosticPostFix(entry, kind, evidence)
+    : postFixMeasure(entry, signal, kind, observedHours);
+  if (useCohort && (!post || post.hours < MIN_VERIFY_HOURS)) {
+    return { verdict: "awaiting-evidence", post };
+  }
   if (!post || post.hours === 0) return { verdict: "awaiting-deploy", post };
   const minimum = entry.source === "insights" ? MIN_VERIFY_CONVERSATIONS : MIN_VERIFY_HOURS;
   if (post.hours < minimum) return { verdict: "awaiting-evidence", post };
-  const baseline = entry.baseline?.value ?? null;
+  const baseline = useCohort
+    ? (entry.baseline?.diagnostics?.value ?? null)
+    : (entry.baseline?.value ?? null);
   if (entry.status === "verified") {
     const regressed = baseline === null ? post.value > 0 : post.value > baseline * REGRESSED_RATIO;
     return { verdict: regressed ? "regressed" : "holding", post };
@@ -352,6 +469,7 @@ export function buildDigest(
   ledger: Ledger,
   now: Date = new Date(),
   machines?: readonly DigestMachine[],
+  evidence?: FleetEvidence,
 ): DigestRecord {
   // A digest of several machines is named by all their bundles, so a leaf's new data is a new digest.
   const id =
@@ -372,7 +490,13 @@ export function buildDigest(
   const verdicts = new Map<string, Verdict>();
   for (const entry of Object.values(ledger.entries)) {
     const signal = bySignature.get(entry.signature);
-    const { verdict, post } = judge(entry, signal, extracted.observedHours);
+    if (
+      evidence &&
+      (evidence.fleet || evidence.history.some((digest) => digest.machines?.length))
+    ) {
+      recoverDiagnosticBaseline(entry, evidence);
+    }
+    const { verdict, post } = judge(entry, signal, extracted.observedHours, evidence);
     verdicts.set(entry.signature, verdict);
     const current = signal?.measure.value ?? 0;
     judgements.push({
@@ -383,7 +507,7 @@ export function buildDigest(
       pr: entry.pr,
       fixedIn: entry.fixedIn ?? (entry.fixedAfter ? `after ${entry.fixedAfter}` : undefined),
       verdict,
-      baseline: entry.baseline?.value ?? null,
+      baseline: entry.baseline?.diagnostics?.value ?? entry.baseline?.value ?? null,
       current,
       postFixValue: post ? round(post.value) : null,
       postFixHours: post ? round(post.hours) : null,
@@ -403,11 +527,14 @@ export function buildDigest(
     ].slice(-MAX_OBSERVATIONS);
   }
 
+  const baselines = evidence?.fleet ? diagnosticBaselines(evidence.machines) : undefined;
   const signals: DigestSignal[] = extracted.signals.map((signal) => {
+    const cohort = baselines?.get(signal.signature);
     const before = previousValues.get(signal.signature);
     const entry = ledger.entries[signal.signature];
     return {
       ...signal,
+      ...(cohort ? { diagnosticBaseline: cohort } : {}),
       trend: trendOf(signal.measure.value, before?.measure.value ?? null),
       previousValue: before?.measure.value ?? null,
       ledger: entry
@@ -547,9 +674,10 @@ export function applyLedgerChange(
     entry.baseline = {
       digestId: latest.digest.id,
       at: latest.digest.bundle.createdAt,
-      value: latest.signal.measure.value,
+      value: latest.signal.diagnosticBaseline?.value ?? latest.signal.measure.value,
       unit: latest.signal.measure.unit,
       kind: latest.signal.measure.kind,
+      diagnostics: latest.signal.diagnosticBaseline,
     };
   }
   if (change.baseline !== undefined) {
@@ -559,6 +687,9 @@ export function applyLedgerChange(
       value: change.baseline,
       unit: entry.baseline?.unit ?? latest?.signal?.measure.unit ?? "",
       kind: entry.baseline?.kind ?? latest?.signal?.measure.kind ?? "rate",
+      diagnostics: entry.baseline?.diagnostics
+        ? { ...entry.baseline.diagnostics, value: change.baseline }
+        : entry.baseline?.diagnostics,
     };
   }
   if (change.ticket !== undefined) entry.ticket = change.ticket;

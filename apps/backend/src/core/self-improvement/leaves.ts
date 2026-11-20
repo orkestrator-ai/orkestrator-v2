@@ -31,6 +31,7 @@ import {
   selectSegments,
   type SkippedPart,
 } from "./insights/prepare.js";
+import type { ExtractedSignals } from "./signals.js";
 import type { TranscriptSources } from "./insights/transcripts.js";
 
 /**
@@ -62,6 +63,7 @@ export interface LeafBundle {
   nodeId: string;
   name: string;
   data: BundleData;
+  extracted: ExtractedSignals;
 }
 
 /**
@@ -160,11 +162,19 @@ function text(value: unknown, max: number): string | null {
 }
 
 function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
-function time(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+export function validInsightTime(value: unknown): value is number {
+  return typeof value === "number" && value >= 0 && Number.isFinite(new Date(value).getTime());
+}
+
+const LEAF_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+function time(value: unknown, now?: number): number | null {
+  return validInsightTime(value) && (now === undefined || value <= now + LEAF_CLOCK_SKEW_MS)
+    ? value
+    : null;
 }
 
 /** Read positions as a leaf receives them: valid entries only, bounded. */
@@ -206,21 +216,22 @@ function parsePosition(
   return { file, ...(lastEntryOffset !== null ? { lastEntryOffset } : {}) };
 }
 
-function parseSegment(value: unknown): Segment | null {
+function parseSegment(value: unknown, now: number): Segment | null {
   const entry = record(value);
   if (!entry) return null;
   const conversationId = text(entry.conversationId, MAX_ID_CHARS);
   const provider =
     entry.provider === "claude" || entry.provider === "codex" ? entry.provider : null;
-  const startedAt = time(entry.startedAt);
-  const lastAt = time(entry.lastAt);
+  const startedAt = time(entry.startedAt, now);
+  const lastAt = time(entry.lastAt, now);
   const from = count(entry.from);
   const to = count(entry.to);
   const key = text(entry.key, MAX_ID_CHARS);
   const body = text(entry.text, MAX_LEAF_SEGMENT_CHARS);
   const typedMessages = count(entry.typedMessages);
   const position = parsePosition(entry);
-  if (!conversationId || !provider || startedAt === null || lastAt === null) return null;
+  if (!conversationId || !provider || startedAt === null || lastAt === null || startedAt > lastAt)
+    return null;
   if (from === null || to === null || to <= from || !key || !body || typedMessages === null) {
     return null;
   }
@@ -241,12 +252,12 @@ function parseSegment(value: unknown): Segment | null {
   };
 }
 
-function parseSkipped(value: unknown): SkippedPart | null {
+function parseSkipped(value: unknown, now: number): SkippedPart | null {
   const entry = record(value);
   if (!entry) return null;
   const conversationId = text(entry.conversationId, MAX_ID_CHARS);
   const to = count(entry.to);
-  const lastAt = time(entry.lastAt);
+  const lastAt = time(entry.lastAt, now);
   const position = parsePosition(entry);
   if (!conversationId || to === null || lastAt === null || !position) return null;
   return {
@@ -259,20 +270,38 @@ function parseSkipped(value: unknown): SkippedPart | null {
 }
 
 /** A leaf's answer to `collect_self_improvement_conversations`, as the command node uses it. */
-export function parseLeafSelection(value: unknown, maxSegments: number): Selection {
+export function parseLeafSelection(
+  value: unknown,
+  maxSegments: number,
+  now = Date.now(),
+): Selection {
   const answer = record(value);
-  const segments = (Array.isArray(answer?.segments) ? answer.segments : [])
-    .map(parseSegment)
-    .filter((segment): segment is Segment => segment !== null);
-  const skipped = (Array.isArray(answer?.skipped) ? answer.skipped : [])
-    .slice(0, MAX_LEAF_CURSOR_ENTRIES)
-    .map(parseSkipped)
-    .filter((part): part is SkippedPart => part !== null);
-  const extra = Math.max(0, segments.length - maxSegments);
+  const waiting = count(answer?.waiting);
+  const invalid = () => new Error("The leaf sent no readable conversation selection.");
+  if (
+    !Array.isArray(answer?.segments) ||
+    !Array.isArray(answer.skipped) ||
+    waiting === null ||
+    answer.segments.length > MAX_SEGMENTS_PER_RUN ||
+    answer.skipped.length > MAX_LEAF_CURSOR_ENTRIES
+  ) {
+    throw invalid();
+  }
+  // Reject a partial reply as well: retry with the same positions next run.
+  const segments = answer.segments.map((value) => {
+    const segment = parseSegment(value, now);
+    if (!segment) throw invalid();
+    return segment;
+  });
+  const skipped = answer.skipped.map((value) => {
+    const part = parseSkipped(value, now);
+    if (!part) throw invalid();
+    return part;
+  });
   return {
     segments: segments.slice(0, maxSegments),
     skipped,
-    waiting: (count(answer?.waiting) ?? 0) + extra,
+    waiting: waiting + Math.max(0, segments.length - maxSegments),
   };
 }
 

@@ -7,12 +7,8 @@
  * Signatures do not change: a machine is never part of one, so the ledger's
  * entries keep matching. What changes is the measure:
  *
- * - A rate is occurrences per machine-day: every machine's occurrences over
- *   the days every machine watched that source, including machines where it
- *   did not happen. This is the same quantity a verdict measures after a fix
- *   (`postFixMeasure`: occurrences over observed hours, summed across
- *   machines), so adding a quiet machine cannot pass for a fix, and a fix is
- *   judged on every machine that runs it.
+ * - A rate is occurrences per machine-day of observed source exposure.
+ *   Fix verdicts use a separate baseline over the machines that saw the fault.
  * - A gauge is the worst value on any machine.
  * - The score ranks by the fleet's total rate, so a problem on every machine
  *   outranks the same problem on one.
@@ -47,13 +43,15 @@ function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-/** Days a machine watched a source: its observed hours, else its whole window. */
-function watchedDays(extracted: ExtractedSignals, source: SignalSource): number {
-  const hours = Object.values(extracted.observedHours[source] ?? {}).reduce(
+export function observedSourceHours(extracted: ExtractedSignals, source: SignalSource): number {
+  return Object.values(extracted.observedHours[source] ?? {}).reduce(
     (sum, value) => sum + value,
     0,
   );
-  return hours > 0 ? hours / 24 : extracted.window.days;
+}
+
+export function diagnosticSource(signature: string, source: SignalSource, machine: MachineSignals) {
+  return signature === "backend:crashed" ? (machine.extracted.crashSource ?? source) : source;
 }
 
 function mergeObservedHours(machines: readonly MachineSignals[]): ObservedHours {
@@ -120,11 +118,22 @@ function mergeGroup(
   if (lead.measure.kind === "gauge") {
     value = Math.max(...group.map(({ signal }) => signal.measure.value));
   } else {
-    const days = machines.reduce(
-      (sum, machine) => sum + watchedDays(machine.extracted, lead.source),
+    const exposure = new Map(
+      machines.map((machine) => [
+        machine.nodeId,
+        observedSourceHours(
+          machine.extracted,
+          diagnosticSource(lead.signature, lead.source, machine),
+        ),
+      ]),
+    );
+    const hours = Array.from(exposure.values()).reduce((sum, value) => sum + value, 0);
+    const observedCount = group.reduce(
+      (sum, { machine, signal }) =>
+        sum + ((exposure.get(machine.nodeId) ?? 0) > 0 ? signal.count : 0),
       0,
     );
-    value = days > 0 ? count / days : lead.measure.value;
+    value = hours > 0 ? (observedCount / hours) * 24 : lead.measure.value;
   }
   const signal: Signal = {
     signature: lead.signature,

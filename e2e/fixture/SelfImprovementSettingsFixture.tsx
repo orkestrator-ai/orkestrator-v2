@@ -29,6 +29,7 @@ const old = params.has("old");
 const reviewOff = params.has("review-off");
 const preview = params.has("preview");
 const leaves = params.has("leaves");
+const failedLeaves = params.has("failed-leaves");
 const finished = leaves || params.has("finished");
 
 const menuItems = [{ id: "self-improvement", label: "Self-improvement", icon: null }];
@@ -108,7 +109,7 @@ function progress(now: number): SelfImprovementProgress {
 
 const LAST_RUN: SelfImprovementRunSummary = {
   digestId: "20261120T080000Z-0f1e2d3c",
-  trigger: "manual",
+  trigger: preview ? "dry-run" : "manual",
   startedAt: new Date(startedAt - 3_600_000).toISOString(),
   finishedAt: new Date(startedAt - 3_300_000).toISOString(),
   outcome: "succeeded",
@@ -135,16 +136,16 @@ const LAST_RUN: SelfImprovementRunSummary = {
           {
             nodeId: "bk_vps",
             name: "build-vps",
-            diagnostics: "read",
-            appVersion: "2.41.0",
-            conversations: "read",
-            conversationParts: 9,
+            diagnostics: failedLeaves ? "failed" : "read",
+            ...(failedLeaves ? {} : { appVersion: "2.41.0" }),
+            conversations: failedLeaves ? "failed" : "read",
+            conversationParts: failedLeaves ? 0 : 9,
           },
           {
             nodeId: "bk_laptop",
             name: "travel-laptop",
-            diagnostics: "read",
-            appVersion: "2.40.2",
+            diagnostics: failedLeaves ? "failed" : "read",
+            ...(failedLeaves ? {} : { appVersion: "2.40.2" }),
             conversations: "failed",
             conversationParts: 0,
           },
@@ -162,9 +163,9 @@ const LAST_RUN: SelfImprovementRunSummary = {
     enabled: true,
     read: leaves ? 30 : 21,
     waiting: 0,
-    notesAdded: 14,
+    notesAdded: preview ? 0 : 14,
     themes: 4,
-    costUsd: 0.62,
+    costUsd: preview ? 0 : 0.62,
     heldForTomorrow: 0,
     errors: [],
   },

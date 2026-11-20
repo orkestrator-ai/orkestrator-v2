@@ -18,10 +18,11 @@ const POLL_MS = 3000;
 const WAIT_LIMIT_MS = 60 * 60 * 1000;
 
 function runLines(run: SelfImprovementRunSummary): string[] {
+  const preview = run.trigger === "dry-run";
   const refs = (items: Array<{ ticket: string; signature: string }>) =>
     items.map((item) => `#${item.ticket} ${item.signature}`).join("; ");
   const lines = [
-    `${run.trigger === "dry-run" ? "Preview" : run.trigger === "daily" ? "Daily run" : "Run"} ${run.outcome} at ${run.finishedAt}`,
+    `${preview ? "Preview" : run.trigger === "daily" ? "Daily run" : "Run"} ${run.outcome} at ${run.finishedAt}`,
   ];
   if (run.error) lines.push(`  ${run.error}`);
   for (const item of run.created) lines.push(`  new ticket #${item.ticket}: ${item.title}`);
@@ -35,14 +36,16 @@ function runLines(run: SelfImprovementRunSummary): string[] {
     lines.push(`  done on the board, now checking: ${refs(run.markedFixed)}`);
   if (run.conversations.enabled) {
     lines.push(
-      `  conversations: read ${run.conversations.read}, ${run.conversations.notesAdded} new notes, ${run.conversations.themes} themes, about $${run.conversations.costUsd.toFixed(2)} at list prices`,
+      `  conversations: ${preview ? "parts to review" : "read"} ${run.conversations.read}, ${run.conversations.notesAdded} new notes, ${run.conversations.themes} themes, about $${run.conversations.costUsd.toFixed(2)} at list prices`,
     );
   }
   for (const error of run.conversations.errors) lines.push(`  conversation review: ${error}`);
   for (const machine of run.machines ?? []) {
     const conversations =
       machine.conversations === "read"
-        ? `, conversations read (${machine.conversationParts} parts)`
+        ? preview
+          ? `, ${machine.conversationParts} conversation parts to review`
+          : `, conversations read (${machine.conversationParts} parts)`
         : machine.conversations === "off"
           ? ""
           : `, conversations ${machine.conversations}`;

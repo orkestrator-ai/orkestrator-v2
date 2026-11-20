@@ -144,6 +144,27 @@ describe("orkestrator self-improvement run --wait", () => {
     expect(run.out).toContain("machine old-mini: diagnostics needs-update");
   });
 
+  test("prints leaf conversations as candidates in a preview", async () => {
+    const box = await fixture({
+      lastRun: lastRun({
+        trigger: "dry-run",
+        machines: [
+          {
+            nodeId: "bk_vps",
+            name: "build-vps",
+            diagnostics: "read",
+            conversations: "read",
+            conversationParts: 9,
+          },
+        ],
+      }),
+    });
+    const status = await box.run(["self-improvement", "status"]);
+    expect(status.code).toBe(0);
+    expect(status.out).toContain("Preview succeeded");
+    expect(status.out).toContain("9 conversation parts to review");
+  });
+
   test("exits as failed when its run failed, with the fixed reason", async () => {
     const box = await fixture({
       lastRun: lastRun({ outcome: "failed", error: "Could not read the project's board." }),

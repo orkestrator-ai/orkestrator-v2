@@ -31,7 +31,7 @@ import {
 } from "@orkestrator/protocol/self-improvement";
 import { ticketLabelKey } from "@orkestrator/protocol/ticket-labels";
 import type { BundleData } from "./bundle.js";
-import { mergeMachineSignals, newestVersion } from "./fleet.js";
+import { type MachineSignals, mergeMachineSignals, newestVersion } from "./fleet.js";
 import {
   type InsightLeaf,
   type InsightLeafResult,
@@ -257,6 +257,15 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
   step("board");
   const ledger = loadLedger(stateDir);
   const digests = listDigests(stateDir);
+  const observedLeaves = new Set(leafBundles.map(({ nodeId }) => nodeId));
+  const lastKnownLeafVersions = new Map<string, string>();
+  for (const digest of digests) {
+    for (const machine of digest.machines?.slice(1) ?? []) {
+      if (machine.appVersion && machine.appVersion !== UNKNOWN_VERSION) {
+        lastKnownLeafVersions.set(machine.nodeId, machine.appVersion);
+      }
+    }
+  }
   const persist = () => {
     if (!dryRun) saveLedger(stateDir, ledger);
   };
@@ -304,12 +313,19 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
       reconciled = true;
     }
     if (entry.status === "tracking" && ticket.status === "done") {
+      const absentContributors = Object.keys(
+        entry.baseline?.diagnostics?.contributors ?? {},
+      ).filter((nodeId) => nodeId && !observedLeaves.has(nodeId));
+      const fixedAfter = newestVersion([
+        runningVersion,
+        ...absentContributors.map((nodeId) => lastKnownLeafVersions.get(nodeId) ?? UNKNOWN_VERSION),
+      ]);
       applyLedgerChange(
         ledger,
         entry.signature,
         {
           status: "fixed",
-          fixedAfter: runningVersion,
+          fixedAfter,
           ...(ticket.prUrl ? { pr: ticket.prUrl } : {}),
         },
         digests,
@@ -336,17 +352,12 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
   if (reconciled) persist();
 
   // 2. Conversations.
-  const extracted =
-    options.fleet && leafBundles.length > 0
-      ? mergeMachineSignals([
-          { ...options.fleet.self, extracted: extractSignals(data) },
-          ...leafBundles.map((leaf) => ({
-            nodeId: leaf.nodeId,
-            name: leaf.name,
-            extracted: extractSignals(leaf.data),
-          })),
-        ])
-      : extractSignals(data);
+  const localSignals = extractSignals(data);
+  const diagnosticMachines: MachineSignals[] = [
+    { nodeId: "", name: options.fleet?.self.name ?? "", extracted: localSignals },
+    ...leafBundles,
+  ];
+  const extracted = mergeMachineSignals(diagnosticMachines);
   let insightRun: InsightRun | null = null;
   if (options.insights) {
     step("reading-conversations");
@@ -409,7 +420,11 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
           ...leafBundles.map((leaf) => digestMachine(leaf.nodeId, leaf.name, leaf.data)),
         ]
       : undefined;
-  const digest = buildDigest(data, extracted, previous, ledger, now(), machines);
+  const digest = buildDigest(data, extracted, previous, ledger, now(), machines, {
+    machines: diagnosticMachines,
+    fleet: options.fleet !== undefined,
+    history: digests,
+  });
   summary.digestId = digest.id;
 
   // 4. Verdicts. The ledger changes once the board has been told (step 5).

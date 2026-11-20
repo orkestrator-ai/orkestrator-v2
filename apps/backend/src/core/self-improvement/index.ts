@@ -3,3 +3,11 @@
 // reviewable.
 export type { Board, BoardTicket } from "./loop.js";
 export { SelfImprovementService } from "./service.js";
+export {
+  answerLeafConversations,
+  answerLeafDiagnostics,
+  type LeafNode,
+  parseLeafArchive,
+  parseLeafSelection,
+} from "./leaves.js";
+export { defaultSources } from "./insights/transcripts.js";

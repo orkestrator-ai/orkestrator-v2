@@ -75,6 +75,9 @@ export const NODE_ROUTING_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   // Shared usage readings move over the link between a command node and its leaf only.
   "collect_shared_usage_readings",
   "apply_shared_usage_readings",
+  // A fleet self-improvement run reads its leaves over the link only.
+  "collect_self_improvement_diagnostics",
+  "collect_self_improvement_conversations",
   "create_node_action_request",
   "list_node_action_requests",
   // Each machine's standing permission is for its own coordinators only.

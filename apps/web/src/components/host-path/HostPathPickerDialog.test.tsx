@@ -14,7 +14,7 @@ import {
   FakeNodeClient,
   renderInNodeScope,
 } from "@/test/render-in-node-scope";
-import { HostPathPickerDialog } from "./HostPathPickerDialog";
+import { HostPathPickerDialog, pickerMachineName } from "./HostPathPickerDialog";
 
 type Listing = {
   path: string;
@@ -625,5 +625,35 @@ describe("HostPathPickerDialog", () => {
     await expect(result).resolves.toBeNull();
     expect(invoke).not.toHaveBeenCalled();
     expectDomAbsent(screen.queryByLabelText("Path"), "picker for an unopened node");
+  });
+});
+
+describe("pickerMachineName", () => {
+  const leaf = "bk_leaf-b" as BackendId;
+  const federation = {
+    enabled: true,
+    bound: { connectionId: FAKE_NODE_ID, backendId: FAKE_NODE_ID, name: "Studio", colorToken: "" },
+    portalState: { nodes: [{ nodeId: leaf, view: { displayName: "MacBook" } }] },
+  } as unknown as Parameters<typeof pickerMachineName>[0];
+
+  test("names the machine whose host the picker browses", () => {
+    expect(pickerMachineName(federation, FAKE_NODE_ID)).toBe("Studio");
+    expect(pickerMachineName(federation, leaf)).toBe("MacBook");
+  });
+
+  test("names nothing with one machine or an unknown node", () => {
+    expect(pickerMachineName({ ...federation, enabled: false }, leaf)).toBeNull();
+    expect(pickerMachineName(federation, "bk_unknown" as BackendId)).toBeNull();
+    expect(pickerMachineName(federation, undefined)).toBeNull();
+  });
+
+  test("the dialog keeps the generic description outside a multi-machine client", async () => {
+    renderPicker();
+    act(() => {
+      void pick({ mode: "directory" });
+    });
+    expect(
+      await screen.findByText("Browsing the machine running the Orkestrator backend."),
+    ).toBeTruthy();
   });
 });

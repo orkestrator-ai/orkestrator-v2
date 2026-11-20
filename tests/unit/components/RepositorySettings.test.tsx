@@ -1,6 +1,11 @@
 import { describe, test, expect, mock, beforeEach, afterEach, afterAll } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import {
+  cleanupNodeScopes,
+  FakeNodeClient,
+  renderInAppCommandScope,
+  renderInNodeScope,
+} from "@/test/render-in-node-scope";
 import * as realProjectIconImage from "@/lib/project-icon-image";
 
 const realProjectIconImageSnapshot = { ...realProjectIconImage };
@@ -180,6 +185,8 @@ afterAll(() => {
 import { CODEX_MODELS } from "@/lib/codex-models";
 import { configStore } from "@/stores/configStore";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { RepositorySettings } from "../../../apps/web/src/components/settings/RepositorySettings";
 import type { AppConfig, Project } from "@/types";
@@ -1378,6 +1385,98 @@ describe("RepositorySettings", () => {
         ),
       );
       expect((getSaveButton() as HTMLButtonElement).disabled).toBe(false);
+    });
+  });
+
+  // A project on another machine: the picker browses that machine, so the file
+  // it returns, the icon search, the origin read and the save must go there
+  // too, never to the command node (where the path may not exist).
+  describe("a project on another node", () => {
+    const LEAF_ID = "bk_leaf-project-node" as BackendId;
+    const ROOT = "/Users/me/project/apps/vulkanglass";
+    const PICKED = `${ROOT}/resources/icon.png`;
+
+    afterEach(cleanupNodeScopes);
+
+    function renderOnLeaf(
+      client: FakeNodeClient,
+      onUpdateProject?: (p: Project) => Promise<Project>,
+    ) {
+      mockSection = "general";
+      const windowScope = new WindowScope();
+      const scope = windowScope.open({ role: "leaf", client });
+      scope.store(configStore).setState({ config: makeConfig(), isLoading: false, error: null });
+      scope.store(agentModelCatalogStore).setState({
+        claudeModels: [],
+        codexModels: CODEX_MODELS,
+        cursorModels: [],
+        grokModels: [],
+      });
+      return renderInNodeScope(
+        <RepositorySettings
+          project={makeProject({ localPath: ROOT })}
+          open
+          onOpenChange={() => {}}
+          onUpdateProject={onUpdateProject}
+        />,
+        { client, windowScope },
+      );
+    }
+
+    test("reads the icon it browsed to from that node, not the command node", async () => {
+      const client = new FakeNodeClient({
+        nodeId: LEAF_ID,
+        invoke: {
+          find_project_icons: [],
+          read_host_image_file: (args: Readonly<Record<string, unknown>>) =>
+            hostImage(String(args.path)),
+          get_cached_opencode_model_catalog: null,
+        },
+      });
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderOnLeaf(client, onUpdateProject);
+
+      nextDialogResult = PICKED;
+      fireEvent.click(screen.getByRole("button", { name: "Icon" }));
+      await waitFor(() =>
+        expect(screen.getByTestId("project-icon").getAttribute("src")).toBe(PICKED_ICON),
+      );
+
+      expect(mockOpenDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ nodeId: LEAF_ID, mode: "file", defaultPath: ROOT }),
+      );
+      expect(client.calls("find_project_icons").map((call) => call.args)).toEqual([{ root: ROOT }]);
+      expect(client.calls("read_host_image_file").map((call) => call.args)).toEqual([
+        { path: PICKED },
+      ]);
+      expect(mockFindProjectIcons).not.toHaveBeenCalled();
+      expect(mockReadHostImageFile).not.toHaveBeenCalled();
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
+    test("reads the origin remote and saves settings on that node", async () => {
+      const client = new FakeNodeClient({
+        nodeId: LEAF_ID,
+        invoke: {
+          get_git_remote_url: "git@github.com:me/vulkanglass.git",
+          patch_repository_settings: () => makeConfig(),
+          get_cached_opencode_model_catalog: null,
+        },
+      });
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderOnLeaf(client, onUpdateProject);
+
+      fireEvent.click(screen.getByRole("button", { name: "Use the local clone's origin remote" }));
+      await waitFor(() => expect(client.calls("get_git_remote_url")).toHaveLength(1));
+      expect(client.calls("get_git_remote_url")[0]?.args).toEqual({ path: ROOT });
+      expect(mockGetGitRemoteUrl).not.toHaveBeenCalled();
+
+      fireEvent.click(getSaveButton());
+      await waitFor(() => expect(client.calls("patch_repository_settings")).toHaveLength(1));
+      expect(client.calls("patch_repository_settings")[0]?.args).toEqual(
+        expect.objectContaining({ projectId: "project-1" }),
+      );
+      expect(mockPatchRepositorySettings).not.toHaveBeenCalled();
     });
   });
 });

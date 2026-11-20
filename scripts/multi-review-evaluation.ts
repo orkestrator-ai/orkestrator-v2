@@ -8,13 +8,13 @@ import {
   safeParseStructuredReviewReport,
   type StructuredReviewReport,
 } from "../packages/protocol/src/structured-review";
-import { evaluationCorpus } from "../apps/backend/src/core/multi-review-evaluation-corpus";
+import { evaluationCorpus } from "../apps/backend/src/core/review/evaluation-corpus";
 import {
   evaluationConsolidationPrompt,
   referenceConsolidation,
   scoreConsolidation,
   summarizePanelValue,
-} from "../apps/backend/src/core/multi-review-evaluation";
+} from "../apps/backend/src/core/review/evaluation";
 import {
   consolidationArgsProblem,
   DEFAULT_EVALUATION_MODEL,

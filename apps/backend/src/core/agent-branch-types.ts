@@ -35,9 +35,9 @@ import type {
   EfficiencyOwner,
   EfficiencyPhase,
   MultiReviewEfficiencyObserver,
-} from "./multi-review-efficiency.js";
-import type { MultiReviewProgressTracker } from "./multi-review-progress.js";
-import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
+  MultiReviewProgressTracker,
+  ReviewFanoutConcurrency,
+} from "./review/index.js";
 import type { ArtifactTurnDispatch, WorkflowResultRefusals } from "./workflows/index.js";
 
 export type AgentBranchStatus = "pending" | "running" | "completed" | "failed" | "cancelled";

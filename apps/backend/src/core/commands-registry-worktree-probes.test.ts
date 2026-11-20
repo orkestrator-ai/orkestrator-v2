@@ -5,7 +5,7 @@ import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
 import * as shell from "./shell.js";
-import { REVIEW_WORKTREE_FINGERPRINT_SCRIPT } from "./review-worktree-fingerprint.js";
+import { REVIEW_WORKTREE_FINGERPRINT_SCRIPT } from "./review/worktree-fingerprint.js";
 
 function harness(environmentType: "local" | "container" = "local") {
   const commands = new Map<string, CommandHandler>();

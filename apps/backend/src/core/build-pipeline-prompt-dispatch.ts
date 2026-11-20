@@ -32,11 +32,11 @@ import {
   executionModeOverrideForPhase,
   attachBeforeDispatch,
 } from "./build-pipeline-service-helpers.js";
-import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
+import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review/validation-prompts.js";
 import {
   REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-} from "./review-prompts.js";
+} from "./review/index.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 

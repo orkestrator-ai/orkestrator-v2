@@ -35,7 +35,7 @@ import { stagePromptImages } from "./prompt-attachments.js";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import { managedProvider, retireProvider } from "./provider-retirement.js";
-import { clearReviewerAdmission } from "./review-fanout-admission.js";
+import { clearReviewerAdmission } from "./review/index.js";
 
 /** Tiers and catalogue access shared by every selection in one operation. */
 interface BuildSelectionContext {

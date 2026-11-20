@@ -44,7 +44,7 @@ import {
   type GraphDescribeHostDependencies,
 } from "./graph-describe-host.js";
 import type { AppConfig, Environment } from "./models.js";
-import { MultiReviewProgressTracker } from "./multi-review-progress.js";
+import { MultiReviewProgressTracker } from "./review/index.js";
 import {
   GRAPH_DESCRIBE_JOB_VERSION,
   GraphDescribeStorageError,

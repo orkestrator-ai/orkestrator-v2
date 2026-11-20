@@ -2,7 +2,7 @@
  * Published transcript artifacts on workflow transcripts that read their
  * providers directly: build-pipeline stage transcripts (the `get_build_pipeline`
  * read) and Multi Review reviewer reads (conditional tokens). The reviewer
- * service read itself is covered in `multi-review-service-part-*.test.ts`.
+ * service read itself is covered in `review/service-part-*.test.ts`.
  */
 import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
@@ -15,7 +15,7 @@ import { transcriptFingerprint } from "../build-pipeline-service-helpers.js";
 import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
 import type { CommandContext } from "../commands-context.js";
 import { createCommandRegistry } from "../commands-registry.js";
-import { readReviewerTranscript } from "../multi-review-reviewer-transcript.js";
+import { readReviewerTranscript } from "../review/reviewer-transcript.js";
 import type { ArtifactLedgerReader } from "../native-agent-service-projection-artifacts.js";
 import { StorageService } from "../storage.js";
 import { WorkflowTranscriptArtifacts } from "./transcript-artifacts.js";

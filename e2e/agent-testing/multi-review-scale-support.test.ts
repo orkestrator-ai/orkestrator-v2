@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { workflowResultToolName } from "@orkestrator/protocol/workflow-results";
-import { MULTI_REVIEW_STEP_TURNS } from "../../apps/backend/src/core/multi-review-steps";
+import { MULTI_REVIEW_STEP_TURNS } from "../../apps/backend/src/core/review/steps";
 import {
   FANOUT_STATS_FILE,
   FANOUT_STATS_FIXTURE_DIR,
@@ -12,7 +12,7 @@ import {
 import {
   DEFAULT_REVIEW_ADMISSION_CONCURRENCY,
   DEFAULT_REVIEW_PROVIDER_CONCURRENCY,
-} from "../../apps/backend/src/core/review-fanout-scheduler";
+} from "../../apps/backend/src/core/review/fanout-scheduler";
 import {
   FANOUT_STATS_DIR,
   FANOUT_STATS_FILE_NAME,

@@ -22,7 +22,7 @@ import type {
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-import { openMultiReviewTab } from "../workflow-tab-actions.js";
+import { openMultiReviewTab } from "../review/tab-actions.js";
 
 let root: string;
 let storage: StorageService;

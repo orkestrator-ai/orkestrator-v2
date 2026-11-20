@@ -61,7 +61,7 @@ executed dozens of tools. Neither change repairs an in-flight SDK stall.
 
 The installed recovery policy also explains the prolonged workflow lock:
 
-- `multi-review-progress.ts` warns after ten minutes without observed progress,
+- `review/progress.ts` warns after ten minutes without observed progress,
   but its abandonment threshold is 45 minutes. For the recorded progress time,
   that threshold is approximately 11:40:50 UTC, subject to the next supervisor
   tick and cancellation/teardown. This was a prediction, not an observed recovery.

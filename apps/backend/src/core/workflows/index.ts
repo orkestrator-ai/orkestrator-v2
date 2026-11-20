@@ -12,15 +12,14 @@
 // `result-environment-validator.ts`, `result-graph-*.ts`,
 // `result-json-text.ts`, `result-final-text.ts`), missing-result prompts
 // (`result-missing.ts`), the rollout and its metrics (`result-rollout.ts`,
-// `result-metrics.ts`). The review and build-pipeline files that use it stay
-// with their own prefix groups, as does `workflow-tab-actions.ts`, which opens
-// a Multi Review tab.
+// `result-metrics.ts`). The review files that use it are in `review/`, and
+// the build-pipeline files stay with their own prefix group.
 //
 // One module is a named exception in `.oxlintrc.json`, not part of this
-// surface: `result-final-text.ts`, which `review-consolidation-scope.ts`
+// surface: `result-final-text.ts`, which `review/consolidation-scope.ts`
 // imports directly. `result-contracts.ts` (and with it `result-service.ts`,
 // `result-tools.ts` and `result-missing.ts`) reaches
-// `review-consolidation-scope.ts`, so routing that file through this one
+// `review/consolidation-scope.ts`, so routing that file through this one
 // would close a runtime import cycle.
 export {
   beginArtifactDispatchTurn,

@@ -27,7 +27,7 @@ import { type StructuredReviewReport } from "@orkestrator/protocol/structured-re
 
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
-import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./review-prompts.js";
+import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./review/prompts.js";
 import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
@@ -45,7 +45,7 @@ import {
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
-import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./review-prompts.js";
+import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./review/prompts.js";
 import { REVIEW_PREPARATION_OUTPUT_CONTRACT } from "./build-pipeline-prompts.js";
 
 const cleanReview: StructuredReviewReport = {

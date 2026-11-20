@@ -813,7 +813,7 @@ Made on 2026-10-25 while adding the `status` scenario and the tile checks.
 - **`completed` after `address_multi_review`.** The item asked for `ready`,
   fix finished, then `completed`. An interactive Fix (what
   `address_multi_review` starts) ends at `fix-done`; only a structured Fix
-  sets `phase: "completed"` (`multi-review-service.ts`). Options: start a
+  sets `phase: "completed"` (`review/service.ts`). Options: start a
   structured Fix (auto-fix on), which skips `ready` entirely; or stop at
   `fix-done`. Chose to stop at `fix-done`, which keeps the coordinator's
   decision point (`ready` → `address_multi_review`) in the run. `completed`

@@ -7,7 +7,7 @@
 Tests: `subprocess bounds > a claude CLI that ignores SIGTERM times out, is
 killed and leaves no directory` and `subprocess bounds > a codex CLI that
 ignores SIGTERM times out, is killed and leaves no directory` in
-`apps/backend/src/core/multi-review-evaluation-drivers.test.ts`.
+`apps/backend/src/core/review/evaluation-drivers.test.ts`.
 
 Observed on `static-html-reports-776fd527af5f-r1` at `c9c14eef6` (a merge of
 `origin/main` at `b6044774c` into the branch), merge base `b6044774c`. The

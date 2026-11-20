@@ -34,7 +34,7 @@ import {
   effectiveDeliveryPolicy,
   type DeliveryPolicy,
 } from "@orkestrator/protocol/ticket-sections";
-import { parseAddressFindingsResult, type ReviewAddressFindingsResult } from "./review-prompts.js";
+import { parseAddressFindingsResult, type ReviewAddressFindingsResult } from "./review/index.js";
 import { type BuildPipelineProvider, ProviderUnavailableError } from "./build-pipeline-provider.js";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import { archiveValidationRun } from "./build-pipeline-validation-history.js";

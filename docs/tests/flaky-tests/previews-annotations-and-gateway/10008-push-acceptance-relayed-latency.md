@@ -1,5 +1,9 @@
 # The relayed push acceptance test can exceed its virtual latency budget
 
+Relocated tests from the recorded commands now live at
+`apps/backend/src/core/review/transcript-push.test.ts` and
+`apps/backend/src/core/review/service-part-4.test.ts`.
+
 - **ID:** 10008
 - **Status:** open
 - **Observed:** 2026-11-20 on the push-layer review fixes, based on
@@ -46,3 +50,19 @@
   Evidence: `/tmp/orkestrator-test-run.QhGIbq/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Isolated rerun:** `mise run test:logged -- --name refresh-main-push-acceptance-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts --parallel=1 --only-failures`
   passed the owning file in 10.7 seconds.
+
+## Isolated failures on 2026-11-20
+
+- **Observed:** on the `review` domain move of to-do 0012, based on
+  `05f3db2d8`. `mise run flaky:recurrence -- 10008 --base 05f3db2d8`
+  reported the case open.
+- **Command:** `NODE_ENV=test bun scripts/run-logged.ts --name review-importer-tests -- bun --cwd=apps/backend test --preload ../../tests/setup-node.ts <33 test files> --parallel=4 --only-failures`,
+  where it measured virtual p95 of 300 ms against its 250 ms budget; the
+  other 32 files passed (789 of 790 tests).
+- **Isolated reruns:** the owning file alone
+  (`bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts`)
+  failed three times out of three with p95 300 ms (8 passed, 1 failed), on
+  the branch and on an untouched checkout of `05f3db2d8`. Unlike the earlier
+  observations it did not pass alone, so on this host (macOS, Apple Silicon)
+  it now fails deterministically on `main`. The move does not touch the push
+  layer; only the test's import path changed.

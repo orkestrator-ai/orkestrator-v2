@@ -186,7 +186,7 @@ export function multiReviewFlowWorkflow(
         tokenCount: 41_200,
         provisionalFindings: [
           reported(
-            issue("P1", "Fix tab id ignores a custom fix launch", "multi-review-service.ts", 2_471),
+            issue("P1", "Fix tab id ignores a custom fix launch", "review/service.ts", 2_471),
             1,
             now,
           ),
@@ -369,7 +369,7 @@ const TRANSCRIPT_LINES: Array<[string, Record<string, string>] | string> = [
   ["Read", { file_path: "review-package/summary.md" }],
   ["Read", { file_path: "apps/web/src/components/review/MultiReviewTab.tsx" }],
   ["Grep", { pattern: '"pausedStep" apps/web/src' }],
-  ["Read", { file_path: "apps/backend/src/core/multi-review-service.ts" }],
+  ["Read", { file_path: "apps/backend/src/core/review/service.ts" }],
   "restartStep resets stepRuntimes but fixSession.startedAt is shared between the three steps…",
   ["Read", { file_path: "packages/protocol/src/multi-review.ts" }],
 ];

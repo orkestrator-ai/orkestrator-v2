@@ -9,9 +9,9 @@ import type {
   WorkflowResultSlotInput,
   WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
-import { evaluationCorpus } from "../multi-review-evaluation-corpus.js";
-import { referenceConsolidation } from "../multi-review-evaluation.js";
-import { consolidationResultContext } from "../review-fanout-provenance.js";
+import { evaluationCorpus } from "../review/evaluation-corpus.js";
+import { referenceConsolidation } from "../review/evaluation.js";
+import { consolidationResultContext } from "../review/fanout-provenance.js";
 import {
   REVIEW_CONSOLIDATION_PROVENANCE,
   REVIEW_CONSOLIDATION_WORDING,

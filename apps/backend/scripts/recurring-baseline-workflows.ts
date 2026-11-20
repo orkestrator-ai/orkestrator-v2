@@ -17,8 +17,8 @@ import type { BuildPipelineProvider } from "../src/core/build-pipeline-provider.
 import { BuildPipelineService } from "../src/core/build-pipeline-service.js";
 import { testGeneratedReviewPackage } from "../src/core/build-pipeline-test-fixtures.js";
 import { FeaturePlanningService } from "../src/core/features/index.js";
-import { MultiReviewService } from "../src/core/multi-review-service.js";
-import { parseReviewPackageReference } from "../src/core/review-package.js";
+import { MultiReviewService } from "../src/core/review/service.js";
+import { parseReviewPackageReference } from "../src/core/review/index.js";
 import { ManualTime, advanceKeyedWork } from "../src/core/recurring-test-support.js";
 import { recurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
 import { StorageService } from "../src/core/storage.js";

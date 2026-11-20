@@ -846,7 +846,10 @@ with `MachinesFilter`:
   client. A drop replaces one repository’s order through
   `update_repository_environment_order`. The command node rejects an order
   that would exceed the storage limit and keeps all saved positions. A command
-  node that does not advertise Manual ordering uses By machine. A row can go
+  node that does not advertise Manual ordering uses By machine; the menu
+  still shows the section there, with By machine checked, Manual disabled
+  and a note to update the backend, so the choice is never silently
+  missing. A row can go
   anywhere in its repository. Until the user arranges a
   repository it is the by-machine order; a new environment goes after the
   last one of its own machine there; a drag among the rows a filter shows

@@ -194,19 +194,13 @@ test("a shift-click range follows the repository order", async () => {
 });
 
 /** This window's machine with one environment and Machine A with one in the same repository. */
-function renderTwoMachines() {
-  renderList(
-    [project("p1", 0, "one")],
-    [environment("a1", "p1", 0)],
-    { manualOrderSupported: true },
-    [],
-    {
-      projects: [{ id: "rp", name: "one", gitUrl: "git@github.com:acme/one.git", order: 0 }],
-      environments: {
-        rp: [{ id: "r1", projectId: "rp", name: "Env r1", status: "running" }],
-      },
+function renderTwoMachines(layout: Partial<PortalLayout> = { manualOrderSupported: true }) {
+  renderList([project("p1", 0, "one")], [environment("a1", "p1", 0)], layout, [], {
+    projects: [{ id: "rp", name: "one", gitUrl: "git@github.com:acme/one.git", order: 0 }],
+    environments: {
+      rp: [{ id: "r1", projectId: "rp", name: "Env r1", status: "running" }],
     },
-  );
+  });
 }
 
 const tile = (machine: string) =>
@@ -289,6 +283,38 @@ test("the sort menu orders environments by machine or by hand, with no machine g
   await waitFor(() =>
     expect(screen.getByTestId("federated-repository-list").dataset.ordering).toBe("manual"),
   );
+});
+
+test("an older backend's sort menu still offers the ordering, with Manual disabled and why", async () => {
+  // A stored Manual choice from a newer backend: the list falls back to By machine.
+  useMachineViewStore.setState({ environmentOrdering: "manual" });
+  renderTwoMachines({});
+  await bothMachinesListed();
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By project" }));
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).getByText("Order environments")).toBeTruthy();
+  const byMachine = within(menu).getByRole("menuitemradio", { name: "By machine" });
+  expect(byMachine.getAttribute("aria-checked")).toBe("true");
+  const manual = within(menu).getByRole("menuitemradio", { name: "Manual" });
+  expect(manual.getAttribute("aria-checked")).toBe("false");
+  expect(manual.getAttribute("aria-disabled")).toBe("true");
+  const note = within(menu).getByText("Update the backend to order environments by hand.");
+  expect(manual.getAttribute("aria-describedby")).toBe(note.id);
+
+  fireEvent.click(manual);
+  expect(useMachineViewStore.getState().environmentOrdering).toBe("manual");
+  expect(screen.getByTestId("federated-repository-list").dataset.ordering).toBe("machine");
+});
+
+test("a backend with Manual ordering shows no update note", async () => {
+  renderTwoMachines();
+  await bothMachinesListed();
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By project" }));
+  const menu = await screen.findByRole("menu");
+  const manual = within(menu).getByRole("menuitemradio", { name: "Manual" });
+  expect(manual.hasAttribute("aria-disabled")).toBe(false);
+  expect(manual.hasAttribute("aria-describedby")).toBe(false);
+  expect(within(menu).queryByText(/Update the backend/) === null).toBe(true);
 });
 
 test("a standalone full sidebar shows its bound CPU tile and has no Manual option", async () => {

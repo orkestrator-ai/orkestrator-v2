@@ -1,4 +1,4 @@
-import { useManualOrderSupported } from "@/lib/portal/portal-layout";
+import { useManualOrderAvailability } from "@/lib/portal/portal-layout";
 import { MOBILE_SHELL_MEDIA_QUERY, noteDrawerNavigation } from "@/lib/mobile-shell";
 import { useSidebarHydration } from "./useSidebarHydration";
 import { useSelectedEnvironmentActions } from "./useSelectedEnvironmentActions";
@@ -375,7 +375,7 @@ export function HierarchicalSidebar() {
   const federation = useFederation();
   const machineViews = useMachineViews();
   const revealMachineProject = useRevealMachineProject();
-  const manualOrderSupported = useManualOrderSupported();
+  const manualOrderAvailability = useManualOrderAvailability();
   const machineFilter = useMachineViewStore((state) => state.machineFilter);
   const machineGrouping = useMachineViewStore((state) => state.grouping);
   const setMachineGrouping = useMachineViewStore((state) => state.setGrouping);
@@ -1124,12 +1124,16 @@ export function HierarchicalSidebar() {
     compact: compactActive,
   });
   // The ordering choice exists only where environments of several machines share a list.
+  // It is offered even when the command node cannot keep a Manual order, so
+  // the choice is not silently missing: Manual is then disabled, says why,
+  // and the menu shows the By machine order the list falls back to.
   const showOrdering =
     federation.enabled &&
-    manualOrderSupported &&
     !compactActive &&
     environmentSortMode === "project" &&
     machineViews.length > 1;
+  const manualOrderSupported = manualOrderAvailability === "supported";
+  const shownOrdering = manualOrderSupported ? environmentOrdering : "machine";
   const groupingValue = groupingOptions.some((option) => option.value === machineGrouping)
     ? machineGrouping
     : "";
@@ -1195,17 +1199,37 @@ export function HierarchicalSidebar() {
                   Order environments
                 </DropdownMenuLabel>
                 <DropdownMenuRadioGroup
-                  value={environmentOrdering}
+                  value={shownOrdering}
                   onValueChange={(value) => {
                     if (isEnvironmentOrdering(value)) setEnvironmentOrdering(value);
                   }}
                 >
-                  {ENVIRONMENT_ORDERING_OPTIONS.map((option) => (
-                    <DropdownMenuRadioItem key={option.value} value={option.value}>
-                      {option.label}
-                    </DropdownMenuRadioItem>
-                  ))}
+                  {ENVIRONMENT_ORDERING_OPTIONS.map((option) => {
+                    const unavailable = option.value === "manual" && !manualOrderSupported;
+                    return (
+                      <DropdownMenuRadioItem
+                        key={option.value}
+                        value={option.value}
+                        disabled={unavailable}
+                        aria-describedby={
+                          unavailable && manualOrderAvailability === "unsupported"
+                            ? "sidebar-manual-order-unavailable"
+                            : undefined
+                        }
+                      >
+                        {option.label}
+                      </DropdownMenuRadioItem>
+                    );
+                  })}
                 </DropdownMenuRadioGroup>
+                {manualOrderAvailability === "unsupported" ? (
+                  <p
+                    id="sidebar-manual-order-unavailable"
+                    className="px-2 pb-1.5 text-[11px] leading-snug text-muted-foreground"
+                  >
+                    Update the backend to order environments by hand.
+                  </p>
+                ) : null}
               </>
             ) : null}
           </>

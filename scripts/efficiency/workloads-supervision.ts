@@ -565,7 +565,7 @@ export async function pipelineCheckpointWorkload(
   }>("apps/backend/src/core/storage.ts");
   const checkpointsModule = await context.loadOptional<{
     BuildPipelineTranscriptCheckpoints: new (storage: unknown) => Checkpoints;
-  }>("apps/backend/src/core/build-pipeline-transcript-checkpoints.ts");
+  }>("apps/backend/src/core/build-pipeline/transcript-checkpoints.ts");
   const progress = await context.loadOptional<
     ProgressModule & { hasProgressSnapshot?: (provider: object) => boolean }
   >("apps/backend/src/core/transcript-progress.ts");
@@ -636,7 +636,7 @@ export async function pipelineCheckpointWorkload(
                     });
                     history.revision += 1;
                   }
-                  // `refreshMovedTranscript` in build-pipeline-service-supervisor.ts,
+                  // `refreshMovedTranscript` in build-pipeline/service-supervisor.ts,
                   // reproduced call for call: probe first, whole read only when the
                   // probe moved since the committed copy.
                   let whole: Promise<readonly unknown[]> | undefined;

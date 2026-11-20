@@ -12,7 +12,7 @@
  * single resolver; model and reasoning level did not, and the four places that
  * resolved them by hand disagreed. `native-agent-launch-activity-reconciler.ts`
  * applied a repository's model to *whatever* agent launched, while
- * `build-pipeline-service-helpers.ts` applied it only when the agent was the
+ * `build-pipeline/service-helpers.ts` applied it only when the agent was the
  * repository's own default. The same stored value meant two different things
  * depending on which code path reached it first, which is invisible until a
  * user pins a model for one platform and launches another. The `owns` rule

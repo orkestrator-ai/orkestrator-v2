@@ -993,7 +993,7 @@ branch on platform. The environment provider holds the server connection
 per server generation; a replaced server (new port or password) gets a new
 one. Observers (activity, catalogue and interaction reads) never start the
 server, and a session whose server is not running reads idle.
-`apps/backend/src/core/build-pipeline-provider.ts` re-exports a deliberately
+`apps/backend/src/core/build-pipeline/provider.ts` re-exports a deliberately
 smaller slice of the contract for pipeline code.
 
 ### Why OpenCode has no bridge
@@ -2181,8 +2181,8 @@ workflow-result turn runs for: the prompt body carries `workflowResultTool` and
 (preparation, consolidation and Fix, and their reminder and restart turns) and
 Build Pipeline consolidation declare the pair, with the key set to the turn's
 request id, which is also the result key. Build Pipeline stage sends
-(`build-pipeline-service-supervisor.ts`) and their durable re-sends
-(`build-pipeline-prompt-dispatch.ts`) declare it too; before they did, a
+(`build-pipeline/service-supervisor.ts`) and their durable re-sends
+(`build-pipeline/prompt-dispatch.ts`) declare it too; before they did, a
 single Pi reviewer's read-only Review in a pipeline could never submit its
 report (found by the Auto-pipeline fake-model run, to-do 7547 task 4). Feature
 Planning (`features/planning.ts`) still omits `workflowResultKey`; declaring its

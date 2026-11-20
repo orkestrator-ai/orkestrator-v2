@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 
 test.each(["absent", "lost", "unknown"] as const)(

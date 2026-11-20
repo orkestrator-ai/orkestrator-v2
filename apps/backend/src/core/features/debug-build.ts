@@ -43,7 +43,7 @@ import type { TaskSnapshotImage } from "@orkestrator/protocol/build-pipeline";
 import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import { createLogger } from "@orkestrator/protocol/logger";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
-import { launchBuildPipeline } from "../build-pipeline-launch.js";
+import { launchBuildPipeline } from "../build-pipeline/launch.js";
 import { assertValidPromptImages } from "../prompt-attachments.js";
 import type { Environment } from "../models.js";
 import type { KanbanTask } from "../storage-shared.js";

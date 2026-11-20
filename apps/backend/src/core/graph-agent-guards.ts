@@ -58,8 +58,11 @@ import {
   type GraphUpstreamRef,
 } from "@orkestrator/protocol/graphs/run";
 import type { WorkflowResultError } from "@orkestrator/protocol/workflow-results";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
-import type { ObservedWorktreeSnapshot, ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
+import type {
+  EnvironmentGit,
+  ObservedWorktreeSnapshot,
+  ReviewWorktreeSnapshot,
+} from "./build-pipeline/index.js";
 import {
   graphAttributePush,
   graphCreatedCommits,

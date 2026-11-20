@@ -96,7 +96,7 @@ import {
 import { runCommand } from "./shell.js";
 import { registerAgentsMdCommands } from "./agents-md-commands.js";
 import { registerWorkerQuestionRelayCommands } from "./worker-question-relay.js";
-import { coordinatorBuildTicketSource } from "./build-pipeline-launch.js";
+import { coordinatorBuildTicketSource } from "./build-pipeline/launch.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,

@@ -21,10 +21,10 @@ import {
   type ConsolidationEvidenceStats,
 } from "./consolidation-evidence.js";
 import {
-  worktreeSnapshotSection,
   type ReviewWorktreeSnapshot,
+  worktreeSnapshotSection,
   type WorktreeSnapshotWording,
-} from "../build-pipeline-prompts.js";
+} from "../build-pipeline/index.js";
 
 /**
  * A Multi Review is started by hand, from whatever state the environment is in.

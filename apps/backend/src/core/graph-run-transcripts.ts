@@ -1,7 +1,7 @@
 /**
  * Captures graph agent activations' display transcripts for the run view
  * (item 211), the way build-pipeline sessions keep theirs: provider messages
- * in the content-addressed transcript store (`build-pipeline-transcript-store.ts`,
+ * in the content-addressed transcript store (`build-pipeline/transcript-store.ts`,
  * owner `graph-run:<run id>`, one session per activation key), referenced
  * from the activation's session as a `PipelineTranscriptReference`.
  *
@@ -18,7 +18,7 @@
  * committed manifest's fingerprint on its next capture).
  */
 import type { PipelineTranscriptReference } from "@orkestrator/protocol/build-pipeline";
-import { transcriptFingerprint } from "./build-pipeline-service-helpers.js";
+import { transcriptFingerprint } from "./build-pipeline/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("graph");

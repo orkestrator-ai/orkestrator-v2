@@ -303,7 +303,7 @@ export class KanbanRepository {
     options: {
       notifyDeliveryPolicyChange?: boolean;
       /**
-       * A build lifecycle write (`build-pipeline-kanban-lifecycle.ts`): it
+       * A build lifecycle write (`build-pipeline/kanban-lifecycle.ts`): it
        * never moves a done ticket, and a status it writes is recorded as the
        * ticket's `lifecycleStatus`.
        */
@@ -340,7 +340,7 @@ export class KanbanRepository {
         const { status: _status, ...remaining } = updates;
         updates = remaining;
       }
-      // An unfinished build owns the column (`build-pipeline-ticket-hold.ts`):
+      // An unfinished build owns the column (`build-pipeline/ticket-hold.ts`):
       // only its lifecycle moves the ticket. The rest of the edit applies.
       if (
         !lifecycle &&

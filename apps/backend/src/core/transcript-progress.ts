@@ -56,7 +56,7 @@ import type {
   NativeAgentRuntimeProvider,
   ProviderTranscriptSnapshot,
 } from "./agent-provider-contract.js";
-import { legacyTranscriptFingerprint } from "./build-pipeline-service-helpers.js";
+import { legacyTranscriptFingerprint } from "./build-pipeline/index.js";
 
 /**
  * Tail length of the legacy digest used by providers without a snapshot

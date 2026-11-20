@@ -4,7 +4,7 @@ import { captureReviewWorktreeSnapshot } from "./fanout.js";
 import {
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
-} from "../build-pipeline-test-fixtures.js";
+} from "../build-pipeline/test-fixtures.js";
 import { expect } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,11 +31,11 @@ import type {
   ProviderCreateSessionOptions,
   ProviderSendOptions,
   ProviderStatus,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 import { type ProviderDispatchStatus } from "../agent-provider-contract.js";
 import { codexConnection, httpProvider } from "../agent-provider-test-support.js";
 import {

@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { BuildPipelineActivity } from "./build-pipeline-activity.js";
+import type { BuildPipelineActivity } from "./build-pipeline/activity.js";
 import { OrkestratorBackend } from "./index.js";
 import type { ClientEnvironment, Environment } from "./models.js";
 import { readStoredValue, seedStore, storageDatabase } from "./storage-test-support.js";

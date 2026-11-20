@@ -14,7 +14,7 @@ import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-comm
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./workflow-retention.js";
 import { seedStore, readStoredValue } from "../storage-test-support.js";
 import { MailWorld } from "../agent-mail-world-test-support.js";
-import { BuildPipelineService } from "../build-pipeline-service.js";
+import { BuildPipelineService } from "../build-pipeline/service.js";
 import {
   coordinatorCreatedEnvironment,
   assertCoordinatorMayActOnEnvironment,

@@ -76,7 +76,7 @@ import {
   readProviderStatus,
   type BuildPipelineProvider,
   type ProviderPrepareDispatchOptions,
-} from "./build-pipeline-provider.js";
+} from "./build-pipeline/provider.js";
 import {
   type EfficiencyEvent,
   efficiencyPlatform,

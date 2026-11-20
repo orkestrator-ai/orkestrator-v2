@@ -1,5 +1,5 @@
 import type { ProviderDispatchStatus } from "./agent-provider-contract.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 
 /** An exact-request result proves delivery even when the journal lost the id. */
 export async function recoveredDispatchAcceptance(

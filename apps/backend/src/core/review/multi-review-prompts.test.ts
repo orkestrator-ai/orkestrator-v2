@@ -16,7 +16,7 @@ import {
   reviewLensSection,
 } from "@orkestrator/protocol/review-lens";
 import { parseReviewPackageReference } from "./package.js";
-import { testGeneratedReviewPackage } from "../build-pipeline-test-fixtures.js";
+import { testGeneratedReviewPackage } from "../build-pipeline/test-fixtures.js";
 
 const report = {
   reviewScope: {

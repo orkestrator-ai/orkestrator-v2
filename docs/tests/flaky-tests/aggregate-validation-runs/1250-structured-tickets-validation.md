@@ -62,7 +62,7 @@ The original invocation was `mise run test:logged -- --name review-fix-backend
 -- bun --cwd apps/backend test`, followed by these paths and flags:
 
 ```text
-src/core/container-worktree-signal.test.ts src/core/container-host-reachability.test.ts src/core/commands-review.test.ts src/core/build-pipeline-service-rewind-follow-ups.test.ts src/core/index.test.ts tests/gateway-base.test.ts src/gateway-result-channels.test.ts src/remote-bandwidth-baseline.test.ts src/sse-route-probe.test.ts src/sse-route-probe.integration.test.ts src/preview-latency-baseline.test.ts --parallel=4 --only-failures
+src/core/container-worktree-signal.test.ts src/core/container-host-reachability.test.ts src/core/commands-review.test.ts src/core/build-pipeline/service-rewind-follow-ups.test.ts src/core/index.test.ts tests/gateway-base.test.ts src/gateway-result-channels.test.ts src/remote-bandwidth-baseline.test.ts src/sse-route-probe.test.ts src/sse-route-probe.integration.test.ts src/preview-latency-baseline.test.ts --parallel=4 --only-failures
 ```
 
 Evidence: host temporary artifact directory `orkestrator-test-run.Lba259`,

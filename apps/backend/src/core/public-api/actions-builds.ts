@@ -28,7 +28,7 @@ import {
   reviewLensLabelError,
   type ReviewLens,
 } from "@orkestrator/protocol/review-lens";
-import { buildAdmissionKey } from "../build-pipeline-service-helpers.js";
+import { buildAdmissionKey } from "../build-pipeline/index.js";
 import { conciseError } from "../commands-error-text.js";
 import { buildPipelineInputWithDefaults, savedLaunchSettings } from "../coordinator/index.js";
 import { isProjectHomeEnvironment } from "../project-home-environment.js";

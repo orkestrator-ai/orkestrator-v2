@@ -13,7 +13,7 @@ import {
   NativeAgentProviderSessionMissingError,
   type NativeAgentService,
 } from "../native-agent-service.js";
-import { addressFindingsReportPrompt } from "../build-pipeline-prompts.js";
+import { addressFindingsReportPrompt } from "../build-pipeline/index.js";
 import { MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS } from "./steps.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 

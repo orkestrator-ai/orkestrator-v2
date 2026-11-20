@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import {
   bridgeTranscriptPage,
   bridgeTranscriptSummaryUpdate,

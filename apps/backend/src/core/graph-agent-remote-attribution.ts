@@ -38,7 +38,7 @@ import {
   type GraphActivationWorktree,
   type GraphRun,
 } from "@orkestrator/protocol/graphs/run";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
+import type { EnvironmentGit } from "./build-pipeline/index.js";
 
 /** Clock skew tolerated between the backend and the environment, seconds. */
 export const GRAPH_GUARD_CLOCK_SKEW_SECONDS = 2;

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import { managedProvider, retainProvider, retireProvider } from "./provider-retirement.js";
 
 test("retirement waits for compound users and asynchronous readers and disposes once", async () => {

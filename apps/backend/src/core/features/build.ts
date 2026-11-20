@@ -27,7 +27,7 @@ import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import { createHash } from "node:crypto";
 import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
-import type { BuildPipelineService } from "../build-pipeline-service.js";
+import type { BuildPipelineService } from "../build-pipeline/service.js";
 import type { StorageService } from "../storage.js";
 import { resizeKanbanImage, type KanbanTask } from "../storage-shared.js";
 import { assertValidPromptImages } from "../prompt-attachments.js";

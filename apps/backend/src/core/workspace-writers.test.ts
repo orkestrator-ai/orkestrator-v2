@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { BUILD_PIPELINE_VERSION, type BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { MULTI_REVIEW_WORKFLOW_VERSION } from "@orkestrator/protocol/multi-review";
-import { startBuilding, withService } from "./build-pipeline-service-test-support.js";
+import { startBuilding, withService } from "./build-pipeline/service-test-support.js";
 import type { StorageService } from "./storage.js";
 import {
   WorkspaceBusyError,

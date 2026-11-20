@@ -29,7 +29,7 @@ native transcript windows keep the contract below instead.
 | `packages/protocol/src/native-agent-transcript-patch.ts` | Part-level patches inside a delta |
 | `apps/backend/src/core/native-agent-display-tail-scheduler.ts` | Restart-preview checkpoints |
 | `apps/backend/src/core/transcript-progress.ts` | Progress samples and versioned digests |
-| `apps/backend/src/core/build-pipeline-transcript-store.ts`, `build-pipeline-transcript-checkpoints.ts` | Durable pipeline transcripts and when they are written |
+| `apps/backend/src/core/build-pipeline/transcript-store.ts`, `build-pipeline/transcript-checkpoints.ts` | Durable pipeline transcripts and when they are written |
 
 ## Bridge reads
 
@@ -586,7 +586,7 @@ rebases once and reports neither progress nor a stall. A provider without a
 snapshot surface keeps the legacy one-row digest
 (`PROGRESS_TRANSCRIPT_TAIL_MESSAGES`, 1).
 
-**Pipeline transcripts** (`build-pipeline-transcript-store.ts`) are the
+**Pipeline transcripts** (`build-pipeline/transcript-store.ts`) are the
 durable copy, never evicted. Manifests live in the database and bodies in
 immutable, content-addressed chunk files; only the unsealed tail chunk is
 rewritten. A checkpoint stages and fsyncs chunks, then commits the manifest in
@@ -601,7 +601,7 @@ The supervisor writes a stage's transcript only at a persist boundary
 (`DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS`, 5 s), when a turn ends, or while a
 stall warning shows, and reads the whole body only when a progress probe moved
 since the committed copy (`refreshMovedTranscript`,
-`build-pipeline-transcript-checkpoints.ts`). The probe baseline is trusted
+`build-pipeline/transcript-checkpoints.ts`). The probe baseline is trusted
 only while the committed copy is the read it gated, and a failed probe falls
 back to the whole read.
 

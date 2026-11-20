@@ -64,17 +64,17 @@ import type { CoordinatorNoticesStorage } from "./storage-coordinator-notices.js
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
 import type { PublicOperationsStorage } from "./storage-public-operations.js";
 import path from "node:path";
-import type { BuildPipelineTranscriptMigrationReport } from "./build-pipeline-transcript-migration.js";
 import type {
-  BuildPipelineTranscriptFaultStage,
   BuildPipelineTranscriptFaults,
+  BuildPipelineTranscriptFaultStage,
   BuildPipelineTranscriptLimits,
+  BuildPipelineTranscriptMigrationReport,
   BuildPipelineTranscriptStats,
   TranscriptCommitInput,
   TranscriptCommitResult,
   TranscriptRead,
   TranscriptReadWindow,
-} from "./build-pipeline-transcript-store.js";
+} from "./build-pipeline/index.js";
 import type {
   AgentActivityCompletionOutcome,
   EnvironmentUnreadReason,

@@ -10,7 +10,7 @@ import {
   ProviderDispatchPreparationError,
   type BuildPipelineProvider,
   type ProviderSendOptions,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 import {
   FANOUT_STATS_FILE,
   FANOUT_STATS_FIXTURE_DIR,

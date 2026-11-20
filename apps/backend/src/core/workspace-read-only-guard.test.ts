@@ -3,7 +3,7 @@ import {
   WORKSPACE_GIT_BASELINE_MAX_PATHS,
   isWorkspaceGitBaseline,
 } from "@orkestrator/protocol/workspace-guard";
-import type { ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
+import type { ReviewWorktreeSnapshot } from "./build-pipeline/prompts.js";
 import {
   WorkspaceBaselineUnavailableError,
   WorkspaceReadOnlyGuard,

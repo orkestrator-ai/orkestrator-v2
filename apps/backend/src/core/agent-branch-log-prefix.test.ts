@@ -7,7 +7,7 @@ import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:te
 import { AgentBranchCommitQueue } from "./agent-branch-commits.js";
 import { attachAgentBeforeDispatch } from "./agent-branch-runner.js";
 import { AGENT_BRANCH_LOG_OWNER } from "./agent-branch-types.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 
 const warn = spyOn(console, "warn").mockImplementation(() => undefined);
 

@@ -14,9 +14,10 @@
 // probe and fingerprint (`worktree-*.ts`), opening a Multi Review tab
 // (`tab-actions.ts`) and the startup cleanup of retired looped reviews
 // (`retired-looped-review-cleanup.ts`). The build pipeline's own review
-// stages (`build-pipeline-review-*.ts`), the review commands
-// (`commands-review.ts`, `commands-registry-reviews.ts`) and the review
-// stores (`storage-reviews.ts`) stay with their own prefix groups.
+// stages (`build-pipeline/review-*.ts`) are in the build-pipeline domain,
+// and the review commands (`commands-review.ts`,
+// `commands-registry-reviews.ts`) and the review stores
+// (`storage-reviews.ts`) stay with their own prefix groups.
 //
 // Eight modules are named exceptions in `.oxlintrc.json`: imported directly,
 // not part of this surface, because routing their importers through this file
@@ -26,7 +27,7 @@
 //   `retired-looped-review-cleanup.ts` (imported only by the composition
 //   root, `core/index.ts`), `graph-engine.ts` (imported by the composition
 //   root and `graph-agent-host.ts`), `fanout.ts` (imported by
-//   `build-pipeline-review-fanout.ts`) and `validation-service.ts` (imported
+//   `build-pipeline/review-fanout.ts`) and `validation-service.ts` (imported
 //   by the review commands, the build pipeline supervisor, graph validation
 //   and environment teardown) reach the graph runtime, the workflow result
 //   contracts and the coordinator's status wakes. Re-exporting any of them
@@ -34,8 +35,8 @@
 //   (`graph-run-pass.ts`, `workflows/result-contracts.ts`,
 //   `coordinator/status-wakes.ts`, …) inside this file's own graph.
 // - `validation-prompts.ts` and `consolidation-scope.ts` are leaves, but
-//   `build-pipeline-prompts.ts` imports both, and `multi-review-prompts.ts`,
-//   re-exported here, imports `build-pipeline-prompts.ts`.
+//   `build-pipeline/prompts.ts` imports both, and `multi-review-prompts.ts`,
+//   re-exported here, imports `build-pipeline/prompts.ts`.
 export { multiReviewAddressFindingsIdentity } from "./address-findings-identity.js";
 export {
   MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE,

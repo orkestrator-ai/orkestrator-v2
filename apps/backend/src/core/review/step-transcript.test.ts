@@ -5,7 +5,7 @@ import {
   type MultiReviewSession,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import {
   readMultiReviewStepTranscript,
   readMultiReviewStepToolDetails,

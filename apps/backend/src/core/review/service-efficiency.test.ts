@@ -15,8 +15,8 @@ import {
   ProviderDispatchPreparationError,
   type BuildPipelineProvider,
   type ProviderSendOptions,
-} from "../build-pipeline-provider.js";
-import { testGeneratedReviewPackage } from "../build-pipeline-test-fixtures.js";
+} from "../build-pipeline/provider.js";
+import { testGeneratedReviewPackage } from "../build-pipeline/test-fixtures.js";
 import { syntheticReport } from "./efficiency-fixtures.js";
 import { RecordingEfficiencyObserver } from "./efficiency.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./service.js";

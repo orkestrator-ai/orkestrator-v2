@@ -36,7 +36,7 @@ cannot be judged by reading the code.
 
 Address Findings is a typed stage like Review and Verify. Its turn opens an `address-findings-result`
 workflow result slot, the same kind Multi Review's Address Findings step submits
-(`build-pipeline-context.ts` `workflowResultKind`), over the tool transport
+(`build-pipeline/context.ts` `workflowResultKind`), over the tool transport
 (`submit_address_findings_result`) or, where the rollout keeps it off, the provider-enforced
 schema. The prompt (`addressValidationInstruction`) says what goes where:
 `summary`, `filesChanged`, `commandsRun` with each check's result, the repairs
@@ -50,7 +50,7 @@ no check still fails and `limitations` is empty.
   (`awaitStructuredResult`, `remindMissingStageResult`). A structured-output
   result the contract rejects fails the stage with the contract's error. The
   tool rejects it at submit time instead, so the model corrects it in its turn.
-- **Accepted.** `finishAddress` (`build-pipeline-service-recovery.ts`) copies
+- **Accepted.** `finishAddress` (`build-pipeline/service-recovery.ts`) copies
   the result onto the Address Findings session as `addressFindingsResult`, bounded by
   `PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS` (`packages/protocol/src/build-pipeline-address-findings-report.ts`:
   4,000-character summary, 48 files, 20 checks with failed checks kept first,
@@ -58,7 +58,7 @@ no check still fails and `limitations` is empty.
   consumes the slot. An incomplete result (`complete: false`) still goes to
   Verify, which judges the round.
 - **Verify reads it** (`verificationAddressFindingsReport` in
-  `build-pipeline-address-findings-report.ts`) as an untrusted JSON evidence frame
+  `build-pipeline/address-findings-report.ts`) as an untrusted JSON evidence frame
   (`<address-findings-result-json>`, framed by `ADDRESS_FINDINGS_RESULT_FRAME_INSTRUCTION`
   from `review-evidence-frames.ts`), as another agent's claim to check against
   the diff. Only this round's live Address Findings session after its latest review
@@ -71,7 +71,7 @@ no check still fails and `limitations` is empty.
   the target branch when a repair needs upstream commits. Before Verify, the
   stage asks `get_environment_commit_ancestry` whether that commit is an
   ancestor of the captured HEAD and states the answer in the prompt
-  (`validationAncestry` in `build-pipeline-stage-prompts.ts`). When Git cannot
+  (`validationAncestry` in `build-pipeline/stage-prompts.ts`). When Git cannot
   answer, the section is left out and the verifier checks the ancestry itself.
   A graph's Verify node captures no HEAD, so it always checks it itself.
 - **Older sessions.** `addressFindingsReportKind: "address-findings-result"` on the session is the
@@ -324,7 +324,7 @@ validation table tags `changed` rows and prints their result on its own line.
 
 ### The loop breaker
 
-`validationStallReason` (`build-pipeline-validation-stall.ts`) runs when Verify
+`validationStallReason` (`build-pipeline/validation-stall.ts`) runs when Verify
 fails, before the next round starts. When no acceptance criterion failed, every
 failing test is listed and no command is unattributed, and either every failure
 is `unrelated` or the round failed exactly the same tests as the previous one,
@@ -359,7 +359,7 @@ integrity verification (`reviewSnapshotStale` on a Multi Review with a package) 
 a different fault and still fails the stage: the evidence itself changed.
 
 Verify keeps a read-only Git guard on every provider
-(`workspace-read-only-guard.ts`, applied by `build-pipeline-read-only-guard.ts`):
+(`workspace-read-only-guard.ts`, applied by `build-pipeline/read-only-guard.ts`):
 
 - **Before dispatch** the backend records HEAD and the Git-visible uncommitted
   paths through `get_environment_uncommitted_paths`, the same probe for local

@@ -4,8 +4,8 @@
 - **Status:** open
 - **Date observed:** 2026-11-02
 - **Scope:** branch `pipeline-code-rewind-dff407190fa7-r1`, which changes only
-  `apps/backend/src/core/build-pipeline-context.ts`,
-  `apps/backend/src/core/build-pipeline-service-lifecycle.ts`, their rewind
+  `apps/backend/src/core/build-pipeline/context.ts`,
+  `apps/backend/src/core/build-pipeline/service-lifecycle.ts`, their rewind
   test and documentation. No desktop, web or root test owner and no terminal
   code changed.
 - **Original command:** `mise run test` (default suite, default worker
@@ -86,7 +86,7 @@ on both checkouts:
 - `bun test --cwd apps/web ./src/stores/terminalPortalStore.test.ts --parallel=1 --only-failures`
 
 The changed-owner command
-`bun test --cwd apps/backend ./src/core/build-pipeline-service-rewind-follow-ups.test.ts --parallel=1 --only-failures`
+`bun test --cwd apps/backend ./src/core/build-pipeline/service-rewind-follow-ups.test.ts --parallel=1 --only-failures`
 passed through `test:logged` (`rewind-kanban-fix`). Touched TypeScript files
 passed `bun fmt --check` and oxlint. The already-passing preparation typecheck,
 lint and format suites were not repeated.

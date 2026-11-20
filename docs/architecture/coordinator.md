@@ -2730,7 +2730,7 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   status (`running`, `idle`, `finished`, `failed`, `cancelled`).
   `list_mailboxes` with `environmentId` lists them (with `nodeId` too, on a
   leaf), and `get_build_pipeline` carries the same list as `workers`
-  (`control-workflow-summary.ts`), so a command node reading a leaf's pipeline
+  (`build-pipeline/control-workflow-summary.ts`), so a command node reading a leaf's pipeline
   lists the same workers. A worker gets its mailbox the moment its session
   starts: a send checks the pipeline's workers before it resolves the address
   (`ensureAgentMailDirectoryFresh`), and the mail service resynchronizes when a
@@ -2747,7 +2747,7 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   like any mail. While the worker's turn runs, mail waits. When the turn ends,
   the supervisor hands everything queued for that worker to it as one turn,
   before the pipeline advances (`dispatchWorkerMailTurn`,
-  `build-pipeline-worker-mail.ts`), journaled as the pending prompt attempt
+  `build-pipeline/worker-mail.ts`), journaled as the pending prompt attempt
   like a queued user message, so it is delivered at most once; the attempt's
   request id is kept on the session (`mailDeliveries`) so a claim interrupted
   by a restart is reconciled against it. `deliverNow` steers into the running
@@ -2760,7 +2760,7 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   and archives that validation run before writable work resumes; preparation
   and validation must then certify the new state.
 - **Identity.** A worker sends, replies, acks and checks its inbox as its own
-  mailbox, on every agent and every turn (`pipeline-worker-identity.ts`):
+  mailbox, on every agent and every turn (`build-pipeline/pipeline-worker-identity.ts`):
   - A tool-mode stage turn's workflow-result capability carries the mail
     tools of the worker the backend's record says owns that attempt. On
     OpenCode the persistent workflow-result broker authenticates each mail
@@ -2960,7 +2960,7 @@ Decisions:
 that stopped for a passing reason (a usage limit, an unreachable agent)
 without the user. It is the UI's step Restart, and with `selection` its
 "Restart in…", through `BuildPipelineService.restartForCoordinator`
-(`build-pipeline-restart-targets.ts` resolves the step inside the pipeline
+(`build-pipeline/restart-targets.ts` resolves the step inside the pipeline
 lock).
 
 - **Which step.** Omit `stepId` to restart the step a failed pipeline failed
@@ -3198,7 +3198,7 @@ the acceptance criteria and on which commit: a tally ("Acceptance criteria:
 not-checked criterion's id and text, within the eight-line detail cap and
 before the delivery line, with a closing line naming how many more did not
 pass. Passed criteria are only counted. The facts come from the pipeline's own
-Verify session (`build-pipeline-criteria-report.ts`), not the ticket, so a
+Verify session (`build-pipeline/criteria-report.ts`), not the ticket, so a
 Linear or GitHub build reports them too; a criterion Verify reported nothing
 for counts as not checked, and a session without a recorded baseline says
 "commit not recorded". `get_build_pipeline` returns the same report in full as
@@ -3535,7 +3535,7 @@ reach the ticket. A `taskId` that is not a ticket in the project is refused
 with an error telling the coordinator to create it with `create_ticket` first;
 the build is never started unlinked. The check and the link are made by the
 backend that runs the build (`coordinatorBuildTicketSource` in
-`build-pipeline-launch.ts`, called by `start_coordinator_build_pipeline` and,
+`build-pipeline/launch.ts`, called by `start_coordinator_build_pipeline` and,
 for a build on a connected node, by that node's
 `start_controller_build_pipeline` against its own copy of the project). The
 command node also sends the source with a node build, so a node too old to
@@ -4256,7 +4256,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - `create_pr` and `resolve_conflicts` admission, preconditions and follows:
   `coordinator/surface-actions.test.ts`
 - `restart_build_pipeline_step`: step resolution, kept rounds, selection and
-  refusals at the service (`build-pipeline-service-coordinator-restart.test.ts`);
+  refusals at the service (`build-pipeline/service-coordinator-restart.test.ts`);
   local and remote restarts, receipts and replays, the older-node refusal,
   follow reopening and the `resume_build_pipeline` refusal
   (`coordinator/pipeline-step-actions.test.ts`); the fake model's script
@@ -4272,14 +4272,14 @@ guarantee, not by one end-to-end scenario replayed per platform:
   discovery, delivery at turn end, `deliverNow`, the environment-only and
   ended-worker refusals, expiry and its notice, worker replies, leaf-side node
   delivery, transcripts, result-key identity, restart):
-  `pipeline-worker-mail.test.ts`; the coordinator tools for them, here and on a
+  `build-pipeline/pipeline-worker-mail.test.ts`; the coordinator tools for them, here and on a
   leaf: `control-mcp/pipeline-workers.test.ts`; worker derivation and carrier
   framing: `packages/protocol/src/pipeline-worker-mail.test.ts`; each worker's
   own mail identity (result server, OpenCode broker, and the environment-wide
   connection with `mailCapability`: send, reply, ack, forged, foreign and
   ended-worker refusals, restart): `agent-tools-pipeline-worker-mail.test.ts`;
-  stage turns carrying it (`build-pipeline-worker-mail.test.ts`), each
-  reviewer and the consolidation (`build-pipeline-review-fanout-worker-mail.test.ts`)
+  stage turns carrying it (`build-pipeline/worker-mail.test.ts`), each
+  reviewer and the consolidation (`build-pipeline/review-fanout-worker-mail.test.ts`)
   and OpenCode's per-turn worker connection (`opencode2/turn-connections.test.ts`)
 - tool contract and poll guard: `control-mcp/server-reads.test.ts` and
   `control-mcp/server-messaging.test.ts`

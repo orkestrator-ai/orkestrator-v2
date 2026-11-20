@@ -174,7 +174,7 @@ function mailToolDescription(
  *
  * - `broker`: OpenCode's persistent workflow-result broker. Every call names
  *   the attempt's resultKey and signed capability; the backend's record of
- *   that attempt names the worker (`pipeline-worker-identity.ts`).
+ *   that attempt names the worker (`build-pipeline/pipeline-worker-identity.ts`).
  * - `worker-capability`: an environment-wide connection. A call may add the
  *   `mailCapability` a build pipeline worker's turn was given, which selects
  *   exactly that worker's mailbox; without it the call acts as the

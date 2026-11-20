@@ -6,7 +6,7 @@ import type {
   PublicBuildPipelineSummary,
   PublicPage,
 } from "@orkestrator/protocol/public-api-resources";
-import type { BuildPipelineService } from "../build-pipeline-service.js";
+import type { BuildPipelineService } from "../build-pipeline/service.js";
 import { createBuildHarness, type BuildHarness } from "./build-test-support.js";
 import { parseBuildLaunch } from "./actions-builds.js";
 import { intentFingerprint, requestKey } from "./operation-ledger.js";

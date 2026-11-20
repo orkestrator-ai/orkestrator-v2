@@ -74,7 +74,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 
 **Context.** The idle A/B and a 10-cycle soak ran on macOS (Live evidence, Live soak). The file says each busy step needs credentials, a scripted UI or a fault injector that `scripts/recurring-live-ab.ts` lacks. Outage and resume overlap with the live outage workload in 0051. The run is batched for macOS and Docker Desktop in 0031.
 
-**Investigation.** `scripts/recurring-live-ab.ts` still drives only profile lifecycle, sampling, freshness probes and the soak (`--soak-cycles`, `scripts/recurring-live-ab.ts:141`). It has no client, credential or fault-injection phase. The keyed domains it would exercise are still switched per domain at `apps/backend/src/core/build-pipeline-context.ts:145`, `feature-planning.ts:259`, `looped-review-service.ts:420`, `review/service.ts:625`, `native-agent-service.ts:988` and `index.ts:359`. Nothing since `00a0cb82` has added busy-profile tooling. Scheduled jobs (#1242) added a new recurring kind, `scheduled-job-tick` (`packages/protocol/src/recurring-work.ts:325`), which a busy profile should include.
+**Investigation.** `scripts/recurring-live-ab.ts` still drives only profile lifecycle, sampling, freshness probes and the soak (`--soak-cycles`, `scripts/recurring-live-ab.ts:141`). It has no client, credential or fault-injection phase. The keyed domains it would exercise are still switched per domain at `apps/backend/src/core/build-pipeline/context.ts:145`, `feature-planning.ts:259`, `looped-review-service.ts:420`, `review/service.ts:625`, `native-agent-service.ts:988` and `index.ts:359`. Nothing since `00a0cb82` has added busy-profile tooling. Scheduled jobs (#1242) added a new recurring kind, `scheduled-job-tick` (`packages/protocol/src/recurring-work.ts:325`), which a busy profile should include.
 
 **Decisions.**
 
@@ -108,7 +108,7 @@ phase in `recurring-live-ab.ts`). No real provider or login is needed.
 
 **Outcome (2026-11-06).** Rechecked on `ee2cc8423`: the driver still had no
 client, approval or workflow phase, and the keyed domains are switched at
-`build-pipeline-context.ts:241`, `features/planning.ts:265`,
+`build-pipeline/context.ts:241`, `features/planning.ts:265`,
 `review/service.ts:751`, `native-agent-service.ts:1438`, `index.ts:525`
 and, since graph runs, `graph-run-service.ts:241` (looped review is retired).
 The recommendation was taken, with every turn on a fake model: a busy phase

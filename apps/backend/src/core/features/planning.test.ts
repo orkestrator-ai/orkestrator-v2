@@ -16,7 +16,7 @@ import {
   type ProviderCreateSessionOptions,
   type ProviderSendOptions,
   type ProviderStatus,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 
 const PLANNER_REPLY = [
   "Here is what I understand so far.",

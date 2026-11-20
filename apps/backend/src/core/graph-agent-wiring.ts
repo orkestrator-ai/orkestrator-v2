@@ -11,8 +11,8 @@ import type {
   AgentEnforcementHost,
   GraphCapabilityCeiling,
 } from "@orkestrator/protocol/graphs/capability-profiles";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
-import type { BuildPipelineProvider, ProviderDependencies } from "./build-pipeline-provider.js";
+import type { EnvironmentGit } from "./build-pipeline/index.js";
+import type { BuildPipelineProvider, ProviderDependencies } from "./build-pipeline/provider.js";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
 import type { GraphLsRemote } from "./graph-agent-guards.js";
 import {

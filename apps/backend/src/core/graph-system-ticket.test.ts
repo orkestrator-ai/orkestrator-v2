@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { GRAPH_TICKET_LIFECYCLE_EVENTS } from "@orkestrator/protocol/graphs/system-actions";
-import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
+import { buildPipelineKanbanUpdate } from "./build-pipeline/kanban-lifecycle.js";
 import type { GraphActivationReport } from "./graph-run-executors.js";
 import { SYSTEM_REPO, systemWorld, type SystemWorld } from "./graph-system-test-support.js";
 
@@ -38,7 +38,7 @@ describe("update-ticket", () => {
     for (const node of ["started", "validated", "raised", "completed"]) {
       complete(await executor.start(w.context(w.activation(node))));
     }
-    // What `build-pipeline-service-supervisor.test.ts` pins for a pipeline run.
+    // What `build-pipeline/service-supervisor.test.ts` pins for a pipeline run.
     const task = await ticket(w, taskId);
     expect(task).toMatchObject({ status: "review", prUrl: PR, prState: "open" });
     expect(task.comments.map((comment) => comment.text)).toEqual([

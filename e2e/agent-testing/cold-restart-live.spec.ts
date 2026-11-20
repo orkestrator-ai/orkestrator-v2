@@ -971,7 +971,7 @@ test.describe("live cold restart", () => {
       // --- Mid-dispatch crash --------------------------------------------
       // This live window may include provider acceptance while profile metadata
       // is read. The deterministic pre-acceptance SIGKILL boundary and same-id
-      // retry live in build-pipeline-service-recovery.test.ts (held send).
+      // retry live in build-pipeline/service-recovery.test.ts (held send).
       const dispatchTrail = new Trail(SHORT_STOPS);
       await dispatchTrail.write(dispatchEnv.worktreePath!);
       const dispatchId = await start(dispatchEnv, dispatchTrail);

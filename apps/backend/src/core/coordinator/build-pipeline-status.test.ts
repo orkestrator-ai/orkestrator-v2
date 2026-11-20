@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import { coordinatorRestartRefusal } from "../build-pipeline-restart-targets.js";
+import { coordinatorRestartRefusal } from "../build-pipeline/restart-targets.js";
 import { BUILD_CANCELLED_NOTICE, buildPipelineStatus } from "./build-pipeline-status.js";
 import {
   MULTI_REVIEW_CANCELLED_NOTICE,
@@ -14,7 +14,7 @@ import {
   renderCoordinatorStatusNotice,
 } from "./status-wakes.js";
 import { resumeRefusal } from "../control-mcp/coordinator-tools.js";
-import { workflowSummary } from "../control-workflow-summary.js";
+import { workflowSummary } from "../build-pipeline/control-workflow-summary.js";
 
 const CANCELLED_AT = "2026-11-10T01:00:00.000Z";
 const RESTART_TOOLS = /restart_build_pipeline_step|resume_build_pipeline|start_build_pipeline/;

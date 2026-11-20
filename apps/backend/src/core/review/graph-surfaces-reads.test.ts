@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import type { CommandContext } from "../commands-context.js";
 import { graphReviewIssue, graphReviewWorld, type GraphReviewWorld } from "./graph-test-support.js";
 import { scriptGraphReview } from "./graph-surfaces-test-support.js";

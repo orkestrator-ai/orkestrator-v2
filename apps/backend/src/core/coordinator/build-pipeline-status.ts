@@ -2,7 +2,7 @@
  * The settled status of a build pipeline snapshot, for a coordinator's
  * status wake (`status-wakes.ts`). A completed or failed build
  * names how its newest Verify judged each acceptance criterion and on which
- * commit (`build-pipeline-criteria-report.ts`), so the coordinator can tell
+ * commit (`build-pipeline/criteria-report.ts`), so the coordinator can tell
  * the user what was proved without reading the ticket.
  *
  * A cancelled build is reported as cancelled, never as failed: a cancel is
@@ -21,11 +21,11 @@ import {
   pipelineBuildStopSummary,
 } from "@orkestrator/protocol/build-pipeline-build-outcome";
 import { isDeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
-import { sessionPhaseForBuildPhase } from "../build-pipeline-stages.js";
 import {
   buildPipelineCriteriaReport,
   criteriaNoticeLines,
-} from "../build-pipeline-criteria-report.js";
+  sessionPhaseForBuildPhase,
+} from "../build-pipeline/index.js";
 import { boundedLine } from "./waiting-status.js";
 import { hash, MAX_DETAILS, record, stalledSession, text } from "./status-support.js";
 import type { CoordinatorStatus } from "./status-wakes.js";

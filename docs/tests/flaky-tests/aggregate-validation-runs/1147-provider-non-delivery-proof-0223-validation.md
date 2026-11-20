@@ -28,7 +28,7 @@ Current path for the recorded account file is `apps/backend/src/core/agent-accou
 
 ## This branch's failures (fixed)
 
-- `apps/backend/src/core/build-pipeline-steps.test.ts` "redispatches a lost
+- `apps/backend/src/core/build-pipeline/steps.test.ts` "redispatches a lost
   prompt with the step's own model and effort": its recording provider had no
   `dispatchStatus`, so the new at-most-once gate parked the redispatch. The
   provider now answers from the ids it took (`absent` otherwise). 34 passed.
@@ -87,7 +87,7 @@ result only for an id in its accepted-id set; all 34 owning-file tests passed.
 The combined pipeline/fan-out run also passed after this correction:
 
 ```sh
-mise run test:logged -- --name pipeline-and-fanout -- bun test --cwd apps/backend ./src/core/build-pipeline-steps.test.ts ./src/core/build-pipeline-service-recovery.test.ts ./src/core/build-pipeline-result-reminder.test.ts ./src/core/review-fanout-dispatch.test.ts ./src/core/review-fanout-interleaving.test.ts ./src/core/build-pipeline-review-fanout.test.ts --parallel=4 --only-failures
+mise run test:logged -- --name pipeline-and-fanout -- bun test --cwd apps/backend ./src/core/build-pipeline/steps.test.ts ./src/core/build-pipeline/service-recovery.test.ts ./src/core/build-pipeline/result-reminder.test.ts ./src/core/review-fanout-dispatch.test.ts ./src/core/review-fanout-interleaving.test.ts ./src/core/build-pipeline/review-fanout.test.ts --parallel=4 --only-failures
 ```
 
 Remaining failures match the previously recorded base failures above:

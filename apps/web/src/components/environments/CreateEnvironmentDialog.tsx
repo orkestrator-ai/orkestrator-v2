@@ -1365,6 +1365,44 @@ export function CreateEnvironmentDialog({
     }
   }, [agentType, availableModels, getInitialAgentSelection, model, open, reasoningEffort]);
 
+  // A handoff's environment type and agent override this opening's defaults,
+  // so this follows the effects that apply them. The machine's own limits
+  // still hold: the availability effect above moves a type it cannot create
+  // to one it can, and a model missing from its catalogue falls back to the
+  // agent's default.
+  const appliedHandoffRef = useRef<CreateEnvironmentHandoff | null>(null);
+  useEffect(() => {
+    if (!open) {
+      appliedHandoffRef.current = null;
+      return;
+    }
+    if (!handoff || appliedHandoffRef.current === handoff) return;
+    appliedHandoffRef.current = handoff;
+    if (handoff.environmentType) setEnvironmentType(handoff.environmentType);
+    const carried = handoff.agent;
+    if (!carried || !enabledAgentPlatforms.includes(carried.type)) return;
+    agentSelectionTouchedRef.current = true;
+    setAgentType(carried.type);
+    const carriedModel = modelsForAgent(modelCatalog, carried.type).find(
+      (candidate) => candidate.id === carried.model,
+    );
+    if (carriedModel) {
+      setModel(carriedModel.id);
+      setReasoningEffort(
+        carried.reasoningEffort !== "default" &&
+          carriedModel.reasoningEfforts?.includes(carried.reasoningEffort)
+          ? carried.reasoningEffort
+          : "default",
+      );
+      setFastMode(defaultFastModeFor(carried.type, carriedModel.id, modelCatalog));
+    } else {
+      const fallback = getInitialAgentSelection(carried.type);
+      setModel(fallback.model);
+      setReasoningEffort(fallback.reasoningEffort);
+      setFastMode(fallback.fastMode);
+    }
+  }, [enabledAgentPlatforms, getInitialAgentSelection, handoff, modelCatalog, open]);
+
   const selectAgent = useCallback(
     (nextAgent: AgentType) => {
       if (nextAgent === agentType) return;
@@ -1472,6 +1510,8 @@ export function CreateEnvironmentDialog({
     () => ({
       prompt: initialPrompt.trim(),
       name: environmentName.trim(),
+      environmentType,
+      agent: { type: agentType, model, reasoningEffort },
       ...(buildIntent === "feature"
         ? {
             feature: {
@@ -1483,12 +1523,16 @@ export function CreateEnvironmentDialog({
         : { interactionMode: buildIntent }),
     }),
     [
+      agentType,
       buildIntent,
       environmentName,
+      environmentType,
       featureAcceptanceCriteria,
       featureDeliveryPolicy,
       featureName,
       initialPrompt,
+      model,
+      reasoningEffort,
     ],
   );
 

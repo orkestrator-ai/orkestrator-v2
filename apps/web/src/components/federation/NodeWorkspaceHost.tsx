@@ -11,6 +11,10 @@ import { useProjects } from "@/hooks/useProjects";
 import { startsOnSelection } from "@/lib/environment-auto-start";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openDialog } from "@/lib/federation/open-workspace";
+import {
+  reportCreateEnvironmentFailed,
+  reportCreateEnvironmentOpened,
+} from "@/lib/federation/create-environment-handoff";
 import type { WorkspaceRequest } from "@/lib/federation/workspace-request";
 import { suggestedCloneDirectory } from "@/lib/github-clone";
 import { useConfigStore } from "@/stores/configStore";
@@ -151,6 +155,8 @@ export function NodeWorkspaceHost() {
   const appliedSeq = useRef(resumedSeq);
   // The request whose dialog the user closed.
   const [closedSeq, setClosedSeq] = useState(resumedSeq);
+  // The New Environment request whose project is not on this node.
+  const [missingProjectSeq, setMissingProjectSeq] = useState<number | null>(null);
 
   useEffect(
     () =>
@@ -196,8 +202,24 @@ export function NodeWorkspaceHost() {
   // refresh must not revive the request.
   if (dialogRequest && createProjectId !== null && !createProjectKnown) {
     setClosedSeq(dialogRequest.seq);
+    setMissingProjectSeq(dialogRequest.seq);
   }
   const createEnvProjectId = createProjectKnown ? createProjectId : null;
+  const openedCreateSeq = createEnvProjectId !== null ? (dialogRequest?.seq ?? null) : null;
+
+  // A machine switch waits to hear whether its form opened here
+  // (`openCreateEnvironmentOnMachine`), and brings it back if not.
+  useEffect(() => {
+    if (openedCreateSeq !== null) reportCreateEnvironmentOpened(scope.nodeId, openedCreateSeq);
+  }, [openedCreateSeq, scope]);
+  useEffect(() => {
+    if (missingProjectSeq === null) return;
+    reportCreateEnvironmentFailed(
+      scope.nodeId,
+      missingProjectSeq,
+      "The project is not on that machine any more.",
+    );
+  }, [missingProjectSeq, scope]);
   const closeDialog = () => {
     if (request) setClosedSeq(request.seq);
   };

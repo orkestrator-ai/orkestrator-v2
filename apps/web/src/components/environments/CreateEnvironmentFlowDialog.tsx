@@ -473,15 +473,22 @@ export function CreateEnvironmentFlowDialog({
   };
 
   // That machine's own dialog takes over: this one closes, and the window
-  // shows the machine's copy of the project with its dialog open.
+  // shows the machine's copy of the project with its dialog open. If that
+  // machine cannot show it, the form comes back here with what was entered.
   const handleSelectMachine = (
     machine: CreateEnvironmentMachine,
     form: CreateEnvironmentHandoff,
   ) => {
-    if (isCreating) return false;
+    if (isCreating || !projectId) return false;
     cancelPendingCredentialFlow();
     onOpenChange(false);
-    openCreateEnvironmentOnMachine(machine, projectName ?? "New environment", form);
+    const currentName = machines.find((candidate) => candidate.current)?.name;
+    openCreateEnvironmentOnMachine(machine, projectName ?? "New environment", form, {
+      connectionId: scope.role === "command" ? "" : scope.nodeId,
+      projectId,
+      machineName: !currentName || currentName === "This machine" ? "this machine" : currentName,
+      title: projectName ?? "New environment",
+    });
     return true;
   };
 

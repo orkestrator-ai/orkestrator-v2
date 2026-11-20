@@ -147,11 +147,13 @@ function dialogWithMachines(
     handoff,
     onOpenChange = () => undefined,
     isLoading = false,
+    localEnvironmentAvailable = true,
   }: {
     projectId?: string;
     handoff?: CreateEnvironmentHandoff;
     onOpenChange?: (open: boolean) => void;
     isLoading?: boolean;
+    localEnvironmentAvailable?: boolean;
   } = {},
 ) {
   return (
@@ -160,6 +162,7 @@ function dialogWithMachines(
         open
         onOpenChange={onOpenChange}
         isLoading={isLoading}
+        localEnvironmentAvailable={localEnvironmentAvailable}
         onCreate={async () => true}
         projectId={projectId}
         handoff={handoff}
@@ -277,6 +280,8 @@ describe("CreateEnvironmentDialog machine dropdown", () => {
         prompt: "Add a dark mode",
         name: "dark-mode",
         interactionMode: "interactive",
+        environmentType: "containerized",
+        agent: { type: "claude", model: "sonnet", reasoningEffort: "default" },
       } satisfies CreateEnvironmentHandoff;
       expect(onSelectMachine.mock.calls).toEqual([[STUDIO, handoff]]);
       cleanup();
@@ -292,6 +297,101 @@ describe("CreateEnvironmentDialog machine dropdown", () => {
       expect(
         (screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value,
       ).toBe("Add a dark mode");
+    } finally {
+      cleanup();
+      store.getState().setConfig(initialConfig);
+    }
+  });
+});
+
+describe("CreateEnvironmentDialog machine switch carries the form", () => {
+  const carried = {
+    prompt: "Ship the report",
+    name: "report",
+    interactionMode: "task",
+    environmentType: "local",
+    agent: { type: "codex", model: "not-in-this-catalogue", reasoningEffort: "high" },
+  } satisfies CreateEnvironmentHandoff;
+
+  async function switchToStudio(
+    onSelectMachine: ReturnType<
+      typeof mock<(machine: CreateEnvironmentMachine, form: CreateEnvironmentHandoff) => boolean>
+    >,
+  ) {
+    fireEvent.click(screen.getByRole("combobox", { name: "Machine" }));
+    fireEvent.click(await screen.findByRole("option", { name: /Studio/ }));
+    return onSelectMachine.mock.calls.at(-1)?.[1];
+  }
+
+  test("the switch sends the environment type and agent with the rest of the form", async () => {
+    federated();
+    const onSelectMachine = mock(
+      (_machine: CreateEnvironmentMachine, _form: CreateEnvironmentHandoff) => true,
+    );
+    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], onSelectMachine));
+    fireEvent.click(screen.getByRole("button", { name: "Local" }));
+    const form = await switchToStudio(onSelectMachine);
+    expect(form?.environmentType).toBe("local");
+    expect(form?.agent?.type).toBe("claude");
+  });
+
+  test("a carried environment type and agent replace the destination's defaults", async () => {
+    federated();
+    const onSelectMachine = mock(
+      (_machine: CreateEnvironmentMachine, _form: CreateEnvironmentHandoff) => true,
+    );
+    renderInAppCommandScope(
+      dialogWithMachines([OWN, STUDIO], onSelectMachine, { handoff: carried }),
+    );
+    // Containerized is this dialog's default; the carried Local wins.
+    expect(screen.queryByText("Git worktree on Build Mac") !== null).toBe(true);
+    expect((screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value).toBe(
+      "Ship the report",
+    );
+    expect((screen.getByLabelText("Environment name (optional)") as HTMLInputElement).value).toBe(
+      "report",
+    );
+    expect(screen.getByRole("button", { name: "Task", pressed: true })).toBeTruthy();
+    const form = await switchToStudio(onSelectMachine);
+    expect(form).toMatchObject({
+      prompt: "Ship the report",
+      name: "report",
+      interactionMode: "task",
+      environmentType: "local",
+    });
+    // The agent is kept; a model this machine does not list falls back to its default.
+    expect(form?.agent?.type).toBe("codex");
+    expect(form?.agent?.model).not.toBe("not-in-this-catalogue");
+  });
+
+  test("a type the destination cannot create falls back to one it can", () => {
+    federated();
+    renderInAppCommandScope(
+      dialogWithMachines([OWN, STUDIO], () => true, {
+        handoff: carried,
+        localEnvironmentAvailable: false,
+      }),
+    );
+    expect(screen.queryByText("Isolated Docker environment on Build Mac") !== null).toBe(true);
+  });
+
+  test("an agent the destination has not enabled keeps its default agent", async () => {
+    federated();
+    const store = appCommandStore(configStore);
+    const initialConfig = store.getState().config;
+    store.getState().setConfig({
+      ...initialConfig,
+      global: { ...initialConfig.global, enabledAgentPlatforms: ["claude"] },
+    });
+    try {
+      const onSelectMachine = mock(
+        (_machine: CreateEnvironmentMachine, _form: CreateEnvironmentHandoff) => true,
+      );
+      renderInAppCommandScope(
+        dialogWithMachines([OWN, STUDIO], onSelectMachine, { handoff: carried }),
+      );
+      const form = await switchToStudio(onSelectMachine);
+      expect(form?.agent?.type).toBe("claude");
     } finally {
       cleanup();
       store.getState().setConfig(initialConfig);

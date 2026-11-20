@@ -1,6 +1,8 @@
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 import type { ProjectBoardTab } from "@/stores/uiStore";
+import type { AgentType } from "@/stores/claudeOptionsStore";
+import type { EnvironmentType } from "@/types";
 
 /**
  * What the window asks another node's workspace to show when it opens it
@@ -57,6 +59,16 @@ export interface CreateEnvironmentHandoff {
     acceptanceCriteria: string;
     deliveryPolicy: DeliveryPolicy;
   };
+  /**
+   * The chosen environment type. The destination keeps it only where it can
+   * create that type (a checkout for Local, Docker for a container).
+   */
+  environmentType?: EnvironmentType;
+  /**
+   * The chosen agent and model. The destination keeps the agent only when it
+   * is enabled there, and the model and effort only when its catalogue has them.
+   */
+  agent?: { type: AgentType; model: string; reasoningEffort: string };
 }
 
 /** What the window asks another node's workspace to show. */

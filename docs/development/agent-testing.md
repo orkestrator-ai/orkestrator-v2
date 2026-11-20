@@ -3647,6 +3647,28 @@ It attaches the leaf, adds projects and changes both profiles' messaging and
 Pi settings, so reset both afterwards. The link setup it shares with the
 notice suite below is in `coordinator-two-node-support.ts`.
 
+### Mixed-version Create Environment handoff
+
+This opt-in check pairs a fresh command profile with the published 2.39.8-beta
+backend. It makes a disposable copy of the profile's fixture repository on the
+leaf, switches the real browser dialog to it, and checks that creation reaches
+the leaf and that the environment remains visible after a reload. A second
+browser tab exercises recovery when a project's summary still advertises a
+checkout but the live read omits the project.
+
+Start a profile with `mise run dev:test --profile create-handoff --fixture
+--headless --agent-platforms pi --no-agent-credentials`. Run the check once
+the profile is ready.
+
+```sh
+ORKESTRATOR_AGENT_TEST_PROFILE=create-handoff ORKESTRATOR_AGENT_TEST_HANDOFF_PAIRING=1 \
+  mise run test:logged -- --name create-handoff-pairing -- mise run test:agent:browser -- \
+  create-environment-handoff-pairing.spec.ts --workers=1
+```
+
+The spec stops the published backend. Stop and reset the command profile with
+`dev:stop` and `dev:reset` when the test finishes.
+
 ### Federation between two profiles (remote activity, relayed events)
 
 `mise run test:agent:federation:two-profile` qualifies what a command node

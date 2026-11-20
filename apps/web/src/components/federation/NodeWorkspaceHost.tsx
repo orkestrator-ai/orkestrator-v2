@@ -4,13 +4,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
 import { useSidebarHydration } from "@/components/sidebar/useSidebarHydration";
-import { useDockerAvailabilityReady } from "@/contexts/DockerAvailabilityContext";
+import {
+  useDockerAvailability,
+  useDockerAvailabilityReady,
+} from "@/contexts/DockerAvailabilityContext";
 import { useEnvironments } from "@/hooks";
 import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
 import { useProjects } from "@/hooks/useProjects";
 import { startsOnSelection } from "@/lib/environment-auto-start";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openDialog } from "@/lib/federation/open-workspace";
+import {
+  reportCreateEnvironmentFailed,
+  reportCreateEnvironmentOpened,
+} from "@/lib/federation/create-environment-handoff";
 import type { WorkspaceRequest } from "@/lib/federation/workspace-request";
 import { suggestedCloneDirectory } from "@/lib/github-clone";
 import { useConfigStore } from "@/stores/configStore";
@@ -103,6 +110,7 @@ export function dialogHydrated(
  */
 export function NodeWorkspaceHost() {
   const dockerReady = useDockerAvailabilityReady();
+  const dockerAvailable = useDockerAvailability();
   const {
     projects,
     addProject,
@@ -151,6 +159,8 @@ export function NodeWorkspaceHost() {
   const appliedSeq = useRef(resumedSeq);
   // The request whose dialog the user closed.
   const [closedSeq, setClosedSeq] = useState(resumedSeq);
+  const [acceptedCreateSeq, setAcceptedCreateSeq] = useState<number | null>(null);
+  const [failedCreate, setFailedCreate] = useState<{ seq: number; reason: string } | null>(null);
 
   useEffect(
     () =>
@@ -190,14 +200,38 @@ export function NodeWorkspaceHost() {
   const showAddProject =
     Boolean(dialogRequest?.addProject) && dialogHydrated({ addProject: true }, hydration);
   const createProjectId = createReady ? (dialogRequest?.createEnvironmentProjectId ?? null) : null;
-  const createProjectKnown =
-    createProjectId !== null && projects.some((project) => project.id === createProjectId);
-  // A project that is not there once everything has loaded is gone; a later
-  // refresh must not revive the request.
-  if (dialogRequest && createProjectId !== null && !createProjectKnown) {
-    setClosedSeq(dialogRequest.seq);
+  const createProject = projects.find((project) => project.id === createProjectId);
+  const failure = !createProject
+    ? "The project is not on that machine any more."
+    : dialogRequest?.createEnvironmentHandoff &&
+        dialogRequest.seq !== acceptedCreateSeq &&
+        !dialogRequest.createEnvironmentRecovery &&
+        !createProject.localPath &&
+        !dockerAvailable
+      ? "The project has no local checkout and Docker is unavailable."
+      : null;
+  // A later refresh must not revive a rejected request.
+  if (dialogRequest && createProjectId !== null) {
+    if (failure) {
+      setClosedSeq(dialogRequest.seq);
+      setFailedCreate({ seq: dialogRequest.seq, reason: failure });
+    } else if (acceptedCreateSeq !== dialogRequest.seq) {
+      setAcceptedCreateSeq(dialogRequest.seq);
+    }
   }
-  const createEnvProjectId = createProjectKnown ? createProjectId : null;
+  const createEnvProjectId = failure ? null : createProjectId;
+  const openedCreateSeq = createEnvProjectId !== null ? (dialogRequest?.seq ?? null) : null;
+
+  // A machine switch waits to hear whether its form opened here
+  // (`openCreateEnvironmentOnMachine`), and brings it back if not.
+  useEffect(() => {
+    if (openedCreateSeq !== null) reportCreateEnvironmentOpened(scope.nodeId, openedCreateSeq);
+  }, [openedCreateSeq, scope]);
+  useEffect(() => {
+    if (failedCreate) {
+      reportCreateEnvironmentFailed(scope.nodeId, failedCreate.seq, failedCreate.reason);
+    }
+  }, [failedCreate, scope]);
   const closeDialog = () => {
     if (request) setClosedSeq(request.seq);
   };
@@ -327,6 +361,7 @@ export function NodeWorkspaceHost() {
         key={createEnvProjectId ? dialogRequest?.seq : undefined}
         open={createEnvProjectId !== null}
         handoff={createEnvProjectId ? dialogRequest?.createEnvironmentHandoff : undefined}
+        recovery={createEnvProjectId ? dialogRequest?.createEnvironmentRecovery : undefined}
         onOpenChange={(open) => {
           if (!open) closeDialog();
         }}

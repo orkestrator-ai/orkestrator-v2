@@ -426,6 +426,14 @@ test("switching refuses a busy form and cancels the pending credential warning b
   );
   expect(screen.queryByRole("alertdialog") === null).toBe(true);
   expect(onOpenChange.mock.calls).toEqual([[false]]);
-  expect(route.mock.calls).toEqual([[targetMachine, "repo", handoff]]);
+  expect(route.mock.calls).toEqual([
+    [
+      targetMachine,
+      "repo",
+      handoff,
+      // The form comes back here if the destination cannot show it.
+      { connectionId: "", projectId: "project-staged", machineName: "this machine", title: "repo" },
+    ],
+  ]);
   expect(createEnvironment).not.toHaveBeenCalled();
 });

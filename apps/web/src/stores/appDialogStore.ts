@@ -1,5 +1,8 @@
 import type { BackendId } from "@orkestrator/protocol/federation";
-import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
+import type {
+  CreateEnvironmentHandoff,
+  CreateEnvironmentRecovery,
+} from "@/lib/federation/workspace-request";
 import { create } from "zustand";
 
 /**
@@ -25,7 +28,12 @@ export type AppDialogRequest = { nodeId: BackendId } & (
   /** Also how another machine's project menu reaches these, in that machine's workspace. */
   | { kind: "repository-settings"; projectId: string }
   | { kind: "delete-project"; projectId: string }
-  | { kind: "create-environment"; projectId: string; handoff?: CreateEnvironmentHandoff }
+  | {
+      kind: "create-environment";
+      projectId: string;
+      handoff?: CreateEnvironmentHandoff;
+      recovery?: CreateEnvironmentRecovery;
+    }
 );
 
 interface AppDialogState {

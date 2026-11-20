@@ -20,6 +20,7 @@ export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: [
     "browser-gateway.spec.ts",
+    "create-environment-handoff-pairing.spec.ts",
     "steer-inactive-live.spec.ts",
     "steer-missed-live.spec.ts",
     "pipeline-delete.spec.ts",

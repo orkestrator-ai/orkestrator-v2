@@ -1081,13 +1081,16 @@ boundary for shell, because no tool-name rule can separate `git log` from
 `git commit` — which is why `capabilityPolicy`'s `shell.mutate` maps to no tool
 names at all. Three invariants keep it honest:
 
-- **The command checked must be the command that runs.** `COMPOSITION_PATTERN`
-  refuses anything that can become several commands, and a newline counts: the
-  shell treats it exactly as `;` does, while a whitespace split would reduce
-  `ls\nrm -rf .` to a harmless-looking `ls`. A plain pipe is the one
-  exception: with every other metacharacter refused it can only separate
-  stages, so `isReadOnlyShellCommand` splits on it and judges each stage as a
-  command of its own (`git diff a..b | head`), and `||` stays refused.
+- **The command checked must be the command that runs.**
+  `read-only-shell-syntax.ts` admits only shell whose words are known before
+  it runs: quoted words, `\` escapes, `;`, newlines, `&&`, `||`, plain pipes,
+  and `NAME=value` commands whose `$NAME` it substitutes. It refuses
+  redirection, substitution, globs, grouping, background `&` and any other
+  `$`. `isReadOnlyShellCommand` judges each command of the list on its own,
+  and what runs is the serialization of the words judged (the hook's
+  `updatedInput` whenever it differs from the text the model wrote). `cd` and `git -C` may name only an existing
+  directory inside the checkout, and paths are checked from every directory a
+  command may run in.
 - **The program name is not the whole command.** A program that launches another
   program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
   is absent for that reason, and a path (`bin/cat`) names whatever the checkout

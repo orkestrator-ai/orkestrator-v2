@@ -309,7 +309,6 @@ describe("Claude coordinator read-only policy", () => {
       "git --glob-pathspecs log",
       "git --bare log",
       "git -c core.fsmonitor=touch status",
-      "git -C ../other status",
       // Allowlisted options do not carry an unlisted one through.
       "git --no-pager --git-dir=vendor/evil log",
       // Git does not abbreviate its own options, so neither does the allowlist.
@@ -328,6 +327,16 @@ describe("Claude coordinator read-only policy", () => {
     ]) {
       const verdict = isReadOnlyShellCommand(command, { commandSandbox: "required" });
       expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: true });
+    }
+    // `-C` may only name a directory inside the checkout, and only where the
+    // shell's directory is known to resolve it against.
+    for (const options of [{}, { cwd: "/workspace" }]) {
+      const verdict = isReadOnlyShellCommand("git -C ../other status", {
+        commandSandbox: "required",
+        ...options,
+      });
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.reason).toContain("within this checkout only");
     }
     expect(
       isReadOnlyShellCommand("git --git-dir=vendor/evil status", {
@@ -557,7 +566,8 @@ describe("Claude coordinator read-only policy", () => {
       isReadOnlyShellCommand("git push origin HEAD", options).reason,
       isReadOnlyShellCommand("touch file", options).reason,
       isReadOnlyShellCommand("sort -o out in", options).reason,
-      isReadOnlyShellCommand("ls && wc", options).reason,
+      isReadOnlyShellCommand("ls > out", options).reason,
+      isReadOnlyShellCommand("cd /", { ...options, cwd: "/workspace" }).reason,
       isReadOnlyShellCommand("bin/cat x", options).reason,
       isReadOnlyShellCommand("git status", { role: "read-only" }).reason,
     ];

@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { statSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV,
   COORDINATOR_PROTECTED_DATA_DIR_ENV,
@@ -29,6 +30,37 @@ export { readBoundaryRefuses, type ReadBoundary };
 /** The checkout as named and as resolved, since a symlink and its target are one directory. */
 export function claudeReadOnlyWorkspacePaths(cwd: string): string[] {
   return [...new Set([cwd, canonicalPath(cwd)])];
+}
+
+/**
+ * Where `target` leads from each of `from`, resolved through symlinks, when
+ * every one is an existing directory inside `root`; null otherwise.
+ *
+ * A read-only command may move only within the checkout (`cd sub`, `git -C
+ * sub`): anywhere else its Git would obey another repository's configuration,
+ * and a relative path the boundary checked against the checkout would name a
+ * different file. A directory that does not exist is refused rather than
+ * guessed at, because a failed `cd` leaves the shell where it was.
+ */
+export function directoriesWithin(
+  target: string,
+  from: readonly string[],
+  root: string,
+): string[] | null {
+  const top = canonicalPath(root);
+  const found = new Set<string>();
+  for (const base of from) {
+    const directory = canonicalPath(resolve(base, target));
+    const fromTop = relative(top, directory);
+    if (fromTop === ".." || fromTop.startsWith(`..${sep}`) || isAbsolute(fromTop)) return null;
+    try {
+      if (!statSync(directory).isDirectory()) return null;
+    } catch {
+      return null;
+    }
+    found.add(directory);
+  }
+  return found.size > 0 ? [...found] : null;
 }
 
 /** The boundary this process was launched under; null outside a coordinator. */
@@ -79,18 +111,19 @@ export function readToolRefused(
 }
 
 /**
- * Whether a vetted command names a denied path. Quoting, globs and substitution
- * are already refused, so what is written is what runs; an option can carry its
- * value attached (`--file=x`, `-fx`). Without a sandbox behind it
- * (`traversal`), a command rooted above the denied directory is refused too.
+ * Whether a vetted command names a denied path. `command` is the words that
+ * run (`read-only-shell-syntax.ts` has already decoded any quoting and refused
+ * globs and substitution), or a plain command split on whitespace; an option
+ * can carry its value attached (`--file=x`, `-fx`). Without a sandbox behind
+ * it (`traversal`), a command rooted above the denied directory is refused too.
  */
 export function shellCommandRefused(
   boundary: ReadBoundary,
-  command: string,
+  command: string | readonly string[],
   cwd: string,
   options: { traversal: boolean },
 ): boolean {
-  const [program, ...tokens] = command.trim().split(/\s+/);
+  const [program, ...tokens] = typeof command === "string" ? command.trim().split(/\s+/) : command;
   if (options.traversal) {
     // These programs can take filenames from file contents or stdin; their
     // operands alone cannot prove which files they will open. Since a plain

@@ -346,13 +346,23 @@ because no tool-name rule can separate `git log` from `git commit` — which is
 why `capabilityPolicy`'s `shell.mutate` maps to no tool names at all. Three
 invariants keep it honest:
 
-- **The command checked must be the command that runs.** `COMPOSITION_PATTERN`
-  refuses anything that can become several commands, and a newline counts: the
-  shell treats it exactly as `;` does, while a whitespace split would reduce
-  `ls\nrm -rf .` to a harmless-looking `ls`. A plain pipe is the one
-  exception: with every other metacharacter refused it can only separate
-  stages, so `isReadOnlyShellCommand` splits on it and judges each stage as a
-  command of its own (`git diff a..b | head`), and `||` stays refused. A pipe
+- **The command checked must be the command that runs.**
+  `read-only-shell-syntax.ts` admits only shell whose words are known before
+  it runs: quoted words, `\` escapes, `;`, newlines, `&&`, `||`, plain pipes,
+  and a command that is only `NAME=value` (a plain value, run whatever came
+  before it), whose `$NAME`/`${NAME}` it substitutes. It refuses redirection,
+  substitution, globs, grouping, background `&`, comments and any other `$`.
+  `isReadOnlyShellCommand` judges each command of the list on its own (`git
+  diff a..b --stat; git show b:x | grep -n "y z"`), and what runs is
+  `serializeShellList` of the words judged (the hook's `updatedInput`
+  whenever it differs from the text the model wrote), so a reading the shell
+  would not share cannot reach it. `read-only-shell-syntax.integration.test.ts` checks the parser against
+  real bash. `cd` (alone in a list) and `git -C` may name only an existing
+  directory inside the checkout (`directoriesWithin`, through symlinks; the
+  session's `cwd` is the root, wherever an earlier call left the shell), and
+  `shellCommandRefused` checks each command from every directory it may run
+  in, since a failed `cd` leaves the shell where it was. `sed` is admitted
+  only for line-number ranges to print (`sed -n 120,180p`). A pipe
   also makes a stage's stdin the model's to write, so a path need never
   appear as a token: a program that takes file names from its input
   (`du`/`sort`/`wc --files0-from`, `find -files0-from`, `file -f`) is refused

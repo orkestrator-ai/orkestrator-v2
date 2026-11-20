@@ -21,10 +21,12 @@ import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 import {
   claudeReadOnlyWorkspacePaths,
   coordinatorReadBoundary,
+  directoriesWithin,
   readToolRefused,
   shellCommandRefused,
   type ReadBoundary,
 } from "./read-only-path-boundary.js";
+import { parseReadOnlyShell, serializeShellList } from "./read-only-shell-syntax.js";
 
 /**
  * Translation of the coordinator's read-only policy into this SDK's terms.
@@ -537,25 +539,16 @@ const CONDITIONAL_GIT_SUBCOMMANDS: ReadonlyMap<string, (args: readonly string[])
 const NETWORK_COMMANDS: ReadonlySet<string> = new Set(["curl", "gh", "wget"]);
 const NETWORK_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(["fetch", "ls-remote", "pull"]);
 
-/**
- * Shell metacharacters that let one command become several.
- *
+/*
  * A read-only allowlist is only worth anything if the thing checked is the
  * thing that runs. Redirection and command substitution both defeat that:
  * `cat x > y` writes, and `echo $(rm -rf .)` runs something the check never
- * saw. So does a newline: the shell treats it exactly as `;` does, while a
- * whitespace split reduces `ls\nrm -rf .` to the harmless-looking `ls`.
- * Refusing the whole command is deliberate — a coordinator does not need shell
- * composition, and partial parsing here is how a bypass gets in.
- *
- * A plain pipe is the one exception (`isReadOnlyShellCommand`): with every
- * other metacharacter refused, `|` can only separate pipeline stages, and each
- * stage is checked as a command of its own, so `git diff a..b | head` runs
- * exactly the two commands checked. `||` and `|&` stay refused.
+ * saw. `read-only-shell-syntax.ts` admits only the part of the shell whose
+ * words are known before it runs (quoted words, `;`, newlines, `&&`, `||` and
+ * plain pipes) and refuses the rest; every command of a list or pipeline is
+ * then judged here as a command of its own. Whatever the model wrote, what
+ * runs is the serialization of the words judged (`isReadOnlyShellCommand`).
  */
-// Quotes, escapes and globs transform arguments before execution. This hook
-// deliberately accepts only literal words, rather than approximating a shell parser.
-const COMPOSITION_PATTERN = /[;&><`$(){}\n\r'"\\*?[\]]|\bsudo\b|\bexec\b/;
 
 export function isCoordinatorReadOnlyPolicy(
   policy: NativeAgentExecutionPolicy | undefined,
@@ -702,16 +695,37 @@ export function claudeReadOnlySandbox(
   };
 }
 
+/** One command of an admitted list or pipeline, as it will run. */
+export interface ReadOnlyStage {
+  /** The words the program receives, its name first. */
+  words: string[];
+  /**
+   * The directories it may run in, when the caller named one (`cwd`): more
+   * than one after a `cd` that may have failed (`cd sub; ls`).
+   */
+  directories?: string[];
+}
+
 interface CommandVerdict {
   allowed: boolean;
   reason?: string;
   /**
-   * The command to run instead, when an admitted command needs arguments the
-   * model did not write (a hardened Git command). Absent when it runs as written.
+   * The command to run instead: the serialization of the words judged, when
+   * that differs from what the model wrote (quoting, a newline, a hardened Git
+   * command's inserted arguments). Absent when it runs as written.
    */
   command?: string;
-  /** An admitted command's pipeline stages, each judged as a command of its own. */
-  stages?: string[];
+  /** An admitted command's stages, each judged as a command of its own. */
+  stages?: ReadOnlyStage[];
+}
+
+/** What one stage's check returns: the verdict and, when it changed them, the words to run. */
+interface StageVerdict {
+  allowed: boolean;
+  reason?: string;
+  words?: string[];
+  /** Where the program resolves its paths, when not the shell's directory (`git -C`). */
+  directories?: string[];
 }
 
 /**
@@ -740,7 +754,7 @@ export function readOnlyRefusalRole(
 const REFUSALS = {
   coordinator: {
     composition:
-      "Coordinator shells cannot use quotes, escapes, globs, redirection, substitution or command chaining (`;`, `&&`, `||`), because the command that runs would not be the one checked. A plain pipe between reading commands is allowed.",
+      "Coordinator shells cannot use globs, variables, redirection, substitution, backslash escapes outside quotes or background `&`, because the command that runs would not be the one checked. Quoted arguments, `;`, `&&`, `||` and plain pipes between reading commands are allowed, as is `cd` within this checkout.",
     byPath: (program: string) =>
       `Coordinator shells run reading programs by name only, so \`${program}\` is not available here. Use the program name, or delegate it to a worker environment.`,
     gitSandbox:
@@ -751,6 +765,8 @@ const REFUSALS = {
       `Coordinator is read-only, so \`${described}\` cannot be used with an argument that writes a file or runs another program. Delegate it to a worker environment.`,
     gitGlobalOption: (option: string) =>
       `Coordinator Git commands run against this checkout only, so the Git option \`${option}\` is not available before the subcommand. Delegate it to a worker environment.`,
+    directory: (described: string) =>
+      `Coordinator commands run within this checkout only, so \`${described}\` is not available here: name an existing directory inside the checkout.`,
     argument: (program: string) =>
       `Coordinator is read-only, so \`${program}\` cannot be used with an argument that writes or runs another program. Delegate it to a worker environment.`,
     program: (program: string) =>
@@ -769,7 +785,7 @@ const REFUSALS = {
   },
   "read-only": {
     composition:
-      "Shell commands in this session cannot use quotes, escapes, globs, redirection, substitution or command chaining (`;`, `&&`, `||`), because the command that runs would not be the one checked. A plain pipe between reading commands is allowed.",
+      "Shell commands in this session cannot use globs, variables, redirection, substitution, backslash escapes outside quotes or background `&`, because the command that runs would not be the one checked. Quoted arguments, `;`, `&&`, `||` and plain pipes between reading commands are allowed, as is `cd` within this checkout.",
     byPath: (program: string) =>
       `This session runs reading programs by name only, so \`${program}\` is not available here. Use the program name.`,
     gitSandbox:
@@ -780,6 +796,8 @@ const REFUSALS = {
       `This session is read-only, so \`${described}\` cannot be used with an argument that writes a file or runs another program.`,
     gitGlobalOption: (option: string) =>
       `Git commands in this session run against this checkout only, so the Git option \`${option}\` is not available before the subcommand.`,
+    directory: (described: string) =>
+      `Commands in this session run within this checkout only, so \`${described}\` is not available here: name an existing directory inside the checkout.`,
     argument: (program: string) =>
       `This session is read-only, so \`${program}\` cannot be used with an argument that writes or runs another program.`,
     program: (program: string) =>
@@ -821,14 +839,35 @@ interface ReadOnlyCommandOptions {
   readBoundary?: ReadBoundary | null;
   /** Git where the sandbox is not `required`; default `refuse`. */
   gitWithoutSandbox?: ReadOnlyGitWithoutSandbox;
+  /**
+   * The shell's working directory. Without it, `cd` and `git -C` are refused:
+   * there is nothing to resolve their directory against.
+   */
+  cwd?: string;
+  /** The checkout `cd` and `git -C` may not leave; default `cwd`. */
+  workspaceRoot?: string;
+}
+
+/** Where a stage runs, for the checks that resolve a directory. */
+interface StageContext {
+  directories: readonly string[];
+  root: string | undefined;
+}
+
+/** Where `target` leads from each of the stage's directories, or null when it leaves the checkout. */
+function stageDirectories(target: string, context: StageContext): string[] | null {
+  if (!context.root || context.directories.length === 0) return null;
+  return directoriesWithin(target, context.directories, context.root);
 }
 
 /**
  * Whether one shell command only reads. Exported for its own tests.
  *
- * A pipeline is admitted when every stage is: each is split out and judged
- * exactly as a command of its own, so `git show a:b | grep -n x | wc -l` runs
- * only programs this file admits, with arguments it checked.
+ * A list or pipeline is admitted when every command in it is: each is judged
+ * exactly as a command of its own, so `git show a:b | grep -n "x y" | wc -l`
+ * runs only programs this file admits, with arguments it checked. A `cd` is
+ * admitted on its own in a list, to an existing directory inside the checkout,
+ * and the commands after it are judged in every directory they may run in.
  */
 export function isReadOnlyShellCommand(
   command: string,
@@ -837,37 +876,62 @@ export function isReadOnlyShellCommand(
   const refusals = REFUSALS[options.role ?? "coordinator"];
   const trimmed = command.trim();
   if (!trimmed) return { allowed: true, stages: [] };
-  if (COMPOSITION_PATTERN.test(trimmed)) {
-    return { allowed: false, reason: refusals.composition };
+  const items = parseReadOnlyShell(trimmed);
+  if (!items) return { allowed: false, reason: refusals.composition };
+  const context: StageContext = {
+    directories: options.cwd ? [options.cwd] : [],
+    root: options.workspaceRoot ?? options.cwd,
+  };
+  const stages: ReadOnlyStage[] = [];
+  const runs: typeof items = [];
+  for (const item of items) {
+    const [first, ...rest] = item.pipeline;
+    if (first?.[0] === "cd") {
+      // In a pipeline `cd` runs in a subshell and moves nothing; alone, it
+      // takes one directory operand (no `-`, `-P`, or bare `cd` to `$HOME`).
+      const target = first.length === 2 ? first[1]! : undefined;
+      const moved =
+        rest.length === 0 && target !== undefined && !target.startsWith("-")
+          ? stageDirectories(target, context)
+          : null;
+      if (!moved) return { allowed: false, reason: refusals.directory(first.join(" ")) };
+      // A `cd` that fails leaves the shell where it was, and `;` or `||` still
+      // runs what follows, so every directory so far stays possible.
+      context.directories = [...new Set([...context.directories, ...moved])];
+      runs.push(item);
+      continue;
+    }
+    const pipeline: string[][] = [];
+    for (const words of item.pipeline) {
+      const verdict = isReadOnlyCommandStage(words, options, context);
+      if (!verdict.allowed) return { allowed: false, reason: verdict.reason };
+      const run = verdict.words ?? words;
+      const directories = verdict.directories ?? context.directories;
+      pipeline.push(run);
+      stages.push({
+        words: run,
+        ...(directories.length > 0 ? { directories: [...directories] } : {}),
+      });
+    }
+    runs.push({ ...item, pipeline });
   }
-  const stages = trimmed.split("|").map((stage) => stage.trim());
-  // An empty stage is `||`, or a pipe with nothing on one side of it.
-  if (stages.length > 1 && stages.some((stage) => !stage)) {
-    return { allowed: false, reason: refusals.composition };
-  }
-  const runs: string[] = [];
-  for (const stage of stages) {
-    const verdict = isReadOnlyCommandStage(stage, options);
-    if (!verdict.allowed) return verdict;
-    runs.push(verdict.command ?? stage);
-  }
-  const rewritten = runs.some((run, index) => run !== stages[index]);
+  const serialized = serializeShellList(runs);
   return {
     allowed: true,
-    stages: runs,
-    ...(rewritten ? { command: runs.join(" | ") } : {}),
+    stages,
+    ...(serialized !== trimmed ? { command: serialized } : {}),
   };
 }
 
-/** One pipeline stage: a single command with no shell composition left in it. */
-function isReadOnlyCommandStage(command: string, options: ReadOnlyCommandOptions): CommandVerdict {
+/** One command of a list or pipeline, as the words its program receives. */
+function isReadOnlyCommandStage(
+  tokens: readonly string[],
+  options: ReadOnlyCommandOptions,
+  context: StageContext,
+): StageVerdict {
   const refusals = REFUSALS[options.role ?? "coordinator"];
-  if (/(?:^|\s)~/.test(command)) {
-    return { allowed: false, reason: refusals.composition };
-  }
-  const tokens = command.split(/\s+/).filter(Boolean);
   const first = tokens[0] ?? "";
-  if (!first) return { allowed: true };
+  if (!first) return { allowed: false, reason: refusals.program(first) };
   // `bin/cat` is whatever the checkout put at that path, not `cat`.
   if (first.includes("/") || first.includes("\\")) {
     return { allowed: false, reason: refusals.byPath(first) };
@@ -882,12 +946,29 @@ function isReadOnlyCommandStage(command: string, options: ReadOnlyCommandOptions
     if (!sandboxed && options.gitWithoutSandbox !== "harden") {
       return { allowed: false, reason: refusals.gitSandbox };
     }
-    const subcommandIndex = tokens.findIndex((token, index) => index > 0 && !token.startsWith("-"));
-    const subcommand = subcommandIndex > 0 ? tokens[subcommandIndex] : undefined;
-    const args = subcommandIndex > 0 ? tokens.slice(subcommandIndex + 1) : [];
-    const globalOptions = tokens.slice(1, subcommandIndex > 0 ? subcommandIndex : undefined);
-    const unlisted = globalOptions.find((option) => !GIT_GLOBAL_OPTIONS.has(option));
-    if (unlisted) return { allowed: false, reason: refusals.gitGlobalOption(unlisted) };
+    let subcommandIndex = 1;
+    let gitDirectories: string[] | undefined;
+    while (subcommandIndex < tokens.length && tokens[subcommandIndex]!.startsWith("-")) {
+      const option = tokens[subcommandIndex]!;
+      if (option === "-C" && subcommandIndex + 1 < tokens.length) {
+        // `-C` may name a directory inside the checkout, where Git finds the
+        // same repository; anywhere else it would obey another one's config.
+        const target = tokens[subcommandIndex + 1]!;
+        const moved = stageDirectories(target, context);
+        if (!moved) return { allowed: false, reason: refusals.directory(`git -C ${target}`) };
+        gitDirectories = moved;
+        subcommandIndex += 2;
+        continue;
+      }
+      if (!GIT_GLOBAL_OPTIONS.has(option)) {
+        return { allowed: false, reason: refusals.gitGlobalOption(option) };
+      }
+      subcommandIndex += 1;
+    }
+    const subcommand = tokens[subcommandIndex];
+    const args = tokens.slice(subcommandIndex + 1);
+    // Git resolves its own path arguments from `-C`'s directory.
+    const located = gitDirectories ? { directories: gitDirectories } : {};
     if (
       subcommand &&
       (NETWORK_GIT_SUBCOMMANDS.has(subcommand) ||
@@ -909,7 +990,7 @@ function isReadOnlyCommandStage(command: string, options: ReadOnlyCommandOptions
     ) {
       return { allowed: false, reason: refusals.gitArgument(described) };
     }
-    if (sandboxed) return { allowed: true };
+    if (sandboxed) return { allowed: true, ...located };
     if (
       hasFlag(args, HARDENED_GIT_REFUSED_ARGUMENTS.get(subcommand) ?? new Set()) ||
       (HARDENED_LOG_SUBCOMMANDS.has(subcommand) && remergeDiffSelected(args))
@@ -917,13 +998,19 @@ function isReadOnlyCommandStage(command: string, options: ReadOnlyCommandOptions
       return { allowed: false, reason: refusals.gitArgument(described) };
     }
     const hardening = HARDENED_GIT_ARGUMENTS.get(subcommand);
-    if (!hardening) return { allowed: true };
+    if (!hardening) return { allowed: true, ...located };
     // Straight after the subcommand, so a `--` among the arguments cannot turn
     // the flags into pathspecs.
     return {
       allowed: true,
-      command: [...tokens.slice(0, subcommandIndex + 1), ...hardening, ...args].join(" "),
+      words: [...tokens.slice(0, subcommandIndex + 1), ...hardening, ...args],
+      ...located,
     };
+  }
+  if (program === "sed") {
+    return sedPrintsLines(tokens.slice(1))
+      ? { allowed: true }
+      : { allowed: false, reason: refusals.argument(program) };
   }
   if (READ_ONLY_COMMANDS.has(program)) {
     const args = tokens.slice(1);
@@ -940,6 +1027,50 @@ function isReadOnlyCommandStage(command: string, options: ReadOnlyCommandOptions
     return { allowed: true };
   }
   return { allowed: false, reason: refusals.program(program) };
+}
+
+/** Options that change how `sed` reads or prints, never what it writes or runs. */
+const SED_READING_OPTIONS: ReadonlySet<string> = new Set([
+  "-n",
+  "--quiet",
+  "--silent",
+  "-s",
+  "--separate",
+  "-u",
+  "--unbuffered",
+]);
+
+/** Line ranges to print (`10,20p`, `1,$p`, `5p;40,60p`), or a line to stop at (`50q`). */
+const SED_PRINT_SCRIPT =
+  /^(?:(?:\d+|\$)(?:,(?:\d+|\$))?p(?:;(?:\d+|\$)(?:,(?:\d+|\$))?p)*;?|\d+q)$/;
+
+/**
+ * Whether `sed` is only printing lines of its input.
+ *
+ * sed's own script language writes files (`w`, `s///w`), runs commands (`e`,
+ * `s///e`) and edits in place (`-i`), so a script is admitted only when it is
+ * nothing but line-number ranges to print: `sed -n 120,180p file` is how a
+ * reviewer reads part of a blob from `git show`. The script is the first
+ * operand; the rest name the files read.
+ */
+function sedPrintsLines(args: readonly string[]): boolean {
+  let script: string | undefined;
+  let optionsEnded = false;
+  for (const arg of args) {
+    if (!optionsEnded && arg === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && arg.startsWith("-") && arg !== "-") {
+      if (!SED_READING_OPTIONS.has(arg)) return false;
+      continue;
+    }
+    if (script === undefined) {
+      if (!SED_PRINT_SCRIPT.test(arg)) return false;
+      script = arg;
+    }
+  }
+  return script !== undefined;
 }
 
 /** Whether every option in `args` is one of `allowed`, each taking a value. */
@@ -1057,16 +1188,23 @@ export function createCoordinatorReadOnlyHook(
         return deny(refusals.unsandboxed);
       }
       const command = typeof toolInput?.command === "string" ? toolInput.command : "";
-      const verdict = isReadOnlyShellCommand(command, options);
+      const verdict = isReadOnlyShellCommand(command, {
+        ...options,
+        cwd: input.cwd,
+        workspaceRoot: options.workspaceRoot ?? input.cwd,
+      });
       if (!verdict.allowed) return deny(verdict.reason!);
       const boundary = readBoundary(input.cwd);
-      // Per stage: the boundary reads each stage's own program and arguments.
+      // Per stage and per directory it may run in: the boundary reads each
+      // stage's own program and arguments, relative to where they resolve.
       if (
         boundary &&
-        (verdict.stages ?? [command]).some((stage) =>
-          shellCommandRefused(boundary, stage, input.cwd, {
-            traversal: options.commandSandbox === "unavailable",
-          }),
+        (verdict.stages ?? []).some((stage) =>
+          (stage.directories ?? [input.cwd]).some((directory) =>
+            shellCommandRefused(boundary, stage.words, directory, {
+              traversal: options.commandSandbox === "unavailable",
+            }),
+          ),
         )
       ) {
         return deny(refusals.dataDirectory);

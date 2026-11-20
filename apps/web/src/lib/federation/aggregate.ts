@@ -118,19 +118,6 @@ export function toggleMachineFilter(
   return normalizedFilter(machines, shown);
 }
 
-/** The machines menu's checkbox: shows or hides one machine. Hiding every machine shows them all. */
-export function setMachineShownInFilter(
-  machines: readonly Pick<MachineView, "connectionId">[],
-  filter: readonly string[],
-  machineId: string,
-  shown: boolean,
-): string[] {
-  const next = shownMachineIds(machines, filter);
-  if (shown) next.add(machineId);
-  else next.delete(machineId);
-  return normalizedFilter(machines, next);
-}
-
 /**
  * Every environment across the selected machines, in the shared activity order
  * (`compareActivity`, backed by the protocol comparator). Ties use machine ID,
@@ -177,36 +164,6 @@ export function activityRows(
   return rows
     .sort((a, b) => compareActivity(a.key, b.key, order))
     .map(({ machine, project, environment }) => ({ machine, project, environment }));
-}
-
-export interface ConnectivitySummary {
-  total: number;
-  connected: number;
-  current: number;
-  unavailable: number;
-  /** e.g. "2 connected · 1 unavailable". Never "all caught up" while one is missing. */
-  label: string;
-  complete: boolean;
-}
-
-export function connectivitySummary(machines: readonly MachineView[]): ConnectivitySummary {
-  const total = machines.length;
-  const connected = machines.filter(
-    (machine) => machine.bound || machine.transport === "connected",
-  ).length;
-  const current = machines.filter((machine) => machine.freshness === "current").length;
-  const unavailable = total - connected;
-  const parts = [`${connected} connected`];
-  if (unavailable > 0) parts.push(`${unavailable} unavailable`);
-  if (connected > 0 && current < connected) parts.push(`${current} of ${total} current`);
-  return {
-    total,
-    connected,
-    current,
-    unavailable,
-    label: parts.join(" · "),
-    complete: current === total && !machines.some((machine) => machine.truncated),
-  };
 }
 
 /**

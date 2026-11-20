@@ -320,6 +320,8 @@ The brand palette lives on the site; the app still ships older values: blue `#3b
 
 **The Outcome Color Rule.** Results always keep their color: a tool row's "success" is green, "failure" red and "running..." yellow, so a run of results can be read at a glance.
 
+**The Update Arrow.** A machine that runs an older Orkestrator than the command node, with an update on offer, is marked by a small up arrow in App All-Clear Green (`success`) outlined in `zinc-950`, 2.5px in from the top-right corner of its sidebar machine tile (10px square), clear of the rounded edge; while it is shown the initials move 4px left so even wide ones keep a gap from it. The black outline is what keeps it legible on every machine colour, the green ones included. In forced colours, the arrow uses `Canvas` for the fill and `CanvasText` for the outline. The arrow clears the initials and CPU reading. The tile's tooltip also serves as its accessible description and gives the version difference in words.
+
 **The Platform Hue Exception.** `emerald` and other accent hues that distinguish agent platforms in the model picker are identity, not status. Never use them to mean success.
 
 ## Typography
@@ -412,6 +414,8 @@ Quiet until touched. Most app buttons are ghost or tonal; the filled blue is rar
 
 ### Navigation
 - **Sidebar rows:** 8px-radius rows inset 4px from the panel edge. Hover is `environment-hover`; the selected row is the `selected` → `selected-edge` gradient with a 2px Signal Blue bar on the left that gives way to the drag grip on hover. Offline machines dim to 60%.
+- **Sidebar header:** one 48px row on the `chrome` surface: the project search field (`input-surface`, 28px from `md`, 32px below) takes the width left by the 28px ghost icon buttons for sort, refresh and add project, 6px apart, inset 8px. Bulk selection shows a search icon beside the selection count and bulk actions. Compact mode keeps only the sort icon.
+- **Title-bar machine switcher:** left of the shown machine's meters, a 24px ghost button with the connected command node's colour dot, a 14px home (the command-node glyph) and its 12px medium name, then a 12px chevron, followed by the title bar's 12px hairline separator. Its menu is a 288px dropdown on the menu surface: a muted "Connect to" label, one row per machine (colour dot, then a home for the command node or lucide `Leaf` for every other machine, the name over a muted address, a check on the connected one), a divider and "Manage machines…". On mobile the button is a 36px icon (dot and home) in the title actions.
 - **Compact sidebar popover:** resting on a compact rail icon slides out a floating panel 8px to its right, up to 18rem wide within the zoomed viewport. It uses the menu surface (`zinc-900` at 95%, 1px `zinc-700` hairline at 70%, 12px radius, the menu shadow). A 13px medium name over a `divider` hairline heads the sidebar's own environment rows. It slides 6px and fades in over 160ms and back out over 120ms. Under reduced motion it appears and disappears without moving.
 - **Workspace tabs.** Tabs use 12–14px labels with an icon. The active tab gets a 2px Signal Blue underline. Top section tabs such as Home, Coordinator and Kanban mark the active section with a blue fill and 8px corners.
 - **Segmented selector:** an `input-surface` track with a `divider` border and 2px inset; the selected segment is a filled blue with bold text.

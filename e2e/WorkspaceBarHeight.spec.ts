@@ -1,73 +1,147 @@
 import { expect, test } from "@playwright/test";
 
-test("project search row matches the pane tab strip height", async ({ page }, testInfo) => {
+test("project search sits in the sidebar header row, level with the action bar", async ({
+  page,
+}, testInfo) => {
   await page.goto("/workspace-bar-height");
 
-  const searchRow = page.getByTestId("project-search-bar");
-  const tabStrip = page.getByTestId("workspace-tab-strip");
+  const header = page.getByTestId("workspace-sidebar-header");
+  const search = page.getByTestId("project-search-bar");
   const trigger = page.getByTestId("project-search-trigger");
-
-  await expect(searchRow).toBeVisible();
-  await expect(tabStrip).toBeVisible();
+  await expect(header).toBeVisible();
   await expect(trigger).toBeVisible();
+  // No search row of its own: the search is inside the header.
+  expect(
+    await header.evaluate((element) =>
+      element.contains(document.querySelector("[data-testid='project-search-bar']")),
+    ),
+  ).toBe(true);
+  await expect(search).toBeVisible();
 
   const geometry = await page.evaluate(() => {
-    const search = document.querySelector("[data-testid='project-search-bar']");
-    const strip = document.querySelector("[data-testid='workspace-tab-strip']");
-    const trigger = document.querySelector("[data-testid='project-search-trigger']");
-    if (!(search instanceof HTMLElement) || !(strip instanceof HTMLElement)) {
-      throw new Error("Expected rendered workspace chrome rows");
-    }
-    if (!(trigger instanceof HTMLElement)) {
-      throw new Error("Expected rendered project search trigger");
-    }
-
-    const searchBox = search.getBoundingClientRect();
-    const stripBox = strip.getBoundingClientRect();
-    const triggerBox = trigger.getBoundingClientRect();
+    const box = (id: string) => {
+      const element = document.querySelector(`[data-testid='${id}']`);
+      if (!(element instanceof HTMLElement)) throw new Error(`Expected ${id}`);
+      return element.getBoundingClientRect();
+    };
+    const header = box("workspace-sidebar-header");
+    const actions = box("workspace-action-bar");
+    const trigger = box("project-search-trigger");
     return {
-      searchHeight: searchBox.height,
-      stripHeight: stripBox.height,
-      searchTop: searchBox.top,
-      stripTop: stripBox.top,
-      triggerHeight: triggerBox.height,
-      triggerOverflow: Math.max(
-        0,
-        searchBox.top - triggerBox.top,
-        triggerBox.bottom - searchBox.bottom,
-      ),
+      headerHeight: header.height,
+      headerTop: header.top,
+      actionsHeight: actions.height,
+      actionsTop: actions.top,
+      triggerHeight: trigger.height,
+      triggerOverflow: Math.max(0, header.top - trigger.top, trigger.bottom - header.bottom),
+      triggerWidth: trigger.width,
     };
   });
 
-  const expectedHeight = testInfo.project.name === "desktop-chromium" ? 32 : 40;
-  expect(geometry.searchHeight).toBe(expectedHeight);
-  expect(geometry.stripHeight).toBe(expectedHeight);
-  expect(geometry.searchHeight).toBe(geometry.stripHeight);
+  expect(geometry.headerHeight).toBe(48);
   expect(geometry.triggerOverflow).toBe(0);
-  expect(geometry.triggerHeight).toBeLessThan(geometry.searchHeight);
-
+  expect(geometry.triggerHeight).toBeLessThan(geometry.headerHeight);
+  // It takes the width the header's buttons leave.
+  expect(geometry.triggerWidth).toBeGreaterThan(200);
   if (testInfo.project.name === "desktop-chromium") {
-    expect(geometry.searchTop).toBe(geometry.stripTop);
+    expect(geometry.headerTop).toBe(geometry.actionsTop);
+    expect(geometry.headerHeight).toBe(geometry.actionsHeight);
   }
 });
 
-test("project navigation matches the search row and contains the Notes tab", async ({
+test("the narrow project drawer fits search, all header actions and its close button", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.goto("/sidebar-drag?header&drawer");
+  const drawer = page.getByRole("dialog", { name: "Projects and environments" });
+  const header = drawer.locator("[data-sidebar-header]");
+  const close = drawer
+    .getByRole("complementary")
+    .getByRole("button", { name: "Close projects and environments" });
+  const controls = [
+    header.getByRole("button", { name: "Search projects and environments" }),
+    header.getByRole("button", { name: /^Sort environments/ }),
+    header.getByRole("button", { name: /^Refresh projects/ }),
+    header.getByRole("button", { name: "Add project" }),
+    close,
+  ];
+  for (const control of controls) await expect(control).toBeVisible();
+  const row = (await header.boundingBox())!;
+  let left = row.x;
+  for (const control of controls) {
+    const box = (await control.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(27);
+    expect(box.x).toBeGreaterThanOrEqual(left);
+    expect(box.x + box.width).toBeLessThanOrEqual(row.x + row.width);
+    expect(box.y).toBeGreaterThanOrEqual(row.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(row.y + row.height);
+    left = box.x + box.width;
+  }
+
+  const search = page.getByRole("dialog", { name: "Search projects and environments" });
+  await controls[0]!.click();
+  await expect(search.getByRole("combobox")).toBeFocused();
+  // Wait for the nested modal to take over outside input before dismissing it.
+  await expect(page.locator("#mobile-projects-drawer")).toHaveCSS("pointer-events", "none");
+  await page.keyboard.press("Escape");
+  await expect(search).toBeHidden();
+  await expect(controls[0]!).toBeFocused();
+  await close.click();
+  await expect(drawer).toBeHidden();
+});
+
+test("bulk selection keeps project search within the same header", async ({ page }, testInfo) => {
+  const mobile = testInfo.project.name === "mobile-chromium";
+  await page.goto(mobile ? "/sidebar-drag?header&drawer" : "/sidebar-drag?header");
+  const header = page.locator("[data-sidebar-header]");
+  const search = header.getByRole("button", { name: "Search projects and environments" });
+  await expect(search).toBeVisible();
+  const row = (await header.boundingBox())!;
+  await page.locator('[data-environment-selection-id="p-env-1"]').click({ modifiers: ["Shift"] });
+  const count = header.getByText(/\d+ selected/);
+  await expect(count).toBeVisible();
+  const searchBox = (await search.boundingBox())!;
+  const countBox = (await count.boundingBox())!;
+  expect((await header.boundingBox())!.height).toBe(row.height);
+  expect(searchBox.width).toBeGreaterThanOrEqual(28);
+  const gap = countBox.x - (searchBox.x + searchBox.width);
+  expect(gap).toBeGreaterThanOrEqual(0);
+  expect(gap).toBeLessThanOrEqual(8);
+
+  const palette = page.getByRole("dialog", { name: "Search projects and environments" });
+  await search.click();
+  await expect(palette.getByRole("combobox")).toBeFocused();
+  if (mobile)
+    await expect(page.locator("#mobile-projects-drawer")).toHaveCSS("pointer-events", "none");
+  await page.keyboard.press("Escape");
+  await expect(palette).toBeHidden();
+  await expect(count).toBeVisible();
+  await page.keyboard.press("Meta+k");
+  await expect(palette.getByRole("combobox")).toBeFocused();
+  await page.keyboard.press("Meta+k");
+  await expect(palette).toBeHidden();
+  await expect(count).toBeVisible();
+});
+
+test("project navigation sits below the sidebar header and contains the Notes tab", async ({
   page,
 }, testInfo) => {
   await page.goto("/project-navigation");
   const row = page.getByTestId("project-navigation-bar");
-  const search = page.getByTestId("project-search-bar");
+  const sidebarHeader = page.getByTestId("project-navigation-sidebar-header");
   const notes = row.getByRole("tab", { name: "Notes", exact: true });
   await expect(row).toBeVisible();
   // The tab row scrolls horizontally when the window is too narrow for it.
   await notes.scrollIntoViewIfNeeded();
   await expect(notes).toBeVisible();
   const rowBox = (await row.boundingBox())!;
-  const searchBox = (await search.boundingBox())!;
+  const headerBox = (await sidebarHeader.boundingBox())!;
   const notesBox = (await notes.boundingBox())!;
   expect(rowBox.height).toBe(testInfo.project.name === "desktop-chromium" ? 32 : 40);
-  expect(rowBox.height).toBe(searchBox.height);
-  expect(rowBox.y).toBe(searchBox.y);
+  // The search is in the sidebar header's row, so the navigation row starts
+  // where that row ends.
+  expect(rowBox.y).toBe(headerBox.y + headerBox.height);
   expect(notesBox.y).toBeGreaterThanOrEqual(rowBox.y);
   expect(notesBox.y + notesBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
   expect(notesBox.x + notesBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);

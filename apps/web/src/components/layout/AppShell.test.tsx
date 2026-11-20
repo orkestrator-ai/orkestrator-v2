@@ -2,7 +2,7 @@ import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import { useEffect, useState } from "react";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import * as realResizable from "@/components/ui/resizable";
 import * as realFilesPanelComponents from "@/components/files-panel";
 import * as realStores from "@/stores";
@@ -32,6 +32,7 @@ import {
 import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { requestAppShortcut, onAppShortcut } from "@/lib/app-shortcuts";
 import { uiStore as uiStoreDef, useUIStore as realUIStore, type UIState } from "@/stores/uiStore";
+import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import type { TabInfo } from "@/types/paneLayout";
 
@@ -744,6 +745,53 @@ describe("AppShell", () => {
     dispose();
   });
 
+  test.each([false, true])(
+    "opens the compact title-bar connection menu after closing the mobile drawer (federation: %s)",
+    async (federated) => {
+      installDesktopFake({
+        list: connectionList(federated ? [remoteConnection("leaf", "Leaf", "teal")] : []),
+        datasets: federated ? { leaf: sharedIdDataset("idle") } : {},
+      });
+      try {
+        renderInAppCommandScope(
+          <FederationProvider>
+            <AppShell>Workspace</AppShell>
+          </FederationProvider>,
+        );
+        const drawer = screen.getByRole("dialog", { name: "Projects and environments" });
+        fireEvent.click(
+          within(drawer).getAllByRole("button", { name: "Close projects and environments" })[1]!,
+        );
+        expect(screen.queryAllByRole("dialog", { name: "Projects and environments" })).toHaveLength(
+          0,
+        );
+        const trigger = await screen.findByRole("button", {
+          name: federated ? /^Command node: .+\. Switch command node$/ : "Connected server: Local",
+        });
+        expect(screen.getByTestId("mobile-agent-info-slot").contains(trigger)).toBe(true);
+        expect(trigger.classList.contains("w-9")).toBe(true);
+        expect(trigger.textContent).toBe("");
+        fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+
+        const menu = await screen.findByRole("menu");
+        if (federated) {
+          fireEvent.click(within(menu).getByRole("menuitem", { name: "Manage machines…" }));
+          expect(useGlobalSettingsStore.getState()).toMatchObject({
+            open: true,
+            section: "machines",
+          });
+        } else {
+          expect(within(menu).getByRole("menuitem", { name: "New connection" })).toBeTruthy();
+        }
+      } finally {
+        cleanup();
+        useGlobalSettingsStore.getState().close();
+        uninstallDesktopFake();
+        portalStore.store.setState(INITIAL_PORTAL, true);
+      }
+    },
+  );
+
   test("mounts the agent-info button in the desktop title bar outside the drag region", () => {
     isMobile = false;
     seedPaneLayout([CLAUDE_TAB], "claude-tab");
@@ -858,9 +906,15 @@ describe("AppShell", () => {
     expect(separator.className).toContain("mx-2");
     expect(separator.className).toContain("bg-border/50");
     const slotChildren = Array.from(slot.children);
-    expect(slotChildren[0]).toBe(meters);
-    expect(slotChildren[1]).toBe(separator);
-    expect(slotChildren[2]?.contains(screen.getByTestId("agent-info-button"))).toBe(true);
+    // The connected machine's switcher comes first, left of the meters. With
+    // neither federation nor saved connections it is empty, and hidden.
+    const connection = screen.getByTestId("title-bar-connection");
+    expect(slotChildren[0]).toBe(connection);
+    expect(connection.childElementCount).toBe(0);
+    expect(connection.className).toContain("empty:hidden");
+    expect(slotChildren[1]).toBe(meters);
+    expect(slotChildren[2]).toBe(separator);
+    expect(slotChildren[3]?.contains(screen.getByTestId("agent-info-button"))).toBe(true);
 
     cleanup();
     isMobile = true;

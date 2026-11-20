@@ -18,8 +18,14 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { emptyPortalLayout } from "@orkestrator/protocol/portal-layout";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
-import { FederationProvider } from "./FederationProvider";
-import { MachineCpuReadings } from "./MachineCpuReadings";
+import { useMemo } from "react";
+import { inMachineOrder } from "@/lib/federation/sidebar-layout";
+import { usePortalLayout } from "@/lib/portal/portal-layout";
+import { machineTextClass } from "@/lib/federation/machine-colors";
+import type { MachineView } from "@/lib/federation/aggregate";
+import { FederationProvider, useFederation } from "./FederationProvider";
+import { useMachineCpu, useMachineScopeLookup } from "./useMachineCpu";
+import { useMachineViews } from "./useMachineViews";
 
 const invokeMock = nativeInvoke as ReturnType<typeof mock>;
 
@@ -108,10 +114,52 @@ function labels() {
   return screen.getAllByRole("img").map((reading) => reading.getAttribute("aria-label"));
 }
 
+/**
+ * Each machine's figure, in machine order, read through the hooks the machine
+ * tiles use: the command node first, then the order the command node keeps.
+ */
+function Readings() {
+  const { enabled, portalState } = useFederation();
+  const views = useMachineViews();
+  const { machineOrder: order } = usePortalLayout();
+  const machines = useMemo(
+    () => inMachineOrder(views, (machine) => machine.connectionId, order, portalState.selfId),
+    [order, portalState.selfId, views],
+  );
+  const scopeOf = useMachineScopeLookup();
+  if (!enabled || machines.length < 2) return null;
+  return (
+    <div data-testid="machine-cpu-probe">
+      {machines.map((machine) => (
+        <Reading key={machine.connectionId} machine={machine} scope={scopeOf(machine)} />
+      ))}
+    </div>
+  );
+}
+
+function Reading({ machine, scope }: { machine: MachineView; scope: NodeScope | null }) {
+  const { cpu } = useMachineCpu({
+    nodeId: machine.backendId,
+    bound: machine.bound,
+    connected: machine.bound || machine.transport === "connected",
+    scope,
+  });
+  const reading = cpu === null ? "—" : `${Math.round(cpu)}%`;
+  return (
+    <span
+      role="img"
+      aria-label={`${machine.name} CPU usage: ${cpu === null ? "unavailable" : reading}`}
+      className={machineTextClass(machine.colorToken)}
+    >
+      {reading}
+    </span>
+  );
+}
+
 const renderReadings = () =>
   renderInAppCommandScope(
     <FederationProvider>
-      <MachineCpuReadings />
+      <Readings />
     </FederationProvider>,
   );
 
@@ -155,11 +203,11 @@ test("a machine that stops answering ages out alone, without holding up the othe
   ]);
 });
 
-test("nothing shows, and nothing is read, with one machine", async () => {
+test("nothing is read with one machine", async () => {
   nodes = [];
   renderReadings();
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-  expect(screen.queryByTestId("machine-cpu-readings") === null).toBe(true);
+  expect(screen.queryByTestId("machine-cpu-probe") === null).toBe(true);
   expect(usageCalls).toEqual([]);
 });
 
@@ -188,7 +236,7 @@ test("a connected machine loses its figure and polling when it disconnects while
   expect(labels()).toContain("bk_a CPU usage: 7%");
 });
 
-test("CPU readings merge a new first registry machine like Settings", async () => {
+test("a new first registry machine merges into the order like Settings", async () => {
   nodes.unshift(summary("bk_new", "teal"));
   machineOrder = ["bk_a", "bk_self", "bk_b"];
   renderReadings();

@@ -9,11 +9,9 @@ import {
 } from "@orkestrator/protocol/federation";
 import {
   activityRows,
-  connectivitySummary,
   duplicateMachineColors,
   filterMachines,
   isMachineFilterActive,
-  setMachineShownInFilter,
   shownMachineIds,
   toggleMachineFilter,
   type MachineView,
@@ -217,13 +215,6 @@ describe("aggregate projections", () => {
     expect(ids("oldest")).toEqual(["bk_a/invalid", "bk_a/missing", "bk_a/a", "bk_a/z", "bk_b/a"]);
   });
 
-  test("connectivity never claims everything is current while a machine is missing", () => {
-    const summary = connectivitySummary([mini, vps, laptop]);
-    expect(summary.label).toBe("2 connected · 1 unavailable");
-    expect(summary.complete).toBe(false);
-    expect(connectivitySummary([mini, vps]).complete).toBe(true);
-  });
-
   test("filtering changes presentation only", () => {
     expect(filterMachines([mini, vps, laptop], ["vps"])).toEqual([vps]);
     expect(filterMachines([mini, vps, laptop], ["laptop", "mini"])).toEqual([mini, laptop]);
@@ -371,14 +362,5 @@ describe("machine tile and menu filter changes", () => {
   test("an unknown machine id leaves the filter as it is", () => {
     expect(toggleMachineFilter(machines, [], "gone")).toEqual([]);
     expect(toggleMachineFilter(machines, ["a"], "gone")).toEqual(["a"]);
-  });
-
-  test("the menu checkbox shows or hides one machine", () => {
-    expect(setMachineShownInFilter(machines, [], "b", false)).toEqual(["a", "c"]);
-    expect(setMachineShownInFilter(machines, ["a"], "c", true)).toEqual(["a", "c"]);
-    expect(setMachineShownInFilter(machines, ["a"], "a", true)).toEqual(["a"]);
-    expect(setMachineShownInFilter(machines, ["a", "c"], "b", true)).toEqual([]);
-    // Hiding the last shown machine shows them all rather than an empty list.
-    expect(setMachineShownInFilter(machines, ["a"], "a", false)).toEqual([]);
   });
 });

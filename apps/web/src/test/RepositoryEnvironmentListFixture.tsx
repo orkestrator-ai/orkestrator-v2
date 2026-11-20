@@ -16,7 +16,6 @@ import {
   type RepositoryEnvironmentOrderUpdate,
 } from "@orkestrator/protocol/portal-layout";
 import { FederationProvider, useFederation } from "@/components/federation/FederationProvider";
-import { MachinesFilter } from "@/components/federation/MachinesFilter";
 import { MachineTiles } from "@/components/federation/MachineTiles";
 import { RepositoryEnvironmentList } from "@/components/federation/RepositoryEnvironmentList";
 import { useRemoteMachineViews } from "@/components/federation/useMachineViews";
@@ -37,6 +36,7 @@ import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
  *
  * - `?ordering=manual`: environments ordered by hand (`environmentOrder`).
  * - `?offline=<machine>`: that machine is unavailable (its tile dims, its rows go).
+ * - `?machine-updates`: older releases across the full machine tile palette.
  *
  * The fake command node records portal layout writes (`updates`) and writes
  * routed to a machine (`reorders`); it answers each machine's CPU read.
@@ -262,13 +262,22 @@ function usageSample(cpuPercent: number) {
 function install() {
   const params = new URLSearchParams(location.search);
   const offline = new Set(params.getAll("offline"));
-  const nodes = REPOSITORY_LIST_MACHINES.map((machine) =>
-    summary(
+  const machineUpdates = params.has("machine-updates");
+  const machines = machineUpdates
+    ? [
+        ...REPOSITORY_LIST_MACHINES,
+        { nodeId: "bk_slate", name: "Slate", colorToken: "slate", cpu: 29, projects: [] },
+        { nodeId: "bk_neutral", name: "Neutral", colorToken: "neutral", cpu: 52, projects: [] },
+      ]
+    : REPOSITORY_LIST_MACHINES;
+  const nodes = machines.map((machine) => {
+    const node = summary(
       params.get("empty") === machine.name ? { ...machine, projects: [] } : machine,
       !offline.has(machine.name),
-    ),
-  );
-  const cpuByNode = new Map(REPOSITORY_LIST_MACHINES.map((m) => [m.nodeId, m.cpu]));
+    );
+    return machineUpdates ? { ...node, version: "2.38.0" } : node;
+  });
+  const cpuByNode = new Map(machines.map((machine) => [machine.nodeId, machine.cpu]));
   const liveLayout = params.has("command-node");
   let layout: PortalLayout = {
     ...emptyPortalLayout(),
@@ -312,7 +321,11 @@ function install() {
         case "list_nodes":
           return { nodes: [] } as T;
         case "get_node_summaries":
-          return { selfId: "bk_self", nodes: structuredClone(nodes) } as T;
+          return {
+            selfId: "bk_self",
+            nodes: structuredClone(nodes),
+            ...(machineUpdates ? { selfVersion: "2.40.0" } : {}),
+          } as T;
         case "get_backend_profile":
           return { revision: 1, displayName: "Self", colorToken: "slate", updatedAt: "t" } as T;
         case "watch_node_events":
@@ -405,14 +418,16 @@ function SidebarColumn() {
       data-testid="fixture-sidebar"
       className="flex h-full w-[340px] max-w-full flex-col bg-sidebar text-foreground shadow-[1px_0_0_var(--color-border)]"
     >
-      <MachinesFilter machines={machines} />
-      <ProjectSearchBar
-        projects={[]}
-        environments={[]}
-        onSelectProject={() => {}}
-        onSelectEnvironment={() => {}}
-        onSelectMachineProject={reveal}
-      />
+      {/* The sidebar header's row: the search, where the sidebar puts it. */}
+      <div className="flex h-12 shrink-0 items-center border-b border-border/80 bg-chrome px-2">
+        <ProjectSearchBar
+          projects={[]}
+          environments={[]}
+          onSelectProject={() => {}}
+          onSelectEnvironment={() => {}}
+          onSelectMachineProject={reveal}
+        />
+      </div>
       <MachineTiles machines={machines} />
       <div data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto">
         <RepositoryEnvironmentList

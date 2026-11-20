@@ -166,7 +166,6 @@ describe("what compact shows", () => {
     expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
     expect(screen.queryByTestId("machine-section-header") === null).toBe(true);
     expect(screen.queryByTestId("machine-tiles") === null).toBe(true);
-    expect(screen.queryByTestId("machines-filter") === null).toBe(true);
     expect(screen.queryByTestId("federated-repository-list") === null).toBe(true);
   });
 

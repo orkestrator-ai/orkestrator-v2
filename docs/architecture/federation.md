@@ -791,32 +791,52 @@ process's, see [logging.md](logging.md)), each with `nodeId`, `nodeName` and
 
 ## Sidebar presentation
 
-When multi-machine views are enabled (`federation.enabled`: the command node
-has at least one other node),
-`HierarchicalSidebar` replaces the switch-and-reload `ServerConnectionSwitcher`
-with `MachinesFilter`:
+The sidebar header is one row: the project search (`ProjectSearchBar`,
+which takes the width the buttons leave), then the sort menu, refresh and
+add-project buttons. During bulk selection, the search stays mounted as an
+icon beside the selection count and actions. The icon, ⌘K and any open search
+remain available.
+Compact mode keeps only the sort menu.
 
+When multi-machine views are enabled (`federation.enabled`: the command node
+has at least one other node), the machine this client is connected to shows
+in the title bar, left of the shown machine's meters
+(`TitleBarConnectionSwitcher`; the mobile title bar has a compact icon
+button):
+
+- **The command-node switcher** (`CommandNodeSwitcher` in
+  `CommandNodeMenu.tsx`) names the command node, with its colour dot and the
+  command-node home (`MachineRoleIcon`). Its menu is a direct choice of which
+  machine to connect to, not a filter: every target with its colour dot, the
+  command node with the home and marked as selected, every other machine with
+  a leaf (lucide `Leaf`), then **Manage machines…** (Settings > Machines).
+  The targets are the device's saved connections, one per machine
+  (`targetsFromConnections`), or in a browser tab the command node's machines
+  with a web address (`targetsFromNodes`). Each opening loads a new target
+  list. Active rows use the command node's colour, and saved addresses
+  without a node ID or profile can use the colour of a matching HTTPS registry
+  route. Choosing another machine hands command over (`requestCommandHandover`); one whose token is not saved here
+  goes to Settings > Machines first.
+- With federation off the same slot is the switch-and-reload
+  `ServerConnectionSwitcher`, and a browser tab on a lone server shows
+  nothing there (the slot collapses with its separator).
 - The filter (`machineViewStore.machineFilter`) is a set of machines; empty
-  shows them all. Its menu offers **All machines** (the default) and a
-  checkbox per machine, then **Manage connections…**. Unfiltered, the trigger
-  shows connected/total (`2/3`); filtered it names the one machine or "N
-  machines" and shows shown/total (`2/7`). The menu's label reads such as
-  `2 connected · 1 unavailable`, never "all caught up" while a machine is
-  missing (`connectivitySummary`). A filter persists across reloads; a stored
-  single machine or `"all"` from before 2.39 is read as a one-machine set or
-  as all (`sanitizePersisted`).
-- **Machine tiles** (`MachineTiles`, design EL01) sit between the search bar
-  and the list: one rounded square per machine, in machine order, its top half
+  shows them all. The machine tiles set it. A filter persists across reloads;
+  a stored single machine or `"all"` from before 2.39 is read as a one-machine
+  set or as all (`sanitizePersisted`).
+- **Machine tiles** (`MachineTiles`, design EL01) sit between the sidebar
+  header and the list: one rounded square per machine, in machine order, its top half
   the machine's colour with three dark initials (`machineInitials`: omarchy-hp
   → OHP, beelink2 → BE2, mini → MIN), its bottom half a darker shade with the
-  CPU percentage in white (`useMachineCpu`, the title bar's coordinated read).
+  CPU percentage in white (`useMachineCpu`, one coordinated read per machine
+  that the title bar's meters join for the machine on screen).
   The full sidebar also shows the bound machine’s tile when there are no peers.
   A machine that is not connected or has no current sample is dimmed and
   shows "—", never an old figure. A tile is a toggle button whose name gives
   the machine, its CPU and "shown" or "hidden"; its tooltip adds the status and
-  any version skew (an amber dot marks an update on offer). The tiles drive
-  the same filter as the menu (`toggleMachineFilter`): with every machine
-  shown a click shows only that machine, which stays highlighted while the
+  any version skew. A green up arrow outlined in black marks an available
+  update. When every machine is shown, clicking a tile filters the list
+  (`toggleMachineFilter`) to that machine, which stays highlighted while the
   others fade; after that each click adds or removes one machine, and turning
   off the last one shows every machine again, so the list is never empty.
   Dragging a tile (8 px before a press becomes a drag) reorders the machines
@@ -1152,11 +1172,11 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   action-bar merge dialog for the environment (`mergePrRequestStore`), so it
   exists only where that dialog can act.
 - A machine tile's tooltip gives the machine's version when it differs from
-  the command node's, with the domains it lacks, and an amber dot marks an
-  update on offer, which the machines menu and Settings > Machines start
-  (`MachineView.release`, which every adapter supplies from the command
-  node's summaries; see
-  [Keeping the fleet current](host-updates.md#keeping-the-fleet-current)).
+  the command node's, along with the domains it lacks. A green up arrow
+  outlined in black marks an available update. Start updates from
+  **Settings > Machines**. Every adapter supplies `MachineView.release` from
+  the command node's summaries. See
+  [Keeping the fleet current](host-updates.md#keeping-the-fleet-current).
 - Container actions are gated by the machine's own Docker availability, which
   its summary read stamps on every row (`dockerAvailable`, from a 30-second
   cache of `check_docker` answers and a bounded probe). A machine that predates

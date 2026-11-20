@@ -35,6 +35,7 @@ export type ArtifactFrameOutcome =
   | { kind: "ready" }
   | { kind: "size"; height: number; width?: number }
   | { kind: "link"; href: string; hostname: string; label: string }
+  | { kind: "result-candidate"; artifactId: string; revision: number; generation: string; candidateId: string; value: Record<string, unknown> }
   | { kind: "disposed"; reason: ArtifactShellDisposeReason }
   | {
       kind: "rejected";
@@ -124,6 +125,12 @@ export class ArtifactFrameSession {
         const url = new URL(message.url);
         this.counters.accepted++;
         return { kind: "link", href: url.href, hostname: url.hostname, label: message.label };
+      }
+      case "result-candidate": {
+        // Proposed values only; the host decides whether any interaction may show them.
+        this.counters.accepted++;
+        const identity = this.identity!;
+        return { kind: "result-candidate", artifactId: identity.artifactId, revision: identity.revision, generation: identity.generation, candidateId: message.candidateId, value: message.value };
       }
     }
   }

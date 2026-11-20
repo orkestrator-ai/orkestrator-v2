@@ -111,7 +111,7 @@ const SHELL_SCRIPT = `(() => {
     const data = event.data;
     if (typeof data !== "object" || data === null || Array.isArray(data)) return drop();
     if (data.channel !== CHANNEL || data.v !== 1) return drop();
-    if (data.type !== "ready" && data.type !== "size" && data.type !== "link-request") return drop();
+    if (data.type !== "ready" && data.type !== "size" && data.type !== "link-request" && data.type !== "result-candidate") return drop();
     if (boundedSize(data) > MAX_BYTES) return drop();
     if (!admit()) return drop();
     let copy;

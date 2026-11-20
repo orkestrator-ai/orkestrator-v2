@@ -266,6 +266,16 @@ export interface NativeTranscriptReferencePart extends NativeBasePart {
   comment?: string;
 }
 
+/**
+ * A decision the user submitted through a rich interaction card, as delivered
+ * to the agent (its `<orkestrator_interaction_result>` envelope). Rendered as a
+ * compact receipt rather than the raw agent-facing summary.
+ */
+export interface NativeInteractionReceiptPart extends NativeBasePart {
+  type: "interaction-receipt";
+  interaction: import("@orkestrator/protocol/rich-interactions").RichInteractionEnvelope;
+}
+
 export interface NativeAsyncQuestionPart extends NativeBasePart {
   type: "async-question";
   asyncQuestion: {
@@ -396,6 +406,7 @@ export interface NativeAgentGroupPart extends NativeBasePart {
 export type NativeMessagePart =
   | NativeTextPart
   | NativeTranscriptReferencePart
+  | NativeInteractionReceiptPart
   | NativeAsyncQuestionPart
   | NativeThinkingPart
   | NativeFilePart

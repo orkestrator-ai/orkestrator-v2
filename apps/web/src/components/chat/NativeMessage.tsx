@@ -129,7 +129,11 @@ export const NativeMessage = memo(function NativeMessage({
   // An artifact card already shows its summary, so a publication row's
   // content is not repeated as a fallback text block.
   const hasTextParts = message.parts.some(
-    (part) => part.type === "text" || part.type === "async-question" || part.type === "artifact",
+    (part) =>
+      part.type === "text" ||
+      part.type === "async-question" ||
+      part.type === "artifact" ||
+      part.type === "interaction-receipt",
   );
   const hasContent = messageHasVisibleContent(message);
   // An empty assistant message with no attributable content or actions carries
@@ -140,6 +144,7 @@ export const NativeMessage = memo(function NativeMessage({
     ? message.parts
         .flatMap((part) => {
           if (part.type === "text" || part.type === "async-question") return [part.content];
+          if (part.type === "interaction-receipt") return [`${part.interaction.title}: ${part.content}`];
           if (part.type !== "transcript-reference") return [];
           return [
             [

@@ -1,3 +1,4 @@
+import { publishArtifactResultCandidate } from "@/lib/chat/artifact-result-candidates";
 import { useEffect, useMemo, useRef, useLayoutEffect } from "react";
 import type { ArtifactLiveSessionResponse } from "@orkestrator/protocol/transcript-artifact-commands";
 import { PREVIEW_ADMISSION_POLICY } from "@orkestrator/protocol/rich-content-policy";
@@ -125,6 +126,9 @@ export function ArtifactLiveHostFrame({
           reportRef.current({
             linkRequest: { href: outcome.href, hostname: outcome.hostname, label: outcome.label },
           });
+          break;
+        case "result-candidate":
+          publishArtifactResultCandidate({ artifactId: outcome.artifactId, revision: outcome.revision, generation: outcome.generation, candidateId: outcome.candidateId, value: outcome.value });
           break;
         case "disposed":
           // The shell already tore the artifact frame down; show the saved preview.

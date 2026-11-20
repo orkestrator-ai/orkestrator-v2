@@ -576,3 +576,27 @@ function labelChoices(options: readonly FormOption[], value: unknown): string {
   return Array.isArray(value) ? value.map(label).join(", ") || "(none)" : value === null ? "null" : label(value);
 }
 
+
+/** A fresh, stable identity for a new repeat item (independent of its position). */
+export function newRepeatItemId(): string {
+  const random = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID().slice(0, 12) : Math.random().toString(36).slice(2, 14);
+  return `item-${random}`;
+}
+
+/**
+ * The first validation problem keyed by field path (`group.field`,
+ * `items[0].values.path`), for showing beside the field. Empty when valid.
+ */
+export function formErrors(spec: FormSpec, values: unknown): Record<string, string> {
+  try {
+    readFormValues(spec, values, "$");
+    return {};
+  } catch (error) {
+    if (error instanceof Error && "path" in error && typeof (error as { path: unknown }).path === "string") {
+      const path = (error as { path: string }).path;
+      const key = path.replace(/^\$\.?/u, "");
+      return { [key || "$"]: error.message.replace(`${path}: `, "") };
+    }
+    throw error;
+  }
+}

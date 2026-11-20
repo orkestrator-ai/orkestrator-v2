@@ -14,8 +14,8 @@
  *
  * The shell runs one fixed script, authorized by its hash. It creates the
  * artifact frame (`sandbox="allow-scripts"`, no referrer) only when it is
- * itself framed, relays exactly `ready`, `size` and `link-request` from that
- * exact frame window to its parent and `theme` from its exact parent to the
+ * itself framed, relays exactly `ready`, `size`, `link-request` and
+ * `result-candidate` (proposed values only, feature 12) from that exact frame window to its parent and `theme` from its exact parent to the
  * frame, re-validating each in both directions (envelope, exact keys,
  * identity, bounds, rate), and rebuilds every relayed message from its
  * validated fields. Any load of the artifact frame after the first, or a
@@ -185,6 +185,21 @@ export function installArtifactShellRelay(config: ArtifactShellRelayConfig): voi
         ...(data.width !== undefined ? { width: data.width } : {}),
         ...identity,
       };
+    }
+    if (data.type === "result-candidate") {
+      // Feature 12: proposed values only, relayed as an exact copy of the
+      // validated shape; the host decides whether anything may use them.
+      const keys = ["channel", "v", "type", "protocolVersion", "candidateId", "value", ...IDENTITY_KEYS];
+      if (!onlyKeys(data, keys)) return null;
+      if (data.protocolVersion !== 2 || typeof data.candidateId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(data.candidateId)) return null;
+      if (!isRecord(data.value)) return null;
+      let value;
+      try {
+        value = JSON.parse(JSON.stringify(data.value));
+      } catch {
+        return null;
+      }
+      return { ...base, type: "result-candidate", protocolVersion: 2, candidateId: data.candidateId, value, ...identity };
     }
     if (data.type === "link-request") {
       const keys = ["channel", "v", "type", "url", "label", ...IDENTITY_KEYS];

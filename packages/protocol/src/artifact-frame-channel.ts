@@ -2,17 +2,26 @@
  * The presentation channel between an interactive HTML artifact frame and the
  * trusted host that displays it.
  *
- * Exactly four message types exist: `ready`, `size` and `link-request` from
- * the frame, `theme` from the host. None of them can reach a tool, the
- * composer, model context, the clipboard, the filesystem or an application
- * API. A link request only creates a host-owned "Open link" control that the
- * user must click. The generation nonce prevents accidental cross-document
+ * Five message types exist: `ready`, `size`, `link-request` and
+ * `result-candidate` from the frame, `theme` from the host. None of them can
+ * reach a tool, the composer, model context, the clipboard, the filesystem or
+ * an application API. A link request only creates a host-owned "Open link"
+ * control that the user must click. A result candidate (candidate protocol 2,
+ * feature 12 of the interactive sessions plan) only proposes values: the host
+ * shows them only to a widget-result interaction bound to this exact artifact
+ * revision and viewer generation, validates them against that interaction's
+ * declared output, and the user's own click on a host-owned control is the
+ * only thing that submits. A frame message or synthetic click cannot. The generation nonce prevents accidental cross-document
  * reuse; it is not a secret and confers no authority.
  */
 import { FRAME_CHANNEL_POLICY } from "./rich-content-policy.js";
 
 export const ARTIFACT_FRAME_CHANNEL = "orkestrator-artifact";
 export const ARTIFACT_FRAME_PROTOCOL_VERSION = 1;
+/** Version of the result-candidate message (feature 12); older hosts drop it as unknown. */
+export const ARTIFACT_RESULT_CANDIDATE_PROTOCOL = 2;
+/** Bounds of one candidate's value: small structured data, never documents. */
+export const ARTIFACT_RESULT_CANDIDATE_LIMITS = { keys: 64, valueBytes: 6 * 1024, candidateIdChars: 64 } as const;
 
 export interface ArtifactFrameIdentity {
   artifactId: string;
@@ -41,6 +50,15 @@ export type ArtifactFrameMessage =
       type: "link-request";
       url: string;
       label: string;
+    } & ArtifactFrameIdentity)
+  | ({
+      channel: typeof ARTIFACT_FRAME_CHANNEL;
+      v: 1;
+      type: "result-candidate";
+      protocolVersion: 2;
+      candidateId: string;
+      /** A flat or shallow JSON object of proposed output values. */
+      value: Record<string, unknown>;
     } & ArtifactFrameIdentity);
 
 export interface ArtifactThemeMessage extends ArtifactFrameIdentity {
@@ -66,7 +84,32 @@ const MESSAGE_KEYS: Record<ArtifactFrameMessage["type"], readonly string[]> = {
   ready: ["channel", "v", "type", "protocolVersion", "nonce"],
   size: ["channel", "v", "type", "height", "width", "artifactId", "revision", "generation"],
   "link-request": ["channel", "v", "type", "url", "label", "artifactId", "revision", "generation"],
+  "result-candidate": ["channel", "v", "type", "protocolVersion", "candidateId", "value", "artifactId", "revision", "generation"],
 };
+
+/** A candidate value: a plain JSON object, bounded in keys, depth and bytes. */
+export function isArtifactResultCandidateValue(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (Object.keys(value).length > ARTIFACT_RESULT_CANDIDATE_LIMITS.keys) return false;
+  const plain = (item: unknown, depth: number): boolean => {
+    if (item === null || typeof item === "string" || typeof item === "boolean") return true;
+    if (typeof item === "number") return Number.isFinite(item);
+    if (depth > 3) return false;
+    if (Array.isArray(item)) return item.length <= 100 && item.every((child) => plain(child, depth + 1));
+    if (typeof item === "object") {
+      const proto = Object.getPrototypeOf(item);
+      if (proto !== Object.prototype && proto !== null) return false;
+      return Object.values(item as Record<string, unknown>).every((child) => plain(child, depth + 1));
+    }
+    return false;
+  };
+  if (!plain(value, 0)) return false;
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).length <= ARTIFACT_RESULT_CANDIDATE_LIMITS.valueBytes;
+  } catch {
+    return false;
+  }
+}
 
 /** Approximate serialized size without serializing hostile cyclic objects. */
 function boundedSize(value: unknown, budget: number): number {
@@ -108,7 +151,7 @@ export function parseArtifactFrameMessage(
   if (record.channel !== ARTIFACT_FRAME_CHANNEL) return { ok: false, reason: "wrong-channel" };
   if (record.v !== ARTIFACT_FRAME_PROTOCOL_VERSION) return { ok: false, reason: "wrong-version" };
   const type = record.type;
-  if (type !== "ready" && type !== "size" && type !== "link-request")
+  if (type !== "ready" && type !== "size" && type !== "link-request" && type !== "result-candidate")
     return { ok: false, reason: "unknown-type" };
   const allowed = MESSAGE_KEYS[type];
   if (Object.keys(record).some((key) => !allowed.includes(key)))
@@ -140,6 +183,17 @@ export function parseArtifactFrameMessage(
     if (
       width !== undefined &&
       (typeof width !== "number" || !Number.isFinite(width) || width < 0 || width > 100_000)
+    ) {
+      return { ok: false, reason: "bad-shape" };
+    }
+    return { ok: true, message: record as ArtifactFrameMessage };
+  }
+  if (type === "result-candidate") {
+    if (
+      record.protocolVersion !== ARTIFACT_RESULT_CANDIDATE_PROTOCOL ||
+      typeof record.candidateId !== "string" ||
+      !/^[A-Za-z0-9_-]{1,64}$/.test(record.candidateId) ||
+      !isArtifactResultCandidateValue(record.value)
     ) {
       return { ok: false, reason: "bad-shape" };
     }
@@ -342,6 +396,22 @@ export function installArtifactFrameRuntime(identity: {
       return () => listeners.delete(listener);
     },
     width: () => document.documentElement.clientWidth,
+    /**
+     * Propose a result for the host to show next to this explorer. The host
+     * decides whether any interaction may use it; only the person's click on
+     * a host control submits it.
+     */
+    proposeResult: (candidateId: string, value: Record<string, unknown>) => {
+      const fields = identityFields();
+      if (!fields || typeof candidateId !== "string" || !value || typeof value !== "object") return;
+      let copy: unknown;
+      try {
+        copy = JSON.parse(JSON.stringify(value));
+      } catch {
+        return;
+      }
+      post({ type: "result-candidate", protocolVersion: 2, candidateId: candidateId.slice(0, 64), value: copy, ...fields });
+    },
     requestLink: (url: string, label = "") => {
       const fields = identityFields();
       if (fields)

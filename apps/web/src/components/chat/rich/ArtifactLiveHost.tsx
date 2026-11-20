@@ -1,3 +1,4 @@
+import { publishArtifactResultCandidate } from "@/lib/chat/artifact-result-candidates";
 import {
   useCallback,
   useEffect,
@@ -373,6 +374,9 @@ function LiveHostSurface({ active }: { active: LiveHostSession }) {
           report({
             linkRequest: { href: event.href, hostname: event.hostname, label: event.label },
           });
+          break;
+        case "result-candidate":
+          publishArtifactResultCandidate({ artifactId: session.artifactId, revision: session.revision, generation: session.generation, candidateId: event.candidateId, value: event.value });
           break;
         case "navigation-blocked":
           report({

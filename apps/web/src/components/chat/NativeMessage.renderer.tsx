@@ -8,6 +8,8 @@ import { agentMailToolCall } from "@/lib/chat/agent-mail-tool-call";
 import { MailToolPart } from "./MailToolPart";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
 import { PlanToolPart } from "./PlanToolPart";
+import { InteractionReceiptPart } from "./interactions/InteractionReceiptPart";
+import { RichInteractionToolPart, isPresentInteractionTool } from "./interactions/RichInteractionToolPart";
 import { type NativeMessagePart } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {
@@ -299,6 +301,8 @@ function MessagePartContent({
       );
     case "transcript-reference":
       return <TranscriptReferencePart part={part} />;
+    case "interaction-receipt":
+      return <InteractionReceiptPart part={part} />;
     case "async-question":
       return <NativeAsyncQuestionCard part={part} />;
     case "tool-invocation": {
@@ -327,6 +331,9 @@ function MessagePartContent({
             deferredDetails={deferredDetails}
           />
         );
+      }
+      if (!part.toolDenied && isPresentInteractionTool(part)) {
+        return <RichInteractionToolPart part={part} />;
       }
       if (!part.toolDenied && isPlanTool(part.toolName)) {
         return (

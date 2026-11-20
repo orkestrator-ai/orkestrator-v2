@@ -808,6 +808,11 @@ export class ArtifactHostSession {
           ...(message.width !== undefined ? { width: message.width } : {}),
         });
         return;
+      case "result-candidate":
+        // Proposed values only: the renderer shows them in host-owned controls,
+        // and only the person's click there submits anything.
+        this.options.emit({ hostId: this.hostId, type: "result-candidate", candidateId: message.candidateId, value: message.value });
+        return;
       case "link-request": {
         // Never opened here: the renderer shows a host-owned control the user must click.
         const link = normalizeArtifactLink(message.url);

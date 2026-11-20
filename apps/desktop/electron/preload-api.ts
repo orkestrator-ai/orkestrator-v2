@@ -271,6 +271,7 @@ const ARTIFACT_HOST_EVENT_TYPES = new Set<ArtifactHostEvent["type"]>([
   "ready",
   "size",
   "link-request",
+  "result-candidate",
   "navigation-blocked",
   "crashed",
   "unresponsive",

@@ -3,7 +3,7 @@ import type {
   RichInteractionReceipt,
   RichInteractionRequest,
 } from "@orkestrator/protocol/rich-interactions";
-import type { StorageDatabase, StoreRows } from "../storage-database.js";
+import type { StorageDatabase } from "../storage-database.js";
 import {
   RICH_DELIVERABLES_STORE,
   RICH_INTERACTION_DRAFTS_STORE,
@@ -79,10 +79,6 @@ export class RichInteractionTx {
 
   constructor(private readonly database: StorageDatabase) {}
 
-  private rows(store: string): StoreRows {
-    return this.database.rows(store);
-  }
-
   private exists(store: string): boolean {
     return this.database.hasStore(store);
   }
@@ -95,14 +91,14 @@ export class RichInteractionTx {
 
   getRequest(interactionId: string): StoredRequest | null {
     if (!this.exists(RICH_INTERACTION_REQUESTS_STORE)) return null;
-    const request = parse<StoredRequest>(this.rows(RICH_INTERACTION_REQUESTS_STORE).get(interactionId), isRequest);
+    const request = parse<StoredRequest>(this.database.rows(RICH_INTERACTION_REQUESTS_STORE).get(interactionId), isRequest);
     return request?.interactionId === interactionId ? request : null;
   }
 
   listRequests(environmentId: string): StoredRequest[] {
     if (!this.exists(RICH_INTERACTION_REQUESTS_STORE)) return [];
     const out: StoredRequest[] = [];
-    for (const entry of this.rows(RICH_INTERACTION_REQUESTS_STORE).list({ values: true, owner: environmentId })) {
+    for (const entry of this.database.rows(RICH_INTERACTION_REQUESTS_STORE).list({ values: true, owner: environmentId })) {
       const request = parse<StoredRequest>(entry.value ?? undefined, isRequest);
       if (request && request.interactionId === entry.key && request.owner.environmentId === environmentId) out.push(request);
     }
@@ -110,25 +106,25 @@ export class RichInteractionTx {
   }
 
   putRequest(request: StoredRequest): void {
-    this.rows(RICH_INTERACTION_REQUESTS_STORE).put(request.interactionId, JSON.stringify(request));
+    this.database.rows(RICH_INTERACTION_REQUESTS_STORE).put(request.interactionId, JSON.stringify(request));
     this.announce(request.owner.environmentId, request.interactionId);
   }
 
   deleteRequest(request: StoredRequest): void {
-    this.rows(RICH_INTERACTION_REQUESTS_STORE).delete(request.interactionId);
+    this.database.rows(RICH_INTERACTION_REQUESTS_STORE).delete(request.interactionId);
     this.announce(request.owner.environmentId, request.interactionId);
   }
 
   getReceipt(receiptId: string): StoredReceipt | null {
     if (!this.exists(RICH_INTERACTION_RECEIPTS_STORE)) return null;
-    const receipt = parse<StoredReceipt>(this.rows(RICH_INTERACTION_RECEIPTS_STORE).get(receiptId), isReceipt);
+    const receipt = parse<StoredReceipt>(this.database.rows(RICH_INTERACTION_RECEIPTS_STORE).get(receiptId), isReceipt);
     return receipt?.receiptId === receiptId ? receipt : null;
   }
 
   listReceipts(environmentId: string, interactionId?: string): StoredReceipt[] {
     if (!this.exists(RICH_INTERACTION_RECEIPTS_STORE)) return [];
     const out: StoredReceipt[] = [];
-    for (const entry of this.rows(RICH_INTERACTION_RECEIPTS_STORE).list({ values: true, owner: environmentId })) {
+    for (const entry of this.database.rows(RICH_INTERACTION_RECEIPTS_STORE).list({ values: true, owner: environmentId })) {
       const receipt = parse<StoredReceipt>(entry.value ?? undefined, isReceipt);
       if (receipt && receipt.receiptId === entry.key && (!interactionId || receipt.interactionId === interactionId)) out.push(receipt);
     }
@@ -139,7 +135,7 @@ export class RichInteractionTx {
   listOutstandingReceipts(states: ReadonlySet<string>, limit: number): StoredReceipt[] {
     if (!this.exists(RICH_INTERACTION_RECEIPTS_STORE)) return [];
     const out: StoredReceipt[] = [];
-    for (const entry of this.rows(RICH_INTERACTION_RECEIPTS_STORE).list({ values: true })) {
+    for (const entry of this.database.rows(RICH_INTERACTION_RECEIPTS_STORE).list({ values: true })) {
       const receipt = parse<StoredReceipt>(entry.value ?? undefined, isReceipt);
       if (receipt && states.has(receipt.delivery)) out.push(receipt);
       if (out.length >= limit) break;
@@ -148,35 +144,35 @@ export class RichInteractionTx {
   }
 
   putReceipt(receipt: StoredReceipt): void {
-    this.rows(RICH_INTERACTION_RECEIPTS_STORE).put(receipt.receiptId, JSON.stringify(receipt));
+    this.database.rows(RICH_INTERACTION_RECEIPTS_STORE).put(receipt.receiptId, JSON.stringify(receipt));
     this.announce(receipt.environmentId, receipt.interactionId);
   }
 
   getDraft(interactionId: string): StoredDraft | null {
     if (!this.exists(RICH_INTERACTION_DRAFTS_STORE)) return null;
-    const draft = parse<StoredDraft>(this.rows(RICH_INTERACTION_DRAFTS_STORE).get(interactionId), isDraft);
+    const draft = parse<StoredDraft>(this.database.rows(RICH_INTERACTION_DRAFTS_STORE).get(interactionId), isDraft);
     return draft?.interactionId === interactionId ? draft : null;
   }
 
   putDraft(draft: StoredDraft): void {
-    this.rows(RICH_INTERACTION_DRAFTS_STORE).put(draft.interactionId, JSON.stringify(draft));
+    this.database.rows(RICH_INTERACTION_DRAFTS_STORE).put(draft.interactionId, JSON.stringify(draft));
     this.announce(draft.environmentId, draft.interactionId);
   }
 
   deleteDraft(environmentId: string, interactionId: string): void {
     if (!this.exists(RICH_INTERACTION_DRAFTS_STORE)) return;
-    if (this.rows(RICH_INTERACTION_DRAFTS_STORE).delete(interactionId)) this.announce(environmentId, interactionId);
+    if (this.database.rows(RICH_INTERACTION_DRAFTS_STORE).delete(interactionId)) this.announce(environmentId, interactionId);
   }
 
   getDeliverable(deliverableId: string): StoredDeliverable | null {
     if (!this.exists(RICH_DELIVERABLES_STORE)) return null;
-    return parse<StoredDeliverable>(this.rows(RICH_DELIVERABLES_STORE).get(deliverableId), isDeliverable);
+    return parse<StoredDeliverable>(this.database.rows(RICH_DELIVERABLES_STORE).get(deliverableId), isDeliverable);
   }
 
   listDeliverables(environmentId: string, logicalSessionKey: string): StoredDeliverable[] {
     if (!this.exists(RICH_DELIVERABLES_STORE)) return [];
     const out: StoredDeliverable[] = [];
-    for (const entry of this.rows(RICH_DELIVERABLES_STORE).list({ values: true, owner: environmentId })) {
+    for (const entry of this.database.rows(RICH_DELIVERABLES_STORE).list({ values: true, owner: environmentId })) {
       const item = parse<StoredDeliverable>(entry.value ?? undefined, isDeliverable);
       if (item && item.logicalSessionKey === logicalSessionKey) out.push(item);
     }
@@ -184,15 +180,16 @@ export class RichInteractionTx {
   }
 
   putDeliverable(item: StoredDeliverable): void {
-    this.rows(RICH_DELIVERABLES_STORE).put(item.deliverableId, JSON.stringify(item));
+    this.database.rows(RICH_DELIVERABLES_STORE).put(item.deliverableId, JSON.stringify(item));
     this.announce(item.environmentId, `deliverable:${item.deliverableId}`);
   }
 
   deleteEnvironment(environmentId: string): number {
     let removed = 0;
-    for (const store of [RICH_INTERACTION_REQUESTS_STORE, RICH_INTERACTION_RECEIPTS_STORE, RICH_INTERACTION_DRAFTS_STORE, RICH_DELIVERABLES_STORE]) {
-      if (this.exists(store)) removed += this.rows(store).deleteWhere({ owner: environmentId });
-    }
+    if (this.exists(RICH_INTERACTION_REQUESTS_STORE)) removed += this.database.rows(RICH_INTERACTION_REQUESTS_STORE).deleteWhere({ owner: environmentId });
+    if (this.exists(RICH_INTERACTION_RECEIPTS_STORE)) removed += this.database.rows(RICH_INTERACTION_RECEIPTS_STORE).deleteWhere({ owner: environmentId });
+    if (this.exists(RICH_INTERACTION_DRAFTS_STORE)) removed += this.database.rows(RICH_INTERACTION_DRAFTS_STORE).deleteWhere({ owner: environmentId });
+    if (this.exists(RICH_DELIVERABLES_STORE)) removed += this.database.rows(RICH_DELIVERABLES_STORE).deleteWhere({ owner: environmentId });
     if (removed) this.announce(environmentId, "*");
     return removed;
   }

@@ -540,6 +540,36 @@ export const createContainerFolderCommand = defineCommand({
   critical: [],
 });
 
+const fileCreateArgs = Schema.Struct({
+  environmentId: Schema.String,
+  parentDirectory: Schema.String,
+  fileName: Schema.String,
+});
+
+/** Creates one empty file; refuses a name that already exists rather than replacing it. */
+export const createLocalFileCommand = defineCommand({
+  domain: filesDomain,
+  name: "create_local_file",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: fileCreateArgs,
+  result: Schema.String,
+  critical: [],
+});
+
+/** Creates one empty file; refuses a name that already exists rather than replacing it. */
+export const createContainerFileCommand = defineCommand({
+  domain: filesDomain,
+  name: "create_container_file",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: fileCreateArgs,
+  result: Schema.String,
+  critical: [],
+});
+
 // --- Web annotation evidence and checks (backend-internal callers) ---
 
 /** Containment and existence of agent-reported container paths; runs `stat` only. */
@@ -602,6 +632,8 @@ export const FILES_COMMANDS = [
   renameContainerFileCommand,
   createLocalFolderCommand,
   createContainerFolderCommand,
+  createLocalFileCommand,
+  createContainerFileCommand,
   checkContainerWorkspacePathsCommand,
   deleteContainerAnnotationEvidenceCommand,
 ] as const;

@@ -38,7 +38,9 @@ import { parseTerminalSizeClientId } from "@orkestrator/protocol/terminal-size-o
 import {
   checkContainerWorkspacePathsCommand,
   copyExternalFileCommand,
+  createContainerFileCommand,
   createContainerFolderCommand,
+  createLocalFileCommand,
   createLocalFolderCommand,
   deleteContainerAnnotationEvidenceCommand,
   deleteContainerFileCommand,
@@ -203,6 +205,7 @@ import {
   parseContainerFileSubtree,
 } from "./commands-helpers.js";
 import { conditionalSnapshot } from "./commands-terminal.js";
+import { createContainerFile, createLocalFile } from "./commands-file-create.js";
 import type { GitFileChange } from "./commands-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { readableHostFileRoots } from "./readable-host-roots.js";
@@ -1273,6 +1276,20 @@ export function registerTerminalCommands(
     },
     ASYNC_HANDLER,
   );
+  register(
+    createLocalFileCommand,
+    async ({ environmentId: id, parentDirectory, fileName }, context) => {
+      return withLocalFileMutation(context, id, async (environment) => {
+        const result = await createLocalFile(environment.worktreePath!, parentDirectory, fileName);
+        context.runtime.diffStats.service.invalidateChanges({
+          worktreePath: environment.worktreePath!,
+        });
+        context.runtime.diffStats.service.refresh(id);
+        return result;
+      });
+    },
+    ASYNC_HANDLER,
+  );
 
   register(
     getGitStatusCommand,
@@ -1685,6 +1702,24 @@ export function registerTerminalCommands(
       context.runtime.diffStats.service.invalidateChanges({ containerId: id });
       context.runtime.diffStats.service.refresh(environmentIdString);
       return created.folderPath;
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    createContainerFileCommand,
+    async ({ environmentId, parentDirectory, fileName }, context) => {
+      const environment = await requireContainerMutationEnvironment(context.storage, environmentId);
+      const id = environment.containerId!;
+      const filePath = await createContainerFile(
+        dependencies.runContainerFileCopyCommand,
+        id,
+        parentDirectory,
+        fileName,
+        dependencies.containerFileCopyTimeoutMs,
+      );
+      context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+      context.runtime.diffStats.service.refresh(environmentId);
+      return filePath;
     },
     ASYNC_HANDLER,
   );

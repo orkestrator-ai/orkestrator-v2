@@ -40,6 +40,7 @@ export function FilesPanel() {
     moveFile,
     renameFile,
     createFolder,
+    createFile,
     copyExternalFiles,
     fileActionPending,
     environmentId,
@@ -199,6 +200,7 @@ export function FilesPanel() {
                 onMove={moveFileInTree}
                 onCopyFiles={copyFilesIntoTree}
                 onCreateFolder={createFolder}
+                onCreateFile={createFile}
                 onRename={renameFile}
                 movePending={fileActionPending !== null}
                 onOpenFile={onOpenFile}

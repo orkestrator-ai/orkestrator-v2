@@ -34,6 +34,49 @@ The shared system instructions every provider receives carry this choice
 (`AGENT_VISUAL_OUTPUT_INSTRUCTION`). Read-only coordinators do not receive that
 block, because they delegate publishing to a worker.
 
+## Interactive cards
+
+When the person must choose, fill in, select, review or approve something
+precise, call `present_interaction` instead of asking in prose. The card is
+rendered by Orkestrator's trusted controls; exploring it (opening previews,
+sorting, selecting) costs no model call, and only an explicit submission
+reaches you, later, as a follow-up message carrying an
+`<orkestrator_interaction_result>` envelope. Do not wait or poll for it. A
+decision is the person's preference, never a permission grant.
+
+| The person needs to | Kind |
+| --- | --- |
+| Pick between 2-8 options, with previews | `choice` |
+| Provide several related values | `form` |
+| Adjust a plan's steps and scope | `plan` |
+| Select rows of findings or results | `collection` |
+| Keep, revise or question parts of a diff | `code-review` |
+| Accept a result or ask for another change | `result-review` |
+| Edit a specification with you | `document` |
+| Act on failed tests | `diagnostics` |
+| Ask about part of a chart | `chart-selection` |
+| Ask about components of a diagram | `diagram` |
+| Send a calculator's chosen values | `widget-result` (with an `html-interactive` artifact that calls `orkestratorArtifact.proposeResult`) |
+| Challenge the evidence behind a recommendation | `evidence` |
+| Agree and then judge a definition of done | `criteria` |
+| Choose between parallel implementations | `alternatives` |
+| Retry or stop a graph-run stage | `workflow-actions` |
+
+Keep a one-line question in prose when a card adds nothing. Reference large
+data (images, reports) as artifact revisions in the spec instead of inlining
+it; each spec error names its JSON path. `update_interaction` publishes a new
+revision (new evidence, a revised plan, a newer result, a reply to a comment
+thread); it cannot change what the person owns (their thread entries, their
+acceptance decisions, preserved document sections). `read_interaction_result`
+returns every submitted decision with its structured result. The full model is
+[rich-interactions.md](rich-interactions.md).
+
+A minimal choice:
+
+```json
+{"requestKey":"layout-1","kind":"choice","title":"Findings layout","spec":{"questions":[{"id":"layout","prompt":"Which layout should I implement?","options":[{"id":"list","label":"Focused list","preview":{"kind":"artifact","description":"List mockup","ref":{"kind":"artifact","artifactId":"art_example0001","revision":2}}},{"id":"board","label":"Visual board"}]}]}}
+```
+
 ## Static reports (`html-static`)
 
 The verified effective document is displayed in the transcript. Write it for

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:0500e66d25adbcffbb8b64306900ad795bda0b50deb3b4e3e6e4690ba92b3a2d",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedDraftRevision": {
+          "maximum": 9007199254740990,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "interactionId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "requestRevision": {
+          "maximum": 9007199254740990,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "value": {}
+      },
+      "required": [
+        "environmentId",
+        "expectedDraftRevision",
+        "interactionId",
+        "requestRevision",
+        "value"
+      ],
+      "type": "object"
+    }
+  }
+}

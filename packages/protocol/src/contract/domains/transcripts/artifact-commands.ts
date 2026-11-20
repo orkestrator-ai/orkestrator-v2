@@ -268,7 +268,15 @@ export const transcriptArtifactListPublicationsCommand = defineCommand({
   since: 1,
   access: "workspace",
   read: false,
-  args: Schema.Struct({ ...conversation, afterSequence: checked, limit: checked }),
+  args: Schema.Struct({
+    ...conversation,
+    afterSequence: checked,
+    beforeSequence: checked,
+    limit: checked,
+    newestFirst: Schema.optionalKey(Schema.Boolean),
+    artifactId: Schema.optionalKey(Schema.String),
+    revision: checked,
+  }),
   result: ArtifactPublicationListSchema,
   critical: [],
 });

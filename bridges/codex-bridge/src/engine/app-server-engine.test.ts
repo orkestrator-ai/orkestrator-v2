@@ -12,6 +12,7 @@ import {
 } from "./app-server-engine-test-harness.js";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import { RICH_INTERACTION_TOOL_NAMES } from "@orkestrator/protocol/rich-interaction-tools";
 import { coordinatorCapabilityPolicy } from "@orkestrator/protocol/coordinator-web-research";
 import { afterEach, describe, test, expect, spyOn } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -857,6 +858,7 @@ describe("thread lifecycle", () => {
             [
               ...AGENT_MAIL_TOOL_NAMES,
               ...ARTIFACT_TOOL_NAMES,
+              ...RICH_INTERACTION_TOOL_NAMES,
               ...AGENT_GOAL_TOOL_NAMES,
               ...AGENT_SUBORK_TOOL_NAMES,
               ...AGENT_AUTO_PIPELINE_TOOL_NAMES,

@@ -61,6 +61,7 @@ import {
   createRegistryRegistrar,
 } from "./commands-registry-contracts.js";
 import { registerPermissionRuleCommands } from "./commands-registry-permission-rules.js";
+import { registerRichInteractionCommands } from "./commands-registry-rich-interactions.js";
 import { registerCredentialCommands } from "./commands-registry-credentials.js";
 import { registerBackendProfileCommands } from "./commands-registry-backend-profile.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
@@ -380,6 +381,7 @@ export function createCommandRegistry(options: CommandRegistryOptions = {}): Com
   registerSystemCommands(register);
   registerBackendProfileCommands(register);
   registerPermissionRuleCommands(register);
+  registerRichInteractionCommands(register);
   registerCredentialCommands(register);
   registerNodeCommands(register);
   registerTicketSyncCommands(register);

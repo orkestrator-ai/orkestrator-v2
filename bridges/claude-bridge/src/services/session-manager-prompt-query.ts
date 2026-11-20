@@ -5,6 +5,7 @@ import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
 import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import { RICH_INTERACTION_TOOL_NAMES } from "@orkestrator/protocol/rich-interaction-tools";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { createHash } from "node:crypto";
 import type { SessionState } from "../types/index.js";
@@ -252,6 +253,7 @@ export async function resolveQueryPlan(
     ? [
         ...AGENT_MAIL_TOOL_NAMES,
         ...ARTIFACT_TOOL_NAMES,
+        ...RICH_INTERACTION_TOOL_NAMES,
         ...AGENT_GOAL_TOOL_NAMES,
         ...AGENT_SUBORK_TOOL_NAMES,
         ...AGENT_AUTO_PIPELINE_TOOL_NAMES,

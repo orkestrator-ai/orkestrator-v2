@@ -1,3 +1,4 @@
+import type { PublicationListOptions } from "./service-ui.js";
 /**
  * TranscriptArtifactService: the backend owner of transcript artifacts.
  *
@@ -513,7 +514,7 @@ export class TranscriptArtifactService {
 
   listPublications(
     scope: ArtifactConversationScope,
-    options: { afterSequence?: unknown; limit?: unknown } = {},
+    options: PublicationListOptions = {},
   ): { publications: ArtifactPublicationView[]; nextSequence: number | null } {
     return this.ui.listPublications(scope, options);
   }
@@ -529,6 +530,15 @@ export class TranscriptArtifactService {
     publicationId: unknown,
   ): Promise<ArtifactLiveSessionResponse> {
     return this.ui.openLiveSession(scope, publicationId);
+  }
+
+  hasLiveGeneration(
+    scope: ArtifactConversationScope,
+    artifactId: string,
+    revision: number,
+    generation: string,
+  ): boolean {
+    return this.ui.hasLiveGeneration(scope, artifactId, revision, generation);
   }
 
   closeLiveSession(generation: unknown): void {

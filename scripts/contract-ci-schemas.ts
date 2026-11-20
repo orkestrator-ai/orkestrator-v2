@@ -360,10 +360,13 @@ const NON_NULL_SCHEMA: JsonObject = Object.freeze({
 });
 
 /**
- * Rewrites what Effect's importer refuses into an equivalent it accepts.
- * `Schema.Struct({})`, the arguments of every command that takes none, exports
- * as `{ not: { type: "null" } }` (any value but `null`), and the importer has
- * no `not`. Only that exact node is rewritten; any other `not` still fails.
+ * Rewrites a stored node into the values its parser accepted, in a form
+ * Effect's importer accepts:
+ *
+ * - `Schema.Struct({})`, the arguments of every command that takes none,
+ *   exports as `{ not: { type: "null" } }` (any value but `null`), and the
+ *   importer has no `not`. Only that exact node is rewritten; any other `not`
+ *   still fails.
  */
 export function importableSchemaNode(schema: JsonObject): JsonObject {
   const not = schema.not;
@@ -404,6 +407,31 @@ export async function loadFixtureGenerator(): Promise<FixtureGenerator> {
   };
 }
 
+// The frozen 2.39.9-beta tool-output schema advertised strings for cursor
+// and limit that its decoder refused. Other schemas can intentionally accept
+// those same strings, so this correction is specific to the published digest.
+const LEGACY_TOOL_OUTPUT_ARGS_DIGEST =
+  "sha256:eb8961fc38b6c10dadc228cb98abec41c3c7bd5852a77ea2acafa9ae36f806e1";
+
+function fixtureDocument(entry: FixtureCase): JsonSchemaDocument {
+  const { command, digest, document } = entry;
+  if (command !== "get_native_agent_tool_output" || digest !== LEGACY_TOOL_OUTPUT_ARGS_DIGEST) {
+    return document;
+  }
+  const schema = document.schema as JsonObject;
+  return {
+    ...document,
+    schema: {
+      ...schema,
+      properties: {
+        ...(schema.properties as JsonObject),
+        cursor: { type: "number" },
+        limit: { type: "number" },
+      },
+    },
+  };
+}
+
 /**
  * Generates fixtures from each case's old schema and decodes each with
  * `decode` (the current parser). A fixture is sent as JSON, as on the wire.
@@ -423,7 +451,7 @@ export function runArgumentFixtures(
     const { command, digest, releases } = entry;
     let samples: readonly unknown[];
     try {
-      samples = generator.sample(entry.document, count, `${command}@${digest}`);
+      samples = generator.sample(fixtureDocument(entry), count, `${command}@${digest}`);
     } catch (error) {
       failures.push({
         command,

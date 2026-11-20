@@ -105,8 +105,9 @@ interface SortableProjectFolderProps {
   /** A repository group's context menu. */
   repositoryMenu?: RepositoryMenuActions;
   /**
-   * A + button where the chevron was (design EL01): collapse stays in the
-   * context menu and on the keyboard (Left collapses, Right expands).
+   * A + button before the chevron (design EL01). The chevron, the context
+   * menu's Expand/Collapse and the keyboard on the heading (Left collapses,
+   * Right expands) all drive the same `isCollapsed`.
    */
   addAction?: { label: string; title: string; disabled?: boolean; onAdd: () => void };
   /** Shown between the heading and its + button (project home activity). */
@@ -209,11 +210,15 @@ export function SortableProjectFolder({
   // "owner/repo": the owner recedes so the repository name leads.
   const ownerEnd = repository ? label.lastIndexOf("/") + 1 : 0;
   const hasMenu = Boolean(onRename || onSort || onUngroup || repositoryMenu);
+  // A repository heading collapses a project's environments; a folder its projects.
+  const kind = repository ? "project" : "folder";
+  const repositoryActionSize = "max-sm:size-10 pointer-coarse:size-10";
 
   // The whole heading is the drag handle. A repository heading also opens on
   // click, so its keyboard drag starts on Space only and Enter keeps the
   // native activation that opens it.
-  // Without a chevron, Left and Right collapse and expand it from the keyboard.
+  // Beside its chevron, Left and Right on a heading with a + collapse and
+  // expand it from the keyboard.
   const headingListeners =
     onOpen && listeners
       ? {
@@ -234,7 +239,8 @@ export function SortableProjectFolder({
       {...headingListeners}
       ref={setActivatorNodeRef}
       type="button"
-      aria-expanded={onOpen && !addAction ? undefined : !isCollapsed}
+      // A heading that opens is not the disclosure: its chevron reports the state.
+      aria-expanded={onOpen ? undefined : !isCollapsed}
       aria-current={selected ? "page" : undefined}
       aria-label={onOpen ? `Open ${label}${destination}` : undefined}
       title={
@@ -361,7 +367,10 @@ export function SortableProjectFolder({
             title={addAction.title}
             disabled={addAction.disabled}
             data-testid="repository-new-environment"
-            className="mr-1 shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-white/[0.07] hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            className={cn(
+              "grid shrink-0 place-items-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-white/[0.07] hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+              repositoryActionSize,
+            )}
             onClick={(event) => {
               event.stopPropagation();
               addAction.onAdd();
@@ -369,27 +378,31 @@ export function SortableProjectFolder({
           >
             <Plus aria-hidden="true" className="h-4 w-4" />
           </button>
-        ) : (
-          // The chevron collapses independently of navigation and dragging.
-          <button
-            type="button"
-            aria-expanded={!isCollapsed}
-            aria-label={isCollapsed ? `Expand folder ${label}` : `Collapse folder ${label}`}
-            className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleCollapse();
-            }}
-          >
-            <ChevronRight
-              aria-hidden="true"
-              className={cn(
-                "h-4 w-4 text-muted-foreground transition-transform duration-200",
-                !isCollapsed && "rotate-90",
-              )}
-            />
-          </button>
-        )}
+        ) : null}
+        {/* The chevron sits last, at the row's right edge, and collapses
+            independently of navigation, dragging and the + button. */}
+        <button
+          type="button"
+          aria-expanded={!isCollapsed}
+          aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${kind} ${label}`}
+          data-testid={repository ? "repository-collapse-toggle" : undefined}
+          className={cn(
+            "grid shrink-0 place-items-center rounded-md p-1 transition-colors hover:bg-white/[0.07]",
+            repository && repositoryActionSize,
+          )}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleCollapse();
+          }}
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className={cn(
+              "h-4 w-4 text-muted-foreground transition-transform duration-200",
+              !isCollapsed && "rotate-90",
+            )}
+          />
+        </button>
       </div>
 
       {/*

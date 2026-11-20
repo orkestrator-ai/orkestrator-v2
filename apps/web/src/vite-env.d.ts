@@ -295,6 +295,8 @@ interface Window {
       openDevTools(
         tabId: string,
       ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      /** Demonstration recording (feature 20); present only on desktop builds that implement it. */
+      trace?: import("@orkestrator/protocol/browser-preview").BrowserPreviewTraceApi;
       /**
        * Trusted web annotation capture (selection, pending spool, pins).
        * Present only on desktop builds that implement it; feature-detect.

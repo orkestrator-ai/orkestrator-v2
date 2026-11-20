@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:fbe35fc6a02386811d1e032dceaa707b5190588c2ba3492ef859d8765c296603",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "actionId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedDraftRevision": {
+          "maximum": 9007199254740990,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expectedRevision": {
+          "maximum": 9007199254740990,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idempotencyKey": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "interactionId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "result": {}
+      },
+      "required": [
+        "actionId",
+        "environmentId",
+        "expectedRevision",
+        "idempotencyKey",
+        "interactionId",
+        "result"
+      ],
+      "type": "object"
+    }
+  }
+}

@@ -27,6 +27,11 @@
  * `untypedByDomain` are derived totals, so a ratchet (plan item 1011) reads
  * the untyped count without walking `commands`.
  *
+ * A defined command's arguments must follow the schema rules whose export
+ * would otherwise mislead the contract CI job (`argumentSchemaProblems` in
+ * `scripts/contract-argument-rules.ts`): no `Schema.optional` or
+ * `UndefinedOr`, and no `Schema.Number`. A breach fails the generator.
+ *
  * The registry is loaded the way `commands-secret-sweep-test-support.ts` does:
  * in a child process with a constructed environment (temporary HOME and XDG
  * directories, an empty PATH, no inherited `ORKESTRATOR_*` variable) and a
@@ -41,6 +46,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { isNodeReadCommand } from "@orkestrator/protocol/command-nodes";
+import { argumentSchemaProblems } from "./contract-argument-rules.ts";
 import { canonicalJsonSchema } from "@orkestrator/protocol/contract/json-schema";
 import type { AnyCommandDef, CommandAccess } from "@orkestrator/protocol/contract/command";
 import {
@@ -178,7 +184,8 @@ function sortedRecord<T>(entries: Iterable<readonly [string, T]>): { [key: strin
  * Builds the manifest. Throws {@link ContractManifestError} listing every
  * string-registered command without a domain, every map entry for a command
  * that is not registered or is registered with its definition, any duplicate
- * entry and any unknown domain.
+ * entry, any unknown domain and any argument schema that breaks the rules
+ * `argumentSchemaProblems` checks.
  */
 export function buildContractManifest(
   registry: ManifestRegistry,
@@ -227,6 +234,7 @@ export function buildContractManifest(
           resultDigest: schemaDigest(def.result),
         },
       ]);
+      problems.push(...argumentSchemaProblems(name, def.args));
       continue;
     }
     if (mapped === undefined) {

@@ -279,7 +279,6 @@ function install() {
     machineFilter: [],
     grouping: "repository",
     environmentOrdering: params.get("ordering") === "manual" ? "manual" : "machine",
-    collapsedFolderKeys: [],
     revealedProject: null,
     openedRepository: null,
   });

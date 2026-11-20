@@ -15,6 +15,7 @@ import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipel
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { boundedWait, boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import { RICH_INTERACTION_TOOL_NAMES } from "@orkestrator/protocol/rich-interaction-tools";
 import {
   agentInteractionToolHintsFromMcpAnnotations,
   type AgentInteractionToolHints,
@@ -200,6 +201,7 @@ export function isOrkestratorMailTool(state: SessionState, toolName: string): bo
     runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
     ((AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(toolName) ||
       (ARTIFACT_TOOL_NAMES as readonly string[]).includes(toolName) ||
+      (RICH_INTERACTION_TOOL_NAMES as readonly string[]).includes(toolName) ||
       (AGENT_GOAL_TOOL_NAMES as readonly string[]).includes(toolName) ||
       (AGENT_SUBORK_TOOL_NAMES as readonly string[]).includes(toolName) ||
       (AGENT_AUTO_PIPELINE_TOOL_NAMES as readonly string[]).includes(toolName))

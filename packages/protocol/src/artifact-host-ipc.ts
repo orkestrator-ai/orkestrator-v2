@@ -42,6 +42,13 @@ export type ArtifactHostEvent =
   | { hostId: string; type: "ready" }
   | { hostId: string; type: "size"; height: number; width?: number }
   | { hostId: string; type: "link-request"; href: string; hostname: string; label: string }
+  /** Feature 12: proposed values only; never a submission. */
+  | {
+      hostId: string;
+      type: "result-candidate";
+      candidateId: string;
+      value: Record<string, unknown>;
+    }
   | { hostId: string; type: "navigation-blocked"; reason: string }
   | { hostId: string; type: "crashed"; reason: string }
   | { hostId: string; type: "unresponsive" }

@@ -555,6 +555,31 @@ describe("BackendPush end to end", () => {
     await expect(
       push.setSubscriptions("o", { streamId: 1, setRevision: 1, subscriptions: [] }),
     ).rejects.toThrow("streamId");
+    await expect(
+      push.setSubscriptions("o", { streamId: "x", setRevision: 1, subscriptions: [], nodeId: 5 }),
+    ).rejects.toThrow("nodeId");
+    push.dispose();
+  });
+
+  test("a null nodeId is the backend's own set, as an absent one is", async () => {
+    // 2.39.9-beta published `nodeId` as `anyOf [string, null]`.
+    const push = new BackendPush({
+      sessionExists: async () => true,
+      nativeAgents: () => undefined,
+    });
+    const stream = push.openConnection("owner", { write: () => true, backpressured: () => false });
+    const absent = await push.setSubscriptions("owner", {
+      streamId: stream,
+      setRevision: 1,
+      subscriptions: [{ topic: "native-session", key: PUSH_KEY }],
+    });
+    const nulled = await push.setSubscriptions("owner", {
+      streamId: stream,
+      setRevision: 2,
+      subscriptions: [{ topic: "native-session", key: PUSH_KEY }],
+      nodeId: null,
+    });
+    expect(nulled).toEqual({ ...absent, setRevision: 2 } as typeof nulled);
     push.dispose();
   });
 });

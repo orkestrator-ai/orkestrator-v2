@@ -58,6 +58,12 @@ export const RESOURCE_KINDS = [
    */
   "permission-rule",
   /**
+   * A rich interaction request, receipt, draft or deliverable of an
+   * environment changed. The id is the environment id; clients re-read
+   * `rich_interactions_list` / `rich_deliverables_list`. A hint only.
+   */
+  "rich-interaction",
+  /**
    * A graph template changed (item 109): a user template was saved or
    * deleted (id `user:<id>`), or a project's templates, trust records or
    * capability ceiling changed (id `project:<projectId>`). Clients re-read

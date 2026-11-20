@@ -408,11 +408,19 @@ export const useArtifactLiveHostStore = create<ArtifactLiveHostState>((set, get)
     report: (hostId, patch) => {
       const active = get().active;
       if (!active || active.hostId !== hostId) return;
-      const { height, ...rest } = patch;
+      const { height, phase, ...rest } = patch;
+      const ended =
+        phase === "error" ||
+        phase === "crashed" ||
+        phase === "unresponsive" ||
+        phase === "navigation-blocked";
+      if (ended) releaseSession(active.session, active.target.nodeId);
       set({
         active: {
           ...active,
           ...rest,
+          ...(phase ? { phase } : {}),
+          ...(ended ? { session: null, linkRequest: null } : {}),
           ...(height !== undefined ? { frameHeight: clampArtifactFrameHeight(height) } : {}),
         },
       });

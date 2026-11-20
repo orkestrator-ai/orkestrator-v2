@@ -4,7 +4,7 @@ import { installControlledTimeout } from "../../../../../tests/helpers/controlle
 import { DndContext, KeyboardSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { SortableProjectFolder } from "./SortableProjectFolder";
 
 afterEach(cleanup);
@@ -173,3 +173,81 @@ test.each([false, true])(
     expect(frame.classList.contains("from-selected")).toBe(selected);
   },
 );
+
+function ToggleableHeading({
+  addAction,
+  onOpen,
+  repository,
+}: {
+  addAction?: { label: string; title: string; onAdd: () => void };
+  onOpen?: () => void;
+  repository: boolean;
+}) {
+  const [isCollapsed, setCollapsed] = useState(false);
+  return (
+    <DndContext>
+      <SortableProjectFolder
+        name={repository ? "github.com/acme/app" : "Work"}
+        label={repository ? "acme/app" : "Work"}
+        repository={repository}
+        onOpen={onOpen}
+        addAction={addAction}
+        projectCount={1}
+        isCollapsed={isCollapsed}
+        onToggleCollapse={() => setCollapsed((collapsed) => !collapsed)}
+      >
+        <span>Member</span>
+      </SortableProjectFolder>
+    </DndContext>
+  );
+}
+
+test("a repository heading with a + has a project chevron to its right that only toggles", () => {
+  const onOpen = mock(() => {});
+  const onAdd = mock(() => {});
+  renderInAppCommandScope(
+    <ToggleableHeading
+      repository
+      onOpen={onOpen}
+      addAction={{ label: "New environment in acme/app", title: "New environment", onAdd }}
+    />,
+  );
+  const add = screen.getByRole("button", { name: "New environment in acme/app" });
+  const chevron = screen.getByRole("button", { name: "Collapse project acme/app" });
+  expect(add.nextElementSibling).toBe(chevron);
+  expect(chevron.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("button", { name: "Open acme/app" }).hasAttribute("aria-expanded")).toBe(
+    false,
+  );
+
+  fireEvent.click(chevron);
+  expect(screen.queryByText("Member") === null).toBe(true);
+  expect(chevron.getAttribute("aria-expanded")).toBe("false");
+  expect(chevron.getAttribute("aria-label")).toBe("Expand project acme/app");
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(onAdd).not.toHaveBeenCalled();
+  fireEvent.click(chevron);
+  expect(screen.getByText("Member")).toBeTruthy();
+
+  fireEvent.click(add);
+  expect(onAdd).toHaveBeenCalledTimes(1);
+  expect(chevron.getAttribute("aria-expanded")).toBe("true");
+});
+
+test("a folder heading keeps its single folder chevron and no +", () => {
+  renderInAppCommandScope(<ToggleableHeading repository={false} />);
+  const buttons = screen.getAllByRole("button");
+  expect(buttons).toHaveLength(2);
+  expect(screen.queryByTestId("repository-new-environment") === null).toBe(true);
+  expect(screen.queryByTestId("repository-collapse-toggle") === null).toBe(true);
+  const chevron = screen.getByRole("button", { name: "Collapse folder Work" });
+  expect(chevron.hasAttribute("title")).toBe(false);
+  expect(chevron.parentElement!.lastElementChild).toBe(chevron);
+  // The folder's heading toggles too, and reports the same state.
+  const heading = screen.getByTitle("Collapse folder Work");
+  expect(heading.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(chevron);
+  expect(screen.queryByText("Member") === null).toBe(true);
+  expect(heading.getAttribute("aria-expanded")).toBe("false");
+  expect(chevron.getAttribute("aria-label")).toBe("Expand folder Work");
+});

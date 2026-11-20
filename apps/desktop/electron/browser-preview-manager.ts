@@ -1,3 +1,8 @@
+import type {
+  BrowserPreviewTraceResult,
+  BrowserPreviewTraceStatus,
+} from "@orkestrator/protocol/browser-preview";
+import { BrowserPreviewTraceSessions, type TraceWebContents } from "./browser-preview-trace.js";
 import { appShortcut, type AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
 import type {
   BrowserWindow,
@@ -59,6 +64,20 @@ import {
   type SessionCookieWriteResult,
 } from "./preview-session-import.js";
 import { createLogger } from "@orkestrator/protocol/logger";
+
+// A node preview runtime can be disposed when its last tab closes. Retained
+// traces belong to the window so later review can still resolve the closed tab.
+const retainedTracesByWindow = new WeakMap<BrowserWindow, Map<string, BrowserPreviewTraceResult>>();
+
+function retainedTraces(window: BrowserWindow | null) {
+  if (!window || window.isDestroyed()) return undefined;
+  let traces = retainedTracesByWindow.get(window);
+  if (!traces) {
+    traces = new Map();
+    retainedTracesByWindow.set(window, traces);
+  }
+  return traces;
+}
 
 const dialogLog = createLogger("desktop.dialog");
 
@@ -229,6 +248,18 @@ export class BrowserPreviewManager {
     previews: Map<string, ManagedPreview>;
   } | null = null;
   private readonly captures: BrowserPreviewCaptureSessions;
+  private readonly traces = new BrowserPreviewTraceSessions({
+    retained: () => retainedTraces(this.options.getWindow()),
+    preview: (tabId) => {
+      const preview = this.previews.get(tabId);
+      return preview
+        ? {
+            contents: preview.view.webContents as unknown as TraceWebContents,
+            generation: preview.documentGeneration,
+          }
+        : null;
+    },
+  });
   private readonly pins: BrowserPreviewPinSessions;
 
   constructor(private readonly options: BrowserPreviewManagerOptions) {
@@ -883,8 +914,29 @@ export class BrowserPreviewManager {
     );
   }
 
+  startTrace(tabId: string, label: string): Promise<BrowserPreviewTraceStatus> {
+    assertTabId(tabId);
+    return this.traces.start(tabId, label);
+  }
+
+  traceStatus(tabId: string): BrowserPreviewTraceStatus {
+    assertTabId(tabId);
+    return this.traces.status(tabId);
+  }
+
+  markTrace(tabId: string, observation: string): BrowserPreviewTraceStatus {
+    assertTabId(tabId);
+    return this.traces.mark(tabId, observation);
+  }
+
+  stopTrace(tabId: string, retain?: boolean): Promise<BrowserPreviewTraceResult> {
+    assertTabId(tabId);
+    return this.traces.stop(tabId, retain);
+  }
+
   destroy(tabId: string): void {
     assertTabId(tabId);
+    this.traces.previewClosed(tabId);
     // Cancel any attach still awaiting transport or a load for this tab.
     this.attachTokens.delete(tabId);
     this.pendingAttaches.delete(tabId);
@@ -898,6 +950,7 @@ export class BrowserPreviewManager {
     for (const tabId of tabIds) this.destroy(tabId);
     this.stopWaitingForWindowFocus();
     this.pins.dispose();
+    this.traces.dispose();
   }
 
   private removePreview(tabId: string): void {

@@ -119,6 +119,16 @@ export async function deleteEnvironment(
       if (cleanup) await environmentCleanupLedger(storage.getDataDir()).record(cleanup);
       // Agents lose tool access first: nothing an agent calls back into may act
       // on an environment that is being taken apart.
+      // Its rich interactions (requests, receipts, drafts, deliverable metadata) go with it.
+      try {
+        context.richInteractions?.environmentDeleted(environmentId);
+      } catch (error) {
+        environmentLog.warn("delete.step-failed", {
+          environmentId,
+          step: "rich-interactions",
+          error: formatLogError(error, { message: false }),
+        });
+      }
       context.agentTools?.revokeEnvironment(environmentId);
       // Credential grants end with the tool access that used them.
       revokeEnvironmentCredentials(context, environmentId);

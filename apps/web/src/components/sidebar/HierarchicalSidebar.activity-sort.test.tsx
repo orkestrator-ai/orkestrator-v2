@@ -134,12 +134,11 @@ test("sidebar menu orders cross-machine activity and preserves the order under a
     ).toEqual([...expected]);
   }
 
-  fireEvent.pointerDown(screen.getByTestId("machines-filter"));
-  const machineA = await screen.findByRole("menuitemcheckbox", { name: /^Machine A,/ });
+  // The machine tiles filter the list.
+  const machineA = await waitFor(() =>
+    screen.getAllByTestId("machine-tile").find((entry) => entry.title.startsWith("Machine A ·"))!,
+  );
   fireEvent.click(machineA);
-  // The menu stays open so several machines can be picked; close it.
-  fireEvent.keyDown(machineA, { key: "Escape" });
-  await waitFor(() => expect(screen.queryByRole("menu") === null).toBe(true));
   await waitFor(() => expect(displayedNames()).toEqual(["c", "a"]));
   await chooseOrder("Newest first");
   await waitFor(() => expect(displayedNames()).toEqual(["a", "c"]));

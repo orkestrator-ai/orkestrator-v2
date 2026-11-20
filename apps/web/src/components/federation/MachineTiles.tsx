@@ -27,15 +27,15 @@ import { cn } from "@/lib/utils";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { machineStatusText } from "./MachineDot";
-import { useMachineCpu, useMachineScopeLookup } from "./MachineCpuReadings";
+import { useMachineCpu, useMachineScopeLookup } from "./useMachineCpu";
 
 const TILE_DRAG_PREFIX = "machine-tile:";
 
 /**
- * One rounded square per machine, in machine order, between the search bar
- * and the list (design EL01): the machine's colour with its initials over a
- * darker shade with its CPU. The tiles are the machine filter's other face
- * (`machineFilter`, which the machines menu also sets): with every machine
+ * One rounded square per machine, in machine order, between the sidebar
+ * header and the list (design EL01): the machine's colour with its initials
+ * over a darker shade with its CPU. The tiles are the machine filter
+ * (`machineFilter`): with every machine
  * shown a click shows only that machine, after that a click adds or removes
  * one, and removing the last one shows them all again. Dragging a tile
  * reorders the machines (`PortalLayout.machineOrder`); a press that moves

@@ -33,9 +33,11 @@ import {
 } from "@/components/files-panel/change-projection-test-fixture";
 import {
   mockToastError,
+  mockToastInfo,
   mockToastSuccess,
   mockToastWarning,
 } from "../../../../../tests/mocks/sonner";
+import { GLOBAL_SETTINGS_REQUEST_EVENT } from "@/lib/settings-navigation";
 import { FederatedActivityList } from "./FederatedSidebarSections";
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { environmentStore } from "@/stores/environmentStore";
@@ -51,7 +53,7 @@ import {
   renderWithFederation,
 } from "./federation-ui-test-fixture";
 import { MachineBadge, MachineDot } from "./MachineDot";
-import { MachinesFilter } from "./MachinesFilter";
+import { CommandNodeSwitcher } from "./CommandNodeMenu";
 import { SshPromptDialog } from "./SshPromptDialog";
 import { useMachineViews } from "./useMachineViews";
 import { appCommandStore } from "@/test/app-command-store";
@@ -114,14 +116,27 @@ function MachineOrder() {
   );
 }
 
-function FilterOnly() {
-  const machines = useMachineViews();
+function SwitcherOnly() {
   return (
     <>
-      <MachinesFilter machines={machines} />
+      <CommandNodeSwitcher />
       <CommandHandoverDialog />
     </>
   );
+}
+
+/** Opens the title bar's command-node switcher and returns its menu. */
+async function openSwitcher(): Promise<HTMLElement> {
+  const trigger = await screen.findByTestId("command-node-switcher");
+  await act(async () => {
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+  });
+  return screen.findByTestId("command-node-menu");
+}
+
+/** The switcher's row for `name`, once the targets have loaded. */
+async function switchTarget(menu: HTMLElement, name: RegExp): Promise<HTMLElement> {
+  return waitFor(() => within(menu).getByRole("menuitemradio", { name }));
 }
 
 async function waitForRows(count: number) {
@@ -998,67 +1013,104 @@ describe("another machine's menus offer what this machine's do", () => {
   });
 });
 
-describe("Machine filter is presentation only", () => {
-  test("filter: choosing a machine updates the store without reloading, switching or routing anything", async () => {
-    const fake = installTwoMachines();
-    const reload = mock(() => undefined);
-    window.location.reload = reload;
-    renderWithFederation(<FilterOnly />);
-    await waitFor(() =>
-      expect(screen.getByTestId("machines-connectivity").textContent).toBe("3/3"),
-    );
-
-    await act(async () => {
-      fireEvent.pointerDown(screen.getByTestId("machines-filter"), {
-        button: 0,
-        ctrlKey: false,
-      });
-    });
-    fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: /^Machine B, / }));
-
-    await waitFor(() => expect(useMachineViewStore.getState().machineFilter).toEqual(["bk_b"]));
-    expect(screen.getByTestId("machines-filter").getAttribute("aria-label")).toMatch(
-      /^Machines: Machine B, 1 of 3 shown\./,
-    );
-    expect(reload).not.toHaveBeenCalled();
-    expect(fake.connections.use).not.toHaveBeenCalled();
-    // Nothing was routed to any node.
-    expect(fake.calls).toEqual([]);
+describe("The title bar's command-node switcher", () => {
+  test("names the command node with its dot and the command-node icon", async () => {
+    installTwoMachines();
+    renderWithFederation(<SwitcherOnly />);
+    const trigger = await screen.findByTestId("command-node-switcher");
+    const name = within(trigger).getByTestId("command-node-name").textContent!;
+    expect(name.length).toBeGreaterThan(0);
+    expect(trigger.getAttribute("aria-label")).toBe(`Command node: ${name}. Switch command node`);
+    expect(within(trigger).getByTestId("machine-color-dot")).toBeTruthy();
+    expect(within(trigger).getByTestId("command-node-icon")).toBeTruthy();
+    expect(within(trigger).queryByTestId("leaf-node-icon") === null).toBe(true);
   });
-});
 
-describe("The command node in the machines menu", () => {
-  test("names the command node below the filters and makes another machine the command node through its switch", async () => {
+  test("lists every machine to connect to, the command node selected, then Manage machines…", async () => {
+    installTwoMachines();
+    renderWithFederation(<SwitcherOnly />);
+    const menu = await openSwitcher();
+    const local = await switchTarget(menu, /^Local, command node, connected/);
+    const a = within(menu).getByRole("menuitemradio", { name: /^Machine A, leaf/ });
+    const b = within(menu).getByRole("menuitemradio", { name: /^Machine B, leaf/ });
+    expect(local.getAttribute("aria-checked")).toBe("true");
+    expect(a.getAttribute("aria-checked")).toBe("false");
+    expect(b.getAttribute("aria-checked")).toBe("false");
+    // The command node has the command-node icon, every other machine a leaf.
+    expect(within(local).getByTestId("command-node-icon")).toBeTruthy();
+    expect(within(local).queryByTestId("leaf-node-icon") === null).toBe(true);
+    for (const row of [a, b]) {
+      expect(within(row).getByTestId("leaf-node-icon")).toBeTruthy();
+      expect(within(row).queryByTestId("command-node-icon") === null).toBe(true);
+    }
+    // Each in its machine's colour.
+    const colour = (row: HTMLElement) =>
+      within(row).getByTestId("machine-color-dot").getAttribute("data-machine-color");
+    expect(colour(a)).toBe("teal");
+    expect(colour(b)).toBe("rose");
+    // A direct choice, not a filter: no checkboxes.
+    expect(within(menu).queryAllByRole("menuitemcheckbox")).toHaveLength(0);
+    const items = [...menu.querySelectorAll("[role^='menuitem']")];
+    expect(items).toHaveLength(4);
+    expect(items.at(-1)!.textContent).toContain("Manage machines…");
+  });
+
+  test("Manage machines… opens Machines settings", async () => {
+    installTwoMachines();
+    const requests: unknown[] = [];
+    const listener = (event: Event) => requests.push((event as CustomEvent).detail);
+    window.addEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, listener);
+    try {
+      renderWithFederation(<SwitcherOnly />);
+      const menu = await openSwitcher();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: /Manage machines/ }));
+      expect(requests).toEqual(["machines"]);
+    } finally {
+      window.removeEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, listener);
+    }
+  });
+
+  test("choosing the command node it is already connected to changes nothing", async () => {
     const fake = installTwoMachines();
-    renderWithFederation(<FilterOnly />);
-    await waitFor(() =>
-      expect(screen.getByTestId("machines-connectivity").textContent).toBe("3/3"),
-    );
+    renderWithFederation(<SwitcherOnly />);
+    const menu = await openSwitcher();
+    fireEvent.click(await switchTarget(menu, /^Local, command node/));
+    expect(screen.queryByTestId("command-handover-dialog") === null).toBe(true);
+    expect(fake.connections.previewCommandHandover).not.toHaveBeenCalled();
+    expect(fake.connections.use).not.toHaveBeenCalled();
+  });
 
-    await act(async () => {
-      fireEvent.pointerDown(screen.getByTestId("machines-filter"), {
-        button: 0,
-        ctrlKey: false,
+  test("a machine whose token is not saved sends the user to Machines settings first", async () => {
+    const fake = installDesktopFake({
+      list: connectionList([
+        MACHINE_A,
+        remoteConnection("b", "Machine B", "rose", { requiresToken: true }),
+      ]),
+      datasets: { a: sharedIdDataset("working"), b: sharedIdDataset("waiting") },
+    });
+    const requests: unknown[] = [];
+    const listener = (event: Event) => requests.push((event as CustomEvent).detail);
+    window.addEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, listener);
+    try {
+      renderWithFederation(<SwitcherOnly />);
+      const menu = await openSwitcher();
+      fireEvent.click(await switchTarget(menu, /^Machine B, leaf, token required/));
+      expect(requests).toEqual(["machines"]);
+      expect(mockToastInfo).toHaveBeenCalledWith("Enter Machine B's token first", {
+        description: "Its token is not saved on this device.",
       });
-    });
-    const row = await screen.findByTestId("command-node-row");
-    expect(screen.getByTestId("command-node-switch")).toBeTruthy();
-    // A "Command node" heading, then the machine, above "Manage machines…".
-    const heading = screen.getByText("Command node", { exact: true });
-    const manage = screen.getByRole("menuitem", { name: /Manage machines/ });
-    expect(heading.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(row.compareDocumentPosition(manage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.queryByTestId("command-handover-dialog") === null).toBe(true);
+      expect(fake.connections.previewCommandHandover).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, listener);
+    }
+  });
 
-    await act(async () => {
-      fireEvent.keyDown(row, { key: "ArrowRight" });
-    });
-    const switcher = await screen.findByTestId("command-node-switcher");
-    expect(
-      within(switcher).getByRole("menuitem", {
-        name: /^Local, current command node/,
-      }),
-    ).toBeTruthy();
-    fireEvent.click(within(switcher).getByRole("menuitem", { name: /^Machine B/ }));
+  test("choosing another machine makes it the command node through the handover", async () => {
+    const fake = installTwoMachines();
+    renderWithFederation(<SwitcherOnly />);
+    const menu = await openSwitcher();
+    fireEvent.click(await switchTarget(menu, /^Machine B/));
 
     // Machine B does not control Machine A yet: the user chooses what goes with it.
     const dialog = await screen.findByTestId("command-handover-dialog");
@@ -1091,26 +1143,13 @@ describe("The command node in a browser tab", () => {
     const originalAssign = window.location.assign;
     window.location.assign = assign;
     try {
-      renderWithFederation(<FilterOnly />);
-      await waitFor(() =>
-        expect(screen.getByTestId("machines-connectivity").textContent).toBe("3/3"),
-      );
-      await act(async () => {
-        fireEvent.pointerDown(screen.getByTestId("machines-filter"), {
-          button: 0,
-          ctrlKey: false,
-        });
-      });
-      const row = await screen.findByTestId("command-node-row");
-      expect(screen.getByTestId("command-node-switch")).toBeTruthy();
-      await act(async () => {
-        fireEvent.keyDown(row, { key: "ArrowRight" });
-      });
-      const switcher = await screen.findByTestId("command-node-switcher");
-      await waitFor(() =>
-        expect(within(switcher).getByRole("menuitem", { name: /^Machine B/ })).toBeTruthy(),
-      );
-      fireEvent.click(within(switcher).getByRole("menuitem", { name: /^Machine B/ }));
+      renderWithFederation(<SwitcherOnly />);
+      const menu = await openSwitcher();
+      const current = await switchTarget(menu, /, command node, connected/);
+      expect(within(current).getByTestId("command-node-icon")).toBeTruthy();
+      const b = await switchTarget(menu, /^Machine B, leaf/);
+      expect(within(b).getByTestId("leaf-node-icon")).toBeTruthy();
+      fireEvent.click(b);
       const dialog = await screen.findByTestId("command-handover-dialog");
       fireEvent.click(within(dialog).getByRole("button", { name: /Make command node/ }));
       await waitFor(() => expect(assign).toHaveBeenCalledWith(MACHINE_B.address!));
@@ -1327,22 +1366,9 @@ describe("command handover dialog edge cases", () => {
     delete api.handOverCommand;
     window.__orkestratorClientPlatform = "ios-wkwebview";
     try {
-      renderWithFederation(<FilterOnly />);
-      await waitFor(() =>
-        expect(screen.getByTestId("machines-connectivity").textContent).toBe("3/3"),
-      );
-      await act(async () => {
-        fireEvent.pointerDown(screen.getByTestId("machines-filter"), {
-          button: 0,
-          ctrlKey: false,
-        });
-      });
-      const row = await screen.findByTestId("command-node-row");
-      await act(async () => {
-        fireEvent.keyDown(row, { key: "ArrowRight" });
-      });
-      const switcher = await screen.findByTestId("command-node-switcher");
-      fireEvent.click(within(switcher).getByRole("menuitem", { name: /^Machine B/ }));
+      renderWithFederation(<SwitcherOnly />);
+      const menu = await openSwitcher();
+      fireEvent.click(await switchTarget(menu, /^Machine B/));
       await waitFor(() => expect(fake.connections.use).toHaveBeenCalledWith(MACHINE_B.id));
       expect(reload).not.toHaveBeenCalled();
       expect(mockToastError).not.toHaveBeenCalled();

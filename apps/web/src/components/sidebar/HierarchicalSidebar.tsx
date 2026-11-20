@@ -83,10 +83,8 @@ import {
   expandMachineProject,
   useRevealMachineProject,
 } from "@/components/federation/useRevealMachineProject";
-import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useProjectCopyStore } from "@/stores/projectCopyStore";
-import { MachinesFilter } from "@/components/federation/MachinesFilter";
 import { MachineDot, MachineHomeIcon, ProjectIconImage } from "@/components/federation/MachineDot";
 import { FederatedActivityList } from "@/components/federation/FederatedSidebarSections";
 import {
@@ -1284,12 +1282,31 @@ export function HierarchicalSidebar() {
         data-sidebar-header
         className={cn(
           "flex h-12 items-center border-b border-border/80 bg-chrome",
-          compactActive ? "justify-center" : "justify-between pl-3 pr-2",
+          compactActive ? "justify-center" : "justify-between gap-1.5 px-2",
         )}
       >
         {compactActive ? (
           sortMenu
-        ) : isMultiSelectMode ? (
+        ) : (
+          // The search stays mounted while several environments are selected,
+          // hidden behind the selection's count, so ⌘K and an open search
+          // survive it.
+          <div
+            className={cn("flex min-w-0 flex-1", isMultiSelectMode && "hidden")}
+            data-testid="sidebar-header-search"
+          >
+            <ProjectSearchBar
+              projects={projects}
+              environments={sidebarEnvironments}
+              allEnvironments={allEnvironments}
+              onSelectProject={handleSearchSelectProject}
+              onSelectEnvironment={handleSearchSelectEnvironment}
+              onSelectMachineProject={revealMachineProject}
+              commandHandlers={paletteHandlers}
+            />
+          </div>
+        )}
+        {compactActive ? null : isMultiSelectMode ? (
           <>
             <span className="text-sm font-medium text-foreground">
               {selection.selected.length} selected
@@ -1329,12 +1346,7 @@ export function HierarchicalSidebar() {
           </>
         ) : (
           <>
-            {federation.enabled ? (
-              <MachinesFilter machines={machineViews} />
-            ) : (
-              <ServerConnectionSwitcher />
-            )}
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               {sortMenu}
               <Button
                 variant="ghost"
@@ -1400,18 +1412,6 @@ export function HierarchicalSidebar() {
           </>
         )}
       </div>
-
-      {compactActive ? null : (
-        <ProjectSearchBar
-          projects={projects}
-          environments={sidebarEnvironments}
-          allEnvironments={allEnvironments}
-          onSelectProject={handleSearchSelectProject}
-          onSelectEnvironment={handleSearchSelectEnvironment}
-          onSelectMachineProject={revealMachineProject}
-          commandHandlers={paletteHandlers}
-        />
-      )}
 
       {compactActive ? null : <MachineTiles machines={machineViews} />}
 

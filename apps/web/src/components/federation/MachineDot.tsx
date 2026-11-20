@@ -1,5 +1,5 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { House } from "lucide-react";
+import { House, Leaf } from "lucide-react";
 import { normalizeProjectIcon } from "@orkestrator/protocol/project-icon";
 import {
   machineColorLabel,
@@ -199,6 +199,28 @@ export function CommandNodeHomeIcon({
         <House className={cn("h-4 w-4", machineTextClass(colorToken))} />
       )}
     </span>
+  );
+}
+
+/**
+ * A machine's role beside its name: a home for the command node this client
+ * is connected to (the same home `CommandNodeHomeIcon` draws), a leaf for
+ * every other machine. Decorative: the surrounding label names the role.
+ */
+export function MachineRoleIcon({
+  role,
+  className,
+}: {
+  role: "command" | "leaf";
+  className?: string;
+}) {
+  const Icon = role === "command" ? House : Leaf;
+  return (
+    <Icon
+      aria-hidden="true"
+      data-testid={role === "command" ? "command-node-icon" : "leaf-node-icon"}
+      className={cn("size-3.5 shrink-0 text-muted-foreground", className)}
+    />
   );
 }
 

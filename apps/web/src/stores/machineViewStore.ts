@@ -38,8 +38,8 @@ export interface MachineCollapseState {
 interface MachineViewState {
   /**
    * The machines shown, by identity; empty shows every machine. Filters
-   * presentation, never connections. The machine tiles and the machines menu
-   * both set it (`toggleMachineFilter`, `setMachineShownInFilter`).
+   * presentation, never connections. The machine tiles set it
+   * (`toggleMachineFilter`); revealing a project on a hidden machine clears it.
    */
   machineFilter: string[];
   /** The full repository list, or compact. */

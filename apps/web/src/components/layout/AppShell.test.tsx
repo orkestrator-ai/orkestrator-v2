@@ -858,9 +858,15 @@ describe("AppShell", () => {
     expect(separator.className).toContain("mx-2");
     expect(separator.className).toContain("bg-border/50");
     const slotChildren = Array.from(slot.children);
-    expect(slotChildren[0]).toBe(meters);
-    expect(slotChildren[1]).toBe(separator);
-    expect(slotChildren[2]?.contains(screen.getByTestId("agent-info-button"))).toBe(true);
+    // The connected machine's switcher comes first, left of the meters. With
+    // neither federation nor saved connections it is empty, and hidden.
+    const connection = screen.getByTestId("title-bar-connection");
+    expect(slotChildren[0]).toBe(connection);
+    expect(connection.childElementCount).toBe(0);
+    expect(connection.className).toContain("empty:hidden");
+    expect(slotChildren[1]).toBe(meters);
+    expect(slotChildren[2]).toBe(separator);
+    expect(slotChildren[3]?.contains(screen.getByTestId("agent-info-button"))).toBe(true);
 
     cleanup();
     isMobile = true;

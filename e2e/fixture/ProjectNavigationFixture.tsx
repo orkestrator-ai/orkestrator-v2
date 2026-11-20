@@ -187,13 +187,17 @@ export function ProjectNavigationFixture() {
         ) : (
           <div className="flex h-screen bg-background text-foreground">
             <aside className="flex w-32 shrink-0 flex-col border-r border-border/80 md:w-72">
-              <div className="h-14 shrink-0 border-b border-border/80 md:h-12" />
-              <ProjectSearchBar
-                projects={[project]}
-                environments={[]}
-                onSelectProject={() => undefined}
-                onSelectEnvironment={() => undefined}
-              />
+              <div
+                data-testid="project-navigation-sidebar-header"
+                className="flex h-14 shrink-0 items-center border-b border-border/80 px-2 md:h-12"
+              >
+                <ProjectSearchBar
+                  projects={[project]}
+                  environments={[]}
+                  onSelectProject={() => undefined}
+                  onSelectEnvironment={() => undefined}
+                />
+              </div>
             </aside>
             <main className="flex min-w-0 flex-1 flex-col">
               <ActionBar presentation={grid ? "grid" : "bar"} />

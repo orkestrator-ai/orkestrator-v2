@@ -35,7 +35,7 @@ function finish(target: HandoverTarget): void {
 }
 
 /**
- * Making another machine the command node, from the machines menu or
+ * Making another machine the command node, from the title bar's switcher or
  * Settings → Machines. When the new command node lacks machines the current
  * one has, the user chooses which go with it (all by default); otherwise it
  * happens at once. The window then follows the new command node.

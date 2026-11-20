@@ -23,7 +23,6 @@ import {
   useEnvironmentIdNameSignal,
   useShimmerRequiresChecks,
 } from "@/hooks/useEnvironmentNameSignal";
-import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import { useConfigStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
@@ -892,23 +891,16 @@ export function ProjectSearchBar({
   );
 
   return (
-    <div
-      data-testid="project-search-bar"
-      className={cn(
-        "flex shrink-0 items-center border-b border-border/80 bg-chrome px-2",
-        WORKSPACE_BAR_HEIGHT_CLASS,
-      )}
-    >
+    // Sits in the sidebar header's row, beside its sort, refresh and add
+    // buttons, taking the width they leave.
+    <div data-testid="project-search-bar" className="flex min-w-0 flex-1 items-center">
       <button
         type="button"
         data-testid="project-search-trigger"
         aria-label="Search projects and environments"
         aria-keyshortcuts="Meta+K Control+K"
         onClick={openSearch}
-        // Borderless, so the padding is purely optical: it puts the icon's ink
-        // under the header's "Projects" title (pl-3) and the badge's right edge
-        // under the ink of the header's 28px "+" button (pr-2).
-        className="flex h-8 w-full items-center gap-2 rounded-lg bg-input-surface pl-[3px] pr-[9px] text-left text-sm text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground md:h-7"
+        className="flex h-8 w-full min-w-0 items-center gap-2 rounded-lg bg-input-surface px-2 text-left text-sm text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground md:h-7"
       >
         <Search className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span className="min-w-0 truncate">Search projects, environments...</span>

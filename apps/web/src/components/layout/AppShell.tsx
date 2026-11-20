@@ -26,12 +26,12 @@ import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
 import { useRemoteMachineView } from "@/components/federation/useMachineViews";
 import { AgentInfoButton } from "./AgentInfoButton";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
+import { TitleBarConnectionSwitcher } from "./TitleBarConnectionSwitcher";
 import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
 import { GlobalSettingsHost } from "./GlobalSettingsHost";
 import { BugReportSheetHost } from "@/components/bug-report/BugReportSheet";
 import { DebugBuildDialogHost } from "@/components/debug-build/DebugBuildDialog";
-import { MachineCpuReadings } from "@/components/federation/MachineCpuReadings";
 import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
 import { NodeTitleBarAgentInfo, NodeTitleBarUsage, useShownInTreeNode } from "./ShownNodeTitleBar";
 import {
@@ -214,6 +214,7 @@ export function AppShell({ children }: AppShellProps) {
           actionBar={<ActionBar presentation="grid" />}
           agentInfoButton={
             <div className="flex items-center gap-1">
+              <TitleBarConnectionSwitcher compact />
               {shownInTree ? (
                 <NodeTitleBarAgentInfo scope={shownInTree.scope} mobile />
               ) : (
@@ -272,7 +273,7 @@ export function AppShell({ children }: AppShellProps) {
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               onMouseDown={(event) => event.stopPropagation()}
             >
-              <MachineCpuReadings />
+              <TitleBarConnectionSwitcher />
               {/*
                 Another node's workspace reports its agent and machine, so
                 they show here as this node's do.

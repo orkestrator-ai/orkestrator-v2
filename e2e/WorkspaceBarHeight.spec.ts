@@ -1,73 +1,72 @@
 import { expect, test } from "@playwright/test";
 
-test("project search row matches the pane tab strip height", async ({ page }, testInfo) => {
+test("project search sits in the sidebar header row, level with the action bar", async ({
+  page,
+}, testInfo) => {
   await page.goto("/workspace-bar-height");
 
-  const searchRow = page.getByTestId("project-search-bar");
-  const tabStrip = page.getByTestId("workspace-tab-strip");
+  const header = page.getByTestId("workspace-sidebar-header");
+  const search = page.getByTestId("project-search-bar");
   const trigger = page.getByTestId("project-search-trigger");
-
-  await expect(searchRow).toBeVisible();
-  await expect(tabStrip).toBeVisible();
+  await expect(header).toBeVisible();
   await expect(trigger).toBeVisible();
+  // No search row of its own: the search is inside the header.
+  expect(
+    await header.evaluate((element) =>
+      element.contains(document.querySelector("[data-testid='project-search-bar']")),
+    ),
+  ).toBe(true);
+  await expect(search).toBeVisible();
 
   const geometry = await page.evaluate(() => {
-    const search = document.querySelector("[data-testid='project-search-bar']");
-    const strip = document.querySelector("[data-testid='workspace-tab-strip']");
-    const trigger = document.querySelector("[data-testid='project-search-trigger']");
-    if (!(search instanceof HTMLElement) || !(strip instanceof HTMLElement)) {
-      throw new Error("Expected rendered workspace chrome rows");
-    }
-    if (!(trigger instanceof HTMLElement)) {
-      throw new Error("Expected rendered project search trigger");
-    }
-
-    const searchBox = search.getBoundingClientRect();
-    const stripBox = strip.getBoundingClientRect();
-    const triggerBox = trigger.getBoundingClientRect();
+    const box = (id: string) => {
+      const element = document.querySelector(`[data-testid='${id}']`);
+      if (!(element instanceof HTMLElement)) throw new Error(`Expected ${id}`);
+      return element.getBoundingClientRect();
+    };
+    const header = box("workspace-sidebar-header");
+    const actions = box("workspace-action-bar");
+    const trigger = box("project-search-trigger");
     return {
-      searchHeight: searchBox.height,
-      stripHeight: stripBox.height,
-      searchTop: searchBox.top,
-      stripTop: stripBox.top,
-      triggerHeight: triggerBox.height,
-      triggerOverflow: Math.max(
-        0,
-        searchBox.top - triggerBox.top,
-        triggerBox.bottom - searchBox.bottom,
-      ),
+      headerHeight: header.height,
+      headerTop: header.top,
+      actionsHeight: actions.height,
+      actionsTop: actions.top,
+      triggerHeight: trigger.height,
+      triggerOverflow: Math.max(0, header.top - trigger.top, trigger.bottom - header.bottom),
+      triggerWidth: trigger.width,
     };
   });
 
-  const expectedHeight = testInfo.project.name === "desktop-chromium" ? 32 : 40;
-  expect(geometry.searchHeight).toBe(expectedHeight);
-  expect(geometry.stripHeight).toBe(expectedHeight);
-  expect(geometry.searchHeight).toBe(geometry.stripHeight);
+  expect(geometry.headerHeight).toBe(48);
   expect(geometry.triggerOverflow).toBe(0);
-  expect(geometry.triggerHeight).toBeLessThan(geometry.searchHeight);
-
+  expect(geometry.triggerHeight).toBeLessThan(geometry.headerHeight);
+  // It takes the width the header's buttons leave.
+  expect(geometry.triggerWidth).toBeGreaterThan(200);
   if (testInfo.project.name === "desktop-chromium") {
-    expect(geometry.searchTop).toBe(geometry.stripTop);
+    expect(geometry.headerTop).toBe(geometry.actionsTop);
+    expect(geometry.headerHeight).toBe(geometry.actionsHeight);
   }
 });
 
-test("project navigation matches the search row and contains the Notes tab", async ({
+test("project navigation sits below the sidebar header and contains the Notes tab", async ({
   page,
 }, testInfo) => {
   await page.goto("/project-navigation");
   const row = page.getByTestId("project-navigation-bar");
-  const search = page.getByTestId("project-search-bar");
+  const sidebarHeader = page.getByTestId("project-navigation-sidebar-header");
   const notes = row.getByRole("tab", { name: "Notes", exact: true });
   await expect(row).toBeVisible();
   // The tab row scrolls horizontally when the window is too narrow for it.
   await notes.scrollIntoViewIfNeeded();
   await expect(notes).toBeVisible();
   const rowBox = (await row.boundingBox())!;
-  const searchBox = (await search.boundingBox())!;
+  const headerBox = (await sidebarHeader.boundingBox())!;
   const notesBox = (await notes.boundingBox())!;
   expect(rowBox.height).toBe(testInfo.project.name === "desktop-chromium" ? 32 : 40);
-  expect(rowBox.height).toBe(searchBox.height);
-  expect(rowBox.y).toBe(searchBox.y);
+  // The search is in the sidebar header's row, so the navigation row starts
+  // where that row ends.
+  expect(rowBox.y).toBe(headerBox.y + headerBox.height);
   expect(notesBox.y).toBeGreaterThanOrEqual(rowBox.y);
   expect(notesBox.y + notesBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
   expect(notesBox.x + notesBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);

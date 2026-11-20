@@ -16,7 +16,6 @@ import {
   type RepositoryEnvironmentOrderUpdate,
 } from "@orkestrator/protocol/portal-layout";
 import { FederationProvider, useFederation } from "@/components/federation/FederationProvider";
-import { MachinesFilter } from "@/components/federation/MachinesFilter";
 import { MachineTiles } from "@/components/federation/MachineTiles";
 import { RepositoryEnvironmentList } from "@/components/federation/RepositoryEnvironmentList";
 import { useRemoteMachineViews } from "@/components/federation/useMachineViews";
@@ -405,14 +404,16 @@ function SidebarColumn() {
       data-testid="fixture-sidebar"
       className="flex h-full w-[340px] max-w-full flex-col bg-sidebar text-foreground shadow-[1px_0_0_var(--color-border)]"
     >
-      <MachinesFilter machines={machines} />
-      <ProjectSearchBar
-        projects={[]}
-        environments={[]}
-        onSelectProject={() => {}}
-        onSelectEnvironment={() => {}}
-        onSelectMachineProject={reveal}
-      />
+      {/* The sidebar header's row: the search, where the sidebar puts it. */}
+      <div className="flex h-12 shrink-0 items-center border-b border-border/80 bg-chrome px-2">
+        <ProjectSearchBar
+          projects={[]}
+          environments={[]}
+          onSelectProject={() => {}}
+          onSelectEnvironment={() => {}}
+          onSelectMachineProject={reveal}
+        />
+      </div>
       <MachineTiles machines={machines} />
       <div data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto">
         <RepositoryEnvironmentList

@@ -29,33 +29,3 @@ test("a whole-run stop requires confirmation and unavailable evidence keeps acce
   await expect(workflow.getByTestId("workflow-intent")).toContainText('"confirmWholeRun":true');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
-
-test("releasing the captured pointer outside the talk button stops speech", async ({ page }) => {
-  await page.addInitScript(() => {
-    class SpeechFixture {
-      onend?: () => void;
-      start() {}
-      stop() {
-        this.onend?.();
-      }
-      abort() {
-        this.onend?.();
-      }
-    }
-    Object.defineProperty(window, "SpeechRecognition", {
-      configurable: true,
-      value: SpeechFixture,
-    });
-  });
-  await page.goto("/rich-interaction-speech");
-  const talk = page.getByRole("button", { name: "Hold to talk" });
-  const box = await talk.boundingBox();
-  if (!box) throw new Error("Missing talk button");
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await expect(page.getByRole("img", { name: "Microphone is recording" })).toBeVisible();
-  await page.mouse.move(box.x + box.width + 10, box.y + box.height + 10);
-  await page.mouse.up();
-  await expect(page.getByRole("img", { name: "Microphone is recording" })).toHaveCount(0);
-  await expect(talk).toHaveAttribute("aria-pressed", "false");
-});

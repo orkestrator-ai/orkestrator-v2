@@ -89,6 +89,42 @@ import {
 await installAgentNativeTabFixture();
 
 describe("AgentNativeTab", () => {
+  test("the composer opens deliverables and demonstrations without the retired tools", async () => {
+    const listInteractions = spyOn(realBackend, "listRichInteractions").mockResolvedValue([]);
+    const listDeliverables = spyOn(realBackend, "listRichDeliverables").mockResolvedValue([]);
+    const listPublications = spyOn(
+      realBackend,
+      "listTranscriptArtifactPublications",
+    ).mockResolvedValue({ publications: [], nextSequence: null });
+    try {
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="session-tools-tab" data={identity("codex")} isActive />,
+      );
+      const composer = within(await screen.findByTestId("shared-native-compose-bar"));
+      const deliverablesButton = await composer.findByRole("button", {
+        name: "Session deliverables",
+      });
+      expect(composer.queryByRole("button", { name: /context tray/i }) === null).toBe(true);
+      expect(composer.queryByRole("button", { name: /point and talk/i }) === null).toBe(true);
+
+      fireEvent.click(deliverablesButton);
+      const deliverables = await screen.findByRole("dialog", { name: "Session deliverables" });
+      await within(deliverables).findByText("No published outputs in this conversation yet.");
+      fireEvent.click(within(deliverables).getByRole("button", { name: "Close" }));
+      await waitFor(() => expect(deliverables.isConnected).toBe(false));
+
+      fireEvent.click(composer.getByRole("button", { name: "Record a demonstration" }));
+      const demonstration = await screen.findByRole("dialog", { name: "Record a demonstration" });
+      expect(
+        within(demonstration).getByText(/needs the desktop app's preview runtime/),
+      ).toBeTruthy();
+    } finally {
+      listInteractions.mockRestore();
+      listDeliverables.mockRestore();
+      listPublications.mockRestore();
+    }
+  });
+
   for (const platform of [undefined, "codex"] as const) {
     for (const modifier of ["metaKey", "ctrlKey"] as const) {
       test(`${platform ?? "unassigned"} tab owns ${modifier}+I only while focused`, async () => {

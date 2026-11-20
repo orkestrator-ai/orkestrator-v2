@@ -5,8 +5,10 @@ decision (choose a design, edit a plan, select rows, review code, accept a
 result, retry a stage), the person explores it locally and submits an explicit
 decision, and Orkestrator delivers that decision to the session or operation
 that owns it, once, with a visible receipt. The person can also compose
-requests of their own: comment threads on exact content, a context tray, a
-spoken request pointing at a target, and a recorded demonstration.
+requests of their own: comment threads on exact content and a recorded
+demonstration. The context tray (feature 15) and point and talk (feature 19)
+were removed from the composer on 2026-11-20; their kinds stay in the contract
+so requests already in transcripts still render and read back.
 
 This document is the living reference for the implementation of the
 "Interactive agent sessions" plan (all twenty features). Status of each
@@ -190,21 +192,24 @@ not inside the artifact's verified source.
 | 3 | Editable plans | Stable-id change sets, dependency checks, comments, constraints, criteria, user revisions | Drag-and-drop ordering (buttons only) |
 | 4 | Selectable tables | Typed columns, sort/filter, stable-id selection, hidden-selection count, partial collections, proposed edits | Server-held selection references for >2,000 rows |
 | 5 | Inline code review | File/hunk/line anchors on either side, keep/revise/explain, trimmed-hunk refusal | Reattaching comments after the file changes |
-| 6 | Persistent comments | Anchored threads (whole, quote, image region in the tray), save/discuss/request-change, agent append-only replies, resolve/reopen | Browser web-annotation threads stay in their own service (not unified) |
+| 6 | Persistent comments | Anchored threads (whole, quote), save/discuss/request-change, agent append-only replies, resolve/reopen | Browser web-annotation threads stay in their own service (not unified) |
 | 7 | Result review | Before/after comparisons, provenance labels, per-criterion acceptance bound to result revision; acceptance recorded on deliverables | No automatic image diff in this card |
 | 8 | Document canvas | Side sheet, block edits with hash checks, preserved blocks, Markdown export, ask-revise | No live multi-cursor collaboration (out of scope by the plan) |
 | 9 | Test/build cards | Baseline, counts, filters, excerpts, evidence, explain/fix | Exact rerun has no registered runner |
 | 10 | Chart selection | Existing chart viewer plus semantic table/range selection by stable ids | No drag brushing on the SVG |
 | 11 | Diagram actions | Read-only Mermaid render plus accessible manifest selection | No click-to-select on the SVG itself |
 | 12 | Widget results | Versioned candidate message through all hosts, host-owned review and submit | Declaration on the interaction, not in the artifact source hash |
-| 13 | Deliverables panel | Ledger-backed list, versions, pins, labels, accepted revision, discuss/comment, open interactions | No drag grouping UI (group field only) |
+| 13 | Deliverables panel | Ledger-backed list, versions, pins, labels, accepted revision, comment (save or discuss), open interactions | No drag grouping UI (group field only) |
 | 14 | Evidence cards | Claims, evidence with provenance, asserted relevance, challenges | — |
-| 15 | Context tray | Files (live or excerpt), excerpts, artifact revisions, image regions, notes, order, budgets, send | Tray is per window session, not persisted across reloads |
+| 15 | Context tray | Removed from the composer (2026-11-20); `context-packet` requests already sent still render | No composer entry point |
 | 16 | Acceptance criteria | Agree/edit, evidence, human decisions bound to criterion hash, historical decisions, guided walkthrough with saved progress, immutable agreed definitions for agent edits | — |
 | 17 | Alternatives | Criterion-aligned comparison, unknown measurements, prefer/request evidence/prepare adoption at exact commit | No product command adopts code; adoption asks the agent for a reviewable change |
 | 18 | Workflow controls | Graph-run retry and confirmed whole-run stop with locked revision, owner and activation checks | Only graph runs have registered commands |
-| 19 | Point and talk | Web Speech engine where available, frozen targets, editable text, typed fallback | No spoken replies; engine availability depends on the client |
+| 19 | Point and talk | Removed from the composer (2026-11-20); `voice-request` requests already sent still render | No composer entry point |
 | 20 | Demonstrations | Desktop recorder (semantic steps, never values, path-only routes, origin scope, bounds), retained review after a stop, trim, expected outcome | No keyframe screenshots; desktop only |
+
+The `rich_interaction_compose` workspace command still accepts `context-packet`
+and `voice-request` requests.
 
 ## Not done
 
@@ -226,10 +231,6 @@ work.
 - **Pointer selection on graphics (features 10, 11).** Selection is made in the
   equivalent table, numeric range fields or object list, not by brushing the
   chart SVG or clicking diagram nodes.
-- **Add-to-request entry points (feature 15).** The tray is filled from the
-  deliverables panel, file paths and pasted excerpts; transcript excerpts,
-  table/chart selections and file viewers do not yet offer "Add to request",
-  and the tray is not persisted across reloads.
 - **Criteria adapters (feature 16).** Goal checks and graph human nodes are not
   linked to criteria sets.
 - **Launching alternatives (feature 17).** The comparison card compares what
@@ -237,8 +238,7 @@ work.
   and no product command adopts code.
 - **Workflow coverage (feature 18).** Only graph runs have registered retry and
   stop commands; build pipelines and Multi Review do not.
-- **Spoken replies (feature 19)** and **keyframe screenshots in demonstrations
-  (feature 20)**.
+- **Keyframe screenshots in demonstrations (feature 20)**.
 - **Measured budgets and qualification.** The budgets above are starting
   values; no real-stack (`dev:test`) or live provider qualification was run for
   these features.

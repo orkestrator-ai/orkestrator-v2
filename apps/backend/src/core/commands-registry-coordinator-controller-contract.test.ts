@@ -19,9 +19,9 @@ import { registerControlCommands } from "./commands-registry-control.js";
 import { registerControllerWorkflowCommands } from "./commands-registry-controller-workflows.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
-import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
-import { registerCoordinatorForkWorker } from "./coordinator-fork-worker.js";
-import { registerCoordinatorWorkerChanges } from "./coordinator-worker-changes.js";
+import { withCoordinatorDelegationPresentation } from "./coordinator/delegation-authority.js";
+import { registerCoordinatorForkWorker } from "./coordinator/fork-worker.js";
+import { registerCoordinatorWorkerChanges } from "./coordinator/worker-changes.js";
 import { grantAdmits } from "./nodes/workspace-grant-test-support.js";
 
 function registered() {

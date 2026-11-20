@@ -463,7 +463,7 @@ launch dialog opens its two checkboxes on the saved app-level settings
 (`launch_multi_review`, whose fields are `autoAddressFindings` and `autoPr`)
 take the same saved values unless the call sets them, and a
 requested `autoPr: true` turns an omitted Auto-address findings on
-(`multiReviewAutomation` in `coordinator-launch-defaults.ts`). Both paths then
+(`multiReviewAutomation` in `coordinator/launch-defaults.ts`). Both paths then
 run the same `MultiReviewService` code:
 
 | Step | Durable record | Recovery after restart |

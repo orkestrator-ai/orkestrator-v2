@@ -9,7 +9,7 @@
  * it, asks for `read` on that path, and the test checks the bytes Pi handed
  * back to the model on the next call. The carrier is the one the backend's
  * mail drain delivers (`renderAgentMailCarrier`); that the backend names the
- * placed copy in it is `coordinator-mail-attachments-read-live.test.ts`'s
+ * placed copy in it is `coordinator/mail-attachments-read-live.test.ts`'s
  * claim.
  *
  * Two recipients: a worker, whose copy sits in its worktree, and a

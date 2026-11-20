@@ -312,7 +312,7 @@ The bridge's catalogue marks the model a tab with no model would start on
 the backend keeps the mark through normalization and the durable catalogue
 cache. Launches resolved without a session prefer it over the first model:
 Multi Review rows from saved defaults (`concreteRow` in
-`coordinator-launch-defaults.ts`) and every launch dialog's `firstModelFor`.
+`coordinator/launch-defaults.ts`) and every launch dialog's `firstModelFor`.
 
 ### Grok Build
 

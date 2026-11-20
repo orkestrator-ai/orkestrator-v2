@@ -11,8 +11,8 @@ import {
 import {
   COORDINATOR_WORKFLOW_NEAR_LIMIT,
   MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
-} from "../src/core/coordinator-workflow-retention.js";
-import { workerOutcomeOwners } from "../src/core/coordinator-worker-outcomes.js";
+} from "../src/core/coordinator/workflow-retention.js";
+import { workerOutcomeOwners } from "../src/core/coordinator/worker-outcomes.js";
 import { StorageService } from "../src/core/storage.js";
 
 const roots: string[] = [];

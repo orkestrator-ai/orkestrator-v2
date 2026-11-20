@@ -21,7 +21,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | `bridges/acp-bridge/` | [`bridges/acp-bridge/AGENTS.md`](bridges/acp-bridge/AGENTS.md) |
 | `docker/`, container lifecycle, firewall, Playwright in containers | [`docker/AGENTS.md`](docker/AGENTS.md) |
 | OpenCode provider or its `opencode2` pin (`apps/backend/src/core/opencode2/`) | [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md#maintaining-the-opencode-integration) |
-| Coordinator qualification (`coordinator-providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
+| Coordinator qualification (`coordinator/providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
 | Agent Capabilities (`core/capabilities/`, `capability-resources*`, the `capabilities` domain, `settings/capabilities/`) | [`docs/architecture/agent-capabilities-management.md`](docs/architecture/agent-capabilities-management.md) |
 | Scheduled jobs (`scheduled-jobs/`, `schedule.*` actions, schedule tools) | [`docs/architecture/scheduled-jobs.md`](docs/architecture/scheduled-jobs.md) |
 | Agent credentials (`apps/backend/src/core/credentials/`, `credential_*` commands, `request_credential` and the other credential tools) | [`docs/architecture/agent-credentials.md`](docs/architecture/agent-credentials.md) |
@@ -38,7 +38,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
 | The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
-| Suborks (`native-agent-subork*`, `agent-tools-subork*`, `control-mcp/coordinator-suborks.ts`, `coordinator-subork-actions.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
+| Suborks (`native-agent-subork*`, `agent-tools-subork*`, `control-mcp/coordinator-suborks.ts`, `coordinator/subork-actions.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
 | Unified federation plan work items (`plans/unified/`): starting one, updating its status | [`plans/unified/0000-index.md`](plans/unified/0000-index.md#how-to-use-this-board) |
 
 ## Show every visual change as an image in the transcript
@@ -1039,7 +1039,7 @@ When touching command discovery or dispatch:
 
 ### Coordinator qualification
 
-`apps/backend/src/core/coordinator-providers.ts` is the single table deciding
+`apps/backend/src/core/coordinator/providers.ts` is the single table deciding
 which platforms may run a coordinator, and at which tier. Every gate consults
 it: the workspace service, the runtime resolver, the bridge launcher and the
 trusted session input. Do not reintroduce a platform literal at any of those

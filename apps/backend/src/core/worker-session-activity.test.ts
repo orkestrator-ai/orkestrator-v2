@@ -3,7 +3,7 @@ import path from "node:path";
 import { OrkestratorBackend } from "./index.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import type { NativeAgentService } from "./native-agent-service.js";
-import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordinator-service.js";
+import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordinator/service.js";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { StorageService } from "./storage.js";
 import type { CommandContext } from "./commands-context.js";

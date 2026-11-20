@@ -17,7 +17,7 @@ import type {
   CoordinatorControlConnection,
   CoordinatorControlScope,
 } from "./control-mcp/index.js";
-import type { CoordinatorService } from "./coordinator-service.js";
+import { type CoordinatorService } from "./coordinator/index.js";
 import type { ProjectGitService } from "./project-git-service.js";
 
 export type { BackendEmit, BackendEventSink } from "./backend-emit.js";

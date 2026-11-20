@@ -13,13 +13,13 @@ import {
   validateSelection,
   type ControlMcpInvoker,
 } from "../control-shared-actions.js";
-import { WORKER_CHANGES_LIMITS, WORKER_DIFF_SCOPES } from "../coordinator-worker-changes-limits.js";
+import { WORKER_CHANGES_LIMITS, WORKER_DIFF_SCOPES } from "../coordinator/index.js";
 
 /**
  * Coordinator tools that read or branch off one worker: `get_worker_changes`
  * (what it changed, read-only) and `fork_worker` (a new worker from where it
- * got to). Backend commands: `coordinator-worker-changes.ts` and
- * `coordinator-fork-worker.ts`, which revalidate the scope and refuse the
+ * got to). Backend commands: `coordinator/worker-changes.ts` and
+ * `coordinator/fork-worker.ts`, which revalidate the scope and refuse the
  * project home.
  */
 

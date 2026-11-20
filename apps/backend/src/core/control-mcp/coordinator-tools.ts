@@ -38,12 +38,12 @@ import { environmentSummary, type ControlMcpInvoker } from "../control-shared-ac
 import { normalizedWorkflow, workflowSummary } from "../control-workflow-summary.js";
 import {
   coordinatorPrFields,
+  featurePlanFollowSummary,
   nodePrHealth,
   prReadingFrom,
   pullRequestFollowSummary,
   thisNodePrHealth,
-} from "../coordinator-pr-status.js";
-import { featurePlanFollowSummary } from "../coordinator-feature-plan-status.js";
+} from "../coordinator/index.js";
 import { withScheduleActor } from "../commands-registry-scheduled-jobs.js";
 import {
   BUILD_CANCELLED_ERROR,

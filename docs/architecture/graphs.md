@@ -47,7 +47,7 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | Run view (211) | `run-view.ts` | `commands-registry-graph-runs.ts`, `graph-run-user-actions.ts`, `graph-run-transcripts.ts` | `components/graph-run/`, `stores/graphRunStore.ts`, `lib/backend/graph-runs.ts` |
 | Designer (110, 212) | | | `components/graph-designer/`, `stores/graphDesignerStore.ts` |
 | Mock runs (213) | `mock.ts`, `mock-pins.ts`, `mock-values.ts`, `schema-sample.ts` | `graph-mock-*.ts`, `commands-registry-graph-mock.ts` | `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` |
-| Launch (214) | `launch.ts` | `graph-run-launch.ts`, `commands-registry-graph-launch.ts`, `control-mcp/graph-tools.ts`, `coordinator-graph-actions.ts`, `public-api/actions-graphs.ts` | `components/graph-launch/`, `lib/backend/graph-launch.ts` |
+| Launch (214) | `launch.ts` | `graph-run-launch.ts`, `commands-registry-graph-launch.ts`, `control-mcp/graph-tools.ts`, `coordinator/graph-actions.ts`, `public-api/actions-graphs.ts` | `components/graph-launch/`, `lib/backend/graph-launch.ts` |
 | Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `storage-graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
 | Items fan-out (401) | `run-fanout.ts` | `graph-run-fanout.ts` | |
 | Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts` | `GraphTemplateService.subgraphResolution` | `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` |
@@ -1361,10 +1361,10 @@ defaults). `graph_run_launch` launches as `user`.
   derived from the public request key.
 - **The coordinator** (D6): Control MCP `list_graph_templates`, `launch_graph`,
   `get_graph_run` and `cancel_graph_run` (`control-mcp/graph-tools.ts`,
-  `coordinator-graph-actions.ts`), launched as `coordinator`. No tool creates,
+  `coordinator/graph-actions.ts`), launched as `coordinator`. No tool creates,
   saves, edits, duplicates, imports or describes a template. A launch reserves
   a `graph-run` workflow association before it acts; the status wake
-  (`graph-run-coordinator-status.ts`, observed by `coordinator-status-wakes.ts`)
+  (`graph-run-coordinator-status.ts`, observed by `coordinator/status-wakes.ts`)
   sends one notice per wait for a person and one when the run ends
   ([coordinator.md](coordinator.md)).
 - **Schedules** (behind the experimental scheduling switch,
@@ -1799,7 +1799,7 @@ Every bound below is enforced by a guard or the runtime, not only documented
 | `GRAPH_DESCRIBE_POLL_MS`, `MAX_PASS_FAILURES` | 3 s, 20 | B`graph-describe-service.ts` |
 | `GRAPH_RUN_VIEW_BOUNDS` listed runs, inline artifact, transcript window default/max | 200, 512 KiB, 2/4 MiB | P`run-view.ts` |
 | `PUBLIC_GRAPH_VALIDATE_TEXT_MAX_BYTES`, `PUBLIC_GRAPH_DIAGNOSTICS_MAX` | 512 KiB, 50 | `packages/protocol/src/public-api-inputs-graph.ts` |
-| Coordinator status positions listed | 16 | B`coordinator-graph-actions.ts` |
+| Coordinator status positions listed | 16 | B`coordinator/graph-actions.ts` |
 | `GRAPH_DESIGNER_HISTORY_LIMIT`, `GRAPH_DESIGNER_COALESCE_MS` | 100, 1.5 s | W`components/graph-designer/graph-designer-history.ts` |
 | `GRAPH_DRAFT_COMPILE_DELAY_MS`, `GRAPH_DESIGNER_MOCK_STEP_MS` | 250 ms, 1 s | W`components/graph-designer/GraphDesignerTab.tsx` |
 | Import and bundle files | 2 MiB | W`GraphImportDialog.tsx`, `GraphShareDialogs.tsx` |

@@ -9,6 +9,7 @@ import { GitHubProvider } from "electron-updater/out/providers/GitHubProvider.js
 import { hostUpdateChannelOfVersion } from "@orkestrator/protocol/host-maintenance";
 import { createLogger } from "@orkestrator/protocol/logger";
 import { isNewerVersion } from "@orkestrator/protocol/node/standalone-service";
+import { GITHUB_REPOSITORY } from "./app-constants.js";
 
 function escapeXml(text: string): string {
   return text
@@ -93,11 +94,7 @@ export class VersionOrderedGitHubProvider extends GitHubProvider {
     updater: ConstructorParameters<typeof GitHubProvider>[1],
     runtime: ConstructorParameters<typeof GitHubProvider>[2],
   ) {
-    super(
-      { ...options, provider: "github", owner: "orkestrator-ai", repo: "orkestrator-v2" },
-      updater,
-      runtime,
-    );
+    super({ ...options, provider: "github", ...GITHUB_REPOSITORY }, updater, runtime);
   }
 
   protected override async httpRequest(

@@ -752,6 +752,36 @@ describe("backend command I/O coverage", () => {
     expect(() => parseContainerFileTree("t\tmissing\0")).toThrow("missing truncated directory");
   });
 
+  test("both walkers include a regular node_modules file and prioritize existing root files", async () => {
+    const root = await createTempDir("ork-tree-recent-root-");
+    await fs.mkdir(path.join(root, "src", "node_modules"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "node_modules", "excluded.txt"), "");
+    for (const name of ["a.txt", "b.txt", "node_modules"]) {
+      await fs.writeFile(path.join(root, name), "");
+    }
+    await fs.symlink(path.join(root, "a.txt"), path.join(root, "symlink.txt"));
+
+    const recent = new Set(["node_modules", "symlink.txt", "missing.txt"]);
+    for (const [limit, expected] of [
+      [2, ["src", "node_modules"]],
+      [10, ["src", "a.txt", "b.txt", "node_modules"]],
+    ] as const) {
+      const local = await buildFileTree(root, { remaining: limit }, recent);
+      const listing = await runCommand("node", [
+        "-e",
+        CONTAINER_FILE_TREE_LISTER,
+        "--",
+        root,
+        String(limit),
+        "",
+        JSON.stringify([...recent]),
+      ]);
+      expect(parseContainerFileTree(listing.stdout)).toEqual(local);
+      expect(local.map((node) => node.path)).toEqual([...expected]);
+      expect(local[0]?.children).toEqual([]);
+    }
+  });
+
   test("lists a Turborepo cache unopened and reads truncated directories on demand in both walkers", async () => {
     const root = await createTempDir("ork-tree-subtree-");
     await fs.mkdir(path.join(root, ".turbo", "cache"), { recursive: true });

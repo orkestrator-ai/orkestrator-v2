@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { renderAgentMailCarrier, type AgentMailMessage } from "@orkestrator/protocol/agent-mail";
 import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
-import { buildPipelineStatus } from "../../apps/backend/src/core/coordinator-build-pipeline-status";
+import { buildPipelineStatus } from "../../apps/backend/src/core/coordinator/build-pipeline-status";
 import {
   renderCoordinatorStatusNotice,
   statusOnNode,
-} from "../../apps/backend/src/core/coordinator-status-wakes";
+} from "../../apps/backend/src/core/coordinator/status-wakes";
 import {
   BUILD_MARKER,
   FAKE_BUILD_REPLY,

@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-10-25
 - **Test:** `project coordinator > a dirty submodule needs enhanced confirmation before a discarding switch`
-- **File:** `apps/backend/src/core/coordinator-service.test.ts`
+- **File:** `apps/backend/src/core/coordinator/service.test.ts`
 - **Original command:** `mise run test:logged -- --name full-0048 -- mise run test` on `todo-0048-recurring-work-qualification-dbe14f8256cc` (storage read path, recurring-work harness and scripts only), macOS 27.0 arm64, Bun 1.4.4, standard worker leases; host load average 50 to 55.
 - **Failure:** the case exceeded Bun's five-second deadline (5128.46 ms).
 - **Isolated rerun:** `mise run test:logged -- --name owners-0048 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-worktree-signal-install.test.ts ./src/core/coordinator-service.test.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures`: this case passed; the three files gave 113 passed, 1 failed (case [0248](../environments-and-containers/0248-move-restart-recovery-submodule-timeout.md)) and one between-test error (176.81 s). Evidence: `orkestrator-test-run.fSNcim/owners-0048.log.gz` under the host temporary directory.

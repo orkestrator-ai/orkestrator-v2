@@ -51,7 +51,7 @@ import type { MailAttachmentBatch } from "../mail-attachments.js";
  *   coordinator of the repository. Both wait in the outbox like worker mail.
  *
  * Notices for a repository's coordinator take the same outbox
- * (`coordinatorNotice`, see `coordinator-notice-router.ts`). They wait there
+ * (`coordinatorNotice`, see `coordinator/notice-router.ts`). They wait there
  * through a link drop and a restart, and a command node that lacks the
  * repository, or has been gone for `NOTICE_HOLD_MAX_MS`, hands them back to this
  * node's coordinator instead. Only a command node that says it takes them

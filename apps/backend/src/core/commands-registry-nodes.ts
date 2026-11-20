@@ -83,10 +83,7 @@ import {
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import {
-  coordinatorDeliverNowResult,
-  settleCoordinatorDeliverNow,
-} from "./coordinator-deliver-now.js";
+import { coordinatorDeliverNowResult, settleCoordinatorDeliverNow } from "./coordinator/index.js";
 import {
   approveSetupCommandsOnNodes,
   parseNodeActionApproval,

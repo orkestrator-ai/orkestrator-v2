@@ -1,5 +1,5 @@
 import path from "node:path";
-import { actionHash } from "./coordinator-action-scope.js";
+import { actionHash } from "./coordinator/action-scope.js";
 import { readStoredValue, seedStore, upgradedLaunchReceipt } from "./storage-test-support.js";
 /**
  * A coordinator acting on a node it controls, over the real coordinator
@@ -20,7 +20,7 @@ import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator
 import { registerControllerWorkflowCommands } from "./commands-registry-controller-workflows.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
+import { CoordinatorRequestFlights } from "./coordinator/request-flights.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
 

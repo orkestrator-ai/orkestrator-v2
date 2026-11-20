@@ -38,7 +38,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 
 | Document | Notes |
 | --- | --- |
-| [agent-engines.md](architecture/agent-engines.md) | Six-engine architecture. Coordinator tiers match `coordinator-providers.ts`. |
+| [agent-engines.md](architecture/agent-engines.md) | Six-engine architecture. Coordinator tiers match `coordinator/providers.ts`. |
 | [agent-messaging.md](architecture/agent-messaging.md) | Durable mailbox, routes (coordinator / peer / isolated), budgets, automatic retry, idle injection. |
 | [agent-registry.md](architecture/agent-registry.md) | Every agent tab and what it is doing: `get_agent_registry`, Control MCP `list_agents`, sidebar hover counts. |
 | [native-agent-service.md](architecture/native-agent-service.md) | `NativeAgentService` as one class wiring collaborators: what each owns, host wiring, lifecycle order, invariants kept, and how tests reach collaborator state, and the transcript projection's read models with the decisions behind the split (from to-do 0057, retired 2026-11-17). |

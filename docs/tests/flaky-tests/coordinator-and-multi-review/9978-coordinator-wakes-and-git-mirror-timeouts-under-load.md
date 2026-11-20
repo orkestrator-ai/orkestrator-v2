@@ -11,12 +11,12 @@
   anything they import.
 - **Files and tests (one aggregate run, 11 failures, each at the 5,000 ms
   default timeout):**
-  - `apps/backend/src/core/coordinator-pr-remote.test.ts`: `a remote worker's
+  - `apps/backend/src/core/coordinator/pr-remote.test.ts`: `a remote worker's
     conflicts get one Resolve tab, and its PR is followed through the node link`
-  - `apps/backend/src/core/coordinator-status-wakes-pr.test.ts`: six cases of
+  - `apps/backend/src/core/coordinator/status-wakes-pr.test.ts`: six cases of
     `pull request status wakes > …`, including `a PR wakes once per state
     change until merge (hidden: %s)` (twice)
-  - `apps/backend/src/core/coordinator-worker-outcomes.test.ts`: `worker
+  - `apps/backend/src/core/coordinator/worker-outcomes.test.ts`: `worker
     outcome wakes > Merge and Cleanup on a pipeline's worker is one notice
     naming both`, `worker outcome wakes > first observation reports an
     immediate closed outcome`

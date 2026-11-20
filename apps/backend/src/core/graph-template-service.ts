@@ -52,7 +52,7 @@ import {
   type GraphTemplateRef as GraphSubgraphRef,
   type GraphTemplateV1,
 } from "@orkestrator/protocol/graphs/template";
-import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
+import { defaultCoordinatorHostCapabilities } from "./coordinator/index.js";
 import {
   GraphProjectTemplates,
   type GraphProjectTemplateScan,

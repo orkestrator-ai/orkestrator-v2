@@ -30,7 +30,7 @@ cited as `0026 (retired)`.
   and fails closed if a persisted session carries another policy id.
 - Moving a platform to `enforced` needs everything in
   [Changing qualification](coordinator.md#changing-qualification), an entry in
-  the `enforced` list in `coordinator-conformance.test.ts` (pinned to
+  the `enforced` list in `coordinator/conformance.test.ts` (pinned to
   `claude`, `codex` and `pi`), and a live read-only run.
 - An OS sandbox is not a write guard for the checkout unless it is told so.
   The Claude SDK sandbox's default write allowance includes the working

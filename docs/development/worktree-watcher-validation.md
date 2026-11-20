@@ -334,7 +334,7 @@ This includes failures that differed from the aggregate; a different test passin
 
 ### Isolated-owner commands
 
-The exact commands include JUnit report paths because the logged runner deletes passing raw output. Backend commands preload node isolation; Pi additionally preloads its isolated agent directory; root/web commands use their Bun configurations.
+These commands use the paths at each recorded revision. They include JUnit report paths because the logged runner deletes passing raw output. Backend commands preload node isolation. Pi additionally preloads its isolated agent directory. Root and web commands use their Bun configurations.
 
 - `mise run test:logged -- --name watcher-triage-acceptance-storage -- bun test --cwd apps/backend ./src/core/change-tracking/acceptance-storage.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/acceptance-storage.xml` — exit 0; wrapper 6.286 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
 - `mise run test:logged -- --name watcher-triage-acceptance-turns -- bun test --cwd apps/backend ./src/core/change-tracking/acceptance-turns.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/acceptance-turns.xml` — exit 0; wrapper 15.084 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
@@ -368,6 +368,18 @@ The exact commands include JUnit report paths because the logged runner deletes 
 - `mise run test:logged -- --name watcher-triage-shared-skills -- bun test --cwd apps/backend ./tests/portable-inputs-shared-skills.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/shared-skills.xml` — exit 0; wrapper 6.682 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
 - `mise run test:logged -- --name watcher-triage-user-commands -- bun test --cwd apps/backend ./src/core/user-commands.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/user-commands.xml` — exit 0; wrapper 9.272 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
 - `mise run test:logged -- --name watcher-triage-worker-turns -- bun test --cwd apps/backend ./src/core/coordinator-worker-turns.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/worker-turns.xml` — exit 1; wrapper 82.647 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
+
+### Rerun the relocated coordinator tests
+
+On a checkout after the coordinator folder move, run these tests from the repository root.
+
+```sh
+mise run test:logged -- --name watcher-coordinator-owners -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts --parallel=1 --only-failures \
+  ./src/core/coordinator/mail-attachments.test.ts \
+  ./src/core/coordinator/status-wakes-pr.test.ts \
+  ./src/core/coordinator/worker-turns.test.ts
+```
 
 ### Non-green isolated artifacts
 

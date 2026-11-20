@@ -11,7 +11,7 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { ControlMcpServer } from "./control-mcp/server.js";
-import { CoordinatorService } from "./coordinator-service.js";
+import { CoordinatorService } from "./coordinator/service.js";
 import {
   graphReviewGap,
   graphReviewIssue,

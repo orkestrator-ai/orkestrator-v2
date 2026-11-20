@@ -31,7 +31,7 @@ import {
   carryCoordinatorDelegationPresentation,
   coordinatorDelegationPresentationFrom,
   restoreCoordinatorDelegationPresentation,
-} from "./coordinator-delegation-authority.js";
+} from "./coordinator/index.js";
 import {
   createAgentModelCatalogReader,
   resolveFastMode,

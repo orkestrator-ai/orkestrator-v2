@@ -398,7 +398,7 @@ array and that an unchanged recheck reuses it.
 The coordinator panel is invalidation-led, not event-folded: it subscribes to
 scoped `coordinator` (and `config`) `resource-changed` events before
 hydrating and re-reads through `get_project_coordinator_view`
-(`apps/backend/src/core/coordinator-view-revisions.ts`), which answers the
+(`apps/backend/src/core/coordinator/view-revisions.ts`), which answers the
 `ViewSnapshotOutcome` contract above. `generation` is one backend lifetime;
 `revision` changes whenever the digest of the captured snapshot changes and
 comes from one process-wide counter, so it is never reused for another body.

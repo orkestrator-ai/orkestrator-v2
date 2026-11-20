@@ -1129,7 +1129,7 @@ server as loaded; the address is never contacted.
   list-and-revoke constraint without a provider rule).
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (MCP OAuth and `mcp-url` sign-in).
 - [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
-  (coordinator safety tiers, `coordinator-providers.ts`; to-do 0026, retired 2026-11-11).
+  (coordinator safety tiers, `coordinator/providers.ts`; to-do 0026, retired 2026-11-11).
 - [agent-accounts.md](../../architecture/agent-accounts.md#sign-in-readiness), to-do
   0003 (retired 2026-11-13) (provider sign-in and readiness).
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md)

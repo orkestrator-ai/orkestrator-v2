@@ -73,10 +73,17 @@ import {
 import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
 import { withProviderSessionTeardownLock } from "./provider-session-ownership.js";
 import {
+  agentMessagingEnabled,
   coordinatorResearchLine,
+  coordinatorRuntimeEnvironment,
+  coordinatorRuntimeUnavailableMessage,
+  heldCoordinatorConversation,
   loadCoordinatorResearch,
-} from "./coordinator-research-context.js";
-import { agentMessagingEnabled, readCoordinatorWaitingOn } from "./coordinator-context-reads.js";
+  pendingCheckoutUpdate,
+  readCoordinatorWaitingOn,
+  renderCheckoutUpdate,
+  resolveCoordinatorRuntime,
+} from "./coordinator/index.js";
 import {
   buildCoordinatorContext,
   type CoordinatorContextDelegation,
@@ -87,7 +94,6 @@ import {
   type CoordinatorConversation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
-import { pendingCheckoutUpdate, renderCheckoutUpdate } from "./coordinator-checkout-update.js";
 import {
   type NativeAgentCommandRefreshOutcome,
   type NativeAgentDefaultModelResolution,
@@ -114,12 +120,6 @@ import {
   bugReportIdFromRuntimeId,
   type BugReportAgent,
 } from "@orkestrator/protocol/bug-report";
-import {
-  coordinatorRuntimeUnavailableMessage,
-  resolveCoordinatorRuntime,
-  heldCoordinatorConversation,
-  coordinatorRuntimeEnvironment,
-} from "./coordinator-runtime.js";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import {
@@ -1221,7 +1221,7 @@ export class NativeAgentService {
 
   /**
    * The checkout-update notice for a coordinator conversation's first turn
-   * after the checkout moved (`coordinator-checkout-update.ts`), or "".
+   * after the checkout moved (`coordinator/checkout-update.ts`), or "".
    * Reading the commits is best-effort: without them the notice still says
    * the checkout moved.
    */

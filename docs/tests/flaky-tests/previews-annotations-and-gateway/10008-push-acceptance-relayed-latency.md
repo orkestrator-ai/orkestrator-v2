@@ -33,3 +33,16 @@
   passed the owning file in 11.6 seconds. The relay still reads real SSE
   sockets outside the fixture's quiescence check, and the source of the
   extra virtual tick remains unverified.
+
+## Later recurrence on 2026-11-20
+
+- **Observed:** while merging `origin/main` at `2f2c4b383` into `df73b63e8`,
+  whose merge base was `0b778d9957ba241e34231f6f86b2ce0e97205c05`. The
+  recurrence check found the open case on the pre-merge branch.
+- **Aggregate command:** `mise run test:logged -- --name refresh-main-default-suite -- mise run test`.
+  The backend ran with four Bun workers. The case measured virtual p95 of
+  300 ms against its 250 ms budget and failed after 908.40 ms. The backend
+  suite reported 19,972 passed, 152 skipped, and one failed across 1,417 files.
+  Evidence: `/tmp/orkestrator-test-run.QhGIbq/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name refresh-main-push-acceptance-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts --parallel=1 --only-failures`
+  passed the owning file in 10.7 seconds.

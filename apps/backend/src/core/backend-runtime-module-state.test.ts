@@ -11,7 +11,7 @@ import {
   assertEnvironmentNotDraining,
   withEnvironmentDraining,
 } from "./container-readiness.js";
-import { withCoordinatorReceipt } from "./coordinator-action-scope.js";
+import { withCoordinatorReceipt } from "./coordinator/action-scope.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { gitHubCli } from "./git/index.js";
 import { GraphSystemActionMemory } from "./graph-system-action.js";

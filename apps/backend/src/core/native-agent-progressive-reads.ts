@@ -12,7 +12,7 @@ import {
   ProviderUnavailableError,
 } from "./native-agent-service-shared.js";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
-import { heldCoordinatorConversation } from "./coordinator-runtime.js";
+import { heldCoordinatorConversation } from "./coordinator/index.js";
 import {
   type NativeAgentSessionStateView,
   type NativeAgentViewIdentity,

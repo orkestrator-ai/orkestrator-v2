@@ -26,7 +26,7 @@ import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { coordinatorNodeTarget } from "./commands-registry-coordinator-nodes.js";
-import { coordinatorCaller, withCoordinatorReceipt } from "./coordinator-action-scope.js";
+import { coordinatorCaller, withCoordinatorReceipt } from "./coordinator/index.js";
 import { nativeTabsOfLayout } from "./public-api/index.js";
 import { optionalText, requireProjectWorker, surfaceRecord } from "./worker-surface-runs.js";
 

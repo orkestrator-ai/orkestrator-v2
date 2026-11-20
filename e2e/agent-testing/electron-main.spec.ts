@@ -632,6 +632,54 @@ print("public.tiff")
       )
       .toBe(`${profile.electronTitle} — Local`);
     if (!nicknamesOnly && !failure) {
+      await test.step("Help › Release Notes opens the releases URL and logs a shell rejection", async () => {
+        const stderr = app.process().stderr;
+        let output = "";
+        const collect = (chunk: Buffer) => {
+          output = (output + chunk.toString("utf8")).slice(-4096);
+        };
+        stderr?.on("data", collect);
+        try {
+          const openedUrls = await app.evaluate(({ BrowserWindow, Menu, shell }) => {
+            const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+            const help = Menu.getApplicationMenu()?.items.find(
+              (item) => item.role === "help" || item.label === "Help",
+            );
+            const releaseNotes = help?.submenu?.items.find(
+              (item) => item.label === "Release Notes",
+            );
+            if (!window || !releaseNotes?.click) {
+              throw new Error("Release Notes menu item is unavailable");
+            }
+            const urls: string[] = [];
+            const originalOpenExternal = shell.openExternal;
+            try {
+              shell.openExternal = async (url) => {
+                urls.push(url);
+              };
+              releaseNotes.click({} as Electron.KeyboardEvent, window, window.webContents);
+              shell.openExternal = async (url) => {
+                urls.push(url);
+                throw new Error("Release Notes browser launch rejected by test");
+              };
+              releaseNotes.click({} as Electron.KeyboardEvent, window, window.webContents);
+              return urls;
+            } finally {
+              shell.openExternal = originalOpenExternal;
+            }
+          });
+          const releasesUrl = "https://github.com/orkestrator-ai/orkestrator-v2/releases";
+          expect(openedUrls).toEqual([releasesUrl, releasesUrl]);
+          await expect
+            .poll(() => output)
+            .toMatch(
+              /menu\.open-external-failed[^\r\n]*Release Notes browser launch rejected by test/,
+            );
+        } finally {
+          stderr?.off("data", collect);
+        }
+      });
+
       // View › Keyboard Shortcuts… reaches the focused window's renderer over
       // IPC. A click opens and never closes; a delivery of the menu's key
       // equivalent toggles. Every subsequent physical press toggles again.

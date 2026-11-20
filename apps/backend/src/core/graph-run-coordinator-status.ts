@@ -1,7 +1,7 @@
 /**
  * A graph run reduced to a coordinator status (item 208, plan P2.8, P2.14):
  * what a coordinator that launched the run hears through its status wake
- * (`coordinator-status-wakes.ts`, `graph-run` associations).
+ * (`coordinator/status-wakes.ts`, `graph-run` associations).
  *
  * - **Waiting for a person.** One notice per wait: the key names the newest
  *   open wait (a human node's wait, or an agent's `ask_human` question) with
@@ -23,7 +23,7 @@ import {
   type GraphRun,
   type GraphRunPendingInteraction,
 } from "@orkestrator/protocol/graphs/run";
-import type { CoordinatorStatus } from "./coordinator-status-wakes.js";
+import { type CoordinatorStatus } from "./coordinator/index.js";
 
 const WAITING_PREFIX = "waiting:";
 

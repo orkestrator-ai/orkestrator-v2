@@ -315,7 +315,7 @@ export function olderLeafTicketMessage(nodeName: string): string {
  * would start from a stale base, and an ambiguous outcome could not be
  * resolved without running it twice. Ticket changes do wait (see above).
  * The coordinator that was refused is woken once when the machine reconnects
- * (`coordinator-node-reconnect-wakes.ts` in the backend).
+ * (`coordinator/node-reconnect-wakes.ts` in the backend).
  */
 export function offlineLaunchMessage(nodeName: string): string {
   return (

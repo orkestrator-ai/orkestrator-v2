@@ -1166,6 +1166,46 @@ export function useFilesPanel() {
     ],
   );
 
+  const createFile = useCallback(
+    async (parentDirectory: string, fileName: string) => {
+      if (!isAvailable || !targetId) {
+        throw new Error("The selected environment is not available");
+      }
+
+      const pendingKey = `${parentDirectory}\0${fileName}`;
+      setFileActionPending(pendingKey);
+      try {
+        const environmentId = await resolveMutationEnvironmentId();
+        const created =
+          isLocalEnvironment && worktreePath
+            ? await backendForScope(scope).createLocalFile(environmentId, parentDirectory, fileName)
+            : await backendForScope(scope).createContainerFile(
+                environmentId,
+                parentDirectory,
+                fileName,
+              );
+        await refreshAllFilesData();
+        toast.success("File created", { description: created });
+        return created;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error("Failed to create file", { description: message });
+        throw error;
+      } finally {
+        setFileActionPending(null);
+      }
+    },
+    [
+      scope,
+      isAvailable,
+      targetId,
+      resolveMutationEnvironmentId,
+      isLocalEnvironment,
+      worktreePath,
+      refreshAllFilesData,
+    ],
+  );
+
   const copyExternalFiles = useCallback(
     async (files: File[], destinationDirectory: string) => {
       if (!isAvailable || !targetId) {
@@ -1339,6 +1379,7 @@ export function useFilesPanel() {
     moveFile,
     renameFile,
     createFolder,
+    createFile,
     copyExternalFiles,
     fileActionPending,
   };

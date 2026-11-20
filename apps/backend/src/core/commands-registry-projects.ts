@@ -110,10 +110,10 @@ import {
   startCursorSdkLogin,
 } from "./cursor-sdk-bridge.js";
 import {
+  coordinatorProviderAllowed,
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
-} from "./coordinator-runtime.js";
-import { coordinatorProviderAllowed } from "./coordinator-providers.js";
+} from "./coordinator/index.js";
 import { bugReportIdFromRuntimeId, isBugReportAgent } from "@orkestrator/protocol/bug-report";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";

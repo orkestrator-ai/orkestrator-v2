@@ -51,7 +51,7 @@
 | `apps/backend/tests/commands-io-coverage.test.ts` | backend command I/O coverage > reports the HEAD and uncommitted paths of a local environment worktree | 5,000ms timeout / 5,001.20ms |
 | `apps/backend/src/core/commands-state-sync.test.ts` | initial prompt attachment command > accepts twenty attachments and rejects the twenty-first | 5,000ms timeout / 5,002.65ms |
 | `apps/backend/src/core/commands-state-sync.test.ts` | initial prompt attachment command > allocates a safe unique name for every hostile or colliding attachment name | 5,000ms timeout / 5,003.55ms |
-| `apps/backend/src/core/coordinator-service.test.ts` | project coordinator > retention never removes an open conversation | 5,000ms timeout / 5,250.71ms |
+| `apps/backend/src/core/coordinator/service.test.ts` | project coordinator > retention never removes an open conversation | 5,000ms timeout / 5,250.71ms |
 | `bridges/acp-bridge/src/acp-http.test.ts` | ACP bridge > reaps a session process when the creating HTTP client disconnects | Timed out waiting for ACP state: empty string / 5,644.46ms |
 
 - **Isolated reruns:** exit 0 for all three logged commands below. Each used

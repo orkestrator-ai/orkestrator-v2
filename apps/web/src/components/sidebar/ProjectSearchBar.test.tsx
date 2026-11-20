@@ -619,6 +619,60 @@ describe("ProjectSearchBar", () => {
     expect(screen.getByLabelText("Filter results: All")).toBeTruthy();
   });
 
+  test("opens by button or shortcut on the environments and recents current at that moment", async () => {
+    const docsProject: Project = { ...project, id: "project-2", name: "docs", order: 1 };
+    const addedWhileClosed: Environment = {
+      ...containerEnvironment,
+      id: "env-added",
+      name: "added-while-closed",
+      branch: "added-while-closed",
+    };
+    const addedLater: Environment = {
+      ...containerEnvironment,
+      id: "env-later",
+      name: "added-later",
+      branch: "added-later",
+    };
+    const { onSelectProject, rerender } = renderSearchBar({ environments: [localEnvironment] });
+
+    // Changed while closed: the button opens on them.
+    rerender({
+      projects: [project, docsProject],
+      environments: [localEnvironment, addedWhileClosed],
+    });
+    act(() => appCommandStore(uiStore).setState({ recentProjectIds: ["project-2"] }));
+    let input = await openSearch();
+    expect(screen.getByTestId("project-search-item-env-added")).toBeTruthy();
+    expectActiveOption(input, "project-2");
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await waitFor(() => expectDomAbsent(screen.queryByRole("dialog"), "closed search palette"));
+
+    // Changed again while closed: the shortcut opens on the newest inputs.
+    rerender({ projects: [project, docsProject], environments: [localEnvironment, addedLater] });
+    act(() => appCommandStore(uiStore).setState({ recentProjectIds: ["project-1", "project-2"] }));
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    input = await screen.findByRole("combobox", { name: "Search projects and environments" });
+    expect(screen.getByTestId("project-search-item-env-later")).toBeTruthy();
+    expectDomAbsent(
+      screen.queryByTestId("project-search-item-env-added"),
+      "row removed while closed",
+    );
+    expectActiveOption(input, "project-1");
+
+    // Live while open, with the keyboard selection held.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expectActiveOption(input, "project-2");
+    rerender({ projects: [project, docsProject], environments: [localEnvironment] });
+    expectDomAbsent(
+      screen.queryByTestId("project-search-item-env-later"),
+      "row removed while open",
+    );
+    expectActiveOption(input, "project-2");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSelectProject).toHaveBeenCalledWith("project-2");
+  });
+
   test("shows empty-state copy for no projects, no environments, and no matches", async () => {
     renderSearchBar({ projects: [], environments: [] });
     await openSearch();

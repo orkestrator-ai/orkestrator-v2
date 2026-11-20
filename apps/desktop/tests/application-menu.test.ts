@@ -17,6 +17,7 @@ function menuActions(overrides: Partial<ApplicationMenuActions> = {}): Applicati
     zoom: () => {},
     showKeyboardShortcuts: () => {},
     openSettings: () => {},
+    openExternal: () => {},
     ...overrides,
   };
 }
@@ -98,6 +99,13 @@ describe("desktop application menu on macOS", () => {
     (closeItem?.click as (() => void) | undefined)?.();
     expect(newWindow).toHaveBeenCalledTimes(1);
     expect(closeTab).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps the help role, whose submenu gets the system's search field", () => {
+    const template = createApplicationMenuTemplate(menuActions());
+    const help = template.find((item) => item.role === "help")!;
+    expect(help.label).toBeUndefined();
+    expect(itemNames(submenu(help))).toEqual(["Release Notes"]);
   });
 
   test("places a Window menu after View, and Help last", () => {
@@ -305,7 +313,7 @@ describe.each(["linux", "win32"] as const)("desktop application menu on %s", (pl
       "quit",
     ]);
     const help = template.find((item) => item.label === "Help")!;
-    expect(itemNames(submenu(help))).toEqual(["about"]);
+    expect(itemNames(submenu(help))).toEqual(["Release Notes", "separator", "about"]);
     expect(itemNames(submenu(template.find((item) => item.label === "Window")!))).toEqual([
       "minimize",
       "separator",
@@ -317,7 +325,12 @@ describe.each(["linux", "win32"] as const)("desktop application menu on %s", (pl
     const checkForUpdates = mock(() => {});
     const template = createApplicationMenuTemplate(menuActions({ platform, checkForUpdates }));
     const help = template.find((item) => item.label === "Help")!;
-    expect(itemNames(submenu(help))).toEqual(["Check for Updates…", "separator", "about"]);
+    expect(itemNames(submenu(help))).toEqual([
+      "Release Notes",
+      "Check for Updates…",
+      "separator",
+      "about",
+    ]);
     (menuItem(template, "Help", "Check for Updates…")?.click as (() => void) | undefined)?.();
     expect(checkForUpdates).toHaveBeenCalledTimes(1);
   });
@@ -438,5 +451,40 @@ describe.each(["darwin", "linux", "win32"] as const)("Open Developer Tools on %s
     expect(items[0]?.accelerator).toBeUndefined();
     (items[0]?.click as (() => void) | undefined)?.();
     expect(openDeveloperTools).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe.each(["darwin", "linux", "win32"] as const)("Release Notes on %s", (platform) => {
+  const help = (template: MenuItemConstructorOptions[]) =>
+    template.find((item) => item.label === "Help" || item.role === "help")!;
+
+  test("is always under Help and opens the GitHub releases page in the default browser", () => {
+    const openExternal = mock((_url: string) => {});
+    const template = createApplicationMenuTemplate(menuActions({ platform, openExternal }));
+    const item = submenu(help(template)).find((entry) => entry.label === "Release Notes");
+    expect(item).toBeDefined();
+    expect(item?.role).toBeUndefined();
+    (item?.click as (() => void) | undefined)?.();
+    expect(openExternal.mock.calls).toEqual([
+      ["https://github.com/orkestrator-ai/orkestrator-v2/releases"],
+    ]);
+  });
+
+  test("follows Open Developer Tools when debug logging is on", () => {
+    const template = createApplicationMenuTemplate(
+      menuActions({ platform, openDeveloperTools: () => {}, checkForUpdates: () => {} }),
+    );
+    expect(itemNames(submenu(help(template)))).toEqual(
+      platform === "darwin"
+        ? ["Open Developer Tools", "separator", "Release Notes"]
+        : [
+            "Open Developer Tools",
+            "separator",
+            "Release Notes",
+            "Check for Updates…",
+            "separator",
+            "about",
+          ],
+    );
   });
 });

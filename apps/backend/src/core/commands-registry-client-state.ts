@@ -29,7 +29,7 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-import { checkUpstreamBeforeMessage } from "./coordinator-message-upstream.js";
+import { checkUpstreamBeforeMessage } from "./coordinator/index.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 
 /**
@@ -46,7 +46,7 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
  *   checkout status (subject to the fetch cooldown) unless a turn is running,
  *   and answers every mergeable checkout `automatic`: it is always merged.
  *   A slow or failed fetch is answered by fast-forwarding to the upstream
- *   commit already fetched (`coordinator-message-upstream.ts`).
+ *   commit already fetched (`coordinator/message-upstream.ts`).
  * - `decline_coordinator_upstream_merge {projectId, upstream, upstreamCommit,
  *   onlyIfAbsent?}`, `get_coordinator_upstream_auto_merge {projectId}` and
  *   `set_coordinator_upstream_auto_merge {projectId, enabled}`: retired, kept

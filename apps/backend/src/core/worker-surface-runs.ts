@@ -20,7 +20,7 @@ import { editWorkerTab, openWorkerBrowserTab } from "./worker-tab-actions.js";
 /**
  * The worker surfaces as they run on the node that owns the worker: a
  * terminal launch, a browser preview, a tab edit. A coordinator on this node
- * reaches them through `coordinator-surface-actions.ts`; a command node's
+ * reaches them through `coordinator/surface-actions.ts`; a command node's
  * coordinator through the `*_controller_*` commands in
  * `commands-registry-controller-workflows.ts`. Each caller checks its own
  * scope and owns the receipt; these validate the input, refuse the project

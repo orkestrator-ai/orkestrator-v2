@@ -19,9 +19,9 @@ Original command: `mise run test` (default worker plan).
 | `a mirror behind the remote costs only the commits it lacks` | tests/unit/workspace-setup-git-mirror.test.ts | 7.9 s | passed, 11.1 s (file) |
 | `an object lost from deep in the history, which only the clone can find` | tests/unit/workspace-setup-git-mirror.test.ts | 7.5 s | passed, as above |
 | `the script declares the capability the backend gates the mount on` | tests/unit/workspace-setup-git-mirror.test.ts | 5.2 s | passed, as above |
-| `remote admission uses completed sync and leaf copy despite unrelated behind status` | apps/backend/src/core/coordinator-node-tickets.test.ts | 5.4 s | passed, 1.3 s |
-| `a downgraded command node hands back deferred notices` | apps/backend/src/core/coordinator-notice-hierarchy.test.ts | 5.4 s | passed, 14.4 s |
-| `a restarted follow delivers a distinct second failure and retry/reconciliation do not duplicate it` | apps/backend/src/core/coordinator-pipeline-step-actions.test.ts | 6.4 s | passed, 2.3 s |
+| `remote admission uses completed sync and leaf copy despite unrelated behind status` | apps/backend/src/core/coordinator/node-tickets.test.ts | 5.4 s | passed, 1.3 s |
+| `a downgraded command node hands back deferred notices` | apps/backend/src/core/coordinator/notice-hierarchy.test.ts | 5.4 s | passed, 14.4 s |
+| `a restarted follow delivers a distinct second failure and retry/reconciliation do not duplicate it` | apps/backend/src/core/coordinator/pipeline-step-actions.test.ts | 6.4 s | passed, 2.3 s |
 | `a branch that took in newer target history is measured from where it now leaves it` | apps/backend/src/core/diff-baseline.test.ts | 5.0 s | passed, 2.4 s (file) |
 | `a worker reset or fast-forwarded to a newer target has no changes of its own` | apps/backend/src/core/diff-baseline.test.ts | 5.0 s | passed, as above |
 
@@ -44,7 +44,7 @@ change:
   native-agents-and-transcripts index has 58 well-formed rows for 59 case files.
 - `tests/claude-state-signal-integration.test.ts`: exits 1 (`hook writers
   serialize counters...` in the aggregate run; already registered).
-- `apps/backend/src/core/coordinator-node-coordinator-mail.test.ts`: `falls back
+- `apps/backend/src/core/coordinator/node-coordinator-mail.test.ts`: `falls back
   to the leaf's coordinator when the command node has none for the repository`.
 - `packages/protocol/src/node/standalone-service-install.test.ts`: `a release
   without a published lockfile still installs, resolving afresh` (ENOENT on

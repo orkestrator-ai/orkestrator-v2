@@ -47,7 +47,7 @@ function parseLedger(value: unknown): UsageLimitNoticeLedger {
   };
 }
 
-/** The durable record behind usage-limit stop notices (`coordinator-usage-limit-notices.ts`). */
+/** The durable record behind usage-limit stop notices (`coordinator/usage-limit-notices.ts`). */
 export class CoordinatorNoticesRepository {
   constructor(private readonly context: StorageContext) {}
 

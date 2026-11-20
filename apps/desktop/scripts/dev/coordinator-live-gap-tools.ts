@@ -97,7 +97,7 @@ export const GAP_COMMAND = "/compact";
 export const GAP_SESSION_ACTION_COMMAND_ID = SESSION_ACTION_SLASH_COMMANDS[GAP_COMMAND]!.id;
 /**
  * The owning node's own refusals for a worker with no pull request
- * (`coordinator-pr.ts`, `launchWorkerResolve`) and for a question it does not
+ * (`coordinator/pr.ts`, `launchWorkerResolve`) and for a question it does not
  * have (`worker-question-relay.ts`). A refusal with any other text is not
  * evidence that the node checked: it could be a broken route or an unknown
  * tool.

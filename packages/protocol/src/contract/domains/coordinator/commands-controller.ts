@@ -8,8 +8,8 @@
  * node (`*_controller_*`, called over the node link). Registered by the
  * backend's `commands-registry-control.ts`,
  * `commands-registry-controller-workflows.ts`,
- * `commands-registry-coordinator-nodes.ts`, `coordinator-fork-worker.ts`
- * and `coordinator-worker-changes.ts`.
+ * `commands-registry-coordinator-nodes.ts`, `coordinator/fork-worker.ts`
+ * and `coordinator/worker-changes.ts`.
  *
  * Arguments: every key a handler reads is declared, because a defined
  * command drops the keys it does not declare. Every key is
@@ -530,7 +530,7 @@ export const openCoordinatorNodeDelegationCommand = defineCommand({
   critical: ["requestId"],
 });
 
-/** The origin check of a coordinator tool naming an environment or workflow (`coordinator-environment-scope.ts`). */
+/** The origin check of a coordinator tool naming an environment or workflow (`coordinator/environment-scope.ts`). */
 export const assertCoordinatorEnvironmentScopeCommand = defineCommand({
   domain: coordinatorDomain,
   name: "assert_coordinator_environment_scope",
@@ -549,7 +549,7 @@ export const assertCoordinatorEnvironmentScopeCommand = defineCommand({
  * A coordinator's call naming a node was refused because the node is not
  * connected. Nothing is queued: the backend remembers the attempt (in memory,
  * bounded) and wakes that conversation once when the node reconnects, so it
- * can retry from a fresh base (`coordinator-node-reconnect-wakes.ts`).
+ * can retry from a fresh base (`coordinator/node-reconnect-wakes.ts`).
  */
 export const noteCoordinatorNodeUnavailableCommand = defineCommand({
   domain: coordinatorDomain,

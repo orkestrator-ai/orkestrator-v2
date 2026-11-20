@@ -293,7 +293,7 @@ builds, bridges and agent CLIs would outlive whatever stopped them.
   past it.
 - **Codex orphans.** Orphan matching uses `/proc` and `ps -E`, and returns
   false on other systems (`process-supervisor.ts:1406-1506`).
-- **Already handled.** `coordinator-providers.ts:80-89` already gives Claude
+- **Already handled.** `coordinator/providers.ts:80-89` already gives Claude
   `claudeSandbox: false` on win32, which is the `provider-configured` tier.
   Cursor's persistence already copes with Windows fsync semantics
   (`cursor-bridge/src/persistence.ts:73-114`).

@@ -1,7 +1,7 @@
 /**
  * The coordinator's Control MCP mail tools between a command node's
  * coordinator and a leaf's coordinator: which backend command each call
- * reaches (`coordinator-node-coordinator-mail.ts` owns what they do).
+ * reaches (`coordinator/node-coordinator-mail.ts` owns what they do).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
